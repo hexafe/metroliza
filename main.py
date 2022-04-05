@@ -1,7 +1,7 @@
 import pdfplumber
 import pandas
-from .reports_parser import reports_parser
 import os
+from reports_parser import reports_parser
 
 REPORT_PATH = "./INPUT/"
 
