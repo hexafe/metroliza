@@ -1,6 +1,6 @@
 import pdfplumber
 import pandas
-import valeo_cmm_parser
+from .reports_parser import reports_parser
 import os
 
 REPORT_PATH = "./INPUT/"
@@ -36,7 +36,7 @@ def get_unique_list(list):
 
 if __name__ == '__main__':
     file_name = "./INPUT/V29123229_001_Overmolded_body_2020.04.21_cav.2_09.PDF"
-    pdf_report = valeo_cmm_parser.CMMReport(file_name)
+    pdf_report = reports_parser.CMMReport(file_name)
     # pdf_report.show_blocks_text()
     pdf_report.cmm_to_df()
 
@@ -44,7 +44,7 @@ if __name__ == '__main__':
     #
     # report_objects = []
     # for pdf_file in get_list_of_reports(REPORT_PATH):
-    #     report = valeo_cmm_parser.CMMReport(pdf_file)
+    #     report = reports_parser.CMMReport(pdf_file)
     #     report_objects.append(report)
     #     for header in report.headers_list:
     #         headers_list.append(header)
