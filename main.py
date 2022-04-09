@@ -1,43 +1,17 @@
 import pdfplumber
 import pandas
 import os
-from reports_parser import reports_parser
+from modules.reports_parser import reports_parser
+from modules.useful_methods import get_list_of_reports, get_unique_list
+
 
 REPORT_PATH = "./INPUT/"
 
 
-def get_list_of_reports(path: str):
-    """
-    Function to return list (str) of pdf files in given direction path
-    :param path: (str) path to check for pdf files
-    :return: list (str) of dir including file name
-    """
-    list_of_reports = []
-    with os.scandir(path) as it:
-        for entry in it:
-            if (entry.name.endswith(".PDF") or entry.name.endswith(".pdf")) and entry.is_file():
-                # print(entry.name, entry.path)
-                list_of_reports.append(entry.path)
-    return list_of_reports
-
-
-def get_unique_list(list):
-    """
-    Function to get list and return only unique elements from that list
-    :param list: input list
-    :return: list with only unique elements from input list
-    """
-    unique_list = []
-    for element in list:
-        if element not in unique_list:
-            unique_list.append(element)
-    return unique_list
-
-
 if __name__ == '__main__':
-    file_name = "./INPUT/V29123229_001_Overmolded_body_2020.04.21_cav.2_09.PDF"
+    file_name = "./INPUT/Body_HR12_2021.11.25_LAB0025379_IKD_124_1.PDF"
     pdf_report = reports_parser.CMMReport(file_name)
-    # pdf_report.show_blocks_text()
+    pdf_report.show_blocks_text()
     pdf_report.cmm_to_df()
 
     # headers_list = []
