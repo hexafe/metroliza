@@ -1,7 +1,7 @@
 import pdfplumber
 import pandas
 import os
-from modules.reports_parser import reports_parser
+from modules import reports_parser
 from modules.useful_methods import get_list_of_reports, get_unique_list
 
 
