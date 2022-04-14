@@ -3,14 +3,14 @@ import pandas
 
 
 class CMMReport:
-    """
-    Class to parse and convert pdf CMM reports into DataFrame/XLS/CSV/GSpread
+    """Class to parse and conver pdf CMM report
     """
 
     def __init__(self, pdf_file_path: str):
-        """
-        Creates object of CMMReport class
-        :param pdf_file_path: (str) file name with path of CMM pdf report file to work on
+        """Creates object of CMMReport class
+        
+            Args:
+                (str) pdf_file_path: path to pdf file CMM report
         """
         self.pdf_file_path = pdf_file_path
         self.pdf_raw_text = []
@@ -22,10 +22,10 @@ class CMMReport:
         self.split_text_to_blocks()
 
     def cmm_open(self):
+        """Method to open CMM pdf file and store text inside pdf_raw_text attribute
+            Combines all the pages
         """
-        Method to open CMM pdf file and store text inside pdf_raw_text attribute - combines all the pages
-        :return: Nothing
-        """
+        
         with pdfplumber.open(f"{self.pdf_file_path}") as pdf_report:
             for page in pdf_report.pages:
                 page_text = page.extract_text().splitlines()
@@ -33,29 +33,26 @@ class CMMReport:
                     self.pdf_raw_text.append(line)
 
     def show_raw_text(self):
+        """Method to print raw text inside pdf
         """
-        Simple method to just print all the text inside pdf
-        :return: Nothing
-        """
+        
         for line in self.pdf_raw_text:
             print(line)
 
     def show_blocks_text(self):
+        """Method to print pdf_blocks_text - blocks of measurements
         """
-        Simple method to print pdf_blocks_text
-        :return:
-        """
+        
         for block in self.pdf_blocks_text:
             print("\n___[BEGINNING OF BLOCK]___")
             for line in block:
-                print(f"{line} (line len={len(line)})")
+                print(f"{line} ({len(line)=})")
             print(f"___[END OF BLOCK ({len(block)=})]___\n")
 
     def split_text_to_blocks(self):
+        """Method to split raw text from pdf to blocks - split by measurements
         """
-        Method to split pdf_text into blocks for each measured dimension
-        :return:
-        """
+        
         text_block = []
         for line in self.pdf_raw_text:
             if line[0] != "#" and line[0] != "*":
@@ -145,17 +142,18 @@ class CMMReport:
                     text_block.append(line.split())
 
     def headers(self):
+        """Method to return list of headers from CMM report
+
+        Returns:
+            (str) list: headers
         """
-        Method to return list of headers from CMM report
-        :return: list of (str) headers
-        """
+        
         return self.headers_list
 
     def cmm_to_df(self):
+        """Method to convert parsed pdf CMM report into Pandas' DataFrame
         """
-        Method to convert parsed pdf CMM report into Pandas' DataFrame
-        :return: DataFrame containing all data from the CMM report
-        """
+        
         for block in self.pdf_blocks_text:
             for index, line in enumerate(block):
                 if index == 0:
@@ -184,4 +182,6 @@ class CMMReport:
         print(f"{self.data_dict=}")
 
     def blocks_to_df(self):
+        """This till be method to create Pandas' DataFrame from text blocks
+        """
         pass
