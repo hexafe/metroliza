@@ -1,5 +1,5 @@
-import pdfplumber
-import pandas
+#import pdfplumber
+#import pandas
 import os
 from modules import reports_parser
 from modules.useful_methods import get_list_of_reports, get_unique_list
@@ -12,7 +12,7 @@ if __name__ == '__main__':
     file_name = "./INPUT/Body_HR12_2021.11.25_LAB0025379_IKD_124_1.PDF"
     pdf_report = reports_parser.CMMReport(file_name)
     pdf_report.show_blocks_text()
-    pdf_report.cmm_to_df()
+    #pdf_report.cmm_to_df()
 
     # headers_list = []
     #
