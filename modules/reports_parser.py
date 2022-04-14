@@ -31,8 +31,6 @@ class CMMReport:
                 page_text = page.extract_text().splitlines()
                 for line in page_text:
                     self.pdf_raw_text.append(line)
-                    # if line[0:3] == "###":
-                    #     self.headers_list.append(line)
 
     def show_raw_text(self):
         """
@@ -50,7 +48,7 @@ class CMMReport:
         for block in self.pdf_blocks_text:
             print("\n___[BEGINNING OF BLOCK]___")
             for line in block:
-                print(f"{line}")
+                print(f"{line} (line len={len(line)})")
             print(f"___[END OF BLOCK ({len(block)=})]___\n")
 
     def split_text_to_blocks(self):
@@ -67,14 +65,14 @@ class CMMReport:
 
             if len(text_block) > 0:
                 if line[0] == "#" or line[0] == "*":
-                    if text_block[-1][0] == "#" or text_block[-1][0] == "*":
-                        text_block.append(line)
+                    if text_block[-1][0][0] == "#" or text_block[-1][0][0] == "*":
+                        text_block.append([line])
                     else:
                         self.pdf_blocks_text.append(text_block)
                         text_block = []
-                        text_block.append(line)
+                        text_block.append([line])
                 elif line[0:3] == "DIM":
-                    text_block.append(line)
+                    text_block.append([line])
                 else:
                     temp_line = []
                     line = line.split()
@@ -142,7 +140,7 @@ class CMMReport:
                     text_block.append(temp_line)
             else:
                 if line[0] == "#" or line[0] == "*" or line[0:3] == "DIM":
-                    text_block.append(line)
+                    text_block.append([line])
                 else:
                     text_block.append(line.split())
 
