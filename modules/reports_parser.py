@@ -1,3 +1,6 @@
+from calendar import c
+from cgitb import text
+from email import header
 import pdfplumber
 import pandas
 from modules.useful_methods import list_from_n_element_list
@@ -17,7 +20,7 @@ class CMMReport:
         self.pdf_raw_text = []
         self.pdf_blocks_text = []
         self.headers_list = []
-        self.data_dict = {}
+        self.df_measurements = pandas.DataFrame()
 
         self.cmm_open()
         self.split_text_to_blocks()
@@ -61,6 +64,8 @@ class CMMReport:
         text_block = []
         block_headers = []
         headers_names = []
+        dim_block = []
+        prev_line = " "
         
         for line in self.pdf_raw_text:
             if line[0] != "#" and line[0] != "*":
@@ -70,23 +75,30 @@ class CMMReport:
 
             if len(text_block) > 0:
                 if line[0] == "#" or line[0] == "*":
-                    if text_block[-1][0][0] == "#" or text_block[-1][0][0] == "*":
+                    if prev_line[0] == "#" or prev_line[0] == "*":
                         block_headers.append([line])
                         
                     else:
-                        text_block.insert(0, headers_names)
-                        text_block.insert(0, block_headers)
-                        
+                        text_block.append(dim_block)
+                        text_block.insert(1, headers_names)
+                        text_block.insert(1, block_headers)
+                        text_block.pop(0)
+                                                
                         self.pdf_blocks_text.append(text_block)
-                        
+                                                
                         text_block = []
                         block_headers = []
                         headers_names = []
+                        dim_block = []
                         
                         headers_names.append("Description")
                         block_headers.append([line])
                         
                 elif line[0:3] == "DIM":
+                    if len(dim_block) > 0:
+                        text_block.append(dim_block)
+                        dim_block = []
+                        
                     headers_names.append("Dimension")
                     block_headers.append([line])
                     
@@ -148,20 +160,23 @@ class CMMReport:
                     elif line[0] == "D1" and len(line) == 5:
                         temp_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
                     
-                    text_block.append(temp_line)
-            else:
-                if line[0] == "#" or line[0] == "*" or line[0:3] == "DIM":
-                    if line[0] == "#" or line[0] == "*":
-                        headers_names.append("Description")
-                        block_headers.append([line])
-                        
-                    else:
-                        headers_names.append("Dimension")
-                        block_headers.append([line])
+                    dim_block.append(temp_line)
                     
-                else:
-                    text_block.append(line.split())
-
+            else:
+                if line[0] == "#" or line[0] == "*":
+                    headers_names.append("Description")
+                    block_headers.append([line])
+                        
+                elif line[0:3] == "DIM":
+                    headers_names.append("Dimension")
+                    block_headers.append([line])
+                
+                text_block.append([])
+                    
+                # else:
+                #     text_block.append(line.split())
+            prev_line = line
+                
     def headers(self):
         """Method to return list of headers from CMM report
 
@@ -171,42 +186,33 @@ class CMMReport:
         
         return self.headers_list
 
-    def cmm_to_df(self):
-        """Method to convert parsed pdf CMM report into Pandas' DataFrame
-        """
-        
-        for block in self.pdf_blocks_text:
-            for index, line in enumerate(block):
-                if index == 0:
-                    temp_dict = {'HEADER_###': line}
-                else:
-                    if len(line) == 1:
-                        temp_dict = {'HEADER_DIM': line}
-                    else:
-                        if line[0] == "AX":
-                            if 'HEADER_MEAS' not in self.data_dict:
-                                temp_dict = {'HEADER_MEAS': line}
-                        elif line[0] == "DIM":
-                            pass #TODO
-                        else:
-                            if 'HEADER_MEAS' in self.data_dict:
-                                # temp_dict = {self.data_dict['HEADER_MEAS'][ind]: item for ind, item in enumerate(line)}
-                                for ind, item in enumerate(line):
-                                    print(f"Inside creation loop:{ind=}")
-                                    td = {self.data_dict['HEADER_MEAS'][ind]: item}
-                                    temp_dict.update(td)
-                                    print(f"Inside creation loop:{ind=}: {temp_dict=}")
-
-                self.data_dict.update(temp_dict)
-                temp_dict.clear()
-
-        print(f"{self.data_dict=}")
-
     def blocks_to_df(self):
         """This till be method to create Pandas' DataFrame from text blocks
         """
         
-        for block in self.pdf_blocks_text:
-            block_headers = block[0]
-            block_headers_names = block[1]
-            ###TODO: blocks to df
+        for block in self.pdf_blocks_text:            
+            block_headers = []
+            for element in block[0]:
+                tmp_header = (element[0], "", "", "", "", "", "", "")
+                block_headers.append(tmp_header)
+                        
+            # for element in block[1]:
+            #     tmp_header = (element, "", "", "", "", "", "", "")
+            #     block_headers.append(tmp_header)
+                        
+            block_df = pandas.DataFrame(block[2:][0])
+            block_df.columns = pandas.MultiIndex.from_arrays(block_headers)
+            
+            self.df_measurements = pandas.concat([self.df_measurements, block_df], axis=1)
+               
+    def show_df(self):
+        """Method to print dataframe with measurements
+        """
+        
+        print(f"{self.df_measurements=}")
+                  
+    def export_to_excel(self):
+        """Method to export generated DataFrame to Excel file
+        """
+        ###TODO: something more elegant
+        self.df_measurements.to_excel("dump.xlsx")

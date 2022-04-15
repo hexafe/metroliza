@@ -12,7 +12,10 @@ if __name__ == '__main__':
         
     file_name = list_of_reports[0]
     pdf_report = reports_parser.CMMReport(file_name)
-    pdf_report.show_blocks_text()
+    #pdf_report.show_blocks_text()
+    pdf_report.blocks_to_df()
+    #pdf_report.show_df()
+    pdf_report.export_to_excel()
     
     # dumping blocks to txt, just for testing
     with open("dump.txt", "w", encoding="utf-8") as f:
