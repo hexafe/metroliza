@@ -12,7 +12,6 @@ def get_list_of_reports(path: str):
     
     return list(Path(path).glob('*.[Pp][Dd][Ff]'))
     
-
 def get_unique_list(list):
     """Function to get list and return only unique elements from that list
 
@@ -25,7 +24,6 @@ def get_unique_list(list):
         if element not in unique_list:
             unique_list.append(element)
     return unique_list
-
 
 def list_from_n_element_list(list, index):
     """Simple function to create list from provided index elements of list of lists

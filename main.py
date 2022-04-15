@@ -2,7 +2,7 @@ from modules import reports_parser
 from modules.useful_methods import get_list_of_reports, get_unique_list
 
 
-REPORT_PATH = "./INPUT/"
+REPORT_PATH = "./input/"
 
 
 if __name__ == '__main__':
@@ -13,8 +13,8 @@ if __name__ == '__main__':
     file_name = list_of_reports[0]
     pdf_report = reports_parser.CMMReport(file_name)
     pdf_report.show_blocks_text()
-
-# dumping blocks to txt, just for testing
+    
+    # dumping blocks to txt, just for testing
     with open("dump.txt", "w", encoding="utf-8") as f:
         for block in pdf_report.pdf_blocks_text:
             for line in block:

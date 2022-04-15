@@ -1,5 +1,6 @@
 import pdfplumber
 import pandas
+from modules.useful_methods import list_from_n_element_list
 
 
 class CMMReport:
@@ -51,9 +52,16 @@ class CMMReport:
 
     def split_text_to_blocks(self):
         """Method to split raw text from pdf to blocks - split by measurements
+            Each block is created as follows:
+            block[0] - headers list
+            block[1] - headers names list
+            block[2:] - dimensions
         """
         
         text_block = []
+        block_headers = []
+        headers_names = []
+        
         for line in self.pdf_raw_text:
             if line[0] != "#" and line[0] != "*":
                 temp_line_split = line.split()
@@ -63,16 +71,29 @@ class CMMReport:
             if len(text_block) > 0:
                 if line[0] == "#" or line[0] == "*":
                     if text_block[-1][0][0] == "#" or text_block[-1][0][0] == "*":
-                        text_block.append([line])
+                        block_headers.append([line])
+                        
                     else:
+                        text_block.insert(0, headers_names)
+                        text_block.insert(0, block_headers)
+                        
                         self.pdf_blocks_text.append(text_block)
+                        
                         text_block = []
-                        text_block.append([line])
+                        block_headers = []
+                        headers_names = []
+                        
+                        headers_names.append("Description")
+                        block_headers.append([line])
+                        
                 elif line[0:3] == "DIM":
-                    text_block.append([line])
+                    headers_names.append("Dimension")
+                    block_headers.append([line])
+                    
                 else:
                     temp_line = []
                     line = line.split()
+                    
                     for item in line:
                         if item[0:2] == "--" or item[0:2] == "-#" or item[0:2] == "#-":
                             line.remove(item)
@@ -127,17 +148,17 @@ class CMMReport:
                     elif line[0] == "D1" and len(line) == 5:
                         temp_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
                     
-                    # else:
-                    #     temp_line.append(line[0])
-                    #     for item in line[1:]:
-                    #         if item.isnumeric():
-                    #             temp_line.append(float(item))
-                    #         else:
-                    #             temp_line.append(item)
                     text_block.append(temp_line)
             else:
                 if line[0] == "#" or line[0] == "*" or line[0:3] == "DIM":
-                    text_block.append([line])
+                    if line[0] == "#" or line[0] == "*":
+                        headers_names.append("Description")
+                        block_headers.append([line])
+                        
+                    else:
+                        headers_names.append("Dimension")
+                        block_headers.append([line])
+                    
                 else:
                     text_block.append(line.split())
 
@@ -184,4 +205,8 @@ class CMMReport:
     def blocks_to_df(self):
         """This till be method to create Pandas' DataFrame from text blocks
         """
-        pass
+        
+        for block in self.pdf_blocks_text:
+            block_headers = block[0]
+            block_headers_names = block[1]
+            ###TODO: blocks to df
