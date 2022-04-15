@@ -1,10 +1,5 @@
-from calendar import c
-from cgitb import text
-from email import header
 import pdfplumber
 import pandas
-from modules.useful_methods import list_from_n_element_list
-
 
 class CMMReport:
     """Class to parse and conver pdf CMM report
@@ -214,5 +209,6 @@ class CMMReport:
     def export_to_excel(self):
         """Method to export generated DataFrame to Excel file
         """
+        
         ###TODO: something more elegant
         self.df_measurements.to_excel("dump.xlsx")
