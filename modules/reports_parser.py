@@ -1,6 +1,7 @@
 import pdfplumber
 import pandas
 
+
 class CMMReport:
     """Class to parse and conver pdf CMM report
     """
@@ -24,7 +25,6 @@ class CMMReport:
         """Method to open CMM pdf file and store text inside pdf_raw_text attribute
             Combines all the pages
         """
-        
         with pdfplumber.open(f"{self.pdf_file_path}") as pdf_report:
             for page in pdf_report.pages:
                 page_text = page.extract_text().splitlines()
@@ -34,14 +34,12 @@ class CMMReport:
     def show_raw_text(self):
         """Method to print raw text inside pdf
         """
-        
         for line in self.pdf_raw_text:
             print(line)
 
     def show_blocks_text(self):
         """Method to print pdf_blocks_text - blocks of measurements
         """
-        
         for block in self.pdf_blocks_text:
             print("\n___[BEGINNING OF BLOCK]___")
             for line in block:
@@ -55,7 +53,6 @@ class CMMReport:
             block[1] - headers names list
             block[2:] - dimensions
         """
-        
         text_block = []
         block_headers = []
         headers_names = []
@@ -65,7 +62,7 @@ class CMMReport:
         for line in self.pdf_raw_text:
             if line[0] != "#" and line[0] != "*":
                 temp_line_split = line.split()
-                if len(temp_line_split) == 3:
+                if len(temp_line_split)==3:
                     continue
 
             if len(text_block) > 0:
@@ -88,7 +85,7 @@ class CMMReport:
                         
                         headers_names.append("Description")
                         block_headers.append([line])
-                        
+    
                 elif line[0:3] == "DIM":
                     if len(dim_block) > 0:
                         text_block.append(dim_block)
@@ -184,7 +181,6 @@ class CMMReport:
     def blocks_to_df(self):
         """This till be method to create Pandas' DataFrame from text blocks
         """
-        
         for block in self.pdf_blocks_text:            
             block_headers = []
             for element in block[0]:
@@ -203,12 +199,10 @@ class CMMReport:
     def show_df(self):
         """Method to print dataframe with measurements
         """
-        
         print(f"{self.df_measurements=}")
                   
     def export_to_excel(self):
         """Method to export generated DataFrame to Excel file
         """
-        
         ###TODO: something more elegant
         self.df_measurements.to_excel("dump.xlsx")

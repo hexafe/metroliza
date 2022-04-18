@@ -5,7 +5,7 @@ from modules.useful_methods import get_list_of_reports, get_unique_list
 REPORT_PATH = "./input/"
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     list_of_reports = get_list_of_reports(REPORT_PATH)
     for report in list_of_reports:
         print(f"{report=}\n")
@@ -23,5 +23,5 @@ if __name__ == '__main__':
             for line in block:
                 items_str = ' '.join([str(item) for item in line])
                 f.write(items_str)
-                f.write('\n')
-            f.write('\n')
+                f.write("\n")
+            f.write("\n")

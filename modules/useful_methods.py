@@ -1,7 +1,7 @@
+"""Some useful methods to clean main.py"""
+
 from pathlib import Path
 
-"""Some useful methods to clean main.py
-"""
 
 def get_list_of_reports(path: str):
     """Function to return list (str) of pdf files in given path
@@ -18,11 +18,11 @@ def get_unique_list(list):
     Returns:
         (str) list: list with unique elements
     """
-    
     unique_list = []
     for element in list:
         if element not in unique_list:
             unique_list.append(element)
+            
     return unique_list
 
 def list_from_n_element_list(list, index):
