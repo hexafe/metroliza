@@ -55,7 +55,7 @@ class CMMReport:
         """
         text_block = []
         block_headers = []
-        headers_names = []
+        # headers_names = []
         dim_block = []
         prev_line = " "
         
@@ -72,7 +72,7 @@ class CMMReport:
                         
                     else:
                         text_block.append(dim_block)
-                        text_block.insert(1, headers_names)
+                        # text_block.insert(1, headers_names)
                         text_block.insert(1, block_headers)
                         text_block.pop(0)
                                                 
@@ -80,10 +80,10 @@ class CMMReport:
                                                 
                         text_block = []
                         block_headers = []
-                        headers_names = []
+                        # headers_names = []
                         dim_block = []
                         
-                        headers_names.append("Description")
+                        # headers_names.append("Description")
                         block_headers.append([line])
     
                 elif line[0:3] == "DIM":
@@ -91,8 +91,9 @@ class CMMReport:
                         text_block.append(dim_block)
                         dim_block = []
                         
-                    headers_names.append("Dimension")
+                    # headers_names.append("Dimension")
                     block_headers.append([line])
+                    block_headers.append(["AX",  "NOM", "+TOL", "-TOL", "BONUS", "MEAS", "DEV", "OUTTOL"])
                     
                 else:
                     temp_line = []
@@ -113,10 +114,10 @@ class CMMReport:
                     temp_line[7] = OUTTOL
                     """
                     
-                    if line[0] == "AX":
-                        temp_line = ["AX",  "NOM", "+TOL", "-TOL", "BONUS", "MEAS", "DEV", "OUTTOL"]
+                    # if line[0] == "AX":
+                    #     temp_line = ["AX",  "NOM", "+TOL", "-TOL", "BONUS", "MEAS", "DEV", "OUTTOL"]
 
-                    elif (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 4:
+                    if (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 4:
                         temp_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
 
                     elif (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 7:
@@ -152,16 +153,18 @@ class CMMReport:
                     elif line[0] == "D1" and len(line) == 5:
                         temp_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
                     
-                    dim_block.append(temp_line)
+                    if temp_line:
+                        dim_block.append(temp_line)
                     
             else:
                 if line[0] == "#" or line[0] == "*":
-                    headers_names.append("Description")
+                    # headers_names.append("Description")
                     block_headers.append([line])
                         
                 elif line[0:3] == "DIM":
-                    headers_names.append("Dimension")
+                    # headers_names.append("Dimension")
                     block_headers.append([line])
+                    block_headers.append(["AX",  "NOM", "+TOL", "-TOL", "BONUS", "MEAS", "DEV", "OUTTOL"])
                 
                 text_block.append([])
                     
@@ -184,22 +187,32 @@ class CMMReport:
         for block in self.pdf_blocks_text:            
             block_headers = []
             for element in block[0]:
-                tmp_header = (element[0], "", "", "", "", "", "", "")
+                tmp_header = []
+                
+                if element[0] != "AX":
+                    tmp_header = (element[0], "", "", "", "", "", "", "")
+                else:
+                    tmp_header = (element[0], element[1], element[2], element[3], element[4], element[5], element[6], element[7])
+                    
                 block_headers.append(tmp_header)
                         
             # for element in block[1]:
             #     tmp_header = (element, "", "", "", "", "", "", "")
             #     block_headers.append(tmp_header)
-                        
-            block_df = pandas.DataFrame(block[2:][0])
+                                    
+            block_df = pandas.DataFrame(block[1:][0])
             block_df.columns = pandas.MultiIndex.from_arrays(block_headers)
             
+            print(f"{block_df.columns=}")
+
+            # print(f"{block_df}")
+                        
             self.df_measurements = pandas.concat([self.df_measurements, block_df], axis=1)
-               
+                           
     def show_df(self):
         """Method to print dataframe with measurements
         """
-        print(f"{self.df_measurements=}")
+        print(f"{self.df_measurements}")
                   
     def export_to_excel(self):
         """Method to export generated DataFrame to Excel file
