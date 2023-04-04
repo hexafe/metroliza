@@ -230,11 +230,11 @@ class CMMReport:
             #table_name = "test"
             
             # Create the table if it does not exist
-            cursor.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" (AX TEXT, NOM REAL, PLUSTOL REAL, MINUSTOL REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL REAL)')
+            cursor.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" (AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL REAL, HEADER TEXT, FILENAME TEXT)')
             
             # Insert the data into the table
             for row in lst[1]:
-                cursor.execute(f'INSERT INTO "{table_name}" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', row)
+                cursor.execute(f'INSERT INTO "{table_name}" VALUES (?, ?, ?, ?, ?, ?, ?, ?, "{table_name}", "{self.pdf_file_path}")', row)
 
         # Commit the changes and close the connection
         conn.commit()

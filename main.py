@@ -67,15 +67,20 @@ if __name__ == "__main__":
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = [table[0] for table in cursor.fetchall()]
 
+    df_list2 = []
     # iterate over the tables and extract data
     for table in tables:
         # extract data from the table and store it in a Pandas DataFrame
         df = pd.read_sql_query(f'SELECT * FROM "{table}"', conn)
+        df_list2.append(df)
         # print(f"Table name: {table}")
-        print(df)
+        # print(df)
 
     # close the database connection
     conn.close()
         
     result_df = pd.concat(df_list)
     result_df.to_excel('output.xlsx', index=False)
+    
+    result_df2 = pd.concat(df_list2)
+    result_df2.to_excel('output2.xlsx', index=False)
