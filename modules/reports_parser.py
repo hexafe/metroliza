@@ -1,6 +1,7 @@
 import pdfplumber
 import pandas
 import sqlite3
+import re
 
 
 class CMMReport:
@@ -18,6 +19,7 @@ class CMMReport:
         self.pdf_blocks_text = []
         self.headers_list = []
         self.df = pandas.DataFrame()
+        self.pdf_date = ""
 
         self.cmm_open()
         self.split_text_to_blocks()
@@ -31,6 +33,16 @@ class CMMReport:
                 page_text = page.extract_text().splitlines()
                 for line in page_text:
                     self.pdf_raw_text.append(line)
+            #date_pattern = r"\d{4}\.\d{2}\.\d{2}"
+            date_pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}"
+            file_name = str(self.pdf_file_path).split("/")[-1]
+            matches = re.findall(date_pattern, file_name)
+            if matches:
+                self.pdf_date = matches[-1]
+            else:
+                self.pdf_date = "0000.00.00"
+            #if isinstance(self.pdf_date, str):
+            self.pdf_date = self.pdf_date.replace(".", "-").replace("_", "-").replace("/", "-")
 
     def show_raw_text(self):
         """Method to print raw text inside pdf
@@ -65,55 +77,64 @@ class CMMReport:
         block_headers = []
         dim_block = []
         prev_line = " "
+        header_dim = []
+        header_comment = []
         
         for index, line in enumerate(self.pdf_raw_text):
             if index == len(self.pdf_raw_text) - 1:
                 if text_block:
+                    block_headers = header_comment.copy()
+                    block_headers.append(header_dim)
                     text_block.append(dim_block)
                     text_block.insert(1, block_headers)
                     text_block.pop(0)
                     self.pdf_blocks_text.append(text_block)
                     text_block, block_headers, dim_block = [], [], []
-                    block_headers.append([line])
+                    header_dim = []
+                    header_comment = []
                     
             if not line.startswith(('#', '*')):
                 if len(line.split()) == 3:
                     continue
 
             if len(text_block) > 0:
-                if line[0] in {"#", "*"}:
-                    if prev_line and prev_line[0] in {"#", "*"}:
-                        block_headers.append([line])
-                        
-                    else:
+                if line[0] in {"#", "*"} or line.startswith("DIM"):
+                    if line[0] in {"#", "*"} and prev_line and prev_line[0] in {"#", "*"}:
+                        header_comment.append([line])
+                    
+                    if line.startswith("DIM") and prev_line and prev_line[0] in {"#", "*"}:
+                        header_dim = []
+                        header_dim.append([line])
+                    
+                    if line.startswith("DIM") and prev_line and prev_line[0] not in {"#", "*"}:
+                        block_headers = header_comment.copy()
+                        block_headers.append(header_dim)
                         text_block.append(dim_block)
                         text_block.insert(1, block_headers)
                         text_block.pop(0)
                         self.pdf_blocks_text.append(text_block)
                         text_block, block_headers, dim_block = [], [], []
-                        block_headers.append([line])
-
-                elif line.startswith("DIM"):
-                    if dim_block:
+                        header_dim = []
+                        header_dim.append([line])
+                        text_block.append(header_comment)
+                        
+                    if line[0] in {"#", "*"} and prev_line and prev_line[0] not in {"#", "*"}:
+                        block_headers = header_comment.copy()
+                        block_headers.append(header_dim)
                         text_block.append(dim_block)
-                        dim_block = []
-                    block_headers.append([line])
+                        text_block.insert(1, block_headers)
+                        text_block.pop(0)
+                        self.pdf_blocks_text.append(text_block)
+                        text_block, block_headers, dim_block = [], [], []
+                        header_dim = []
+                        header_comment = []
+                        header_comment.append([line])
+                        text_block.append(header_comment)
                     
                 else:
                     temp_line = []
                     line = line.split()
                     line = [item for item in line if not (item.startswith("--") or item.startswith("-#") or item.startswith("#-") or item.startswith("<-"))]
-
-                    """
-                    temp_line[0] = dimension symbol
-                    temp_line[1] = NOM
-                    temp_line[2] = +TOL
-                    temp_line[3] = -TOL
-                    temp_line[4] = BONUS
-                    temp_line[5] = MEAS
-                    temp_line[6] = DEV
-                    temp_line[7] = OUTTOL
-                    """
 
                     if (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 4:
                         temp_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
@@ -151,16 +172,47 @@ class CMMReport:
                     elif line[0] == "PA" and len(line) == 4:
                         temp_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
 
-                    elif line[0] == "D1" and len(line) == 5:
+                    elif line[0] == "D1" and len(line) == 5 and line[1].isnumeric():
                         temp_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
                     
                     if temp_line:
                         dim_block.append(temp_line)
                                
             else:
-                if line[0] in {"#", "*"} or line.startswith("DIM"):
-                    block_headers.append(line)
-                text_block.append(block_headers)
+                if not self.pdf_blocks_text:
+                    if line[0] in {"#", "*"} or line.startswith("DIM"):
+                        if line[0] in {"#", "*"}:
+                            header_comment.append([line])
+                            block_headers.append([line])
+                            text_block.append(block_headers)
+                        else:
+                            header_dim.append([line])
+                            text_block.append(header_dim)
+                
+                else:
+                    if line.startswith("DIM"):
+                        block_headers = header_comment.copy()
+                        block_headers.append(header_dim)
+                        text_block.append(dim_block)
+                        text_block.insert(1, block_headers)
+                        text_block.pop(0)
+                        self.pdf_blocks_text.append(text_block)
+                        text_block, block_headers, dim_block = [], [], []
+                        header_dim = []
+                        # header_comment = []
+                        header_dim.append([line])
+                        
+                    if line[0] in {"#", "*"}:
+                        block_headers = header_comment.copy()
+                        block_headers.append(header_dim)
+                        text_block.append(dim_block)
+                        text_block.insert(1, block_headers)
+                        text_block.pop(0)
+                        self.pdf_blocks_text.append(text_block)
+                        text_block, block_headers, dim_block = [], [], []
+                        header_dim = []
+                        header_comment = []
+                        header_comment.append([line])
 
             prev_line = line
                 
@@ -230,11 +282,11 @@ class CMMReport:
             #table_name = "test"
             
             # Create the table if it does not exist
-            cursor.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" (AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL REAL, HEADER TEXT, FILENAME TEXT)')
+            cursor.execute(f'CREATE TABLE IF NOT EXISTS "{table_name}" (AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL REAL, HEADER TEXT, FILENAME TEXT, DATE TEXT)')
             
             # Insert the data into the table
             for row in lst[1]:
-                cursor.execute(f'INSERT INTO "{table_name}" VALUES (?, ?, ?, ?, ?, ?, ?, ?, "{table_name}", "{self.pdf_file_path}")', row)
+                cursor.execute(f'INSERT INTO "{table_name}" VALUES (?, ?, ?, ?, ?, ?, ?, ?, "{table_name}", "{self.pdf_file_path}", "{self.pdf_date}")', row)
 
         # Commit the changes and close the connection
         conn.commit()
