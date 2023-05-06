@@ -4,7 +4,6 @@ import pandas
 import sqlite3
 import re
 from pathlib import Path
-import time
 
 
 class CMMReport_pdfplumber:
@@ -79,21 +78,6 @@ class CMMReport_pdfplumber:
                 self.pdf_date = "0000.00.00"
             self.pdf_date = self.pdf_date.replace(".", "-").replace("_", "-").replace("/", "-")
     
-    def cmm_open_pymupdf(self):
-        """Method to open CMM pdf file and store text inside pdf_raw_text attribute"""
-        with fitz.open(f"{self.pdf_file_path}\{self.pdf_file_name}") as pdf_report:
-            for page in pdf_report:
-                page_text = page.get_text().splitlines()
-                for line in page_text:
-                    self.pdf_raw_text.append(line)
-            date_pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}"
-            matches = re.findall(date_pattern, self.pdf_file_name)
-            if matches:
-                self.pdf_date = matches[-1]
-            else:
-                self.pdf_date = "0000.00.00"
-            self.pdf_date = self.pdf_date.replace(".", "-").replace("_", "-").replace("/", "-")
-
     def show_raw_text(self):
         """Method to print raw text inside pdf"""
         for line in self.pdf_raw_text:
@@ -232,167 +216,7 @@ class CMMReport_pdfplumber:
                         text_block, header_comment, dim_block = [], [], []
                         formatted_line = re.sub(r'^[#*]+', '', line).strip()
                         header_comment.append([formatted_line])
-                        
-    def split_text_to_blocks_pymupdf(self):
-        """Method to split raw text from pdf to blocks - split by measurements"""
-        def is_comment_or_header(line):
-            """Check if line is a comment or header"""
-            return line.startswith(('#', '*'))
-        
-        def is_dim_line(line):
-            """Check if line is a DIM header"""
-            return line.startswith("DIM")
-        
-        def process_line(line):
-            """Process measurement line"""
-            processed_line = []
-            
-            if (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 4:
-                processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-
-            elif (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 7:
-                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-            elif line[0] == "TP" and len(line) == 7:
-                processed_line = [line[0], "", float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
-
-            elif line[0] == "M" and len(line) == 7:
-                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-            elif line[0] == "M" and len(line) == 8:
-                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), float(line[4]), float(line[5]), float(line[6]), float(line[7])]
-
-            elif line[0] == "D" and len(line) == 7:
-                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-            elif line[0] == "RN" and len(line) == 7:
-                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-            elif line[0] == "DF" and len(line) == 8:
-                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), float(line[4]), float(line[5]), float(line[6]), float(line[7])]
-                
-            elif line[0] == "DF" and len(line) == 7:
-                processed_line = [line[0], float(line[1]), float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
-
-            elif line[0] == "PR" and len(line) == 7:
-                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-            elif line[0] == "PR" and len(line) == 4:
-                processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-
-            elif line[0] == "PA" and len(line) == 4:
-                processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-
-            elif line[0] == "D1" and len(line) == 5 and line[1].isnumeric():
-                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
-                
-            return processed_line
-       
-        def extract_numerical_lines(lines):
-            prefixes = ["X", "Y", "Z", "TP", "M", "D", "RN", "DF", "PR", "PA", "D1"]
-            numerical_lines = []
-            for i in range(len(lines)):
-                line = lines[i]
-                if any(line.startswith(p) for p in prefixes) and not i:
-                    numerical_lines.append(line)
-                elif is_numerical(line):
-                    numerical_lines.append(line)
-                else:
-                    break
-            return numerical_lines
-
-        def is_numerical(line):
-            try:
-                float(line.strip())
-                return True
-            except ValueError:
-                return False
-        
-        measurement_line_map = {
-            "X": 7,
-            "Y": 7,
-            "Z": 7,
-            "TP": 7,
-            "M": 8,
-            "D": 7,
-            "RN": 7,
-            "DF": 8,
-            "PR": 7,
-            "PA": 4,
-            "D1": 5
-        }
-        text_block = []
-        dim_block = []
-        header_comment = []
-        
-        for index, line in enumerate(self.pdf_raw_text):
-            if index == len(self.pdf_raw_text) - 1:
-                if text_block:
-                    text_block = [header_comment] + [dim_block]
-                    self.pdf_blocks_text.append(text_block)
-                    text_block, header_comment, dim_block = [], [], []
-                    
-            if not is_comment_or_header(line):
-                if len(line.split()) == 3:
-                    continue
-
-            if text_block:
-                if is_comment_or_header(line) or is_dim_line(line):
-                    if is_comment_or_header(line) and self.pdf_raw_text[index-1] and is_comment_or_header(self.pdf_raw_text[index-1]):
-                        formatted_line = re.sub(r'^[#*]+', '', line)
-                        header_comment.append([formatted_line])
-                    
-                    if is_dim_line(line) and self.pdf_raw_text[index-1] and not is_comment_or_header(self.pdf_raw_text[index-1]):
-                        text_block = [header_comment] + [dim_block]
-                        self.pdf_blocks_text.append(text_block)
-                        text_block, dim_block = [], []
-                        text_block.append(header_comment)
-                        
-                    if is_comment_or_header(line) and self.pdf_raw_text[index-1] and not is_comment_or_header(self.pdf_raw_text[index-1]):
-                        text_block = [header_comment] + [dim_block]
-                        self.pdf_blocks_text.append(text_block)
-                        text_block, header_comment, dim_block = [], [], []
-                        formatted_line = re.sub(r'^[#*]+', '', line)
-                        header_comment.append([formatted_line])
-                        text_block.append(header_comment)
-                    
-                else:
-                    if line in measurement_line_map:
-                        next_lines = self.pdf_raw_text[index:index+measurement_line_map[line]]
-                        print(f"next {measurement_line_map[line]} lines: {next_lines=}")
-                        line_split = []
-                        for item in next_lines:
-                            line_split.extend(item.split())
-                        print(f"{line_split=}")
-                        if line_split[0] == "TP":
-                            line_split[1] = "0"
-                        next_lines = extract_numerical_lines(line_split)
-                        print(f"after processing: {next_lines=}")
-                        temp_line = process_line(next_lines)
-                        print(f"{temp_line=}")
-                        if temp_line:
-                            dim_block.append(temp_line)
-                               
-            else:
-                if not self.pdf_blocks_text:
-                    if is_comment_or_header(line):
-                        formatted_line = re.sub(r'^[#*]+', '', line)
-                        header_comment.append([formatted_line])
-                        text_block.append(header_comment)
-                
-                else:
-                    if is_dim_line(line):
-                        text_block = [header_comment] + [dim_block]
-                        self.pdf_blocks_text.append(text_block)
-                        text_block, dim_block = [], []
-                        
-                    if is_comment_or_header(line):
-                        text_block = [header_comment] + [dim_block]
-                        self.pdf_blocks_text.append(text_block)
-                        text_block, header_comment, dim_block = [], [], []
-                        formatted_line = re.sub(r'^[#*]+', '', line)
-                        header_comment.append([formatted_line])
-    
+                         
     def to_dict(self):
         pass
 
@@ -526,22 +350,7 @@ class CMMReport_pymupdf:
                     open_split_2sql()
                 else:
                     print(f"{self.pdf_file_name} already exists in the database. Skipping the file.")
-
-    def cmm_open_pdfplumber(self):
-        """Method to open CMM pdf file and store text inside pdf_raw_text attribute"""
-        with pdfplumber.open(f"{self.pdf_file_path}\{self.pdf_file_name}") as pdf_report:
-            for page in pdf_report.pages:
-                page_text = page.extract_text().splitlines()
-                for line in page_text:
-                    self.pdf_raw_text.append(line)
-            date_pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}"
-            matches = re.findall(date_pattern, self.pdf_file_name)
-            if matches:
-                self.pdf_date = matches[-1]
-            else:
-                self.pdf_date = "0000.00.00"
-            self.pdf_date = self.pdf_date.replace(".", "-").replace("_", "-").replace("/", "-")
-    
+ 
     def cmm_open_pymupdf(self):
         """Method to open CMM pdf file and store text inside pdf_raw_text attribute"""
         with fitz.open(f"{self.pdf_file_path}\{self.pdf_file_name}") as pdf_report:
@@ -576,125 +385,6 @@ class CMMReport_pymupdf:
             print("\n___[BEGINNING OF BLOCK]___")
             print(f"{block}")
             print(f"___[END OF BLOCK ({len(block)=})]___\n")
-
-    def split_text_to_blocks_pdfplumber(self):
-        """Method to split raw text from pdf to blocks - split by measurements"""
-        def is_comment_or_header(line):
-            """Check if line is a comment or header"""
-            return line.startswith(('#', '*'))
-        
-        def is_dim_line(line):
-            """Check if line is a DIM header"""
-            return line.startswith("DIM")
-        
-        def process_line(line):
-            """Process measurement line"""
-            processed_line = []
-            
-            if line:
-                line = line.split()
-                line = [item for item in line if not (item.startswith("--") or item.startswith("-#") or item.startswith("#-") or item.startswith("<-"))]
-
-                if (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 4:
-                    processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-
-                elif (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 7:
-                    processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-                elif line[0] == "TP" and len(line) == 7:
-                    processed_line = [line[0], "", float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
-
-                elif line[0] == "M" and len(line) == 7:
-                    processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-                elif line[0] == "M" and len(line) == 8:
-                    processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), float(line[4]), float(line[5]), float(line[6]), float(line[7])]
-
-                elif line[0] == "D" and len(line) == 7:
-                    processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-                elif line[0] == "RN" and len(line) == 7:
-                    processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-                elif line[0] == "DF" and len(line) == 8:
-                    processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), float(line[4]), float(line[5]), float(line[6]), float(line[7])]
-                    
-                elif line[0] == "DF" and len(line) == 7:
-                    processed_line = [line[0], float(line[1]), float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
-
-                elif line[0] == "PR" and len(line) == 7:
-                    processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
-
-                elif line[0] == "PR" and len(line) == 4:
-                    processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-
-                elif line[0] == "PA" and len(line) == 4:
-                    processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-
-                elif line[0] == "D1" and len(line) == 5 and line[1].isnumeric():
-                    processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
-                
-            return processed_line
-        
-        text_block = []
-        dim_block = []
-        header_comment = []
-        
-        for index, line in enumerate(self.pdf_raw_text):
-            if index == len(self.pdf_raw_text) - 1:
-                if text_block:
-                    text_block = [header_comment] + [dim_block]
-                    self.pdf_blocks_text.append(text_block)
-                    text_block, header_comment, dim_block = [], [], []
-                    
-            if not is_comment_or_header(line):
-                if len(line.split()) == 3:
-                    continue
-
-            if text_block:
-                if is_comment_or_header(line) or is_dim_line(line):
-                    if is_comment_or_header(line) and self.pdf_raw_text[index-1] and is_comment_or_header(self.pdf_raw_text[index-1]):
-                        formatted_line = re.sub(r'^[#*]+', '', line)
-                        header_comment.append([formatted_line])
-                    
-                    if is_dim_line(line) and self.pdf_raw_text[index-1] and not is_comment_or_header(self.pdf_raw_text[index-1]):
-                        text_block = [header_comment] + [dim_block]
-                        self.pdf_blocks_text.append(text_block)
-                        text_block, dim_block = [], []
-                        text_block.append(header_comment)
-                        
-                    if is_comment_or_header(line) and self.pdf_raw_text[index-1] and not is_comment_or_header(self.pdf_raw_text[index-1]):
-                        text_block = [header_comment] + [dim_block]
-                        self.pdf_blocks_text.append(text_block)
-                        text_block, header_comment, dim_block = [], [], []
-                        formatted_line = re.sub(r'^[#*]+', '', line)
-                        header_comment.append([formatted_line])
-                        text_block.append(header_comment)
-                    
-                else:                  
-                    temp_line = process_line(line)
-                    if temp_line:
-                        dim_block.append(temp_line)
-                               
-            else:
-                if not self.pdf_blocks_text:
-                    if is_comment_or_header(line):
-                        formatted_line = re.sub(r'^[#*]+', '', line)
-                        header_comment.append([formatted_line])
-                        text_block.append(header_comment)
-                
-                else:
-                    if is_dim_line(line):
-                        text_block = [header_comment] + [dim_block]
-                        self.pdf_blocks_text.append(text_block)
-                        text_block, dim_block = [], []
-                        
-                    if is_comment_or_header(line):
-                        text_block = [header_comment] + [dim_block]
-                        self.pdf_blocks_text.append(text_block)
-                        text_block, header_comment, dim_block = [], [], []
-                        formatted_line = re.sub(r'^[#*]+', '', line)
-                        header_comment.append([formatted_line])
                         
     def split_text_to_blocks_pymupdf(self):
         """Method to split raw text from pdf to blocks - split by measurements"""
@@ -709,7 +399,7 @@ class CMMReport_pymupdf:
         def process_line(line):
             """Process measurement line"""
             processed_line = []
-            
+                        
             if (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 4:
                 processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
 
@@ -717,7 +407,7 @@ class CMMReport_pymupdf:
                 processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
 
             elif line[0] == "TP" and len(line) == 7:
-                processed_line = [line[0], "", float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
+                processed_line = [line[0], float(line[1]), float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
 
             elif line[0] == "M" and len(line) == 7:
                 processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
@@ -751,29 +441,48 @@ class CMMReport_pymupdf:
                 
             return processed_line
        
+        # def extract_numerical_lines(lines):
+        #     prefixes = ["X", "Y", "Z", "TP", "M", "D", "RN", "DF", "PR", "PA", "D1"]
+        #     numerical_lines = []
+        #     counter = 0
+        #     for i in range(len(lines)):
+        #         line = lines[i]
+        #         if any(line.startswith(p) for p in prefixes) and not i:
+        #             numerical_lines.append(line)
+        #         elif is_numerical(line):
+        #             numerical_lines.append(line)
+        #         else:
+        #             counter = i - 1
+        #             break
+        #     return numerical_lines, counter
         def extract_numerical_lines(lines):
+            """Creates list with numerical values from the line and calculates how many lines can be skipped"""
             prefixes = ["X", "Y", "Z", "TP", "M", "D", "RN", "DF", "PR", "PA", "D1"]
             numerical_lines = []
-            for i in range(len(lines)):
-                line = lines[i]
+            counter = 0
+            
+            for i, line in enumerate(lines):
                 if any(line.startswith(p) for p in prefixes) and not i:
                     numerical_lines.append(line)
-                elif is_numerical(line):
-                    numerical_lines.append(line)
-                else:
+                elif not is_numerical(line):
+                    counter = i - 1
                     break
-            return numerical_lines
-        
+                else:
+                    numerical_lines.append(line)
+            
+            return numerical_lines, counter
+
         def extract_header_comment(lines):
+            """Creates list with headers from the lines and calculates how many lines can be skipped"""
             header = []
             counter = 0
-            for i in range(len(lines)):
-                if not lines[i].startswith("DIM"):
+            for i, line in enumerate(lines):
+                if not is_dim_line(line):
                     if i:
-                        lines[i] = lines[i].replace('#', '').replace('*', '')
-                    header.append(lines[i])
+                        line = line.replace('#', '').replace('*', '')
+                    header.append(line)
                 else:
-                    counter = i
+                    counter = i - 1
                     break
             header = " ".join(header)
             return header, counter
@@ -847,7 +556,7 @@ class CMMReport_pymupdf:
                             line_split.extend(item.split())
                         if line_split[0] == "TP":
                             line_split[1] = "0"
-                        next_lines = extract_numerical_lines(line_split)
+                        next_lines, counter = extract_numerical_lines(line_split)
                         temp_line = process_line(next_lines)
                         if temp_line:
                             dim_block.append(temp_line)
