@@ -4,14 +4,15 @@ import pandas as pd
 import xlsxwriter
 import sqlite3
 from pathlib import Path
+import time
 
 
 REPORT_PATH = Path("./input/")
 DATABASE = "mydatabase.db"
 
-def sql2xls():
+def sql2xls(name: str, database: str):
     # Connect to SQLite3 database
-    conn = sqlite3.connect(DATABASE)
+    conn = sqlite3.connect(database)
     cursor = conn.cursor()
 
     # Get list of tables in the database
@@ -19,7 +20,7 @@ def sql2xls():
     tables = cursor.fetchall()
 
     # Create Excel writer object
-    excel_writer = pd.ExcelWriter('output_sql_to_excel_test.xlsx', engine='xlsxwriter')
+    excel_writer = pd.ExcelWriter(name, engine='xlsxwriter')
 
     # Loop through tables and add to Excel workbook as separate sheets
     for table in tables:
@@ -54,13 +55,14 @@ def sql2xls():
 
 if __name__ == "__main__":
     list_of_reports = get_list_of_reports(REPORT_PATH)
-     
+    
+    pdfplumber_start_time = time.time()
     for report in list_of_reports:
-        pdf_report = reports_parser.CMMReport(report, DATABASE)
+        pdf_report = reports_parser.CMMReport_pdfplumber(report, DATABASE)
         # pdf_report.show_blocks_text()
         # pdf_report.to_sqlite()
     
-    conn = sqlite3.connect(DATABASE)
+    conn = sqlite3.connect("pdfplumber_" + DATABASE)
 
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -68,4 +70,28 @@ if __name__ == "__main__":
 
     conn.close()
     
-    sql2xls()
+    sql2xls(name='pdfplumber_output_sql_to_excel_test.xlsx', database='pdfplumber_'+DATABASE)
+    pdfplumber_end_time = time.time()
+    pdfplumber_running_time = pdfplumber_end_time - pdfplumber_start_time
+    
+    PyMuPDF_start_time = time.time()
+    for report in list_of_reports:
+        pdf_report = reports_parser.CMMReport_pymupdf(report, DATABASE)
+        # pdf_report.show_blocks_text()
+        # pdf_report.to_sqlite()
+    
+    conn = sqlite3.connect("pymupdf_" + DATABASE)
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = [table[0] for table in cursor.fetchall()]
+
+    conn.close()
+    
+    sql2xls(name='pymupdf_output_sql_to_excel_test.xlsx', database='pymupdf_'+DATABASE)
+    PyMuPDF_end_time = time.time()
+    PyMuPDF_running_time = PyMuPDF_end_time - PyMuPDF_start_time
+    
+    
+    print(f"\nRunning time for pdfplumber: {pdfplumber_running_time} seconds")
+    print(f"Running time for PyMuPDF: {PyMuPDF_running_time} seconds, which is {pdfplumber_running_time/PyMuPDF_running_time}x faster compared to pdfplumber \:D/")
