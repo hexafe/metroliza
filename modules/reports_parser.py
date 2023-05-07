@@ -331,7 +331,7 @@ class CMMReport_pymupdf:
     
     def get_reference_from_filename(self):
         """Retrieves reference from filename by using regex"""
-        reference_pattern = r"([A-Z][A-Za-z0-9]{5,9}_?\d{3})|(\d{2}[A-Za-z][._-]?\d{3}[._-]?\d{3})|(216\d{5})"
+        reference_pattern = r"([A-Z][A-Za-z0-9]{4}\d{1,5}(_\d{3})?)|(\d{2}[A-Za-z][._-]?\d{3}[._-]?\d{3})|(216\d{5})"
         reference_match = re.match(reference_pattern, self.pdf_file_name)
         reference_match = reference_match.group(0) if reference_match else "REF?"
         return reference_match
