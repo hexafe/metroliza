@@ -45,7 +45,7 @@ def sql2xls(name: str, database: str):
         # print(f"Table '{table_name}' added to Excel workbook as sheet '{table_name_sanitized}'.")
 
     # Save and close Excel writer
-    excel_writer.save()
+    # excel_writer.save()
     excel_writer.close()
 
     # Close database connection
@@ -66,10 +66,15 @@ if __name__ == "__main__":
     PyMuPDF_start_time = time.time()
     for report in list_of_reports:
         pdf_report = reports_parser.CMMReport_pymupdf(report, DATABASE)
+    PyMuPDF_end_time_before_export = time.time()    
     sql2xls(name='pymupdf_output_sql_to_excel_test.xlsx', database='pymupdf_'+DATABASE)
     PyMuPDF_end_time = time.time()
+    PyMuPDF_running_time_before_export = PyMuPDF_end_time_before_export - PyMuPDF_start_time
     PyMuPDF_running_time = PyMuPDF_end_time - PyMuPDF_start_time
+    excel_export_time = PyMuPDF_running_time - PyMuPDF_running_time_before_export
     
     # print(f"\nRunning time for pdfplumber: {pdfplumber_running_time} seconds")
     # print(f"Running time for PyMuPDF: {PyMuPDF_running_time} seconds, which is {pdfplumber_running_time/PyMuPDF_running_time}x faster compared to pdfplumber \:D/")
-    print(f"Running time for PyMuPDF: {PyMuPDF_running_time} seconds")
+    print(f"Running time for PyMuPDF (not including export to Excel): {PyMuPDF_running_time_before_export} seconds")
+    print(f"Running time for PyMuPDF (including export to Excel): {PyMuPDF_running_time} seconds")
+    print(f"So it takes: {excel_export_time} seconds to export the data to Excel")

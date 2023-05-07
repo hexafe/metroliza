@@ -11,7 +11,8 @@ def get_list_of_reports(directory: str):
     """
     pdf_files = []
     for path in directory.glob("**/*.[Pp][Dd][Ff]"):
-        pdf_files.append(path)
+        if path.is_file() and path.stat().st_size:
+            pdf_files.append(path)
     return pdf_files
     #return list(Path(path).glob('*.[Pp][Dd][Ff]'))
     

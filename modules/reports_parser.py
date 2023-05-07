@@ -299,37 +299,49 @@ class CMMReport_pymupdf:
 
     def __init__(self, pdf_file_path: str, database: str):
         """Creates object of CMMReport class"""
-        self.pdf_file_path = str(Path(pdf_file_path).absolute().parent)
-        self.pdf_file_name = str(Path(pdf_file_path).name)
+        self.pdf_file_path = self.get_file_path_from_filename(pdf_file_path)
+        self.pdf_file_name = self.get_file_name_from_filename(pdf_file_path)
+        self.pdf_date = self.get_date_from_filename()
+        self.pdf_reference = self.get_reference_from_filename()
         self.pdf_raw_text = []
         self.pdf_blocks_text = []
         self.df = pandas.DataFrame()
-        self.pdf_date = ""
         self.database = "pymupdf_" + database
 
         self.open_database_and_check_filename()
         # self.cmm_open()
         # self.split_text_to_blocks()
         # self.to_sqlite()
+        
+    def get_file_path_from_filename(self, pdf_file_path: str):
+        """Retrieves date from filename by using regex"""
+        return str(Path(pdf_file_path).absolute().parent)
+    
+    def get_file_name_from_filename(self, pdf_file_path: str):
+        """Retrieves date from filename by using regex"""
+        return str(Path(pdf_file_path).name)
+        
+    def get_date_from_filename(self):
+        """Retrieves date from filename by using regex"""
+        date_pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}"
+        date_match = re.findall(date_pattern, self.pdf_file_name)
+        date_match = date_match[-1] if date_match else "0000.00.00"
+        date_match = date_match.replace(".", "-").replace("_", "-").replace("/", "-")
+        return date_match
+    
+    def get_reference_from_filename(self):
+        """Retrieves reference from filename by using regex"""
+        reference_pattern = r"/[A-Z][A-Za-z0-9]{5,9}_?\d{3}|[0-9]{2}[A-Za-z][._-]?[0-9]{3}[._-]?[0-9]{3}|216[0-9]{5}/g"
+        reference_match = re.match(reference_pattern, self.pdf_file_name)
+        reference_match = reference_match.group(0) if reference_match else "REF?"
+        return reference_match
 
     def open_database_and_check_filename(self):
         """Checks if opened file is already in database"""
         def open_split_2sql():
-            # pdfplumber_start_time = time.time()
-            # self.cmm_open_pdfplumber()
-            # self.split_text_to_blocks_pdfplumber()
-            # self.to_sqlite()
-            # pdfplumber_end_time = time.time()
-            # pdfplumber_running_time = pdfplumber_end_time - pdfplumber_start_time
-            # print(f"runtime for pdfplumber: {pdfplumber_running_time}s")
-            
-            # PyMuPDF_start_time = time.time()
             self.cmm_open_pymupdf()
             self.split_text_to_blocks_pymupdf()
             self.to_sqlite()
-            # PyMuPDF_end_time = time.time()
-            # PyMuPDF_running_time = PyMuPDF_end_time - PyMuPDF_start_time
-            # print(f"runtime for PyMuPDF: {PyMuPDF_running_time}s, which is {pdfplumber_running_time/PyMuPDF_running_time}x faster!")
             
         with sqlite3.connect(self.database) as conn:
             with conn:
@@ -358,13 +370,6 @@ class CMMReport_pymupdf:
                 page_text = page.get_text().splitlines()
                 for line in page_text:
                     self.pdf_raw_text.append(line)
-            date_pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}"
-            matches = re.findall(date_pattern, self.pdf_file_name)
-            if matches:
-                self.pdf_date = matches[-1]
-            else:
-                self.pdf_date = "0000.00.00"
-            self.pdf_date = self.pdf_date.replace(".", "-").replace("_", "-").replace("/", "-")
 
     def show_raw_text(self):
         """Method to print raw text inside pdf"""
@@ -602,6 +607,7 @@ class CMMReport_pymupdf:
             columns = ['AX', 'NOM', '+TOL', '-TOL', 'BONUS', 'MEAS', 'DEV', 'OUTTOL']
             df = pandas.DataFrame(block[1], columns=columns)
             df['Header'] = header
+            df['Reference'] = self.pdf_references
             df['File location'] = self.pdf_file_path
             df['File name'] = self.pdf_file_name
             df['Date'] = self.pdf_date
@@ -617,16 +623,16 @@ class CMMReport_pymupdf:
                 cursor = conn.cursor()
 
                 cursor.execute('CREATE TABLE IF NOT EXISTS MEASUREMENTS (ID INTEGER PRIMARY KEY, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL REAL, HEADER TEXT, REPORT_ID INTEGER, FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID))')
-                cursor.execute('CREATE TABLE IF NOT EXISTS REPORTS (ID INTEGER PRIMARY KEY, FILELOC TEXT, FILENAME TEXT, DATE TEXT)')
+                cursor.execute('CREATE TABLE IF NOT EXISTS REPORTS (ID INTEGER PRIMARY KEY, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT)')
 
-                cursor.execute('SELECT COUNT(*) FROM REPORTS WHERE FILELOC = ? AND FILENAME = ? AND DATE = ?', (self.pdf_file_path, self.pdf_file_name, self.pdf_date))
+                cursor.execute('SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ?', (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date))
                 count = cursor.fetchone()[0]
 
                 if count > 0:
                     print(f'Report ({self.pdf_file_name}) already exists in database.')
                     return
 
-                cursor.execute('INSERT INTO REPORTS (FILELOC, FILENAME, DATE) VALUES (?, ?, ?)', (self.pdf_file_path, self.pdf_file_name, self.pdf_date))
+                cursor.execute('INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE) VALUES (?, ?, ?, ?)', (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date))
                 report_id = cursor.lastrowid
 
                 for lst in self.pdf_blocks_text:
