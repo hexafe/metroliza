@@ -68,7 +68,7 @@ class ParseReportsThread(QThread):
         total_files = len(list_of_reports)
         parsed_files = 0
         for report in list_of_reports:
-            reports_parser.CMMReport_pymupdf(report, self.db_file)
+            reports_parser.CMMReport(report, self.db_file)
             parsed_files += 1
             percentage = int(parsed_files / total_files * 100)
             self.update_progress.emit(percentage)
