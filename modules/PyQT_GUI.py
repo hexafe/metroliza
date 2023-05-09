@@ -98,6 +98,7 @@ class ParsingDialog(QDialog):
         self.parse_button.clicked.connect(self.show_loading_screen)
         
         self.parse_thread = None
+        self.parsing_canceled = False
 
         # Initialize the layout
         self.layout = QGridLayout()
