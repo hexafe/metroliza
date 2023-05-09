@@ -306,7 +306,7 @@ class CMMReport_pymupdf:
         self.pdf_raw_text = []
         self.pdf_blocks_text = []
         self.df = pandas.DataFrame()
-        self.database = "pymupdf_" + database
+        self.database = database
 
         self.open_database_and_check_filename()
         # self.cmm_open()
