@@ -224,14 +224,10 @@ class ExportDialog(QDialog):
         self.export_btn.clicked.connect(self.export_data)
         self.export_btn.setEnabled(False)
 
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.reject)
-
         vbox = QVBoxLayout()
         vbox.addWidget(self.select_db_btn)
         vbox.addWidget(self.select_excel_btn)
         vbox.addWidget(self.export_btn)
-        vbox.addWidget(self.cancel_btn)
 
         self.setLayout(vbox)
 
