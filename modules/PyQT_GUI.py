@@ -119,7 +119,8 @@ class ParsingDialog(QDialog):
     def select_database(self):
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        filename, _ = QFileDialog.getSaveFileName(self, "Select database", "",
+        default_name = [part for part in self.directory.split("/") if part][-1]
+        filename, _ = QFileDialog.getSaveFileName(self, "Select database", f"{default_name}",
                                                   "SQLite3 Database (*.db);;All Files (*)", options=options)
         if filename:
             if not filename.endswith(".db"):
@@ -199,6 +200,9 @@ class ParsingDialog(QDialog):
         
         # Reset the parsing canceled flag
         self.parsing_canceled = False
+        
+        # Close the parsing dialog
+        self.accept()
 
 
 class ExportDialog(QDialog):
@@ -245,7 +249,7 @@ class ExportDialog(QDialog):
     def select_excel_file(self):
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        filename, _ = QFileDialog.getSaveFileName(self, "Select Excel File", "",
+        filename, _ = QFileDialog.getSaveFileName(self, "Select Excel File", f"{self.db_file[:-3]}",
                                                   "Excel Workbook (*.xlsx);;All Files (*)", options=options)
         if filename:
             if not filename.endswith(".xlsx"):

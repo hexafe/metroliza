@@ -122,6 +122,9 @@ class CMMReport:
             elif (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 7:
                 processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
 
+            elif line[0] == "TP" and len(line) == 6:
+                processed_line = [line[0], float(line[1]), float(line[2]), "", float(line[3]), float(line[4]), float(line[4]), float(line[5])]
+            
             elif line[0] == "TP" and len(line) == 7:
                 processed_line = [line[0], float(line[1]), float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
 
@@ -157,20 +160,6 @@ class CMMReport:
                 
             return processed_line
        
-        # def extract_numerical_lines(lines):
-        #     prefixes = ["X", "Y", "Z", "TP", "M", "D", "RN", "DF", "PR", "PA", "D1"]
-        #     numerical_lines = []
-        #     counter = 0
-        #     for i in range(len(lines)):
-        #         line = lines[i]
-        #         if any(line.startswith(p) for p in prefixes) and not i:
-        #             numerical_lines.append(line)
-        #         elif is_numerical(line):
-        #             numerical_lines.append(line)
-        #         else:
-        #             counter = i - 1
-        #             break
-        #     return numerical_lines, counter
         def extract_numerical_lines(lines):
             """Creates list with numerical values from the line and calculates how many lines can be skipped"""
             prefixes = ["X", "Y", "Z", "TP", "M", "D", "RN", "DF", "PR", "PA", "D1"]
@@ -283,16 +272,15 @@ class CMMReport:
                         formatted_line = re.sub(r'^[#*/]+', '', line).strip()
                         header_comment.append([formatted_line])
                         text_block.append(header_comment)
-                
+                    elif is_dim_line(line):
+                        header_comment.append("NO HEADER")
+                        text_block.append(header_comment)
                 else:
-                    if is_dim_line(line):
+                    if is_dim_line(line) or is_comment_or_header(line):
                         text_block = [header_comment] + [dim_block]
                         self.pdf_blocks_text.append(text_block)
                         text_block, dim_block = [], []
-                        
                     if is_comment_or_header(line):
-                        text_block = [header_comment] + [dim_block]
-                        self.pdf_blocks_text.append(text_block)
                         text_block, header_comment, dim_block = [], [], []
                         formatted_line = re.sub(r'^[#*/]+', '', line).strip()
                         header_comment.append([formatted_line])
