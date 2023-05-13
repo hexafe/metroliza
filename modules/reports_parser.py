@@ -1,6 +1,7 @@
 import fitz
 import pandas
 import sqlite3
+import time
 import re
 from pathlib import Path
 
@@ -421,7 +422,7 @@ class CMMReport:
 
         if df_list:
             self.df = pandas.concat(df_list)
-         
+
     def to_sqlite(self):
         """
         Creates tables (if necessary) and inserts measurements and reports data into an SQLite database.
@@ -464,32 +465,52 @@ class CMMReport:
                     print(f'Report ({self.pdf_file_name}) already exists in the database.')
                     return
 
-                # Insert report data into the REPORTS table
-                cursor.execute('INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE) VALUES (?, ?, ?, ?)', 
-                            (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date))
-                report_id = cursor.lastrowid
+                # Retry mechanism for handling database lock
+                max_retry_attempts = 5
+                retry_delay = 1  # seconds
+                retry_attempt = 1
 
-                # Insert measurements data into the MEASUREMENTS table
-                for lst in self.pdf_blocks_text:
-                    table_name = ""
-                    for sublist in lst[0]:
-                        if isinstance(sublist, str):
-                            table_name += sublist
-                            table_name += ", "
-                        else:
-                            for item in sublist:
-                                if isinstance(item, str):
-                                    table_name += item
+                while retry_attempt <= max_retry_attempts:
+                    try:
+                        # Attempt to insert report data into the REPORTS table
+                        cursor.execute('INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE) VALUES (?, ?, ?, ?)', 
+                                    (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date))
+                        report_id = cursor.lastrowid
+
+                        # Insert measurements data into the MEASUREMENTS table
+                        for lst in self.pdf_blocks_text:
+                            table_name = ""
+                            for sublist in lst[0]:
+                                if isinstance(sublist, str):
+                                    table_name += sublist
                                     table_name += ", "
+                                else:
+                                    for item in sublist:
+                                        if isinstance(item, str):
+                                            table_name += item
+                                            table_name += ", "
 
-                    table_name = table_name.replace('"', '')
-                    table_name = table_name[:-2]
+                            table_name = table_name.replace('"', '')
+                            table_name = table_name[:-2]
 
-                    rows = [(None, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], table_name, report_id) for row in lst[1]]
-                    cursor.executemany('INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', rows)
+                            rows = [(None, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], table_name, report_id) for row in lst[1]]
+                            cursor.executemany('INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', rows)
 
-                print(f'Report ({self.pdf_file_name}) and measurements inserted into the database.')
-                           
+                        print(f'Report ({self.pdf_file_name}) and measurements inserted into the database.')
+                        return
+
+                    except sqlite3.OperationalError as e:
+                        error_message = str(e)
+                        if 'database is locked' in error_message:
+                            print(f"Database is locked. Retrying attempt {retry_attempt}...")
+                            retry_attempt += 1
+                            time.sleep(retry_delay)
+                        else:
+                            print(f"Error occurred: {error_message}.")  # Handle other database errors
+
+                print(f"Failed to insert data into the database after {max_retry_attempts} attempts.")
+                return
+                    
     def show_df(self):
         """Prints the dataframe with measurements"""
         print(f"{self.df}")

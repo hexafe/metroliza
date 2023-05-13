@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import QPushButton, QWidget, QLabel, QGridLayout
 from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox
 from PyQt5.QtWidgets import QProgressBar
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt5.QtCore import QTemporaryFile, pyqtSlot
 from PyQt5.QtGui import QMovie
 import sqlite3
 import pandas as pd
@@ -10,9 +11,9 @@ import xlsxwriter
 from modules import base64_encoded_files, reports_parser
 from pathlib import Path
 import base64
-import tempfile
+import time
 
-VERSION_DATE = "230513.1730"
+VERSION_DATE = "230513.1930"
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -75,6 +76,7 @@ class ParseReportsThread(QThread):
         # Initialize the thread with the provided directory and database file
         self.directory = directory
         self.db_file = db_file
+        self.parsing_canceled = False
 
     def get_list_of_reports(self):
         pdf_files = []
@@ -91,26 +93,48 @@ class ParseReportsThread(QThread):
         with sqlite3.connect(self.db_file) as conn:
             # Create a cursor object
             with conn:
-                cursor = conn.cursor()
+                # Retry mechanism for handling database lock
+                max_retry_attempts = 5
+                retry_delay = 1  # seconds
+                retry_attempt = 1
+                while retry_attempt <= max_retry_attempts:
+                    try:
+                        cursor = conn.cursor()
 
-                # Check if 'REPORTS' table exists
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='REPORTS'")
-                result = cursor.fetchone()
+                        # Check if 'REPORTS' table exists
+                        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='REPORTS'")
+                        result = cursor.fetchone()
 
-                if result:
-                    # 'REPORTS' table exists, fetch the list of filenames
-                    cursor.execute("SELECT FILENAME FROM REPORTS")
-                    rows = cursor.fetchall()
+                        if result:
+                            # 'REPORTS' table exists, fetch the list of filenames
+                            cursor.execute("SELECT FILENAME FROM REPORTS")
+                            rows = cursor.fetchall()
 
-                    for row in rows:
-                        # Extract report filename
-                        filename = row[0]
+                            for row in rows:
+                                # Extract report filename
+                                filename = row[0]
 
-                        # Append the report ID and name as a tuple to the list
-                        list_of_reports_in_database.append(filename)
-        
+                                # Append the filename to the list
+                                list_of_reports_in_database.append(filename)
+
+                            # Return the list of reports in the database
+                            return list_of_reports_in_database
+
+                    except sqlite3.OperationalError as e:
+                        error_message = str(e)
+                        if 'database is locked' in error_message:
+                            print(f"Database is locked. Retrying attempt {retry_attempt}...")
+                            retry_attempt += 1
+                            time.sleep(retry_delay)
+                        else:
+                            print(f"Error occurred: {error_message}.")  # Handle other database errors
+
         # Return the list of reports in the database
         return list_of_reports_in_database
+
+    def stop_parsing(self):
+        # Set the flag to indicate parsing cancellation
+        self.parsing_canceled = True
 
     def run(self):
         # Get the list of reports from the provided directory
@@ -121,6 +145,9 @@ class ParseReportsThread(QThread):
 
         # Loop through each report and parse it
         for report in list_of_reports:
+            if self.parsing_canceled:
+                break
+
             if report.name not in list_of_parsed_reports:
                 reports_parser.CMMReport(report, self.db_file)
             parsed_files += 1
@@ -173,6 +200,7 @@ class ParsingDialog(QDialog):
         self.layout.addWidget(self.parse_button, 2, 0, 1, 2)
         self.setLayout(self.layout)
 
+    @pyqtSlot()
     def select_directory(self):
         # Open a dialog to select a directory
         directory = QFileDialog.getExistingDirectory(self, "Select directory")
@@ -181,6 +209,7 @@ class ParsingDialog(QDialog):
             self.directory = directory
             self.database_button.setEnabled(True)
 
+    @pyqtSlot()
     def select_database(self):
         # Open a dialog to select a database file
         options = QFileDialog.Options()
@@ -195,6 +224,7 @@ class ParsingDialog(QDialog):
             self.db_file = filename
             self.parse_button.setEnabled(True)
 
+    @pyqtSlot()
     def show_loading_screen(self):
         # Create the progress dialog
         self.loading_dialog = QDialog(self, Qt.WindowTitleHint)
@@ -210,13 +240,17 @@ class ParsingDialog(QDialog):
         # Load the loading.gif from a file, create a QMovie from it, and set it to the label
         loading_gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
 
-        # Save the byte array to a temporary file
-        temp_file = tempfile.NamedTemporaryFile(delete=False)
-        temp_file.write(loading_gif_decoded)
-        temp_file.close()
+        # Create temporary file and save encoded loading gif to it
+        temp_file = QTemporaryFile()
+        temp_file.setAutoRemove(False)
+        temp_file_name = ""
+        if temp_file.open():
+            temp_file.write(loading_gif_decoded)
+            temp_file.close()
+            temp_file_name = temp_file.fileName()
 
         # Create the QMovie using the temporary file name
-        self.loading_gif = QMovie(temp_file.name)  # Save as an instance variable
+        self.loading_gif = QMovie(temp_file_name)  # Save as an instance variable
         self.loading_gif.setScaledSize(QSize(200, 200))
         loading_gif_label.setMovie(self.loading_gif)
         self.loading_gif.start()
@@ -252,13 +286,26 @@ class ParsingDialog(QDialog):
         self.parse_thread.finished.connect(self.on_parse_finished)
         self.parse_thread.start()
 
+    @pyqtSlot()
     def stop_parsing(self):
         # Stop the parsing thread
         self.parsing_canceled = True
+        self.parse_thread.stop_parsing()
         self.parse_thread.quit()
-        self.parse_thread.terminate()
+        
+        # Check if the thread is still running and wait for it to finish
+        if self.parse_thread.isRunning():
+            print("Parsing thread still running, waiting...")
+            self.parse_thread.wait()
+            print("Parsing thread closed successfully!")
+        
+        # Close the loading dialog
         self.loading_dialog.reject()
         
+        # Close the main dialog
+        self.close()
+        
+    @pyqtSlot()
     def on_parse_finished(self):
         if self.parsing_canceled:
             # Show a message box to inform the user that parsing has been canceled
@@ -293,52 +340,50 @@ class ExportDataThread(QThread):
     def run(self):
         try:
             # Connect to the SQLite database
-            conn = sqlite3.connect(self.db_file)
-            cursor = conn.cursor()
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
 
-            # Retrieve the table names from the database
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = cursor.fetchall()
+                # Retrieve the table names from the database
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                tables = cursor.fetchall()
 
-            # Calculate the total number of tables for progress tracking
-            total_tables = len(tables)
-            current_table = 0
+                # Calculate the total number of tables for progress tracking
+                total_tables = len(tables)
+                current_table = 0
 
-            # Create an Excel writer using xlsxwriter engine
-            excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
+                # Create an Excel writer using xlsxwriter engine
+                excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
 
-            # Export each table in a separate sheet
-            for table in tables:
-                table_name = table[0]
-                cursor.execute(f'SELECT * FROM "{table_name}";')
-                data = cursor.fetchall()
-                column_names = [desc[0] for desc in cursor.description]
-                df = pd.DataFrame(data, columns=column_names)
+                # Export each table in a separate sheet
+                for table in tables:
+                    table_name = table[0]
+                    cursor.execute(f'SELECT * FROM "{table_name}";')
+                    data = cursor.fetchall()
+                    column_names = [desc[0] for desc in cursor.description]
+                    df = pd.DataFrame(data, columns=column_names)
 
-                # Sanitize the table name to avoid invalid characters in the sheet name
-                table_name_sanitized = ''.join([c if c.isalnum() or c.isspace() else '' for c in table_name])
-                table_name_sanitized = table_name_sanitized[:30]  # Limit the sheet name to 30 characters
-                if not table_name_sanitized:
-                    table_name_sanitized = 'Sheet'
+                    # Sanitize the table name to avoid invalid characters in the sheet name
+                    table_name_sanitized = ''.join([c if c.isalnum() or c.isspace() else '' for c in table_name])
+                    table_name_sanitized = table_name_sanitized[:30]  # Limit the sheet name to 30 characters
+                    if not table_name_sanitized:
+                        table_name_sanitized = 'Sheet'
 
-                # Write the DataFrame to the Excel sheet
-                df.to_excel(excel_writer, sheet_name=table_name_sanitized, index=False)
-                worksheet = excel_writer.sheets[table_name_sanitized]
+                    # Write the DataFrame to the Excel sheet
+                    df.to_excel(excel_writer, sheet_name=table_name_sanitized, index=False)
+                    worksheet = excel_writer.sheets[table_name_sanitized]
 
-                # Adjust the column widths based on the data
-                for i, column in enumerate(df.columns):
-                    column_width = self.calculate_column_width(df[column])
-                    worksheet.set_column(i, i, column_width)
+                    # Adjust the column widths based on the data
+                    for i, column in enumerate(df.columns):
+                        column_width = self.calculate_column_width(df[column])
+                        worksheet.set_column(i, i, column_width)
 
-                current_table += 1
-                progress = int((current_table / total_tables) * 100)
-                self.update_progress.emit(progress)
-                self.update_label.emit(f"Exporting table {current_table}/{total_tables}")
+                    current_table += 1
+                    progress = int((current_table / total_tables) * 100)
+                    self.update_progress.emit(progress)
+                    self.update_label.emit(f"Exporting table {current_table}/{total_tables}")
 
-            excel_writer.close()
-
-            cursor.close()
-            conn.close()
+                excel_writer.close()
+                cursor.close()
 
             self.finished.emit()
 
@@ -348,8 +393,8 @@ class ExportDataThread(QThread):
 
     def calculate_column_width(self, data):
         # Calculate the column width based on the maximum length of the data in the column
-        column_width = max(data.astype(str).map(len).max() + 2, 10)
-        return column_width
+        column_width = max(len(str(value)) for value in data) + 2
+        return max(column_width, 10)
 
 
 class ExportDialog(QDialog):
@@ -428,13 +473,17 @@ class ExportDialog(QDialog):
         # Load the loading.gif from a file, create a QMovie from it, and set it to the label
         loading_gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
 
-        # Save the byte array to a temporary file
-        temp_file = tempfile.NamedTemporaryFile(delete=False)
-        temp_file.write(loading_gif_decoded)
-        temp_file.close()
+        # Create temporary file and save encoded loading gif to it
+        temp_file = QTemporaryFile()
+        temp_file.setAutoRemove(False)
+        temp_file_name = ""
+        if temp_file.open():
+            temp_file.write(loading_gif_decoded)
+            temp_file.close()
+            temp_file_name = temp_file.fileName()
 
         # Create the QMovie using the temporary file name
-        self.loading_gif = QMovie(temp_file.name)
+        self.loading_gif = QMovie(temp_file_name)  # Save as an instance variable
         self.loading_gif.setScaledSize(QSize(200, 200))
         loading_gif_label.setMovie(self.loading_gif)
         self.loading_gif.start()
@@ -473,9 +522,17 @@ class ExportDialog(QDialog):
     def stop_exporting(self):
         # Stop the exporting thread
         self.export_thread.quit()
-        self.export_thread.terminate()
-        self.loading_dialog.reject()
 
+        # Check if the thread is still running and wait for it to finish
+        if self.export_thread.isRunning():
+            print("Export thread still running, waiting...")
+            self.export_thread.wait()
+            print("Export thread closed successfully!")
+        
+        # self.export_thread.terminate()
+        self.loading_dialog.reject()
+        self.close()
+        
     def on_export_finished(self):
         # Show a message box to inform the user that exporting is complete
         QMessageBox.information(self, "Export successful", f"Data exported successfully to {self.excel_file}!")
@@ -488,3 +545,4 @@ class ExportDialog(QDialog):
 
         # Close the exporting dialog
         self.accept()
+        

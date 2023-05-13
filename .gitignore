@@ -3,3 +3,4 @@ input/
 dist/
 build/
 modules/__pycache__
+main.spec
