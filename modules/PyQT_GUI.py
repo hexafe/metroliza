@@ -7,18 +7,19 @@ from PyQt5.QtGui import QMovie
 import sqlite3
 import pandas as pd
 import xlsxwriter
-from modules import reports_parser, loading_gif_b64
+from modules import base64_encoded_files, reports_parser
 from pathlib import Path
 import base64
 import tempfile
 
+VERSION_DATE = "230513.1730"
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
         # Initialize the main window and layout
-        self.setWindowTitle("Metroliza")
+        self.setWindowTitle(f"Metroliza [{VERSION_DATE}]")
         self.setGeometry(100, 100, 300, 150)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -75,15 +76,53 @@ class ParseReportsThread(QThread):
         self.directory = directory
         self.db_file = db_file
 
+    def get_list_of_reports(self):
+        pdf_files = []
+        for path in Path(self.directory).glob("**/*.[Pp][Dd][Ff]"):
+            if path.is_file() and path.stat().st_size:
+                pdf_files.append(path)
+        return pdf_files
+
+    def get_list_of_reports_in_database(self):
+        # Create an empty list to store the reports
+        list_of_reports_in_database = []
+
+        # Connect to the SQLite database
+        with sqlite3.connect(self.db_file) as conn:
+            # Create a cursor object
+            with conn:
+                cursor = conn.cursor()
+
+                # Check if 'REPORTS' table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='REPORTS'")
+                result = cursor.fetchone()
+
+                if result:
+                    # 'REPORTS' table exists, fetch the list of filenames
+                    cursor.execute("SELECT FILENAME FROM REPORTS")
+                    rows = cursor.fetchall()
+
+                    for row in rows:
+                        # Extract report filename
+                        filename = row[0]
+
+                        # Append the report ID and name as a tuple to the list
+                        list_of_reports_in_database.append(filename)
+        
+        # Return the list of reports in the database
+        return list_of_reports_in_database
+
     def run(self):
         # Get the list of reports from the provided directory
-        list_of_reports = get_list_of_reports(Path(self.directory))
+        list_of_reports = self.get_list_of_reports()
+        list_of_parsed_reports = self.get_list_of_reports_in_database()
         total_files = len(list_of_reports)
         parsed_files = 0
 
         # Loop through each report and parse it
         for report in list_of_reports:
-            reports_parser.CMMReport(report, self.db_file)
+            if report.name not in list_of_parsed_reports:
+                reports_parser.CMMReport(report, self.db_file)
             parsed_files += 1
 
             # Calculate the percentage of parsed files and emit the progress signal
@@ -117,7 +156,7 @@ class ParsingDialog(QDialog):
         self.database_button = QPushButton("Browse")
         self.database_button.setDisabled(True)
         self.database_button.clicked.connect(self.select_database)
-        self.parse_button = QPushButton("Parse Reports")
+        self.parse_button = QPushButton("Parse reports")
         self.parse_button.setDisabled(True)
         self.parse_button.clicked.connect(self.show_loading_screen)
         
@@ -148,7 +187,7 @@ class ParsingDialog(QDialog):
         options |= QFileDialog.DontUseNativeDialog
         default_name = [part for part in self.directory.split("/") if part][-1]
         filename, _ = QFileDialog.getSaveFileName(self, "Select database", f"{default_name}",
-                                                  "SQLite3 Database (*.db);;All Files (*)", options=options)
+                                                  "SQLite3 database (*.db);;All Files (*)", options=options)
         if filename:
             if not filename.endswith(".db"):
                 filename += ".db"
@@ -159,7 +198,7 @@ class ParsingDialog(QDialog):
     def show_loading_screen(self):
         # Create the progress dialog
         self.loading_dialog = QDialog(self, Qt.WindowTitleHint)
-        self.loading_dialog.setWindowTitle("Parsing Reports...")
+        self.loading_dialog.setWindowTitle("Parsing reports...")
         self.loading_dialog.setWindowModality(Qt.ApplicationModal)
         self.loading_dialog.setFixedSize(400, 300)
 
@@ -169,7 +208,7 @@ class ParsingDialog(QDialog):
         loading_gif_label.setAlignment(Qt.AlignCenter)
 
         # Load the loading.gif from a file, create a QMovie from it, and set it to the label
-        loading_gif_decoded = base64.b64decode(loading_gif_b64.loading_gif_encoded_string)
+        loading_gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
 
         # Save the byte array to a temporary file
         temp_file = tempfile.NamedTemporaryFile(delete=False)
@@ -216,16 +255,17 @@ class ParsingDialog(QDialog):
     def stop_parsing(self):
         # Stop the parsing thread
         self.parsing_canceled = True
+        self.parse_thread.quit()
         self.parse_thread.terminate()
         self.loading_dialog.reject()
         
     def on_parse_finished(self):
         if self.parsing_canceled:
             # Show a message box to inform the user that parsing has been canceled
-            QMessageBox.information(self, "Parsing Canceled", "Parsing has been canceled.")
+            QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
         else:
             # Show a message box to inform the user that parsing is complete
-            QMessageBox.information(self, "Parsing Successful", f"Measurements data saved to {self.db_file}!")
+            QMessageBox.information(self, "Parsing successful", f"Measurements data saved to {self.db_file}!")
         
         # Close the loading dialog
         self.loading_dialog.accept()
@@ -315,7 +355,7 @@ class ExportDataThread(QThread):
 class ExportDialog(QDialog):
     def __init__(self, db_file, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Export Data")
+        self.setWindowTitle("Export data")
         self.setGeometry(100, 100, 300, 150)
 
         self.db_file = db_file
@@ -351,8 +391,8 @@ class ExportDialog(QDialog):
         """Open a file dialog to select a database file"""
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        filename, _ = QFileDialog.getOpenFileName(self, "Select Database", "",
-                                                  "SQLite Database (*.db);;All Files (*)", options=options)
+        filename, _ = QFileDialog.getOpenFileName(self, "Select database", "",
+                                                  "SQLite database (*.db);;All Files (*)", options=options)
         if filename:
             if not filename.endswith(".db"):
                 filename += ".db"
@@ -365,7 +405,7 @@ class ExportDialog(QDialog):
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
         filename, _ = QFileDialog.getSaveFileName(self, "Select Excel File", f"{self.db_file[:-3]}",
-                                                  "Excel Workbook (*.xlsx);;All Files (*)", options=options)
+                                                  "Excel workbook (*.xlsx);;All Files (*)", options=options)
         if filename:
             if not filename.endswith(".xlsx"):
                 filename += ".xlsx"
@@ -376,7 +416,7 @@ class ExportDialog(QDialog):
     def show_loading_screen(self):
         # Create the progress dialog
         self.loading_dialog = QDialog(self, Qt.WindowTitleHint)
-        self.loading_dialog.setWindowTitle("Exporting Data...")
+        self.loading_dialog.setWindowTitle("Exporting data...")
         self.loading_dialog.setWindowModality(Qt.ApplicationModal)
         self.loading_dialog.setFixedSize(400, 300)
 
@@ -386,7 +426,7 @@ class ExportDialog(QDialog):
         loading_gif_label.setAlignment(Qt.AlignCenter)
 
         # Load the loading.gif from a file, create a QMovie from it, and set it to the label
-        loading_gif_decoded = base64.b64decode(loading_gif_b64.loading_gif_encoded_string)
+        loading_gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
 
         # Save the byte array to a temporary file
         temp_file = tempfile.NamedTemporaryFile(delete=False)
@@ -432,12 +472,13 @@ class ExportDialog(QDialog):
 
     def stop_exporting(self):
         # Stop the exporting thread
+        self.export_thread.quit()
         self.export_thread.terminate()
         self.loading_dialog.reject()
 
     def on_export_finished(self):
         # Show a message box to inform the user that exporting is complete
-        QMessageBox.information(self, "Export Successful", f"Data exported successfully to {self.excel_file}!")
+        QMessageBox.information(self, "Export successful", f"Data exported successfully to {self.excel_file}!")
 
         # Close the loading dialog
         self.loading_dialog.accept()
@@ -447,11 +488,3 @@ class ExportDialog(QDialog):
 
         # Close the exporting dialog
         self.accept()
-
-
-def get_list_of_reports(directory: Path):
-    pdf_files = []
-    for path in directory.glob("**/*.[Pp][Dd][Ff]"):
-        if path.is_file() and path.stat().st_size:
-            pdf_files.append(path)
-    return pdf_files
