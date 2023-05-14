@@ -13,10 +13,9 @@ from pathlib import Path
 import base64
 import time
 
-VERSION_DATE = "230513.1930"
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, VERSION_DATE):
         super().__init__()
 
         # Initialize the main window and layout
@@ -142,7 +141,7 @@ class ParseReportsThread(QThread):
         list_of_parsed_reports = self.get_list_of_reports_in_database()
         total_files = len(list_of_reports)
         parsed_files = 0
-
+        
         # Loop through each report and parse it
         for report in list_of_reports:
             if self.parsing_canceled:
