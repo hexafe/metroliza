@@ -141,7 +141,8 @@ class ExportDialog(QDialog):
         """Open a file dialog to select an excel file"""
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        default_name = [part for part in self.db_file.split("/") if part][-1][:-3]
+        # default_name = [part for part in self.db_file.split("/") if part][-1][:-3]
+        default_name = self.db_file[:-3]
         if not default_name.endswith(".xlsx"):
                 default_name += ".xlsx"
         filename, _ = QFileDialog.getSaveFileName(self, "Select Excel File", f"{default_name}",

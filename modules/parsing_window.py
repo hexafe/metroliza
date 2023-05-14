@@ -174,7 +174,7 @@ class ParsingDialog(QDialog):
         # Open a dialog to select a database file
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        default_name = [part for part in self.directory.split("/") if part][-1]
+        default_name = self.directory # + "/" + [part for part in self.directory.split("/") if part][-1]
         if not default_name.endswith(".db"):
                 default_name += ".db"
         filename, _ = QFileDialog.getSaveFileName(self, "Select database", f"{default_name}",
