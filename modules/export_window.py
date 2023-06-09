@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QDate
 from PyQt5.QtWidgets import (
     QDialog,
     QLabel,
@@ -8,6 +8,11 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QVBoxLayout,
     QMessageBox,
+    QListWidget,
+    QListWidgetItem,
+    QAbstractItemView,
+    QLineEdit,
+    QDateEdit,
 )
 import sqlite3
 import pandas as pd
@@ -23,64 +28,80 @@ class ExportDataThread(QThread):
     update_progress = pyqtSignal(int)
     finished = pyqtSignal()
 
-    def __init__(self, db_file, excel_file):
+    def __init__(self, db_file, excel_file, filter_query=None):
         super().__init__()
         self.db_file = db_file
         self.excel_file = excel_file
+        self.filter_query = filter_query
 
     def run(self):
-        try:
-            # Connect to the SQLite database
-            with sqlite3.connect(self.db_file) as conn:
-                cursor = conn.cursor()
+        # Connect to the SQLite database
+        with sqlite3.connect(self.db_file) as conn:
+            cursor = conn.cursor()
 
-                # Retrieve the table names from the database
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-                tables = cursor.fetchall()
+            # Retrieve the table names from the database
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = cursor.fetchall()
 
-                # Calculate the total number of tables for progress tracking
-                total_tables = len(tables)
-                current_table = 0
+            # Calculate the total number of tables for progress tracking
+            total_tables = len(tables)
+            current_table = 0
 
-                # Create an Excel writer using xlsxwriter engine
-                excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
+            # Create an Excel writer using xlsxwriter engine
+            excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
 
-                # Export each table in a separate sheet
-                for table in tables:
-                    table_name = table[0]
-                    cursor.execute(f'SELECT * FROM "{table_name}";')
-                    data = cursor.fetchall()
-                    column_names = [desc[0] for desc in cursor.description]
-                    df = pd.DataFrame(data, columns=column_names)
+            if self.filter_query:
+                self.export_filtered_data(cursor, excel_writer)
+            else:
+                self.export_all_tables(cursor, tables, excel_writer, total_tables, current_table)
 
-                    # Sanitize the table name to avoid invalid characters in the sheet name
-                    table_name_sanitized = ''.join([c if c.isalnum() or c.isspace() else '' for c in table_name])
-                    table_name_sanitized = table_name_sanitized[:30]  # Limit the sheet name to 30 characters
-                    if not table_name_sanitized:
-                        table_name_sanitized = 'Sheet'
+            excel_writer.close()
+            self.update_label.emit("Export completed successfully.")
 
-                    # Write the DataFrame to the Excel sheet
-                    df.to_excel(excel_writer, sheet_name=table_name_sanitized, index=False)
-                    worksheet = excel_writer.sheets[table_name_sanitized]
+        self.finished.emit()
 
-                    # Adjust the column widths based on the data
-                    for i, column in enumerate(df.columns):
-                        column_width = self.calculate_column_width(df[column])
-                        worksheet.set_column(i, i, column_width)
+    def export_filtered_data(self, cursor, excel_writer):
+        export_query = self.filter_query
+        cursor.execute(export_query)
+        data = cursor.fetchall()
+        column_names = [desc[0] for desc in cursor.description]
 
-                    current_table += 1
-                    progress = int((current_table / total_tables) * 100)
-                    self.update_progress.emit(progress)
-                    self.update_label.emit(f"Exporting table {current_table}/{total_tables}")
+        # Write the data to the Excel file
+        self.write_data_to_excel(data, column_names, "MEASUREMENTS", excel_writer)
 
-                excel_writer.close()
-                cursor.close()
+    def export_all_tables(self, cursor, tables, excel_writer, total_tables, current_table):
+        # Export each table to the Excel file
+        for table in tables:
+            table_name = table[0]
 
-            self.finished.emit()
+            # Construct the export query
+            export_query = f"SELECT * FROM {table_name}"
 
-        except Exception as e:
-            self.update_label.emit(f"Export error: {str(e)}")
-            self.finished.emit()
+            # Execute the export query and fetch the data
+            cursor.execute(export_query)
+            data = cursor.fetchall()
+            column_names = [desc[0] for desc in cursor.description]
+
+            # Write the data to the Excel file
+            self.write_data_to_excel(data, column_names, table_name, excel_writer)
+
+            # Update the progress
+            current_table += 1
+            progress = int((current_table / total_tables) * 100)
+            self.update_progress.emit(progress)
+
+    def write_data_to_excel(self, data, column_names, table_name, excel_writer):
+        # Convert the data to a DataFrame
+        df = pd.DataFrame(data, columns=column_names)
+
+        # Write the DataFrame to the Excel file
+        df.to_excel(excel_writer, sheet_name=table_name, index=False)
+        worksheet = excel_writer.sheets[table_name]
+
+        # Adjust the column widths based on the data
+        for i, column in enumerate(df.columns):
+            column_width = self.calculate_column_width(df[column])
+            worksheet.set_column(i, i, column_width)
 
     def calculate_column_width(self, data):
         # Calculate the column width based on the maximum length of the data in the column
@@ -97,6 +118,7 @@ class ExportDialog(QDialog):
 
         self.db_file = ""
         self.excel_file = ""
+        self.filter_query = None
 
         self.init_widgets()
         self.init_layout()
@@ -106,6 +128,9 @@ class ExportDialog(QDialog):
         self.select_db_label = QLabel("Select a database file:")
         self.select_db_button = QPushButton("Browse")
         self.select_db_button.clicked.connect(self.select_db_file)
+        self.filter_button = QPushButton("Filter")
+        self.filter_button.setDisabled(True)
+        self.filter_button.clicked.connect(self.open_filter_window)
         self.select_excel_label = QLabel("Select an excel file:")
         self.select_excel_button = QPushButton("Browse")
         self.select_excel_button.setDisabled(True)
@@ -119,9 +144,10 @@ class ExportDialog(QDialog):
         self.layout = QGridLayout()
         self.layout.addWidget(self.select_db_label, 0, 0)
         self.layout.addWidget(self.select_db_button, 0, 1)
+        self.layout.addWidget(self.filter_button, 2, 0, 1, 2)
         self.layout.addWidget(self.select_excel_label, 1, 0)
         self.layout.addWidget(self.select_excel_button, 1, 1)
-        self.layout.addWidget(self.export_button, 2, 0, 1, 2)
+        self.layout.addWidget(self.export_button, 3, 0, 1, 2)
         self.setLayout(self.layout)
 
     def select_db_file(self):
@@ -136,6 +162,216 @@ class ExportDialog(QDialog):
             print(f"{filename=}")
             self.db_file = filename
             self.select_excel_button.setEnabled(True)
+            self.filter_button.setEnabled(True)
+
+    def open_filter_window(self):
+        self.filter_window = QDialog(self)
+        self.filter_window.setWindowTitle("Data Filtering")
+        self.filter_window.setModal(True)
+
+        # Create labels and list widgets for each column to be filtered
+        ax_label = QLabel("AX:")
+        self.ax_list = QListWidget()
+        self.ax_list.setSelectionMode(QAbstractItemView.MultiSelection)
+        
+        header_label = QLabel("HEADER:")
+        self.header_list = QListWidget()
+        self.header_list.setSelectionMode(QAbstractItemView.MultiSelection)
+        
+        reference_label = QLabel("REFERENCE:")
+        self.reference_list = QListWidget()
+        self.reference_list.setSelectionMode(QAbstractItemView.MultiSelection)
+        
+        date_from_label = QLabel("MEASUREMENT DATE FROM:")
+        self.date_from_calendar = QDateEdit(calendarPopup=True)
+        self.date_from_calendar.setCalendarPopup(True)
+        self.date_from_calendar.setDate(QDate(2000, 1, 1))
+        self.date_from_calendar.setFixedSize(200, 30)
+
+        date_to_label = QLabel("MEASUREMENT DATE TO:")
+        self.date_to_calendar = QDateEdit(calendarPopup=True)
+        self.date_to_calendar.setCalendarPopup(True)
+        self.date_to_calendar.setDate(QDate.currentDate())
+        self.date_to_calendar.setFixedSize(200, 30)
+
+        # Set the default selection for list widgets as "SELECT ALL"
+        self.ax_list.addItem("SELECT ALL")
+        self.header_list.addItem("SELECT ALL")
+        self.reference_list.addItem("SELECT ALL")
+
+        # Create separate QLineEdit widgets for searching in each list widget
+        self.ax_search_input = QLineEdit()
+        self.ax_search_input.setPlaceholderText("Search AX...")
+        self.header_search_input = QLineEdit()
+        self.header_search_input.setPlaceholderText("Search HEADER...")
+        self.reference_search_input = QLineEdit()
+        self.reference_search_input.setPlaceholderText("Search REFERENCE...")
+
+        # Create a button to apply the filters
+        apply_button = QPushButton("Apply Filters")
+        apply_button.clicked.connect(self.apply_filters)
+
+        # Create a button to select today's date as "date TO"
+        select_today_button = QPushButton("Select Today")
+        select_today_button.clicked.connect(self.select_today_as_date_to)
+
+        # Create a button to select the beginning of time
+        select_beginning_button = QPushButton("Select Beginning of Time")
+        select_beginning_button.clicked.connect(self.select_beginning_of_time)
+
+        # Create a grid layout for the filter window
+        layout = QGridLayout(self.filter_window)
+
+        # Add labels, list widgets, and search inputs to the grid layout
+        layout.addWidget(ax_label, 0, 0)
+        layout.addWidget(self.ax_search_input, 1, 0)
+        layout.addWidget(self.ax_list, 2, 0)
+        
+        layout.addWidget(header_label, 0, 1)
+        layout.addWidget(self.header_search_input, 1, 1)
+        layout.addWidget(self.header_list, 2, 1)
+        
+        layout.addWidget(reference_label, 0, 2)
+        layout.addWidget(self.reference_search_input, 1, 2)
+        layout.addWidget(self.reference_list, 2, 2)
+        
+        layout.addWidget(date_from_label, 3, 0)
+        layout.addWidget(self.date_from_calendar, 3, 1)
+        
+        layout.addWidget(date_to_label, 4, 0)
+        layout.addWidget(self.date_to_calendar, 4, 1)
+        
+        # Add buttons to the layout
+        layout.addWidget(select_beginning_button, 3, 2)
+        layout.addWidget(select_today_button, 4, 2)
+        layout.addWidget(apply_button, 6, 0, 1, 3)
+
+        # Populate the list widgets with unique values from the columns in the database
+        self.populate_list_widgets()
+
+        # Connect the search input signals
+        self.ax_search_input.textChanged.connect(lambda: self.search_list_widgets(self.ax_list, self.ax_search_input.text()))
+        self.header_search_input.textChanged.connect(lambda: self.search_list_widgets(self.header_list, self.header_search_input.text()))
+        self.reference_search_input.textChanged.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
+
+        # Show the filter window
+        self.filter_window.show()
+
+    def search_list_widgets(self, list_widget, search_text):
+        selected_items = list_widget.selectedItems()  # Get the currently selected items
+
+        list_widget.clearSelection()
+
+        if not search_text:
+            # Show all items if search text is empty
+            for row in range(list_widget.count()):
+                item = list_widget.item(row)
+                item.setHidden(False)
+
+            # Restore the previously selected items
+            for item in selected_items:
+                item.setSelected(True)
+
+            return
+
+        # Perform case-insensitive search
+        search_text = search_text.lower()
+
+        # Iterate over items and hide those that don't match the search text
+        for row in range(list_widget.count()):
+            item = list_widget.item(row)
+            item_text = item.text().lower()
+            if search_text in item_text:
+                item.setHidden(False)
+            else:
+                item.setHidden(True)
+
+        # Restore the previously selected items
+        for item in selected_items:
+            item.setSelected(True)
+
+    def populate_list_widgets(self):
+        # Connect to the SQLite database
+        with sqlite3.connect(self.db_file) as conn:
+            cursor = conn.cursor()
+
+            # Get unique values from AX column
+            cursor.execute("SELECT DISTINCT AX FROM MEASUREMENTS;")
+            ax_values = cursor.fetchall()
+            for value in ax_values:
+                item = QListWidgetItem(value[0])
+                self.ax_list.addItem(item)
+
+            # Get unique values from HEADER column
+            cursor.execute("SELECT DISTINCT HEADER FROM MEASUREMENTS;")
+            header_values = cursor.fetchall()
+            for value in header_values:
+                item = QListWidgetItem(value[0])
+                self.header_list.addItem(item)
+
+            # Get unique values from REFERENCE column
+            cursor.execute("SELECT DISTINCT REFERENCE FROM REPORTS;")
+            reference_values = cursor.fetchall()
+            for value in reference_values:
+                item = QListWidgetItem(value[0])
+                self.reference_list.addItem(item)
+
+        cursor.close()
+
+    def select_beginning_of_time(self):
+        beginning_of_time = QDate(2000, 1, 1)
+        self.date_from_calendar.setDate(beginning_of_time)
+
+    def select_today_as_date_to(self):
+        today = QDate.currentDate()
+        self.date_to_calendar.setDate(today)
+
+    def apply_filters(self):
+        # Get the selected values from the list widgets and calendars
+        ax_selected_items = [item.text() for item in self.ax_list.selectedItems()]
+        header_selected_items = [item.text() for item in self.header_list.selectedItems()]
+        reference_selected_items = [item.text() for item in self.reference_list.selectedItems()]
+        date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
+        date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
+
+        # Construct the filter query based on the selected values
+        # query = "SELECT * FROM MEASUREMENTS JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID WHERE 1=1"
+        query = """
+            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
+                MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
+                MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE, 
+                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE 
+            FROM MEASUREMENTS
+            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            WHERE 1=1
+            """
+
+
+        if ax_selected_items and "SELECT ALL" not in ax_selected_items:
+            ax_values = "','".join(ax_selected_items)
+            query += f" AND MEASUREMENTS.AX IN ('{ax_values}')"
+
+        if header_selected_items and "SELECT ALL" not in header_selected_items:
+            header_values = "','".join(header_selected_items)
+            query += f" AND MEASUREMENTS.HEADER IN ('{header_values}')"
+
+        if reference_selected_items and "SELECT ALL" not in reference_selected_items:
+            reference_values = "','".join(reference_selected_items)
+            query += f" AND REPORTS.REFERENCE IN ('{reference_values}')"
+
+        if date_from:
+            query += f" AND REPORTS.DATE >= '{date_from}'"
+
+        if date_to:
+            query += f" AND REPORTS.DATE <= '{date_to}'"
+
+        self.filter_query = query
+
+        # Close the filter window
+        self.filter_window.close()
+
+        # Enable the select excel button
+        self.select_excel_button.setEnabled(True)
 
     def select_excel_file(self):
         """Open a file dialog to select an excel file"""
@@ -209,7 +445,7 @@ class ExportDialog(QDialog):
         self.loading_dialog.show()
 
         # Start the exporting thread
-        self.export_thread = ExportDataThread(self.db_file, self.excel_file)
+        self.export_thread = ExportDataThread(self.db_file, self.excel_file, self.filter_query)
         self.export_thread.update_label.connect(self.loading_label.setText)
         self.export_thread.update_progress.connect(self.loading_bar.setValue)
         self.export_thread.finished.connect(self.on_export_finished)

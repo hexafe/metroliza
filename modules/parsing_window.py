@@ -109,7 +109,8 @@ class ParseReportsThread(QThread):
                 break
 
             if report.name not in list_of_parsed_reports:
-                CMMReport(report, self.db_file)
+                cmm_report = CMMReport(report, self.db_file)
+                cmm_report.open_database_and_check_filename()
             parsed_files += 1
 
             # Calculate the percentage of parsed files and emit the progress signal

@@ -27,7 +27,7 @@ class CMMReport:
         self.df = pandas.DataFrame()
         self.database = database
 
-        self.open_database_and_check_filename()
+        # self.open_database_and_check_filename()
         
     def get_file_path_from_filename(self, pdf_file_path: str):
         """

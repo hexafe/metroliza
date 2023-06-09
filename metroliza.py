@@ -3,7 +3,7 @@ from modules.main_window import MainWindow
 from PyQt5.QtWidgets import QApplication
 import sys
 
-VERSION_DATE = "230514.1930"
+VERSION_DATE = "230609.2315"
 
 if __name__ == "__main__":   
     app = QApplication(sys.argv)

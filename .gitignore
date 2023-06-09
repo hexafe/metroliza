@@ -4,3 +4,5 @@ dist/
 build/
 modules/__pycache__
 main.spec
+modules/export_window.py
+gear_report_parser.py
