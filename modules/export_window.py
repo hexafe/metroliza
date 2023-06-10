@@ -104,8 +104,11 @@ class ExportDataThread(QThread):
             worksheet.set_column(i, i, column_width)
 
     def calculate_column_width(self, data):
-        # Calculate the column width based on the maximum length of the data in the column
-        column_width = max(len(str(value)) for value in data) + 2
+        if data.empty:
+            return 10  # Return a default width if the data is empty
+
+        # Convert series to a list and calculate the column width based on the maximum length of the data in the column
+        column_width = max(len(str(value)) for value in data.tolist()) + 2
         return max(column_width, 10)
 
 
@@ -154,8 +157,8 @@ class ExportDialog(QDialog):
         """Open a file dialog to select a database file"""
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        filename, _ = QFileDialog.getOpenFileName(self, "Select database", "",
-                                                  "SQLite database (*.db);;All Files (*)", options=options)
+        filename, _ = QFileDialog.getOpenFileName(self, "Select a database file", "",
+                                                  "SQLite database (*.db);;All files (*)", options=options)
         if filename:
             if not filename.endswith(".db"):
                 filename += ".db"
@@ -165,8 +168,9 @@ class ExportDialog(QDialog):
             self.filter_button.setEnabled(True)
 
     def open_filter_window(self):
+        # Create the filter window as a QDialog
         self.filter_window = QDialog(self)
-        self.filter_window.setWindowTitle("Data Filtering")
+        self.filter_window.setWindowTitle("Data filtering")
         self.filter_window.setModal(True)
 
         # Create labels and list widgets for each column to be filtered
@@ -174,18 +178,20 @@ class ExportDialog(QDialog):
         self.ax_list = QListWidget()
         self.ax_list.setSelectionMode(QAbstractItemView.MultiSelection)
         
-        header_label = QLabel("HEADER:")
-        self.header_list = QListWidget()
-        self.header_list.setSelectionMode(QAbstractItemView.MultiSelection)
-        
         reference_label = QLabel("REFERENCE:")
         self.reference_list = QListWidget()
         self.reference_list.setSelectionMode(QAbstractItemView.MultiSelection)
         
+        header_label = QLabel("HEADER:")
+        self.header_list = QListWidget()
+        self.header_list.setSelectionMode(QAbstractItemView.MultiSelection)
+        self.all_headers_list = QListWidget()
+        self.all_headers_list.setSelectionMode(QAbstractItemView.MultiSelection)
+        
         date_from_label = QLabel("MEASUREMENT DATE FROM:")
         self.date_from_calendar = QDateEdit(calendarPopup=True)
         self.date_from_calendar.setCalendarPopup(True)
-        self.date_from_calendar.setDate(QDate(2000, 1, 1))
+        self.date_from_calendar.setDate(QDate(1970, 1, 1))
         self.date_from_calendar.setFixedSize(200, 30)
 
         date_to_label = QLabel("MEASUREMENT DATE TO:")
@@ -196,23 +202,24 @@ class ExportDialog(QDialog):
 
         # Set the default selection for list widgets as "SELECT ALL"
         self.ax_list.addItem("SELECT ALL")
-        self.header_list.addItem("SELECT ALL")
         self.reference_list.addItem("SELECT ALL")
+        self.header_list.addItem("SELECT ALL")
+        self.all_headers_list.addItem("SELECT ALL")
 
         # Create separate QLineEdit widgets for searching in each list widget
         self.ax_search_input = QLineEdit()
         self.ax_search_input.setPlaceholderText("Search AX...")
-        self.header_search_input = QLineEdit()
-        self.header_search_input.setPlaceholderText("Search HEADER...")
         self.reference_search_input = QLineEdit()
         self.reference_search_input.setPlaceholderText("Search REFERENCE...")
+        self.header_search_input = QLineEdit()
+        self.header_search_input.setPlaceholderText("Search HEADER...")
 
         # Create a button to apply the filters
-        apply_button = QPushButton("Apply Filters")
+        apply_button = QPushButton("Apply filters")
         apply_button.clicked.connect(self.apply_filters)
 
         # Create a button to select today's date as "date TO"
-        select_today_button = QPushButton("Select Today")
+        select_today_button = QPushButton("Select today")
         select_today_button.clicked.connect(self.select_today_as_date_to)
 
         # Create a button to select the beginning of time
@@ -227,13 +234,13 @@ class ExportDialog(QDialog):
         layout.addWidget(self.ax_search_input, 1, 0)
         layout.addWidget(self.ax_list, 2, 0)
         
-        layout.addWidget(header_label, 0, 1)
-        layout.addWidget(self.header_search_input, 1, 1)
-        layout.addWidget(self.header_list, 2, 1)
+        layout.addWidget(reference_label, 0, 1)
+        layout.addWidget(self.reference_search_input, 1, 1)
+        layout.addWidget(self.reference_list, 2, 1)
         
-        layout.addWidget(reference_label, 0, 2)
-        layout.addWidget(self.reference_search_input, 1, 2)
-        layout.addWidget(self.reference_list, 2, 2)
+        layout.addWidget(header_label, 0, 2)
+        layout.addWidget(self.header_search_input, 1, 2)
+        layout.addWidget(self.header_list, 2, 2)
         
         layout.addWidget(date_from_label, 3, 0)
         layout.addWidget(self.date_from_calendar, 3, 1)
@@ -291,35 +298,81 @@ class ExportDialog(QDialog):
             item.setSelected(True)
 
     def populate_list_widgets(self):
-        # Connect to the SQLite database
-        with sqlite3.connect(self.db_file) as conn:
-            cursor = conn.cursor()
+        try:
+            # Connect to the SQLite database
+            with sqlite3.connect(self.db_file) as conn:
+                cursor = conn.cursor()
 
-            # Get unique values from AX column
-            cursor.execute("SELECT DISTINCT AX FROM MEASUREMENTS;")
-            ax_values = cursor.fetchall()
-            for value in ax_values:
-                item = QListWidgetItem(value[0])
-                self.ax_list.addItem(item)
+                # Get unique values from AX column
+                cursor.execute("SELECT DISTINCT AX FROM MEASUREMENTS;")
+                ax_values = cursor.fetchall()
+                for value in ax_values:
+                    item = QListWidgetItem(value[0])
+                    self.ax_list.addItem(item)
 
-            # Get unique values from HEADER column
-            cursor.execute("SELECT DISTINCT HEADER FROM MEASUREMENTS;")
-            header_values = cursor.fetchall()
-            for value in header_values:
-                item = QListWidgetItem(value[0])
-                self.header_list.addItem(item)
+                # Get unique values from HEADER column
+                cursor.execute("SELECT DISTINCT HEADER FROM MEASUREMENTS;")
+                header_values = cursor.fetchall()
+                for value in header_values:
+                    header_item = QListWidgetItem(value[0])
+                    all_headers_item = QListWidgetItem(value[0])
+                    self.header_list.addItem(header_item)
+                    self.all_headers_list.addItem(all_headers_item)
 
-            # Get unique values from REFERENCE column
-            cursor.execute("SELECT DISTINCT REFERENCE FROM REPORTS;")
-            reference_values = cursor.fetchall()
-            for value in reference_values:
-                item = QListWidgetItem(value[0])
-                self.reference_list.addItem(item)
+                # Get unique values from REFERENCE column
+                cursor.execute("SELECT DISTINCT REFERENCE FROM REPORTS;")
+                reference_values = cursor.fetchall()
+                for value in reference_values:
+                    item = QListWidgetItem(value[0])
+                    self.reference_list.addItem(item)
+
+        except sqlite3.Error as e:
+            print(f"Error accessing the database: {e}")
+            return
 
         cursor.close()
 
+        # Connect the itemSelectionChanged signal of the reference_list to the on_reference_selection_changed method
+        self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
+
+    def on_reference_selection_changed(self):
+        selected_references = [item.text() for item in self.reference_list.selectedItems()]
+
+        # Clear the current items in the HEADER list widget
+        self.header_list.clear()
+
+        if selected_references and "SELECT ALL" not in selected_references:
+            try:
+                # Connect to the SQLite database
+                with sqlite3.connect(self.db_file) as conn:
+                    cursor = conn.cursor()
+
+                    # Get unique values from HEADER column based on the selected references
+                    reference_values = "','".join(selected_references)
+                    query = f"""
+                        SELECT DISTINCT HEADER FROM MEASUREMENTS 
+                        JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID 
+                        WHERE REFERENCE IN (SELECT REFERENCE FROM REPORTS WHERE REFERENCE IN ('{reference_values}'));
+                        """
+                    cursor.execute(query)
+                    header_values = cursor.fetchall()
+                    for value in header_values:
+                        item = QListWidgetItem(value[0])
+                        self.header_list.addItem(item)
+
+            except sqlite3.Error as e:
+                print(f"Error accessing the database: {e}")
+                return
+
+            cursor.close()
+        else:
+            # Add all headers from all_headers_list when no references are selected
+            for row in range(self.all_headers_list.count()):
+                item = self.all_headers_list.item(row)
+                self.header_list.addItem(item.text())
+
     def select_beginning_of_time(self):
-        beginning_of_time = QDate(2000, 1, 1)
+        beginning_of_time = QDate(1970, 1, 1)
         self.date_from_calendar.setDate(beginning_of_time)
 
     def select_today_as_date_to(self):
@@ -335,7 +388,6 @@ class ExportDialog(QDialog):
         date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
 
         # Construct the filter query based on the selected values
-        # query = "SELECT * FROM MEASUREMENTS JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID WHERE 1=1"
         query = """
             SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
                 MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
@@ -345,7 +397,6 @@ class ExportDialog(QDialog):
             JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
             WHERE 1=1
             """
-
 
         if ax_selected_items and "SELECT ALL" not in ax_selected_items:
             ax_values = "','".join(ax_selected_items)
@@ -377,12 +428,11 @@ class ExportDialog(QDialog):
         """Open a file dialog to select an excel file"""
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        # default_name = [part for part in self.db_file.split("/") if part][-1][:-3]
         default_name = self.db_file[:-3]
         if not default_name.endswith(".xlsx"):
-                default_name += ".xlsx"
-        filename, _ = QFileDialog.getSaveFileName(self, "Select Excel File", f"{default_name}",
-                                                  "Excel workbook (*.xlsx);;All Files (*)", options=options)
+            default_name += ".xlsx"
+        filename, _ = QFileDialog.getSaveFileName(self, "Select an Excel file", f"{default_name}",
+                                                "Excel workbook (*.xlsx);;All files (*)", options=options)
         if filename:
             if not filename.endswith(".xlsx"):
                 filename += ".xlsx"
@@ -415,7 +465,7 @@ class ExportDialog(QDialog):
             temp_file_name = temp_file.fileName()
 
         # Create the QMovie using the temporary file name
-        self.loading_gif = QMovie(temp_file_name)  # Save as an instance variable
+        self.loading_gif = QMovie(temp_file_name)
         self.loading_gif.setScaledSize(QSize(200, 200))
         loading_gif_label.setMovie(self.loading_gif)
         self.loading_gif.start()
@@ -458,18 +508,17 @@ class ExportDialog(QDialog):
         # Check if the thread is still running and wait for it to finish
         if self.export_thread.isRunning():
             print("Export thread still running, waiting...")
-            #TODO: remove terminate after changing way of export to line by line or something that can be stopped
+            # TODO: remove terminate after changing way of export to line by line or something that can be stopped
             self.export_thread.terminate()
             self.export_thread.wait()
             print("Export thread closed successfully!")
-        
+
         # Show a message box to inform the user that exporting has been cancelled
         QMessageBox.information(self, "Export canceled", f"Data exporting has been canceled")
-        
-        # self.export_thread.terminate()
+
         self.loading_dialog.reject()
         self.close()
-        
+
     def on_export_finished(self):
         # Show a message box to inform the user that exporting is complete
         QMessageBox.information(self, "Export successful", f"Data exported successfully to {self.excel_file}!")
@@ -482,3 +531,4 @@ class ExportDialog(QDialog):
 
         # Close the exporting dialog
         self.accept()
+
