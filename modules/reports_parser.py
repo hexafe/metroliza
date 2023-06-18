@@ -429,7 +429,7 @@ class CMMReport:
         """
         # Check if there are measurements data
         if not any(lst[1] for lst in self.pdf_blocks_text):
-            print("No measurements data available. Skipping database insertion.")
+            print(f"Report ({self.pdf_file_name}) - no measurements data available. Skipping database insertion.")
             return
         
         with sqlite3.connect(self.database) as conn:
@@ -501,7 +501,7 @@ class CMMReport:
                             rows = [(None, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], table_name, report_id) for row in lst[1]]
                             cursor.executemany('INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', rows)
 
-                        print(f'Report ({self.pdf_file_name}) and measurements inserted into the database.')
+                        print(f'Report ({self.pdf_file_name}) - measurements inserted into the database.')
                         return
 
                     except sqlite3.OperationalError as e:
