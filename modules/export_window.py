@@ -168,6 +168,7 @@ class ExportDialog(QDialog):
             self.filter_button.setEnabled(True)
 
     def open_filter_window(self):
+        """Open window used for filtering references, headers and dates of measurements"""
         # Create the filter window as a QDialog
         self.filter_window = QDialog(self)
         self.filter_window.setWindowTitle("Data filtering")
@@ -265,7 +266,7 @@ class ExportDialog(QDialog):
         self.filter_window.show()
 
     def search_list_widgets(self, list_widget, search_text):
-        selected_items = list_widget.selectedItems()  # Get the currently selected items
+        selected_items = list_widget.selectedItems()
 
         list_widget.clearSelection()
 

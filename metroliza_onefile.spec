@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-VERSION_DATE = "230514.1930"
+import version_date
+
+VERSION_DATE = version_date.VERSION_DATE
 
 block_cipher = None
 

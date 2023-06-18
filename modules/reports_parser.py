@@ -427,6 +427,11 @@ class CMMReport:
         """
         Creates tables (if necessary) and inserts measurements and reports data into an SQLite database.
         """
+        # Check if there are measurements data
+        if not any(lst[1] for lst in self.pdf_blocks_text):
+            print("No measurements data available. Skipping database insertion.")
+            return
+        
         with sqlite3.connect(self.database) as conn:
             with conn:
                 cursor = conn.cursor()
