@@ -175,12 +175,12 @@ class ParsingDialog(QDialog):
         self.layout.addWidget(self.directory_button, 2, 0, 1, 2)
         self.layout.addWidget(self.spacer, 3, 0)
         
-        self.layout.addWidget(self.database_label, 3, 0)
-        self.layout.addWidget(self.database_text_label, 4, 0)
-        self.layout.addWidget(self.database_button, 5, 0, 1, 2)
-        self.layout.addWidget(self.spacer, 6, 0)
+        self.layout.addWidget(self.database_label, 4, 0)
+        self.layout.addWidget(self.database_text_label, 5, 0)
+        self.layout.addWidget(self.database_button, 6, 0, 1, 2)
+        self.layout.addWidget(self.spacer, 7, 0)
         
-        self.layout.addWidget(self.parse_button, 7, 0, 1, 2)
+        self.layout.addWidget(self.parse_button, 8, 0, 1, 2)
         
         self.setLayout(self.layout)
 

@@ -173,16 +173,16 @@ class ExportDialog(QDialog):
         self.layout.addWidget(self.select_db_button, 2, 0, 1, 2)
         self.layout.addWidget(self.spacer, 3, 0)
         
-        self.layout.addWidget(self.select_excel_label, 3, 0)
-        self.layout.addWidget(self.excel_file_text_label, 4, 0)
-        self.layout.addWidget(self.select_excel_button, 5, 0, 1, 2)
-        self.layout.addWidget(self.spacer, 6, 0)
+        self.layout.addWidget(self.select_excel_label, 4, 0)
+        self.layout.addWidget(self.excel_file_text_label, 5, 0)
+        self.layout.addWidget(self.select_excel_button, 6, 0, 1, 2)
+        self.layout.addWidget(self.spacer, 7, 0)
         
-        self.layout.addWidget(self.select_filter_label, 7, 0)
-        self.layout.addWidget(self.filter_button, 8, 0, 1, 2)
-        self.layout.addWidget(self.spacer, 9, 0)
+        self.layout.addWidget(self.select_filter_label, 8, 0)
+        self.layout.addWidget(self.filter_button, 9, 0, 1, 2)
+        self.layout.addWidget(self.spacer, 10, 0)
         
-        self.layout.addWidget(self.export_button, 10, 0, 1, 2)
+        self.layout.addWidget(self.export_button, 11, 0, 1, 2)
         
         self.setLayout(self.layout)
 
