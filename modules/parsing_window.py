@@ -125,7 +125,7 @@ class ParseReportsThread(QThread):
 
 
 class ParsingDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, directory="", db_file=""):
         super().__init__(parent)
         
         # Set the window title and geometry
@@ -133,20 +133,36 @@ class ParsingDialog(QDialog):
         self.setGeometry(100, 100, 300, 150)
         
         # Initialize variables
-        self.directory = ""
-        self.db_file = ""
+        self.directory = directory
+        self.db_file = db_file
         
         # Initialize the widgets
         self.directory_label = QLabel("Select a directory:")
         self.directory_button = QPushButton("Browse")
         self.directory_button.clicked.connect(self.select_directory)
+        
         self.database_label = QLabel("Select a database file:")
         self.database_button = QPushButton("Browse")
-        self.database_button.setDisabled(True)
         self.database_button.clicked.connect(self.select_database)
+        
         self.parse_button = QPushButton("Parse reports")
-        self.parse_button.setDisabled(True)
         self.parse_button.clicked.connect(self.show_loading_screen)
+        
+        self.spacer = QLabel(" ")
+        
+        if self.directory:
+            self.directory_text_label = QLabel(self.directory)
+            self.database_button.setDisabled(False)
+        else:
+            self.directory_text_label = QLabel("None selected")
+            self.database_button.setDisabled(True)
+            
+        if self.db_file:
+            self.database_text_label = QLabel(self.db_file)
+            self.parse_button.setDisabled(False)
+        else:
+            self.database_text_label = QLabel("None selected")
+            self.parse_button.setDisabled(True)
         
         # Initialize thread and flag
         self.parse_thread = None
@@ -155,10 +171,17 @@ class ParsingDialog(QDialog):
         # Initialize the layout
         self.layout = QGridLayout()
         self.layout.addWidget(self.directory_label, 0, 0)
-        self.layout.addWidget(self.directory_button, 0, 1)
-        self.layout.addWidget(self.database_label, 1, 0)
-        self.layout.addWidget(self.database_button, 1, 1)
-        self.layout.addWidget(self.parse_button, 2, 0, 1, 2)
+        self.layout.addWidget(self.directory_text_label, 1, 0)
+        self.layout.addWidget(self.directory_button, 2, 0, 1, 2)
+        self.layout.addWidget(self.spacer, 3, 0)
+        
+        self.layout.addWidget(self.database_label, 3, 0)
+        self.layout.addWidget(self.database_text_label, 4, 0)
+        self.layout.addWidget(self.database_button, 5, 0, 1, 2)
+        self.layout.addWidget(self.spacer, 6, 0)
+        
+        self.layout.addWidget(self.parse_button, 7, 0, 1, 2)
+        
         self.setLayout(self.layout)
 
     @pyqtSlot()
@@ -168,7 +191,9 @@ class ParsingDialog(QDialog):
         if directory:
             print(f"{directory=}")
             self.directory = directory
+            self.directory_text_label.setText(directory)
             self.database_button.setEnabled(True)
+            self.parent().set_directory(directory)
 
     @pyqtSlot()
     def select_database(self):
@@ -185,7 +210,9 @@ class ParsingDialog(QDialog):
                 filename += ".db"
             print(f"{filename=}")
             self.db_file = filename
+            self.database_text_label.setText(filename)
             self.parse_button.setEnabled(True)
+            self.parent().set_db_file(filename)
 
     @pyqtSlot()
     def show_loading_screen(self):

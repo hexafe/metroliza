@@ -1,4 +1,6 @@
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QDate
+from PyQt5.QtGui import QMovie
+from PyQt5.QtCore import QTemporaryFile, QSize
 from PyQt5.QtWidgets import (
     QDialog,
     QLabel,
@@ -18,9 +20,8 @@ import sqlite3
 import pandas as pd
 import xlsxwriter
 import base64
-from PyQt5.QtGui import QMovie
-from PyQt5.QtCore import QTemporaryFile, QSize
 from modules import base64_encoded_files
+from pathlib import Path
 
 
 class ExportDataThread(QThread):
@@ -113,13 +114,13 @@ class ExportDataThread(QThread):
 
 
 class ExportDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         self.setWindowTitle("Export")
         self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 300, 150)
 
-        self.db_file = ""
+        self.db_file = db_file
         self.excel_file = ""
         self.filter_query = None
 
@@ -131,26 +132,58 @@ class ExportDialog(QDialog):
         self.select_db_label = QLabel("Select a database file:")
         self.select_db_button = QPushButton("Browse")
         self.select_db_button.clicked.connect(self.select_db_file)
+        
         self.filter_button = QPushButton("Filter")
-        self.filter_button.setDisabled(True)
         self.filter_button.clicked.connect(self.open_filter_window)
+        
         self.select_excel_label = QLabel("Select an excel file:")
         self.select_excel_button = QPushButton("Browse")
-        self.select_excel_button.setDisabled(True)
         self.select_excel_button.clicked.connect(self.select_excel_file)
+        
         self.export_button = QPushButton("Export")
         self.export_button.setDisabled(True)
         self.export_button.clicked.connect(self.show_loading_screen)
+        
+        self.select_filter_label = QLabel("Select filters (optional):")
+        
+        self.spacer = QLabel(" ")
+        
+        if self.db_file:
+            self.database_text_label = QLabel(self.db_file)
+            self.select_excel_button.setEnabled(True)
+            self.filter_button.setEnabled(True)
+        else:
+            self.database_text_label = QLabel("None selected")
+            self.filter_button.setDisabled(True)
+            self.select_excel_button.setDisabled(True)
+            
+        if self.excel_file:
+            self.excel_file_text_label = QLabel(self.excel_file)
+            self.export_button.setEnabled(True)
+        else:
+            self.excel_file_text_label = QLabel("None selected")
+            self.export_button.setEnabled(False)
 
     def init_layout(self):
         """Initialize the layout"""
         self.layout = QGridLayout()
+        
         self.layout.addWidget(self.select_db_label, 0, 0)
-        self.layout.addWidget(self.select_db_button, 0, 1)
-        self.layout.addWidget(self.filter_button, 2, 0, 1, 2)
-        self.layout.addWidget(self.select_excel_label, 1, 0)
-        self.layout.addWidget(self.select_excel_button, 1, 1)
-        self.layout.addWidget(self.export_button, 3, 0, 1, 2)
+        self.layout.addWidget(self.database_text_label, 1, 0)
+        self.layout.addWidget(self.select_db_button, 2, 0, 1, 2)
+        self.layout.addWidget(self.spacer, 3, 0)
+        
+        self.layout.addWidget(self.select_excel_label, 3, 0)
+        self.layout.addWidget(self.excel_file_text_label, 4, 0)
+        self.layout.addWidget(self.select_excel_button, 5, 0, 1, 2)
+        self.layout.addWidget(self.spacer, 6, 0)
+        
+        self.layout.addWidget(self.select_filter_label, 7, 0)
+        self.layout.addWidget(self.filter_button, 8, 0, 1, 2)
+        self.layout.addWidget(self.spacer, 9, 0)
+        
+        self.layout.addWidget(self.export_button, 10, 0, 1, 2)
+        
         self.setLayout(self.layout)
 
     def select_db_file(self):
@@ -164,6 +197,7 @@ class ExportDialog(QDialog):
                 filename += ".db"
             print(f"{filename=}")
             self.db_file = filename
+            self.database_text_label.setText(filename)
             self.select_excel_button.setEnabled(True)
             self.filter_button.setEnabled(True)
 
@@ -432,13 +466,25 @@ class ExportDialog(QDialog):
         default_name = self.db_file[:-3]
         if not default_name.endswith(".xlsx"):
             default_name += ".xlsx"
-        filename, _ = QFileDialog.getSaveFileName(self, "Select an Excel file", f"{default_name}",
+
+        file_path = Path(default_name)
+        base_name = file_path.stem
+        suffix = file_path.suffix
+        directory = file_path.parent
+
+        counter = 1
+        while file_path.exists():
+            file_path = directory / f"{base_name}_{counter}{suffix}"
+            counter += 1
+
+        filename, _ = QFileDialog.getSaveFileName(self, "Select an Excel file", str(file_path),
                                                 "Excel workbook (*.xlsx);;All files (*)", options=options)
+
         if filename:
-            if not filename.endswith(".xlsx"):
-                filename += ".xlsx"
-            print(f"{filename=}")
-            self.excel_file = filename
+            file_path = Path(filename)
+            print(f"{file_path=}")
+            self.excel_file = file_path
+            self.excel_file_text_label.setText(str(file_path))
             self.export_button.setEnabled(True)
 
     def show_loading_screen(self):
