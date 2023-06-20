@@ -212,28 +212,28 @@ class ExportDialog(QDialog):
         ax_label = QLabel("AX:")
         self.ax_list = QListWidget()
         self.ax_list.setSelectionMode(QAbstractItemView.MultiSelection)
-        
+
         reference_label = QLabel("REFERENCE:")
         self.reference_list = QListWidget()
         self.reference_list.setSelectionMode(QAbstractItemView.MultiSelection)
-        
+
         header_label = QLabel("HEADER:")
         self.header_list = QListWidget()
         self.header_list.setSelectionMode(QAbstractItemView.MultiSelection)
         self.all_headers_list = QListWidget()
         self.all_headers_list.setSelectionMode(QAbstractItemView.MultiSelection)
-        
+
         date_from_label = QLabel("MEASUREMENT DATE FROM:")
         self.date_from_calendar = QDateEdit(calendarPopup=True)
         self.date_from_calendar.setCalendarPopup(True)
         self.date_from_calendar.setDate(QDate(1970, 1, 1))
-        self.date_from_calendar.setFixedSize(200, 30)
+        self.date_from_calendar.setMinimumWidth(100)
 
         date_to_label = QLabel("MEASUREMENT DATE TO:")
         self.date_to_calendar = QDateEdit(calendarPopup=True)
         self.date_to_calendar.setCalendarPopup(True)
         self.date_to_calendar.setDate(QDate.currentDate())
-        self.date_to_calendar.setFixedSize(200, 30)
+        self.date_to_calendar.setMinimumWidth(100)
 
         # Set the default selection for list widgets as "SELECT ALL"
         self.ax_list.addItem("SELECT ALL")
@@ -258,36 +258,48 @@ class ExportDialog(QDialog):
         select_today_button.clicked.connect(self.select_today_as_date_to)
 
         # Create a button to select the beginning of time
-        select_beginning_button = QPushButton("Select Beginning of Time")
+        select_beginning_button = QPushButton("Select beginning of time")
         select_beginning_button.clicked.connect(self.select_beginning_of_time)
 
         # Create a grid layout for the filter window
         layout = QGridLayout(self.filter_window)
 
-        # Add labels, list widgets, and search inputs to the grid layout
+        # Add labels and widgets to the grid layout
         layout.addWidget(ax_label, 0, 0)
         layout.addWidget(self.ax_search_input, 1, 0)
         layout.addWidget(self.ax_list, 2, 0)
-        
+
         layout.addWidget(reference_label, 0, 1)
         layout.addWidget(self.reference_search_input, 1, 1)
         layout.addWidget(self.reference_list, 2, 1)
-        
+
         layout.addWidget(header_label, 0, 2)
         layout.addWidget(self.header_search_input, 1, 2)
         layout.addWidget(self.header_list, 2, 2)
-        
+
         layout.addWidget(date_from_label, 3, 0)
         layout.addWidget(self.date_from_calendar, 3, 1)
-        
+
         layout.addWidget(date_to_label, 4, 0)
         layout.addWidget(self.date_to_calendar, 4, 1)
         
+        # Set the fixed widths for elements in column 0 and column 1
+        for row in range(layout.rowCount()):
+            for column in range(layout.columnCount()):
+                item = layout.itemAtPosition(row, column)
+                if item is not None:
+                    widget = item.widget()
+                    if widget is not None:
+                        if column == 0:
+                            widget.setFixedWidth(150)
+                        elif column == 1:
+                            widget.setFixedWidth(150)
+
         # Add buttons to the layout
         layout.addWidget(select_beginning_button, 3, 2)
         layout.addWidget(select_today_button, 4, 2)
         layout.addWidget(apply_button, 6, 0, 1, 3)
-
+        
         # Populate the list widgets with unique values from the columns in the database
         self.populate_list_widgets()
 
@@ -298,6 +310,8 @@ class ExportDialog(QDialog):
 
         # Show the filter window
         self.filter_window.show()
+
+
 
     def search_list_widgets(self, list_widget, search_text):
         selected_items = list_widget.selectedItems()
