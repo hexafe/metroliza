@@ -125,7 +125,7 @@ class ParseReportsThread(QThread):
 
 
 class ParsingDialog(QDialog):
-    def __init__(self, parent=None, directory="", db_file=""):
+    def __init__(self, parent=None, directory=None, db_file=None):
         super().__init__(parent)
         
         # Set the window title and geometry
@@ -147,22 +147,24 @@ class ParsingDialog(QDialog):
         
         self.parse_button = QPushButton("Parse reports")
         self.parse_button.clicked.connect(self.show_loading_screen)
+        self.parse_button.setEnabled(False)
         
         self.spacer = QLabel(" ")
         
         if self.directory:
             self.directory_text_label = QLabel(self.directory)
-            self.database_button.setDisabled(False)
+            self.database_button.setEnabled(True)
         else:
             self.directory_text_label = QLabel("None selected")
-            self.database_button.setDisabled(True)
+            self.database_button.setEnabled(False)
             
         if self.db_file:
             self.database_text_label = QLabel(self.db_file)
-            self.parse_button.setDisabled(False)
+            if self.directory:
+                self.parse_button.setEnabled(True)
         else:
             self.database_text_label = QLabel("None selected")
-            self.parse_button.setDisabled(True)
+            self.parse_button.setEnabled(False)
         
         # Initialize thread and flag
         self.parse_thread = None
@@ -194,6 +196,11 @@ class ParsingDialog(QDialog):
             self.directory_text_label.setText(directory)
             self.database_button.setEnabled(True)
             self.parent().set_directory(directory)
+            
+            if self.db_file and self.directory:
+                self.parse_button.setEnabled(True)
+            else:
+                self.parse_button.setEnabled(False)
 
     @pyqtSlot()
     def select_database(self):
@@ -211,8 +218,12 @@ class ParsingDialog(QDialog):
             print(f"{filename=}")
             self.db_file = filename
             self.database_text_label.setText(filename)
-            self.parse_button.setEnabled(True)
             self.parent().set_db_file(filename)
+            
+            if self.db_file and self.directory:
+                self.parse_button.setEnabled(True)
+            else:
+                self.parse_button.setEnabled(False)
 
     @pyqtSlot()
     def show_loading_screen(self):
@@ -266,7 +277,7 @@ class ParsingDialog(QDialog):
         layout.addWidget(cancel_button, alignment=Qt.AlignHCenter)
 
         # Disable the parse button and show the progress dialog
-        self.parse_button.setDisabled(True)
+        self.parse_button.setEnabled(False)
         self.loading_dialog.show()
         
         # Start the parsing thread

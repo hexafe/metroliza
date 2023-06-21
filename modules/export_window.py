@@ -200,6 +200,7 @@ class ExportDialog(QDialog):
             self.database_text_label.setText(filename)
             self.select_excel_button.setEnabled(True)
             self.filter_button.setEnabled(True)
+            self.parent().set_db_file(filename)
 
     def open_filter_window(self):
         """Open window used for filtering references, headers and dates of measurements"""
@@ -310,8 +311,6 @@ class ExportDialog(QDialog):
 
         # Show the filter window
         self.filter_window.show()
-
-
 
     def search_list_widgets(self, list_widget, search_text):
         selected_items = list_widget.selectedItems()

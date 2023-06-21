@@ -30,8 +30,8 @@ class MainWindow(QMainWindow):
         self.parsing_dialog = None
         self.export_dialog = None
         
-        self.directory = ""
-        self.db_file = ""
+        self.directory = None
+        self.db_file = None
 
         # Initialize the buttons
         self.parse_button = QPushButton("Launch Parsing")
@@ -46,6 +46,10 @@ class MainWindow(QMainWindow):
         self.export_button.clicked.connect(self.launch_export_dialog)
 
     def launch_parsing_dialog(self):
+        # Check if export dialog is already open or visible
+        if self.export_dialog and self.export_dialog.isVisible():
+            self.export_dialog.close()
+            
         # Check if parsing dialog is already open or visible
         if not self.parsing_dialog or not self.parsing_dialog.isVisible():
             # Create a new parsing dialog if not already existing or visible
@@ -57,6 +61,10 @@ class MainWindow(QMainWindow):
         self.parsing_dialog.activateWindow()
 
     def launch_export_dialog(self):
+        # Check if parsing dialog is already open or visible
+        if self.parsing_dialog and self.parsing_dialog.isVisible():
+            self.parsing_dialog.close()
+            
         # Check if export dialog is already open or visible
         if not self.export_dialog or not self.export_dialog.isVisible():
             # Create a new export dialog if not already existing or visible
