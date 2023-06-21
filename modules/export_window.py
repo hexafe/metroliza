@@ -144,7 +144,7 @@ class ExportDialog(QDialog):
         self.export_button.setDisabled(True)
         self.export_button.clicked.connect(self.show_loading_screen)
         
-        self.select_filter_label = QLabel("Select filters (optional):")
+        self.select_filter_label = QLabel("Select filters (optional): not applied")
         
         self.spacer = QLabel(" ")
         
@@ -465,6 +465,9 @@ class ExportDialog(QDialog):
             query += f" AND REPORTS.DATE <= '{date_to}'"
 
         self.filter_query = query
+        
+        # Update filter label in export window
+        self.select_filter_label.setText("Select filters (optional): applied")
 
         # Close the filter window
         self.filter_window.close()
