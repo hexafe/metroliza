@@ -59,7 +59,6 @@ class ExportDataThread(QThread):
 
             # Retrieve the table names from the database
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = cursor.fetchall()
 
             # Create an Excel writer using xlsxwriter engine
             excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
@@ -72,7 +71,6 @@ class ExportDataThread(QThread):
         self.update_label.emit("Export completed successfully.")
 
         self.finished.emit()
-        
         QCoreApplication.processEvents()
 
     def add_measurements_horizontal_sheet(self, cursor, excel_writer):
@@ -82,6 +80,7 @@ class ExportDataThread(QThread):
 
         # Create a DataFrame from the fetched data
         df = pd.DataFrame(data, columns=column_names)
+        df['HEADER - AX'] = df['HEADER'] + ' - ' + df['AX']
 
         # Group the data by reference
         reference_groups = df.groupby('REFERENCE')
@@ -96,54 +95,94 @@ class ExportDataThread(QThread):
         workbook = excel_writer.book
         worksheet = workbook.add_worksheet(sheet_name)
         default_format = workbook.add_format({'align': 'center', 'valign': 'vcenter'})
-        border_format = workbook.add_format({'right': 2})
+        border_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'right': 2})
+
+        summary_worksheet = workbook.add_worksheet('SUMMARY')
+        summary_row_names = ['REFERENCE', 'HEADER', 'AX', 'NOM', 'MIN', 'MAX', 'AVG', 'STD', 'Cp', 'Cpk']
+
+        # Write summary row names to the summary worksheet
+        for index, name in enumerate(summary_row_names):
+            summary_worksheet.write(index, 0, name)
 
         ref_col_added = 0
         header_col_added = 0
-        
         col = 0
-        
+
         for (ref, ref_group) in reference_groups:
             ref_col_added = col
+
             # Write the reference value
             worksheet.write(ref_row, col, ref)
+            summary_worksheet.write(0, col + 1, ref)
 
             # Get the headers for the current reference
             header_groups = ref_group.groupby('HEADER')
 
             for (header, header_group) in header_groups:
                 header_col_added = col
+
                 # Write the header value
                 worksheet.write(header_row, col, header)
+                summary_worksheet.write(1, col + 1, header)
 
                 # Get the headers for the current reference
                 ax_groups = header_group.groupby('AX')
+
                 for (ax, ax_group) in ax_groups:
+                    ax_values = ax_group['MEAS']
+
                     # Write the AX value
                     worksheet.write(ax_row, col, ax)
+                    summary_worksheet.write(2, col + 1, ax)
 
-                    for i, meas_value in enumerate(ax_group['MEAS']):
+                    # Write the measurement values
+                    ax_values = ax_group['MEAS']
+                    for i, meas_value in enumerate(ax_values):
                         worksheet.write(meas_row + i, col, meas_value)
 
+                    # Write summary statistics to the summary worksheet
+                    summary_worksheet.write(3, col + 1, ax_group['NOM'].iloc[0])
+                    summary_worksheet.write(4, col + 1, ax_values.min())
+                    summary_worksheet.write(5, col + 1, ax_values.max())
+                    summary_worksheet.write(6, col + 1, ax_values.mean())
+                    summary_worksheet.write(7, col + 1, ax_values.std())
+
                     col += 1
-                
+
                 # Merge cells for the header
                 header_col_end = col - 1
                 if header_col_added != header_col_end:
                     worksheet.merge_range(header_row, header_col_added, header_row, header_col_end, header)
+                    summary_worksheet.merge_range(1, header_col_added + 1, 1, header_col_end + 1, header)
 
             # Merge cells for the reference
             ref_col_end = col - 1
             if ref_col_added != ref_col_end:
                 worksheet.merge_range(ref_row, ref_col_added, ref_row, ref_col_end, ref)
-                
-            # Add right border to the last column of the reference group
-            for row in range(ref_row, meas_row + len(ax_group['MEAS'])):
-                worksheet.write(row, ref_col_end, '', border_format)
+                summary_worksheet.merge_range(0, ref_col_added + 1, 0, ref_col_end + 1, ref)
 
         # Set the default cell format for the worksheet (middle-aligned and centered)
-        worksheet.set_row(20, cell_format=default_format)
         worksheet.set_column(0, col, None, cell_format=default_format)
+        summary_worksheet.set_column(0, col + 1, None, cell_format=default_format)
+
+        # Set border format for the first column of the summary worksheet
+        summary_worksheet.set_column(0, 0, None, border_format)
+
+        prev_last_ref_col = 0
+        for (ref, ref_group) in reference_groups:
+            last_ref_col = len(ref_group['HEADER - AX'].unique().tolist()) - 1
+            prev_last_ref_col += last_ref_col
+
+            # Set border format for the last column of each reference in the worksheet
+            worksheet.set_column(prev_last_ref_col, prev_last_ref_col, None, border_format)
+
+            # Set border format for the last column of each reference in the summary worksheet
+            summary_worksheet.set_column(prev_last_ref_col + 1, prev_last_ref_col + 1, None, border_format)
+            prev_last_ref_col += 1
+
+        # Freeze panes in the worksheets
+        worksheet.freeze_panes(3, 0)
+        summary_worksheet.freeze_panes(0, 1)
 
     def export_filtered_data(self, cursor, excel_writer):
         export_query = self.filter_query
@@ -164,6 +203,9 @@ class ExportDataThread(QThread):
         
         # Apply autofilter to enable filtering
         worksheet.autofilter(0, 0, df.shape[0], df.shape[1] - 1)
+        
+        # Freeze first row
+        worksheet.freeze_panes(1, 0)
 
         # Adjust the column widths based on the data
         for i, column in enumerate(df.columns):
