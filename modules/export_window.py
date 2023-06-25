@@ -1,6 +1,13 @@
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QDate
 from PyQt5.QtGui import QMovie
-from PyQt5.QtCore import QTemporaryFile, QSize
+from PyQt5.QtCore import (
+    QThread,
+    pyqtSignal,
+    Qt,
+    QDate,
+    QTemporaryFile,
+    QSize,
+    QCoreApplication,
+)
 from PyQt5.QtWidgets import (
     QDialog,
     QLabel,
@@ -33,6 +40,16 @@ class ExportDataThread(QThread):
         super().__init__()
         self.db_file = db_file
         self.excel_file = excel_file
+        if not filter_query:
+            filter_query = """
+            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
+                MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
+                MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE, 
+                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE 
+            FROM MEASUREMENTS
+            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            WHERE 1=1
+            """
         self.filter_query = filter_query
 
     def run(self):
@@ -44,22 +61,89 @@ class ExportDataThread(QThread):
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
             tables = cursor.fetchall()
 
-            # Calculate the total number of tables for progress tracking
-            total_tables = len(tables)
-            current_table = 0
-
             # Create an Excel writer using xlsxwriter engine
             excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
 
-            if self.filter_query:
-                self.export_filtered_data(cursor, excel_writer)
-            else:
-                self.export_all_tables(cursor, tables, excel_writer, total_tables, current_table)
+            self.export_filtered_data(cursor, excel_writer)
 
-            excel_writer.close()
-            self.update_label.emit("Export completed successfully.")
+            self.add_measurements_horizontal_sheet(cursor, excel_writer)
+
+        excel_writer.close()
+        self.update_label.emit("Export completed successfully.")
 
         self.finished.emit()
+        
+        QCoreApplication.processEvents()
+
+    def add_measurements_horizontal_sheet(self, cursor, excel_writer):
+        cursor.execute(self.filter_query)
+        data = cursor.fetchall()
+        column_names = [desc[0] for desc in cursor.description]
+
+        # Create a DataFrame from the fetched data
+        df = pd.DataFrame(data, columns=column_names)
+
+        # Group the data by reference
+        reference_groups = df.groupby('REFERENCE')
+
+        # Create the sheet for horizontal measurements
+        sheet_name = 'MEASUREMENTS_HORIZONTAL'
+        ref_row = 0
+        header_row = 1
+        ax_row = 2
+        meas_row = 3
+
+        workbook = excel_writer.book
+        worksheet = workbook.add_worksheet(sheet_name)
+        default_format = workbook.add_format({'align': 'center', 'valign': 'vcenter'})
+        border_format = workbook.add_format({'right': 2})
+
+        ref_col_added = 0
+        header_col_added = 0
+        
+        col = 0
+        
+        for (ref, ref_group) in reference_groups:
+            ref_col_added = col
+            # Write the reference value
+            worksheet.write(ref_row, col, ref)
+
+            # Get the headers for the current reference
+            header_groups = ref_group.groupby('HEADER')
+
+            for (header, header_group) in header_groups:
+                header_col_added = col
+                # Write the header value
+                worksheet.write(header_row, col, header)
+
+                # Get the headers for the current reference
+                ax_groups = header_group.groupby('AX')
+                for (ax, ax_group) in ax_groups:
+                    # Write the AX value
+                    worksheet.write(ax_row, col, ax)
+
+                    for i, meas_value in enumerate(ax_group['MEAS']):
+                        worksheet.write(meas_row + i, col, meas_value)
+
+                    col += 1
+                
+                # Merge cells for the header
+                header_col_end = col - 1
+                if header_col_added != header_col_end:
+                    worksheet.merge_range(header_row, header_col_added, header_row, header_col_end, header)
+
+            # Merge cells for the reference
+            ref_col_end = col - 1
+            if ref_col_added != ref_col_end:
+                worksheet.merge_range(ref_row, ref_col_added, ref_row, ref_col_end, ref)
+                
+            # Add right border to the last column of the reference group
+            for row in range(ref_row, meas_row + len(ax_group['MEAS'])):
+                worksheet.write(row, ref_col_end, '', border_format)
+
+        # Set the default cell format for the worksheet (middle-aligned and centered)
+        worksheet.set_row(20, cell_format=default_format)
+        worksheet.set_column(0, col, None, cell_format=default_format)
 
     def export_filtered_data(self, cursor, excel_writer):
         export_query = self.filter_query
@@ -70,27 +154,6 @@ class ExportDataThread(QThread):
         # Write the data to the Excel file
         self.write_data_to_excel(data, column_names, "MEASUREMENTS", excel_writer)
 
-    def export_all_tables(self, cursor, tables, excel_writer, total_tables, current_table):
-        # Export each table to the Excel file
-        for table in tables:
-            table_name = table[0]
-
-            # Construct the export query
-            export_query = f"SELECT * FROM {table_name}"
-
-            # Execute the export query and fetch the data
-            cursor.execute(export_query)
-            data = cursor.fetchall()
-            column_names = [desc[0] for desc in cursor.description]
-
-            # Write the data to the Excel file
-            self.write_data_to_excel(data, column_names, table_name, excel_writer)
-
-            # Update the progress
-            current_table += 1
-            progress = int((current_table / total_tables) * 100)
-            self.update_progress.emit(progress)
-
     def write_data_to_excel(self, data, column_names, table_name, excel_writer):
         # Convert the data to a DataFrame
         df = pd.DataFrame(data, columns=column_names)
@@ -98,6 +161,9 @@ class ExportDataThread(QThread):
         # Write the DataFrame to the Excel file
         df.to_excel(excel_writer, sheet_name=table_name, index=False)
         worksheet = excel_writer.sheets[table_name]
+        
+        # Apply autofilter to enable filtering
+        worksheet.autofilter(0, 0, df.shape[0], df.shape[1] - 1)
 
         # Adjust the column widths based on the data
         for i, column in enumerate(df.columns):
