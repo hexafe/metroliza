@@ -29,6 +29,7 @@ import xlsxwriter
 import base64
 from modules import base64_encoded_files
 from pathlib import Path
+import math
 
 
 class ExportDataThread(QThread):
@@ -98,7 +99,7 @@ class ExportDataThread(QThread):
         border_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'right': 2})
 
         summary_worksheet = workbook.add_worksheet('SUMMARY')
-        summary_row_names = ['REFERENCE', 'HEADER', 'AX', 'NOM', 'MIN', 'MAX', 'AVG', 'STD', 'Cp', 'Cpk']
+        summary_row_names = ['REFERENCE', 'HEADER', 'AX', 'NOM', 'MIN', 'MAX', 'AVG', 'STD', 'Cp', 'Cpk', 'SAMPLES',]
 
         # Write summary row names to the summary worksheet
         for index, name in enumerate(summary_row_names):
@@ -139,13 +140,18 @@ class ExportDataThread(QThread):
                     ax_values = ax_group['MEAS']
                     for i, meas_value in enumerate(ax_values):
                         worksheet.write(meas_row + i, col, meas_value)
+                        
+                    summary_worksheet.write(10, col + 1, ax_values.count())
 
                     # Write summary statistics to the summary worksheet
                     summary_worksheet.write(3, col + 1, ax_group['NOM'].iloc[0])
                     summary_worksheet.write(4, col + 1, ax_values.min())
                     summary_worksheet.write(5, col + 1, ax_values.max())
                     summary_worksheet.write(6, col + 1, ax_values.mean())
-                    summary_worksheet.write(7, col + 1, ax_values.std())
+                    if math.isnan(ax_values.std()) or math.isinf(ax_values.std()):
+                        summary_worksheet.write(7, col + 1, 0)
+                    else:
+                        summary_worksheet.write(7, col + 1, ax_values.std())
 
                     col += 1
 
@@ -218,7 +224,9 @@ class ExportDataThread(QThread):
 
         # Convert series to a list and calculate the column width based on the maximum length of the data in the column
         column_width = max(len(str(value)) for value in data.tolist()) + 2
-        return max(column_width, 10)
+        column_width = min(column_width, 40)
+        column_width = max(column_width, 10)
+        return column_width
 
 
 class ExportDialog(QDialog):

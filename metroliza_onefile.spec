@@ -3,7 +3,7 @@
 #import version_date
 #VERSION_DATE = version_date.VERSION_DATE
 
-VERSION_DATE = "230625.2030"
+VERSION_DATE = "230626.2030"
 
 block_cipher = None
 
