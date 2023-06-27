@@ -75,6 +75,7 @@ class ExportDataThread(QThread):
         QCoreApplication.processEvents()
 
     def add_measurements_horizontal_sheet(self, cursor, excel_writer):
+        # Fetch data from the cursor
         cursor.execute(self.filter_query)
         data = cursor.fetchall()
         column_names = [desc[0] for desc in cursor.description]
@@ -86,109 +87,115 @@ class ExportDataThread(QThread):
         # Group the data by reference
         reference_groups = df.groupby('REFERENCE')
 
-        # Create the sheet for horizontal measurements
-        sheet_name = 'MEASUREMENTS_HORIZONTAL'
-        ref_row = 0
-        header_row = 1
-        ax_row = 2
-        meas_row = 3
-
+        # Create the summary worksheet
         workbook = excel_writer.book
-        worksheet = workbook.add_worksheet(sheet_name)
-        default_format = workbook.add_format({'align': 'center', 'valign': 'vcenter'})
-        border_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'right': 2})
-
         summary_worksheet = workbook.add_worksheet('SUMMARY')
-        summary_row_names = ['REFERENCE', 'HEADER', 'AX', 'NOM', 'MIN', 'MAX', 'AVG', 'STD', 'Cp', 'Cpk', 'SAMPLES',]
+        summary_row_names = ['REFERENCE', 'HEADER', 'AX', 'NOM', 'MIN', 'MAX', 'AVG', 'STD', 'Cp', 'Cpk', 'SAMPLES']
 
         # Write summary row names to the summary worksheet
         for index, name in enumerate(summary_row_names):
             summary_worksheet.write(index, 0, name)
 
-        ref_col_added = 0
-        header_col_added = 0
-        col = 0
+        # Initialize variables for column and summary column tracking
+        col = 1
+        summary_col = 1
+        summary_ref_col_added = 1
+        
+        # Define cell formats
+        default_format = workbook.add_format({'align': 'center', 'valign': 'vcenter'})
+        border_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'right': 1})
+        
+        # Set the default cell format for the summary worksheet
+        max_col = len(df['HEADER - AX'].unique())
+        summary_worksheet.set_column(0, max_col, None, cell_format=default_format)
+        
+        # Set border format for the first column of the summary worksheet
+        summary_worksheet.set_column(0, 0, None, cell_format=border_format)
 
         for (ref, ref_group) in reference_groups:
-            ref_col_added = col
+            # Create a worksheet for each reference
+            worksheet = workbook.add_worksheet(ref)
+            
+            # Set the default cell format for the worksheet
+            worksheet.set_column(0, max_col, None, cell_format=default_format)
+            
+            # Set border format for the first column of the worksheet
+            worksheet.set_column(0, 0, None, cell_format=border_format)
+            
+            worksheet.write(0, 0, 'HEADER')
+            worksheet.write(1, 0, 'AX')
+            
+            # Reset the column tracking for new sheet
+            col = 1
+            summary_ref_col_added = summary_col
 
-            # Write the reference value
-            worksheet.write(ref_row, col, ref)
-            summary_worksheet.write(0, col + 1, ref)
+            # Write the reference value to the summary worksheet
+            summary_worksheet.write(0, summary_col, ref)
 
-            # Get the headers for the current reference
+            # Group the data by header within the reference
             header_groups = ref_group.groupby('HEADER')
 
             for (header, header_group) in header_groups:
+                # Reset header col tracking
                 header_col_added = col
+                summary_header_col_added = summary_col
+                
+                # Write the header value to the worksheet and summary worksheet
+                worksheet.write(0, col, header)
+                summary_worksheet.write(1, summary_col, header)
 
-                # Write the header value
-                worksheet.write(header_row, col, header)
-                summary_worksheet.write(1, col + 1, header)
-
-                # Get the headers for the current reference
+                # Group the data by AX within the header
                 ax_groups = header_group.groupby('AX')
 
                 for (ax, ax_group) in ax_groups:
-                    ax_values = ax_group['MEAS']
+                    # Write the AX value to the worksheet and summary worksheet
+                    worksheet.write(1, col, ax)
+                    summary_worksheet.write(2, summary_col, ax)
 
-                    # Write the AX value
-                    worksheet.write(ax_row, col, ax)
-                    summary_worksheet.write(2, col + 1, ax)
-
-                    # Write the measurement values
+                    # Write the measurement values to the worksheet
                     ax_values = ax_group['MEAS']
-                    for i, meas_value in enumerate(ax_values):
-                        worksheet.write(meas_row + i, col, meas_value)
-                        
-                    summary_worksheet.write(10, col + 1, ax_values.count())
+                    worksheet.write_column(2, col, ax_values)
 
                     # Write summary statistics to the summary worksheet
-                    summary_worksheet.write(3, col + 1, ax_group['NOM'].iloc[0])
-                    summary_worksheet.write(4, col + 1, ax_values.min())
-                    summary_worksheet.write(5, col + 1, ax_values.max())
-                    summary_worksheet.write(6, col + 1, ax_values.mean())
+                    summary_worksheet.write(3, summary_col, ax_group['NOM'].iloc[0])
+                    summary_worksheet.write(4, summary_col, ax_values.min())
+                    summary_worksheet.write(5, summary_col, ax_values.max())
+                    summary_worksheet.write(6, summary_col, ax_values.mean())
                     if math.isnan(ax_values.std()) or math.isinf(ax_values.std()):
-                        summary_worksheet.write(7, col + 1, 0)
+                        summary_worksheet.write(7, summary_col, 0)
                     else:
-                        summary_worksheet.write(7, col + 1, ax_values.std())
+                        summary_worksheet.write(7, summary_col, ax_values.std())
+                        
+                    # Write the count of samples to the summary worksheet
+                    summary_worksheet.write(10, summary_col, ax_values.count())
 
                     col += 1
+                    summary_col += 1
 
                 # Merge cells for the header
                 header_col_end = col - 1
+                summary_header_col_end = summary_col - 1
                 if header_col_added != header_col_end:
-                    worksheet.merge_range(header_row, header_col_added, header_row, header_col_end, header)
-                    summary_worksheet.merge_range(1, header_col_added + 1, 1, header_col_end + 1, header)
+                    worksheet.merge_range(0, header_col_added, 0, header_col_end, header)
+                if summary_header_col_added != summary_header_col_end:
+                    summary_worksheet.merge_range(1, summary_header_col_added, 1, summary_header_col_end, header)
+                    
+                # Set border format for last column of header for worksheet
+                worksheet.set_column(header_col_end, header_col_end, None, cell_format=border_format)
 
-            # Merge cells for the reference
-            ref_col_end = col - 1
-            if ref_col_added != ref_col_end:
-                worksheet.merge_range(ref_row, ref_col_added, ref_row, ref_col_end, ref)
-                summary_worksheet.merge_range(0, ref_col_added + 1, 0, ref_col_end + 1, ref)
+            # Merge cells for the reference in the summary worksheet
+            summary_ref_col_end = summary_col - 1
+            if summary_ref_col_added != summary_ref_col_end:
+                summary_worksheet.merge_range(0, summary_ref_col_added, 0, summary_ref_col_end, ref)
+                
+            # Set border format for last column of reference for summary worksheet
+            summary_worksheet.set_column(summary_ref_col_end, summary_ref_col_end, None, cell_format=border_format)
+            
+            # Freeze panes in the reference worksheet
+            worksheet.freeze_panes(2, 1)
 
-        # Set the default cell format for the worksheet (middle-aligned and centered)
-        worksheet.set_column(0, col, None, cell_format=default_format)
-        summary_worksheet.set_column(0, col + 1, None, cell_format=default_format)
-
-        # Set border format for the first column of the summary worksheet
-        summary_worksheet.set_column(0, 0, None, border_format)
-
-        prev_last_ref_col = 0
-        for (ref, ref_group) in reference_groups:
-            last_ref_col = len(ref_group['HEADER - AX'].unique().tolist()) - 1
-            prev_last_ref_col += last_ref_col
-
-            # Set border format for the last column of each reference in the worksheet
-            worksheet.set_column(prev_last_ref_col, prev_last_ref_col, None, border_format)
-
-            # Set border format for the last column of each reference in the summary worksheet
-            summary_worksheet.set_column(prev_last_ref_col + 1, prev_last_ref_col + 1, None, border_format)
-            prev_last_ref_col += 1
-
-        # Freeze panes in the worksheets
-        worksheet.freeze_panes(3, 0)
-        summary_worksheet.freeze_panes(0, 1)
+        # Freeze panes in the summary worksheet
+        summary_worksheet.freeze_panes(3, 1)
 
     def export_filtered_data(self, cursor, excel_writer):
         export_query = self.filter_query
