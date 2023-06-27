@@ -30,6 +30,7 @@ import base64
 from modules import base64_encoded_files
 from pathlib import Path
 import math
+import re
 
 
 class ExportDataThread(QThread):
@@ -68,11 +69,11 @@ class ExportDataThread(QThread):
 
             self.add_measurements_horizontal_sheet(cursor, excel_writer)
 
-        excel_writer.close()
-        self.update_label.emit("Export completed successfully.")
-
-        self.finished.emit()
-        QCoreApplication.processEvents()
+            excel_writer.close()
+            
+            self.update_label.emit("Export completed successfully.")
+            self.finished.emit()
+            QCoreApplication.processEvents()
 
     def add_measurements_horizontal_sheet(self, cursor, excel_writer):
         # Fetch data from the cursor
@@ -113,6 +114,10 @@ class ExportDataThread(QThread):
         summary_worksheet.set_column(0, 0, None, cell_format=border_format)
 
         for (ref, ref_group) in reference_groups:
+            # Check if ref has invalid Excel characters for sheet
+            invalid_chars = r'[\[\]:\*\?/\\]'
+            ref = re.sub(invalid_chars, '', ref)
+        
             # Create a worksheet for each reference
             worksheet = workbook.add_worksheet(ref)
             
@@ -700,9 +705,9 @@ class ExportDialog(QDialog):
             print("Export thread closed successfully!")
 
         # Show a message box to inform the user that exporting has been cancelled
-        QMessageBox.information(self, "Export canceled", f"Data exporting has been canceled")
+        QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
 
-        self.loading_dialog.reject()
+        self.loading_dialog.reject()  
         self.close()
 
     def on_export_finished(self):

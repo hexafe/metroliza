@@ -76,12 +76,12 @@ class CMMReport:
 
         Returns:
             str: The extracted reference from the filename,
-            or "REF?" if no reference is found.
+            or "REF" if no reference is found.
 
         """
         reference_pattern = r"([A-Z][A-Za-z0-9]{4}\d{1,5}(_\d{3})?)|(\d{2}[A-Za-z][._-]?\d{3}[._-]?\d{3})|(216\d{5})"
         reference_match = re.match(reference_pattern, self.pdf_file_name)
-        reference_match = reference_match.group(0) if reference_match else "REF?"
+        reference_match = reference_match.group(0) if reference_match else "REF"
         return reference_match
 
     def open_database_and_check_filename(self):
