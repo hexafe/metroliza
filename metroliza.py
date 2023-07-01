@@ -1,4 +1,4 @@
-from modules.main_window import MainWindow
+from modules.MainWindow import MainWindow
 from PyQt5.QtWidgets import QApplication
 import sys
 import version_date

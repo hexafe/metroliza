@@ -1,22 +1,22 @@
 import fitz
 import pandas
+
+
+import re
 import sqlite3
 import time
-import re
 from pathlib import Path
 
 
-class CMMReport:
+class CMMReportParser:
     """Class to parse and convert PDF CMM report."""
 
     def __init__(self, pdf_file_path: str, database: str):
         """
         Initializes an instance of the CMMReport class.
-
         Args:
             pdf_file_path (str): The path of the PDF file.
             database (str): The path of the database.
-
         """
         self.pdf_file_path = self.get_file_path_from_filename(pdf_file_path)
         self.pdf_file_name = self.get_file_name_from_filename(pdf_file_path)
@@ -28,56 +28,46 @@ class CMMReport:
         self.database = database
 
         # self.open_database_and_check_filename()
-        
+
     def get_file_path_from_filename(self, pdf_file_path: str):
         """
         Retrieves the file path from the given PDF file path.
-
         Args:
             pdf_file_path (str): The path of the PDF file.
-
         Returns:
             str: The absolute parent directory path of the PDF file.
-
         """
         return str(Path(pdf_file_path).absolute().parent)
-   
+
     def get_file_name_from_filename(self, pdf_file_path: str):
         """
         Retrieves the file name from the given PDF file path.
-
         Args:
             pdf_file_path (str): The path of the PDF file.
-
         Returns:
             str: The file name of the PDF file.
-
         """
         return str(Path(pdf_file_path).name)
 
     def get_date_from_filename(self):
         """
         Retrieves the date from the filename using regular expressions.
-
         Returns:
             str: The extracted date from the filename in the format "YYYY-MM-DD",
             or "0000-00-00" if no date is found.
-
         """
         date_pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}"
         date_match = re.findall(date_pattern, self.pdf_file_name)
         date_match = date_match[-1] if date_match else "0000.00.00"
         date_match = date_match.replace(".", "-").replace("_", "-").replace("/", "-")
         return date_match
-   
+
     def get_reference_from_filename(self):
         """
         Retrieves the reference from the filename using regular expressions.
-
         Returns:
             str: The extracted reference from the filename,
             or "REF" if no reference is found.
-
         """
         reference_pattern = r"([A-Z][A-Za-z0-9]{4}\d{1,5}(_\d{3})?)|(\d{2}[A-Za-z][._-]?\d{3}[._-]?\d{3})|(216\d{5})"
         reference_match = re.match(reference_pattern, self.pdf_file_name)
@@ -87,11 +77,9 @@ class CMMReport:
     def open_database_and_check_filename(self):
         """
         Checks if the opened file is already present in the database and performs appropriate actions.
-
         If the 'REPORTS' table does not exist in the database, it creates the table and imports the data.
         If the file is not present in the 'REPORTS' table, it imports the data.
         If the file already exists in the 'REPORTS' table, it skips the file.
-
         """
         def open_split_to_sql():
             # Helper function to open, split, and import data to the SQLite database
@@ -125,9 +113,7 @@ class CMMReport:
     def cmm_open(self):
         """
         Method to open the CMM PDF file and store the text inside the pdf_raw_text attribute.
-
         It uses the PyMuPDF library (fitz) to open the PDF file and extract the text from each page.
-
         """
         with fitz.open(f"{self.pdf_file_path}\{self.pdf_file_name}") as pdf_report:
             for page in pdf_report:
@@ -138,9 +124,7 @@ class CMMReport:
     def show_raw_text(self):
         """
         Method to print the raw text inside the PDF.
-
         It iterates over each line of text in the pdf_raw_text attribute and prints it.
-
         """
         for line in self.pdf_raw_text:
             print(line)
@@ -148,10 +132,8 @@ class CMMReport:
     def show_blocks_text(self):
         """
         Method to print the pdf_blocks_text - blocks of measurements.
-
         It iterates over each block in the pdf_blocks_text attribute and prints each line within the block.
         Each block is surrounded by markers indicating the beginning and end of the block.
-
         """
         for block in self.pdf_blocks_text:
             print("\n___[BEGINNING OF BLOCK]___")
@@ -162,30 +144,28 @@ class CMMReport:
     def show_blocks_text2(self):
         """
         Method to print the pdf_blocks_text - blocks of measurements.
-
         It iterates over each block in the pdf_blocks_text attribute and prints the entire block as a string.
         Each block is surrounded by markers indicating the beginning and end of the block.
-
         """
         for block in self.pdf_blocks_text:
             print("\n___[BEGINNING OF BLOCK]___")
             print(f"{block}")
             print(f"___[END OF BLOCK ({len(block)=})]___\n")
-               
+
     def split_text_to_blocks(self):
         """Method to split raw text from pdf to blocks - split by measurements"""
         def is_comment_or_header(line):
             """Check if line is a comment or header"""
             return line.startswith(('#', '*'))
-        
+
         def is_dim_line(line):
             """Check if line is a DIM header"""
             return line.startswith("DIM")
-        
+
         def process_line(line):
             """Process measurement line"""
             processed_line = []
-                        
+
             if (line[0] == "X" or line[0] == "Y" or line[0] == "Z") and len(line) == 4:
                 processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
 
@@ -194,7 +174,7 @@ class CMMReport:
 
             elif line[0] == "TP" and len(line) == 6:
                 processed_line = [line[0], float(line[1]), float(line[2]), "", float(line[3]), float(line[4]), float(line[4]), float(line[5])]
-            
+
             elif line[0] == "TP" and len(line) == 7:
                 processed_line = [line[0], float(line[1]), float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
 
@@ -212,7 +192,7 @@ class CMMReport:
 
             elif line[0] == "DF" and len(line) == 8:
                 processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), float(line[4]), float(line[5]), float(line[6]), float(line[7])]
-                
+
             elif line[0] == "DF" and len(line) == 7:
                 processed_line = [line[0], float(line[1]), float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
 
@@ -227,15 +207,15 @@ class CMMReport:
 
             elif line[0] == "D1" and len(line) == 5 and line[1].isnumeric():
                 processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
-                
+
             return processed_line
-       
+
         def extract_numerical_lines(lines):
             """Creates list with numerical values from the line and calculates how many lines can be skipped"""
             prefixes = ["X", "Y", "Z", "TP", "M", "D", "RN", "DF", "PR", "PA", "D1"]
             numerical_lines = []
             counter = 0
-            
+
             for i, line in enumerate(lines):
                 if any(line.startswith(p) for p in prefixes) and not i:
                     numerical_lines.append(line)
@@ -244,7 +224,7 @@ class CMMReport:
                     break
                 else:
                     numerical_lines.append(line)
-            
+
             return numerical_lines, counter
 
         def extract_header_comment(lines):
@@ -268,7 +248,7 @@ class CMMReport:
                 return True
             except ValueError:
                 return False
-        
+
         measurement_line_map = {
             "X": 7,
             "Y": 7,
@@ -286,7 +266,7 @@ class CMMReport:
         dim_block = []
         header_comment = []
         counter = 0
-        
+
         for index, line in enumerate(self.pdf_raw_text):
             # Skip lines if there is an ongoing counter
             if counter:
@@ -371,14 +351,12 @@ class CMMReport:
                         text_block, header_comment, dim_block = [], [], []
                         formatted_line = re.sub(r'^[#*/]+', '', line).strip()
                         header_comment.append([formatted_line])
-  
+
     def to_dict(self):
         """
         Converts the parsed CMM report data into a dictionary.
-
         Returns:
             dict: A dictionary containing the parsed CMM report data.
-
         """
         cmm_report_dict = {
             "file_name": self.pdf_file_name,
@@ -409,7 +387,7 @@ class CMMReport:
                     for item in sublist:
                         if isinstance(item, str):
                             header += item
-                            header += ", " 
+                            header += ", "
             header = header[:-2]
             columns = ['AX', 'NOM', '+TOL', '-TOL', 'BONUS', 'MEAS', 'DEV', 'OUTTOL']
             df = pandas.DataFrame(block[1], columns=columns)
@@ -431,7 +409,7 @@ class CMMReport:
         if not any(lst[1] for lst in self.pdf_blocks_text):
             print(f"Report ({self.pdf_file_name}) - no measurements data available. Skipping database insertion.")
             return
-        
+
         with sqlite3.connect(self.database) as conn:
             with conn:
                 cursor = conn.cursor()
@@ -462,7 +440,7 @@ class CMMReport:
                                 )''')
 
                 # Check if the report already exists in the database
-                cursor.execute('SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ?', 
+                cursor.execute('SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ?',
                             (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date))
                 count = cursor.fetchone()[0]
 
@@ -478,7 +456,7 @@ class CMMReport:
                 while retry_attempt <= max_retry_attempts:
                     try:
                         # Attempt to insert report data into the REPORTS table
-                        cursor.execute('INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE) VALUES (?, ?, ?, ?)', 
+                        cursor.execute('INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE) VALUES (?, ?, ?, ?)',
                                     (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date))
                         report_id = cursor.lastrowid
 
@@ -515,8 +493,7 @@ class CMMReport:
 
                 print(f"Failed to insert data into the database after {max_retry_attempts} attempts.")
                 return
-                    
+
     def show_df(self):
         """Prints the dataframe with measurements"""
         print(f"{self.df}")
-                  

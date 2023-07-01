@@ -1,9 +1,13 @@
-from PyQt5.QtWidgets import QMainWindow, QWidget, QGridLayout, QPushButton
-from PyQt5.QtGui import QIcon, QPixmap
-from PyQt5.QtCore import QByteArray
-from modules.parsing_window import ParsingDialog
-from modules.export_window import ExportDialog
 from modules import base64_encoded_files
+from modules.ExportDialog import ExportDialog
+from modules.ParsingDialog import ParsingDialog
+
+
+from PyQt5.QtCore import QByteArray
+from PyQt5.QtGui import QIcon, QPixmap
+from PyQt5.QtWidgets import QGridLayout, QMainWindow, QPushButton, QWidget
+
+
 import base64
 
 
@@ -18,7 +22,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QGridLayout()
         self.central_widget.setLayout(self.layout)
-        
+
         # Set the icon
         icon_decoded = base64.b64decode(base64_encoded_files.encoded_icon)
         byte_array = QByteArray(icon_decoded)
@@ -26,10 +30,10 @@ class MainWindow(QMainWindow):
         pixmap.loadFromData(byte_array)
         icon = QIcon(pixmap)
         self.setWindowIcon(icon)
-        
+
         self.parsing_dialog = None
         self.export_dialog = None
-        
+
         self.directory = None
         self.db_file = None
 
@@ -49,7 +53,7 @@ class MainWindow(QMainWindow):
         # Check if export dialog is already open or visible
         if self.export_dialog and self.export_dialog.isVisible():
             self.export_dialog.close()
-            
+
         # Check if parsing dialog is already open or visible
         if not self.parsing_dialog or not self.parsing_dialog.isVisible():
             # Create a new parsing dialog if not already existing or visible
@@ -64,7 +68,7 @@ class MainWindow(QMainWindow):
         # Check if parsing dialog is already open or visible
         if self.parsing_dialog and self.parsing_dialog.isVisible():
             self.parsing_dialog.close()
-            
+
         # Check if export dialog is already open or visible
         if not self.export_dialog or not self.export_dialog.isVisible():
             # Create a new export dialog if not already existing or visible
@@ -74,7 +78,7 @@ class MainWindow(QMainWindow):
         # Raise the export dialog to the top and activate it
         self.export_dialog.raise_()
         self.export_dialog.activateWindow()
-        
+
     def set_db_file(self, db_file):
         self.db_file = db_file
 
