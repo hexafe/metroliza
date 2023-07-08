@@ -1,9 +1,5 @@
 from modules.CMMReportParser import CMMReportParser
-
-
 from PyQt5.QtCore import QThread, pyqtSignal
-
-
 import sqlite3
 import time
 from pathlib import Path

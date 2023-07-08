@@ -1,7 +1,5 @@
 import fitz
 import pandas
-
-
 import re
 import sqlite3
 import time
@@ -22,6 +20,7 @@ class CMMReportParser:
         self.pdf_file_name = self.get_file_name_from_filename(pdf_file_path)
         self.pdf_date = self.get_date_from_filename()
         self.pdf_reference = self.get_reference_from_filename()
+        self.pdf_sample_number = self.get_sample_number_from_file()
         self.pdf_raw_text = []
         self.pdf_blocks_text = []
         self.df = pandas.DataFrame()
@@ -61,6 +60,19 @@ class CMMReportParser:
         date_match = date_match[-1] if date_match else "0000.00.00"
         date_match = date_match.replace(".", "-").replace("_", "-").replace("/", "-")
         return date_match
+    
+    def get_sample_number_from_file(self):
+        """
+        Retrieves the sample number from the filename using regular expressions.
+        Returns:
+            str: The extracted sample number from the filename,
+            or "0000" if no sample number is found.
+        """
+        pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}_(.*?)\.(?i:pdf)"
+        match = re.search(pattern, self.pdf_file_name)
+        if match:
+            return match.group(1)
+        return "0000"
 
     def get_reference_from_filename(self):
         """
@@ -436,12 +448,13 @@ class CMMReportParser:
                                     REFERENCE TEXT,
                                     FILELOC TEXT,
                                     FILENAME TEXT,
-                                    DATE TEXT
+                                    DATE TEXT,
+                                    SAMPLE_NUMBER TEXT
                                 )''')
 
                 # Check if the report already exists in the database
-                cursor.execute('SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ?',
-                            (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date))
+                cursor.execute('SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
+                            (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number))
                 count = cursor.fetchone()[0]
 
                 if count > 0:
@@ -456,8 +469,8 @@ class CMMReportParser:
                 while retry_attempt <= max_retry_attempts:
                     try:
                         # Attempt to insert report data into the REPORTS table
-                        cursor.execute('INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE) VALUES (?, ?, ?, ?)',
-                                    (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date))
+                        cursor.execute('INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                                    (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number))
                         report_id = cursor.lastrowid
 
                         # Insert measurements data into the MEASUREMENTS table

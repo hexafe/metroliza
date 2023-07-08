@@ -1,7 +1,5 @@
 from modules import base64_encoded_files
 from modules.ParseReportsThread import ParseReportsThread
-
-
 from PyQt5.QtCore import QSize, QTemporaryFile, Qt, pyqtSlot
 from PyQt5.QtGui import QMovie
 from PyQt5.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout

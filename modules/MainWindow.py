@@ -1,11 +1,19 @@
 from modules import base64_encoded_files
 from modules.ExportDialog import ExportDialog
 from modules.ParsingDialog import ParsingDialog
+from modules.AboutWindow import AboutWindow
 
 
 from PyQt5.QtCore import QByteArray
 from PyQt5.QtGui import QIcon, QPixmap
-from PyQt5.QtWidgets import QGridLayout, QMainWindow, QPushButton, QWidget
+from PyQt5.QtWidgets import (
+    QGridLayout,
+    QMainWindow,
+    QPushButton,
+    QWidget,
+    QAction,
+    qApp,
+)
 
 
 import base64
@@ -40,6 +48,11 @@ class MainWindow(QMainWindow):
         # Initialize the buttons
         self.parse_button = QPushButton("Launch Parsing")
         self.export_button = QPushButton("Launch Export")
+        
+        # Add the About button
+        self.about_button = QAction("About", self)
+        self.about_button.triggered.connect(self.open_about_window)
+        self.menuBar().addAction(self.about_button)
 
         # Add the buttons to the layout
         self.layout.addWidget(self.parse_button, 0, 0)
@@ -78,6 +91,10 @@ class MainWindow(QMainWindow):
         # Raise the export dialog to the top and activate it
         self.export_dialog.raise_()
         self.export_dialog.activateWindow()
+        
+    def open_about_window(self):
+        about_window = AboutWindow()
+        about_window.exec_()
 
     def set_db_file(self, db_file):
         self.db_file = db_file

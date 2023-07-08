@@ -1,12 +1,22 @@
 from modules import base64_encoded_files
 from modules.ExportDataThread import ExportDataThread
-
-
 from PyQt5.QtCore import QDate, QSize, QTemporaryFile, Qt
 from PyQt5.QtGui import QMovie
-from PyQt5.QtWidgets import QAbstractItemView, QDateEdit, QDialog, QFileDialog, QGridLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
-
-
+from PyQt5.QtWidgets import(
+    QAbstractItemView,
+    QDateEdit,
+    QDialog,
+    QFileDialog,
+    QGridLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
+)
 import base64
 import sqlite3
 from pathlib import Path
@@ -339,7 +349,7 @@ class ExportDialog(QDialog):
             SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
                 MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
                 MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE, 
-                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE 
+                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER 
             FROM MEASUREMENTS
             JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
             WHERE 1=1
