@@ -23,8 +23,8 @@ class ClickableLabel(QLabel):
 
 
 class AboutWindow(QDialog):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
         # Set the window title and layout
         self.setWindowTitle("About")

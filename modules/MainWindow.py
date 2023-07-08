@@ -93,7 +93,7 @@ class MainWindow(QMainWindow):
         self.export_dialog.activateWindow()
         
     def open_about_window(self):
-        about_window = AboutWindow()
+        about_window = AboutWindow(self)
         about_window.exec_()
 
     def set_db_file(self, db_file):

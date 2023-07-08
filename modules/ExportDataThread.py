@@ -98,15 +98,9 @@ class ExportDataThread(QThread):
                 worksheet.write(0, col + 1, nom)
                 
                 worksheet.write(1, col, '+TOL')
-                try:
-                    USL = round(header_group['+TOL'].iloc[0], 3)
-                    worksheet.write(1, col + 1, USL)
-                    USL = nom + USL
-                except:
-                    print(f"{header_group['+TOL'].iloc[0]=}")
-                    print(f"{ref=}")
-                    print(f"{header=}")
-                    print(f"{header_group['FILENAME'].iloc[0]=}")
+                USL = round(header_group['+TOL'].iloc[0], 3)
+                worksheet.write(1, col + 1, USL)
+                USL = nom + USL
                 
                 worksheet.write(2, col, '-TOL')
                 if header_group['-TOL'].iloc[0]:
