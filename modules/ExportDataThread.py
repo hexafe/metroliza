@@ -98,12 +98,23 @@ class ExportDataThread(QThread):
                 worksheet.write(0, col + 1, nom)
                 
                 worksheet.write(1, col, '+TOL')
-                # USL = round(header_group['+TOL'].iloc[0], 3)
-                # worksheet.write(1, col + 1, USL)
+                try:
+                    USL = round(header_group['+TOL'].iloc[0], 3)
+                    worksheet.write(1, col + 1, USL)
+                    USL = nom + USL
+                except:
+                    print(f"{header_group['+TOL'].iloc[0]=}")
+                    print(f"{ref=}")
+                    print(f"{header=}")
+                    print(f"{header_group['FILENAME'].iloc[0]=}")
                 
                 worksheet.write(2, col, '-TOL')
-                # LSL = round(header_group['-TOL'].iloc[0], 3)
-                # worksheet.write(2, col + 1, LSL)
+                if header_group['-TOL'].iloc[0]:
+                    LSL = round(header_group['-TOL'].iloc[0], 3)
+                else:
+                    LSL = 0
+                worksheet.write(2, col + 1, LSL)
+                LSL = nom + LSL
                 
                 worksheet.write(3, col, 'MIN')
                 min_meas = round(header_group['MEAS'].min(), 3)
@@ -125,12 +136,22 @@ class ExportDataThread(QThread):
                 worksheet.write(6, col + 1, sigma)
                 
                 worksheet.write(7, col, 'Cp')
-                # Cp = round((USL - LSL)/(6 * sigma), 3)
-                # worksheet.write(7, col + 1, Cp)
+                if sigma:
+                    Cp = round((USL - LSL)/(6 * sigma), 3)
+                else:
+                    Cp = 0
+                if np.isnan(Cp) or np.isinf(Cp):
+                    Cp = 0
+                worksheet.write(7, col + 1, Cp)
                 
                 worksheet.write(8, col, 'Cpk')
-                # Cpk = round(min((USL - avg_meas)/(3 * sigma), (avg_meas - LSL)/(3 * sigma)), 3)
-                # worksheet.write(8, col + 1, Cpk)
+                if sigma:
+                    Cpk = round(min((USL - avg_meas)/(3 * sigma), (avg_meas - LSL)/(3 * sigma)), 3)
+                else:
+                    Cpk = 0
+                if np.isnan(Cpk) or np.isinf(Cpk):
+                    Cpk = 0
+                worksheet.write(8, col + 1, Cpk)
                 
                 worksheet.write(10, col, 'Date')
                 worksheet.write_column(11, col, header_group['DATE'])
@@ -141,35 +162,18 @@ class ExportDataThread(QThread):
                 worksheet.write(10, col + 2, header)
                 worksheet.write_column(11, col + 2, round(header_group['MEAS'], 3))
                 
+                # Define the format for conditional formatting (highlight cells in red)
+                red_format = workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
+
+                # Apply conditional formatting to highlight cells greater than USL in red
+                worksheet.conditional_format(11, col + 2, len(header_group) + 10, col + 2,
+                                            {'type': 'cell', 'criteria': '>', 'value': USL, 'format': red_format})
+
+                # Apply conditional formatting to highlight cells lower than LSL in red
+                worksheet.conditional_format(11, col + 2, len(header_group) + 10, col + 2,
+                                            {'type': 'cell', 'criteria': '<', 'value': LSL, 'format': red_format})
+                
                 col += 3
-
-                # # Group the data by AX within the header
-                # ax_groups = header_group.groupby('AX', as_index=False)
-
-                # for (ax, ax_group) in ax_groups:
-                #     # Write the AX value to the worksheet and summary worksheet
-                #     worksheet.write(1, col, ax)
-                #     summary_worksheet.write(2, summary_col, ax)
-
-                #     # Write the measurement values to the worksheet
-                #     ax_values = ax_group['MEAS'].values
-                #     worksheet.write_column(2, col, ax_values)
-
-                #     # Write summary statistics to the summary worksheet
-                #     summary_worksheet.write(3, summary_col, ax_group['NOM'].iloc[0])
-                #     summary_worksheet.write(4, summary_col, ax_values.min())
-                #     summary_worksheet.write(5, summary_col, ax_values.max())
-                #     summary_worksheet.write(6, summary_col, ax_values.mean())
-                #     if np.isnan(ax_values.std()) or np.isinf(ax_values.std()):
-                #         summary_worksheet.write(7, summary_col, 0)
-                #     else:
-                #         summary_worksheet.write(7, summary_col, ax_values.std())
-
-                #     # Write the count of samples to the summary worksheet
-                #     summary_worksheet.write(10, summary_col, ax_values.size)
-
-                #     col += 1
-                #     summary_col += 1
 
                 # Merge cells for the header
                 header_col_end = col - 1

@@ -206,7 +206,7 @@ class CMMReportParser:
                 processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), float(line[4]), float(line[5]), float(line[6]), float(line[7])]
 
             elif line[0] == "DF" and len(line) == 7:
-                processed_line = [line[0], float(line[1]), float(line[2]), "", float(line[3]), float(line[4]), float(line[5]), float(line[6])]
+                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "0", float(line[4]), float(line[5]), float(line[6])]
 
             elif line[0] == "PR" and len(line) == 7:
                 processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), float(line[5]), float(line[6])]
@@ -257,6 +257,13 @@ class CMMReportParser:
         def is_numerical(line):
             try:
                 float(line.strip())
+                return True
+            except ValueError:
+                return False
+
+        def is_number(value):
+            try:
+                float(value)
                 return True
             except ValueError:
                 return False
@@ -333,8 +340,17 @@ class CMMReportParser:
                         line_split = []
                         for item in next_lines:
                             line_split.extend(item.split())
+                            
                         if line_split[0] == "TP":
                             line_split[1] = "0"
+                            if not is_number(line_split[3]):
+                                line_split.pop(3)
+                                line_split.pop(3)
+                                line_split.append(line_split[-1])
+                                if float(line_split[4]) > float(line_split[2]):
+                                    line_split.append(str(float(line_split[4]) - float(line_split[2])))
+                                else:
+                                    line_split.append("0")
                         next_lines, counter = extract_numerical_lines(line_split)
                         temp_line = process_line(next_lines)
                         if temp_line:
@@ -363,6 +379,37 @@ class CMMReportParser:
                         text_block, header_comment, dim_block = [], [], []
                         formatted_line = re.sub(r'^[#*/]+', '', line).strip()
                         header_comment.append([formatted_line])
+                        
+        self.add_tolerances()
+
+    def add_tolerances(self):
+        for block in self.pdf_blocks_text:
+            tol_plus = 0
+            tol_minus = 0
+            bonus = 0
+            if block[1]:
+                if block[1][-1][0] == 'TP':
+                    # Fill -TOL with 0
+                    block[1][-1][3] = 0
+                    
+                    # Get +TOL from TP and apply it as +/- tolerance
+                    tol_plus = block[1][-1][2] * 0.5
+                    tol_minus = -tol_plus
+                    
+                    #Get tolerance bonus from TP
+                    bonus = block[1][-1][4]
+                    
+                    for measurement_line in block[1]:
+                        if not measurement_line[2]:
+                            measurement_line[2] = tol_plus
+                            measurement_line[3] = tol_minus
+                            measurement_line[4] = bonus
+                else:
+                    for measurement_line in block[1]:
+                        if not measurement_line[2]:
+                            measurement_line[2] = tol_plus
+                            measurement_line[3] = tol_minus
+                            measurement_line[4] = bonus         
 
     def to_dict(self):
         """
