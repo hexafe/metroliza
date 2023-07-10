@@ -132,12 +132,12 @@ class ExportDataThread(QThread):
                 USL_formula = f"({summary_col}1 + {summary_col}2)"
                 LSL_formula = f"({summary_col}1 + {summary_col}3)"
                 sigma_formula = f"({summary_col}7)"
-                cp_formula = f"ROUND(({USL_formula} - {LSL_formula})/(3 * {sigma_formula}), 3)"
+                cp_formula = f"ROUND(({USL_formula} - {LSL_formula})/(6 * {sigma_formula}), 3)"
                 worksheet.write_formula(7, col + 1, cp_formula)
                 
                 worksheet.write(8, col, 'Cpk')
                 average_formula = f"({summary_col}5)"
-                cpk_formula = f"ROUND(MIN( (({USL_formula} - {average_formula})/(3 * {sigma_formula})), (({average_formula} - {LSL_formula})/(3 * {sigma_formula})), 3)"
+                cpk_formula = f"ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
                 worksheet.write_formula(8, col + 1, cpk_formula)
                 
                 worksheet.write(9, col, "Sample size")
@@ -157,11 +157,11 @@ class ExportDataThread(QThread):
                 red_format = workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
 
                 # Apply conditional formatting to highlight cells greater than USL in red
-                worksheet.conditional_format(11, col + 2, len(header_group) + 10, col + 2,
+                worksheet.conditional_format(12, col + 2, len(header_group) + 11, col + 2,
                                             {'type': 'cell', 'criteria': '>', 'value': USL, 'format': red_format})
 
                 # Apply conditional formatting to highlight cells lower than LSL in red
-                worksheet.conditional_format(11, col + 2, len(header_group) + 10, col + 2,
+                worksheet.conditional_format(12, col + 2, len(header_group) + 11, col + 2,
                                             {'type': 'cell', 'criteria': '<', 'value': LSL, 'format': red_format})
                 
                 col += 3
@@ -173,7 +173,7 @@ class ExportDataThread(QThread):
                 worksheet.set_column(header_col_end, header_col_end, None, cell_format=border_format)
 
             # Freeze panes in the reference worksheet
-            worksheet.freeze_panes(11, 0)
+            worksheet.freeze_panes(12, 0)
         
     def export_filtered_data(self, cursor, excel_writer):
         export_query = self.filter_query
