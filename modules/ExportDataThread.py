@@ -112,69 +112,46 @@ class ExportDataThread(QThread):
                 LSL = nom + LSL
                 
                 worksheet.write(3, col, 'MIN')
-                # min_meas = round(header_group['MEAS'].min(), 3)
-                # worksheet.write(3, col + 1, min_meas)
-                min_formula = f"=ROUND(MIN({xl_col_to_name(col + 2)}12:{xl_col_to_name(col + 2)}{len(header_group) + 11}), 3)"
+                min_formula = f"=ROUND(MIN({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12}), 3)"
                 worksheet.write_formula(3, col + 1, min_formula)
                 
                 worksheet.write(4, col, 'AVG')
-                # avg_meas = round(header_group['MEAS'].mean(), 3)
-                # worksheet.write(4, col + 1, avg_meas)
-                avg_formula = f"=ROUND(AVERAGE({xl_col_to_name(col + 2)}12:{xl_col_to_name(col + 2)}{len(header_group) + 11}), 3)"
+                avg_formula = f"=ROUND(AVERAGE({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12}), 3)"
                 worksheet.write_formula(4, col + 1, avg_formula)
                 
                 worksheet.write(5, col, 'MAX')
-                # max_meas = round(header_group['MEAS'].max(), 3)
-                # worksheet.write(5, col + 1, max_meas)
-                max_formula = f"=ROUND(MAX({xl_col_to_name(col + 2)}12:{xl_col_to_name(col + 2)}{len(header_group) + 11}), 3)"
+                max_formula = f"=ROUND(MAX({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12}), 3)"
                 worksheet.write_formula(5, col + 1, max_formula)
                 
                 worksheet.write(6, col, 'STD')
-                # if np.isnan(header_group['MEAS'].std()) or np.isinf(header_group['MEAS'].std()):
-                #     sigma = round(0, 3)
-                # else:
-                #     sigma = round(header_group['MEAS'].std(), 3)
-                # worksheet.write(6, col + 1, sigma)
-                std_formula = f"=ROUND(STDEV({xl_col_to_name(col + 2)}12:{xl_col_to_name(col + 2)}{len(header_group) + 11}), 3)"
+                std_formula = f"=ROUND(STDEV({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12}), 3)"
                 worksheet.write_formula(6, col + 1, std_formula)
                 
                 worksheet.write(7, col, 'Cp')
-                # if sigma:
-                #     Cp = round((USL - LSL)/(6 * sigma), 3)
-                # else:
-                #     Cp = 0
-                # if np.isnan(Cp) or np.isinf(Cp):
-                #     Cp = 0
-                # worksheet.write(7, col + 1, Cp)
                 summary_col = xl_col_to_name(col + 1)
                 USL_formula = f"({summary_col}1 + {summary_col}2)"
                 LSL_formula = f"({summary_col}1 + {summary_col}3)"
                 sigma_formula = f"({summary_col}7)"
-                # cp_formula = f"=({xl_col_to_name(col + 1)}2-{xl_col_to_name(col + 1)}3)/(6*{std_formula})"
                 cp_formula = f"ROUND(({USL_formula} - {LSL_formula})/(3 * {sigma_formula}), 3)"
                 worksheet.write_formula(7, col + 1, cp_formula)
                 
                 worksheet.write(8, col, 'Cpk')
-                # if sigma:
-                #     Cpk = round(min((USL - avg_meas)/(3 * sigma), (avg_meas - LSL)/(3 * sigma)), 3)
-                # else:
-                #     Cpk = 0
-                # if np.isnan(Cpk) or np.isinf(Cpk):
-                #     Cpk = 0
-                # worksheet.write(8, col + 1, Cpk)
-                # cpk_formula = f"=MIN(({xl_col_to_name(col + 1)}2-{avg_formula})/(3*{std_formula}), ({avg_formula}-{xl_col_to_name(col + 1)}3)/(3*{std_formula}))"
                 average_formula = f"({summary_col}5)"
-                cpk_formula = f"ROUND(MIN( ({USL_formula} - {average_formula}/(3 * {sigma_formula})), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
+                cpk_formula = f"ROUND(MIN( (({USL_formula} - {average_formula})/(3 * {sigma_formula})), (({average_formula} - {LSL_formula})/(3 * {sigma_formula})), 3)"
                 worksheet.write_formula(8, col + 1, cpk_formula)
                 
-                worksheet.write(10, col, 'Date')
-                worksheet.write_column(11, col, header_group['DATE'])
+                worksheet.write(9, col, "Sample size")
+                count_formula = f"=COUNT({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12})"
+                worksheet.write_formula(9, col + 1, count_formula)
                 
-                worksheet.write(10, col + 1, 'Sample #')
-                worksheet.write_column(11, col + 1, header_group['SAMPLE_NUMBER'])
+                worksheet.write(11, col, 'Date')
+                worksheet.write_column(12, col, header_group['DATE'])
                 
-                worksheet.write(10, col + 2, header)
-                worksheet.write_column(11, col + 2, round(header_group['MEAS'], 3))
+                worksheet.write(11, col + 1, 'Sample #')
+                worksheet.write_column(12, col + 1, header_group['SAMPLE_NUMBER'])
+                
+                worksheet.write(11, col + 2, header)
+                worksheet.write_column(12, col + 2, round(header_group['MEAS'], 3))
                 
                 # Define the format for conditional formatting (highlight cells in red)
                 red_format = workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
