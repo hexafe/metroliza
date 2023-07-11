@@ -219,12 +219,15 @@ class CMMReportParser:
 
             elif line[0] == "D1" and len(line) == 5 and line[1].isnumeric():
                 processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
+            
+            elif line[0] == "A" and len(line) == 7:
+                processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "0", float(line[4]), float(line[5]), float(line[6])]
 
             return processed_line
 
         def extract_numerical_lines(lines):
             """Creates list with numerical values from the line and calculates how many lines can be skipped"""
-            prefixes = ["X", "Y", "Z", "TP", "M", "D", "RN", "DF", "PR", "PA", "D1"]
+            prefixes = ["X", "Y", "Z", "TP", "M", "D", "RN", "DF", "PR", "PA", "D1", "A"]
             numerical_lines = []
             counter = 0
 
@@ -279,7 +282,8 @@ class CMMReportParser:
             "DF": 8,
             "PR": 7,
             "PA": 4,
-            "D1": 5
+            "D1": 5,
+            "A": 7,
         }
         text_block = []
         dim_block = []
