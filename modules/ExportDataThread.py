@@ -5,7 +5,7 @@ import math
 import re
 import sqlite3
 import xlsxwriter
-from xlsxwriter.utility import xl_col_to_name
+from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 
 
 class ExportDataThread(QThread):
@@ -102,6 +102,7 @@ class ExportDataThread(QThread):
                 USL = round(header_group['+TOL'].iloc[0], 3)
                 worksheet.write(1, col + 1, USL)
                 USL = nom + USL
+                USL_cell = xl_rowcol_to_cell(1, col + 1, row_abs=True, col_abs=True)
                 
                 worksheet.write(2, col, '-TOL')
                 if header_group['-TOL'].iloc[0]:
@@ -110,6 +111,7 @@ class ExportDataThread(QThread):
                     LSL = 0
                 worksheet.write(2, col + 1, LSL)
                 LSL = nom + LSL
+                LSL_cell = xl_rowcol_to_cell(2, col + 1, row_abs=True, col_abs=True)
                 
                 worksheet.write(3, col, 'MIN')
                 min_formula = f"=ROUND(MIN({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12}), 3)"
@@ -158,11 +160,11 @@ class ExportDataThread(QThread):
 
                 # Apply conditional formatting to highlight cells greater than USL in red
                 worksheet.conditional_format(12, col + 2, len(header_group) + 11, col + 2,
-                                            {'type': 'cell', 'criteria': '>', 'value': USL, 'format': red_format})
+                                            {'type': 'cell', 'criteria': '>', 'value': USL_cell, 'format': red_format})
 
                 # Apply conditional formatting to highlight cells lower than LSL in red
                 worksheet.conditional_format(12, col + 2, len(header_group) + 11, col + 2,
-                                            {'type': 'cell', 'criteria': '<', 'value': LSL, 'format': red_format})
+                                            {'type': 'cell', 'criteria': '<', 'value': LSL_cell, 'format': red_format})
                 
                 col += 3
 

@@ -2,7 +2,7 @@ from modules import base64_encoded_files
 from modules.ExportDialog import ExportDialog
 from modules.ParsingDialog import ParsingDialog
 from modules.AboutWindow import AboutWindow
-
+from modules.CSVSummaryDialog import CSVSummaryDialog
 
 from PyQt5.QtCore import QByteArray
 from PyQt5.QtGui import QIcon, QPixmap
@@ -12,9 +12,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QWidget,
     QAction,
-    qApp,
 )
-
 
 import base64
 
@@ -48,7 +46,8 @@ class MainWindow(QMainWindow):
         # Initialize the buttons
         self.parse_button = QPushButton("Launch Parsing")
         self.export_button = QPushButton("Launch Export")
-        
+        self.csv_summary_button = QPushButton("CSV Summary")
+
         # Add the About button
         self.about_button = QAction("About", self)
         self.about_button.triggered.connect(self.open_about_window)
@@ -57,10 +56,12 @@ class MainWindow(QMainWindow):
         # Add the buttons to the layout
         self.layout.addWidget(self.parse_button, 0, 0)
         self.layout.addWidget(self.export_button, 1, 0)
+        self.layout.addWidget(self.csv_summary_button, 2, 0)
 
         # Connect the buttons to their respective dialogs
         self.parse_button.clicked.connect(self.launch_parsing_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
+        self.csv_summary_button.clicked.connect(self.launch_csv_summary_dialog)
 
     def launch_parsing_dialog(self):
         # Check if export dialog is already open or visible
@@ -91,10 +92,14 @@ class MainWindow(QMainWindow):
         # Raise the export dialog to the top and activate it
         self.export_dialog.raise_()
         self.export_dialog.activateWindow()
-        
+
     def open_about_window(self):
         about_window = AboutWindow(self)
         about_window.exec_()
+
+    def launch_csv_summary_dialog(self):
+        csv_summary_window = CSVSummaryDialog(self)
+        csv_summary_window.exec_()
 
     def set_db_file(self, db_file):
         self.db_file = db_file
