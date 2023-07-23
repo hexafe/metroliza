@@ -194,6 +194,29 @@ class DataProcessingThread(QThread):
                     # Apply conditional formatting to highlight cells lower than LSL in red
                     worksheet.conditional_format(1, col - 3, len(selected_data[data_column]), col - 3,
                                                 {'type': 'cell', 'criteria': '<', 'value': LSL_cell, 'format': red_format})
+                    
+                    # Create an XY chart object.
+                    chart = writer.book.add_chart({'type': 'scatter'})
+
+                    # Add data to the chart with the specified x and y ranges.
+                    num_rows = len(selected_data[data_column])
+                    x_range = f"={data_column[:30]}!${xl_col_to_name(col-8)}$2:${xl_col_to_name(col-8)}${num_rows + 1}"
+                    y_range = f"={data_column[:30]}!${xl_col_to_name(col-3)}$2:${xl_col_to_name(col-3)}${num_rows + 1}"
+
+                    # Add the series to the chart.
+                    chart.add_series({
+                        'name': data_column,
+                        'categories': x_range,
+                        'values': y_range,
+                    })
+
+                    # Configure the chart properties.
+                    chart.set_title({'name': 'Sample XY Chart'})
+                    # chart.set_x_axis({'name': 'Date'})
+                    chart.set_y_axis({'name': f'{data_column[:30]}'})
+
+                    # Insert the chart into the worksheet.
+                    worksheet.insert_chart(12, col + 3, chart)
 
                     # Calculate the progress percentage and emit the progress signal
                     progress_percentage = int((i + 1) * 100 / total_filtered_columns)
