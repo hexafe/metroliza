@@ -197,7 +197,7 @@ class ExportDataThread(QThread):
                 #     'max': num_rows + 1,
                 # })
                 chart.set_y_axis({
-                    'name': f'{header}',
+                    # 'name': f'{header}',
                     'major_gridlines': {
                         'visible': False,
                     }
