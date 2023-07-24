@@ -5,7 +5,7 @@ import math
 import re
 import sqlite3
 import xlsxwriter
-from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
+from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
 
 
 class ExportDataThread(QThread):
@@ -97,6 +97,7 @@ class ExportDataThread(QThread):
                 worksheet.write(0, col, 'NOM')
                 nom = round(header_group['NOM'].iloc[0], 3)
                 worksheet.write(0, col + 1, nom)
+                NOM_cell = xl_rowcol_to_cell(0, col + 1, row_abs=True, col_abs=True)
                 
                 worksheet.write(1, col, '+TOL')
                 USL = round(header_group['+TOL'].iloc[0], 3)
@@ -160,11 +161,11 @@ class ExportDataThread(QThread):
 
                 # Apply conditional formatting to highlight cells greater than USL in red
                 worksheet.conditional_format(12, col + 2, len(header_group) + 11, col + 2,
-                                            {'type': 'cell', 'criteria': '>', 'value': USL_cell, 'format': red_format})
+                                            {'type': 'cell', 'criteria': '>', 'value': f'({NOM_cell}+{USL_cell})', 'format': red_format})
 
                 # Apply conditional formatting to highlight cells lower than LSL in red
                 worksheet.conditional_format(12, col + 2, len(header_group) + 11, col + 2,
-                                            {'type': 'cell', 'criteria': '<', 'value': LSL_cell, 'format': red_format})
+                                            {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format})
                 
                 col += 3
 
@@ -173,6 +174,65 @@ class ExportDataThread(QThread):
 
                 # Set border format for last column of header for worksheet
                 worksheet.set_column(header_col_end, header_col_end, None, cell_format=border_format)
+                
+                # Create an XY chart object
+                chart = workbook.add_chart({'type': 'scatter'})
+
+                # Add data to the chart with the specified x and y ranges
+                num_rows = len(header_group) + 12
+                x_range = f"={ref}!${xl_col_to_name(col-2)}$13:${xl_col_to_name(col-2)}${num_rows}"
+                y_range = f"={ref}!${xl_col_to_name(col-1)}$13:${xl_col_to_name(col-1)}${num_rows}"
+
+                # Add the series to the chart
+                chart.add_series({
+                    'name': header,
+                    'categories': x_range,
+                    'values': y_range,
+                })
+
+                # Configure the chart properties
+                chart.set_title({'name': f'{header}'})
+                # chart.set_x_axis({
+                #     'min': 0,
+                #     'max': num_rows + 1,
+                # })
+                chart.set_y_axis({
+                    'name': f'{header}',
+                    'major_gridlines': {
+                        'visible': False,
+                    }
+                })
+
+                chart.set_legend({'position': 'none'})
+                
+                USL_y_values_list = [USL] * len(header_group)
+                LSL_y_values_list = [LSL] * len(header_group)
+                USL_limits_y_values = '={' + ','.join(str(item) for item in USL_y_values_list) + '}'
+                LSL_limits_y_values = '={' + ','.join(str(item) for item in LSL_y_values_list) + '}'
+                chart.add_series({
+                    'name': 'USL',
+                    'categories': x_range,
+                    'values': USL_limits_y_values,
+                    'line': {'color': 'red', 'width': 1},
+                    'marker': {'type': 'none'},
+                    'data_labels': {'value': False},
+                    'show_legend_key': False,
+                })
+                chart.add_series({
+                    'name': 'LSL',
+                    'categories': x_range,
+                    'values': LSL_limits_y_values,
+                    'line': {'color': 'red', 'width': 1},
+                    'marker': {'type': 'none'},
+                    'data_labels': {'value': False},
+                    'show_legend_key': False,
+                })
+                
+                chart.set_size({'width': 240, 'height': 160})
+
+                # Insert the chart into the worksheet.
+                worksheet.insert_chart(12, col - 3, chart)
+                
 
             # Freeze panes in the reference worksheet
             worksheet.freeze_panes(12, 0)

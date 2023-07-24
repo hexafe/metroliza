@@ -108,6 +108,108 @@ class DataProcessingThread(QThread):
         self.data_frame = data_frame
         self.canceled = False
 
+    def write_summary_data(self, worksheet, data_column, selected_data):
+        col = selected_data.shape[1] + 2
+
+        worksheet.write(0, col, 'NOM')
+        nom = 0
+        worksheet.write(0, col + 1, nom)
+
+        worksheet.write(1, col, '+TOL')
+        USL = 0
+        worksheet.write(1, col + 1, USL)
+        USL = nom + USL
+        USL_cell = xl_rowcol_to_cell(1, col + 1, row_abs=True, col_abs=True)
+
+        worksheet.write(2, col, '-TOL')
+        LSL = 0
+        worksheet.write(2, col + 1, LSL)
+        LSL = nom + LSL
+        LSL_cell = xl_rowcol_to_cell(2, col + 1, row_abs=True, col_abs=True)
+
+        worksheet.write(3, col, 'MIN')
+        min_formula = f"=ROUND(MIN({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
+        worksheet.write_formula(3, col + 1, min_formula)
+
+        worksheet.write(4, col, 'AVG')
+        avg_formula = f"=ROUND(AVERAGE({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
+        worksheet.write_formula(4, col + 1, avg_formula)
+
+        worksheet.write(5, col, 'MAX')
+        max_formula = f"=ROUND(MAX({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
+        worksheet.write_formula(5, col + 1, max_formula)
+
+        worksheet.write(6, col, 'STD')
+        std_formula = f"=ROUND(STDEV({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
+        worksheet.write_formula(6, col + 1, std_formula)
+
+        worksheet.write(7, col, 'Cp')
+        summary_col = xl_col_to_name(col + 1)
+        USL_formula = f"({summary_col}1 + {summary_col}2)"
+        LSL_formula = f"({summary_col}1 + {summary_col}3)"
+        sigma_formula = f"({summary_col}7)"
+        cp_formula = f"ROUND(({USL_formula} - {LSL_formula})/(6 * {sigma_formula}), 3)"
+        worksheet.write_formula(7, col + 1, cp_formula)
+
+        worksheet.write(8, col, 'Cpk')
+        average_formula = f"({summary_col}5)"
+        cpk_formula = f"ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
+        worksheet.write_formula(8, col + 1, cpk_formula)
+
+        worksheet.write(9, col, "Sample size")
+        count_formula = f"=COUNT({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1})"
+        worksheet.write_formula(9, col + 1, count_formula)
+
+        return col, USL_cell, LSL_cell
+
+    def apply_conditional_formatting(self, worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer):
+        # Define the format for conditional formatting (highlight cells in red)
+        red_format = writer.book.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
+
+        # Apply conditional formatting to highlight cells greater than USL in red
+        worksheet.conditional_format(1, col - 3, len(selected_data[data_column]), col - 3,
+                                    {'type': 'cell', 'criteria': '>', 'value': USL_cell, 'format': red_format})
+
+        # Apply conditional formatting to highlight cells lower than LSL in red
+        worksheet.conditional_format(1, col - 3, len(selected_data[data_column]), col - 3,
+                                    {'type': 'cell', 'criteria': '<', 'value': LSL_cell, 'format': red_format})
+
+    def add_xy_chart(self, worksheet, data_column, col, selected_data, writer):
+        # Create an XY chart object
+        chart = writer.book.add_chart({'type': 'scatter'})
+
+        # Add data to the chart with the specified x and y ranges
+        num_rows = len(selected_data[data_column])
+        x_range = f"={data_column[:30]}!${xl_col_to_name(col-8)}$2:${xl_col_to_name(col-8)}${num_rows + 1}"
+        y_range = f"={data_column[:30]}!${xl_col_to_name(col-3)}$2:${xl_col_to_name(col-3)}${num_rows + 1}"
+
+        # Add the series to the chart
+        chart.add_series({
+            'name': data_column,
+            'categories': x_range,
+            'values': y_range,
+        })
+
+        # Configure the chart properties
+        chart.set_title({'name': f'{data_column[:30]}'})
+        chart.set_x_axis({
+            # 'name': 'Date',
+            # 'date_axis': True,
+            'min': 0,
+            'max': num_rows + 1,
+        })
+        chart.set_y_axis({
+            'name': f'{data_column[:30]}',
+            'major_gridlines': {
+                'visible': False,
+            }
+        })
+
+        chart.set_legend({'position': 'none'})
+
+        # Insert the chart into the worksheet.
+        worksheet.insert_chart(12, col + 3, chart)
+
     def run(self):
         # Perform the data processing and save to the Excel file here
 
@@ -130,93 +232,14 @@ class DataProcessingThread(QThread):
 
                     # Write the data to a new sheet with the name of the data column
                     selected_data.to_excel(writer, sheet_name=data_column[:30], index=False)
-                    
+
                     worksheet = writer.sheets[data_column[:30]]
-                    
-                    col = selected_data.shape[1] + 2
-                    
-                    worksheet.write(0, col, 'NOM')
-                    nom = 0
-                    worksheet.write(0, col + 1, nom)
-                    
-                    worksheet.write(1, col, '+TOL')
-                    USL = 0
-                    worksheet.write(1, col + 1, USL)
-                    USL = nom + USL
-                    USL_cell = xl_rowcol_to_cell(1, col + 1, row_abs=True, col_abs=True)
-                    
-                    worksheet.write(2, col, '-TOL')
-                    LSL = 0
-                    worksheet.write(2, col + 1, LSL)
-                    LSL = nom + LSL
-                    LSL_cell = xl_rowcol_to_cell(2, col + 1, row_abs=True, col_abs=True)
-                    
-                    worksheet.write(3, col, 'MIN')
-                    min_formula = f"=ROUND(MIN({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
-                    worksheet.write_formula(3, col + 1, min_formula)
-                    
-                    worksheet.write(4, col, 'AVG')
-                    avg_formula = f"=ROUND(AVERAGE({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
-                    worksheet.write_formula(4, col + 1, avg_formula)
-                    
-                    worksheet.write(5, col, 'MAX')
-                    max_formula = f"=ROUND(MAX({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
-                    worksheet.write_formula(5, col + 1, max_formula)
-                    
-                    worksheet.write(6, col, 'STD')
-                    std_formula = f"=ROUND(STDEV({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
-                    worksheet.write_formula(6, col + 1, std_formula)
-                    
-                    worksheet.write(7, col, 'Cp')
-                    summary_col = xl_col_to_name(col + 1)
-                    USL_formula = f"({summary_col}1 + {summary_col}2)"
-                    LSL_formula = f"({summary_col}1 + {summary_col}3)"
-                    sigma_formula = f"({summary_col}7)"
-                    cp_formula = f"ROUND(({USL_formula} - {LSL_formula})/(6 * {sigma_formula}), 3)"
-                    worksheet.write_formula(7, col + 1, cp_formula)
-                    
-                    worksheet.write(8, col, 'Cpk')
-                    average_formula = f"({summary_col}5)"
-                    cpk_formula = f"ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
-                    worksheet.write_formula(8, col + 1, cpk_formula)
-                    
-                    worksheet.write(9, col, "Sample size")
-                    count_formula = f"=COUNT({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1})"
-                    worksheet.write_formula(9, col + 1, count_formula)
-                    
-                    # Define the format for conditional formatting (highlight cells in red)
-                    red_format = writer.book.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
 
-                    # Apply conditional formatting to highlight cells greater than USL in red
-                    worksheet.conditional_format(1, col - 3, len(selected_data[data_column]), col - 3,
-                                                {'type': 'cell', 'criteria': '>', 'value': USL_cell, 'format': red_format})
+                    col, USL_cell, LSL_cell = self.write_summary_data(worksheet, data_column, selected_data)
 
-                    # Apply conditional formatting to highlight cells lower than LSL in red
-                    worksheet.conditional_format(1, col - 3, len(selected_data[data_column]), col - 3,
-                                                {'type': 'cell', 'criteria': '<', 'value': LSL_cell, 'format': red_format})
-                    
-                    # Create an XY chart object.
-                    chart = writer.book.add_chart({'type': 'scatter'})
+                    self.apply_conditional_formatting(worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer)
 
-                    # Add data to the chart with the specified x and y ranges.
-                    num_rows = len(selected_data[data_column])
-                    x_range = f"={data_column[:30]}!${xl_col_to_name(col-8)}$2:${xl_col_to_name(col-8)}${num_rows + 1}"
-                    y_range = f"={data_column[:30]}!${xl_col_to_name(col-3)}$2:${xl_col_to_name(col-3)}${num_rows + 1}"
-
-                    # Add the series to the chart.
-                    chart.add_series({
-                        'name': data_column,
-                        'categories': x_range,
-                        'values': y_range,
-                    })
-
-                    # Configure the chart properties.
-                    chart.set_title({'name': 'Sample XY Chart'})
-                    # chart.set_x_axis({'name': 'Date'})
-                    chart.set_y_axis({'name': f'{data_column[:30]}'})
-
-                    # Insert the chart into the worksheet.
-                    worksheet.insert_chart(12, col + 3, chart)
+                    self.add_xy_chart(worksheet, data_column, col, selected_data, writer)
 
                     # Calculate the progress percentage and emit the progress signal
                     progress_percentage = int((i + 1) * 100 / total_filtered_columns)
