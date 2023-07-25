@@ -67,6 +67,7 @@ class ExportDataThread(QThread):
         # Define cell formats
         default_format = workbook.add_format({'align': 'center', 'valign': 'vcenter'})
         border_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'right': 1})
+        wrap_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
 
         column_width = 12
 
@@ -153,7 +154,7 @@ class ExportDataThread(QThread):
                 worksheet.write(11, col + 1, 'Sample #')
                 worksheet.write_column(12, col + 1, header_group['SAMPLE_NUMBER'])
                 
-                worksheet.write(11, col + 2, header)
+                worksheet.write(11, col + 2, header, wrap_format)
                 worksheet.write_column(12, col + 2, round(header_group['MEAS'], 3))
                 
                 # Define the format for conditional formatting (highlight cells in red)
