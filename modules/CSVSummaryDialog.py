@@ -27,8 +27,8 @@ class FilterDialog(QDialog):
         self.setGeometry(200, 200, 500, 150)  # Increased the width for better visibility
 
         self.column_names = column_names
-        self.selected_indexes = column_names[:5]  # Select default indexes
-        self.selected_data_columns = column_names[5:]  # Select default data columns
+        self.selected_indexes = column_names[:1]  # Select default indexes
+        self.selected_data_columns = column_names[1:]  # Select default data columns
 
         # Initialize the layout
         main_layout = QVBoxLayout()
@@ -49,7 +49,7 @@ class FilterDialog(QDialog):
         horizontal_layout.addWidget(self.data_list_widget)
 
         # Populate the list widgets with column names
-        self.index_list_widget.addItem("SELECT DEFAULT (FIRST 5 COLUMNS)")  # Add the option at the top
+        self.index_list_widget.addItem("SELECT DEFAULT (FIRST COLUMN)")  # Add the option at the top
         self.index_list_widget.addItems(column_names)
         self.data_list_widget.addItem("SELECT ALL")  # Add the option at the top
         self.data_list_widget.addItems(column_names)
@@ -82,9 +82,9 @@ class FilterDialog(QDialog):
         self.selected_indexes = [item.text() for item in self.index_list_widget.selectedItems()]
         self.selected_data_columns = [item.text() for item in self.data_list_widget.selectedItems()]
 
-        # Return the first 5 columns if "SELECT DEFAULT (FIRST 5 COLUMNS)" is selected
-        if "SELECT DEFAULT (FIRST 5 COLUMNS)" in self.selected_indexes:
-            self.selected_indexes = self.column_names[:5]
+        # Return the first column if "SELECT DEFAULT (FIRST COLUMN)" is selected
+        if "SELECT DEFAULT (FIRST COLUMN)" in self.selected_indexes:
+            self.selected_indexes = self.column_names[:1]
 
         # Return all columns except the ones selected in INDEX if "SELECT ALL" is selected
         if "SELECT ALL" in self.selected_data_columns:
@@ -109,69 +109,69 @@ class DataProcessingThread(QThread):
         self.canceled = False
 
     def write_summary_data(self, worksheet, data_column, selected_data):
-        col = selected_data.shape[1] + 2
+        col = selected_data.shape[1]
 
-        worksheet.write(0, col, 'NOM')
+        worksheet.write(0, col + 2, 'NOM')
         nom = 0
-        worksheet.write(0, col + 1, nom)
+        worksheet.write(0, col + 3, nom)
 
-        worksheet.write(1, col, '+TOL')
+        worksheet.write(1, col + 2, '+TOL')
         USL = 0
-        worksheet.write(1, col + 1, USL)
+        worksheet.write(1, col + 3, USL)
         USL = nom + USL
-        USL_cell = xl_rowcol_to_cell(1, col + 1, row_abs=True, col_abs=True)
+        USL_cell = xl_rowcol_to_cell(1, col + 3, row_abs=True, col_abs=True)
 
-        worksheet.write(2, col, '-TOL')
+        worksheet.write(2, col + 2, '-TOL')
         LSL = 0
-        worksheet.write(2, col + 1, LSL)
+        worksheet.write(2, col + 3, LSL)
         LSL = nom + LSL
-        LSL_cell = xl_rowcol_to_cell(2, col + 1, row_abs=True, col_abs=True)
+        LSL_cell = xl_rowcol_to_cell(2, col + 3, row_abs=True, col_abs=True)
 
-        worksheet.write(3, col, 'MIN')
-        min_formula = f"=ROUND(MIN({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
-        worksheet.write_formula(3, col + 1, min_formula)
+        worksheet.write(3, col + 2, 'MIN')
+        min_formula = f"=ROUND(MIN({xl_col_to_name(col-1)}2:{xl_col_to_name(col-1)}{len(selected_data[data_column]) + 1}), 3)"
+        worksheet.write_formula(3, col + 3, min_formula)
 
-        worksheet.write(4, col, 'AVG')
-        avg_formula = f"=ROUND(AVERAGE({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
-        worksheet.write_formula(4, col + 1, avg_formula)
+        worksheet.write(4, col + 2, 'AVG')
+        avg_formula = f"=ROUND(AVERAGE({xl_col_to_name(col-1)}2:{xl_col_to_name(col-1)}{len(selected_data[data_column]) + 1}), 3)"
+        worksheet.write_formula(4, col + 3, avg_formula)
 
-        worksheet.write(5, col, 'MAX')
-        max_formula = f"=ROUND(MAX({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
-        worksheet.write_formula(5, col + 1, max_formula)
+        worksheet.write(5, col + 2, 'MAX')
+        max_formula = f"=ROUND(MAX({xl_col_to_name(col-1)}2:{xl_col_to_name(col-1)}{len(selected_data[data_column]) + 1}), 3)"
+        worksheet.write_formula(5, col + 3, max_formula)
 
-        worksheet.write(6, col, 'STD')
-        std_formula = f"=ROUND(STDEV({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1}), 3)"
-        worksheet.write_formula(6, col + 1, std_formula)
+        worksheet.write(6, col + 2, 'STD')
+        std_formula = f"=ROUND(STDEV({xl_col_to_name(col-1)}2:{xl_col_to_name(col-1)}{len(selected_data[data_column]) + 1}), 3)"
+        worksheet.write_formula(6, col + 3, std_formula)
 
-        worksheet.write(7, col, 'Cp')
-        summary_col = xl_col_to_name(col + 1)
+        worksheet.write(7, col + 2, 'Cp')
+        summary_col = xl_col_to_name(col + 3)
         USL_formula = f"({summary_col}1 + {summary_col}2)"
         LSL_formula = f"({summary_col}1 + {summary_col}3)"
         sigma_formula = f"({summary_col}7)"
         cp_formula = f"ROUND(({USL_formula} - {LSL_formula})/(6 * {sigma_formula}), 3)"
-        worksheet.write_formula(7, col + 1, cp_formula)
+        worksheet.write_formula(7, col + 3, cp_formula)
 
-        worksheet.write(8, col, 'Cpk')
+        worksheet.write(8, col + 2, 'Cpk')
         average_formula = f"({summary_col}5)"
         cpk_formula = f"ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
-        worksheet.write_formula(8, col + 1, cpk_formula)
+        worksheet.write_formula(8, col + 3, cpk_formula)
 
-        worksheet.write(9, col, "Sample size")
-        count_formula = f"=COUNT({xl_col_to_name(col-3)}2:{xl_col_to_name(col-3)}{len(selected_data[data_column]) + 1})"
-        worksheet.write_formula(9, col + 1, count_formula)
+        worksheet.write(9, col + 2, "Sample size")
+        count_formula = f"=COUNT({xl_col_to_name(col-1)}2:{xl_col_to_name(col-1)}{len(selected_data[data_column]) + 1})"
+        worksheet.write_formula(9, col + 3, count_formula)
 
         return col, USL_cell, LSL_cell
 
     def apply_conditional_formatting(self, worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer):
         # Define the format for conditional formatting (highlight cells in red)
-        red_format = writer.book.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
+        red_format = writer.book.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1, 'num_format': '#,##0.000'})
 
         # Apply conditional formatting to highlight cells greater than USL in red
-        worksheet.conditional_format(1, col - 3, len(selected_data[data_column]), col - 3,
+        worksheet.conditional_format(1, col - 1, len(selected_data[data_column]), col - 1,
                                     {'type': 'cell', 'criteria': '>', 'value': USL_cell, 'format': red_format})
 
         # Apply conditional formatting to highlight cells lower than LSL in red
-        worksheet.conditional_format(1, col - 3, len(selected_data[data_column]), col - 3,
+        worksheet.conditional_format(1, col - 1, len(selected_data[data_column]), col - 1,
                                     {'type': 'cell', 'criteria': '<', 'value': LSL_cell, 'format': red_format})
 
     def add_xy_chart(self, worksheet, data_column, col, selected_data, writer):
@@ -180,8 +180,8 @@ class DataProcessingThread(QThread):
 
         # Add data to the chart with the specified x and y ranges
         num_rows = len(selected_data[data_column])
-        x_range = f"={data_column[:30]}!${xl_col_to_name(col-8)}$2:${xl_col_to_name(col-8)}${num_rows + 1}"
-        y_range = f"={data_column[:30]}!${xl_col_to_name(col-3)}$2:${xl_col_to_name(col-3)}${num_rows + 1}"
+        x_range = f"={data_column[:30]}!${xl_col_to_name(0)}$2:${xl_col_to_name(0)}${num_rows + 1}"
+        y_range = f"={data_column[:30]}!${xl_col_to_name(col - 1)}$2:${xl_col_to_name(col - 1)}${num_rows + 1}"
 
         # Add the series to the chart
         chart.add_series({
@@ -208,7 +208,7 @@ class DataProcessingThread(QThread):
         chart.set_legend({'position': 'none'})
 
         # Insert the chart into the worksheet.
-        worksheet.insert_chart(12, col + 3, chart)
+        worksheet.insert_chart(12, col + 5, chart)
 
     def run(self):
         # Perform the data processing and save to the Excel file here
@@ -220,6 +220,8 @@ class DataProcessingThread(QThread):
 
                 # Calculate the total number of filtered data columns
                 total_filtered_columns = len(self.selected_data_columns)
+                
+                num_format = writer.book.add_format({'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0.000'})
 
                 # Update the progress bar for each selected data column
                 for i, data_column in enumerate(self.selected_data_columns):
@@ -236,6 +238,9 @@ class DataProcessingThread(QThread):
                     worksheet = writer.sheets[data_column[:30]]
 
                     col, USL_cell, LSL_cell = self.write_summary_data(worksheet, data_column, selected_data)
+                    
+                    # Set the number format for the data column
+                    worksheet.set_column(col, col, None, num_format)
 
                     self.apply_conditional_formatting(worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer)
 
@@ -317,8 +322,8 @@ class CSVSummaryDialog(QDialog):
             # Load the CSV file into a Pandas DataFrame
             self.data_frame = pd.read_csv(filename, delimiter=';', decimal=',', low_memory=False)
             self.column_names = self.data_frame.columns.tolist()
-            self.selected_indexes = self.column_names[:5]
-            self.selected_data_columns = self.column_names[5:]
+            self.selected_indexes = self.column_names[:1]
+            self.selected_data_columns = self.column_names[1:]
 
     def handle_filter_button(self):
         print("FILTER button clicked")
