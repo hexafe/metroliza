@@ -231,6 +231,9 @@ class DataProcessingThread(QThread):
 
                     # Create a new DataFrame with the selected data column and indexes
                     selected_data = self.data_frame[self.selected_indexes + [data_column]]
+                    
+                    selected_data.loc[:, data_column] = pd.to_numeric(selected_data[data_column], errors='coerce')
+                    selected_data = selected_data.dropna(subset=data_column)
 
                     # Write the data to a new sheet with the name of the data column
                     selected_data.to_excel(writer, sheet_name=data_column[:30], index=False)
