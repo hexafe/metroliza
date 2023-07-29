@@ -68,6 +68,7 @@ class ExportDataThread(QThread):
         default_format = workbook.add_format({'align': 'center', 'valign': 'vcenter'})
         border_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'right': 1})
         wrap_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
+        percent_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'num_format': '0.00%'})
 
         column_width = 12
 
@@ -115,20 +116,22 @@ class ExportDataThread(QThread):
                 LSL = nom + LSL
                 LSL_cell = xl_rowcol_to_cell(2, col + 1, row_abs=True, col_abs=True)
                 
+                data_range = f'{xl_col_to_name(col + 2)}22:{xl_col_to_name(col + 2)}{len(header_group) + 21}'
+                
                 worksheet.write(3, col, 'MIN')
-                min_formula = f"=ROUND(MIN({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12}), 3)"
+                min_formula = f"=ROUND(MIN({data_range}), 3)"
                 worksheet.write_formula(3, col + 1, min_formula)
                 
                 worksheet.write(4, col, 'AVG')
-                avg_formula = f"=ROUND(AVERAGE({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12}), 3)"
+                avg_formula = f"=ROUND(AVERAGE({data_range}), 3)"
                 worksheet.write_formula(4, col + 1, avg_formula)
                 
                 worksheet.write(5, col, 'MAX')
-                max_formula = f"=ROUND(MAX({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12}), 3)"
+                max_formula = f"=ROUND(MAX({data_range}), 3)"
                 worksheet.write_formula(5, col + 1, max_formula)
                 
                 worksheet.write(6, col, 'STD')
-                std_formula = f"=ROUND(STDEV({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12}), 3)"
+                std_formula = f"=ROUND(STDEV({data_range}), 3)"
                 worksheet.write_formula(6, col + 1, std_formula)
                 
                 worksheet.write(7, col, 'Cp')
@@ -136,36 +139,48 @@ class ExportDataThread(QThread):
                 USL_formula = f"({summary_col}1 + {summary_col}2)"
                 LSL_formula = f"({summary_col}1 + {summary_col}3)"
                 sigma_formula = f"({summary_col}7)"
-                cp_formula = f"ROUND(({USL_formula} - {LSL_formula})/(6 * {sigma_formula}), 3)"
+                cp_formula = f"=ROUND(({USL_formula} - {LSL_formula})/(6 * {sigma_formula}), 3)"
                 worksheet.write_formula(7, col + 1, cp_formula)
                 
                 worksheet.write(8, col, 'Cpk')
                 average_formula = f"({summary_col}5)"
-                cpk_formula = f"ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
+                cpk_formula = f"=ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
                 worksheet.write_formula(8, col + 1, cpk_formula)
                 
-                worksheet.write(9, col, "Sample size")
-                count_formula = f"=COUNT({xl_col_to_name(col + 2)}13:{xl_col_to_name(col + 2)}{len(header_group) + 12})"
-                worksheet.write_formula(9, col + 1, count_formula)
+                worksheet.write(9, col, "NOK number")
+                NOK_HIGH = f'COUNTIF({data_range}, ">"&({NOM_cell}+{USL_cell}))'
+                NOK_LOW = f'COUNTIF({data_range}, "<"&({NOM_cell}+{LSL_cell}))'
+                NOK_TOTAL = f'={NOK_HIGH}+{NOK_LOW}'
+                worksheet.write_formula(9, col + 1, NOK_TOTAL)
                 
-                worksheet.write(11, col, 'Date')
-                worksheet.write_column(12, col, header_group['DATE'])
+                worksheet.write(10, col, "NOK %")
+                NOK_cell = xl_rowcol_to_cell(9, col + 1, row_abs=True, col_abs=True)
+                SAMPLESIZE_cell = xl_rowcol_to_cell(11, col + 1, row_abs=True, col_abs=True)
+                NOK_perc_formula = f"=ROUND(({NOK_cell}/{SAMPLESIZE_cell})*100%, 3)"
+                worksheet.write_formula(10, col + 1, NOK_perc_formula, percent_format)
                 
-                worksheet.write(11, col + 1, 'Sample #')
-                worksheet.write_column(12, col + 1, header_group['SAMPLE_NUMBER'])
+                worksheet.write(11, col, "Sample size")
+                count_formula = f"=COUNT({data_range})"
+                worksheet.write_formula(11, col + 1, count_formula)
                 
-                worksheet.write(11, col + 2, header, wrap_format)
-                worksheet.write_column(12, col + 2, round(header_group['MEAS'], 3))
+                worksheet.write(20, col, 'Date')
+                worksheet.write_column(21, col, header_group['DATE'])
+                
+                worksheet.write(20, col + 1, 'Sample #')
+                worksheet.write_column(21, col + 1, header_group['SAMPLE_NUMBER'])
+                
+                worksheet.write(20, col + 2, header, wrap_format)
+                worksheet.write_column(21, col + 2, round(header_group['MEAS'], 3))
                 
                 # Define the format for conditional formatting (highlight cells in red)
                 red_format = workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
 
                 # Apply conditional formatting to highlight cells greater than USL in red
-                worksheet.conditional_format(12, col + 2, len(header_group) + 11, col + 2,
+                worksheet.conditional_format(21, col + 2, len(header_group) + 20, col + 2,
                                             {'type': 'cell', 'criteria': '>', 'value': f'({NOM_cell}+{USL_cell})', 'format': red_format})
 
                 # Apply conditional formatting to highlight cells lower than LSL in red
-                worksheet.conditional_format(12, col + 2, len(header_group) + 11, col + 2,
+                worksheet.conditional_format(21, col + 2, len(header_group) + 20, col + 2,
                                             {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format})
                 
                 col += 3
@@ -180,9 +195,9 @@ class ExportDataThread(QThread):
                 chart = workbook.add_chart({'type': 'scatter'})
 
                 # Add data to the chart with the specified x and y ranges
-                num_rows = len(header_group) + 12
-                x_range = f"={ref}!${xl_col_to_name(col-2)}$13:${xl_col_to_name(col-2)}${num_rows}"
-                y_range = f"={ref}!${xl_col_to_name(col-1)}$13:${xl_col_to_name(col-1)}${num_rows}"
+                num_rows = len(header_group) + 20
+                x_range = f"={ref}!${xl_col_to_name(col-2)}$22:${xl_col_to_name(col-2)}${num_rows}"
+                y_range = f"={ref}!${xl_col_to_name(col-1)}$22:${xl_col_to_name(col-1)}${num_rows}"
 
                 # Add the series to the chart
                 chart.add_series({
@@ -192,7 +207,7 @@ class ExportDataThread(QThread):
                 })
 
                 # Configure the chart properties
-                chart.set_title({'name': f'{header}'})
+                chart.set_title({'name': f'{header}', 'name_font': {'size': 10}})
                 # chart.set_x_axis({
                 #     'min': 0,
                 #     'max': num_rows + 1,
