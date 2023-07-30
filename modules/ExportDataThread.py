@@ -144,7 +144,11 @@ class ExportDataThread(QThread):
                 
                 worksheet.write(8, col, 'Cpk')
                 average_formula = f"({summary_col}5)"
-                cpk_formula = f"=ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
+                # Check if NOM and LSL are both equal to 0
+                if nom == 0 and LSL == 0:
+                    cpk_formula = f"=ROUND(({USL_formula} - {average_formula})/(3 * {sigma_formula}), 3)"
+                else:
+                    cpk_formula = f"=ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
                 worksheet.write_formula(8, col + 1, cpk_formula)
                 
                 worksheet.write(9, col, "NOK number")
