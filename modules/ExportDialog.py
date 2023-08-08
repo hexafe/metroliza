@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import(
     QProgressBar,
     QPushButton,
     QVBoxLayout,
+    QComboBox,
 )
 import base64
 import sqlite3
@@ -93,6 +94,16 @@ class ExportDialog(QDialog):
 
         self.layout.addWidget(self.export_button, 11, 0, 1, 2)
 
+        # Add the new dropdown list
+        self.export_type_label = QLabel("Export Type:")
+        self.export_type_combobox = QComboBox()
+        self.export_type_combobox.addItem("Scatter")
+        self.export_type_combobox.addItem("Line")
+        self.export_type_combobox.setCurrentText("Scatter")  # Set the default value to Scatter
+
+        self.layout.addWidget(self.export_type_label, 12, 0)
+        self.layout.addWidget(self.export_type_combobox, 12, 1)
+        
         self.setLayout(self.layout)
 
     def select_db_file(self):
@@ -466,8 +477,11 @@ class ExportDialog(QDialog):
         self.export_button.setDisabled(True)
         self.loading_dialog.show()
 
-        # Start the exporting thread
-        self.export_thread = ExportDataThread(self.db_file, self.excel_file, self.filter_query)
+        # Get the selected export type
+        selected_export_type = self.export_type_combobox.currentText()
+
+        # Start the exporting thread with the selected export type
+        self.export_thread = ExportDataThread(self.db_file, self.excel_file, self.filter_query, selected_export_type)
         self.export_thread.update_label.connect(self.loading_label.setText)
         self.export_thread.update_progress.connect(self.loading_bar.setValue)
         self.export_thread.finished.connect(self.on_export_finished)

@@ -412,8 +412,10 @@ class CMMReportParser:
                     for measurement_line in block[1]:
                         if not measurement_line[2]:
                             measurement_line[2] = tol_plus
+                        elif not measurement_line[3]:
                             measurement_line[3] = tol_minus
-                            measurement_line[4] = bonus         
+                        elif not measurement_line[4]:
+                            measurement_line[4] = bonus
 
     def to_dict(self):
         """

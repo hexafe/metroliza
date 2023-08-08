@@ -13,7 +13,7 @@ class ExportDataThread(QThread):
     update_progress = pyqtSignal(int)
     finished = pyqtSignal()
 
-    def __init__(self, db_file, excel_file, filter_query=None):
+    def __init__(self, db_file, excel_file, filter_query=None, selected_export_type="scatter"):
         super().__init__()
         self.db_file = db_file
         self.excel_file = excel_file
@@ -28,6 +28,7 @@ class ExportDataThread(QThread):
             WHERE 1=1
             """
         self.filter_query = filter_query
+        self.selected_export_type = selected_export_type
 
     def run(self):
         # Connect to the SQLite database
@@ -116,22 +117,23 @@ class ExportDataThread(QThread):
                 LSL = nom + LSL
                 LSL_cell = xl_rowcol_to_cell(2, col + 1, row_abs=True, col_abs=True)
                 
-                data_range = f'{xl_col_to_name(col + 2)}22:{xl_col_to_name(col + 2)}{len(header_group) + 21}'
+                data_range_y = f'{xl_col_to_name(col + 2)}22:{xl_col_to_name(col + 2)}{len(header_group) + 21}'
+                data_range_x = f'{xl_col_to_name(col + 1)}22:{xl_col_to_name(col + 1)}{len(header_group) + 21}'
                 
                 worksheet.write(3, col, 'MIN')
-                min_formula = f"=ROUND(MIN({data_range}), 3)"
+                min_formula = f"=ROUND(MIN({data_range_y}), 3)"
                 worksheet.write_formula(3, col + 1, min_formula)
                 
                 worksheet.write(4, col, 'AVG')
-                avg_formula = f"=ROUND(AVERAGE({data_range}), 3)"
+                avg_formula = f"=ROUND(AVERAGE({data_range_y}), 3)"
                 worksheet.write_formula(4, col + 1, avg_formula)
                 
                 worksheet.write(5, col, 'MAX')
-                max_formula = f"=ROUND(MAX({data_range}), 3)"
+                max_formula = f"=ROUND(MAX({data_range_y}), 3)"
                 worksheet.write_formula(5, col + 1, max_formula)
                 
                 worksheet.write(6, col, 'STD')
-                std_formula = f"=ROUND(STDEV({data_range}), 3)"
+                std_formula = f"=ROUND(STDEV({data_range_y}), 3)"
                 worksheet.write_formula(6, col + 1, std_formula)
                 
                 worksheet.write(7, col, 'Cp')
@@ -152,8 +154,8 @@ class ExportDataThread(QThread):
                 worksheet.write_formula(8, col + 1, cpk_formula)
                 
                 worksheet.write(9, col, "NOK number")
-                NOK_HIGH = f'COUNTIF({data_range}, ">"&({NOM_cell}+{USL_cell}))'
-                NOK_LOW = f'COUNTIF({data_range}, "<"&({NOM_cell}+{LSL_cell}))'
+                NOK_HIGH = f'COUNTIF({data_range_y}, ">"&({NOM_cell}+{USL_cell}))'
+                NOK_LOW = f'COUNTIF({data_range_y}, "<"&({NOM_cell}+{LSL_cell}))'
                 NOK_TOTAL = f'={NOK_HIGH}+{NOK_LOW}'
                 worksheet.write_formula(9, col + 1, NOK_TOTAL)
                 
@@ -164,7 +166,7 @@ class ExportDataThread(QThread):
                 worksheet.write_formula(10, col + 1, NOK_perc_formula, percent_format)
                 
                 worksheet.write(11, col, "Sample size")
-                count_formula = f"=COUNT({data_range})"
+                count_formula = f"=COUNT({data_range_y})"
                 worksheet.write_formula(11, col + 1, count_formula)
                 
                 worksheet.write(20, col, 'Date')
@@ -195,13 +197,15 @@ class ExportDataThread(QThread):
                 # Set border format for last column of header for worksheet
                 worksheet.set_column(header_col_end, header_col_end, None, cell_format=border_format)
                 
+                self.selected_export_type = self.selected_export_type.lower()
+                
                 # Create an XY chart object
-                chart = workbook.add_chart({'type': 'scatter'})
+                chart = workbook.add_chart({'type': self.selected_export_type})
 
                 # Add data to the chart with the specified x and y ranges
                 num_rows = len(header_group) + 20
-                x_range = f"={ref}!${xl_col_to_name(col-2)}$22:${xl_col_to_name(col-2)}${num_rows}"
-                y_range = f"={ref}!${xl_col_to_name(col-1)}$22:${xl_col_to_name(col-1)}${num_rows}"
+                x_range = f"={ref}!${data_range_x}"
+                y_range = f"={ref}!${data_range_y}"
 
                 # Add the series to the chart
                 chart.add_series({
