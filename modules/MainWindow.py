@@ -3,6 +3,9 @@ from modules.ExportDialog import ExportDialog
 from modules.ParsingDialog import ParsingDialog
 from modules.AboutWindow import AboutWindow
 from modules.CSVSummaryDialog import CSVSummaryDialog
+from modules.ReleaseNotesDialog import ReleaseNotesDialog
+
+from version_date import release_notes
 
 from PyQt5.QtCore import QByteArray
 from PyQt5.QtGui import QIcon, QPixmap
@@ -48,10 +51,15 @@ class MainWindow(QMainWindow):
         self.export_button = QPushButton("Launch Export")
         self.csv_summary_button = QPushButton("CSV Summary")
 
-        # Add the About button
+        # Add the About button in menu bar
         self.about_button = QAction("About", self)
         self.about_button.triggered.connect(self.open_about_window)
         self.menuBar().addAction(self.about_button)
+        
+        # Add the Release notes button in menu bar
+        self.release_notes_action = QAction("Release notes", self)
+        self.release_notes_action.triggered.connect(self.open_release_notes_dialog)
+        self.menuBar().addAction(self.release_notes_action)
 
         # Add the buttons to the layout
         self.layout.addWidget(self.parse_button, 0, 0)
@@ -96,6 +104,10 @@ class MainWindow(QMainWindow):
     def open_about_window(self):
         about_window = AboutWindow(self)
         about_window.exec_()
+        
+    def open_release_notes_dialog(self):
+        release_notes_dialog = ReleaseNotesDialog(release_notes)
+        release_notes_dialog.exec_()
 
     def launch_csv_summary_dialog(self):
         csv_summary_window = CSVSummaryDialog(self)

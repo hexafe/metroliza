@@ -189,6 +189,10 @@ class ExportDataThread(QThread):
                 worksheet.conditional_format(21, col + 2, len(header_group) + 20, col + 2,
                                             {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format})
                 
+                # Apply conditional formatting to highlight cells lower than LSL in red
+                worksheet.conditional_format(10, col + 1, 10, col + 1,
+                                            {'type': 'cell', 'criteria': '>', 'value': f'0', 'format': red_format})
+                
                 col += 3
 
                 # Merge cells for the header

@@ -207,3 +207,4 @@ class ParsingDialog(QDialog):
 
         # Close the parsing dialog
         self.accept()
+        
