@@ -264,13 +264,10 @@ class ExportDataThread(QThread):
                 worksheet.insert_chart(12, col - 3, chart)
                 
                 if self.hide_ok_results:
-                    OK_flag = 1
-                    # Check if measurement is within tolerance and if true - hide it
-                    for meas_value in header_group['MEAS']:
-                        if meas_value > USL or meas_value < LSL:
-                            OK_flag = 0
-                            break
-                    if OK_flag:
+                    # Use a list comprehension to check if all meas_value elements are within tolerance
+                    hide_columns = all(LSL <= meas_value <= USL for meas_value in header_group['MEAS'])
+
+                    if hide_columns:
                         worksheet.set_column(col - 3, col - 1, 0)
                 
 
