@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import(
     QPushButton,
     QVBoxLayout,
     QComboBox,
+    QCheckBox,
 )
 import base64
 import sqlite3
@@ -100,9 +101,15 @@ class ExportDialog(QDialog):
         self.export_type_combobox.addItem("Line")
         self.export_type_combobox.addItem("Scatter")
         self.export_type_combobox.setCurrentText("Line")  # Set the default value to Line
+        
+        # Add a QCheckBox for "Hide OK results?"
+        self.hide_ok_results_checkbox = QCheckBox("Hide OK results?")
+        self.hide_ok_results_checkbox.setChecked(False)
 
         self.layout.addWidget(self.export_type_label, 12, 0)
         self.layout.addWidget(self.export_type_combobox, 12, 1)
+        
+        self.layout.addWidget(self.hide_ok_results_checkbox, 13, 1)
         
         self.setLayout(self.layout)
 
@@ -143,6 +150,13 @@ class ExportDialog(QDialog):
         self.header_list.setSelectionMode(QAbstractItemView.MultiSelection)
         self.all_headers_list = QListWidget()
         self.all_headers_list.setSelectionMode(QAbstractItemView.MultiSelection)
+        
+        selected_headers_label = QLabel("SELECTED HEADERS:")
+        self.selected_headers_list = QListWidget()
+        self.selected_headers_list.setSelectionMode(QAbstractItemView.MultiSelection)
+        
+        # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
+        self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
 
         date_from_label = QLabel("MEASUREMENT DATE FROM:")
         self.date_from_calendar = QDateEdit(calendarPopup=True)
@@ -197,6 +211,9 @@ class ExportDialog(QDialog):
         layout.addWidget(header_label, 0, 2)
         layout.addWidget(self.header_search_input, 1, 2)
         layout.addWidget(self.header_list, 2, 2)
+        
+        layout.addWidget(selected_headers_label, 0, 3)
+        layout.addWidget(self.selected_headers_list, 2, 3)
 
         layout.addWidget(date_from_label, 3, 0)
         layout.addWidget(self.date_from_calendar, 3, 1)
@@ -338,6 +355,19 @@ class ExportDialog(QDialog):
             for row in range(self.all_headers_list.count()):
                 item = self.all_headers_list.item(row)
                 self.header_list.addItem(item.text())
+                
+    def update_selected_headers(self):
+        # Clear the current items in the "SELECTED HEADERS" list
+        self.selected_headers_list.clear()
+
+        # Get selected items from the "HEADER" list
+        selected_header_items = self.header_list.selectedItems()
+
+        # Add the selected headers to the "SELECTED HEADERS" list
+        for item in selected_header_items:
+            selected_header_item = QListWidgetItem(item.text())
+            self.selected_headers_list.addItem(selected_header_item)
+
 
     def select_beginning_of_time(self):
         beginning_of_time = QDate(1970, 1, 1)
@@ -479,9 +509,18 @@ class ExportDialog(QDialog):
 
         # Get the selected chart type
         selected_export_type = self.export_type_combobox.currentText()
+        
+        # Get the state of the "Hide OK results?" checkbox
+        hide_ok_results = self.hide_ok_results_checkbox.isChecked()
 
         # Start the exporting thread with the selected chart type
-        self.export_thread = ExportDataThread(self.db_file, self.excel_file, self.filter_query, selected_export_type)
+        self.export_thread = ExportDataThread(
+            self.db_file,
+            self.excel_file,
+            self.filter_query,
+            selected_export_type,
+            hide_ok_results,
+        )
         self.export_thread.update_label.connect(self.loading_label.setText)
         self.export_thread.update_progress.connect(self.loading_bar.setValue)
         self.export_thread.finished.connect(self.on_export_finished)

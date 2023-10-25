@@ -13,7 +13,7 @@ class ExportDataThread(QThread):
     update_progress = pyqtSignal(int)
     finished = pyqtSignal()
 
-    def __init__(self, db_file, excel_file, filter_query=None, selected_export_type="scatter"):
+    def __init__(self, db_file, excel_file, filter_query=None, selected_export_type="scatter", hide_ok_results=False):
         super().__init__()
         self.db_file = db_file
         self.excel_file = excel_file
@@ -29,6 +29,7 @@ class ExportDataThread(QThread):
             """
         self.filter_query = filter_query
         self.selected_export_type = selected_export_type
+        self.hide_ok_results = hide_ok_results
 
     def run(self):
         # Connect to the SQLite database
@@ -178,6 +179,7 @@ class ExportDataThread(QThread):
                 worksheet.write(20, col + 2, header, wrap_format)
                 worksheet.write_column(21, col + 2, round(header_group['MEAS'], 3))
                 
+                
                 # Define the format for conditional formatting (highlight cells in red)
                 red_format = workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
 
@@ -189,9 +191,9 @@ class ExportDataThread(QThread):
                 worksheet.conditional_format(21, col + 2, len(header_group) + 20, col + 2,
                                             {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format})
                 
-                # Apply conditional formatting to highlight cells lower than LSL in red
+                # Apply conditional formatting to highlight if NOK% > 0
                 worksheet.conditional_format(10, col + 1, 10, col + 1,
-                                            {'type': 'cell', 'criteria': '>', 'value': f'0', 'format': red_format})
+                                            {'type': 'cell', 'criteria': '>', 'value': f'0', 'format': red_format})                
                 
                 col += 3
 
@@ -260,6 +262,16 @@ class ExportDataThread(QThread):
 
                 # Insert the chart into the worksheet.
                 worksheet.insert_chart(12, col - 3, chart)
+                
+                if self.hide_ok_results:
+                    OK_flag = 1
+                    # Check if measurement is within tolerance and if true - hide it
+                    for meas_value in header_group['MEAS']:
+                        if meas_value > USL or meas_value < LSL:
+                            OK_flag = 0
+                            break
+                    if OK_flag:
+                        worksheet.set_column(col - 3, col - 1, 0)
                 
 
             # Freeze panes in the reference worksheet
