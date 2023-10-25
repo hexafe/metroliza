@@ -7,11 +7,11 @@ formatted_time = current_time.strftime("%y%m%d.%H%M")
 VERSION_DATE = "231025"
 
 release_notes = f"""
-    <h2>Version 231025:</h2>
+    <br><b>Current Version 231025:</b><br>
     - Export: added list of selected headers to filtering window<br>
     - Export: added option to hide columns with OK results<br>
 
-    <h2>Version 231024:</h2>
+    <br><b>Version 231024:</b><br>
     - Export: changed default chart type to line<br>
     - Export: added conditional formating if NOK% > 0<br>
     - Added release notes (you can see it right now :))<br>
