@@ -1,7 +1,9 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import norm
 from PyQt5.QtCore import QCoreApplication, QThread, pyqtSignal
-import math
+from io import BytesIO
 import re
 import sqlite3
 import xlsxwriter
@@ -13,7 +15,7 @@ class ExportDataThread(QThread):
     update_progress = pyqtSignal(int)
     finished = pyqtSignal()
 
-    def __init__(self, db_file, excel_file, filter_query=None, selected_export_type="scatter", hide_ok_results=False):
+    def __init__(self, db_file, excel_file, filter_query=None, selected_export_type="scatter", selected_sorting_parameter="date", hide_ok_results=False, generate_summary_sheet=False):
         super().__init__()
         self.db_file = db_file
         self.excel_file = excel_file
@@ -29,7 +31,11 @@ class ExportDataThread(QThread):
             """
         self.filter_query = filter_query
         self.selected_export_type = selected_export_type
+        self.selected_export_type = self.selected_export_type.lower()
+        self.selected_sorting_parameter = selected_sorting_parameter
+        self.selected_sorting_parameter = self.selected_sorting_parameter.lower()
         self.hide_ok_results = hide_ok_results
+        self.generate_summary_sheet = generate_summary_sheet
 
     def run(self):
         # Connect to the SQLite database
@@ -87,6 +93,8 @@ class ExportDataThread(QThread):
 
             # Create a worksheet for each reference
             worksheet = workbook.add_worksheet(ref)
+            if self.generate_summary_sheet:
+                summary_worksheet = workbook.add_worksheet(f"{ref}_summary")
 
             # Set the default cell format for the worksheet
             worksheet.set_column(0, max_col, column_width, cell_format=default_format)
@@ -98,6 +106,10 @@ class ExportDataThread(QThread):
             header_groups = ref_group.groupby('HEADER - AX', as_index=False)
 
             for (header, header_group) in header_groups:
+                #testing
+                if self.selected_sorting_parameter == "sample #":
+                    header_group.sort_values(by='SAMPLE_NUMBER', inplace=True)
+                
                 worksheet.write(0, col, 'NOM')
                 nom = round(header_group['NOM'].iloc[0], 3)
                 worksheet.write(0, col + 1, nom)
@@ -203,8 +215,6 @@ class ExportDataThread(QThread):
                 # Set border format for last column of header for worksheet
                 worksheet.set_column(header_col_end, header_col_end, None, cell_format=border_format)
                 
-                self.selected_export_type = self.selected_export_type.lower()
-                
                 # Create an XY chart object
                 chart = workbook.add_chart({'type': self.selected_export_type})
 
@@ -263,10 +273,12 @@ class ExportDataThread(QThread):
                 # Insert the chart into the worksheet.
                 worksheet.insert_chart(12, col - 3, chart)
                 
+                if self.generate_summary_sheet:
+                    self.summary_sheet_fill(summary_worksheet, header, header_group, col)
+                
                 if self.hide_ok_results:
                     # Use a list comprehension to check if all meas_value elements are within tolerance
                     hide_columns = all(LSL <= meas_value <= USL for meas_value in header_group['MEAS'])
-
                     if hide_columns:
                         worksheet.set_column(col - 3, col - 1, 0)
                 
@@ -304,7 +316,7 @@ class ExportDataThread(QThread):
 
     def calculate_column_width(self, data):
         if data.empty:
-            return 12  # Return a default width if the data is empty
+            return 12  # Return a default width 12 if the data is empty
 
         # Convert series to a list and calculate the column width based on the maximum length of the data in the column
         column_width = data.astype(str).apply(len).max()
@@ -312,3 +324,93 @@ class ExportDataThread(QThread):
         column_width = max(column_width, 12)
         return column_width
     
+    def summary_sheet_fill(self, summary_worksheet, header, header_group, col):
+        imgplot = BytesIO()
+        nom = round(header_group['NOM'].iloc[0], 3)
+        USL = round(header_group['+TOL'].iloc[0], 3)
+        USL = nom + USL
+        if header_group['-TOL'].iloc[0]:
+            LSL = round(header_group['-TOL'].iloc[0], 3)
+        else:
+            LSL = 0
+        LSL = nom + LSL
+        minimum = header_group['MEAS'].min()
+        maximum = header_group['MEAS'].max()
+        sigma = header_group['MEAS'].std()
+        average = header_group['MEAS'].mean()
+        Cp = (USL - LSL)/(6 * sigma)
+        if nom == 0 and LSL == 0:
+            Cpk = (USL - average)/(3 * sigma)
+        else:
+            Cpk = min((USL - average)/(3 * sigma), (average - LSL)/(3 * sigma))
+        
+        # Create a Matplotlib figure and plot the scatter chart with lines
+        # Set global font size
+        plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.scatter(header_group['SAMPLE_NUMBER'], header_group['MEAS'], label=header, color='blue', marker='.')
+        ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
+        ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
+        ax.set_xlabel('Sample #')
+        ax.set_ylabel('Measurement')
+        ax.set_title(f'{header}')
+        # ax.legend()
+        fig.savefig(imgplot, format="png")
+        
+        imgplot.seek(0)
+        
+        row = 0
+        if col > 3:
+            row = int(((col/3)-1)*20)
+        summary_worksheet.write(row, 0, header)
+        summary_worksheet.insert_image(row + 1, 0, "", {'image_data': imgplot})
+        
+        plt.close(fig)
+        
+        imgplot = BytesIO()
+        # Plot the histogram with auto-defined bins
+        fig, ax = plt.subplots(figsize=(6, 4))
+        n, bins, patches = plt.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color='blue', edgecolor='black')
+        
+        # Add a table with statistics
+        table_data = [
+            ('Min', round(minimum, 3)),
+            ('Max', round(maximum, 3)),
+            ('Mean', round(average, 3)),
+            ('Std Dev', round(sigma, 3)),
+            ('Cp', round(Cp, 2)),
+            ('Cpk', round(Cpk, 2)),
+        ]
+
+        ax_table = plt.table(cellText=table_data,
+                        colLabels=['Statistic', 'Value'],
+                        cellLoc='center',
+                        loc='right',
+                        bbox=[1, 0, 0.3, 1])
+
+        # Format the table
+        ax_table.auto_set_font_size(False)
+        ax_table.set_fontsize(8)
+
+        # Fit a normal distribution to the data
+        mu, std = norm.fit(header_group['MEAS'])
+
+        # Plot the Gaussian curve
+        xmin, xmax = plt.xlim()
+        x = np.linspace(xmin, xmax, 100)
+        p = norm.pdf(x, mu, std)
+        plt.plot(x, p, 'k', linewidth=2)
+
+        # Set labels and title
+        plt.xlabel('Measurement')
+        plt.ylabel('Frequency')
+        plt.title(f'Histogram of {header}')
+        
+        plt.subplots_adjust(right=0.75)
+        
+        fig.savefig(imgplot, format="png")
+        imgplot.seek(0)
+        summary_worksheet.insert_image(row + 1, 9, "", {'image_data': imgplot})
+        
+        plt.close(fig)
+        

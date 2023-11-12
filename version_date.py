@@ -4,10 +4,15 @@ current_time = datetime.now()
 formatted_time = current_time.strftime("%y%m%d.%H%M")
 
 # VERSION_DATE = formatted_time
-VERSION_DATE = "231025"
+VERSION_DATE = "231111"
 
 release_notes = f"""
-    <br><b>Current Version 231025:</b><br>
+    <br><b>Current Version 231111:</b><br>
+    - Export: added selection of sorting mesurements by Date or Sample #<br>
+    - WIP: added option to generate summary sheet with plots (scatter plot, histogram and basic statistics)<br>
+    - Minor bugfixes<br>
+    
+    <br><b>Version 231025:</b><br>
     - Export: added list of selected headers to filtering window<br>
     - Export: added option to hide columns with OK results<br>
 

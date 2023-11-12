@@ -95,21 +95,37 @@ class ExportDialog(QDialog):
 
         self.layout.addWidget(self.export_button, 11, 0, 1, 2)
 
-        # Add the new dropdown list
+        # Add dropdown list for chart type
         self.export_type_label = QLabel("Chart type:")
         self.export_type_combobox = QComboBox()
         self.export_type_combobox.addItem("Line")
         self.export_type_combobox.addItem("Scatter")
-        self.export_type_combobox.setCurrentText("Line")  # Set the default value to Line
+        self.export_type_combobox.setCurrentText("Line")
+        
+        # Add dropdown list for chart type
+        self.sort_measurements_label = QLabel("Sort measurements by:")
+        self.sort_measurements_combobox = QComboBox()
+        self.sort_measurements_combobox.addItem("Date")
+        self.sort_measurements_combobox.addItem("Sample #")
+        self.sort_measurements_combobox.setCurrentText("Date")
         
         # Add a QCheckBox for "Hide OK results?"
         self.hide_ok_results_checkbox = QCheckBox("Hide OK results?")
         self.hide_ok_results_checkbox.setChecked(False)
+        
+        # Add a QCheckBox for "Generate summary sheet?"
+        self.generate_summary_sheet_checkbox = QCheckBox("Generate summary sheet?")
+        self.generate_summary_sheet_checkbox.setChecked(False)
 
         self.layout.addWidget(self.export_type_label, 12, 0)
         self.layout.addWidget(self.export_type_combobox, 12, 1)
         
-        self.layout.addWidget(self.hide_ok_results_checkbox, 13, 1)
+        self.layout.addWidget(self.sort_measurements_label, 13, 0)
+        self.layout.addWidget(self.sort_measurements_combobox, 13, 1)
+        
+        self.layout.addWidget(self.hide_ok_results_checkbox, 14, 0)
+        
+        self.layout.addWidget(self.generate_summary_sheet_checkbox, 14, 1)
         
         self.setLayout(self.layout)
 
@@ -510,8 +526,14 @@ class ExportDialog(QDialog):
         # Get the selected chart type
         selected_export_type = self.export_type_combobox.currentText()
         
+        # Get the selected sorting parameter
+        selected_sorting_parameter = self.sort_measurements_combobox.currentText()
+        
         # Get the state of the "Hide OK results?" checkbox
         hide_ok_results = self.hide_ok_results_checkbox.isChecked()
+        
+        # Get the state of the "Generate summary sheet?" checkbox
+        generate_summary_sheet = self.generate_summary_sheet_checkbox.isChecked()
 
         # Start the exporting thread with the selected chart type
         self.export_thread = ExportDataThread(
@@ -519,7 +541,9 @@ class ExportDialog(QDialog):
             self.excel_file,
             self.filter_query,
             selected_export_type,
+            selected_sorting_parameter,
             hide_ok_results,
+            generate_summary_sheet,
         )
         self.export_thread.update_label.connect(self.loading_label.setText)
         self.export_thread.update_progress.connect(self.loading_bar.setValue)

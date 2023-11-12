@@ -30,6 +30,7 @@ class AboutWindow(QDialog):
         self.setWindowTitle("About")
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
+        self.layout.setAlignment(Qt.AlignCenter)
 
         # Create a QLabel to display the loading GIF
         gif_label = QLabel()
@@ -52,6 +53,7 @@ class AboutWindow(QDialog):
         self.gif = QMovie(temp_file_name)
         self.gif.setScaledSize(QSize(200, 200))
         gif_label.setMovie(self.gif)
+        gif_label.setAlignment(Qt.AlignCenter)
         self.gif.start()
         self.layout.addWidget(gif_label)
 
