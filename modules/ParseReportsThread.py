@@ -102,3 +102,4 @@ class ParseReportsThread(QThread):
 
         # Emit the signal indicating that parsing has finished
         self.parsing_finished.emit()
+        

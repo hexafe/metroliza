@@ -106,9 +106,10 @@ class ExportDataThread(QThread):
             header_groups = ref_group.groupby('HEADER - AX', as_index=False)
 
             for (header, header_group) in header_groups:
-                #testing
                 if self.selected_sorting_parameter == "sample #":
                     header_group.sort_values(by='SAMPLE_NUMBER', inplace=True)
+                else:
+                    header_group.sort_values(by='DATE', inplace=True)
                 
                 worksheet.write(0, col, 'NOM')
                 nom = round(header_group['NOM'].iloc[0], 3)
@@ -338,23 +339,31 @@ class ExportDataThread(QThread):
         maximum = header_group['MEAS'].max()
         sigma = header_group['MEAS'].std()
         average = header_group['MEAS'].mean()
+        median = header_group['MEAS'].median()
         Cp = (USL - LSL)/(6 * sigma)
         if nom == 0 and LSL == 0:
             Cpk = (USL - average)/(3 * sigma)
         else:
             Cpk = min((USL - average)/(3 * sigma), (average - LSL)/(3 * sigma))
+        samplesize = header_group['MEAS'].count()
+        NOK_nb = header_group[header_group['MEAS'] > USL]['MEAS'].count() + header_group[header_group['MEAS'] < LSL]['MEAS'].count()
+        NOK_pct = NOK_nb/samplesize
         
         # Create a Matplotlib figure and plot the scatter chart with lines
         # Set global font size
         plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
         fig, ax = plt.subplots(figsize=(6, 4))
+        
+        #if (header_group.groupby('SAMPLE_NUMBER')['MEAS'].nunique() > 1).any():
+        #    plt.boxplot(header_group.groupby('SAMPLE_NUMBER')['MEAS'].apply(list), labels=header_group['SAMPLE_NUMBER'].unique())
+        #else:
         ax.scatter(header_group['SAMPLE_NUMBER'], header_group['MEAS'], label=header, color='blue', marker='.')
+        
         ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
         ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
         ax.set_xlabel('Sample #')
         ax.set_ylabel('Measurement')
         ax.set_title(f'{header}')
-        # ax.legend()
         fig.savefig(imgplot, format="png")
         
         imgplot.seek(0)
@@ -377,9 +386,13 @@ class ExportDataThread(QThread):
             ('Min', round(minimum, 3)),
             ('Max', round(maximum, 3)),
             ('Mean', round(average, 3)),
+            ('Median', round(median, 3)),
             ('Std Dev', round(sigma, 3)),
             ('Cp', round(Cp, 2)),
             ('Cpk', round(Cpk, 2)),
+            ('Samples', round(samplesize, 1)),
+            ('NOK nb', round(NOK_nb, 1)),
+            ('NOK %', round(NOK_pct, 2)),
         ]
 
         ax_table = plt.table(cellText=table_data,
@@ -400,11 +413,24 @@ class ExportDataThread(QThread):
         x = np.linspace(xmin, xmax, 100)
         p = norm.pdf(x, mu, std)
         plt.plot(x, p, 'k', linewidth=2)
+        
+        # Add vertical lines for mean, LSL and USL
+        plt.axvline(average, color='red', linestyle='dashed', linewidth=2, label=f'Mean = {average:.2f}')
+        plt.axvline(USL, color='green', linestyle='dashed', linewidth=2, label=f'USL = {USL}')
+        plt.axvline(LSL, color='green', linestyle='dashed', linewidth=2, label=f'LSL = {LSL}')
+        
+        # Get current y-axis limits
+        y_min, y_max = plt.ylim()
+
+        # Add text annotations for mean, LSL and USL
+        plt.text(average, y_max*0.95, f'Mean = {average:.2f}', color='red', ha='left', va='top', bbox = dict(facecolor = 'white'))
+        plt.text(USL, y_max*0.9, f'USL = {USL}', color='green', ha='right', va='top', bbox = dict(facecolor = 'white'))
+        plt.text(LSL, y_max*0.85, f'LSL = {LSL}', color='green', ha='left', va='top', bbox = dict(facecolor = 'white'))
 
         # Set labels and title
         plt.xlabel('Measurement')
         plt.ylabel('Frequency')
-        plt.title(f'Histogram of {header}')
+        plt.title(f'{header}')
         
         plt.subplots_adjust(right=0.75)
         

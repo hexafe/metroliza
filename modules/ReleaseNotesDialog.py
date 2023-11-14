@@ -12,3 +12,4 @@ class ReleaseNotesDialog(QDialog):
         layout = QVBoxLayout()
         layout.addWidget(self.release_notes_browser)
         self.setLayout(layout)
+        
