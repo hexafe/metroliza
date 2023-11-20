@@ -15,7 +15,18 @@ class ExportDataThread(QThread):
     update_progress = pyqtSignal(int)
     finished = pyqtSignal()
 
-    def __init__(self, db_file, excel_file, filter_query=None, selected_export_type="scatter", selected_sorting_parameter="date", hide_ok_results=False, generate_summary_sheet=False):
+    def __init__(
+        self,
+        db_file,
+        excel_file,
+        filter_query=None,
+        selected_export_type="scatter",
+        selected_sorting_parameter="date",
+        violin_plot_min_samplesize=6,
+        hide_ok_results=False,
+        generate_summary_sheet=False,
+        ):
+        
         super().__init__()
         self.db_file = db_file
         self.excel_file = excel_file
@@ -30,10 +41,9 @@ class ExportDataThread(QThread):
             WHERE 1=1
             """
         self.filter_query = filter_query
-        self.selected_export_type = selected_export_type
-        self.selected_export_type = self.selected_export_type.lower()
-        self.selected_sorting_parameter = selected_sorting_parameter
-        self.selected_sorting_parameter = self.selected_sorting_parameter.lower()
+        self.selected_export_type = selected_export_type.lower()
+        self.selected_sorting_parameter = selected_sorting_parameter.lower()
+        self.violin_plot_min_samplesize = violin_plot_min_samplesize
         self.hide_ok_results = hide_ok_results
         self.generate_summary_sheet = generate_summary_sheet
 
@@ -354,10 +364,15 @@ class ExportDataThread(QThread):
         plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
         fig, ax = plt.subplots(figsize=(6, 4))
         
-        #if (header_group.groupby('SAMPLE_NUMBER')['MEAS'].nunique() > 1).any():
-        #    plt.boxplot(header_group.groupby('SAMPLE_NUMBER')['MEAS'].apply(list), labels=header_group['SAMPLE_NUMBER'].unique())
-        #else:
-        ax.scatter(header_group['SAMPLE_NUMBER'], header_group['MEAS'], label=header, color='blue', marker='.')
+        if (header_group.groupby('SAMPLE_NUMBER')['MEAS'].nunique() >= self.violin_plot_min_samplesize).all():
+           plt.violinplot(header_group.groupby('SAMPLE_NUMBER')['MEAS'].apply(list),
+                          showmeans=True,
+                          showmedians=False,
+                          showextrema=True)
+           xtick_labels = header_group['SAMPLE_NUMBER'].unique()
+           plt.xticks(range(1, len(xtick_labels) + 1), xtick_labels)
+        else:
+            ax.scatter(header_group['SAMPLE_NUMBER'], header_group['MEAS'], label=header, color='blue', marker='.')
         
         ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
         ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
@@ -415,17 +430,17 @@ class ExportDataThread(QThread):
         plt.plot(x, p, 'k', linewidth=2)
         
         # Add vertical lines for mean, LSL and USL
-        plt.axvline(average, color='red', linestyle='dashed', linewidth=2, label=f'Mean = {average:.2f}')
-        plt.axvline(USL, color='green', linestyle='dashed', linewidth=2, label=f'USL = {USL}')
-        plt.axvline(LSL, color='green', linestyle='dashed', linewidth=2, label=f'LSL = {LSL}')
+        plt.axvline(average, color='red', linestyle='dashed', linewidth=2, label=f'Mean = {average:.3f}')
+        plt.axvline(USL, color='green', linestyle='dashed', linewidth=2, label=f'USL = {USL:.3f}')
+        plt.axvline(LSL, color='green', linestyle='dashed', linewidth=2, label=f'LSL = {LSL:.3f}')
         
         # Get current y-axis limits
         y_min, y_max = plt.ylim()
 
         # Add text annotations for mean, LSL and USL
-        plt.text(average, y_max*0.95, f'Mean = {average:.2f}', color='red', ha='left', va='top', bbox = dict(facecolor = 'white'))
-        plt.text(USL, y_max*0.9, f'USL = {USL}', color='green', ha='right', va='top', bbox = dict(facecolor = 'white'))
-        plt.text(LSL, y_max*0.85, f'LSL = {LSL}', color='green', ha='left', va='top', bbox = dict(facecolor = 'white'))
+        plt.text(average, y_max*0.95, f'Mean = {average:.3f}', color='red', ha='left', va='top', bbox = dict(facecolor = 'white'))
+        plt.text(USL, y_max*0.9, f'USL = {USL:.3f}', color='green', ha='right', va='top', bbox = dict(facecolor = 'white'))
+        plt.text(LSL, y_max*0.85, f'LSL = {LSL:.3f}', color='green', ha='left', va='top', bbox = dict(facecolor = 'white'))
 
         # Set labels and title
         plt.xlabel('Measurement')

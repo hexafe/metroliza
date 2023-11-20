@@ -109,6 +109,14 @@ class ExportDialog(QDialog):
         self.sort_measurements_combobox.addItem("Sample #")
         self.sort_measurements_combobox.setCurrentText("Date")
         
+        # Add textbox to set min samplesize for violin plot
+        self.violin_plot_min_samplesize_label = QLabel("Min samplesize to generate violin plot instead of scatter: ")
+        self.violin_plot_min_samplesize = QLineEdit()
+        self.violin_plot_min_samplesize.setPlaceholderText('Min: 3, Default: 6')
+        
+        # Connect textChanged signal to validate_input function
+        self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
+        
         # Add a QCheckBox for "Hide OK results?"
         self.hide_ok_results_checkbox = QCheckBox("Hide OK results?")
         self.hide_ok_results_checkbox.setChecked(False)
@@ -123,11 +131,30 @@ class ExportDialog(QDialog):
         self.layout.addWidget(self.sort_measurements_label, 13, 0)
         self.layout.addWidget(self.sort_measurements_combobox, 13, 1)
         
-        self.layout.addWidget(self.hide_ok_results_checkbox, 14, 0)
+        self.layout.addWidget(self.violin_plot_min_samplesize_label, 14, 0)
+        self.layout.addWidget(self.violin_plot_min_samplesize, 14, 1)
         
-        self.layout.addWidget(self.generate_summary_sheet_checkbox, 14, 1)
+        self.layout.addWidget(self.hide_ok_results_checkbox, 15, 0)
+        
+        self.layout.addWidget(self.generate_summary_sheet_checkbox, 15, 1)
         
         self.setLayout(self.layout)
+        
+    def validate_violin_plot_min_samplesize_input(self):
+        # Get user input
+        user_input = self.violin_plot_min_samplesize.text()
+
+        # Validate if input is an integer and >= 3
+        try:
+            input_value = int(user_input)
+            if input_value < 3:
+                input_value = 3
+        except ValueError:
+            # Replace non-integer input with default value (6 in this case)
+            input_value = 6
+
+        # Update the textbox with the validated value
+        self.violin_plot_min_samplesize.setText(str(input_value))
 
     def select_db_file(self):
         """Open a file dialog to select a database file"""
@@ -529,6 +556,13 @@ class ExportDialog(QDialog):
         # Get the selected sorting parameter
         selected_sorting_parameter = self.sort_measurements_combobox.currentText()
         
+        # Get the min samplesize for violin plot
+        if not self.violin_plot_min_samplesize.text():
+            self.violin_plot_min_samplesize.setText(str(6))
+        if int(self.violin_plot_min_samplesize.text()) < 3:
+            self.violin_plot_min_samplesize.setText(str(3))
+        violin_plot_min_samplesize = int(self.violin_plot_min_samplesize.text())
+        
         # Get the state of the "Hide OK results?" checkbox
         hide_ok_results = self.hide_ok_results_checkbox.isChecked()
         
@@ -542,6 +576,7 @@ class ExportDialog(QDialog):
             self.filter_query,
             selected_export_type,
             selected_sorting_parameter,
+            violin_plot_min_samplesize,
             hide_ok_results,
             generate_summary_sheet,
         )
