@@ -4,9 +4,7 @@ from modules.ParsingDialog import ParsingDialog
 from modules.AboutWindow import AboutWindow
 from modules.CSVSummaryDialog import CSVSummaryDialog
 from modules.ReleaseNotesDialog import ReleaseNotesDialog
-
 from version_date import release_notes
-
 from PyQt5.QtCore import QByteArray
 from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
@@ -16,8 +14,9 @@ from PyQt5.QtWidgets import (
     QWidget,
     QAction,
 )
-
 import base64
+import logging
+import sys
 
 
 class MainWindow(QMainWindow):
@@ -72,49 +71,77 @@ class MainWindow(QMainWindow):
         self.csv_summary_button.clicked.connect(self.launch_csv_summary_dialog)
 
     def launch_parsing_dialog(self):
-        # Check if export dialog is already open or visible
-        if self.export_dialog and self.export_dialog.isVisible():
-            self.export_dialog.close()
+        try:
+            # Check if export dialog is already open or visible
+            if self.export_dialog and self.export_dialog.isVisible():
+                self.export_dialog.close()
 
-        # Check if parsing dialog is already open or visible
-        if not self.parsing_dialog or not self.parsing_dialog.isVisible():
-            # Create a new parsing dialog if not already existing or visible
-            self.parsing_dialog = ParsingDialog(self, self.directory, self.db_file)
-            self.parsing_dialog.show()
+            # Check if parsing dialog is already open or visible
+            if not self.parsing_dialog or not self.parsing_dialog.isVisible():
+                # Create a new parsing dialog if not already existing or visible
+                self.parsing_dialog = ParsingDialog(self, self.directory, self.db_file)
+                self.parsing_dialog.show()
 
-        # Raise the parsing dialog to the top and activate it
-        self.parsing_dialog.raise_()
-        self.parsing_dialog.activateWindow()
+            # Raise the parsing dialog to the top and activate it
+            self.parsing_dialog.raise_()
+            self.parsing_dialog.activateWindow()
+        except Exception as e:
+            logging.exception("An error occured: %s", e)
+            sys.exit(1)
 
     def launch_export_dialog(self):
-        # Check if parsing dialog is already open or visible
-        if self.parsing_dialog and self.parsing_dialog.isVisible():
-            self.parsing_dialog.close()
+        try:
+            # Check if parsing dialog is already open or visible
+            if self.parsing_dialog and self.parsing_dialog.isVisible():
+                self.parsing_dialog.close()
 
-        # Check if export dialog is already open or visible
-        if not self.export_dialog or not self.export_dialog.isVisible():
-            # Create a new export dialog if not already existing or visible
-            self.export_dialog = ExportDialog(self, self.db_file)
-            self.export_dialog.show()
+            # Check if export dialog is already open or visible
+            if not self.export_dialog or not self.export_dialog.isVisible():
+                # Create a new export dialog if not already existing or visible
+                self.export_dialog = ExportDialog(self, self.db_file)
+                self.export_dialog.show()
 
-        # Raise the export dialog to the top and activate it
-        self.export_dialog.raise_()
-        self.export_dialog.activateWindow()
+            # Raise the export dialog to the top and activate it
+            self.export_dialog.raise_()
+            self.export_dialog.activateWindow()
+        except Exception as e:
+            logging.exception("An error occured: %s", e)
+            sys.exit(1)
 
     def open_about_window(self):
-        about_window = AboutWindow(self)
-        about_window.exec_()
+        try:
+            about_window = AboutWindow(self)
+            about_window.exec_()
+        except Exception as e:
+            logging.exception("An error occured: %s", e)
+            sys.exit(1)
         
     def open_release_notes_dialog(self):
-        release_notes_dialog = ReleaseNotesDialog(release_notes)
-        release_notes_dialog.exec_()
+        try:
+            release_notes_dialog = ReleaseNotesDialog(release_notes)
+            release_notes_dialog.exec_()
+        except Exception as e:
+            logging.exception("An error occured: %s", e)
+            sys.exit(1)
 
     def launch_csv_summary_dialog(self):
-        csv_summary_window = CSVSummaryDialog(self)
-        csv_summary_window.exec_()
+        try:
+            csv_summary_window = CSVSummaryDialog(self)
+            csv_summary_window.exec_()
+        except Exception as e:
+            logging.exception("An error occured: %s", e)
+            sys.exit(1)
 
     def set_db_file(self, db_file):
-        self.db_file = db_file
+        try:
+            self.db_file = db_file
+        except Exception as e:
+            logging.exception("An error occured: %s", e)
+            sys.exit(1)
 
     def set_directory(self, directory):
-        self.directory = directory
+        try:
+            self.directory = directory
+        except Exception as e:
+            logging.exception("An error occured: %s", e)
+            sys.exit(1)

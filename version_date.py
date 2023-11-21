@@ -4,10 +4,13 @@ current_time = datetime.now()
 formatted_time = current_time.strftime("%y%m%d.%H%M")
 
 # VERSION_DATE = formatted_time
-VERSION_DATE = "231120"
+VERSION_DATE = "231121"
 
 release_notes = f"""
-    <br><b>Current Version 231120:</b><br>
+    <br><b>Current Version 231121:</b><br>
+    - Added logging<br>
+
+    <br><b>Version 231120:</b><br>
     - Bugfix: crash when exporting without specifying min samplesize for violin plot in some cases<br>
 
     <br><b>Version 231115:</b><br>
