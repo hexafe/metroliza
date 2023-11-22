@@ -3,13 +3,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 from PyQt5.QtCore import QCoreApplication, QThread, pyqtSignal
+from PyQt5.QtWidgets import QMessageBox
 from io import BytesIO
 import re
 import sqlite3
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
 import logging
-import sys
 
 
 class ExportDataThread(QThread):
@@ -72,8 +72,7 @@ class ExportDataThread(QThread):
                 self.finished.emit()
                 QCoreApplication.processEvents()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def add_measurements_horizontal_sheet(self, cursor, excel_writer):
         try:
@@ -298,8 +297,7 @@ class ExportDataThread(QThread):
                 # Freeze panes in the reference worksheet
                 worksheet.freeze_panes(12, 0)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
         
     def export_filtered_data(self, cursor, excel_writer):
         try:
@@ -311,8 +309,7 @@ class ExportDataThread(QThread):
             # Write the data to the Excel file
             self.write_data_to_excel(data, column_names, "MEASUREMENTS", excel_writer)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def write_data_to_excel(self, data, column_names, table_name, excel_writer):
         try:
@@ -334,8 +331,7 @@ class ExportDataThread(QThread):
                 column_width = self.calculate_column_width(df[column])
                 worksheet.set_column(i, i, column_width)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def calculate_column_width(self, data):
         try:
@@ -348,8 +344,7 @@ class ExportDataThread(QThread):
             column_width = max(column_width, 12)
             return column_width
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
     
     def summary_sheet_fill(self, summary_worksheet, header, header_group, col):
         try:
@@ -472,6 +467,11 @@ class ExportDataThread(QThread):
             
             plt.close(fig)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
+            
+    def log_and_exit(self, exception):
+        logging.exception("An error occured: %s", exception)
+        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
+        raise
+
         

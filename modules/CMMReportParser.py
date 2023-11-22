@@ -5,7 +5,7 @@ import sqlite3
 import time
 from pathlib import Path
 import logging
-import sys
+from PyQt5.QtWidgets import QMessageBox
 
 
 class CMMReportParser:
@@ -41,8 +41,7 @@ class CMMReportParser:
             """
             return str(Path(pdf_file_path).absolute().parent)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def get_file_name_from_filename(self, pdf_file_path: str):
         try:
@@ -55,8 +54,7 @@ class CMMReportParser:
             """
             return str(Path(pdf_file_path).name)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def get_date_from_filename(self):
         try:
@@ -72,8 +70,7 @@ class CMMReportParser:
             date_match = date_match.replace(".", "-").replace("_", "-").replace("/", "-")
             return date_match
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
     
     def get_sample_number_from_file(self):
         try:
@@ -89,8 +86,7 @@ class CMMReportParser:
                 return match.group(1)
             return "0000"
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def get_reference_from_filename(self):
         try:
@@ -105,8 +101,7 @@ class CMMReportParser:
             reference_match = reference_match.group(0) if reference_match else "REF"
             return reference_match
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def open_database_and_check_filename(self):
         try:
@@ -145,8 +140,7 @@ class CMMReportParser:
                     else:
                         print(f"{self.pdf_file_name} already exists in the database. Skipping the file.")
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def cmm_open(self):
         try:
@@ -160,8 +154,7 @@ class CMMReportParser:
                     for line in page_text:
                         self.pdf_raw_text.append(line)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def show_raw_text(self):
         try:
@@ -172,8 +165,7 @@ class CMMReportParser:
             for line in self.pdf_raw_text:
                 print(line)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def show_blocks_text(self):
         try:
@@ -188,8 +180,7 @@ class CMMReportParser:
                     print(f"{line} ({len(line)=}")
                 print(f"___[END OF BLOCK ({len(block)=})]___\n")
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def show_blocks_text2(self):
         try:
@@ -203,8 +194,7 @@ class CMMReportParser:
                 print(f"{block}")
                 print(f"___[END OF BLOCK ({len(block)=})]___\n")
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def split_text_to_blocks(self):
         try:
@@ -429,8 +419,7 @@ class CMMReportParser:
                             
             self.add_tolerances()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def add_tolerances(self):
         try:
@@ -464,8 +453,7 @@ class CMMReportParser:
                             elif not measurement_line[4]:
                                 measurement_line[4] = bonus
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def to_dict(self):
         try:
@@ -490,8 +478,7 @@ class CMMReportParser:
 
             return cmm_report_dict
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def to_df(self):
         try:
@@ -521,8 +508,7 @@ class CMMReportParser:
             if df_list:
                 self.df = pandas.concat(df_list)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def to_sqlite(self):
         try:
@@ -619,13 +605,16 @@ class CMMReportParser:
                     print(f"Failed to insert data into the database after {max_retry_attempts} attempts.")
                     return
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def show_df(self):
         try:
             """Prints the dataframe with measurements"""
             print(f"{self.df}")
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
+            
+    def log_and_exit(self, exception):
+        logging.exception("An error occured: %s", exception)
+        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
+        raise

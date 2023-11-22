@@ -13,10 +13,10 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QWidget,
     QAction,
+    QMessageBox,
 )
 import base64
 import logging
-import sys
 
 
 class MainWindow(QMainWindow):
@@ -86,8 +86,7 @@ class MainWindow(QMainWindow):
             self.parsing_dialog.raise_()
             self.parsing_dialog.activateWindow()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def launch_export_dialog(self):
         try:
@@ -105,43 +104,42 @@ class MainWindow(QMainWindow):
             self.export_dialog.raise_()
             self.export_dialog.activateWindow()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def open_about_window(self):
         try:
             about_window = AboutWindow(self)
             about_window.exec_()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
         
     def open_release_notes_dialog(self):
         try:
             release_notes_dialog = ReleaseNotesDialog(release_notes)
             release_notes_dialog.exec_()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def launch_csv_summary_dialog(self):
         try:
             csv_summary_window = CSVSummaryDialog(self)
             csv_summary_window.exec_()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def set_db_file(self, db_file):
         try:
             self.db_file = db_file
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def set_directory(self, directory):
         try:
             self.directory = directory
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
+    
+    def log_and_exit(self, exception):
+        logging.exception("An error occured: %s", exception)
+        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
+        raise

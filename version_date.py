@@ -4,10 +4,13 @@ current_time = datetime.now()
 formatted_time = current_time.strftime("%y%m%d.%H%M")
 
 # VERSION_DATE = formatted_time
-VERSION_DATE = "231121"
+VERSION_DATE = "231122"
 
 release_notes = f"""
-    <br><b>Current Version 231121:</b><br>
+    <br><b>Current Version 231122:</b><br>
+    - Improved logging<br>
+
+    <br><b>Version 231121:</b><br>
     - Added logging<br>
 
     <br><b>Version 231120:</b><br>

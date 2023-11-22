@@ -4,9 +4,6 @@ from PyQt5.QtCore import QSize, QTemporaryFile, Qt, pyqtSlot
 from PyQt5.QtGui import QMovie
 from PyQt5.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
 import logging
-import sys
-
-
 import base64
 
 
@@ -89,8 +86,7 @@ class ParsingDialog(QDialog):
                 else:
                     self.parse_button.setEnabled(False)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     @pyqtSlot()
     def select_database(self):
@@ -116,8 +112,7 @@ class ParsingDialog(QDialog):
                 else:
                     self.parse_button.setEnabled(False)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     @pyqtSlot()
     def show_loading_screen(self):
@@ -182,8 +177,7 @@ class ParsingDialog(QDialog):
             self.parse_thread.finished.connect(self.on_parse_finished)
             self.parse_thread.start()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     @pyqtSlot()
     def stop_parsing(self):
@@ -202,8 +196,7 @@ class ParsingDialog(QDialog):
             # Close the main dialog
             # self.close()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     @pyqtSlot()
     def on_parse_finished(self):
@@ -227,6 +220,9 @@ class ParsingDialog(QDialog):
             # Close the parsing dialog
             self.accept()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
         
+    def log_and_exit(self, exception):
+        logging.exception("An error occured: %s", exception)
+        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
+        raise

@@ -1,10 +1,10 @@
 from modules.CMMReportParser import CMMReportParser
 from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtWidgets import QMessageBox
 import sqlite3
 import time
 from pathlib import Path
 import logging
-import sys
 
 
 class ParseReportsThread(QThread):
@@ -28,8 +28,7 @@ class ParseReportsThread(QThread):
                     pdf_files.append(path)
             return pdf_files
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def get_list_of_reports_in_database(self):
         try:
@@ -79,16 +78,14 @@ class ParseReportsThread(QThread):
             # Return the list of reports in the database
             return list_of_reports_in_database
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def stop_parsing(self):
         try:
             # Set the flag to indicate parsing cancellation
             self.parsing_canceled = True
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def run(self):
         try:
@@ -118,6 +115,9 @@ class ParseReportsThread(QThread):
             # Emit the signal indicating that parsing has finished
             self.parsing_finished.emit()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
         
+    def log_and_exit(self, exception):
+        logging.exception("An error occured: %s", exception)
+        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
+        raise

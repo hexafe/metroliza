@@ -23,7 +23,6 @@ import base64
 import sqlite3
 from pathlib import Path
 import logging
-import sys
 
 
 class ExportDialog(QDialog):
@@ -79,8 +78,7 @@ class ExportDialog(QDialog):
                 self.excel_file_text_label = QLabel("None selected")
                 self.export_button.setEnabled(False)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def init_layout(self):
         try:
@@ -148,8 +146,7 @@ class ExportDialog(QDialog):
             
             self.setLayout(self.layout)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
         
     def validate_violin_plot_min_samplesize_input(self):
         try:
@@ -168,8 +165,7 @@ class ExportDialog(QDialog):
             # Update the textbox with the validated value
             self.violin_plot_min_samplesize.setText(str(input_value))
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def select_db_file(self):
         try:
@@ -188,8 +184,7 @@ class ExportDialog(QDialog):
                 self.filter_button.setEnabled(True)
                 self.parent().set_db_file(filename)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def open_filter_window(self):
         try:
@@ -312,8 +307,7 @@ class ExportDialog(QDialog):
             # Show the filter window
             self.filter_window.show()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def search_list_widgets(self, list_widget, search_text):
         try:
@@ -349,8 +343,7 @@ class ExportDialog(QDialog):
             for item in selected_items:
                 item.setSelected(True)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def populate_list_widgets(self):
         try:
@@ -391,8 +384,7 @@ class ExportDialog(QDialog):
             # Connect the itemSelectionChanged signal of the reference_list to the on_reference_selection_changed method
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def on_reference_selection_changed(self):
         try:
@@ -431,8 +423,7 @@ class ExportDialog(QDialog):
                     item = self.all_headers_list.item(row)
                     self.header_list.addItem(item.text())
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
                 
     def update_selected_headers(self):
         try:
@@ -447,24 +438,21 @@ class ExportDialog(QDialog):
                 selected_header_item = QListWidgetItem(item.text())
                 self.selected_headers_list.addItem(selected_header_item)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def select_beginning_of_time(self):
         try:
             beginning_of_time = QDate(1970, 1, 1)
             self.date_from_calendar.setDate(beginning_of_time)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def select_today_as_date_to(self):
         try:
             today = QDate.currentDate()
             self.date_to_calendar.setDate(today)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def apply_filters(self):
         try:
@@ -515,8 +503,7 @@ class ExportDialog(QDialog):
             # Enable the select excel button
             self.select_excel_button.setEnabled(True)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def select_excel_file(self):
         try:
@@ -547,8 +534,7 @@ class ExportDialog(QDialog):
                 self.excel_file_text_label.setText(str(file_path))
                 self.export_button.setEnabled(True)
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def show_loading_screen(self):
         try:
@@ -640,8 +626,7 @@ class ExportDialog(QDialog):
             self.export_thread.finished.connect(self.on_export_finished)
             self.export_thread.start()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def stop_exporting(self):
         try:
@@ -662,8 +647,7 @@ class ExportDialog(QDialog):
             self.loading_dialog.reject()
             self.close()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
 
     def on_export_finished(self):
         try:
@@ -679,5 +663,9 @@ class ExportDialog(QDialog):
             # Close the exporting dialog
             self.accept()
         except Exception as e:
-            logging.exception("An error occured: %s", e)
-            sys.exit(1)
+            self.log_and_exit(e)
+            
+    def log_and_exit(self, exception):
+        logging.exception("An error occured: %s", exception)
+        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
+        raise
