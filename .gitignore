@@ -7,3 +7,8 @@ main.spec
 modules/export_window.py
 gear_report_parser.py
 __pycache__/version_date.cpython-39.pyc
+metroliza.dist/
+metroliza.build/
+metroliza.onefile-build/
+testing.py
+metroliza.log

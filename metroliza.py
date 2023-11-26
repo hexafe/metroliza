@@ -1,22 +1,24 @@
 from modules.MainWindow import MainWindow
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from modules.CustomLogger import CustomLogger
+from PyQt5.QtWidgets import QApplication
 import sys
 import version_date
 import logging
-import sys
 
+# Avoid duplicate imports
 VERSION_DATE = version_date.VERSION_DATE
 
-def log_and_exit(self, exception):
-        logging.exception("An error occured: %s", exception)
-        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
-        raise
+def log_and_exit(exception):
+    """Handles logging exceptions using CustomLogger."""
+    CustomLogger(exception)
 
 if __name__ == "__main__":
-    logging.basicConfig(filename=f'metroliza.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+    # Setup logging configuration
+    logging.basicConfig(filename='metroliza.log', level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 
     try:
         app = QApplication(sys.argv)
+        # Initialize MainWindow with the version date
         main_window = MainWindow(VERSION_DATE)
         main_window.show()
         sys.exit(app.exec_())

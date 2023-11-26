@@ -66,7 +66,7 @@ class AboutWindow(QDialog):
         text_field_label2.setAlignment(Qt.AlignHCenter)
         self.layout.addWidget(text_field_label2)
 
-        # Add the text with a link to www.google.com
+        # Add the text with a link to www.github.com
         link_label = ClickableLabel("Github: https://www.github.com/hexafe/", "https://www.github.com/hexafe/")
         link_label.setOpenExternalLinks(True)
         link_label.setAlignment(Qt.AlignHCenter)

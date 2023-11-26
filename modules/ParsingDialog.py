@@ -1,9 +1,9 @@
 from modules import base64_encoded_files
 from modules.ParseReportsThread import ParseReportsThread
+from modules.CustomLogger import CustomLogger
 from PyQt5.QtCore import QSize, QTemporaryFile, Qt, pyqtSlot
 from PyQt5.QtGui import QMovie
 from PyQt5.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
-import logging
 import base64
 
 
@@ -23,14 +23,19 @@ class ParsingDialog(QDialog):
         self.directory_label = QLabel("Select a directory:")
         self.directory_button = QPushButton("Browse")
         self.directory_button.clicked.connect(self.select_directory)
+        self.directory_label.setToolTip("Use this button to select the path to PDF reports")
+        self.directory_button.setToolTip("Use this button to select the path to PDF reports")
 
         self.database_label = QLabel("Select a database file:")
         self.database_button = QPushButton("Browse")
         self.database_button.clicked.connect(self.select_database)
+        self.database_label.setToolTip("Use this button to select the database to which to save the results from PDF files")
+        self.database_button.setToolTip("Use this button to select the database to which to save the results from PDF files")
 
         self.parse_button = QPushButton("Parse reports")
         self.parse_button.clicked.connect(self.show_loading_screen)
         self.parse_button.setEnabled(False)
+        self.parse_button.setToolTip("Use this button to start reading data from PDF files and writing to the database")
 
         self.spacer = QLabel(" ")
 
@@ -92,13 +97,13 @@ class ParsingDialog(QDialog):
     def select_database(self):
         try:
             # Open a dialog to select a database file
-            options = QFileDialog.Options()
-            options |= QFileDialog.DontUseNativeDialog
+            # options = QFileDialog.Options()
+            # options |= QFileDialog.DontUseNativeDialog
             default_name = self.directory # + "/" + [part for part in self.directory.split("/") if part][-1]
             if not default_name.endswith(".db"):
                     default_name += ".db"
             filename, _ = QFileDialog.getSaveFileName(self, "Select database", f"{default_name}",
-                                                    "SQLite3 database (*.db);;All Files (*)", options=options)
+                                                    "SQLite3 database (*.db);;All Files (*)")#, options=options)
             if filename:
                 if not filename.endswith(".db"):
                     filename += ".db"
@@ -222,7 +227,5 @@ class ParsingDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
         
-    def log_and_exit(self, exception):
-        logging.exception("An error occured: %s", exception)
-        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
-        raise
+    def log_and_exit(exception):
+        CustomLogger(exception)

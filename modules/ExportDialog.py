@@ -1,17 +1,15 @@
 from modules import base64_encoded_files
 from modules.ExportDataThread import ExportDataThread
-from PyQt5.QtCore import QDate, QSize, QTemporaryFile, Qt
+from modules.FilterDialog import FilterDialog
+from modules.CustomLogger import CustomLogger
+from PyQt5.QtCore import QSize, QTemporaryFile, Qt
 from PyQt5.QtGui import QMovie
 from PyQt5.QtWidgets import(
-    QAbstractItemView,
-    QDateEdit,
     QDialog,
     QFileDialog,
     QGridLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -20,9 +18,7 @@ from PyQt5.QtWidgets import(
     QCheckBox,
 )
 import base64
-import sqlite3
 from pathlib import Path
-import logging
 
 
 class ExportDialog(QDialog):
@@ -36,6 +32,8 @@ class ExportDialog(QDialog):
         self.db_file = db_file
         self.excel_file = ""
         self.filter_query = None
+        
+        self.filter_window = None
 
         self.init_widgets()
         self.init_layout()
@@ -46,17 +44,23 @@ class ExportDialog(QDialog):
             self.select_db_label = QLabel("Select a database file:")
             self.select_db_button = QPushButton("Browse")
             self.select_db_button.clicked.connect(self.select_db_file)
+            self.select_db_label.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
+            self.select_db_button.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
 
             self.filter_button = QPushButton("Filter")
             self.filter_button.clicked.connect(self.open_filter_window)
+            self.filter_button.setToolTip("Use this button to filter data from the database")
 
             self.select_excel_label = QLabel("Select an excel file:")
             self.select_excel_button = QPushButton("Browse")
             self.select_excel_button.clicked.connect(self.select_excel_file)
+            self.select_excel_label.setToolTip("Use this button to select the Excel file to which the data will be saved")
+            self.select_excel_button.setToolTip("Use this button to select the Excel file to which the data will be saved")
 
             self.export_button = QPushButton("Export")
             self.export_button.setDisabled(True)
             self.export_button.clicked.connect(self.show_loading_screen)
+            self.export_button.setToolTip("Start exporting")
 
             self.select_filter_label = QLabel("Select filters (optional): not applied")
 
@@ -77,6 +81,62 @@ class ExportDialog(QDialog):
             else:
                 self.excel_file_text_label = QLabel("None selected")
                 self.export_button.setEnabled(False)
+                
+            # Add dropdown list for chart type
+            self.export_type_label = QLabel("Chart type:")
+            self.export_type_combobox = QComboBox()
+            self.export_type_combobox.addItem("Line")
+            self.export_type_combobox.addItem("Scatter")
+            self.export_type_combobox.setCurrentText("Line")
+            self.export_type_label.setToolTip(
+                "Use this menu to select the type of charts in Excel sheets\n"
+                "On line chart samples numbers are visible\n"
+                "On scatter chart parts are numbered sequentially from 1"
+            )
+            self.export_type_combobox.setToolTip(
+                "Use this menu to select the type of charts in Excel sheets\n"
+                "On line chart samples numbers are visible\n"
+                "On scatter chart parts are numbered sequentially from 1"
+            )
+            
+            # Add dropdown list for chart type
+            self.sort_measurements_label = QLabel("Sort measurements by:")
+            self.sort_measurements_combobox = QComboBox()
+            self.sort_measurements_combobox.addItem("Date")
+            self.sort_measurements_combobox.addItem("Sample #")
+            self.sort_measurements_combobox.setCurrentText("Date")
+            self.sort_measurements_label.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
+            self.sort_measurements_combobox.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
+            
+            # Add textbox to set min samplesize for violin plot
+            self.violin_plot_min_samplesize_label = QLabel("Min samplesize to generate violin plot instead of scatter: ")
+            self.violin_plot_min_samplesize = QLineEdit()
+            self.violin_plot_min_samplesize.setPlaceholderText('Min: 3, Default: 6')
+            self.violin_plot_min_samplesize_label.setToolTip(
+                "Works only if you choose 'Generate summary sheet' option!\n"
+                "Use this menu to select how many measurements are required "
+                "to generate violin chart instead of scatter"
+            )
+            self.violin_plot_min_samplesize.setToolTip(
+                "Works only if you choose 'Generate summary sheet' option!\n"
+                "Use this menu to select how many measurements are required "
+                "to generate violin chart instead of scatter"
+            )
+            
+            # Connect textChanged signal to validate_input function
+            self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
+            
+            # Add a QCheckBox for "Hide OK results?"
+            self.hide_ok_results_checkbox = QCheckBox("Hide OK results?")
+            self.hide_ok_results_checkbox.setChecked(False)
+            self.hide_ok_results_checkbox.setToolTip("When enabled, only OK results will be visible (columns with OK results will be hidden, not deleted)")
+            
+            # Add a QCheckBox for "Generate summary sheet?"
+            self.generate_summary_sheet_checkbox = QCheckBox("Generate summary sheet?")
+            self.generate_summary_sheet_checkbox.setChecked(False)
+            self.generate_summary_sheet_checkbox.setToolTip(
+                "When enabled, additional sheets will be created for each reference with additional graphs (grouped scatter/violin, histograms with basic statistics)"
+            )
         except Exception as e:
             self.log_and_exit(e)
 
@@ -100,36 +160,6 @@ class ExportDialog(QDialog):
             self.layout.addWidget(self.spacer, 10, 0)
 
             self.layout.addWidget(self.export_button, 11, 0, 1, 2)
-
-            # Add dropdown list for chart type
-            self.export_type_label = QLabel("Chart type:")
-            self.export_type_combobox = QComboBox()
-            self.export_type_combobox.addItem("Line")
-            self.export_type_combobox.addItem("Scatter")
-            self.export_type_combobox.setCurrentText("Line")
-            
-            # Add dropdown list for chart type
-            self.sort_measurements_label = QLabel("Sort measurements by:")
-            self.sort_measurements_combobox = QComboBox()
-            self.sort_measurements_combobox.addItem("Date")
-            self.sort_measurements_combobox.addItem("Sample #")
-            self.sort_measurements_combobox.setCurrentText("Date")
-            
-            # Add textbox to set min samplesize for violin plot
-            self.violin_plot_min_samplesize_label = QLabel("Min samplesize to generate violin plot instead of scatter: ")
-            self.violin_plot_min_samplesize = QLineEdit()
-            self.violin_plot_min_samplesize.setPlaceholderText('Min: 3, Default: 6')
-            
-            # Connect textChanged signal to validate_input function
-            self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
-            
-            # Add a QCheckBox for "Hide OK results?"
-            self.hide_ok_results_checkbox = QCheckBox("Hide OK results?")
-            self.hide_ok_results_checkbox.setChecked(False)
-            
-            # Add a QCheckBox for "Generate summary sheet?"
-            self.generate_summary_sheet_checkbox = QCheckBox("Generate summary sheet?")
-            self.generate_summary_sheet_checkbox.setChecked(False)
 
             self.layout.addWidget(self.export_type_label, 12, 0)
             self.layout.addWidget(self.export_type_combobox, 12, 1)
@@ -170,10 +200,10 @@ class ExportDialog(QDialog):
     def select_db_file(self):
         try:
             """Open a file dialog to select a database file"""
-            options = QFileDialog.Options()
-            options |= QFileDialog.DontUseNativeDialog
+            # options = QFileDialog.Options()
+            # options |= QFileDialog.DontUseNativeDialog
             filename, _ = QFileDialog.getOpenFileName(self, "Select a database file", "",
-                                                    "SQLite database (*.db);;All files (*)", options=options)
+                                                    "SQLite database (*.db);;All files (*)")#, options=options)
             if filename:
                 if not filename.endswith(".db"):
                     filename += ".db"
@@ -188,328 +218,37 @@ class ExportDialog(QDialog):
 
     def open_filter_window(self):
         try:
-            """Open window used for filtering references, headers and dates of measurements"""
-            # Create the filter window as a QDialog
-            self.filter_window = QDialog(self)
-            self.filter_window.setWindowTitle("Data filtering")
-            self.filter_window.setModal(True)
+            # Check if export dialog is already open or visible
+            if not self.filter_window:
+                # Create a new export dialog if not already existing or visible
+                self.filter_window = FilterDialog(self, db_file=self.db_file)
+            if not self.filter_window.isVisible():
+                self.filter_window.show()
 
-            # Create labels and list widgets for each column to be filtered
-            ax_label = QLabel("AX:")
-            self.ax_list = QListWidget()
-            self.ax_list.setSelectionMode(QAbstractItemView.MultiSelection)
-
-            reference_label = QLabel("REFERENCE:")
-            self.reference_list = QListWidget()
-            self.reference_list.setSelectionMode(QAbstractItemView.MultiSelection)
-
-            header_label = QLabel("HEADER:")
-            self.header_list = QListWidget()
-            self.header_list.setSelectionMode(QAbstractItemView.MultiSelection)
-            self.all_headers_list = QListWidget()
-            self.all_headers_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            # Raise the export dialog to the top and activate it
+            self.filter_window.raise_()
+            self.filter_window.activateWindow()
+        except Exception as e:
+            self.log_and_exit(e)
             
-            selected_headers_label = QLabel("SELECTED HEADERS:")
-            self.selected_headers_list = QListWidget()
-            self.selected_headers_list.setSelectionMode(QAbstractItemView.MultiSelection)
-            
-            # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
-            self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
-
-            date_from_label = QLabel("MEASUREMENT DATE FROM:")
-            self.date_from_calendar = QDateEdit(calendarPopup=True)
-            self.date_from_calendar.setCalendarPopup(True)
-            self.date_from_calendar.setDate(QDate(1970, 1, 1))
-            self.date_from_calendar.setMinimumWidth(100)
-
-            date_to_label = QLabel("MEASUREMENT DATE TO:")
-            self.date_to_calendar = QDateEdit(calendarPopup=True)
-            self.date_to_calendar.setCalendarPopup(True)
-            self.date_to_calendar.setDate(QDate.currentDate())
-            self.date_to_calendar.setMinimumWidth(100)
-
-            # Set the default selection for list widgets as "SELECT ALL"
-            self.ax_list.addItem("SELECT ALL")
-            self.reference_list.addItem("SELECT ALL")
-            self.header_list.addItem("SELECT ALL")
-            self.all_headers_list.addItem("SELECT ALL")
-
-            # Create separate QLineEdit widgets for searching in each list widget
-            self.ax_search_input = QLineEdit()
-            self.ax_search_input.setPlaceholderText("Search AX...")
-            self.reference_search_input = QLineEdit()
-            self.reference_search_input.setPlaceholderText("Search REFERENCE...")
-            self.header_search_input = QLineEdit()
-            self.header_search_input.setPlaceholderText("Search HEADER...")
-
-            # Create a button to apply the filters
-            apply_button = QPushButton("Apply filters")
-            apply_button.clicked.connect(self.apply_filters)
-
-            # Create a button to select today's date as "date TO"
-            select_today_button = QPushButton("Select today")
-            select_today_button.clicked.connect(self.select_today_as_date_to)
-
-            # Create a button to select the beginning of time
-            select_beginning_button = QPushButton("Select beginning of time")
-            select_beginning_button.clicked.connect(self.select_beginning_of_time)
-
-            # Create a grid layout for the filter window
-            layout = QGridLayout(self.filter_window)
-
-            # Add labels and widgets to the grid layout
-            layout.addWidget(ax_label, 0, 0)
-            layout.addWidget(self.ax_search_input, 1, 0)
-            layout.addWidget(self.ax_list, 2, 0)
-
-            layout.addWidget(reference_label, 0, 1)
-            layout.addWidget(self.reference_search_input, 1, 1)
-            layout.addWidget(self.reference_list, 2, 1)
-
-            layout.addWidget(header_label, 0, 2)
-            layout.addWidget(self.header_search_input, 1, 2)
-            layout.addWidget(self.header_list, 2, 2)
-            
-            layout.addWidget(selected_headers_label, 0, 3)
-            layout.addWidget(self.selected_headers_list, 2, 3)
-
-            layout.addWidget(date_from_label, 3, 0)
-            layout.addWidget(self.date_from_calendar, 3, 1)
-
-            layout.addWidget(date_to_label, 4, 0)
-            layout.addWidget(self.date_to_calendar, 4, 1)
-
-            # Set the fixed widths for elements in column 0 and column 1
-            for row in range(layout.rowCount()):
-                for column in range(layout.columnCount()):
-                    item = layout.itemAtPosition(row, column)
-                    if item is not None:
-                        widget = item.widget()
-                        if widget is not None:
-                            if column == 0:
-                                widget.setFixedWidth(150)
-                            elif column == 1:
-                                widget.setFixedWidth(150)
-
-            # Add buttons to the layout
-            layout.addWidget(select_beginning_button, 3, 2)
-            layout.addWidget(select_today_button, 4, 2)
-            layout.addWidget(apply_button, 6, 0, 1, 3)
-
-            # Populate the list widgets with unique values from the columns in the database
-            self.populate_list_widgets()
-
-            # Connect the search input signals
-            self.ax_search_input.textChanged.connect(lambda: self.search_list_widgets(self.ax_list, self.ax_search_input.text()))
-            self.header_search_input.textChanged.connect(lambda: self.search_list_widgets(self.header_list, self.header_search_input.text()))
-            self.reference_search_input.textChanged.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
-
-            # Show the filter window
-            self.filter_window.show()
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def search_list_widgets(self, list_widget, search_text):
+    def set_filter_query(self, query):
         try:
-            selected_items = list_widget.selectedItems()
-
-            list_widget.clearSelection()
-
-            if not search_text:
-                # Show all items if search text is empty
-                for row in range(list_widget.count()):
-                    item = list_widget.item(row)
-                    item.setHidden(False)
-
-                # Restore the previously selected items
-                for item in selected_items:
-                    item.setSelected(True)
-
-                return
-
-            # Perform case-insensitive search
-            search_text = search_text.lower()
-
-            # Iterate over items and hide those that don't match the search text
-            for row in range(list_widget.count()):
-                item = list_widget.item(row)
-                item_text = item.text().lower()
-                if search_text in item_text:
-                    item.setHidden(False)
-                else:
-                    item.setHidden(True)
-
-            # Restore the previously selected items
-            for item in selected_items:
-                item.setSelected(True)
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def populate_list_widgets(self):
-        try:
-            try:
-                # Connect to the SQLite database
-                with sqlite3.connect(self.db_file) as conn:
-                    cursor = conn.cursor()
-
-                    # Get unique values from AX column
-                    cursor.execute("SELECT DISTINCT AX FROM MEASUREMENTS;")
-                    ax_values = cursor.fetchall()
-                    for value in ax_values:
-                        item = QListWidgetItem(value[0])
-                        self.ax_list.addItem(item)
-
-                    # Get unique values from HEADER column
-                    cursor.execute("SELECT DISTINCT HEADER FROM MEASUREMENTS;")
-                    header_values = cursor.fetchall()
-                    for value in header_values:
-                        header_item = QListWidgetItem(value[0])
-                        all_headers_item = QListWidgetItem(value[0])
-                        self.header_list.addItem(header_item)
-                        self.all_headers_list.addItem(all_headers_item)
-
-                    # Get unique values from REFERENCE column
-                    cursor.execute("SELECT DISTINCT REFERENCE FROM REPORTS;")
-                    reference_values = cursor.fetchall()
-                    for value in reference_values:
-                        item = QListWidgetItem(value[0])
-                        self.reference_list.addItem(item)
-
-            except sqlite3.Error as e:
-                print(f"Error accessing the database: {e}")
-                return
-
-            cursor.close()
-
-            # Connect the itemSelectionChanged signal of the reference_list to the on_reference_selection_changed method
-            self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def on_reference_selection_changed(self):
-        try:
-            selected_references = [item.text() for item in self.reference_list.selectedItems()]
-
-            # Clear the current items in the HEADER list widget
-            self.header_list.clear()
-
-            if selected_references and "SELECT ALL" not in selected_references:
-                try:
-                    # Connect to the SQLite database
-                    with sqlite3.connect(self.db_file) as conn:
-                        cursor = conn.cursor()
-
-                        # Get unique values from HEADER column based on the selected references
-                        reference_values = "','".join(selected_references)
-                        query = f"""
-                            SELECT DISTINCT HEADER FROM MEASUREMENTS 
-                            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID 
-                            WHERE REFERENCE IN (SELECT REFERENCE FROM REPORTS WHERE REFERENCE IN ('{reference_values}'));
-                            """
-                        cursor.execute(query)
-                        header_values = cursor.fetchall()
-                        for value in header_values:
-                            item = QListWidgetItem(value[0])
-                            self.header_list.addItem(item)
-
-                except sqlite3.Error as e:
-                    print(f"Error accessing the database: {e}")
-                    return
-
-                cursor.close()
-            else:
-                # Add all headers from all_headers_list when no references are selected
-                for row in range(self.all_headers_list.count()):
-                    item = self.all_headers_list.item(row)
-                    self.header_list.addItem(item.text())
-        except Exception as e:
-            self.log_and_exit(e)
-                
-    def update_selected_headers(self):
-        try:
-            # Clear the current items in the "SELECTED HEADERS" list
-            self.selected_headers_list.clear()
-
-            # Get selected items from the "HEADER" list
-            selected_header_items = self.header_list.selectedItems()
-
-            # Add the selected headers to the "SELECTED HEADERS" list
-            for item in selected_header_items:
-                selected_header_item = QListWidgetItem(item.text())
-                self.selected_headers_list.addItem(selected_header_item)
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def select_beginning_of_time(self):
-        try:
-            beginning_of_time = QDate(1970, 1, 1)
-            self.date_from_calendar.setDate(beginning_of_time)
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def select_today_as_date_to(self):
-        try:
-            today = QDate.currentDate()
-            self.date_to_calendar.setDate(today)
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def apply_filters(self):
-        try:
-            # Get the selected values from the list widgets and calendars
-            ax_selected_items = [item.text() for item in self.ax_list.selectedItems()]
-            header_selected_items = [item.text() for item in self.header_list.selectedItems()]
-            reference_selected_items = [item.text() for item in self.reference_list.selectedItems()]
-            date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
-            date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
-
-            # Construct the filter query based on the selected values
-            query = """
-                SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
-                    MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
-                    MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE, 
-                    REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER 
-                FROM MEASUREMENTS
-                JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
-                WHERE 1=1
-                """
-
-            if ax_selected_items and "SELECT ALL" not in ax_selected_items:
-                ax_values = "','".join(ax_selected_items)
-                query += f" AND MEASUREMENTS.AX IN ('{ax_values}')"
-
-            if header_selected_items and "SELECT ALL" not in header_selected_items:
-                header_values = "','".join(header_selected_items)
-                query += f" AND MEASUREMENTS.HEADER IN ('{header_values}')"
-
-            if reference_selected_items and "SELECT ALL" not in reference_selected_items:
-                reference_values = "','".join(reference_selected_items)
-                query += f" AND REPORTS.REFERENCE IN ('{reference_values}')"
-
-            if date_from:
-                query += f" AND REPORTS.DATE >= '{date_from}'"
-
-            if date_to:
-                query += f" AND REPORTS.DATE <= '{date_to}'"
-
             self.filter_query = query
-
+        except Exception as e:
+            self.log_and_exit(e)
+            
+    def set_filter_applied(self):
+        try:
             # Update filter label in export window
             self.select_filter_label.setText("Select filters (optional): applied")
-
-            # Close the filter window
-            self.filter_window.close()
-
-            # Enable the select excel button
-            self.select_excel_button.setEnabled(True)
         except Exception as e:
             self.log_and_exit(e)
 
     def select_excel_file(self):
         try:
             """Open a file dialog to select an excel file"""
-            options = QFileDialog.Options()
-            options |= QFileDialog.DontUseNativeDialog
+            # options = QFileDialog.Options()
+            # options |= QFileDialog.DontUseNativeDialog
             default_name = self.db_file[:-3]
             if not default_name.endswith(".xlsx"):
                 default_name += ".xlsx"
@@ -525,7 +264,7 @@ class ExportDialog(QDialog):
                 counter += 1
 
             filename, _ = QFileDialog.getSaveFileName(self, "Select an Excel file", str(file_path),
-                                                    "Excel workbook (*.xlsx);;All files (*)", options=options)
+                                                    "Excel workbook (*.xlsx);;All files (*)")#, options=options)
 
             if filename:
                 file_path = Path(filename)
@@ -665,7 +404,5 @@ class ExportDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
             
-    def log_and_exit(self, exception):
-        logging.exception("An error occured: %s", exception)
-        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
-        raise
+    def log_and_exit(exception):
+        CustomLogger(exception)

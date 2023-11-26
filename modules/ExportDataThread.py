@@ -3,13 +3,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 from PyQt5.QtCore import QCoreApplication, QThread, pyqtSignal
-from PyQt5.QtWidgets import QMessageBox
 from io import BytesIO
+from modules.CustomLogger import CustomLogger
 import re
 import sqlite3
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
-import logging
 
 
 class ExportDataThread(QThread):
@@ -469,9 +468,7 @@ class ExportDataThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
             
-    def log_and_exit(self, exception):
-        logging.exception("An error occured: %s", exception)
-        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
-        raise
+    def log_and_exit(exception):
+        CustomLogger(exception)
 
         

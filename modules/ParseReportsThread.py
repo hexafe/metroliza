@@ -1,10 +1,9 @@
 from modules.CMMReportParser import CMMReportParser
+from modules.CustomLogger import CustomLogger
 from PyQt5.QtCore import QThread, pyqtSignal
-from PyQt5.QtWidgets import QMessageBox
 import sqlite3
 import time
 from pathlib import Path
-import logging
 
 
 class ParseReportsThread(QThread):
@@ -117,7 +116,5 @@ class ParseReportsThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
         
-    def log_and_exit(self, exception):
-        logging.exception("An error occured: %s", exception)
-        QMessageBox.information(None, "Error", "An error occured.\nPlease check log file for more informations.\n(or just contact the author :P)")
-        raise
+    def log_and_exit(exception):
+        CustomLogger(exception)
