@@ -1,6 +1,7 @@
 from modules import base64_encoded_files
 from modules.ExportDataThread import ExportDataThread
 from modules.FilterDialog import FilterDialog
+from modules.DataGrouping import DataGrouping
 from modules.CustomLogger import CustomLogger
 from PyQt5.QtCore import QSize, QTemporaryFile, Qt
 from PyQt5.QtGui import QMovie
@@ -31,9 +32,19 @@ class ExportDialog(QDialog):
 
         self.db_file = db_file
         self.excel_file = ""
-        self.filter_query = None
+        self.filter_query = """
+                SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
+                    MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
+                    MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE, 
+                    REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER 
+                FROM MEASUREMENTS
+                JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+                WHERE 1=1
+                """
+        self.df_for_grouping = None
         
         self.filter_window = None
+        self.grouping_window = None
 
         self.init_widgets()
         self.init_layout()
@@ -47,9 +58,15 @@ class ExportDialog(QDialog):
             self.select_db_label.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
             self.select_db_button.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
 
+            self.select_filter_label = QLabel("Select filters (optional): not applied")
             self.filter_button = QPushButton("Filter")
             self.filter_button.clicked.connect(self.open_filter_window)
             self.filter_button.setToolTip("Use this button to filter data from the database")
+            
+            self.select_group_label = QLabel("Group data (optional): not applied")
+            self.group_button = QPushButton("Group")
+            self.group_button.clicked.connect(self.open_grouping_window)
+            self.group_button.setToolTip("Use this button to group data")
 
             self.select_excel_label = QLabel("Select an excel file:")
             self.select_excel_button = QPushButton("Browse")
@@ -62,17 +79,17 @@ class ExportDialog(QDialog):
             self.export_button.clicked.connect(self.show_loading_screen)
             self.export_button.setToolTip("Start exporting")
 
-            self.select_filter_label = QLabel("Select filters (optional): not applied")
-
             self.spacer = QLabel(" ")
 
             if self.db_file:
                 self.database_text_label = QLabel(self.db_file)
                 self.select_excel_button.setEnabled(True)
+                self.group_button.setEnabled(True)
                 self.filter_button.setEnabled(True)
             else:
                 self.database_text_label = QLabel("None selected")
                 self.filter_button.setDisabled(True)
+                self.group_button.setDisabled(True)
                 self.select_excel_button.setDisabled(True)
 
             if self.excel_file:
@@ -158,21 +175,25 @@ class ExportDialog(QDialog):
             self.layout.addWidget(self.select_filter_label, 8, 0)
             self.layout.addWidget(self.filter_button, 9, 0, 1, 2)
             self.layout.addWidget(self.spacer, 10, 0)
+            
+            self.layout.addWidget(self.select_group_label, 11, 0)
+            self.layout.addWidget(self.group_button, 12, 0, 1, 2)
+            self.layout.addWidget(self.spacer, 13, 0)
 
-            self.layout.addWidget(self.export_button, 11, 0, 1, 2)
+            self.layout.addWidget(self.export_button, 14, 0, 1, 2)
 
-            self.layout.addWidget(self.export_type_label, 12, 0)
-            self.layout.addWidget(self.export_type_combobox, 12, 1)
+            self.layout.addWidget(self.export_type_label, 15, 0)
+            self.layout.addWidget(self.export_type_combobox, 15, 1)
             
-            self.layout.addWidget(self.sort_measurements_label, 13, 0)
-            self.layout.addWidget(self.sort_measurements_combobox, 13, 1)
+            self.layout.addWidget(self.sort_measurements_label, 16, 0)
+            self.layout.addWidget(self.sort_measurements_combobox, 16, 1)
             
-            self.layout.addWidget(self.violin_plot_min_samplesize_label, 14, 0)
-            self.layout.addWidget(self.violin_plot_min_samplesize, 14, 1)
+            self.layout.addWidget(self.violin_plot_min_samplesize_label, 17, 0)
+            self.layout.addWidget(self.violin_plot_min_samplesize, 17, 1)
             
-            self.layout.addWidget(self.hide_ok_results_checkbox, 15, 0)
+            self.layout.addWidget(self.hide_ok_results_checkbox, 18, 0)
             
-            self.layout.addWidget(self.generate_summary_sheet_checkbox, 15, 1)
+            self.layout.addWidget(self.generate_summary_sheet_checkbox, 18, 1)
             
             self.setLayout(self.layout)
         except Exception as e:
@@ -212,6 +233,7 @@ class ExportDialog(QDialog):
                 self.database_text_label.setText(filename)
                 self.select_excel_button.setEnabled(True)
                 self.filter_button.setEnabled(True)
+                self.group_button.setEnabled(True)
                 self.parent().set_db_file(filename)
         except Exception as e:
             self.log_and_exit(e)
@@ -231,9 +253,36 @@ class ExportDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
             
+    def open_grouping_window(self):
+        try:
+            # Check if grouping dialog is already open or visible
+            if not self.grouping_window:
+                # Create a new grouping dialog if not already existing or visible
+                self.grouping_window = DataGrouping(self, db_file=self.db_file)
+            if not self.grouping_window.isVisible():
+                self.grouping_window.show()
+
+            # Raise the grouping dialog to the top and activate it
+            self.grouping_window.raise_()
+            self.grouping_window.activateWindow()
+        except Exception as e:
+            self.log_and_exit(e)
+            
     def set_filter_query(self, query):
         try:
             self.filter_query = query
+        except Exception as e:
+            self.log_and_exit(e)
+            
+    def set_df_for_grouping(self, df):
+        try:
+            self.df_for_grouping = df
+        except Exception as e:
+            self.log_and_exit(e)
+    
+    def get_filter_query(self):
+        try:
+            return self.filter_query
         except Exception as e:
             self.log_and_exit(e)
             
@@ -354,6 +403,7 @@ class ExportDialog(QDialog):
                 self.db_file,
                 self.excel_file,
                 self.filter_query,
+                self.df_for_grouping,
                 selected_export_type,
                 selected_sorting_parameter,
                 violin_plot_min_samplesize,

@@ -21,7 +21,7 @@ class FilterDialog(QDialog):
         self.setWindowIcon(parent.windowIcon())
         self.setModal(True)
         self.db_file = db_file
-        self.filter_query = None
+        self.filter_query = self.parent().get_filter_query()
         self.setup_ui()
 
     def setup_ui(self):
@@ -130,6 +130,21 @@ class FilterDialog(QDialog):
             self.show()
         except Exception as e:
             self.log_and_exit(e)
+            
+    def connect_signals(self):
+        try:
+            self.ax_search_input.textChanged.connect(lambda: self.search_list_widgets(self.ax_list, self.ax_search_input.text()))
+            self.header_search_input.textChanged.connect(lambda: self.search_list_widgets(self.header_list, self.header_search_input.text()))
+            self.reference_search_input.textChanged.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
+            
+            # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
+            self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
+
+            self.select_today_button.clicked.connect(self.select_today_as_date_to)
+            self.select_beginning_button.clicked.connect(self.select_beginning_of_time)
+            self.apply_button.clicked.connect(self.apply_filters)
+        except Exception as e:
+            self.log_and_exit(e)
 
     def populate_list_widgets(self):
         try:
@@ -158,21 +173,6 @@ class FilterDialog(QDialog):
 
             cursor.close()
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def connect_signals(self):
-        try:
-            self.ax_search_input.textChanged.connect(lambda: self.search_list_widgets(self.ax_list, self.ax_search_input.text()))
-            self.header_search_input.textChanged.connect(lambda: self.search_list_widgets(self.header_list, self.header_search_input.text()))
-            self.reference_search_input.textChanged.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
-            
-            # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
-            self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
-
-            self.select_today_button.clicked.connect(self.select_today_as_date_to)
-            self.select_beginning_button.clicked.connect(self.select_beginning_of_time)
-            self.apply_button.clicked.connect(self.apply_filters)
         except Exception as e:
             self.log_and_exit(e)
 
