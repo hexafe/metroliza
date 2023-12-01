@@ -292,6 +292,16 @@ class ExportDialog(QDialog):
             self.select_filter_label.setText("Select filters (optional): applied")
         except Exception as e:
             self.log_and_exit(e)
+    
+    def set_grouping_applied(self, applied):
+        try:
+            # Update filter label in export window
+            if applied:
+                self.select_group_label.setText("Group data (optional): applied")
+            else:
+                self.select_group_label.setText("Group data (optional): not applied")
+        except Exception as e:
+            self.log_and_exit(e)
 
     def select_excel_file(self):
         try:

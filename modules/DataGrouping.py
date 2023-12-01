@@ -77,7 +77,9 @@ class DataGrouping(QDialog):
             self.remove_from_group_button.setDisabled(True)
             self.delete_group_button = QPushButton("Delete selected group")
             self.delete_group_button.setDisabled(True)
-            self.done_button = QPushButton("Done")
+            
+            self.use_grouping_button = QPushButton("Use grouping")
+            self.dont_use_grouping_button = QPushButton("Do not use grouping")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -114,7 +116,8 @@ class DataGrouping(QDialog):
             self.layout.addWidget(self.remove_from_group_button, 6, 0, 1, 4)
             self.layout.addWidget(self.delete_group_button, 7, 0, 1, 4)
 
-            self.layout.addWidget(self.done_button, 8, 0, 1, 4)
+            self.layout.addWidget(self.use_grouping_button, 8, 0, 1, 2)
+            self.layout.addWidget(self.dont_use_grouping_button, 8, 2, 1, 2)
 
             self.show()
         except Exception as e:
@@ -144,7 +147,8 @@ class DataGrouping(QDialog):
             self.remove_from_group_button.clicked.connect(self.remove_from_group)
             self.delete_group_button.clicked.connect(self.delete_group)
             
-            self.done_button.clicked.connect(self.done_grouping)
+            self.use_grouping_button.clicked.connect(self.use_grouping)
+            self.dont_use_grouping_button.clicked.connect(self.dont_use_grouping)
         except Exception as e:
             self.log_and_exit(e)
             
@@ -340,10 +344,19 @@ class DataGrouping(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
-    def done_grouping(self):
+    def use_grouping(self):
         try:
             self.hide()
             self.parent().set_df_for_grouping(self.df)
+            self.parent().set_grouping_applied(True)
+        except Exception as e:
+            self.log_and_exit(e)
+            
+    def dont_use_grouping(self):
+        try:
+            self.hide()
+            self.parent().set_df_for_grouping(None)
+            self.parent().set_grouping_applied(False)
         except Exception as e:
             self.log_and_exit(e)
             

@@ -5,7 +5,6 @@ import sys
 import version_date
 import logging
 
-# Avoid duplicate imports
 VERSION_DATE = version_date.VERSION_DATE
 
 def log_and_exit(exception):

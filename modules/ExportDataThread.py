@@ -348,8 +348,7 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
     
     def summary_sheet_fill(self, summary_worksheet, header, header_group, col):
-        try:
-            header_group = pd.merge(header_group, self.df_for_grouping, on=['REFERENCE', 'SAMPLE_NUMBER'], how='left')
+        try:           
             imgplot = BytesIO()
             nom = round(header_group['NOM'].iloc[0], 3)
             USL = round(header_group['+TOL'].iloc[0], 3)
@@ -378,17 +377,27 @@ class ExportDataThread(QThread):
             plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
             fig, ax = plt.subplots(figsize=(6, 4))
             
-            if (header_group.groupby('GROUP')['MEAS'].count() >= self.violin_plot_min_samplesize).all():
-                plt.violinplot(header_group.groupby('GROUP')['MEAS'].apply(list),
-                                showmeans=True,
-                                showmedians=False,
-                                showextrema=True)
-                # xtick_labels = header_group['SAMPLE_NUMBER'].unique()
-                xtick_labels = header_group['GROUP'].unique()
-                plt.xticks(range(1, len(xtick_labels) + 1), xtick_labels)
+            if isinstance(self.df_for_grouping, pd.DataFrame) and not self.df_for_grouping.empty:
+                header_group = pd.merge(header_group, self.df_for_grouping, on=['REFERENCE', 'SAMPLE_NUMBER'], how='left')
+                if (header_group.groupby('GROUP')['MEAS'].count() >= self.violin_plot_min_samplesize).all():
+                    plt.violinplot(header_group.groupby('GROUP')['MEAS'].apply(list),
+                                    showmeans=True,
+                                    showmedians=False,
+                                    showextrema=True)
+                    xtick_labels = header_group['GROUP'].unique()
+                    plt.xticks(range(1, len(xtick_labels) + 1), xtick_labels)
+                else:
+                    ax.scatter(header_group['GROUP'], header_group['MEAS'], label=header, color='blue', marker='.')
             else:
-                # ax.scatter(header_group['SAMPLE_NUMBER'], header_group['MEAS'], label=header, color='blue', marker='.')
-                ax.scatter(header_group['GROUP'], header_group['MEAS'], label=header, color='blue', marker='.')
+                if (header_group.groupby('SAMPLE_NUMBER')['MEAS'].count() >= self.violin_plot_min_samplesize).all():
+                    plt.violinplot(header_group.groupby('SAMPLE_NUMBER')['MEAS'].apply(list),
+                                    showmeans=True,
+                                    showmedians=False,
+                                    showextrema=True)
+                    xtick_labels = header_group['SAMPLE_NUMBER'].unique()
+                    plt.xticks(range(1, len(xtick_labels) + 1), xtick_labels)
+                else:
+                    ax.scatter(header_group['SAMPLE_NUMBER'], header_group['MEAS'], label=header, color='blue', marker='.')
             
             ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
             ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
