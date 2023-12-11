@@ -1,11 +1,12 @@
 from PyQt5.QtWidgets import QDialog, QTextBrowser, QVBoxLayout
 
 class ReleaseNotesDialog(QDialog):
-    def __init__(self, release_notes):
-        super().__init__()
+    def __init__(self, parent, release_notes):
+        super().__init__(parent)
 
         # Initialize the dialog window
         self.setWindowTitle("Release Notes")
+        self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 600, 400)
 
         # Create a QTextBrowser to display release notes

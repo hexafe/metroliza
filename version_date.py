@@ -4,10 +4,10 @@ current_time = datetime.now()
 formatted_time = current_time.strftime("%y%m%d.%H%M")
 
 # VERSION_DATE = formatted_time
-VERSION_DATE = "231130_TESTING"
+VERSION_DATE = "231212"
 
 release_notes = f"""
-    <br><b>Current Version 231130_TESTING:</b><br>
+    <br><b>Current Version 231212:</b><br>
     - Added tooltips with basic information when hovering the mouse cursor<br>
     - Code refactoring/optimization<br>
     - Export: added grouping of samples<br>

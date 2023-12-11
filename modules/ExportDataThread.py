@@ -479,6 +479,46 @@ class ExportDataThread(QThread):
             summary_worksheet.insert_image(row + 1, 9, "", {'image_data': imgplot})
             
             plt.close(fig)
+            
+            imgplot = BytesIO()
+            plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
+            fig, ax = plt.subplots(figsize=(6, 4))
+            
+            data_x = list(range(0, header_group['MEAS'].count()))
+            data_y = header_group['MEAS']
+
+            unique_labels = []
+            for label in header_group['SAMPLE_NUMBER']:
+                if label not in unique_labels:
+                    unique_labels.append(label)
+                else:
+                    unique_labels.append('')
+
+            fig, ax = plt.subplots(figsize=(6, 4))
+
+            # Scatter plot
+            ax.scatter(data_x, data_y, label=header, color='blue', marker='.')
+
+            ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
+            ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
+            ax.set_xlabel('Sample #')
+            ax.set_ylabel('Measurement')
+            ax.set_title(f'{header}')
+
+            # Set ticks and labels
+            ax.set_xticks(data_x)
+            ax.set_xticklabels(unique_labels)
+
+            # Rotate the tick labels for better visibility
+            plt.xticks(rotation=90)
+
+            # Saving the plot to BytesIO
+            imgplot = BytesIO()
+            fig.savefig(imgplot, format="png", bbox_inches='tight')
+            imgplot.seek(0)
+            summary_worksheet.insert_image(row + 1, 19, "", {'image_data': imgplot})
+            plt.close(fig)
+            
         except Exception as e:
             self.log_and_exit(e)
             

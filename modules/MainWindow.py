@@ -114,7 +114,7 @@ class MainWindow(QMainWindow):
 
     def open_release_notes_dialog(self):
         try:
-            release_notes_dialog = ReleaseNotesDialog(release_notes)
+            release_notes_dialog = ReleaseNotesDialog(self, release_notes)
             release_notes_dialog.exec_()
         except Exception as e:
             self.log_and_exit(e)
