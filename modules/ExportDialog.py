@@ -140,8 +140,20 @@ class ExportDialog(QDialog):
                 "to generate violin chart instead of scatter"
             )
             
+            # Add textbox to set scale for y-axis
+            self.summary_plot_scale_label = QLabel("Scale for y-axis in summary sheet plots: ")
+            self.summary_plot_scale = QLineEdit()
+            self.summary_plot_scale.setPlaceholderText('Default: 0')
+            self.summary_plot_scale_label.setToolTip(
+                "For example, if you select 2, it will increase the Y-axis limits by a factor of 2."
+            )
+            self.summary_plot_scale.setToolTip(
+                "For example, if you select 2, it will increase the Y-axis limits by a factor of 2."
+            )
+            
             # Connect textChanged signal to validate_input function
             self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
+            self.summary_plot_scale.textChanged.connect(self.validate_plot_scale_input)
             
             # Add a QCheckBox for "Hide OK results?"
             self.hide_ok_results_checkbox = QCheckBox("Hide OK results?")
@@ -191,9 +203,12 @@ class ExportDialog(QDialog):
             self.layout.addWidget(self.violin_plot_min_samplesize_label, 17, 0)
             self.layout.addWidget(self.violin_plot_min_samplesize, 17, 1)
             
-            self.layout.addWidget(self.hide_ok_results_checkbox, 18, 0)
+            self.layout.addWidget(self.summary_plot_scale_label, 18, 0)
+            self.layout.addWidget(self.summary_plot_scale, 18, 1)
             
-            self.layout.addWidget(self.generate_summary_sheet_checkbox, 18, 1)
+            self.layout.addWidget(self.hide_ok_results_checkbox, 19, 0)
+            
+            self.layout.addWidget(self.generate_summary_sheet_checkbox, 19, 1)
             
             self.setLayout(self.layout)
         except Exception as e:
@@ -210,11 +225,30 @@ class ExportDialog(QDialog):
                 if input_value < 2:
                     input_value = 2
             except ValueError:
-                # Replace non-integer input with default value (6 in this case)
+                # Replace non-integer input with default value
                 input_value = 6
 
             # Update the textbox with the validated value
             self.violin_plot_min_samplesize.setText(str(input_value))
+        except Exception as e:
+            self.log_and_exit(e)
+            
+    def validate_plot_scale_input(self):
+        try:
+            # Get user input
+            user_input = self.summary_plot_scale.text()
+
+            # Validate if input is a float > 0
+            try:
+                input_value = float(user_input)
+                if input_value <= 0:
+                    input_value = 0
+            except ValueError:
+                # Replace non-number with default value
+                input_value = 0
+
+            # Update the textbox with the validated value
+            self.summary_plot_scale.setText(str(input_value))
         except Exception as e:
             self.log_and_exit(e)
 
@@ -394,9 +428,15 @@ class ExportDialog(QDialog):
             # Get the min samplesize for violin plot
             if not self.violin_plot_min_samplesize.text():
                 self.violin_plot_min_samplesize.setText(str(6))
-            if int(self.violin_plot_min_samplesize.text()) < 3:
-                self.violin_plot_min_samplesize.setText(str(3))
+            if int(self.violin_plot_min_samplesize.text()) < 2:
+                self.violin_plot_min_samplesize.setText(str(2))
             violin_plot_min_samplesize = int(self.violin_plot_min_samplesize.text())
+            
+            if not self.summary_plot_scale.text():
+                self.summary_plot_scale.setText(str(0))
+            if float(self.summary_plot_scale.text()) <= 0:
+                self.summary_plot_scale.setText(str(0))
+            summary_plot_scale = float(self.summary_plot_scale.text())
             
             # Get the state of the "Hide OK results?" checkbox
             hide_ok_results = self.hide_ok_results_checkbox.isChecked()
@@ -413,6 +453,7 @@ class ExportDialog(QDialog):
                 selected_export_type,
                 selected_sorting_parameter,
                 violin_plot_min_samplesize,
+                summary_plot_scale,
                 hide_ok_results,
                 generate_summary_sheet,
             )
@@ -460,5 +501,5 @@ class ExportDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
             
-    def log_and_exit(exception):
+    def log_and_exit(self, exception):
         CustomLogger(exception)

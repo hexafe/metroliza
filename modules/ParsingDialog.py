@@ -227,5 +227,5 @@ class ParsingDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
         
-    def log_and_exit(exception):
+    def log_and_exit(self, exception):
         CustomLogger(exception)

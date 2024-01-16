@@ -25,6 +25,7 @@ class ExportDataThread(QThread):
         selected_export_type="scatter",
         selected_sorting_parameter="date",
         violin_plot_min_samplesize=6,
+        summary_plot_scale=0,
         hide_ok_results=False,
         generate_summary_sheet=False,
         ):
@@ -48,6 +49,7 @@ class ExportDataThread(QThread):
         self.selected_export_type = selected_export_type.lower()
         self.selected_sorting_parameter = selected_sorting_parameter.lower()
         self.violin_plot_min_samplesize = violin_plot_min_samplesize
+        self.summary_plot_scale = summary_plot_scale
         self.hide_ok_results = hide_ok_results
         self.generate_summary_sheet = generate_summary_sheet
         
@@ -401,6 +403,20 @@ class ExportDataThread(QThread):
             
             ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
             ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
+            
+            # Get the current y-axis limits
+            current_y_limits = ax.get_ylim()
+
+            # Calculate data range
+            data_range = current_y_limits[1] - current_y_limits[0]
+
+            # Calculate new y-axis limits based on the data range and scale factor
+            y_min = current_y_limits[0] - self.summary_plot_scale * data_range / 2
+            y_max = current_y_limits[1] + self.summary_plot_scale * data_range / 2
+
+            # Set y-axis limits using the Axes object
+            ax.set_ylim(y_min, y_max)
+            
             ax.set_xlabel('Sample #')
             ax.set_ylabel('Measurement')
             ax.set_title(f'{header}')
@@ -511,6 +527,19 @@ class ExportDataThread(QThread):
 
             # Rotate the tick labels for better visibility
             plt.xticks(rotation=90)
+            
+            # Get the current y-axis limits
+            current_y_limits = ax.get_ylim()
+
+            # Calculate data range
+            data_range = current_y_limits[1] - current_y_limits[0]
+
+            # Calculate new y-axis limits based on the data range and scale factor
+            y_min = current_y_limits[0] - self.summary_plot_scale * data_range / 2
+            y_max = current_y_limits[1] + self.summary_plot_scale * data_range / 2
+
+            # Set y-axis limits using the Axes object
+            ax.set_ylim(y_min, y_max)
 
             # Saving the plot to BytesIO
             imgplot = BytesIO()
@@ -522,7 +551,5 @@ class ExportDataThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
             
-    def log_and_exit(exception):
+    def log_and_exit(self, exception):
         CustomLogger(exception)
-
-        
