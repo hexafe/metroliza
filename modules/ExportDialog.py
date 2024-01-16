@@ -128,7 +128,7 @@ class ExportDialog(QDialog):
             # Add textbox to set min samplesize for violin plot
             self.violin_plot_min_samplesize_label = QLabel("Min samplesize to generate violin plot instead of scatter: ")
             self.violin_plot_min_samplesize = QLineEdit()
-            self.violin_plot_min_samplesize.setPlaceholderText('Min: 3, Default: 6')
+            self.violin_plot_min_samplesize.setPlaceholderText('Min: 2, Default: 6')
             self.violin_plot_min_samplesize_label.setToolTip(
                 "Works only if you choose 'Generate summary sheet' option!\n"
                 "Use this menu to select how many measurements are required "
@@ -204,11 +204,11 @@ class ExportDialog(QDialog):
             # Get user input
             user_input = self.violin_plot_min_samplesize.text()
 
-            # Validate if input is an integer and >= 3
+            # Validate if input is an integer and >= 2
             try:
                 input_value = int(user_input)
-                if input_value < 3:
-                    input_value = 3
+                if input_value < 2:
+                    input_value = 2
             except ValueError:
                 # Replace non-integer input with default value (6 in this case)
                 input_value = 6
@@ -221,10 +221,8 @@ class ExportDialog(QDialog):
     def select_db_file(self):
         try:
             """Open a file dialog to select a database file"""
-            # options = QFileDialog.Options()
-            # options |= QFileDialog.DontUseNativeDialog
             filename, _ = QFileDialog.getOpenFileName(self, "Select a database file", "",
-                                                    "SQLite database (*.db);;All files (*)")#, options=options)
+                                                    "SQLite database (*.db);;All files (*)")
             if filename:
                 if not filename.endswith(".db"):
                     filename += ".db"
@@ -306,8 +304,6 @@ class ExportDialog(QDialog):
     def select_excel_file(self):
         try:
             """Open a file dialog to select an excel file"""
-            # options = QFileDialog.Options()
-            # options |= QFileDialog.DontUseNativeDialog
             default_name = self.db_file[:-3]
             if not default_name.endswith(".xlsx"):
                 default_name += ".xlsx"

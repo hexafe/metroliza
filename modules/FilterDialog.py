@@ -17,11 +17,14 @@ import sqlite3
 class FilterDialog(QDialog):
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
+        
         self.setWindowTitle("Data filtering")
         self.setWindowIcon(parent.windowIcon())
         self.setModal(True)
+        
         self.db_file = db_file
         self.filter_query = self.parent().get_filter_query()
+        
         self.setup_ui()
 
     def setup_ui(self):
