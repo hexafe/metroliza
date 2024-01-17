@@ -141,14 +141,18 @@ class ExportDialog(QDialog):
             )
             
             # Add textbox to set scale for y-axis
-            self.summary_plot_scale_label = QLabel("Scale for y-axis in summary sheet plots: ")
+            self.summary_plot_scale_label = QLabel("Increase the limits on the y-axis by as many times: ")
             self.summary_plot_scale = QLineEdit()
             self.summary_plot_scale.setPlaceholderText('Default: 0')
             self.summary_plot_scale_label.setToolTip(
-                "For example, if you select 2, it will increase the Y-axis limits by a factor of 2."
+                "Works only if you choose 'Generate summary sheet' option!\n"
+                "For instance, if you choose 0 (default), limits will be based on the minimum, maximum, and tolerance limits.\n"
+                "If you choose 1, it will also add a 'buffer' to the minimum and maximum y-axis limits, resulting in a range that is three times larger."
             )
             self.summary_plot_scale.setToolTip(
-                "For example, if you select 2, it will increase the Y-axis limits by a factor of 2."
+                "Works only if you choose 'Generate summary sheet' option!\n"
+                "For instance, if you choose 0 (default), limits will be based on the minimum, maximum, and tolerance limits.\n"
+                "If you choose 1, it will also add a 'buffer' to the minimum and maximum y-axis limits, resulting in a range that is three times larger."
             )
             
             # Connect textChanged signal to validate_input function

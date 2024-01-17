@@ -8,8 +8,8 @@ VERSION_DATE = "240116"
 
 release_notes = f"""
     <br><b>Current Version 240116:</b><br>
-    - Changed min sample size for violin plot to 2<br>
     - Added Modify Database module to easily modify measurement dataset before export<br>
+    - Export: hanged min sample size for violin plot to 2<br>
     - Export: added scale factor for summary sheet plots<br>
 
     <br><b>Version 231212:</b><br>
