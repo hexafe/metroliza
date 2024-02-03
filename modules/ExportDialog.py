@@ -244,7 +244,7 @@ class ExportDialog(QDialog):
 
             # Validate if input is a float > 0
             try:
-                input_value = float(user_input)
+                input_value = int(user_input)
                 if input_value <= 0:
                     input_value = 0
             except ValueError:
@@ -438,9 +438,9 @@ class ExportDialog(QDialog):
             
             if not self.summary_plot_scale.text():
                 self.summary_plot_scale.setText(str(0))
-            if float(self.summary_plot_scale.text()) <= 0:
+            if int(self.summary_plot_scale.text()) <= 0:
                 self.summary_plot_scale.setText(str(0))
-            summary_plot_scale = float(self.summary_plot_scale.text())
+            summary_plot_scale = int(self.summary_plot_scale.text())
             
             # Get the state of the "Hide OK results?" checkbox
             hide_ok_results = self.hide_ok_results_checkbox.isChecked()
