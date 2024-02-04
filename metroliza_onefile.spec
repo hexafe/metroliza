@@ -45,5 +45,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['C:\\Users\\G\\VSC\\PYTHON\\metroliza input\\metroliza_icon2.ico'],
+    icon=['metroliza_icon2.ico'],
 )
