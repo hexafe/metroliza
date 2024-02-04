@@ -9,7 +9,7 @@ block_cipher = None
 
 
 a = Analysis(
-    ['metroliza_Valeo.py'],
+    ['metroliza.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -32,7 +32,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name=f'metroliza_lite_(VALEO)_{VERSION_DATE}',
+    name=f'metroliza_Valeo_{VERSION_DATE}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
