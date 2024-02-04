@@ -16,7 +16,7 @@ import pandas as pd
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 import base64
-from modules import base64_encoded_files
+from modules import Base64EncodedFiles
 
 
 class FilterDialog(QDialog):
@@ -386,7 +386,7 @@ class CSVSummaryDialog(QDialog):
         loading_gif_label.setAlignment(Qt.AlignCenter)
 
         # Load the loading.gif from a file, create a QMovie from it, and set it to the label
-        loading_gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
+        loading_gif_decoded = base64.b64decode(Base64EncodedFiles.encoded_loading_gif)
 
         # Create temporary file and save encoded loading gif to it
         temp_file = QTemporaryFile()

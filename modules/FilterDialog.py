@@ -1,6 +1,6 @@
 from modules.CustomLogger import CustomLogger
-from PyQt5.QtCore import QDate
-from PyQt5.QtWidgets import(
+from PyQt6.QtCore import QDate
+from PyQt6.QtWidgets import(
     QAbstractItemView,
     QDateEdit,
     QDialog,
@@ -41,21 +41,21 @@ class FilterDialog(QDialog):
             # Create labels and list widgets for each column to be filtered
             self.ax_label = QLabel("AX:")
             self.ax_list = QListWidget()
-            self.ax_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            self.ax_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
 
             self.reference_label = QLabel("REFERENCE:")
             self.reference_list = QListWidget()
-            self.reference_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            self.reference_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
 
             self.header_label = QLabel("HEADER:")
             self.header_list = QListWidget()
-            self.header_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            self.header_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
             self.all_headers_list = QListWidget()
-            self.all_headers_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            self.all_headers_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
             
             self.selected_headers_label = QLabel("SELECTED HEADERS:")
             self.selected_headers_list = QListWidget()
-            self.selected_headers_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            self.selected_headers_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
 
             self.date_from_label = QLabel("MEASUREMENT DATE FROM:")
             self.date_from_calendar = QDateEdit(calendarPopup=True)

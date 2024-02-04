@@ -1,6 +1,6 @@
 from modules.CMMReportParser import CMMReportParser
 from modules.CustomLogger import CustomLogger
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal
 import sqlite3
 import time
 from pathlib import Path

@@ -1,16 +1,16 @@
-from PyQt5.QtCore import QSize, QTemporaryFile, Qt, QUrl
-from PyQt5.QtGui import QMovie, QDesktopServices, QCursor
-from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout
-from modules import base64_encoded_files
+from PyQt6.QtCore import QSize, QTemporaryFile, Qt, QUrl
+from PyQt6.QtGui import QMovie, QDesktopServices, QCursor
+from PyQt6.QtWidgets import QDialog, QLabel, QVBoxLayout
+from modules import Base64EncodedFiles
 import base64
-import version_date
+import VersionDate
 
 
 class ClickableLabel(QLabel):
     def __init__(self, text, link):
         super().__init__(text)
         self.link = link
-        self.setCursor(QCursor(Qt.PointingHandCursor))
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
     def enterEvent(self, event):
         self.setStyleSheet("QLabel { color: blue; text-decoration: underline; }")
@@ -30,19 +30,18 @@ class AboutWindow(QDialog):
         self.setWindowTitle("About")
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
-        self.layout.setAlignment(Qt.AlignCenter)
+        self.layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Create a QLabel to display the loading GIF
         gif_label = QLabel()
-        gif_label.setFixedSize(200, 200)
-        gif_label.setAlignment(Qt.AlignCenter)
+        # gif_label.setFixedSize(200, 200)
 
         # Load the loading.gif from a file, create a QMovie from it, and set it to the label
-        gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
+        gif_decoded = base64.b64decode(Base64EncodedFiles.encoded_loading_gif)
 
-        # Create temporary file and save encoded loading gif to it
+        # Create temporary file and save encoded gif to it
         temp_file = QTemporaryFile()
-        temp_file.setAutoRemove(False)
+        temp_file.setAutoRemove(True)
         temp_file_name = ""
         if temp_file.open():
             temp_file.write(gif_decoded)
@@ -53,26 +52,17 @@ class AboutWindow(QDialog):
         self.gif = QMovie(temp_file_name)
         self.gif.setScaledSize(QSize(200, 200))
         gif_label.setMovie(self.gif)
-        gif_label.setAlignment(Qt.AlignCenter)
+        gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.gif.start()
         self.layout.addWidget(gif_label)
 
-        # Add the text fields
-        text_field_label1 = QLabel(f"Metroliza version <b>{version_date.VERSION_DATE}</b>")
-        text_field_label1.setAlignment(Qt.AlignHCenter)
-        self.layout.addWidget(text_field_label1)
+        # Add the title label
+        title_label = QLabel(f"Metroliza Valeo version <b>{VersionDate.VERSION_DATE}</b>")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(title_label)
         
-        text_field_label2 = QLabel(f"Grzegorz Ozimek")
-        text_field_label2.setAlignment(Qt.AlignHCenter)
-        self.layout.addWidget(text_field_label2)
-
-        # Add the text with a link to www.github.com
-        link_label = ClickableLabel("Github: https://www.github.com/hexafe/", "https://www.github.com/hexafe/")
-        link_label.setOpenExternalLinks(True)
-        link_label.setAlignment(Qt.AlignHCenter)
-        self.layout.addWidget(link_label)
-
-        # # Add the mailto link
-        # mailto_label = ClickableLabel("Send email", "mailto:asd@asd.asd")
-        # mailto_label.setOpenExternalLinks(True)
-        # self.layout.addWidget(mailto_label)
+        # Add the clickable label with email
+        author_label = ClickableLabel(f"Grzegorz Ozimek (grzegorz.ozimek@valeo.com)", "mailto:grzegorz.ozimek@valeo.com")
+        author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        author_label.setOpenExternalLinks(True)
+        self.layout.addWidget(author_label)

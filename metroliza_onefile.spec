@@ -3,13 +3,13 @@
 #import version_date
 #VERSION_DATE = version_date.VERSION_DATE
 
-VERSION_DATE = "240116"
+VERSION_DATE = "240204"
 
 block_cipher = None
 
 
 a = Analysis(
-    ['metroliza.py'],
+    ['metroliza_Valeo.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -32,7 +32,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name=f'metroliza_{VERSION_DATE}',
+    name=f'metroliza_lite_(VALEO)_{VERSION_DATE}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

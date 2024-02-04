@@ -1,5 +1,5 @@
 from modules.CustomLogger import CustomLogger
-from PyQt5.QtWidgets import(
+from PyQt6.QtWidgets import(
     QAbstractItemView,
     QDialog,
     QGridLayout,
@@ -47,16 +47,16 @@ class DataGrouping(QDialog):
 
             self.part_label = QLabel("PART #:")
             self.part_list = QListWidget()
-            self.part_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            self.part_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
             self.all_parts_list = QListWidget()
-            self.all_parts_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            self.all_parts_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
             
             self.groups_label = QLabel("GROUPS:")
             self.groups_list = QListWidget()
             
             self.part_group_label = QLabel("PART IN SELECTED GROUP:")
             self.part_group_list = QListWidget()
-            self.part_group_list.setSelectionMode(QAbstractItemView.MultiSelection)
+            self.part_group_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
 
             # Create separate QLineEdit widgets for searching in each list widget
             self.reference_search_input = QLineEdit()
@@ -331,10 +331,16 @@ class DataGrouping(QDialog):
             # Get the selected group
             selected_group = self.groups_list.currentItem().text()
 
-            confirmation = QMessageBox.question(self, 'Confirm Deletion', f"Are you sure you want to delete group '{selected_group}'?",
-                                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            # Create a QMessageBox with the Question icon
+            confirmation = QMessageBox(QMessageBox.Icon.Question, 'Confirm Deletion', f"Are you sure you want to delete group '{selected_group}'?")
 
-            if confirmation == QMessageBox.Yes and selected_group:
+            # Add buttons to the QMessageBox
+            confirmation.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            
+            # Execute the QMessageBox and check the result
+            result = confirmation.exec()
+
+            if result == QMessageBox.StandardButton.Yes and selected_group:
                 # Update the dataframe with the default group value for the selected group
                 self.df.loc[self.df['GROUP'] == selected_group, 'GROUP'] = self.default_group
             

@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QDialog, QTextBrowser, QVBoxLayout
+from PyQt6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout
 
 class ReleaseNotesDialog(QDialog):
     def __init__(self, parent, release_notes):

@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm
-from PyQt5.QtCore import QCoreApplication, QThread, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from io import BytesIO
 from modules.CustomLogger import CustomLogger
 import re

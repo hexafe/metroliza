@@ -1,11 +1,11 @@
 from modules.MainWindow import MainWindow
 from modules.CustomLogger import CustomLogger
-from PyQt5.QtWidgets import QApplication
+import VersionDate
+from PyQt6.QtWidgets import QApplication
 import sys
-import version_date
 import logging
 
-VERSION_DATE = version_date.VERSION_DATE
+VERSION_DATE = VersionDate.VERSION_DATE
 
 def log_and_exit(exception):
     """Handles logging exceptions using CustomLogger."""
@@ -17,9 +17,11 @@ if __name__ == "__main__":
 
     try:
         app = QApplication(sys.argv)
+
         # Initialize MainWindow with the version date
         main_window = MainWindow(VERSION_DATE)
         main_window.show()
-        sys.exit(app.exec_())
+
+        sys.exit(app.exec())
     except Exception as e:
         log_and_exit(e)

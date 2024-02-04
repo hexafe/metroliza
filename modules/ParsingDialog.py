@@ -1,9 +1,9 @@
-from modules import base64_encoded_files
+from modules import Base64EncodedFiles
 from modules.ParseReportsThread import ParseReportsThread
 from modules.CustomLogger import CustomLogger
-from PyQt5.QtCore import QSize, QTemporaryFile, Qt, pyqtSlot
-from PyQt5.QtGui import QMovie
-from PyQt5.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
+from PyQt6.QtCore import QSize, QTemporaryFile, Qt, pyqtSlot
+from PyQt6.QtGui import QMovie
+from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
 import base64
 
 
@@ -123,18 +123,18 @@ class ParsingDialog(QDialog):
     def show_loading_screen(self):
         try:
             # Create the progress dialog
-            self.loading_dialog = QDialog(self, Qt.WindowTitleHint)
+            self.loading_dialog = QDialog(self, Qt.WindowType.WindowTitleHint)
             self.loading_dialog.setWindowTitle("Parsing reports...")
-            self.loading_dialog.setWindowModality(Qt.ApplicationModal)
+            self.loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
             self.loading_dialog.setFixedSize(400, 300)
 
             # Create a QLabel to display the loading GIF
             loading_gif_label = QLabel(self.loading_dialog)
             loading_gif_label.setFixedSize(200, 200)
-            loading_gif_label.setAlignment(Qt.AlignCenter)
+            loading_gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             # Load the loading.gif from a file, create a QMovie from it, and set it to the label
-            loading_gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
+            loading_gif_decoded = base64.b64decode(Base64EncodedFiles.encoded_loading_gif)
 
             # Create temporary file and save encoded loading gif to it
             temp_file = QTemporaryFile()
@@ -153,23 +153,23 @@ class ParsingDialog(QDialog):
 
             # Create the loading label and progress bar
             self.loading_label = QLabel("Parsing files...", self.loading_dialog)
-            self.loading_label.setAlignment(Qt.AlignCenter)
+            self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             self.loading_bar = QProgressBar(self.loading_dialog)
             self.loading_bar.setValue(0)
             self.loading_bar.setFixedSize(380, 20)
-            self.loading_bar.setAlignment(Qt.AlignCenter)
+            self.loading_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             # Create a layout for the progress dialog and add the loading GIF, loading label, and progress bar to it
             layout = QVBoxLayout(self.loading_dialog)
-            layout.addWidget(loading_gif_label, alignment=Qt.AlignHCenter)
-            layout.addWidget(self.loading_label, alignment=Qt.AlignHCenter)
-            layout.addWidget(self.loading_bar, alignment=Qt.AlignHCenter)
+            layout.addWidget(loading_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+            layout.addWidget(self.loading_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+            layout.addWidget(self.loading_bar, alignment=Qt.AlignmentFlag.AlignHCenter)
 
             # Create and add the Cancel button to the layout
             cancel_button = QPushButton("Cancel", self.loading_dialog)
             cancel_button.clicked.connect(self.stop_parsing)
-            layout.addWidget(cancel_button, alignment=Qt.AlignHCenter)
+            layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
             # Disable the parse button and show the progress dialog
             self.parse_button.setEnabled(False)

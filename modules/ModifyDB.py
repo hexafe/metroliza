@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QDialog,
     QGridLayout,
     QTableWidget,
@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QMessageBox,
 )
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 import sqlite3
 from modules.CustomLogger import CustomLogger
 
@@ -21,7 +21,7 @@ class ModifyDB(QDialog):
         self.setModal(True)
 
         self.db_file = db_file
-        self.undo_data = {}  # Dictionary to store the original values for undo
+        self.undo_data = {}
 
         self.setup_ui()
 
@@ -54,6 +54,8 @@ class ModifyDB(QDialog):
             # Create buttons for Select DB file, Apply changes, Undo, and Cancel
             self.select_db_button = QPushButton("Select DB file")
             self.apply_button = QPushButton("Apply changes")
+            if not self.db_file:
+                self.apply_button.setEnabled(False)
             self.undo_button = QPushButton("Undo last change")
             self.cancel_button = QPushButton("Cancel")
         except Exception as e:
@@ -98,6 +100,7 @@ class ModifyDB(QDialog):
                 print(f"Selected DB file: {filename}")
                 self.db_file = filename
                 self.populate_tables()
+                self.apply_button.setEnabled(True)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -136,7 +139,7 @@ class ModifyDB(QDialog):
         self.undo_data[table] = {}
         for i, value in enumerate(values):
             item = QTableWidgetItem(str(value[0]))
-            item.setData(Qt.UserRole, str(value[0]))
+            item.setData(Qt.ItemDataRole.UserRole, str(value[0]))
             table.setItem(i, 0, item)
             self.undo_data[table][i] = str(value[0])
 
@@ -144,14 +147,14 @@ class ModifyDB(QDialog):
         try:
             modifications_text = self.collect_modifications()
             confirmation_dialog = QMessageBox(self)
-            confirmation_dialog.setIcon(QMessageBox.Question)
+            confirmation_dialog.setIcon(QMessageBox.Icon.Question)
             confirmation_dialog.setText(
                 "The following modifications will be applied:\n\n" + modifications_text
             )
             confirmation_dialog.setWindowTitle("Confirm changes")
-            confirmation_dialog.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+            confirmation_dialog.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
 
-            if confirmation_dialog.exec_() == QMessageBox.Ok:
+            if confirmation_dialog.exec() == QMessageBox.StandardButton.Ok:
                 self.apply_changes()
         except Exception as e:
             self.log_and_exit(e)
@@ -180,7 +183,7 @@ class ModifyDB(QDialog):
         modifications_text = ""
 
         for i in range(table.rowCount()):
-            old_value = str(table.item(i, 0).data(Qt.UserRole))
+            old_value = str(table.item(i, 0).data(Qt.ItemDataRole.UserRole))
             new_value = str(table.item(i, 0).text())
 
             if old_value != new_value:
@@ -216,7 +219,7 @@ class ModifyDB(QDialog):
     def update_table_values(self, cursor, conn, table_widget, table_name, column_name):
         for row in range(table_widget.rowCount()):
             new_value = str(table_widget.item(row, 0).text())
-            old_value = str(table_widget.item(row, 0).data(Qt.UserRole))
+            old_value = str(table_widget.item(row, 0).data(Qt.ItemDataRole.UserRole))
 
             if new_value != old_value:
                 query = f"UPDATE {table_name} SET {column_name} = ? WHERE {column_name} = ?"
