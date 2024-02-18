@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 class MainWindow(QMainWindow):
     """A main window class that provides the user interface for the Metroliza application."""
 
-    def __init__(self, VERSION_DATE):
+    def __init__(self, VERSION_DATE, days_until_expiration):
         """Initialize the main window and its components.
 
         Args:
@@ -29,12 +29,13 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         # Initialize the main window and layout
-        self.setWindowTitle(f"Metroliza Valeo [{VERSION_DATE}]")
+        self.setWindowTitle(f"Metroliza V [{VERSION_DATE}] ({days_until_expiration+1} day{'s' if days_until_expiration > 1 else ''} left)")
         self.setGeometry(100, 100, 300, 150)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QGridLayout()
         self.central_widget.setLayout(self.layout)
+        self.days_until_expiration = days_until_expiration
 
         # Set the window icon
         self.setWindowIcon(self.decode_icon(Base64EncodedFiles.encoded_icon))
@@ -153,7 +154,7 @@ class MainWindow(QMainWindow):
 
     def open_about_window(self):
         try:
-            about_window = AboutWindow(self)
+            about_window = AboutWindow(self, days_until_expiration=self.days_until_expiration)
             about_window.exec()
         except Exception as e:
             self.log_and_exit(e)

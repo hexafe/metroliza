@@ -1,6 +1,6 @@
-VERSION_DATE = "240204"
+VERSION_DATE = "240218"
 
 release_notes = f"""
-    <br><b>Current Version 240204:</b><br>
+    <br><b>Current Version 240218:</b><br>
     - First release<br>
     """

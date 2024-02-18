@@ -23,7 +23,7 @@ class ClickableLabel(QLabel):
 
 
 class AboutWindow(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, days_until_expiration=0):
         super().__init__(parent)
 
         # Set the window title and layout
@@ -57,12 +57,24 @@ class AboutWindow(QDialog):
         self.layout.addWidget(gif_label)
 
         # Add the title label
-        title_label = QLabel(f"Metroliza Valeo version <b>{VersionDate.VERSION_DATE}</b>")
+        title_label = QLabel(f"Metroliza V version <b>{VersionDate.VERSION_DATE}</b>")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(title_label)
         
+        # Add the license expiration label
+        license_expiration_label = QLabel(f"License expiration in <b>{days_until_expiration+1}</b> day{'s' if days_until_expiration > 1 else ''}")
+        license_expiration_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.layout.addWidget(license_expiration_label)
+        
         # Add the clickable label with email
-        author_label = ClickableLabel(f"Grzegorz Ozimek (grzegorz.ozimek@valeo.com)", "mailto:grzegorz.ozimek@valeo.com")
+        # author_label = ClickableLabel(f"Grzegorz Ozimek (grzegorz.ozimek@valeo.com)", "mailto:grzegorz.ozimek@valeo.com")
+        author_label = QLabel(f"Grzegorz Ozimek")
         author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         author_label.setOpenExternalLinks(True)
         self.layout.addWidget(author_label)
+        
+        # Add the text with a link to www.github.com
+        link_label = ClickableLabel("Github: https://www.github.com/hexafe/", "https://www.github.com/hexafe/")
+        link_label.setOpenExternalLinks(True)
+        link_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.layout.addWidget(link_label)
