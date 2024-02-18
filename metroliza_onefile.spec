@@ -3,7 +3,7 @@
 #import version_date
 #VERSION_DATE = version_date.VERSION_DATE
 
-VERSION_DATE = "240204"
+VERSION_DATE = "240218"
 
 block_cipher = None
 
@@ -32,7 +32,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name=f'metroliza_Valeo_{VERSION_DATE}',
+    name=f'metroliza_V_{VERSION_DATE}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

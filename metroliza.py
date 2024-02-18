@@ -1,9 +1,11 @@
 from modules.MainWindow import MainWindow
 from modules.CustomLogger import CustomLogger
-from modules.Base64EncodedFiles import public_key_b64
+from modules.Base64EncodedFiles import public_key_b64, encoded_icon
 from modules.LicenseKeyManager import LicenseKeyManager
 import VersionDate
 from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QVBoxLayout, QHBoxLayout, QPushButton
+from PyQt6.QtCore import QByteArray
+from PyQt6.QtGui import QIcon, QPixmap
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from datetime import datetime
@@ -17,9 +19,28 @@ def log_and_exit(exception):
     """Handles logging exceptions using CustomLogger."""
     CustomLogger(exception)
 
+def decode_icon(encoded_icon):
+        """Decode the base64 encoded icon and return an QIcon object.
+
+        Args:
+            encoded_icon (str): The base64 encoded icon.
+
+        Returns:
+            QIcon: The decoded icon.
+        """
+        icon_decoded = base64.b64decode(encoded_icon)
+        byte_array = QByteArray(icon_decoded)
+        pixmap = QPixmap()
+        pixmap.loadFromData(byte_array)
+        icon = QIcon(pixmap)
+        return icon
+
 def show_invalid_license_message(title, message, hardware_id):
     dialog = QDialog()
     dialog.setWindowTitle(title)
+    
+    # Set the window icon
+    dialog.setWindowIcon(decode_icon(encoded_icon))
 
     # Create layouts
     main_layout = QVBoxLayout()
