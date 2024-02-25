@@ -1,6 +1,6 @@
-from PyQt5.QtCore import Qt, pyqtSlot, QThread, pyqtSignal, QTemporaryFile, QSize
-from PyQt5.QtGui import QMovie
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSlot, QThread, pyqtSignal, QTemporaryFile, QSize
+from PyQt6.QtGui import QMovie
+from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
     QPushButton,
@@ -24,11 +24,11 @@ class FilterDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle("Filter Columns")
-        self.setGeometry(200, 200, 500, 150)  # Increased the width for better visibility
+        self.setGeometry(200, 200, 500, 150)
 
         self.column_names = column_names
-        self.selected_indexes = column_names[:1]  # Select default indexes
-        self.selected_data_columns = column_names[1:]  # Select default data columns
+        self.selected_indexes = column_names[:1]
+        self.selected_data_columns = column_names[1:]
 
         # Initialize the layout
         main_layout = QVBoxLayout()
@@ -41,17 +41,17 @@ class FilterDialog(QDialog):
         self.data_list_widget = QListWidget()
 
         # Set the selection mode to multi-selection
-        self.index_list_widget.setSelectionMode(QListWidget.MultiSelection)
-        self.data_list_widget.setSelectionMode(QListWidget.MultiSelection)
+        self.index_list_widget.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self.data_list_widget.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
 
         # Add the list widgets to the horizontal layout
         horizontal_layout.addWidget(self.index_list_widget)
         horizontal_layout.addWidget(self.data_list_widget)
 
         # Populate the list widgets with column names
-        self.index_list_widget.addItem("SELECT DEFAULT (FIRST COLUMN)")  # Add the option at the top
+        self.index_list_widget.addItem("SELECT DEFAULT (FIRST COLUMN)")
         self.index_list_widget.addItems(column_names)
-        self.data_list_widget.addItem("SELECT ALL")  # Add the option at the top
+        self.data_list_widget.addItem("SELECT ALL")
         self.data_list_widget.addItems(column_names)
 
         # Add the horizontal layout to the main layout
@@ -115,13 +115,13 @@ class DataProcessingThread(QThread):
         nom = 0
         worksheet.write(0, col + 3, nom)
 
-        worksheet.write(1, col + 2, '+TOL')
+        worksheet.write(1, col + 2, 'USL')
         USL = 0
         worksheet.write(1, col + 3, USL)
         USL = nom + USL
         USL_cell = xl_rowcol_to_cell(1, col + 3, row_abs=True, col_abs=True)
 
-        worksheet.write(2, col + 2, '-TOL')
+        worksheet.write(2, col + 2, 'LSL')
         LSL = 0
         worksheet.write(2, col + 3, LSL)
         LSL = nom + LSL
@@ -310,8 +310,7 @@ class CSVSummaryDialog(QDialog):
 
     # Define functions for button clicks
     def handle_input_button(self):
-        options = QFileDialog.Options()
-        options |= QFileDialog.ReadOnly
+        options = QFileDialog.Option.ReadOnly
         filename, _ = QFileDialog.getOpenFileName(self, "Select input file (CSV)", "", "CSV Files (*.csv);;All Files (*)", options=options)
         if filename:
             if not filename.endswith(".csv"):
@@ -335,7 +334,7 @@ class CSVSummaryDialog(QDialog):
         if self.data_frame is not None:
             filter_dialog = FilterDialog(self, self.column_names)
 
-            if filter_dialog.exec_() == QDialog.Accepted:
+            if filter_dialog.exec() == QDialog.DialogCode.Accepted:
                 self.selected_indexes, self.selected_data_columns = filter_dialog.get_selected_columns()
 
                 # Use the selected_indexes and selected_data_columns for further processing
@@ -347,8 +346,7 @@ class CSVSummaryDialog(QDialog):
             QMessageBox.warning(self, "Warning", "No data loaded. Please select an input file first.")
 
     def handle_output_button(self):
-        options = QFileDialog.Options()
-        options |= QFileDialog.DontUseNativeDialog
+        # options = QFileDialog.Option.DontUseNativeDialog
         default_name = self.input_file[:-4]
         if not default_name.endswith(".xlsx"):
             default_name += ".xlsx"
@@ -364,7 +362,7 @@ class CSVSummaryDialog(QDialog):
             counter += 1
 
         filename, _ = QFileDialog.getSaveFileName(self, "Select output file (xlsx)", str(file_path),
-                                                "Excel Files (*.xlsx);;All Files (*)", options=options)
+                                                "Excel Files (*.xlsx);;All Files (*)")#, options=options)
 
         if filename:
             print("Selected output file:", filename)
@@ -375,15 +373,15 @@ class CSVSummaryDialog(QDialog):
     @pyqtSlot()
     def show_loading_screen(self):
         # Create a custom QDialog for the loading screen
-        self.loading_dialog = QDialog(self, Qt.WindowTitleHint)
+        self.loading_dialog = QDialog(self, Qt.WindowType.WindowTitleHint)
         self.loading_dialog.setWindowTitle("Processing...")
-        self.loading_dialog.setWindowModality(Qt.ApplicationModal)
+        self.loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.loading_dialog.setFixedSize(400, 300)
 
         # Create a QLabel to display the loading GIF
         loading_gif_label = QLabel(self.loading_dialog)
         loading_gif_label.setFixedSize(200, 200)
-        loading_gif_label.setAlignment(Qt.AlignCenter)
+        loading_gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Load the loading.gif from a file, create a QMovie from it, and set it to the label
         loading_gif_decoded = base64.b64decode(Base64EncodedFiles.encoded_loading_gif)
@@ -405,23 +403,23 @@ class CSVSummaryDialog(QDialog):
 
         # Create the loading label and progress bar as instance variables
         self.loading_label = QLabel("Processing data...", self.loading_dialog)
-        self.loading_label.setAlignment(Qt.AlignCenter)
+        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.loading_bar = QProgressBar(self.loading_dialog)
         self.loading_bar.setValue(0)
         self.loading_bar.setFixedSize(380, 20)
-        self.loading_bar.setAlignment(Qt.AlignCenter)
+        self.loading_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Create a layout for the dialog and add the loading GIF, loading label, and progress bar to it
         layout = QVBoxLayout(self.loading_dialog)
-        layout.addWidget(loading_gif_label, alignment=Qt.AlignHCenter)
-        layout.addWidget(self.loading_label, alignment=Qt.AlignHCenter)
-        layout.addWidget(self.loading_bar, alignment=Qt.AlignHCenter)
+        layout.addWidget(loading_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.loading_label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.loading_bar, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # Create and add the Cancel button to the layout
         cancel_button = QPushButton("Cancel", self.loading_dialog)
         cancel_button.clicked.connect(self.stop_data_processing_and_close_loading)
-        layout.addWidget(cancel_button, alignment=Qt.AlignHCenter)
+        layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # Start the data processing in a separate thread
         self.worker_thread = DataProcessingThread(

@@ -6,6 +6,7 @@ from modules.ModifyDB import ModifyDB
 from modules.AboutWindow import AboutWindow
 from modules.ReleaseNotesDialog import ReleaseNotesDialog
 from modules.CustomLogger import CustomLogger
+from modules.CSVSummaryDialog import CSVSummaryDialog
 from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray
 from PyQt6.QtGui import QIcon, QPixmap, QAction
@@ -51,7 +52,7 @@ class MainWindow(QMainWindow):
         self.parse_button = QPushButton("Launch Parsing")
         self.modifydb_button = QPushButton("Launch Modify Database")
         self.export_button = QPushButton("Launch Export")
-        # self.csv_summary_button = QPushButton("CSV Summary")
+        self.csv_summary_button = QPushButton("CSV Summary")
         self.setup_button_tooltips()
 
         # Set up menu items
@@ -81,7 +82,7 @@ class MainWindow(QMainWindow):
         self.parse_button.setToolTip("Use Parsing module to get data from PDF reports into database for further export to Excel")
         self.modifydb_button.setToolTip("Use Modify Database module to modify Reference, Part number or Header in database")
         self.export_button.setToolTip("Use Export module to filter, set and export data from database to Excel file")
-        # self.csv_summary_button.setToolTip("Use CSV module to automatically create charts from CSV data")
+        self.csv_summary_button.setToolTip("Use CSV module to automatically create charts from CSV data")
 
     def setup_menu_actions(self):
         """Set up the menu actions for the main window."""
@@ -97,11 +98,11 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.parse_button, 0, 0)
         self.layout.addWidget(self.modifydb_button, 1, 0)
         self.layout.addWidget(self.export_button, 2, 0)
-        # self.layout.addWidget(self.csv_summary_button, 3, 0)
+        self.layout.addWidget(self.csv_summary_button, 3, 0)
         self.parse_button.clicked.connect(self.launch_parsing_dialog)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
-        # self.csv_summary_button.clicked.connect(self.launch_csv_summary_dialog)
+        self.csv_summary_button.clicked.connect(self.launch_csv_summary_dialog)
 
     def launch_parsing_dialog(self):
         """Launch the parsing dialog and close the other dialogs if they are open."""
@@ -168,8 +169,8 @@ class MainWindow(QMainWindow):
 
     def launch_csv_summary_dialog(self):
         try:
-            # csv_summary_window = CSVSummaryDialog(self)
-            # csv_summary_window.exec()
+            csv_summary_window = CSVSummaryDialog(self)
+            csv_summary_window.exec()
             pass
         except Exception as e:
             self.log_and_exit(e)
