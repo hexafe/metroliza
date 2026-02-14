@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
+from modules.excel_sheet_utils import unique_sheet_name
 import base64
 from modules import Base64EncodedFiles
 
@@ -174,14 +175,14 @@ class DataProcessingThread(QThread):
         worksheet.conditional_format(1, col - 1, len(selected_data[data_column]), col - 1,
                                     {'type': 'cell', 'criteria': '<', 'value': LSL_cell, 'format': red_format})
 
-    def add_xy_chart(self, worksheet, data_column, col, selected_data, writer):
+    def add_xy_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
         # Create an XY chart object
         chart = writer.book.add_chart({'type': 'scatter'})
 
         # Add data to the chart with the specified x and y ranges
         num_rows = len(selected_data[data_column])
-        x_range = f"={data_column[:30]}!${xl_col_to_name(0)}$2:${xl_col_to_name(0)}${num_rows + 1}"
-        y_range = f"={data_column[:30]}!${xl_col_to_name(col - 1)}$2:${xl_col_to_name(col - 1)}${num_rows + 1}"
+        x_range = f"={sheet_name}!${xl_col_to_name(0)}$2:${xl_col_to_name(0)}${num_rows + 1}"
+        y_range = f"={sheet_name}!${xl_col_to_name(col - 1)}$2:${xl_col_to_name(col - 1)}${num_rows + 1}"
 
         # Add the series to the chart
         chart.add_series({
@@ -191,7 +192,7 @@ class DataProcessingThread(QThread):
         })
 
         # Configure the chart properties
-        chart.set_title({'name': f'{data_column[:30]}'})
+        chart.set_title({'name': f'{sheet_name}'})
         chart.set_x_axis({
             # 'name': 'Date',
             # 'date_axis': True,
@@ -199,7 +200,7 @@ class DataProcessingThread(QThread):
             'max': num_rows + 1,
         })
         chart.set_y_axis({
-            'name': f'{data_column[:30]}',
+            'name': f'{sheet_name}',
             'major_gridlines': {
                 'visible': False,
             }
@@ -220,7 +221,8 @@ class DataProcessingThread(QThread):
 
                 # Calculate the total number of filtered data columns
                 total_filtered_columns = len(self.selected_data_columns)
-                
+                used_sheet_names = set()
+
                 num_format = writer.book.add_format({'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0.000'})
 
                 # Update the progress bar for each selected data column
@@ -235,10 +237,11 @@ class DataProcessingThread(QThread):
                     selected_data.loc[:, data_column] = pd.to_numeric(selected_data[data_column], errors='coerce')
                     selected_data = selected_data.dropna(subset=data_column)
 
-                    # Write the data to a new sheet with the name of the data column
-                    selected_data.to_excel(writer, sheet_name=data_column[:30], index=False)
+                    # Write the data to a new sheet with a safe unique name
+                    sheet_name = unique_sheet_name(data_column, used_sheet_names)
+                    selected_data.to_excel(writer, sheet_name=sheet_name, index=False)
 
-                    worksheet = writer.sheets[data_column[:30]]
+                    worksheet = writer.sheets[sheet_name]
 
                     col, USL_cell, LSL_cell = self.write_summary_data(worksheet, data_column, selected_data)
                     
@@ -247,7 +250,7 @@ class DataProcessingThread(QThread):
 
                     self.apply_conditional_formatting(worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer)
 
-                    self.add_xy_chart(worksheet, data_column, col, selected_data, writer)
+                    self.add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
 
                     # Calculate the progress percentage and emit the progress signal
                     progress_percentage = int((i + 1) * 100 / total_filtered_columns)
