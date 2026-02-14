@@ -187,19 +187,11 @@ class ParsingDialog(QDialog):
     @pyqtSlot()
     def stop_parsing(self):
         try:
-            # Stop the parsing thread
+            # Request cooperative cancellation and return immediately to keep UI responsive
             self.parsing_canceled = True
-            self.parse_thread.stop_parsing()
-            self.parse_thread.quit()
-
-            # Check if the thread is still running and wait for it to finish
-            if self.parse_thread.isRunning():
-                print("Parsing thread still running, waiting...")
-                self.parse_thread.wait()
-                print("Parsing thread closed successfully!")
-
-            # Close the main dialog
-            # self.close()
+            if self.parse_thread is not None and self.parse_thread.isRunning():
+                self.parse_thread.stop_parsing()
+                self.loading_label.setText("Canceling parsing...")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -228,4 +220,4 @@ class ParsingDialog(QDialog):
             self.log_and_exit(e)
         
     def log_and_exit(self, exception):
-        CustomLogger(exception)
+        CustomLogger(exception, reraise=False)

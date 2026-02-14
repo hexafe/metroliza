@@ -16,6 +16,7 @@ class ExportDataThread(QThread):
     update_label = pyqtSignal(str)
     update_progress = pyqtSignal(int)
     finished = pyqtSignal()
+    canceled = pyqtSignal()
 
     def __init__(
         self,
@@ -53,10 +54,25 @@ class ExportDataThread(QThread):
         self.summary_plot_scale = summary_plot_scale
         self.hide_ok_results = hide_ok_results
         self.generate_summary_sheet = generate_summary_sheet
+        self.export_canceled = False
         
+
+    def stop_exporting(self):
+        self.export_canceled = True
+
+    def _check_canceled(self):
+        if self.export_canceled:
+            self.update_label.emit("Export canceled.")
+            self.canceled.emit()
+            return True
+        return False
+
     def run(self):
         try:
             # Connect to the SQLite database
+            if self._check_canceled():
+                return
+
             with sqlite3.connect(self.db_file) as conn:
                 cursor = conn.cursor()
 
@@ -67,8 +83,14 @@ class ExportDataThread(QThread):
                 excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
 
                 self.export_filtered_data(cursor, excel_writer)
+                if self._check_canceled():
+                    excel_writer.close()
+                    return
 
                 self.add_measurements_horizontal_sheet(cursor, excel_writer)
+                if self._check_canceled():
+                    excel_writer.close()
+                    return
 
                 excel_writer.close()
 
@@ -105,7 +127,9 @@ class ExportDataThread(QThread):
             # Set the default cell format for the summary worksheet
             max_col = len(df['HEADER - AX'].unique()) * 3
 
-            for (ref, ref_group) in reference_groups:   
+            for (ref, ref_group) in reference_groups:
+                if self._check_canceled():
+                    return
                 # Reset the column tracking for new sheet
                 col = 0
                 
@@ -124,6 +148,8 @@ class ExportDataThread(QThread):
                 header_groups = ref_group.groupby('HEADER - AX', as_index=False)
 
                 for (header, header_group) in header_groups:
+                    if self._check_canceled():
+                        return
                     if self.selected_sorting_parameter == "sample #":
                         header_group.sort_values(by='SAMPLE_NUMBER', inplace=True)
                     else:
@@ -287,9 +313,14 @@ class ExportDataThread(QThread):
 
                     # Insert the chart into the worksheet.
                     worksheet.insert_chart(12, col - 3, chart)
+
+                    if self._check_canceled():
+                        return
                     
                     if self.generate_summary_sheet:
                         self.summary_sheet_fill(summary_worksheet, header, header_group, col)
+                        if self._check_canceled():
+                            return
                     
                     if self.hide_ok_results:
                         # Use a list comprehension to check if all meas_value elements are within tolerance
@@ -305,6 +336,8 @@ class ExportDataThread(QThread):
         
     def export_filtered_data(self, cursor, excel_writer):
         try:
+            if self._check_canceled():
+                return
             export_query = self.filter_query
             cursor.execute(export_query)
             data = cursor.fetchall()
@@ -317,6 +350,8 @@ class ExportDataThread(QThread):
 
     def write_data_to_excel(self, data, column_names, table_name, excel_writer):
         try:
+            if self._check_canceled():
+                return
             # Convert the data to a DataFrame
             df = pd.DataFrame(data, columns=column_names)
 
@@ -333,6 +368,8 @@ class ExportDataThread(QThread):
 
             # Adjust the column widths based on the data
             for i, column in enumerate(df.columns):
+                if self._check_canceled():
+                    return
                 column_width = self.calculate_column_width(df[column])
                 worksheet.set_column(i, i, column_width)
         except Exception as e:
@@ -352,7 +389,9 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
     
     def summary_sheet_fill(self, summary_worksheet, header, header_group, col):
-        try:           
+        try:
+            if self._check_canceled():
+                return
             imgplot = BytesIO()
             nom = round(header_group['NOM'].iloc[0], 3)
             USL = round(header_group['+TOL'].iloc[0], 3)
@@ -427,7 +466,11 @@ class ExportDataThread(QThread):
                 row = int(((col/3)-1)*20)
             summary_worksheet.write(row, 0, header)
             summary_worksheet.insert_image(row + 1, 0, "", {'image_data': imgplot})
-            
+
+            if self._check_canceled():
+                plt.close(fig)
+                return
+
             plt.close(fig)
             
             imgplot = BytesIO()
@@ -491,7 +534,11 @@ class ExportDataThread(QThread):
             fig.savefig(imgplot, format="png")
             imgplot.seek(0)
             summary_worksheet.insert_image(row + 1, 9, "", {'image_data': imgplot})
-            
+
+            if self._check_canceled():
+                plt.close(fig)
+                return
+
             plt.close(fig)
             
             imgplot = BytesIO()
@@ -550,4 +597,4 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
             
     def log_and_exit(self, exception):
-        CustomLogger(exception)
+        CustomLogger(exception, reraise=False)

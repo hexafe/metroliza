@@ -24,6 +24,8 @@ class ParseReportsThread(QThread):
         try:
             pdf_files = []
             for path in Path(self.directory).glob("**/*.[Pp][Dd][Ff]"):
+                if self.parsing_canceled:
+                    break
                 if path.is_file() and path.stat().st_size:
                     pdf_files.append(path)
             return pdf_files
@@ -34,6 +36,9 @@ class ParseReportsThread(QThread):
         try:
             # Create a set to store report fingerprints
             report_fingerprints = set()
+
+            if self.parsing_canceled:
+                return report_fingerprints
 
             # Connect to the SQLite database
             with sqlite3.connect(self.db_file) as conn:
@@ -57,6 +62,8 @@ class ParseReportsThread(QThread):
                                 rows = cursor.fetchall()
 
                                 for row in rows:
+                                    if self.parsing_canceled:
+                                        return report_fingerprints
                                     report = {
                                         'ID': row[0],
                                         'REFERENCE': row[1],
@@ -124,4 +131,4 @@ class ParseReportsThread(QThread):
             self.log_and_exit(e)
         
     def log_and_exit(self, exception):
-        CustomLogger(exception)
+        CustomLogger(exception, reraise=False)
