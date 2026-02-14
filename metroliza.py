@@ -79,20 +79,19 @@ def show_invalid_license_message(title, message, hardware_id):
     return dialog_result
     
 def verify_license():   
-    # Decode public key for signature verification
-    # public_key = LicenseKeyManager().read_public_key_file()
-    public_key = base64.b64decode(public_key_b64)
-    public_key = serialization.load_der_public_key(public_key, backend=default_backend())
-    license_key = LicenseKeyManager().read_license_key_file()
-    hardware_id = LicenseKeyManager().generate_hardware_id()
-    
-    # Validate the license key
-    if license_key and public_key:
-        if LicenseKeyManager().validate_license_key(license_key, hardware_id, public_key):
-            return True
-        else:
-            return False
-    else:
+    try:
+        # Decode public key for signature verification
+        # public_key = LicenseKeyManager().read_public_key_file()
+        public_key = base64.b64decode(public_key_b64)
+        public_key = serialization.load_der_public_key(public_key, backend=default_backend())
+        license_key = LicenseKeyManager().read_license_key_file()
+        hardware_id = LicenseKeyManager().generate_hardware_id()
+
+        # Validate the license key
+        if license_key and public_key:
+            return LicenseKeyManager().validate_license_key(license_key, hardware_id, public_key)
+        return False
+    except Exception:
         return False
 
 def get_days_until_expiration(license_key):
@@ -106,7 +105,14 @@ def get_days_until_expiration(license_key):
         int: The number of days until expiration.
     """
     expiration_date_str = LicenseKeyManager.get_expiration_date_from_license_key(license_key)
-    expiration_date = datetime.strptime(expiration_date_str, "%Y-%m-%d %H:%M:%S")
+    if not expiration_date_str:
+        return 0
+
+    try:
+        expiration_date = datetime.strptime(expiration_date_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return 0
+
     current_date = datetime.now()
     days_until_expiration = (expiration_date - current_date).days
     return days_until_expiration

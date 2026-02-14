@@ -4,6 +4,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 import sqlite3
 import time
 from pathlib import Path
+from modules.report_fingerprint import build_report_fingerprint, build_parser_fingerprint
 
 
 class ParseReportsThread(QThread):
@@ -29,10 +30,10 @@ class ParseReportsThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
 
-    def get_list_of_reports_in_database(self):
+    def get_report_fingerprints_in_database(self):
         try:
-            # Create an empty list to store the reports
-            list_of_reports_in_database = []
+            # Create a set to store report fingerprints
+            report_fingerprints = set()
 
             # Connect to the SQLite database
             with sqlite3.connect(self.db_file) as conn:
@@ -51,19 +52,23 @@ class ParseReportsThread(QThread):
                             result = cursor.fetchone()
 
                             if result:
-                                # 'REPORTS' table exists, fetch the list of filenames
-                                cursor.execute("SELECT FILENAME FROM REPORTS")
+                                # 'REPORTS' table exists, fetch report identity columns
+                                cursor.execute("SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS")
                                 rows = cursor.fetchall()
 
                                 for row in rows:
-                                    # Extract report filename
-                                    filename = row[0]
+                                    report = {
+                                        'ID': row[0],
+                                        'REFERENCE': row[1],
+                                        'FILELOC': row[2],
+                                        'FILENAME': row[3],
+                                        'DATE': row[4],
+                                        'SAMPLE_NUMBER': row[5],
+                                    }
+                                    report_fingerprints.add(build_report_fingerprint(report))
 
-                                    # Append the filename to the list
-                                    list_of_reports_in_database.append(filename)
-
-                            # Return the list of reports in the database
-                            return list_of_reports_in_database
+                            # Return report fingerprints
+                            return report_fingerprints
 
                         except sqlite3.OperationalError as e:
                             error_message = str(e)
@@ -74,8 +79,8 @@ class ParseReportsThread(QThread):
                             else:
                                 print(f"Error occurred: {error_message}.")  # Handle other database errors
 
-            # Return the list of reports in the database
-            return list_of_reports_in_database
+            # Return report fingerprints from fallback path
+            return report_fingerprints
         except Exception as e:
             self.log_and_exit(e)
 
@@ -90,7 +95,7 @@ class ParseReportsThread(QThread):
         try:
             # Get the list of reports from the provided directory
             list_of_reports = self.get_list_of_reports()
-            list_of_parsed_reports = self.get_list_of_reports_in_database()
+            report_fingerprints = self.get_report_fingerprints_in_database()
             total_files = len(list_of_reports)
             parsed_files = 0
 
@@ -99,9 +104,11 @@ class ParseReportsThread(QThread):
                 if self.parsing_canceled:
                     break
 
-                if report.name not in list_of_parsed_reports:
-                    cmm_report = CMMReportParser(report, self.db_file)
+                cmm_report = CMMReportParser(report, self.db_file)
+                fingerprint = build_parser_fingerprint(cmm_report)
+                if fingerprint not in report_fingerprints:
                     cmm_report.open_database_and_check_filename()
+                    report_fingerprints.add(fingerprint)
                 parsed_files += 1
 
                 # Calculate the percentage of parsed files and emit the progress signal

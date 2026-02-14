@@ -5,10 +5,11 @@ from scipy.stats import norm
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from io import BytesIO
 from modules.CustomLogger import CustomLogger
-import re
 import sqlite3
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
+from modules.excel_sheet_utils import unique_sheet_name
+from modules.stats_utils import safe_process_capability
 
 
 class ExportDataThread(QThread):
@@ -88,6 +89,7 @@ class ExportDataThread(QThread):
 
             # Create the summary worksheet
             workbook = excel_writer.book
+            used_sheet_names = set(excel_writer.sheets.keys())
 
             # Initialize variables for column and summary column tracking
             col = 0
@@ -107,14 +109,13 @@ class ExportDataThread(QThread):
                 # Reset the column tracking for new sheet
                 col = 0
                 
-                # Check if ref has invalid Excel characters for sheet
-                invalid_chars = r'[\[\]:\*\?/\\]'
-                ref = re.sub(invalid_chars, '', ref)
+                safe_ref_sheet_name = unique_sheet_name(ref, used_sheet_names)
 
                 # Create a worksheet for each reference
-                worksheet = workbook.add_worksheet(ref)
+                worksheet = workbook.add_worksheet(safe_ref_sheet_name)
                 if self.generate_summary_sheet:
-                    summary_worksheet = workbook.add_worksheet(f"{ref}_summary")
+                    summary_sheet_name = unique_sheet_name(f"{safe_ref_sheet_name}_summary", used_sheet_names)
+                    summary_worksheet = workbook.add_worksheet(summary_sheet_name)
 
                 # Set the default cell format for the worksheet
                 worksheet.set_column(0, max_col, column_width, cell_format=default_format)
@@ -238,8 +239,8 @@ class ExportDataThread(QThread):
 
                     # Add data to the chart with the specified x and y ranges
                     num_rows = len(header_group) + 20
-                    x_range = f"={ref}!${data_range_x}"
-                    y_range = f"={ref}!${data_range_y}"
+                    x_range = f"={safe_ref_sheet_name}!${data_range_x}"
+                    y_range = f"={safe_ref_sheet_name}!${data_range_y}"
 
                     # Add the series to the chart
                     chart.add_series({
@@ -320,8 +321,9 @@ class ExportDataThread(QThread):
             df = pd.DataFrame(data, columns=column_names)
 
             # Write the DataFrame to the Excel file
-            df.to_excel(excel_writer, sheet_name=table_name, index=False)
-            worksheet = excel_writer.sheets[table_name]
+            safe_table_name = unique_sheet_name(table_name, set(excel_writer.sheets.keys()))
+            df.to_excel(excel_writer, sheet_name=safe_table_name, index=False)
+            worksheet = excel_writer.sheets[safe_table_name]
 
             # Apply autofilter to enable filtering
             worksheet.autofilter(0, 0, df.shape[0], df.shape[1] - 1)
@@ -365,11 +367,7 @@ class ExportDataThread(QThread):
             sigma = header_group['MEAS'].std()
             average = header_group['MEAS'].mean()
             median = header_group['MEAS'].median()
-            Cp = (USL - LSL)/(6 * sigma)
-            if nom == 0 and LSL == 0:
-                Cpk = (USL - average)/(3 * sigma)
-            else:
-                Cpk = min((USL - average)/(3 * sigma), (average - LSL)/(3 * sigma))
+            Cp, Cpk = safe_process_capability(nom, USL, LSL, sigma, average)
             samplesize = header_group['MEAS'].count()
             NOK_nb = header_group[header_group['MEAS'] > USL]['MEAS'].count() + header_group[header_group['MEAS'] < LSL]['MEAS'].count()
             NOK_pct = NOK_nb/samplesize
@@ -444,8 +442,8 @@ class ExportDataThread(QThread):
                 ('Mean', round(average, 3)),
                 ('Median', round(median, 3)),
                 ('Std Dev', round(sigma, 3)),
-                ('Cp', round(Cp, 2)),
-                ('Cpk', round(Cpk, 2)),
+                ('Cp', Cp if isinstance(Cp, str) else round(Cp, 2)),
+                ('Cpk', Cpk if isinstance(Cpk, str) else round(Cpk, 2)),
                 ('Samples', round(samplesize, 1)),
                 ('NOK nb', round(NOK_nb, 1)),
                 ('NOK %', round(NOK_pct, 2)),

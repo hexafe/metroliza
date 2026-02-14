@@ -58,6 +58,18 @@ class LicenseKeyManager:
         license_key = base64.b64encode(license_data + signature).decode()
         return license_key
 
+
+    @staticmethod
+    def parse_license_payload(license_key):
+        """Safely decode a license key payload into (data, signature)."""
+        try:
+            decoded = base64.b64decode(license_key.encode())
+            if len(decoded) <= 256:
+                return None, None
+            return decoded[:-256], decoded[-256:]
+        except Exception:
+            return None, None
+
     @staticmethod
     def validate_license_key(license_key, hardware_id, public_key):
         """
@@ -71,17 +83,21 @@ class LicenseKeyManager:
         Returns:
             bool: True if the license key is valid, False otherwise.
         """
-        license_data, signature = base64.b64decode(license_key.encode())[:-256], base64.b64decode(license_key.encode())[-256:]
-        if not LicenseKeyManager.verify_signature(license_data, signature, public_key):
+        try:
+            license_data, signature = LicenseKeyManager.parse_license_payload(license_key)
+            if not license_data or not signature:
+                return False
+
+            if not LicenseKeyManager.verify_signature(license_data, signature, public_key):
+                return False
+
+            stored_hardware_id = license_data[:17].decode()
+            expiration_date_str = license_data[17:].decode()
+            expiration_date = datetime.strptime(expiration_date_str, "%Y-%m-%d %H:%M:%S")
+            current_date = datetime.now()
+            return current_date <= expiration_date and stored_hardware_id == hardware_id
+        except Exception:
             return False
-
-        expiration_date_str = license_data[17:].decode()
-        expiration_date = datetime.strptime(expiration_date_str, "%Y-%m-%d %H:%M:%S")
-        current_date = datetime.now()
-
-        stored_hardware_id = license_data[:17].decode()
-
-        return current_date <= expiration_date and stored_hardware_id == hardware_id
 
     @staticmethod
     def sign_data(data, private_key):
@@ -243,6 +259,10 @@ class LicenseKeyManager:
         Returns:
             str: The expiration date in '%Y-%m-%d %H:%M:%S' format.
         """
-        decoded_license_key = base64.b64decode(license_key.encode())
-        expiration_date_str = decoded_license_key[17:36].decode()
-        return expiration_date_str
+        try:
+            license_data, _ = LicenseKeyManager.parse_license_payload(license_key)
+            if not license_data:
+                return None
+            return license_data[17:].decode()
+        except Exception:
+            return None
