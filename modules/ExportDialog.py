@@ -464,27 +464,30 @@ class ExportDialog(QDialog):
             self.export_thread.update_label.connect(self.loading_label.setText)
             self.export_thread.update_progress.connect(self.loading_bar.setValue)
             self.export_thread.finished.connect(self.on_export_finished)
+            self.export_thread.canceled.connect(self.on_export_canceled)
             self.export_thread.start()
         except Exception as e:
             self.log_and_exit(e)
 
     def stop_exporting(self):
         try:
-            # Stop the exporting thread
-            self.export_thread.quit()
+            # Request cooperative cancellation and return immediately to avoid blocking the UI thread
+            if self.export_thread is not None and self.export_thread.isRunning():
+                self.export_thread.stop_exporting()
+                self.loading_label.setText("Canceling export...")
+                return
 
-            # Check if the thread is still running and wait for it to finish
-            if self.export_thread.isRunning():
-                print("Export thread still running, waiting...")
-                # TODO: remove terminate after changing way of export to line by line or something that can be stopped
-                self.export_thread.terminate()
-                self.export_thread.wait()
-                print("Export thread closed successfully!")
-
-            # Show a message box to inform the user that exporting has been cancelled
             QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
-
             self.loading_dialog.reject()
+            self.close()
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def on_export_canceled(self):
+        try:
+            QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
+            self.loading_dialog.reject()
+            self.export_button.setEnabled(True)
             self.close()
         except Exception as e:
             self.log_and_exit(e)
@@ -506,4 +509,4 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
             
     def log_and_exit(self, exception):
-        CustomLogger(exception)
+        CustomLogger(exception, reraise=False)
