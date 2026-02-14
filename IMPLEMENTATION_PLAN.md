@@ -2,6 +2,17 @@
 
 This is the single, execution-ready plan that combines all previously discussed work into one prioritized roadmap.
 
+## Current implementation status (repo audit)
+
+Audit result based on the current repository state:
+- **Phase 0:** ✅ Implemented.
+- **Phase 1:** 🟡 Partially implemented.
+- **Phase 2:** 🟡 Partially implemented (limited correctness work landed, structural refactor pending).
+- **Phase 3:** 🔴 Not implemented.
+- **Phase 4:** 🟡 Partially implemented (Phase 0 regression tests exist; broader baseline missing).
+
+Use this section as the source of truth for what is done vs still outstanding.
+
 ## Goals
 - Fix correctness issues first (grouping/plot mismatches, crashes, dedupe bugs).
 - Standardize module communication through dataclass contracts.
@@ -17,6 +28,14 @@ This is the single, execution-ready plan that combines all previously discussed 
 ---
 
 ## Phase 0 — Safety hotfixes (Priority P0, 1–2 days)
+
+### Status: ✅ Completed
+
+### Implementation checklist
+1. **Shared safe Excel sheet-name utility** — ✅ done.
+2. **Harden stats math (Cp/Cpk edge cases)** — ✅ done.
+3. **Fix parse dedupe fingerprint** — ✅ done.
+4. **Harden license parsing/validation** — ✅ done.
 
 ### Scope
 1. Add a shared **safe Excel sheet-name utility** used by all sheet creation paths.
@@ -42,6 +61,19 @@ This is the single, execution-ready plan that combines all previously discussed 
 
 ## Phase 1 — Reliability and cancellation (Priority P1, 2–3 days)
 
+### Status: 🟡 Partially implemented
+
+### Implementation checklist
+1. **Cooperative cancellation in parse/export workers** — ✅ mostly done.
+   - Cancellation flags and checkpoints are present in parse/export threads.
+   - Forced thread termination in normal flow appears removed.
+2. **Eliminate UI-thread blocking waits** — 🟡 partially done.
+   - Cancel handlers were adjusted to request cancellation and return.
+   - A focused sweep for all possible blocking patterns is still needed.
+3. **Adjust `CustomLogger` behavior in user flows** — 🟡 partially done.
+   - Some call sites use `reraise=False`.
+   - Behavior is not consistently applied across all user-facing flows.
+
 ### Scope
 1. Convert parse/export workers to **cooperative cancellation**.
    - Add cancellation flag checked at granular checkpoints (I/O, row loops, chart creation).
@@ -60,6 +92,17 @@ This is the single, execution-ready plan that combines all previously discussed 
 ---
 
 ## Phase 2 — Correctness + structure + performance (Priority P1/P2, 3–5 days)
+
+### Status: 🟡 Partially implemented
+
+### Implementation checklist
+1. **Fix grouping/plot mismatch root causes** — 🟡 partially done.
+   - Deterministic sort by selected mode exists in export flow.
+   - Stable merge key strategy (`REPORT_ID` preferred + fallback), duplicate-key warning path, and strict label/value alignment safeguards remain to be completed.
+2. **Introduce dataclass contracts in `modules/contracts.py`** — 🔴 not started.
+3. **Decompose heavy workers into testable units** — 🔴 not started.
+4. **Create shared DB utilities module (`db.py`)** — 🔴 not started.
+5. **Performance cleanup** — 🔴 not started.
 
 ### Scope
 1. Fix grouping/plot mismatch root causes.
@@ -89,6 +132,14 @@ This is the single, execution-ready plan that combines all previously discussed 
 
 ## Phase 3 — Documentation + developer quality baseline (Priority P2, 1–2 days)
 
+### Status: 🔴 Not implemented
+
+### Implementation checklist
+1. **Rewrite `README.md` (quickstart/setup/run/package/troubleshooting)** — 🟡 partial (overview exists, but no full quickstart/troubleshooting baseline).
+2. **Dependency hygiene (UTF-8 + split runtime/dev/build)** — 🔴 not started.
+3. **Baseline CI (`compileall`, lint, smoke tests)** — 🔴 not started.
+4. **Add `CONTRIBUTING.md` + architecture notes** — 🔴 not started.
+
 ### Scope
 1. Rewrite `README.md`.
    - Quickstart.
@@ -114,6 +165,13 @@ This is the single, execution-ready plan that combines all previously discussed 
 ---
 
 ## Phase 4 — Test coverage baseline (Priority P1/P2, 2–4 days)
+
+### Status: 🟡 Partially implemented
+
+### Implementation checklist
+- **Unit tests for Phase 0 regressions** — ✅ done.
+- **Additional unit tests (grouping merge key correctness + deterministic label/value order)** — 🔴 not started.
+- **Integration test (parse → DB → export happy path)** — 🔴 not started.
 
 ### Unit tests
 - License parsing and validation edge cases.
@@ -161,9 +219,19 @@ This is the single, execution-ready plan that combines all previously discussed 
 ---
 
 ## Definition of Done (global)
-- Grouping mismatch bug fixed and covered by tests.
-- Export/parse/grouping paths use dataclass contracts.
-- Normal operation avoids forced thread termination.
-- Reliability fixes merged for dedupe, sheet naming, stats edge cases, and license parsing.
-- Docs updated with architecture and operating instructions.
-- CI executes compile + tests + lint successfully.
+- [ ] Grouping mismatch bug fixed and covered by tests.
+- [ ] Export/parse/grouping paths use dataclass contracts.
+- [x] Normal operation avoids forced thread termination.
+- [x] Reliability fixes merged for dedupe, sheet naming, stats edge cases, and license parsing.
+- [ ] Docs updated with architecture and operating instructions.
+- [ ] CI executes compile + tests + lint successfully.
+
+## Remaining execution order (updated)
+1. Complete **Phase 1** consistency pass (logger behavior + final non-blocking audit).
+2. Execute **Phase 2** structural items in small mergeable PRs:
+   - contracts/dataclasses,
+   - worker decomposition,
+   - DB utilities,
+   - grouping key hardening.
+3. Execute **Phase 3** developer baseline (README quickstart, dependency cleanup, CI, contributing docs).
+4. Execute **Phase 4** coverage expansion (grouping regressions + integration happy path).
