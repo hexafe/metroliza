@@ -1,3 +1,4 @@
+import hashlib
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -55,6 +56,76 @@ class ExportDataThread(QThread):
         self.hide_ok_results = hide_ok_results
         self.generate_summary_sheet = generate_summary_sheet
         self.export_canceled = False
+
+    @staticmethod
+    def _is_sample_sort_mode(sort_mode):
+        return sort_mode in {"sample", "sample #", "sample number", "part #", "part number"}
+
+    def _sort_header_group(self, header_group):
+        sort_mode = self.selected_sorting_parameter.strip().lower()
+        sorted_group = header_group.copy()
+
+        if self._is_sample_sort_mode(sort_mode):
+            sample_numeric = pd.to_numeric(sorted_group['SAMPLE_NUMBER'], errors='coerce')
+            if sample_numeric.notna().any():
+                sorted_group = sorted_group.assign(_sample_numeric=sample_numeric)
+                sorted_group = sorted_group.sort_values(by=['_sample_numeric', 'SAMPLE_NUMBER'], kind='mergesort')
+                sorted_group = sorted_group.drop(columns=['_sample_numeric'])
+            else:
+                sorted_group = sorted_group.sort_values(by='SAMPLE_NUMBER', kind='mergesort')
+        else:
+            date_series = pd.to_datetime(sorted_group['DATE'], errors='coerce')
+            if date_series.notna().any():
+                sorted_group = sorted_group.assign(_date_sort=date_series)
+                sorted_group = sorted_group.sort_values(by=['_date_sort', 'SAMPLE_NUMBER'], kind='mergesort')
+                sorted_group = sorted_group.drop(columns=['_date_sort'])
+            else:
+                sorted_group = sorted_group.sort_values(by=['DATE', 'SAMPLE_NUMBER'], kind='mergesort')
+
+        return sorted_group
+
+    @staticmethod
+    def _add_group_key(df):
+        composite_key = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
+        if not all(column in df.columns for column in composite_key):
+            return df
+
+        keyed_df = df.copy()
+        raw_key = keyed_df[composite_key].fillna('').astype(str).agg('|'.join, axis=1)
+        keyed_df['GROUP_KEY'] = raw_key.apply(lambda value: hashlib.sha1(value.encode('utf-8')).hexdigest())
+        return keyed_df
+
+    def _prepare_grouping_df(self):
+        if not isinstance(self.df_for_grouping, pd.DataFrame) or self.df_for_grouping.empty:
+            return None
+
+        if 'GROUP' not in self.df_for_grouping.columns:
+            return None
+
+        optional_cols = ['REPORT_ID', 'REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
+        available_cols = [column for column in optional_cols if column in self.df_for_grouping.columns]
+
+        grouping_df = self.df_for_grouping[available_cols + ['GROUP']].copy()
+        grouping_df = self._add_group_key(grouping_df)
+        return grouping_df
+
+    @staticmethod
+    def _resolve_group_merge_keys(header_group, grouping_df):
+        if 'GROUP_KEY' in header_group.columns and 'GROUP_KEY' in grouping_df.columns:
+            return ['GROUP_KEY']
+
+        if 'REPORT_ID' in header_group.columns and 'REPORT_ID' in grouping_df.columns:
+            return ['REPORT_ID']
+
+        composite_key = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
+        if all(column in header_group.columns and column in grouping_df.columns for column in composite_key):
+            return composite_key
+
+        fallback_key = ['REFERENCE', 'SAMPLE_NUMBER']
+        if all(column in header_group.columns and column in grouping_df.columns for column in fallback_key):
+            return fallback_key
+
+        return None
         
 
     def stop_exporting(self):
@@ -150,10 +221,7 @@ class ExportDataThread(QThread):
                 for (header, header_group) in header_groups:
                     if self._check_canceled():
                         return
-                    if self.selected_sorting_parameter == "sample #":
-                        header_group.sort_values(by='SAMPLE_NUMBER', inplace=True)
-                    else:
-                        header_group.sort_values(by='DATE', inplace=True)
+                    header_group = self._sort_header_group(header_group)
                     
                     worksheet.write(0, col, 'NOM')
                     nom = round(header_group['NOM'].iloc[0], 3)
@@ -416,25 +484,34 @@ class ExportDataThread(QThread):
             plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
             fig, ax = plt.subplots(figsize=(6, 4))
             
-            if isinstance(self.df_for_grouping, pd.DataFrame) and not self.df_for_grouping.empty:
-                header_group = pd.merge(header_group, self.df_for_grouping, on=['REFERENCE', 'SAMPLE_NUMBER'], how='left')
-                if (header_group.groupby('GROUP')['MEAS'].count() >= self.violin_plot_min_samplesize).all():
-                    plt.violinplot(header_group.groupby('GROUP')['MEAS'].apply(list),
-                                    showmeans=True,
-                                    showmedians=False,
-                                    showextrema=True)
-                    xtick_labels = header_group['GROUP'].unique()
-                    plt.xticks(range(1, len(xtick_labels) + 1), xtick_labels)
+            grouping_df = self._prepare_grouping_df()
+            header_group = self._add_group_key(header_group)
+            merge_keys = self._resolve_group_merge_keys(header_group, grouping_df) if grouping_df is not None else None
+            if grouping_df is not None and merge_keys is not None:
+                grouping_df = grouping_df.drop_duplicates(subset=merge_keys, keep='last')
+                header_group = pd.merge(header_group, grouping_df, on=merge_keys, how='left')
+                header_group['GROUP'] = header_group['GROUP'].fillna('UNGROUPED')
+                grouped_meas = header_group.groupby('GROUP', sort=False)['MEAS'].apply(list)
+                if (grouped_meas.apply(len) >= self.violin_plot_min_samplesize).all():
+                    labels = list(grouped_meas.index)
+                    values = list(grouped_meas.values)
+                    plt.violinplot(values,
+                                   showmeans=True,
+                                   showmedians=False,
+                                   showextrema=True)
+                    plt.xticks(range(1, len(labels) + 1), labels)
                 else:
                     ax.scatter(header_group['GROUP'], header_group['MEAS'], label=header, color='blue', marker='.')
             else:
-                if (header_group.groupby('SAMPLE_NUMBER')['MEAS'].count() >= self.violin_plot_min_samplesize).all():
-                    plt.violinplot(header_group.groupby('SAMPLE_NUMBER')['MEAS'].apply(list),
-                                    showmeans=True,
-                                    showmedians=False,
-                                    showextrema=True)
-                    xtick_labels = header_group['SAMPLE_NUMBER'].unique()
-                    plt.xticks(range(1, len(xtick_labels) + 1), xtick_labels)
+                grouped_meas = header_group.groupby('SAMPLE_NUMBER', sort=False)['MEAS'].apply(list)
+                if (grouped_meas.apply(len) >= self.violin_plot_min_samplesize).all():
+                    labels = list(grouped_meas.index)
+                    values = list(grouped_meas.values)
+                    plt.violinplot(values,
+                                   showmeans=True,
+                                   showmedians=False,
+                                   showextrema=True)
+                    plt.xticks(range(1, len(labels) + 1), labels)
                 else:
                     ax.scatter(header_group['SAMPLE_NUMBER'], header_group['MEAS'], label=header, color='blue', marker='.')
             
