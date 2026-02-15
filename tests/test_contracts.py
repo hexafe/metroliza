@@ -5,10 +5,23 @@ import pandas as pd
 from modules.contracts import (
     AppPaths,
     ExportOptions,
+    ParseRequest,
     validate_export_options,
     validate_grouping_df,
+    validate_parse_request,
     validate_paths,
 )
+
+
+class TestValidateParseRequest(unittest.TestCase):
+    def test_accepts_valid_request(self):
+        request = ParseRequest(source_directory='reports', db_file='test.db')
+        validated = validate_parse_request(request)
+        self.assertEqual(validated.source_directory, 'reports')
+
+    def test_rejects_empty_source_directory(self):
+        with self.assertRaises(ValueError):
+            validate_parse_request(ParseRequest(source_directory='   ', db_file='test.db'))
 
 
 class TestValidateExportOptions(unittest.TestCase):

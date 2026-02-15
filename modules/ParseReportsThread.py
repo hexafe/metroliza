@@ -5,6 +5,7 @@ import sqlite3
 import time
 from pathlib import Path
 from modules.report_fingerprint import build_report_fingerprint, build_parser_fingerprint
+from modules.contracts import ParseRequest, validate_parse_request
 
 
 class ParseReportsThread(QThread):
@@ -12,12 +13,14 @@ class ParseReportsThread(QThread):
     update_label = pyqtSignal(str)
     parsing_finished = pyqtSignal()
 
-    def __init__(self, directory, db_file):
+    def __init__(self, parse_request: ParseRequest):
         super().__init__()
 
-        # Initialize the thread with the provided directory and database file
-        self.directory = directory
-        self.db_file = db_file
+        validated_request = validate_parse_request(parse_request)
+
+        # Initialize the thread with validated request values
+        self.directory = validated_request.source_directory
+        self.db_file = validated_request.db_file
         self.parsing_canceled = False
 
     def get_list_of_reports(self):
