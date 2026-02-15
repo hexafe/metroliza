@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -109,6 +110,34 @@ class ExportDataThread(QThread):
         grouping_df = self.df_for_grouping[available_cols + ['GROUP']].copy()
         grouping_df = self._add_group_key(grouping_df)
         return grouping_df
+
+    def _warn_duplicate_group_assignments(self, grouping_df, merge_keys):
+        duplicated_mask = grouping_df.duplicated(subset=merge_keys, keep=False)
+        duplicate_count = int(duplicated_mask.sum())
+        if duplicate_count == 0:
+            return
+
+        message = (
+            f"Detected {duplicate_count} grouping assignment rows with duplicate merge key(s) "
+            f"{merge_keys}. Keeping the latest assignment per key."
+        )
+        logging.warning(message)
+        self.update_label.emit("Grouping data contains duplicate keys; using latest assignment.")
+
+    def _apply_group_assignments(self, header_group, grouping_df):
+        if grouping_df is None:
+            return header_group, False
+
+        keyed_header = self._add_group_key(header_group)
+        merge_keys = self._resolve_group_merge_keys(keyed_header, grouping_df)
+        if merge_keys is None:
+            return keyed_header, False
+
+        self._warn_duplicate_group_assignments(grouping_df, merge_keys)
+        deduped_grouping_df = grouping_df.drop_duplicates(subset=merge_keys, keep='last')
+        merged_group = pd.merge(keyed_header, deduped_grouping_df, on=merge_keys, how='left')
+        merged_group['GROUP'] = merged_group['GROUP'].fillna('UNGROUPED')
+        return merged_group, True
 
     @staticmethod
     def _resolve_group_merge_keys(header_group, grouping_df):
@@ -486,12 +515,8 @@ class ExportDataThread(QThread):
             fig, ax = plt.subplots(figsize=(6, 4))
             
             grouping_df = self._prepare_grouping_df()
-            header_group = self._add_group_key(header_group)
-            merge_keys = self._resolve_group_merge_keys(header_group, grouping_df) if grouping_df is not None else None
-            if grouping_df is not None and merge_keys is not None:
-                grouping_df = grouping_df.drop_duplicates(subset=merge_keys, keep='last')
-                header_group = pd.merge(header_group, grouping_df, on=merge_keys, how='left')
-                header_group['GROUP'] = header_group['GROUP'].fillna('UNGROUPED')
+            header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
+            if grouping_applied:
                 grouped_meas = header_group.groupby('GROUP', sort=False)['MEAS'].apply(list)
                 if (grouped_meas.apply(len) >= self.violin_plot_min_samplesize).all():
                     labels = list(grouped_meas.index)

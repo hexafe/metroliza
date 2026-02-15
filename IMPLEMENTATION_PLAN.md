@@ -96,9 +96,10 @@ Use this section as the source of truth for what is done vs still outstanding.
 ### Status: 🟡 Partially implemented
 
 ### Implementation checklist
-1. **Fix grouping/plot mismatch root causes** — 🟡 partially done.
+1. **Fix grouping/plot mismatch root causes** — 🟡 largely done.
    - Deterministic sort by selected mode exists in export flow.
-   - Stable merge key strategy (`REPORT_ID` preferred + fallback), duplicate-key warning path, and strict label/value alignment safeguards remain to be completed.
+   - Stable merge key strategy (`GROUP_KEY`/`REPORT_ID`/composite fallback) and duplicate-key warning path are implemented.
+   - A final hardening sweep for label/value alignment safeguards on edge-case grouped datasets remains.
 2. **Introduce dataclass contracts in `modules/contracts.py`** — 🔴 not started.
 3. **Decompose heavy workers into testable units** — 🔴 not started.
 4. **Create shared DB utilities module (`db.py`)** — 🔴 not started.
@@ -229,9 +230,9 @@ Use this section as the source of truth for what is done vs still outstanding.
 ## Remaining execution order (updated)
 1. Complete **Phase 1** consistency pass (logger behavior + final non-blocking audit).
 2. Execute **Phase 2** structural items in small mergeable PRs:
-   - contracts/dataclasses,
+   - contracts/dataclasses migration at parse/export entrypoints,
    - worker decomposition,
    - DB utilities,
-   - grouping key hardening.
+   - final grouping label/value alignment hardening.
 3. Execute **Phase 3** developer baseline (README quickstart, dependency cleanup, CI, contributing docs).
 4. Execute **Phase 4** coverage expansion (grouping regressions + integration happy path).
