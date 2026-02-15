@@ -11,6 +11,7 @@ import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.stats_utils import safe_process_capability
+from modules.contracts import validate_grouping_df
 
 
 class ExportDataThread(QThread):
@@ -48,7 +49,7 @@ class ExportDataThread(QThread):
             WHERE 1=1
             """
         self.filter_query = filter_query
-        self.df_for_grouping = df_for_grouping
+        self.df_for_grouping = validate_grouping_df(df_for_grouping)
         self.selected_export_type = selected_export_type.lower()
         self.selected_sorting_parameter = selected_sorting_parameter.lower()
         self.violin_plot_min_samplesize = violin_plot_min_samplesize

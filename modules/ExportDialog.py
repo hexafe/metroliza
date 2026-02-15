@@ -3,6 +3,7 @@ from modules.ExportDataThread import ExportDataThread
 from modules.FilterDialog import FilterDialog
 from modules.DataGrouping import DataGrouping
 from modules.CustomLogger import CustomLogger
+from modules.contracts import AppPaths, ExportOptions, validate_export_options, validate_paths
 from PyQt6.QtCore import QSize, QTemporaryFile, Qt
 from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import(
@@ -423,43 +424,37 @@ class ExportDialog(QDialog):
             self.export_button.setDisabled(True)
             self.loading_dialog.show()
 
-            # Get the selected chart type
-            selected_export_type = self.export_type_combobox.currentText()
-            
-            # Get the selected sorting parameter
-            selected_sorting_parameter = self.sort_measurements_combobox.currentText()
-            
-            # Get the min samplesize for violin plot
-            if not self.violin_plot_min_samplesize.text():
-                self.violin_plot_min_samplesize.setText(str(6))
-            if int(self.violin_plot_min_samplesize.text()) < 2:
-                self.violin_plot_min_samplesize.setText(str(2))
-            violin_plot_min_samplesize = int(self.violin_plot_min_samplesize.text())
-            
-            if not self.summary_plot_scale.text():
-                self.summary_plot_scale.setText(str(0))
-            if int(self.summary_plot_scale.text()) <= 0:
-                self.summary_plot_scale.setText(str(0))
-            summary_plot_scale = int(self.summary_plot_scale.text())
-            
-            # Get the state of the "Hide OK results?" checkbox
-            hide_ok_results = self.hide_ok_results_checkbox.isChecked()
-            
-            # Get the state of the "Generate summary sheet?" checkbox
-            generate_summary_sheet = self.generate_summary_sheet_checkbox.isChecked()
+            violin_input = self.violin_plot_min_samplesize.text() or "6"
+            summary_scale_input = self.summary_plot_scale.text() or "0"
 
-            # Start the exporting thread with the selected chart type
+            options = validate_export_options(
+                ExportOptions(
+                    export_type=self.export_type_combobox.currentText(),
+                    sorting_parameter=self.sort_measurements_combobox.currentText(),
+                    violin_plot_min_samplesize=int(violin_input),
+                    summary_plot_scale=int(summary_scale_input),
+                    hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
+                    generate_summary_sheet=self.generate_summary_sheet_checkbox.isChecked(),
+                )
+            )
+            validate_paths(AppPaths(db_file=self.db_file, excel_file=str(self.excel_file)))
+
+            # Normalize user-visible values after validation/coercion.
+            self.violin_plot_min_samplesize.setText(str(options.violin_plot_min_samplesize))
+            self.summary_plot_scale.setText(str(options.summary_plot_scale))
+
+            # Start the exporting thread with validated options
             self.export_thread = ExportDataThread(
                 self.db_file,
                 self.excel_file,
                 self.filter_query,
                 self.df_for_grouping,
-                selected_export_type,
-                selected_sorting_parameter,
-                violin_plot_min_samplesize,
-                summary_plot_scale,
-                hide_ok_results,
-                generate_summary_sheet,
+                options.export_type,
+                options.sorting_parameter,
+                options.violin_plot_min_samplesize,
+                options.summary_plot_scale,
+                options.hide_ok_results,
+                options.generate_summary_sheet,
             )
             self.export_thread.update_label.connect(self.loading_label.setText)
             self.export_thread.update_progress.connect(self.loading_bar.setValue)
