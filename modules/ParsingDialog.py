@@ -5,6 +5,7 @@ from PyQt6.QtCore import QSize, QTemporaryFile, Qt, pyqtSlot
 from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
 import base64
+from modules.contracts import ParseRequest, validate_parse_request
 
 
 class ParsingDialog(QDialog):
@@ -175,8 +176,10 @@ class ParsingDialog(QDialog):
             self.parse_button.setEnabled(False)
             self.loading_dialog.show()
 
+            request = validate_parse_request(ParseRequest(source_directory=self.directory, db_file=self.db_file))
+
             # Start the parsing thread
-            self.parse_thread = ParseReportsThread(self.directory, self.db_file)
+            self.parse_thread = ParseReportsThread(request)
             self.parse_thread.update_label.connect(self.loading_label.setText)
             self.parse_thread.update_progress.connect(self.loading_bar.setValue)
             self.parse_thread.finished.connect(self.on_parse_finished)

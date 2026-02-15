@@ -63,6 +63,14 @@ def validate_paths(paths: AppPaths) -> AppPaths:
     return paths
 
 
+def validate_parse_request(request: ParseRequest) -> ParseRequest:
+    if not isinstance(request.source_directory, str) or not request.source_directory.strip():
+        raise ValueError("A source directory is required.")
+
+    validate_paths(AppPaths(db_file=request.db_file))
+    return request
+
+
 def validate_export_options(options: ExportOptions) -> ExportOptions:
     export_type = options.export_type.strip().lower()
     if export_type not in _ALLOWED_EXPORT_TYPES:
