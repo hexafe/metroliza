@@ -367,4 +367,4 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def log_and_exit(self, exception):
-        CustomLogger(exception)
+        CustomLogger(exception, reraise=False)

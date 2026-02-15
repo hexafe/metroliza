@@ -117,7 +117,7 @@ class MainWindow(QMainWindow):
                 self.parsing_dialog = ParsingDialog(self, self.directory, self.db_file)
                 self.parsing_dialog.show()
         except Exception as e:
-            CustomLogger(e)
+            CustomLogger(e, reraise=False)
             
     def launch_modifydb_dialog(self):
         try:
@@ -188,4 +188,4 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def log_and_exit(self, exception):
-        CustomLogger(exception)
+        CustomLogger(exception, reraise=False)

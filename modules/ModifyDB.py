@@ -250,4 +250,4 @@ class ModifyDB(QDialog):
         self.close()
 
     def log_and_exit(self, exception):
-        CustomLogger(exception)
+        CustomLogger(exception, reraise=False)
