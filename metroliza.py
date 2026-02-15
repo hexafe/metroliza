@@ -17,7 +17,7 @@ VERSION_DATE = VersionDate.VERSION_DATE
 
 def log_and_exit(exception):
     """Handles logging exceptions using CustomLogger."""
-    CustomLogger(exception)
+    CustomLogger(exception, reraise=False)
 
 def decode_icon(encoded_icon):
         """Decode the base64 encoded icon and return an QIcon object.
