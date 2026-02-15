@@ -85,6 +85,22 @@ This allows running the tool without:
 
 The executable can be distributed as a single file and executed locally on Windows machines.
 
+## Implementation Roadmap Status
+
+The execution roadmap is tracked in `IMPLEMENTATION_PLAN.md`. Current highlights:
+
+- **Phase 0 (safety hotfixes):** completed.
+- **Phase 1 (reliability and cancellation):** completed, including cooperative cancellation, non-blocking cancel behavior, and non-reraising user-facing logger behavior.
+- **Phase 2–4:** still in progress (structural refactor, docs/CI baseline, broader regression and integration coverage).
+
+## Tests
+
+Current regression tests are in `tests/` and can be run with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 ## Project Status
 
 This project reflects an iterative learning process and real-world usage.  

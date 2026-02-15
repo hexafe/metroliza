@@ -61,18 +61,18 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Phase 1 — Reliability and cancellation (Priority P1, 2–3 days)
 
-### Status: 🟡 Partially implemented
+### Status: ✅ Completed
 
 ### Implementation checklist
 1. **Cooperative cancellation in parse/export workers** — ✅ mostly done.
    - Cancellation flags and checkpoints are present in parse/export threads.
    - Forced thread termination in normal flow appears removed.
-2. **Eliminate UI-thread blocking waits** — 🟡 partially done.
-   - Cancel handlers were adjusted to request cancellation and return.
-   - A focused sweep for all possible blocking patterns is still needed.
-3. **Adjust `CustomLogger` behavior in user flows** — 🟡 partially done.
-   - Some call sites use `reraise=False`.
-   - Behavior is not consistently applied across all user-facing flows.
+2. **Eliminate UI-thread blocking waits** — ✅ done.
+   - Cancel handlers request cancellation and return immediately.
+   - Guardrail tests now enforce no `.wait()` usage in parse/export dialog cancel flows.
+3. **Adjust `CustomLogger` behavior in user flows** — ✅ done.
+   - User-facing error paths consistently use `CustomLogger(..., reraise=False)`.
+   - Guardrail tests prevent regressions in logger call-site behavior.
 
 ### Scope
 1. Convert parse/export workers to **cooperative cancellation**.
@@ -228,11 +228,10 @@ Use this section as the source of truth for what is done vs still outstanding.
 - [ ] CI executes compile + tests + lint successfully.
 
 ## Remaining execution order (updated)
-1. Complete **Phase 1** consistency pass (logger behavior + final non-blocking audit).
-2. Execute **Phase 2** structural items in small mergeable PRs:
+1. Execute **Phase 2** structural items in small mergeable PRs:
    - contracts/dataclasses migration at parse/export entrypoints,
    - worker decomposition,
    - DB utilities,
    - final grouping label/value alignment hardening.
-3. Execute **Phase 3** developer baseline (README quickstart, dependency cleanup, CI, contributing docs).
-4. Execute **Phase 4** coverage expansion (grouping regressions + integration happy path).
+2. Execute **Phase 3** developer baseline (README quickstart, dependency cleanup, CI, contributing docs).
+3. Execute **Phase 4** coverage expansion (grouping regressions + integration happy path).
