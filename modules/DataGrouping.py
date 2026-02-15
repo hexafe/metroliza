@@ -1,4 +1,5 @@
 from modules.CustomLogger import CustomLogger
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import(
     QAbstractItemView,
     QDialog,
@@ -6,10 +7,12 @@ from PyQt6.QtWidgets import(
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QInputDialog,
     QMessageBox,
 )
+import hashlib
 import sqlite3
 import pandas as pd
 
@@ -154,7 +157,7 @@ class DataGrouping(QDialog):
             
     def read_data_to_df(self):
         try:
-            query = "SELECT REFERENCE, SAMPLE_NUMBER FROM REPORTS"
+            query = "SELECT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS"
             with sqlite3.connect(self.db_file) as conn:
                 cursor = conn.cursor()
                 self.df = pd.read_sql_query(query, cursor.connection)
@@ -164,13 +167,47 @@ class DataGrouping(QDialog):
     def add_default_group(self):
         try:
             self.df["GROUP"] = self.default_group
+            self.df["GROUP_KEY"] = self._compute_group_key_for_df(self.df)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _compute_group_key_for_df(self, df):
+        try:
+            key_columns = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
+            raw_key = df[key_columns].fillna('').astype(str).agg('|'.join, axis=1)
+            return raw_key.apply(lambda value: hashlib.sha1(value.encode('utf-8')).hexdigest())
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def _part_display_label(self, row):
+        sample = str(row['SAMPLE_NUMBER'])
+        date = str(row['DATE']) if pd.notna(row['DATE']) else ''
+        filename = str(row['FILENAME']) if pd.notna(row['FILENAME']) else ''
+        return f"{sample} | {date} | {filename}"
+
+    def _populate_part_list(self, selected_reference=None):
+        rows_df = self.df if not selected_reference else self.df[self.df['REFERENCE'] == selected_reference]
+        rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
+
+        self.part_list.clear()
+        for _, row in rows_df.iterrows():
+            item = QListWidgetItem(self._part_display_label(row))
+            item.setData(Qt.ItemDataRole.UserRole, row['GROUP_KEY'])
+            self.part_list.addItem(item)
+
+    def _populate_part_group_list(self, selected_group=None):
+        rows_df = self.df if not selected_group else self.df[self.df['GROUP'] == selected_group]
+        rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
+
+        self.part_group_list.clear()
+        for _, row in rows_df.iterrows():
+            item = QListWidgetItem(self._part_display_label(row))
+            item.setData(Qt.ItemDataRole.UserRole, row['GROUP_KEY'])
+            self.part_group_list.addItem(item)
             
     def populate_list_widgets(self):
         try:
             unique_references = self.df["REFERENCE"].unique()
-            unique_sample_numbers = self.df["SAMPLE_NUMBER"].unique()
             unique_groups = self.df["GROUP"].unique()
 
             # Populate reference_list
@@ -182,11 +219,11 @@ class DataGrouping(QDialog):
                 self.reference_list.setCurrentRow(0)
 
             # Use clear and addItems for the rest of the lists
-            self.part_list.clear()
-            self.part_list.addItems(map(str, unique_sample_numbers))
+            selected_reference = self.reference_list.currentItem().text() if self.reference_list.currentItem() else None
+            self._populate_part_list(selected_reference)
 
             self.all_parts_list.clear()
-            self.all_parts_list.addItems(map(str, unique_sample_numbers))
+            self.all_parts_list.addItems(map(str, self.df['SAMPLE_NUMBER'].astype(str).unique()))
 
             self.groups_list.clear()
             self.groups_list.addItems(map(str, unique_groups))
@@ -194,10 +231,8 @@ class DataGrouping(QDialog):
             # Select the first item in the groups_list by default
             if self.groups_list.count() > 0:
                 self.groups_list.setCurrentRow(0)
-            selected_group = self.groups_list.currentItem().text()
-            
-            self.part_group_list.clear()
-            self.part_group_list.addItems(map(str, self.df.loc[self.df['GROUP'] == selected_group, 'SAMPLE_NUMBER'].unique()))           
+            selected_group = self.groups_list.currentItem().text() if self.groups_list.currentItem() else None
+            self._populate_part_group_list(selected_group)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -231,17 +266,8 @@ class DataGrouping(QDialog):
             
     def on_reference_selection_changed(self):
         try:
-            selected_reference = self.reference_list.currentItem().text()
-            self.part_list.clear()
-            
-            if selected_reference:
-                for value in self.df[self.df["REFERENCE"] == selected_reference]["SAMPLE_NUMBER"].unique():
-                    self.part_list.addItem(str(value))
-            else:
-                for row in range(self.all_parts_list.count()):
-                    item = self.all_parts_list.item(row)
-                    self.part_list.addItem(item.text())
-                    
+            selected_reference = self.reference_list.currentItem().text() if self.reference_list.currentItem() else None
+            self._populate_part_list(selected_reference)
             self.create_group_button.setDisabled(True)
         except Exception as e:
             self.log_and_exit(e)
@@ -255,11 +281,9 @@ class DataGrouping(QDialog):
     
     def on_group_selection_changed(self):
         try:
-            selected_group = self.groups_list.currentItem().text()
-            
-            self.part_group_list.clear()
-            self.part_group_list.addItems(map(str, self.df.loc[self.df['GROUP'] == selected_group, 'SAMPLE_NUMBER'].unique())) 
-            
+            selected_group_name = self.groups_list.currentItem().text() if self.groups_list.currentItem() else None
+            self._populate_part_group_list(selected_group_name)
+
             selected_group = self.groups_list.currentItem() is not None
             self.rename_group_button.setEnabled(selected_group)
             self.delete_group_button.setEnabled(selected_group)
@@ -276,15 +300,13 @@ class DataGrouping(QDialog):
     def create_group(self):
         try:
             # Get the selected items from the list widgets
-            selected_reference = self.reference_list.currentItem().text()
-            selected_part_numbers = [item.text() for item in self.part_list.selectedItems()]
+            selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_list.selectedItems()]
             new_group_name, ok_pressed = QInputDialog.getText(self, "New group", "Enter group name:")
 
-            if ok_pressed and selected_reference and selected_part_numbers:
+            if ok_pressed and selected_part_keys:
                 # Update the dataframe with the new group information
                 self.df.loc[
-                    (self.df['REFERENCE'] == selected_reference) &
-                    (self.df['SAMPLE_NUMBER'].isin(selected_part_numbers)),
+                    self.df['GROUP_KEY'].isin(selected_part_keys),
                     'GROUP'
                 ] = new_group_name
                 
@@ -309,14 +331,14 @@ class DataGrouping(QDialog):
             
     def remove_from_group(self):
         try:
-            selected_group = self.groups_list.currentItem().text()
-            selected_part_numbers = [item.text() for item in self.part_group_list.selectedItems()]
+            selected_group = self.groups_list.currentItem().text() if self.groups_list.currentItem() else None
+            selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_group_list.selectedItems()]
 
-            if selected_group and selected_part_numbers:
-                # Update the dataframe with the default group information for the selected part numbers in the group
+            if selected_group and selected_part_keys:
+                # Update the dataframe with the default group information for selected rows only
                 self.df.loc[
                     (self.df['GROUP'] == selected_group) &
-                    (self.df['SAMPLE_NUMBER'].isin(selected_part_numbers)),
+                    (self.df['GROUP_KEY'].isin(selected_part_keys)),
                     'GROUP'
                 ] = self.default_group
 
