@@ -96,10 +96,10 @@ Use this section as the source of truth for what is done vs still outstanding.
 ### Status: 🟡 Partially implemented
 
 ### Implementation checklist
-1. **Fix grouping/plot mismatch root causes** — 🟡 largely done.
+1. **Fix grouping/plot mismatch root causes** — ✅ completed.
    - Deterministic sort by selected mode exists in export flow.
    - Stable merge key strategy (`GROUP_KEY`/`REPORT_ID`/composite fallback) and duplicate-key warning path are implemented.
-   - A final hardening sweep for label/value alignment safeguards on edge-case grouped datasets remains.
+   - Violin label/value payload now filters NaN-only buckets and preserves aligned labels/values from a single grouped source before plotting.
 2. **Introduce dataclass contracts in `modules/contracts.py`** — ✅ completed for parse/export entrypoints.
    - `ParseRequest`, `AppPaths`, `ExportOptions`, `GroupingAssignment`, and `ExportRequest` exist.
    - Validation helpers now cover parse, paths, options, grouping, and end-to-end export request validation.
@@ -223,7 +223,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 ---
 
 ## Definition of Done (global)
-- [ ] Grouping mismatch bug fixed and covered by tests.
+- [x] Grouping mismatch bug fixed and covered by tests.
 - [x] Export/parse entrypoints use dataclass contracts (grouping internals still being hardened).
 - [x] Normal operation avoids forced thread termination.
 - [x] Reliability fixes merged for dedupe, sheet naming, stats edge cases, and license parsing.
@@ -231,9 +231,8 @@ Use this section as the source of truth for what is done vs still outstanding.
 - [ ] CI executes compile + tests + lint successfully.
 
 ## Remaining execution order (updated)
-1. Execute **Phase 2** structural items in small mergeable PRs:
+1. Execute remaining **Phase 2** structural items in small mergeable PRs:
    - worker decomposition,
-   - DB utilities,
-   - final grouping label/value alignment hardening.
+   - DB utilities.
 2. Execute **Phase 3** developer baseline (README quickstart, dependency cleanup, CI, contributing docs).
 3. Execute **Phase 4** coverage expansion (grouping regressions + integration happy path).

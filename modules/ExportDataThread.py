@@ -52,6 +52,22 @@ class ExportDataThread(QThread):
     def _is_sample_sort_mode(sort_mode):
         return sort_mode in {"sample", "sample #", "sample number", "part #", "part number"}
 
+    @staticmethod
+    def _build_violin_payload(header_group, group_column, min_samplesize):
+        grouped_meas = (
+            header_group.groupby(group_column, sort=False)['MEAS']
+            .apply(lambda values: [value for value in values.tolist() if pd.notna(value)])
+        )
+        grouped_meas = grouped_meas[grouped_meas.apply(len) > 0]
+
+        if grouped_meas.empty:
+            return [], [], False
+
+        labels = list(grouped_meas.index)
+        values = list(grouped_meas.values)
+        can_render_violin = all(len(group_values) >= min_samplesize for group_values in values)
+        return labels, values, can_render_violin
+
     def _sort_header_group(self, header_group):
         sort_mode = self.selected_sorting_parameter.strip().lower()
         sorted_group = header_group.copy()
@@ -506,10 +522,12 @@ class ExportDataThread(QThread):
             grouping_df = self._prepare_grouping_df()
             header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
             if grouping_applied:
-                grouped_meas = header_group.groupby('GROUP', sort=False)['MEAS'].apply(list)
-                if (grouped_meas.apply(len) >= self.violin_plot_min_samplesize).all():
-                    labels = list(grouped_meas.index)
-                    values = list(grouped_meas.values)
+                labels, values, can_render_violin = self._build_violin_payload(
+                    header_group,
+                    'GROUP',
+                    self.violin_plot_min_samplesize,
+                )
+                if can_render_violin:
                     plt.violinplot(values,
                                    showmeans=True,
                                    showmedians=False,
@@ -518,10 +536,12 @@ class ExportDataThread(QThread):
                 else:
                     ax.scatter(header_group['GROUP'], header_group['MEAS'], label=header, color='blue', marker='.')
             else:
-                grouped_meas = header_group.groupby('SAMPLE_NUMBER', sort=False)['MEAS'].apply(list)
-                if (grouped_meas.apply(len) >= self.violin_plot_min_samplesize).all():
-                    labels = list(grouped_meas.index)
-                    values = list(grouped_meas.values)
+                labels, values, can_render_violin = self._build_violin_payload(
+                    header_group,
+                    'SAMPLE_NUMBER',
+                    self.violin_plot_min_samplesize,
+                )
+                if can_render_violin:
                     plt.violinplot(values,
                                    showmeans=True,
                                    showmedians=False,

@@ -119,6 +119,42 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         grouping_with_id = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['G1']})
         self.assertEqual(ExportDataThread._resolve_group_merge_keys(header_with_id, grouping_with_id), ['REPORT_ID'])
 
+
+    def test_build_violin_payload_drops_nan_and_empty_groups(self):
+        header_group = pd.DataFrame(
+            {
+                'GROUP': ['A', 'A', 'B', 'C'],
+                'MEAS': [1.0, float('nan'), float('nan'), 2.0],
+            }
+        )
+
+        labels, values, can_render = ExportDataThread._build_violin_payload(
+            header_group,
+            'GROUP',
+            min_samplesize=1,
+        )
+
+        self.assertEqual(labels, ['A', 'C'])
+        self.assertEqual(values, [[1.0], [2.0]])
+        self.assertTrue(can_render)
+
+    def test_build_violin_payload_honors_minimum_sample_size(self):
+        header_group = pd.DataFrame(
+            {
+                'SAMPLE_NUMBER': ['1', '1', '2'],
+                'MEAS': [1.0, 1.1, 0.9],
+            }
+        )
+
+        labels, values, can_render = ExportDataThread._build_violin_payload(
+            header_group,
+            'SAMPLE_NUMBER',
+            min_samplesize=2,
+        )
+
+        self.assertEqual(labels, ['1', '2'])
+        self.assertEqual(values, [[1.0, 1.1], [0.9]])
+        self.assertFalse(can_render)
     def test_apply_group_assignments_keeps_latest_duplicate_assignment(self):
         thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
         header_group = pd.DataFrame(
