@@ -186,6 +186,32 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(merged['GROUP'].tolist(), ['NEW_GROUP'])
         warning_mock.assert_called_once()
 
+    def test_apply_group_assignments_with_report_id_preserves_sample_number_column(self):
+        thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
+        header_group = pd.DataFrame(
+            {
+                'REPORT_ID': [1],
+                'REFERENCE': ['R1'],
+                'SAMPLE_NUMBER': ['7'],
+                'MEAS': [1.0],
+            }
+        )
+        grouping_df = pd.DataFrame(
+            {
+                'REPORT_ID': [1],
+                'SAMPLE_NUMBER': ['999'],
+                'GROUP': ['A'],
+            }
+        )
+
+        merged, applied = thread._apply_group_assignments(header_group, grouping_df)
+
+        self.assertTrue(applied)
+        self.assertIn('SAMPLE_NUMBER', merged.columns)
+        self.assertNotIn('SAMPLE_NUMBER_x', merged.columns)
+        self.assertNotIn('SAMPLE_NUMBER_y', merged.columns)
+        self.assertEqual(merged['SAMPLE_NUMBER'].tolist(), ['7'])
+
 
 if __name__ == '__main__':
     unittest.main()

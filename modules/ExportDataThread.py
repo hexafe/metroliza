@@ -153,7 +153,8 @@ class ExportDataThread(QThread):
 
         self._warn_duplicate_group_assignments(grouping_df, merge_keys)
         deduped_grouping_df = grouping_df.drop_duplicates(subset=merge_keys, keep='last')
-        merged_group = pd.merge(keyed_header, deduped_grouping_df, on=merge_keys, how='left')
+        merge_projection = deduped_grouping_df[merge_keys + ['GROUP']]
+        merged_group = pd.merge(keyed_header, merge_projection, on=merge_keys, how='left')
         merged_group['GROUP'] = merged_group['GROUP'].fillna('UNGROUPED')
         return merged_group, True
 
