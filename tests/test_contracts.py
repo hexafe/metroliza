@@ -6,7 +6,9 @@ from modules.contracts import (
     AppPaths,
     ExportOptions,
     ParseRequest,
+    ExportRequest,
     validate_export_options,
+    validate_export_request,
     validate_grouping_df,
     validate_parse_request,
     validate_paths,
@@ -69,6 +71,31 @@ class TestValidateGroupingDf(unittest.TestCase):
         df = pd.DataFrame({'GROUP': ['A'], 'REFERENCE': ['R1']})
         with self.assertRaises(ValueError):
             validate_grouping_df(df)
+
+
+class TestValidateExportRequest(unittest.TestCase):
+    def test_validates_nested_contracts(self):
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(export_type='Scatter', sorting_parameter='Part #', violin_plot_min_samplesize=1),
+            grouping_df=pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['NOK']}),
+        )
+
+        validated = validate_export_request(request)
+
+        self.assertEqual(validated.options.export_type, 'scatter')
+        self.assertEqual(validated.options.sorting_parameter, 'part #')
+        self.assertEqual(validated.options.violin_plot_min_samplesize, 2)
+
+    def test_rejects_non_string_filter_query(self):
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(),
+            filter_query=123,
+        )
+
+        with self.assertRaises(ValueError):
+            validate_export_request(request)
 
 
 if __name__ == '__main__':

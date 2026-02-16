@@ -44,6 +44,25 @@ class ExportRequest:
     grouping_df: pd.DataFrame | None = None
 
 
+def validate_export_request(request: ExportRequest) -> ExportRequest:
+    if not isinstance(request, ExportRequest):
+        raise ValueError("Export request must be provided as an ExportRequest instance.")
+
+    validated_paths = validate_paths(request.paths)
+    validated_options = validate_export_options(request.options)
+    validated_grouping_df = validate_grouping_df(request.grouping_df)
+
+    if request.filter_query is not None and not isinstance(request.filter_query, str):
+        raise ValueError("Filter query must be a string when provided.")
+
+    return ExportRequest(
+        paths=validated_paths,
+        options=validated_options,
+        filter_query=request.filter_query,
+        grouping_df=validated_grouping_df,
+    )
+
+
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
 _SAMPLE_SORT_ALIASES = {"sample", "sample #", "sample number", "part #", "part number"}
 

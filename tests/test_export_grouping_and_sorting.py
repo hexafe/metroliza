@@ -46,9 +46,23 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import ExportDataThread
+from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
 
 class TestExportSortingAndGrouping(unittest.TestCase):
+
+    def test_constructor_accepts_export_request_contract(self):
+        request = ExportRequest(
+            paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'),
+            options=ExportOptions(export_type='LINE', sorting_parameter='Sample #', violin_plot_min_samplesize=1),
+        )
+
+        thread = ExportDataThread(db_file='ignored.db', excel_file='ignored.xlsx', export_request=request)
+
+        self.assertEqual(thread.db_file, ':memory:')
+        self.assertEqual(thread.selected_export_type, 'line')
+        self.assertEqual(thread.selected_sorting_parameter, 'sample #')
+        self.assertEqual(thread.violin_plot_min_samplesize, 2)
     def test_sort_by_sample_number_uses_numeric_order(self):
         thread = ExportDataThread(db_file=':memory:', excel_file='dummy.xlsx', selected_sorting_parameter='Part number')
         header_group = pd.DataFrame(
