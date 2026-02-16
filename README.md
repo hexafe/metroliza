@@ -92,14 +92,14 @@ The execution roadmap is tracked in `IMPLEMENTATION_PLAN.md`. Current highlights
 - **Phase 0 (safety hotfixes):** completed.
 - **Phase 1 (reliability and cancellation):** completed, including cooperative cancellation, non-blocking cancel behavior, and non-reraising user-facing logger behavior.
 - **Phase 2–4:** still in progress (structural refactor, docs/CI baseline, broader regression and integration coverage).
-- **Latest Phase 2 increment:** export flow now supports validated `ExportRequest` dataclass contracts in addition to legacy constructor arguments, improving consistency between UI inputs and worker execution.
+- **Latest Phase 2 increment:** parse and export worker entrypoints now use validated request dataclasses (`ParseRequest`, `ExportRequest`) end-to-end from dialog/UI call sites.
 
 ## Tests
 
 Current regression tests are in `tests/` and can be run with:
 
 ```bash
-python -m unittest discover -s tests -v
+PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
 
@@ -108,7 +108,7 @@ python -m unittest discover -s tests -v
 To run the contract and export-grouping focused tests only:
 
 ```bash
-python -m unittest tests.test_contracts tests.test_export_grouping_and_sorting -v
+PYTHONPATH=. python -m unittest tests.test_contracts tests.test_export_grouping_and_sorting -v
 ```
 
 ## Project Status
