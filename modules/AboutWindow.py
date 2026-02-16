@@ -61,10 +61,11 @@ class AboutWindow(QDialog):
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(title_label)
         
-        # Add the license expiration label
-        license_expiration_label = QLabel(f"License expiration in <b>{days_until_expiration+1}</b> day{'s' if days_until_expiration+1 > 1 else ''}")
-        license_expiration_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.layout.addWidget(license_expiration_label)
+        if days_until_expiration is not None:
+            # Add the license expiration label
+            license_expiration_label = QLabel(f"License expiration in <b>{days_until_expiration+1}</b> day{'s' if days_until_expiration+1 > 1 else ''}")
+            license_expiration_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.layout.addWidget(license_expiration_label)
         
         # Add the clickable label with email
         # author_label = ClickableLabel(f"Grzegorz Ozimek (grzegorz.ozimek@valeo.com)", "mailto:grzegorz.ozimek@valeo.com")

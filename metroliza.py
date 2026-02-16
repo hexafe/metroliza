@@ -14,6 +14,7 @@ import logging
 import base64
 
 VERSION_DATE = VersionDate.VERSION_DATE
+LICENSE_VERIFICATION_ENABLED = False
 
 def log_and_exit(exception):
     """Handles logging exceptions using CustomLogger."""
@@ -79,6 +80,9 @@ def show_invalid_license_message(title, message, hardware_id):
     return dialog_result
     
 def verify_license():   
+    if not LICENSE_VERIFICATION_ENABLED:
+        return True
+
     try:
         # Decode public key for signature verification
         # public_key = LicenseKeyManager().read_public_key_file()
@@ -125,9 +129,12 @@ if __name__ == "__main__":
         app = QApplication(sys.argv)
         hardware_id = LicenseKeyManager().generate_hardware_id()
         if verify_license():
-            # Read expiration date from license key
-            license_key = LicenseKeyManager().read_license_key_file()
-            days_until_expiration = get_days_until_expiration(license_key)
+            if LICENSE_VERIFICATION_ENABLED:
+                # Read expiration date from license key
+                license_key = LicenseKeyManager().read_license_key_file()
+                days_until_expiration = get_days_until_expiration(license_key)
+            else:
+                days_until_expiration = None
             
             # Initialize MainWindow with the version date
             main_window = MainWindow(VersionDate.VERSION_DATE, days_until_expiration)

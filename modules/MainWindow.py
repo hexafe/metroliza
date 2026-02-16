@@ -30,7 +30,10 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         # Initialize the main window and layout
-        self.setWindowTitle(f"Metroliza V [{VERSION_DATE}] ({days_until_expiration+1} day{'s' if days_until_expiration+1 > 1 else ''} left)")
+        if days_until_expiration is None:
+            self.setWindowTitle(f"Metroliza V [{VERSION_DATE}]")
+        else:
+            self.setWindowTitle(f"Metroliza V [{VERSION_DATE}] ({days_until_expiration+1} day{'s' if days_until_expiration+1 > 1 else ''} left)")
         self.setGeometry(100, 100, 300, 150)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
