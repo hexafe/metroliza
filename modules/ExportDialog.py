@@ -3,7 +3,7 @@ from modules.ExportDataThread import ExportDataThread
 from modules.FilterDialog import FilterDialog
 from modules.DataGrouping import DataGrouping
 from modules.CustomLogger import CustomLogger
-from modules.contracts import AppPaths, ExportOptions, validate_export_options, validate_paths
+from modules.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_options, validate_paths
 from PyQt6.QtCore import QSize, QTemporaryFile, Qt
 from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import(
@@ -443,18 +443,18 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setText(str(options.violin_plot_min_samplesize))
             self.summary_plot_scale.setText(str(options.summary_plot_scale))
 
+            export_request = ExportRequest(
+                paths=AppPaths(db_file=self.db_file, excel_file=str(self.excel_file)),
+                options=options,
+                filter_query=self.filter_query,
+                grouping_df=self.df_for_grouping,
+            )
+
             # Start the exporting thread with validated options
             self.export_thread = ExportDataThread(
                 self.db_file,
                 self.excel_file,
-                self.filter_query,
-                self.df_for_grouping,
-                options.export_type,
-                options.sorting_parameter,
-                options.violin_plot_min_samplesize,
-                options.summary_plot_scale,
-                options.hide_ok_results,
-                options.generate_summary_sheet,
+                export_request=export_request,
             )
             self.export_thread.update_label.connect(self.loading_label.setText)
             self.export_thread.update_progress.connect(self.loading_bar.setValue)

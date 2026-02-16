@@ -100,7 +100,10 @@ Use this section as the source of truth for what is done vs still outstanding.
    - Deterministic sort by selected mode exists in export flow.
    - Stable merge key strategy (`GROUP_KEY`/`REPORT_ID`/composite fallback) and duplicate-key warning path are implemented.
    - A final hardening sweep for label/value alignment safeguards on edge-case grouped datasets remains.
-2. **Introduce dataclass contracts in `modules/contracts.py`** — 🔴 not started.
+2. **Introduce dataclass contracts in `modules/contracts.py`** — 🟡 partially implemented.
+   - `ParseRequest`, `AppPaths`, `ExportOptions`, `GroupingAssignment`, and `ExportRequest` exist.
+   - Validation helpers now cover parse, paths, options, grouping, and end-to-end export request validation.
+   - Export entrypoint wiring has started via `ExportRequest`; full migration of remaining call sites is pending.
 3. **Decompose heavy workers into testable units** — 🔴 not started.
 4. **Create shared DB utilities module (`db.py`)** — 🔴 not started.
 5. **Performance cleanup** — 🔴 not started.
