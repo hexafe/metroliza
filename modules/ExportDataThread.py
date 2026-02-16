@@ -630,14 +630,15 @@ class ExportDataThread(QThread):
             ax_table.auto_set_font_size(False)
             ax_table.set_fontsize(8)
 
-            # Fit a normal distribution to the data
+            # Fit a normal distribution to the data. If the measured values are
+            # constant, std can be 0 and scipy emits divide-by-zero warnings.
             mu, std = norm.fit(header_group['MEAS'])
-
-            # Plot the Gaussian curve
-            xmin, xmax = plt.xlim()
-            x = np.linspace(xmin, xmax, 100)
-            p = norm.pdf(x, mu, std)
-            plt.plot(x, p, 'k', linewidth=2)
+            if std > 0:
+                # Plot the Gaussian curve
+                xmin, xmax = plt.xlim()
+                x = np.linspace(xmin, xmax, 100)
+                p = norm.pdf(x, mu, std)
+                plt.plot(x, p, 'k', linewidth=2)
             
             # Add vertical lines for mean, LSL and USL
             plt.axvline(average, color='red', linestyle='dashed', linewidth=2, label=f'Mean = {average:.3f}')
@@ -671,7 +672,6 @@ class ExportDataThread(QThread):
             
             imgplot = BytesIO()
             plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
-            fig, ax = plt.subplots(figsize=(6, 4))
             
             data_x = list(range(0, header_group['MEAS'].count()))
             data_y = header_group['MEAS']
