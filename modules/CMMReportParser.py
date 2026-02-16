@@ -1,4 +1,30 @@
-import fitz
+import importlib.metadata
+import importlib.util
+
+
+def _resolve_pymupdf_backend_module() -> str | None:
+    """Return the import name for a valid PyMuPDF backend, if available."""
+    if importlib.util.find_spec("pymupdf") is not None:
+        return "pymupdf"
+
+    fitz_distributions = {
+        name.lower()
+        for name in importlib.metadata.packages_distributions().get("fitz", [])
+    }
+    if "pymupdf" in fitz_distributions and importlib.util.find_spec("fitz") is not None:
+        return "fitz"
+
+    return None
+
+
+_PYMUPDF_BACKEND_MODULE = _resolve_pymupdf_backend_module()
+if _PYMUPDF_BACKEND_MODULE == "pymupdf":
+    import pymupdf as fitz
+elif _PYMUPDF_BACKEND_MODULE == "fitz":
+    import fitz
+else:
+    fitz = None
+
 import pandas
 import re
 import sqlite3
@@ -141,13 +167,23 @@ class CMMReportParser:
         except Exception as e:
             self.log_and_exit(e)
 
+    def _require_pdf_backend(self):
+        if fitz is None:
+            raise ImportError(
+                "PyMuPDF is required to parse PDF reports. Install `PyMuPDF` (which "
+                "provides either the `pymupdf` or `fitz` module) and remove any "
+                "conflicting standalone `fitz` package."
+            )
+        return fitz
+
     def cmm_open(self):
         try:
             """
             Method to open the CMM PDF file and store the text inside the pdf_raw_text attribute.
             It uses the PyMuPDF library (fitz) to open the PDF file and extract the text from each page.
             """
-            with fitz.open(f"{self.pdf_file_path}\{self.pdf_file_name}") as pdf_report:
+            pdf_backend = self._require_pdf_backend()
+            with pdf_backend.open(f"{self.pdf_file_path}\{self.pdf_file_name}") as pdf_report:
                 for page in pdf_report:
                     page_text = page.get_text().splitlines()
                     for line in page_text:
