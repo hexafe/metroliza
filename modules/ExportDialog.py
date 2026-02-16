@@ -451,11 +451,7 @@ class ExportDialog(QDialog):
             )
 
             # Start the exporting thread with validated options
-            self.export_thread = ExportDataThread(
-                self.db_file,
-                self.excel_file,
-                export_request=export_request,
-            )
+            self.export_thread = ExportDataThread(export_request=export_request)
             self.export_thread.update_label.connect(self.loading_label.setText)
             self.export_thread.update_progress.connect(self.loading_bar.setValue)
             self.export_thread.finished.connect(self.on_export_finished)

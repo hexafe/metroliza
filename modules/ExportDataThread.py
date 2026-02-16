@@ -12,7 +12,7 @@ import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.stats_utils import safe_process_capability
-from modules.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_request
+from modules.contracts import ExportRequest, validate_export_request
 
 
 class ExportDataThread(QThread):
@@ -21,44 +21,15 @@ class ExportDataThread(QThread):
     finished = pyqtSignal()
     canceled = pyqtSignal()
 
-    def __init__(
-        self,
-        db_file,
-        excel_file,
-        filter_query=None,
-        df_for_grouping=None,
-        selected_export_type="scatter",
-        selected_sorting_parameter="date",
-        violin_plot_min_samplesize=6,
-        summary_plot_scale=0,
-        hide_ok_results=False,
-        generate_summary_sheet=False,
-        export_request: ExportRequest | None = None,
-        ):
+    def __init__(self, export_request: ExportRequest):
 
         super().__init__()
-
-        if export_request is None:
-            export_request = ExportRequest(
-                paths=AppPaths(db_file=db_file, excel_file=excel_file),
-                options=ExportOptions(
-                    export_type=selected_export_type,
-                    sorting_parameter=selected_sorting_parameter,
-                    violin_plot_min_samplesize=violin_plot_min_samplesize,
-                    summary_plot_scale=summary_plot_scale,
-                    hide_ok_results=hide_ok_results,
-                    generate_summary_sheet=generate_summary_sheet,
-                ),
-                filter_query=filter_query,
-                grouping_df=df_for_grouping,
-            )
 
         validated_request = validate_export_request(export_request)
         self.db_file = validated_request.paths.db_file
         self.excel_file = validated_request.paths.excel_file
 
-        if not validated_request.filter_query:
-            filter_query = """
+        default_filter_query = """
             SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
                 MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
                 MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE, 
@@ -67,7 +38,7 @@ class ExportDataThread(QThread):
             JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
             WHERE 1=1
             """
-        self.filter_query = filter_query if not validated_request.filter_query else validated_request.filter_query
+        self.filter_query = validated_request.filter_query or default_filter_query
         self.df_for_grouping = validated_request.grouping_df
         self.selected_export_type = validated_request.options.export_type
         self.selected_sorting_parameter = validated_request.options.sorting_parameter

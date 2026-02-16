@@ -100,10 +100,10 @@ Use this section as the source of truth for what is done vs still outstanding.
    - Deterministic sort by selected mode exists in export flow.
    - Stable merge key strategy (`GROUP_KEY`/`REPORT_ID`/composite fallback) and duplicate-key warning path are implemented.
    - A final hardening sweep for label/value alignment safeguards on edge-case grouped datasets remains.
-2. **Introduce dataclass contracts in `modules/contracts.py`** — 🟡 partially implemented.
+2. **Introduce dataclass contracts in `modules/contracts.py`** — ✅ completed for parse/export entrypoints.
    - `ParseRequest`, `AppPaths`, `ExportOptions`, `GroupingAssignment`, and `ExportRequest` exist.
    - Validation helpers now cover parse, paths, options, grouping, and end-to-end export request validation.
-   - Export entrypoint wiring has started via `ExportRequest`; full migration of remaining call sites is pending.
+   - Parse and export thread entrypoints now require validated request dataclasses from UI call sites.
 3. **Decompose heavy workers into testable units** — 🔴 not started.
 4. **Create shared DB utilities module (`db.py`)** — 🔴 not started.
 5. **Performance cleanup** — 🔴 not started.
@@ -209,7 +209,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 ## Milestone sequence
 1. **Week 1:** Phase 0 + grouping correctness tests from Phase 2.
 2. **Week 2:** Phase 1 (cooperative cancellation + logger behavior).
-3. **Week 3:** Remaining Phase 2 structure/performance work + dataclass migration.
+3. **Week 3:** Remaining Phase 2 structure/performance work + grouping alignment hardening.
 4. **Week 4:** Phase 3 docs/CI + Phase 4 coverage baseline.
 
 ---
@@ -224,7 +224,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Definition of Done (global)
 - [ ] Grouping mismatch bug fixed and covered by tests.
-- [ ] Export/parse/grouping paths use dataclass contracts.
+- [x] Export/parse entrypoints use dataclass contracts (grouping internals still being hardened).
 - [x] Normal operation avoids forced thread termination.
 - [x] Reliability fixes merged for dedupe, sheet naming, stats edge cases, and license parsing.
 - [ ] Docs updated with architecture and operating instructions.
@@ -232,7 +232,6 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Remaining execution order (updated)
 1. Execute **Phase 2** structural items in small mergeable PRs:
-   - contracts/dataclasses migration at parse/export entrypoints,
    - worker decomposition,
    - DB utilities,
    - final grouping label/value alignment hardening.

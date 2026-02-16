@@ -57,14 +57,14 @@ class TestExportSortingAndGrouping(unittest.TestCase):
             options=ExportOptions(export_type='LINE', sorting_parameter='Sample #', violin_plot_min_samplesize=1),
         )
 
-        thread = ExportDataThread(db_file='ignored.db', excel_file='ignored.xlsx', export_request=request)
+        thread = ExportDataThread(export_request=request)
 
         self.assertEqual(thread.db_file, ':memory:')
         self.assertEqual(thread.selected_export_type, 'line')
         self.assertEqual(thread.selected_sorting_parameter, 'sample #')
         self.assertEqual(thread.violin_plot_min_samplesize, 2)
     def test_sort_by_sample_number_uses_numeric_order(self):
-        thread = ExportDataThread(db_file=':memory:', excel_file='dummy.xlsx', selected_sorting_parameter='Part number')
+        thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions(sorting_parameter='Part number')))
         header_group = pd.DataFrame(
             {
                 'SAMPLE_NUMBER': ['10', '2', '1'],
@@ -78,7 +78,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(sorted_group['SAMPLE_NUMBER'].tolist(), ['1', '2', '10'])
 
     def test_sort_by_date_falls_back_to_sample_for_ties(self):
-        thread = ExportDataThread(db_file=':memory:', excel_file='dummy.xlsx', selected_sorting_parameter='Date')
+        thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions(sorting_parameter='Date')))
         header_group = pd.DataFrame(
             {
                 'SAMPLE_NUMBER': ['2', '1', '3'],
@@ -92,7 +92,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(sorted_group['SAMPLE_NUMBER'].tolist(), ['3', '1', '2'])
 
     def test_prepare_grouping_df_adds_group_key_for_composite_identity(self):
-        thread = ExportDataThread(db_file=':memory:', excel_file='dummy.xlsx')
+        thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
         thread.df_for_grouping = pd.DataFrame(
             {
                 'REFERENCE': ['R1', 'R1'],
@@ -120,7 +120,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(ExportDataThread._resolve_group_merge_keys(header_with_id, grouping_with_id), ['REPORT_ID'])
 
     def test_apply_group_assignments_keeps_latest_duplicate_assignment(self):
-        thread = ExportDataThread(db_file=':memory:', excel_file='dummy.xlsx')
+        thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
         header_group = pd.DataFrame(
             {
                 'REFERENCE': ['R1'],
