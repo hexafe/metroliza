@@ -91,8 +91,9 @@ The execution roadmap is tracked in `IMPLEMENTATION_PLAN.md`. Current highlights
 
 - **Phase 0 (safety hotfixes):** completed.
 - **Phase 1 (reliability and cancellation):** completed, including cooperative cancellation, non-blocking cancel behavior, and non-reraising user-facing logger behavior.
-- **Phase 2–4:** still in progress (structural refactor, docs/CI baseline, broader regression and integration coverage).
-- **Latest Phase 2 increment:** parse and export worker entrypoints now use validated request dataclasses (`ParseRequest`, `ExportRequest`) end-to-end from dialog/UI call sites.
+- **Phase 2:** in progress; grouping/plot mismatch fixes are now completed and covered by regression tests, with structural decomposition/performance tasks still pending.
+- **Phase 3–4:** still in progress (docs/CI baseline and broader integration coverage).
+- **Latest Phase 2 increments:** parse/export worker entrypoints use validated request dataclasses (`ParseRequest`, `ExportRequest`) end-to-end from dialog/UI call sites, and summary violin plotting now hardens label/value alignment by removing NaN-only buckets before rendering.
 
 ## Tests
 
