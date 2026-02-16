@@ -157,10 +157,32 @@ class DataGrouping(QDialog):
             
     def read_data_to_df(self):
         try:
-            query = "SELECT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS"
+            filter_query = self.parent().get_filter_query() if self.parent() else None
+            query = self._build_grouping_query(filter_query)
             with sqlite3.connect(self.db_file) as conn:
                 cursor = conn.cursor()
                 self.df = pd.read_sql_query(query, cursor.connection)
+        except Exception as e:
+            self.log_and_exit(e)
+
+    @staticmethod
+    def _build_grouping_query(filter_query):
+        default_query = "SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS"
+        if not isinstance(filter_query, str) or not filter_query.strip():
+            return default_query
+
+        return f"""
+            SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER
+            FROM (
+                {filter_query.strip()}
+            ) AS FILTERED_DATA
+        """
+
+    def refresh_data(self):
+        try:
+            self.read_data_to_df()
+            self.add_default_group()
+            self.populate_list_widgets()
         except Exception as e:
             self.log_and_exit(e)
             
