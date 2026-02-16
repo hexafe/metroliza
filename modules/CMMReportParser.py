@@ -183,7 +183,8 @@ class CMMReportParser:
             It uses the PyMuPDF library (fitz) to open the PDF file and extract the text from each page.
             """
             pdf_backend = self._require_pdf_backend()
-            with pdf_backend.open(f"{self.pdf_file_path}\{self.pdf_file_name}") as pdf_report:
+            pdf_path = Path(self.pdf_file_path) / self.pdf_file_name
+            with pdf_backend.open(str(pdf_path)) as pdf_report:
                 for page in pdf_report:
                     page_text = page.get_text().splitlines()
                     for line in page_text:
