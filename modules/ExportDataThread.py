@@ -1,7 +1,11 @@
 import hashlib
 import logging
+import matplotlib
 import pandas as pd
 import numpy as np
+
+matplotlib.use('Agg')
+
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
@@ -51,6 +55,15 @@ class ExportDataThread(QThread):
     @staticmethod
     def _is_sample_sort_mode(sort_mode):
         return sort_mode in {"sample", "sample #", "sample number", "part #", "part number"}
+
+    @staticmethod
+    def _ensure_sample_number_column(df):
+        if 'SAMPLE_NUMBER' in df.columns:
+            return df
+
+        normalized_df = df.copy()
+        normalized_df['SAMPLE_NUMBER'] = [str(index + 1) for index in range(len(normalized_df))]
+        return normalized_df
 
     @staticmethod
     def _build_violin_payload(header_group, group_column, min_samplesize):
@@ -210,6 +223,7 @@ class ExportDataThread(QThread):
         try:
             # Fetch data from the cursor
             df = pd.read_sql_query(self.filter_query, cursor.connection)
+            df = self._ensure_sample_number_column(df)
             df['HEADER - AX'] = df['HEADER'] + ' - ' + df['AX']
 
             # Group the data by reference
@@ -495,6 +509,7 @@ class ExportDataThread(QThread):
         try:
             if self._check_canceled():
                 return
+            header_group = self._ensure_sample_number_column(header_group)
             imgplot = BytesIO()
             nom = round(header_group['NOM'].iloc[0], 3)
             USL = round(header_group['+TOL'].iloc[0], 3)
