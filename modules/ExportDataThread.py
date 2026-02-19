@@ -11,12 +11,12 @@ from scipy.stats import norm
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from io import BytesIO
 from modules.CustomLogger import CustomLogger
-import sqlite3
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.stats_utils import safe_process_capability
 from modules.contracts import ExportRequest, validate_export_request
+from modules.db import execute_select_with_columns, read_sql_dataframe
 
 
 class ExportDataThread(QThread):
@@ -189,41 +189,32 @@ class ExportDataThread(QThread):
 
     def run(self):
         try:
-            # Connect to the SQLite database
             if self._check_canceled():
                 return
 
-            with sqlite3.connect(self.db_file) as conn:
-                cursor = conn.cursor()
+            excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
 
-                # Retrieve the table names from the database
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-
-                # Create an Excel writer using xlsxwriter engine
-                excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
-
-                self.export_filtered_data(cursor, excel_writer)
-                if self._check_canceled():
-                    excel_writer.close()
-                    return
-
-                self.add_measurements_horizontal_sheet(cursor, excel_writer)
-                if self._check_canceled():
-                    excel_writer.close()
-                    return
-
+            self.export_filtered_data(excel_writer)
+            if self._check_canceled():
                 excel_writer.close()
+                return
 
-                self.update_label.emit("Export completed successfully.")
-                self.finished.emit()
-                QCoreApplication.processEvents()
+            self.add_measurements_horizontal_sheet(excel_writer)
+            if self._check_canceled():
+                excel_writer.close()
+                return
+
+            excel_writer.close()
+
+            self.update_label.emit("Export completed successfully.")
+            self.finished.emit()
+            QCoreApplication.processEvents()
         except Exception as e:
             self.log_and_exit(e)
 
-    def add_measurements_horizontal_sheet(self, cursor, excel_writer):
+    def add_measurements_horizontal_sheet(self, excel_writer):
         try:
-            # Fetch data from the cursor
-            df = pd.read_sql_query(self.filter_query, cursor.connection)
+            df = read_sql_dataframe(self.db_file, self.filter_query)
             df = self._ensure_sample_number_column(df)
             df['HEADER - AX'] = df['HEADER'] + ' - ' + df['AX']
 
@@ -452,16 +443,13 @@ class ExportDataThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
         
-    def export_filtered_data(self, cursor, excel_writer):
+    def export_filtered_data(self, excel_writer):
         try:
             if self._check_canceled():
                 return
             export_query = self.filter_query
-            cursor.execute(export_query)
-            data = cursor.fetchall()
-            column_names = [desc[0] for desc in cursor.description]
+            data, column_names = execute_select_with_columns(self.db_file, export_query)
 
-            # Write the data to the Excel file
             self.write_data_to_excel(data, column_names, "MEASUREMENTS", excel_writer)
         except Exception as e:
             self.log_and_exit(e)
