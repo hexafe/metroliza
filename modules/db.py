@@ -45,6 +45,36 @@ def execute_with_retry(
     return []
 
 
+def execute_select_with_columns(
+    db_path: str,
+    query: str,
+    params: tuple[Any, ...] | None = None,
+    *,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> tuple[list[tuple[Any, ...]], list[str]]:
+    """Execute a SELECT query and return rows with column names."""
+    params = params or ()
+    attempts = retries + 1
+
+    for attempt in range(attempts):
+        try:
+            with connect_sqlite(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                column_names = [description[0] for description in (cursor.description or [])]
+                return rows, column_names
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
+            if not is_transient or attempt >= attempts - 1:
+                raise
+            time.sleep(retry_delay_s)
+
+    return [], []
+
+
 def read_sql_dataframe(db_path: str, query: str) -> pd.DataFrame:
     """Read a SQL query into a DataFrame using a managed SQLite connection."""
     with connect_sqlite(db_path) as conn:

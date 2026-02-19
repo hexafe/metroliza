@@ -105,7 +105,7 @@ Use this section as the source of truth for what is done vs still outstanding.
    - Validation helpers now cover parse, paths, options, grouping, and end-to-end export request validation.
    - Parse and export thread entrypoints now require validated request dataclasses from UI call sites.
 3. **Decompose heavy workers into testable units** — 🔴 not started.
-4. **Create shared DB utilities module (`db.py`)** — 🟡 partially implemented (core helpers added and adopted in grouping/filter reads).
+4. **Create shared DB utilities module (`db.py`)** — 🟡 partially implemented (core helpers added; adopted in grouping/filter and export data-loading paths).
 5. **Performance cleanup** — 🔴 not started.
 
 ### Scope
@@ -123,7 +123,8 @@ Use this section as the source of truth for what is done vs still outstanding.
 4. Create shared DB utilities module (`db.py`).
    - Connection handling, retry policy, query helpers.
    - ✅ Initial implementation landed (`connect_sqlite`, `execute_with_retry`, `read_sql_dataframe`) and first call-sites migrated (`DataGrouping`, `FilterDialog`).
-   - ⏳ Remaining migration: parse/export/modify flows still using direct `sqlite3.connect`.
+   - ✅ Export data-loading now also uses shared helpers (`read_sql_dataframe`, `execute_select_with_columns`).
+   - ⏳ Remaining migration: parse/modify flows still using direct `sqlite3.connect`.
 5. Performance cleanup.
    - Cache workbook formats.
    - Remove redundant matplotlib figure creation.
@@ -235,6 +236,6 @@ Use this section as the source of truth for what is done vs still outstanding.
 ## Remaining execution order (updated)
 1. Execute remaining **Phase 2** structural items in small mergeable PRs:
    - worker decomposition,
-   - DB utilities (continue migration of remaining DB call-sites to `modules/db.py`).
+   - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
 2. Execute **Phase 3** developer baseline (README quickstart, dependency cleanup, CI, contributing docs).
 3. Execute **Phase 4** coverage expansion (grouping regressions + integration happy path).

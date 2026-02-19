@@ -5,7 +5,7 @@ import unittest
 
 import pandas as pd
 
-from modules.db import execute_with_retry, read_sql_dataframe
+from modules.db import execute_select_with_columns, execute_with_retry, read_sql_dataframe
 
 
 class TestDbUtils(unittest.TestCase):
@@ -34,6 +34,14 @@ class TestDbUtils(unittest.TestCase):
         df = read_sql_dataframe(self.db_path, 'SELECT id, name FROM sample ORDER BY id')
         self.assertIsInstance(df, pd.DataFrame)
         self.assertListEqual(df['name'].tolist(), ['alpha', 'beta'])
+
+    def test_execute_select_with_columns_returns_rows_and_columns(self):
+        rows, column_names = execute_select_with_columns(
+            self.db_path,
+            'SELECT id, name FROM sample ORDER BY id',
+        )
+        self.assertEqual(rows, [(1, 'alpha'), (2, 'beta')])
+        self.assertEqual(column_names, ['id', 'name'])
 
 
 if __name__ == '__main__':
