@@ -208,12 +208,23 @@ class ExportDataThread(QThread):
             if self._check_canceled():
                 return
 
+            self.update_progress.emit(0)
+            self.update_label.emit("Preparing export...")
+
             excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
             try:
                 completed = run_export_steps(
                     [
-                        lambda: self.export_filtered_data(excel_writer),
-                        lambda: self.add_measurements_horizontal_sheet(excel_writer),
+                        lambda: (
+                            self.update_label.emit("Exporting filtered data..."),
+                            self.export_filtered_data(excel_writer),
+                            self.update_progress.emit(50),
+                        ),
+                        lambda: (
+                            self.update_label.emit("Building measurement sheets..."),
+                            self.add_measurements_horizontal_sheet(excel_writer),
+                            self.update_progress.emit(100),
+                        ),
                     ],
                     should_cancel=self._check_canceled,
                 )
