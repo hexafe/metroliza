@@ -1,4 +1,5 @@
 from modules.CustomLogger import CustomLogger
+from modules.db import read_sql_dataframe
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import(
     QAbstractItemView,
@@ -13,7 +14,6 @@ from PyQt6.QtWidgets import(
     QMessageBox,
 )
 import hashlib
-import sqlite3
 import pandas as pd
 
 
@@ -159,9 +159,7 @@ class DataGrouping(QDialog):
         try:
             filter_query = self.parent().get_filter_query() if self.parent() else None
             query = self._build_grouping_query(filter_query)
-            with sqlite3.connect(self.db_file) as conn:
-                cursor = conn.cursor()
-                self.df = pd.read_sql_query(query, cursor.connection)
+            self.df = read_sql_dataframe(self.db_file, query)
         except Exception as e:
             self.log_and_exit(e)
 

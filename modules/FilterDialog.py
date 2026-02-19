@@ -1,4 +1,5 @@
 from modules.CustomLogger import CustomLogger
+from modules.db import execute_with_retry
 from PyQt6.QtCore import QDate
 from PyQt6.QtWidgets import(
     QAbstractItemView,
@@ -11,7 +12,6 @@ from PyQt6.QtWidgets import(
     QListWidgetItem,
     QPushButton,
 )
-import sqlite3
 
 
 class FilterDialog(QDialog):
@@ -151,30 +151,23 @@ class FilterDialog(QDialog):
 
     def populate_list_widgets(self):
         try:
-            with sqlite3.connect(self.db_file) as conn:
-                cursor = conn.cursor()
+            ax_values = execute_with_retry(self.db_file, "SELECT DISTINCT AX FROM MEASUREMENTS;")
+            for value in ax_values:
+                item = QListWidgetItem(value[0])
+                self.ax_list.addItem(item)
 
-                cursor.execute("SELECT DISTINCT AX FROM MEASUREMENTS;")
-                ax_values = cursor.fetchall()
-                for value in ax_values:
-                    item = QListWidgetItem(value[0])
-                    self.ax_list.addItem(item)
+            header_values = execute_with_retry(self.db_file, "SELECT DISTINCT HEADER FROM MEASUREMENTS;")
+            for value in header_values:
+                header_item = QListWidgetItem(value[0])
+                all_headers_item = QListWidgetItem(value[0])
+                self.header_list.addItem(header_item)
+                self.all_headers_list.addItem(all_headers_item)
 
-                cursor.execute("SELECT DISTINCT HEADER FROM MEASUREMENTS;")
-                header_values = cursor.fetchall()
-                for value in header_values:
-                    header_item = QListWidgetItem(value[0])
-                    all_headers_item = QListWidgetItem(value[0])
-                    self.header_list.addItem(header_item)
-                    self.all_headers_list.addItem(all_headers_item)
+            reference_values = execute_with_retry(self.db_file, "SELECT DISTINCT REFERENCE FROM REPORTS;")
+            for value in reference_values:
+                item = QListWidgetItem(value[0])
+                self.reference_list.addItem(item)
 
-                cursor.execute("SELECT DISTINCT REFERENCE FROM REPORTS;")
-                reference_values = cursor.fetchall()
-                for value in reference_values:
-                    item = QListWidgetItem(value[0])
-                    self.reference_list.addItem(item)
-
-            cursor.close()
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
         except Exception as e:
             self.log_and_exit(e)
@@ -213,20 +206,16 @@ class FilterDialog(QDialog):
             self.header_list.clear()
 
             if selected_references and "SELECT ALL" not in selected_references:
-                with sqlite3.connect(self.db_file) as conn:
-                    cursor = conn.cursor()
-                    reference_values = "','".join(selected_references)
-                    query = f"""
-                        SELECT DISTINCT HEADER FROM MEASUREMENTS 
-                        JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID 
-                        WHERE REFERENCE IN (SELECT REFERENCE FROM REPORTS WHERE REFERENCE IN ('{reference_values}'));
-                        """
-                    cursor.execute(query)
-                    header_values = cursor.fetchall()
-                    for value in header_values:
-                        item = QListWidgetItem(value[0])
-                        self.header_list.addItem(item)
-                    cursor.close()
+                reference_values = "','".join(selected_references)
+                query = f"""
+                    SELECT DISTINCT HEADER FROM MEASUREMENTS 
+                    JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID 
+                    WHERE REFERENCE IN (SELECT REFERENCE FROM REPORTS WHERE REFERENCE IN ('{reference_values}'));
+                    """
+                header_values = execute_with_retry(self.db_file, query)
+                for value in header_values:
+                    item = QListWidgetItem(value[0])
+                    self.header_list.addItem(item)
             else:
                 for row in range(self.all_headers_list.count()):
                     item = self.all_headers_list.item(row)
