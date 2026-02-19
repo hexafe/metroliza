@@ -124,7 +124,7 @@ Use this section as the source of truth for what is done vs still outstanding.
    - Connection handling, retry policy, query helpers.
    - ✅ Initial implementation landed (`connect_sqlite`, `execute_with_retry`, `read_sql_dataframe`) and first call-sites migrated (`DataGrouping`, `FilterDialog`).
    - ✅ Export data-loading now also uses shared helpers (`read_sql_dataframe`, `execute_select_with_columns`).
-   - ⏳ Remaining migration: parse/modify flows still using direct `sqlite3.connect`.
+   - ✅ Parse and modify flows now use shared DB helpers (`execute_with_retry`, `execute_select_with_columns`, `connect_sqlite`) instead of direct `sqlite3.connect`.
 5. Performance cleanup.
    - Cache workbook formats.
    - Remove redundant matplotlib figure creation.

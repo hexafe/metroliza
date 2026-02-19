@@ -1,11 +1,10 @@
 from modules.CMMReportParser import CMMReportParser
 from modules.CustomLogger import CustomLogger
 from PyQt6.QtCore import QThread, pyqtSignal
-import sqlite3
-import time
 from pathlib import Path
 from modules.report_fingerprint import build_report_fingerprint, build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
+from modules.db import execute_with_retry
 
 
 class ParseReportsThread(QThread):
@@ -43,51 +42,35 @@ class ParseReportsThread(QThread):
             if self.parsing_canceled:
                 return report_fingerprints
 
-            # Connect to the SQLite database
-            with sqlite3.connect(self.db_file) as conn:
-                # Create a cursor object
-                with conn:
-                    # Retry mechanism for handling database lock
-                    max_retry_attempts = 5
-                    retry_delay = 1  # seconds
-                    retry_attempt = 1
-                    while retry_attempt <= max_retry_attempts:
-                        try:
-                            cursor = conn.cursor()
+            table_exists = execute_with_retry(
+                self.db_file,
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='REPORTS'",
+                retries=5,
+                retry_delay_s=1,
+            )
 
-                            # Check if 'REPORTS' table exists
-                            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='REPORTS'")
-                            result = cursor.fetchone()
+            if not table_exists:
+                return report_fingerprints
 
-                            if result:
-                                # 'REPORTS' table exists, fetch report identity columns
-                                cursor.execute("SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS")
-                                rows = cursor.fetchall()
+            rows = execute_with_retry(
+                self.db_file,
+                "SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS",
+                retries=5,
+                retry_delay_s=1,
+            )
 
-                                for row in rows:
-                                    if self.parsing_canceled:
-                                        return report_fingerprints
-                                    report = {
-                                        'ID': row[0],
-                                        'REFERENCE': row[1],
-                                        'FILELOC': row[2],
-                                        'FILENAME': row[3],
-                                        'DATE': row[4],
-                                        'SAMPLE_NUMBER': row[5],
-                                    }
-                                    report_fingerprints.add(build_report_fingerprint(report))
-
-                            # Return report fingerprints
-                            return report_fingerprints
-
-                        except sqlite3.OperationalError as e:
-                            error_message = str(e)
-                            if 'database is locked' in error_message:
-                                print(f"Database is locked. Retrying attempt {retry_attempt}...")
-                                retry_attempt += 1
-                                time.sleep(retry_delay)
-                            else:
-                                print(f"Error occurred: {error_message}.")  # Handle other database errors
+            for row in rows:
+                if self.parsing_canceled:
+                    return report_fingerprints
+                report = {
+                    'ID': row[0],
+                    'REFERENCE': row[1],
+                    'FILELOC': row[2],
+                    'FILENAME': row[3],
+                    'DATE': row[4],
+                    'SAMPLE_NUMBER': row[5],
+                }
+                report_fingerprints.add(build_report_fingerprint(report))
 
             # Return report fingerprints from fallback path
             return report_fingerprints
