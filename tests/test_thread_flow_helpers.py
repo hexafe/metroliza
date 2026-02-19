@@ -91,17 +91,21 @@ class TestParseHelpers(unittest.TestCase):
             calls['count'] += 1
             return calls['count'] > 2
 
+        progress_updates = []
+
         result = parse_new_reports(
             reports,
             existing,
             parser_factory=DummyParser,
             persist_report=lambda parser: persisted.append(parser.FILE_PATH),
             should_cancel=should_cancel,
+            on_progress=lambda parsed, total: progress_updates.append((parsed, total)),
         )
 
         self.assertEqual(result.total_files, 3)
         self.assertEqual(result.parsed_files, 2)
         self.assertEqual(persisted, ['a.pdf', 'b.pdf'])
+        self.assertEqual(progress_updates, [(1, 3), (2, 3)])
 
 
 class TestExportHelpers(unittest.TestCase):

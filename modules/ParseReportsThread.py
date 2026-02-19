@@ -31,7 +31,14 @@ def build_report_fingerprints_from_rows(rows, should_cancel=lambda: False):
     return report_fingerprints
 
 
-def parse_new_reports(report_paths, report_fingerprints, parser_factory, persist_report, should_cancel=lambda: False):
+def parse_new_reports(
+    report_paths,
+    report_fingerprints,
+    parser_factory,
+    persist_report,
+    should_cancel=lambda: False,
+    on_progress=None,
+):
     parsed_files = 0
     total_files = len(report_paths)
 
@@ -45,6 +52,9 @@ def parse_new_reports(report_paths, report_fingerprints, parser_factory, persist
             persist_report(parser)
             report_fingerprints.add(fingerprint)
         parsed_files += 1
+
+        if on_progress:
+            on_progress(parsed_files, total_files)
 
     return ParseBatchResult(parsed_files=parsed_files, total_files=total_files)
 
@@ -132,13 +142,15 @@ class ParseReportsThread(QThread):
                 parser_factory=lambda report: CMMReportParser(report, self.db_file),
                 persist_report=lambda parser: parser.open_database_and_check_filename(),
                 should_cancel=lambda: self.parsing_canceled,
+                on_progress=lambda parsed_files, total_files: (
+                    self.update_progress.emit(int(parsed_files / total_files * 100) if total_files else 100),
+                    self.update_label.emit(f"Parsing file {parsed_files} of {total_files}"),
+                ),
             )
 
-            total_files = result.total_files
-            for parsed_files in range(1, result.parsed_files + 1):
-                percentage = int(parsed_files / total_files * 100) if total_files else 100
-                self.update_progress.emit(percentage)
-                self.update_label.emit(f"Parsing file {parsed_files} of {total_files}")
+            if result.total_files == 0:
+                self.update_progress.emit(100)
+                self.update_label.emit("No reports found to parse.")
 
             self.parsing_finished.emit()
         except Exception as e:
