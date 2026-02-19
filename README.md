@@ -93,8 +93,8 @@ The execution roadmap is tracked in `IMPLEMENTATION_PLAN.md`. Current highlights
 - **Phase 1 (reliability and cancellation):** completed, including cooperative cancellation, non-blocking cancel behavior, and non-reraising user-facing logger behavior.
 - **Phase 2:** in progress; grouping/plot mismatch fixes are now completed and covered by regression tests, with structural decomposition/performance tasks still pending.
 - **Phase 3–4:** still in progress (docs/CI baseline and broader integration coverage).
-- **Latest Phase 2 increments:** parse/export worker entrypoints use validated request dataclasses (`ParseRequest`, `ExportRequest`) end-to-end from dialog/UI call sites, summary violin plotting hardens label/value alignment by removing NaN-only buckets before rendering, and export data-loading now uses shared DB utilities from `modules/db.py` (`read_sql_dataframe`, `execute_select_with_columns`).
-- **Next structural increment (Phase 2):** continue DB utility migration for remaining parse/modify call-sites and start worker decomposition into smaller testable units.
+- **Latest Phase 2 increments:** parse/export worker entrypoints use validated request dataclasses (`ParseRequest`, `ExportRequest`) end-to-end from dialog/UI call sites, summary violin plotting hardens label/value alignment by removing NaN-only buckets before rendering, and parse/export/modify DB access now uses shared utilities from `modules/db.py` (`execute_with_retry`, `read_sql_dataframe`, `execute_select_with_columns`, `connect_sqlite`).
+- **Next structural increment (Phase 2):** start worker decomposition into smaller testable units and expand DB utility retry/locking coverage.
 
 ## Tests
 

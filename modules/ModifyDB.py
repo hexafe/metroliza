@@ -8,8 +8,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 from PyQt6.QtCore import Qt
-import sqlite3
 from modules.CustomLogger import CustomLogger
+from modules.db import connect_sqlite, execute_select_with_columns
 
 
 class ModifyDB(QDialog):
@@ -112,25 +112,23 @@ class ModifyDB(QDialog):
             self.header_table.clearContents()
             self.undo_data.clear()
 
-            with sqlite3.connect(self.db_file) as conn:
-                cursor = conn.cursor()
+            reference_values, _ = execute_select_with_columns(
+                self.db_file,
+                "SELECT DISTINCT REFERENCE FROM REPORTS;",
+            )
+            self.populate_table(self.reference_table, reference_values)
 
-                # Populate reference table
-                cursor.execute("SELECT DISTINCT REFERENCE FROM REPORTS;")
-                reference_values = cursor.fetchall()
-                self.populate_table(self.reference_table, reference_values)
+            part_number_values, _ = execute_select_with_columns(
+                self.db_file,
+                "SELECT DISTINCT SAMPLE_NUMBER FROM REPORTS;",
+            )
+            self.populate_table(self.part_number_table, part_number_values)
 
-                # Populate part number table
-                cursor.execute("SELECT DISTINCT SAMPLE_NUMBER FROM REPORTS;")
-                part_number_values = cursor.fetchall()
-                self.populate_table(self.part_number_table, part_number_values)
-
-                # Populate header table
-                cursor.execute("SELECT DISTINCT HEADER FROM MEASUREMENTS;")
-                header_values = cursor.fetchall()
-                self.populate_table(self.header_table, header_values)
-
-            cursor.close()
+            header_values, _ = execute_select_with_columns(
+                self.db_file,
+                "SELECT DISTINCT HEADER FROM MEASUREMENTS;",
+            )
+            self.populate_table(self.header_table, header_values)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -196,7 +194,7 @@ class ModifyDB(QDialog):
 
     def apply_changes(self):
         try:
-            with sqlite3.connect(self.db_file) as conn:
+            with connect_sqlite(self.db_file) as conn:
                 cursor = conn.cursor()
 
                 # Update reference values
