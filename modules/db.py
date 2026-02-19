@@ -1,0 +1,51 @@
+import sqlite3
+import time
+from typing import Any
+
+import pandas as pd
+
+
+TRANSIENT_SQLITE_ERRORS = (
+    'database is locked',
+    'database schema is locked',
+    'unable to open database file',
+)
+
+
+def connect_sqlite(db_path: str, timeout_s: float = 5.0) -> sqlite3.Connection:
+    """Create a SQLite connection with common defaults for the app."""
+    return sqlite3.connect(db_path, timeout=timeout_s)
+
+
+def execute_with_retry(
+    db_path: str,
+    query: str,
+    params: tuple[Any, ...] | None = None,
+    *,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> list[tuple[Any, ...]]:
+    """Execute a query and return rows with a small retry policy for transient SQLite errors."""
+    params = params or ()
+    attempts = retries + 1
+
+    for attempt in range(attempts):
+        try:
+            with connect_sqlite(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                return cursor.fetchall()
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
+            if not is_transient or attempt >= attempts - 1:
+                raise
+            time.sleep(retry_delay_s)
+
+    return []
+
+
+def read_sql_dataframe(db_path: str, query: str) -> pd.DataFrame:
+    """Read a SQL query into a DataFrame using a managed SQLite connection."""
+    with connect_sqlite(db_path) as conn:
+        return pd.read_sql_query(query, conn)

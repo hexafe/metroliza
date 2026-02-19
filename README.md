@@ -94,6 +94,7 @@ The execution roadmap is tracked in `IMPLEMENTATION_PLAN.md`. Current highlights
 - **Phase 2:** in progress; grouping/plot mismatch fixes are now completed and covered by regression tests, with structural decomposition/performance tasks still pending.
 - **Phase 3–4:** still in progress (docs/CI baseline and broader integration coverage).
 - **Latest Phase 2 increments:** parse/export worker entrypoints use validated request dataclasses (`ParseRequest`, `ExportRequest`) end-to-end from dialog/UI call sites, and summary violin plotting now hardens label/value alignment by removing NaN-only buckets before rendering.
+- **Next structural increment (Phase 2):** initial shared DB utilities were added in `modules/db.py` (connection defaults, retryable query helper, DataFrame query helper) and integrated into grouping/filter data-loading paths, with remaining parse/export/modify call-sites queued for migration.
 
 ## Tests
 
@@ -109,7 +110,7 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 To run the contract and export-grouping focused tests only:
 
 ```bash
-PYTHONPATH=. python -m unittest tests.test_contracts tests.test_export_grouping_and_sorting -v
+PYTHONPATH=. python -m unittest tests.test_contracts tests.test_export_grouping_and_sorting tests.test_db_utils -v
 ```
 
 ## Project Status
