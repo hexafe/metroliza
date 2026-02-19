@@ -1,10 +1,52 @@
 from modules.CMMReportParser import CMMReportParser
 from modules.CustomLogger import CustomLogger
 from PyQt6.QtCore import QThread, pyqtSignal
+from dataclasses import dataclass
 from pathlib import Path
 from modules.report_fingerprint import build_report_fingerprint, build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.db import execute_with_retry
+
+
+@dataclass(frozen=True)
+class ParseBatchResult:
+    parsed_files: int
+    total_files: int
+
+
+def build_report_fingerprints_from_rows(rows, should_cancel=lambda: False):
+    report_fingerprints = set()
+    for row in rows:
+        if should_cancel():
+            break
+        report = {
+            'ID': row[0],
+            'REFERENCE': row[1],
+            'FILELOC': row[2],
+            'FILENAME': row[3],
+            'DATE': row[4],
+            'SAMPLE_NUMBER': row[5],
+        }
+        report_fingerprints.add(build_report_fingerprint(report))
+    return report_fingerprints
+
+
+def parse_new_reports(report_paths, report_fingerprints, parser_factory, persist_report, should_cancel=lambda: False):
+    parsed_files = 0
+    total_files = len(report_paths)
+
+    for report in report_paths:
+        if should_cancel():
+            break
+
+        parser = parser_factory(report)
+        fingerprint = build_parser_fingerprint(parser)
+        if fingerprint not in report_fingerprints:
+            persist_report(parser)
+            report_fingerprints.add(fingerprint)
+        parsed_files += 1
+
+    return ParseBatchResult(parsed_files=parsed_files, total_files=total_files)
 
 
 class ParseReportsThread(QThread):
@@ -59,18 +101,9 @@ class ParseReportsThread(QThread):
                 retry_delay_s=1,
             )
 
-            for row in rows:
-                if self.parsing_canceled:
-                    return report_fingerprints
-                report = {
-                    'ID': row[0],
-                    'REFERENCE': row[1],
-                    'FILELOC': row[2],
-                    'FILENAME': row[3],
-                    'DATE': row[4],
-                    'SAMPLE_NUMBER': row[5],
-                }
-                report_fingerprints.add(build_report_fingerprint(report))
+            report_fingerprints.update(
+                build_report_fingerprints_from_rows(rows, should_cancel=lambda: self.parsing_canceled)
+            )
 
             # Return report fingerprints from fallback path
             return report_fingerprints
@@ -86,32 +119,27 @@ class ParseReportsThread(QThread):
 
     def run(self):
         try:
-            # Get the list of reports from the provided directory
             list_of_reports = self.get_list_of_reports()
+            if self.parsing_canceled:
+                self.parsing_finished.emit()
+                return
+
             report_fingerprints = self.get_report_fingerprints_in_database()
-            total_files = len(list_of_reports)
-            parsed_files = 0
 
-            # Loop through each report and parse it
-            for report in list_of_reports:
-                if self.parsing_canceled:
-                    break
+            result = parse_new_reports(
+                list_of_reports,
+                report_fingerprints,
+                parser_factory=lambda report: CMMReportParser(report, self.db_file),
+                persist_report=lambda parser: parser.open_database_and_check_filename(),
+                should_cancel=lambda: self.parsing_canceled,
+            )
 
-                cmm_report = CMMReportParser(report, self.db_file)
-                fingerprint = build_parser_fingerprint(cmm_report)
-                if fingerprint not in report_fingerprints:
-                    cmm_report.open_database_and_check_filename()
-                    report_fingerprints.add(fingerprint)
-                parsed_files += 1
-
-                # Calculate the percentage of parsed files and emit the progress signal
-                percentage = int(parsed_files / total_files * 100)
+            total_files = result.total_files
+            for parsed_files in range(1, result.parsed_files + 1):
+                percentage = int(parsed_files / total_files * 100) if total_files else 100
                 self.update_progress.emit(percentage)
-
-                # Update the label with the current parsing status
                 self.update_label.emit(f"Parsing file {parsed_files} of {total_files}")
 
-            # Emit the signal indicating that parsing has finished
             self.parsing_finished.emit()
         except Exception as e:
             self.log_and_exit(e)

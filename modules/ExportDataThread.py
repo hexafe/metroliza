@@ -19,6 +19,22 @@ from modules.contracts import ExportRequest, validate_export_request
 from modules.db import execute_select_with_columns, read_sql_dataframe
 
 
+def build_export_dataframe(data, column_names):
+    return pd.DataFrame(data, columns=column_names)
+
+
+def execute_export_query(db_file, export_query, select_reader=execute_select_with_columns):
+    return select_reader(db_file, export_query)
+
+
+def run_export_steps(steps, should_cancel):
+    for step in steps:
+        if should_cancel():
+            return False
+        step()
+    return not should_cancel()
+
+
 class ExportDataThread(QThread):
     update_label = pyqtSignal(str)
     update_progress = pyqtSignal(int)
@@ -193,18 +209,18 @@ class ExportDataThread(QThread):
                 return
 
             excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
-
-            self.export_filtered_data(excel_writer)
-            if self._check_canceled():
+            try:
+                completed = run_export_steps(
+                    [
+                        lambda: self.export_filtered_data(excel_writer),
+                        lambda: self.add_measurements_horizontal_sheet(excel_writer),
+                    ],
+                    should_cancel=self._check_canceled,
+                )
+                if not completed:
+                    return
+            finally:
                 excel_writer.close()
-                return
-
-            self.add_measurements_horizontal_sheet(excel_writer)
-            if self._check_canceled():
-                excel_writer.close()
-                return
-
-            excel_writer.close()
 
             self.update_label.emit("Export completed successfully.")
             self.finished.emit()
@@ -447,9 +463,7 @@ class ExportDataThread(QThread):
         try:
             if self._check_canceled():
                 return
-            export_query = self.filter_query
-            data, column_names = execute_select_with_columns(self.db_file, export_query)
-
+            data, column_names = execute_export_query(self.db_file, self.filter_query)
             self.write_data_to_excel(data, column_names, "MEASUREMENTS", excel_writer)
         except Exception as e:
             self.log_and_exit(e)
@@ -459,7 +473,7 @@ class ExportDataThread(QThread):
             if self._check_canceled():
                 return
             # Convert the data to a DataFrame
-            df = pd.DataFrame(data, columns=column_names)
+            df = build_export_dataframe(data, column_names)
 
             # Write the DataFrame to the Excel file
             safe_table_name = unique_sheet_name(table_name, set(excel_writer.sheets.keys()))
