@@ -107,7 +107,8 @@ Recent performance-focused changes include:
 - cached preparation of grouping assignments during export summary generation (reused across headers),
 - vectorized NaN filtering/list aggregation for violin payload construction,
 - vectorized column-width sizing during raw-sheet export,
-- faster dataframe-to-widget row iteration in grouping dialogs (`itertuples` over `iterrows`).
+- faster dataframe-to-widget row iteration in grouping dialogs (`itertuples` over `iterrows`),
+- sparse repeated sample labels in summary trend plots to improve readability on dense exports.
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 
