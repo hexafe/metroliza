@@ -138,6 +138,25 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(values, [[1.0], [2.0]])
         self.assertTrue(can_render)
 
+
+    def test_build_violin_payload_preserves_input_group_order(self):
+        header_group = pd.DataFrame(
+            {
+                'GROUP': ['B', 'A', 'B', 'A'],
+                'MEAS': [1.0, 2.0, 1.1, 2.1],
+            }
+        )
+
+        labels, values, can_render = ExportDataThread._build_violin_payload(
+            header_group,
+            'GROUP',
+            min_samplesize=1,
+        )
+
+        self.assertEqual(labels, ['B', 'A'])
+        self.assertEqual(values, [[1.0, 1.1], [2.0, 2.1]])
+        self.assertTrue(can_render)
+
     def test_build_violin_payload_honors_minimum_sample_size(self):
         header_group = pd.DataFrame(
             {
