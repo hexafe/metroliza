@@ -41,7 +41,10 @@ class _DummyLogger:
 custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
-from modules.ExportDataThread import compute_scaled_y_limits
+from modules.ExportDataThread import (
+    build_histogram_density_curve_payload,
+    compute_scaled_y_limits,
+)
 
 
 class TestExportPlotHelpers(unittest.TestCase):
@@ -50,6 +53,18 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual(y_min, 8.0)
         self.assertEqual(y_max, 22.0)
+
+    def test_build_histogram_density_curve_payload_builds_curve_for_variable_data(self):
+        payload = build_histogram_density_curve_payload([1.0, 1.5, 2.0, 2.5])
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(len(payload['x']), 100)
+        self.assertEqual(len(payload['y']), 100)
+
+    def test_build_histogram_density_curve_payload_returns_none_for_constant_data(self):
+        payload = build_histogram_density_curve_payload([3.0, 3.0, 3.0])
+
+        self.assertIsNone(payload)
 
 
 if __name__ == '__main__':
