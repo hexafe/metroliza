@@ -46,7 +46,7 @@ Metroliza supports an end-to-end flow:
 ## Project layout
 
 - `metroliza.py` — application entry point.
-- `modules/` — core app modules (parsing, grouping, export, dialogs, contracts, DB helpers).
+- `modules/` — core app modules (parsing, grouping, export, dialogs, contracts, DB helpers, export summary utilities).
 - `tests/` — regression/unit tests.
 - `IMPLEMENTATION_PLAN.md` — roadmap and phase status.
 - `metroliza_onefile.spec` — PyInstaller one-file build spec.
@@ -64,7 +64,7 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 Run focused checks when iterating on specific areas:
 
 ```bash
-PYTHONPATH=. python -m unittest tests.test_contracts tests.test_export_grouping_and_sorting tests.test_db_utils -v
+PYTHONPATH=. python -m unittest tests.test_contracts tests.test_export_grouping_and_sorting tests.test_export_summary_utils tests.test_db_utils -v
 PYTHONPATH=. python -m unittest tests.test_phase4_integration_happy_path -v
 ```
 

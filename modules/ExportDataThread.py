@@ -14,7 +14,7 @@ from modules.CustomLogger import CustomLogger
 import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
 from modules.excel_sheet_utils import unique_sheet_name
-from modules.stats_utils import safe_process_capability
+from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
 from modules.contracts import ExportRequest, validate_export_request
 from modules.db import execute_select_with_columns, read_sql_dataframe
 
@@ -554,23 +554,22 @@ class ExportDataThread(QThread):
                 return
             header_group = self._ensure_sample_number_column(header_group)
             imgplot = BytesIO()
-            nom = round(header_group['NOM'].iloc[0], 3)
-            USL = round(header_group['+TOL'].iloc[0], 3)
-            USL = nom + USL
-            if header_group['-TOL'].iloc[0]:
-                LSL = round(header_group['-TOL'].iloc[0], 3)
-            else:
-                LSL = 0
-            LSL = nom + LSL
-            minimum = header_group['MEAS'].min()
-            maximum = header_group['MEAS'].max()
-            sigma = header_group['MEAS'].std()
-            average = header_group['MEAS'].mean()
-            median = header_group['MEAS'].median()
-            Cp, Cpk = safe_process_capability(nom, USL, LSL, sigma, average)
-            samplesize = header_group['MEAS'].count()
-            NOK_nb = header_group[header_group['MEAS'] > USL]['MEAS'].count() + header_group[header_group['MEAS'] < LSL]['MEAS'].count()
-            NOK_pct = NOK_nb/samplesize
+            limits = resolve_nominal_and_limits(header_group)
+            nom = limits['nom']
+            USL = limits['usl']
+            LSL = limits['lsl']
+
+            summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
+            minimum = summary_stats['minimum']
+            maximum = summary_stats['maximum']
+            sigma = summary_stats['sigma']
+            average = summary_stats['average']
+            median = summary_stats['median']
+            Cp = summary_stats['cp']
+            Cpk = summary_stats['cpk']
+            samplesize = summary_stats['sample_size']
+            NOK_nb = summary_stats['nok_count']
+            NOK_pct = summary_stats['nok_pct']
             
             # Create a Matplotlib figure and plot the scatter chart with lines
             # Set global font size

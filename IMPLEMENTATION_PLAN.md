@@ -104,7 +104,7 @@ Use this section as the source of truth for what is done vs still outstanding.
    - `ParseRequest`, `AppPaths`, `ExportOptions`, `GroupingAssignment`, and `ExportRequest` exist.
    - Validation helpers now cover parse, paths, options, grouping, and end-to-end export request validation.
    - Parse and export thread entrypoints now require validated request dataclasses from UI call sites.
-3. **Decompose heavy workers into testable units** — 🔴 not started.
+3. **Decompose heavy workers into testable units** — 🟡 in progress (summary-stat extraction helpers added for export flow).
 4. **Create shared DB utilities module (`db.py`)** — 🟡 partially implemented (core helpers added; adopted in grouping/filter and export data-loading paths).
 5. **Performance cleanup** — 🔴 not started.
 
@@ -119,6 +119,7 @@ Use this section as the source of truth for what is done vs still outstanding.
    - Add validators (`validate_export_options`, `validate_paths`, `validate_grouping_df`).
 3. Decompose heavy workers into testable units.
    - Split `ExportDataThread` into acquisition, workbook writing, stats/chart generation.
+   - ✅ Summary-stat and limit calculation logic extracted to `modules/export_summary_utils.py` and consumed by export summary generation.
    - Add pure functions for formulas/statistics.
 4. Create shared DB utilities module (`db.py`).
    - Connection handling, retry policy, query helpers.
@@ -238,7 +239,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Remaining execution order (updated)
 1. Execute remaining **Phase 2** structural items in small mergeable PRs:
-   - worker decomposition,
+   - continue worker decomposition (remaining chart/workbook sections),
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
 2. Execute remaining **Phase 3** items (lint/smoke CI expansion).
 3. Execute remaining CI/lint expansion and keep phase coverage green in maintenance PRs.
