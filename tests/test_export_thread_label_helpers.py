@@ -43,7 +43,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 
-from modules.ExportDataThread import build_sparse_unique_labels
+from modules.ExportDataThread import all_measurements_within_limits, build_sparse_unique_labels
 
 
 class TestExportThreadLabelHelpers(unittest.TestCase):
@@ -60,6 +60,15 @@ class TestExportThreadLabelHelpers(unittest.TestCase):
         result = build_sparse_unique_labels(labels)
 
         self.assertEqual(result, ['A', 'B', '', 'C', ''])
+
+
+class TestExportThreadToleranceHelpers(unittest.TestCase):
+    def test_all_measurements_within_limits_true_when_all_values_in_range(self):
+        self.assertTrue(all_measurements_within_limits([1.0, 1.1, 0.9], 0.8, 1.2))
+
+    def test_all_measurements_within_limits_false_when_any_value_out_of_range(self):
+        self.assertFalse(all_measurements_within_limits([1.0, 1.5, 0.9], 0.8, 1.2))
+
 
 
 if __name__ == '__main__':

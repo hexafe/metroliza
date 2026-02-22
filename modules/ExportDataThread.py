@@ -35,6 +35,11 @@ def run_export_steps(steps, should_cancel):
     return not should_cancel()
 
 
+def all_measurements_within_limits(measurements, lower_limit, upper_limit):
+    series = pd.Series(measurements)
+    return series.between(lower_limit, upper_limit, inclusive='both').all()
+
+
 def build_sparse_unique_labels(labels):
     """Return labels with repeated values blanked for clearer x-axis display."""
     seen = set()
@@ -309,6 +314,7 @@ class ExportDataThread(QThread):
             border_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'right': 1})
             wrap_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
             percent_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'num_format': '0.00%'})
+            red_format = workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
 
             column_width = 12
 
@@ -419,11 +425,8 @@ class ExportDataThread(QThread):
                     worksheet.write_column(21, col + 1, header_group['SAMPLE_NUMBER'])
                     
                     worksheet.write(20, col + 2, header, wrap_format)
-                    worksheet.write_column(21, col + 2, round(header_group['MEAS'], 3))
-                    
-                    
-                    # Define the format for conditional formatting (highlight cells in red)
-                    red_format = workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
+                    rounded_meas = header_group['MEAS'].round(3)
+                    worksheet.write_column(21, col + 2, rounded_meas)
 
                     # Apply conditional formatting to highlight cells greater than USL in red
                     worksheet.conditional_format(21, col + 2, len(header_group) + 20, col + 2,
@@ -508,8 +511,7 @@ class ExportDataThread(QThread):
                             return
                     
                     if self.hide_ok_results:
-                        # Use a list comprehension to check if all meas_value elements are within tolerance
-                        hide_columns = all(LSL <= meas_value <= USL for meas_value in header_group['MEAS'])
+                        hide_columns = all_measurements_within_limits(header_group['MEAS'], LSL, USL)
                         if hide_columns:
                             worksheet.set_column(col - 3, col - 1, 0)
                     

@@ -108,7 +108,8 @@ Recent performance-focused changes include:
 - vectorized NaN filtering/list aggregation for violin payload construction,
 - vectorized column-width sizing during raw-sheet export,
 - faster dataframe-to-widget row iteration in grouping dialogs (`itertuples` over `iterrows`),
-- sparse repeated sample labels in summary trend plots to improve readability on dense exports.
+- sparse repeated sample labels in summary trend plots to improve readability on dense exports,
+- cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops).
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 
@@ -122,3 +123,8 @@ Current high-level state:
 - Phase 2: partially completed (remaining structural/performance items).
 - Phase 3: partially completed (docs/dependency hygiene/contributor guide done; CI lint rollout remains incremental).
 - Phase 4: completed.
+
+
+### Planned optimization follow-ups
+- Export: additional profiling and inner-loop precomputation for chart-heavy workbooks.
+- Parsing: stage-level timing + reduced redundant DB checks/regex work in large parse batches.
