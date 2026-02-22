@@ -19,6 +19,27 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
         self.assertIn('from modules.db import execute_with_retry', parse_thread)
         self.assertIn('from modules.db import connect_sqlite, execute_select_with_columns', modify_db)
 
+    def test_cmm_and_bom_manager_no_longer_use_direct_sqlite_connect(self):
+        cmm_parser = self._read('modules/CMMReportParser.py')
+        bom_manager = self._read('modules/bom_manager.py')
+
+        self.assertNotIn('sqlite3.connect(', cmm_parser)
+        self.assertNotIn('sqlite3.connect(', bom_manager)
+
+        self.assertIn('from modules.db import connect_sqlite, execute_with_retry', cmm_parser)
+        self.assertIn('from modules.db import connect_sqlite, execute_select_with_columns', bom_manager)
+
+    def test_migrated_result_shape_usage_is_tuple_based(self):
+        cmm_parser = self._read('modules/CMMReportParser.py')
+        bom_manager = self._read('modules/bom_manager.py')
+
+        self.assertIn('count = count_rows[0][0] if count_rows else 0', cmm_parser)
+        self.assertIn('count = count_rows[0][0] if count_rows else 0', cmm_parser)
+
+        self.assertIn('return parent_rows[0][0]', bom_manager)
+        self.assertIn('entry_id = entry[0]', bom_manager)
+        self.assertIn('product_reference = entry[1]', bom_manager)
+
 
 if __name__ == '__main__':
     unittest.main()
