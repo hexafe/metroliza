@@ -35,6 +35,19 @@ def run_export_steps(steps, should_cancel):
     return not should_cancel()
 
 
+def build_sparse_unique_labels(labels):
+    """Return labels with repeated values blanked for clearer x-axis display."""
+    seen = set()
+    sparse_labels = []
+    for label in labels:
+        if label in seen:
+            sparse_labels.append('')
+            continue
+        seen.add(label)
+        sparse_labels.append(label)
+    return sparse_labels
+
+
 class ExportDataThread(QThread):
     update_label = pyqtSignal(str)
     update_progress = pyqtSignal(int)
@@ -724,12 +737,7 @@ class ExportDataThread(QThread):
             data_x = list(range(0, header_group['MEAS'].count()))
             data_y = header_group['MEAS']
 
-            unique_labels = []
-            for label in header_group['SAMPLE_NUMBER']:
-                if label not in unique_labels:
-                    unique_labels.append(label)
-                else:
-                    unique_labels.append('')
+            unique_labels = build_sparse_unique_labels(list(header_group['SAMPLE_NUMBER']))
 
             fig, ax = plt.subplots(figsize=(6, 4))
 

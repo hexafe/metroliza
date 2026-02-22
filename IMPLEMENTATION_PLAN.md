@@ -105,6 +105,7 @@ Use this section as the source of truth for what is done vs still outstanding.
    - Validation helpers now cover parse, paths, options, grouping, and end-to-end export request validation.
    - Parse and export thread entrypoints now require validated request dataclasses from UI call sites.
 3. **Decompose heavy workers into testable units** — 🟡 in progress (summary-stat extraction helpers added for export flow).
+   - Added a dedicated sparse-label helper for summary trend x-axis rendering (`build_sparse_unique_labels`) and direct unit coverage to keep this behavior stable during continued worker decomposition.
 4. **Create shared DB utilities module (`db.py`)** — 🟡 partially implemented (core helpers added; adopted in grouping/filter and export data-loading paths).
 5. **Performance cleanup** — 🟡 in progress (export/grouping hot paths optimized; broader parser/export profiling still pending).
 
@@ -243,6 +244,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 ## Remaining execution order (updated)
 1. Execute remaining **Phase 2** structural items in small mergeable PRs:
    - continue worker decomposition (remaining chart/workbook sections),
+   - continue extracting + testing pure plotting/data-shaping helpers from `ExportDataThread` (next target: histogram/trend payload builders),
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
 2. Execute remaining **Phase 3** items (lint/smoke CI expansion).
 3. Execute remaining CI/lint expansion and keep phase coverage green in maintenance PRs.
