@@ -139,13 +139,13 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Phase 3 — Documentation + developer quality baseline (Priority P2, 1–2 days)
 
-### Status: 🔴 Not implemented
+### Status: 🟡 Partially implemented
 
 ### Implementation checklist
-1. **Rewrite `README.md` (quickstart/setup/run/package/troubleshooting)** — 🟡 partial (overview exists, but no full quickstart/troubleshooting baseline).
+1. **Rewrite `README.md` (quickstart/setup/run/package/troubleshooting)** — ✅ done.
 2. **Dependency hygiene (UTF-8 + split runtime/dev/build)** — 🔴 not started.
-3. **Baseline CI (`compileall`, lint, smoke tests)** — 🔴 not started.
-4. **Add `CONTRIBUTING.md` + architecture notes** — 🔴 not started.
+3. **Baseline CI (`compileall`, lint, smoke tests)** — 🟡 partially done (`compileall` + unit test workflow added; dedicated lint/smoke steps still pending).
+4. **Add `CONTRIBUTING.md` + architecture notes** — ✅ done (initial contributor setup, checks, architecture flow, and contracts guidance added).
 
 ### Scope
 1. Rewrite `README.md`.
@@ -177,7 +177,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ### Implementation checklist
 - **Unit tests for Phase 0 regressions** — ✅ done.
-- **Additional unit tests (grouping merge key correctness + deterministic label/value order)** — 🔴 not started.
+- **Additional unit tests (grouping merge key correctness + deterministic label/value order)** — 🟡 partially done (deterministic label/value order coverage added; merge-key scenario expansion still pending).
 - **Integration test (parse → DB → export happy path)** — 🔴 not started.
 
 ### Unit tests
@@ -230,12 +230,12 @@ Use this section as the source of truth for what is done vs still outstanding.
 - [x] Export/parse entrypoints use dataclass contracts (grouping internals still being hardened).
 - [x] Normal operation avoids forced thread termination.
 - [x] Reliability fixes merged for dedupe, sheet naming, stats edge cases, and license parsing.
-- [ ] Docs updated with architecture and operating instructions.
+- [x] Docs updated with architecture and operating instructions.
 - [ ] CI executes compile + tests + lint successfully.
 
 ## Remaining execution order (updated)
 1. Execute remaining **Phase 2** structural items in small mergeable PRs:
    - worker decomposition,
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
-2. Execute **Phase 3** developer baseline (README quickstart, dependency cleanup, CI, contributing docs).
+2. Execute remaining **Phase 3** items (dependency cleanup and lint/smoke CI expansion).
 3. Execute **Phase 4** coverage expansion (grouping regressions + integration happy path).
