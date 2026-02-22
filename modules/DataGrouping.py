@@ -210,9 +210,9 @@ class DataGrouping(QDialog):
         rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
 
         self.part_list.clear()
-        for _, row in rows_df.iterrows():
-            item = QListWidgetItem(self._part_display_label(row))
-            item.setData(Qt.ItemDataRole.UserRole, row['GROUP_KEY'])
+        for row in rows_df.itertuples(index=False):
+            item = QListWidgetItem(f"{row.SAMPLE_NUMBER} | {row.DATE if pd.notna(row.DATE) else ''} | {row.FILENAME if pd.notna(row.FILENAME) else ''}")
+            item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
             self.part_list.addItem(item)
 
     def _populate_part_group_list(self, selected_group=None):
@@ -220,9 +220,9 @@ class DataGrouping(QDialog):
         rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
 
         self.part_group_list.clear()
-        for _, row in rows_df.iterrows():
-            item = QListWidgetItem(self._part_display_label(row))
-            item.setData(Qt.ItemDataRole.UserRole, row['GROUP_KEY'])
+        for row in rows_df.itertuples(index=False):
+            item = QListWidgetItem(f"{row.SAMPLE_NUMBER} | {row.DATE if pd.notna(row.DATE) else ''} | {row.FILENAME if pd.notna(row.FILENAME) else ''}")
+            item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
             self.part_group_list.addItem(item)
             
     def populate_list_widgets(self):

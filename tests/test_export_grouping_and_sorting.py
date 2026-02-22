@@ -206,6 +206,29 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(labels, ['1', '2'])
         self.assertEqual(values, [[1.0, 1.1], [0.9]])
         self.assertFalse(can_render)
+
+    def test_prepared_grouping_df_is_cached_per_export_thread_instance(self):
+        thread = ExportDataThread(
+            export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions())
+        )
+        thread.df_for_grouping = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'],
+                'FILELOC': ['/a'],
+                'FILENAME': ['x.pdf'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'GROUP': ['A'],
+            }
+        )
+
+        with patch.object(thread, '_prepare_grouping_df', wraps=thread._prepare_grouping_df) as prepare_mock:
+            first = thread.prepared_grouping_df
+            second = thread.prepared_grouping_df
+
+        self.assertIs(first, second)
+        self.assertEqual(prepare_mock.call_count, 1)
+
     def test_apply_group_assignments_keeps_latest_duplicate_assignment(self):
         thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
         header_group = pd.DataFrame(

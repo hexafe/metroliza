@@ -106,7 +106,7 @@ Use this section as the source of truth for what is done vs still outstanding.
    - Parse and export thread entrypoints now require validated request dataclasses from UI call sites.
 3. **Decompose heavy workers into testable units** — 🟡 in progress (summary-stat extraction helpers added for export flow).
 4. **Create shared DB utilities module (`db.py`)** — 🟡 partially implemented (core helpers added; adopted in grouping/filter and export data-loading paths).
-5. **Performance cleanup** — 🔴 not started.
+5. **Performance cleanup** — 🟡 in progress (export/grouping hot paths optimized; broader parser/export profiling still pending).
 
 ### Scope
 1. Fix grouping/plot mismatch root causes.
@@ -127,6 +127,9 @@ Use this section as the source of truth for what is done vs still outstanding.
    - ✅ Export data-loading now also uses shared helpers (`read_sql_dataframe`, `execute_select_with_columns`).
    - ✅ Parse and modify flows now use shared DB helpers (`execute_with_retry`, `execute_select_with_columns`, `connect_sqlite`) instead of direct `sqlite3.connect`.
 5. Performance cleanup.
+   - ✅ Cache/reuse grouping dataframe preparation across summary-sheet header renders.
+   - ✅ Reduce export dataframe hot-path overhead via vectorized operations (violin payload build and column-width sizing).
+   - ✅ Replace `iterrows` with `itertuples` in grouping-dialog list population hot paths.
    - Cache workbook formats.
    - Remove redundant matplotlib figure creation.
    - Precompute expensive loop constants.

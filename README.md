@@ -101,6 +101,16 @@ Recent code paths use retry-aware helpers from `modules/db.py`. If a lock persis
 
 Check grouping and filtering choices first. Group/plot alignment, NaN-only bucket handling, and merge-key fallback selection (blank `GROUP_KEY`/`REPORT_ID` now fall back to composite identity) were hardened in the Phase 2 correctness work; rerun export after verifying source rows in the selected date/reference scope.
 
+### Export and parsing performance notes
+
+Recent performance-focused changes include:
+- cached preparation of grouping assignments during export summary generation (reused across headers),
+- vectorized NaN filtering/list aggregation for violin payload construction,
+- vectorized column-width sizing during raw-sheet export,
+- faster dataframe-to-widget row iteration in grouping dialogs (`itertuples` over `iterrows`).
+
+For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
+
 ## Roadmap status
 
 Roadmap progress and next actions are maintained in `IMPLEMENTATION_PLAN.md`.
@@ -109,5 +119,5 @@ Current high-level state:
 - Phase 0: completed.
 - Phase 1: completed.
 - Phase 2: partially completed (remaining structural/performance items).
-- Phase 3: in progress (docs + CI baseline being completed).
-- Phase 4: partially completed (additional coverage pending).
+- Phase 3: partially completed (docs/dependency hygiene/contributor guide done; CI lint rollout remains incremental).
+- Phase 4: completed.
