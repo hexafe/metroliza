@@ -31,6 +31,7 @@ import sqlite3
 import time
 from pathlib import Path
 from modules.CustomLogger import CustomLogger
+from modules.db import connect_sqlite, execute_with_retry
 
 
 class CMMReportParser:
@@ -142,28 +143,30 @@ class CMMReportParser:
                 self.split_text_to_blocks()
                 self.to_sqlite()
 
-            with sqlite3.connect(self.database) as conn:
-                with conn:
-                    cursor = conn.cursor()
+            # Check if 'REPORTS' table exists
+            table_exists = execute_with_retry(
+                self.database,
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='REPORTS'"
+            )
 
-                    # Check if 'REPORTS' table exists
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='REPORTS'")
-                    table_exists = cursor.fetchone()
+            if not table_exists:
+                print("REPORTS table does not exist. Creating...")
+                open_split_to_sql()
+                return
 
-                    if table_exists is None:
-                        print("REPORTS table does not exist. Creating...")
-                        open_split_to_sql()
-                        return
+            # Check if the file already exists in the 'REPORTS' table
+            count_rows = execute_with_retry(
+                self.database,
+                'SELECT COUNT(*) FROM REPORTS WHERE FILENAME = ?',
+                (self.pdf_file_name,),
+            )
+            count = count_rows[0][0] if count_rows else 0
 
-                    # Check if the file already exists in the 'REPORTS' table
-                    cursor.execute('SELECT COUNT(*) FROM REPORTS WHERE FILENAME = ?', (self.pdf_file_name,))
-                    count = cursor.fetchone()[0]
-
-                    if count == 0:
-                        # File does not exist in the 'REPORTS' table, import the data
-                        open_split_to_sql()
-                    else:
-                        print(f"{self.pdf_file_name} already exists in the database. Skipping the file.")
+            if count == 0:
+                # File does not exist in the 'REPORTS' table, import the data
+                open_split_to_sql()
+            else:
+                print(f"{self.pdf_file_name} already exists in the database. Skipping the file.")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -556,7 +559,7 @@ class CMMReportParser:
                 print(f"Report ({self.pdf_file_name}) - no measurements data available. Skipping database insertion.")
                 return
 
-            with sqlite3.connect(self.database) as conn:
+            with connect_sqlite(self.database) as conn:
                 with conn:
                     cursor = conn.cursor()
 
@@ -587,9 +590,12 @@ class CMMReportParser:
                                     )''')
 
                     # Check if the report already exists in the database
-                    cursor.execute('SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
-                                (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number))
-                    count = cursor.fetchone()[0]
+                    count_rows = execute_with_retry(
+                        self.database,
+                        'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
+                        (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number),
+                    )
+                    count = count_rows[0][0] if count_rows else 0
 
                     if count > 0:
                         print(f'Report ({self.pdf_file_name}) already exists in the database.')

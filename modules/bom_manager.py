@@ -11,7 +11,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
 )
 from PyQt5.QtCore import Qt
-import sqlite3
+
+from modules.db import connect_sqlite, execute_select_with_columns
 
 
 class BOMManager(QMainWindow):
@@ -19,10 +20,10 @@ class BOMManager(QMainWindow):
         super().__init__()
         self.setWindowTitle("BOM Manager")
         self.setGeometry(200, 200, 600, 400)
+        self.database_path = database_path
 
         # Create a connection to the SQLite database
-        self.conn = sqlite3.connect(database_path)
-        self.c = self.conn.cursor()
+        self.conn = connect_sqlite(database_path)
 
         # Create the BOM table if it doesn't exist
         self.create_bom_table()
@@ -51,9 +52,19 @@ class BOMManager(QMainWindow):
         self.modifying_row = False
         self.selected_entry_id = None
 
+    def _execute_write(self, query, params=()):
+        cursor = self.conn.cursor()
+        cursor.execute(query, params)
+        self.conn.commit()
+        return cursor
+
+    def _execute_read(self, query, params=()):
+        rows, _ = execute_select_with_columns(self.database_path, query, params)
+        return rows
+
     def create_bom_table(self):
         # Create a BOM table in the database if it doesn't exist
-        self.c.execute('''CREATE TABLE IF NOT EXISTS bom (
+        self._execute_write('''CREATE TABLE IF NOT EXISTS bom (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             product_reference TEXT,
                             description TEXT,
@@ -62,7 +73,6 @@ class BOMManager(QMainWindow):
                             parent_id INTEGER,
                             FOREIGN KEY (parent_id) REFERENCES bom(id)
                         )''')
-        self.conn.commit()
 
     def create_input_widgets(self):
         # Create the input widgets
@@ -136,8 +146,7 @@ class BOMManager(QMainWindow):
         self.bom_table.setRowCount(0)
 
         # Retrieve the BOM entries from the database
-        self.c.execute("SELECT * FROM bom")
-        bom_entries = self.c.fetchall()
+        bom_entries = self._execute_read("SELECT * FROM bom")
 
         # Populate the table with the BOM entries
         for row_data in bom_entries:
@@ -167,17 +176,15 @@ class BOMManager(QMainWindow):
 
     def get_parent_reference(self, parent_id):
         # Retrieve the parent reference based on the parent_id
-        self.c.execute("SELECT part_reference FROM bom WHERE id = ?", (parent_id,))
-        parent_data = self.c.fetchone()
-        if parent_data:
-            return parent_data[0]
+        parent_rows = self._execute_read("SELECT part_reference FROM bom WHERE id = ?", (parent_id,))
+        if parent_rows:
+            return parent_rows[0][0]
         else:
             return "None"
 
     def get_bom_entries(self):
         # Retrieve the BOM entries from the database
-        self.c.execute("SELECT id, product_reference FROM bom")
-        bom_entries = self.c.fetchall()
+        bom_entries = self._execute_read("SELECT id, product_reference FROM bom")
 
         # Format the entries as strings for the combo box
         entries = []
@@ -201,11 +208,10 @@ class BOMManager(QMainWindow):
             parent_id = int(parent_entry.split(" - ")[0])
 
         # Insert the BOM entry into the database
-        self.c.execute(
+        self._execute_write(
             "INSERT INTO bom (product_reference, description, part_reference, part_description, parent_id) VALUES (?, ?, ?, ?, ?)",
             (product_reference, description, part_reference, part_description, parent_id)
         )
-        self.conn.commit()
 
         # Refresh the table and clear the input fields
         self.refresh_table()
@@ -225,11 +231,10 @@ class BOMManager(QMainWindow):
             parent_id = int(parent_entry.split(" - ")[0])
 
         # Update the modified BOM entry in the database
-        self.c.execute(
+        self._execute_write(
             "UPDATE bom SET product_reference = ?, description = ?, part_reference = ?, part_description = ?, parent_id = ? WHERE id = ?",
             (product_reference, description, part_reference, part_description, parent_id, self.selected_entry_id)
         )
-        self.conn.commit()
 
         # Refresh the table, clear the input fields, and reset the state
         self.refresh_table()
@@ -250,10 +255,11 @@ class BOMManager(QMainWindow):
                                             QMessageBox.Yes | QMessageBox.No)
         if confirm_dialog == QMessageBox.Yes:
             # Delete the selected BOM entries from the database
+            cursor = self.conn.cursor()
             for item in selected_rows:
                 row = item.row()
                 entry_id = self.bom_table.item(row, 0).data(Qt.UserRole)[0]
-                self.c.execute("DELETE FROM bom WHERE id = ?", (entry_id,))
+                cursor.execute("DELETE FROM bom WHERE id = ?", (entry_id,))
             self.conn.commit()
 
             # Refresh the table and clear the input fields
