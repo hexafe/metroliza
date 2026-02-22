@@ -109,7 +109,9 @@ Recent performance-focused changes include:
 - vectorized column-width sizing during raw-sheet export,
 - faster dataframe-to-widget row iteration in grouping dialogs (`itertuples` over `iterrows`),
 - sparse repeated sample labels in summary trend plots to improve readability on dense exports,
+- seaborn-based styling in summary scatter/violin/histogram/trend plots for improved visual defaults while retaining headless export rendering,
 - extracted/tested summary payload helpers for histogram-stat tables and trend chart payload construction (supports safer refactors in `ExportDataThread`),
+- extracted/tested y-axis scaling helper for summary charts (`compute_scaled_y_limits`) to reduce duplicated chart math,
 - cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops).
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.

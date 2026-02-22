@@ -7,7 +7,12 @@ import numpy as np
 matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
+import importlib.util
 from scipy.stats import norm
+
+_HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
+if _HAS_SEABORN:
+    import seaborn as sns
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from io import BytesIO
 from modules.CustomLogger import CustomLogger
@@ -82,6 +87,52 @@ def build_trend_plot_payload(header_group):
         'y': measurements,
         'labels': build_sparse_unique_labels(sample_labels),
     }
+
+
+def compute_scaled_y_limits(current_limits, scale_factor):
+    """Return y-axis limits expanded by a symmetric scale factor."""
+    y_min, y_max = current_limits
+    data_range = y_max - y_min
+    padding = scale_factor * data_range / 2
+    return y_min - padding, y_max + padding
+
+
+def apply_summary_plot_theme():
+    """Apply a consistent summary plotting theme."""
+    if _HAS_SEABORN:
+        sns.set_theme(style='whitegrid', context='paper')
+    plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
+
+
+def render_violin(ax, values, labels):
+    if _HAS_SEABORN:
+        sns.violinplot(data=values, inner='quartile', cut=0, ax=ax)
+        ax.set_xticks(range(len(labels)))
+    else:
+        ax.violinplot(values, showmeans=True, showmedians=False, showextrema=True)
+        ax.set_xticks(range(1, len(labels) + 1))
+    ax.set_xticklabels(labels)
+
+
+def render_scatter(ax, data=None, x=None, y=None):
+    if _HAS_SEABORN:
+        sns.scatterplot(data=data, x=x, y=y, ax=ax, s=20, legend=False)
+    else:
+        ax.scatter(data[x], data[y], color='blue', marker='.')
+
+
+def render_histogram(ax, header_group):
+    if _HAS_SEABORN:
+        sns.histplot(data=header_group, x='MEAS', bins='auto', stat='density', alpha=0.7, color='steelblue', edgecolor='black', ax=ax)
+    else:
+        ax.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color='blue', edgecolor='black')
+
+
+def render_density_line(ax, x, p):
+    if _HAS_SEABORN:
+        sns.lineplot(x=x, y=p, color='black', linewidth=2, ax=ax)
+    else:
+        ax.plot(x, p, 'k', linewidth=2)
 
 
 class ExportDataThread(QThread):
@@ -615,9 +666,7 @@ class ExportDataThread(QThread):
             summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
             average = summary_stats['average']
             
-            # Create a Matplotlib figure and plot the scatter chart with lines
-            # Set global font size
-            plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
+            apply_summary_plot_theme()
             fig, ax = plt.subplots(figsize=(6, 4))
             
             grouping_df = self.prepared_grouping_df
@@ -629,13 +678,9 @@ class ExportDataThread(QThread):
                     self.violin_plot_min_samplesize,
                 )
                 if can_render_violin:
-                    plt.violinplot(values,
-                                   showmeans=True,
-                                   showmedians=False,
-                                   showextrema=True)
-                    plt.xticks(range(1, len(labels) + 1), labels)
+                    render_violin(ax, values, labels)
                 else:
-                    ax.scatter(header_group['GROUP'], header_group['MEAS'], label=header, color='blue', marker='.')
+                    render_scatter(ax, data=header_group, x='GROUP', y='MEAS')
             else:
                 labels, values, can_render_violin = self._build_violin_payload(
                     header_group,
@@ -643,26 +688,15 @@ class ExportDataThread(QThread):
                     self.violin_plot_min_samplesize,
                 )
                 if can_render_violin:
-                    plt.violinplot(values,
-                                   showmeans=True,
-                                   showmedians=False,
-                                   showextrema=True)
-                    plt.xticks(range(1, len(labels) + 1), labels)
+                    render_violin(ax, values, labels)
                 else:
-                    ax.scatter(header_group['SAMPLE_NUMBER'], header_group['MEAS'], label=header, color='blue', marker='.')
+                    render_scatter(ax, data=header_group, x='SAMPLE_NUMBER', y='MEAS')
             
             ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
             ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
             
-            # Get the current y-axis limits
             current_y_limits = ax.get_ylim()
-
-            # Calculate data range
-            data_range = current_y_limits[1] - current_y_limits[0]
-
-            # Calculate new y-axis limits based on the data range and scale factor
-            y_min = current_y_limits[0] - self.summary_plot_scale * data_range / 2
-            y_max = current_y_limits[1] + self.summary_plot_scale * data_range / 2
+            y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
 
             # Set y-axis limits using the Axes object
             ax.set_ylim(y_min, y_max)
@@ -689,7 +723,7 @@ class ExportDataThread(QThread):
             imgplot = BytesIO()
             # Plot the histogram with auto-defined bins
             fig, ax = plt.subplots(figsize=(6, 4))
-            n, bins, patches = plt.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color='blue', edgecolor='black')
+            render_histogram(ax, header_group)
             
             # Add a table with statistics
             table_data = build_histogram_table_data(summary_stats)
@@ -712,7 +746,7 @@ class ExportDataThread(QThread):
                 xmin, xmax = plt.xlim()
                 x = np.linspace(xmin, xmax, 100)
                 p = norm.pdf(x, mu, std)
-                plt.plot(x, p, 'k', linewidth=2)
+                render_density_line(ax, x, p)
             
             # Add vertical lines for mean, LSL and USL
             plt.axvline(average, color='red', linestyle='dashed', linewidth=2, label=f'Mean = {average:.3f}')
@@ -745,7 +779,7 @@ class ExportDataThread(QThread):
             plt.close(fig)
             
             imgplot = BytesIO()
-            plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
+            apply_summary_plot_theme()
             
             trend_payload = build_trend_plot_payload(header_group)
             data_x = trend_payload['x']
@@ -754,8 +788,11 @@ class ExportDataThread(QThread):
 
             fig, ax = plt.subplots(figsize=(6, 4))
 
-            # Scatter plot
-            ax.scatter(data_x, data_y, label=header, color='blue', marker='.')
+            # Trend scatter plot
+            if _HAS_SEABORN:
+                sns.scatterplot(x=data_x, y=data_y, ax=ax, s=20, legend=False)
+            else:
+                ax.scatter(data_x, data_y, color='blue', marker='.')
 
             ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
             ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
@@ -770,15 +807,8 @@ class ExportDataThread(QThread):
             # Rotate the tick labels for better visibility
             plt.xticks(rotation=90)
             
-            # Get the current y-axis limits
             current_y_limits = ax.get_ylim()
-
-            # Calculate data range
-            data_range = current_y_limits[1] - current_y_limits[0]
-
-            # Calculate new y-axis limits based on the data range and scale factor
-            y_min = current_y_limits[0] - self.summary_plot_scale * data_range / 2
-            y_max = current_y_limits[1] + self.summary_plot_scale * data_range / 2
+            y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
 
             # Set y-axis limits using the Axes object
             ax.set_ylim(y_min, y_max)
