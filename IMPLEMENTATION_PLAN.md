@@ -104,8 +104,8 @@ Use this section as the source of truth for what is done vs still outstanding.
    - `ParseRequest`, `AppPaths`, `ExportOptions`, `GroupingAssignment`, and `ExportRequest` exist.
    - Validation helpers now cover parse, paths, options, grouping, and end-to-end export request validation.
    - Parse and export thread entrypoints now require validated request dataclasses from UI call sites.
-3. **Decompose heavy workers into testable units** — 🟡 in progress (summary-stat extraction helpers added for export flow).
-   - Added dedicated pure helpers for summary rendering payloads: sparse trend labels (`build_sparse_unique_labels`), histogram statistics table rows (`build_histogram_table_data`), and summary trend payload assembly (`build_trend_plot_payload`) with direct unit coverage to keep behavior stable during continued worker decomposition.
+3. **Decompose heavy workers into testable units** — 🟡 in progress (summary-stat extraction helpers added for export flow; chart scaling helper extraction started).
+   - Added dedicated pure helpers for summary rendering payloads: sparse trend labels (`build_sparse_unique_labels`), histogram statistics table rows (`build_histogram_table_data`), summary trend payload assembly (`build_trend_plot_payload`), and chart y-limit scaling (`compute_scaled_y_limits`) with direct unit coverage to keep behavior stable during continued worker decomposition.
 4. **Create shared DB utilities module (`db.py`)** — 🟡 partially implemented (core helpers added; adopted in grouping/filter and export data-loading paths).
 5. **Performance cleanup** — 🟡 in progress (export/grouping hot paths optimized; broader parser/export profiling still pending).
 
@@ -132,7 +132,7 @@ Use this section as the source of truth for what is done vs still outstanding.
    - ✅ Reduce export dataframe hot-path overhead via vectorized operations (violin payload build and column-width sizing).
    - ✅ Replace `iterrows` with `itertuples` in grouping-dialog list population hot paths.
    - ✅ Cache workbook formats (reuse per-sheet conditional highlight format instead of recreating per-header loop).
-   - Remove redundant matplotlib figure creation.
+   - Continue reducing plotting overhead (seaborn styling has been introduced for summary charts; monitor render-cost impact on large exports).
    - Precompute expensive loop constants.
 
 ### Acceptance criteria
@@ -244,7 +244,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 ## Remaining execution order (updated)
 1. Execute remaining **Phase 2** structural items in small mergeable PRs:
    - continue worker decomposition (remaining chart/workbook sections),
-   - continue extracting + testing pure plotting/data-shaping helpers from `ExportDataThread` (histogram/trend payload builders completed; next targets are chart rendering and worksheet write segments),
+   - continue extracting + testing pure plotting/data-shaping helpers from `ExportDataThread` (histogram/trend payload + y-limit scaling helpers completed; next targets are worksheet write segments and further chart rendering decomposition),
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
 2. Execute remaining **Phase 3** items (lint/smoke CI expansion).
 3. Execute remaining CI/lint expansion and keep phase coverage green in maintenance PRs.
