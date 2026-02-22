@@ -1,0 +1,6 @@
+# Packaging/build dependencies.
+-r requirements.txt
+Nuitka>=1.9
+pyinstaller>=5.10.1
+pyinstaller-hooks-contrib>=2023.2
+zstandard>=0.22.0
