@@ -131,7 +131,7 @@ Use this section as the source of truth for what is done vs still outstanding.
    - ✅ Cache/reuse grouping dataframe preparation across summary-sheet header renders.
    - ✅ Reduce export dataframe hot-path overhead via vectorized operations (violin payload build and column-width sizing).
    - ✅ Replace `iterrows` with `itertuples` in grouping-dialog list population hot paths.
-   - Cache workbook formats.
+   - ✅ Cache workbook formats (reuse per-sheet conditional highlight format instead of recreating per-header loop).
    - Remove redundant matplotlib figure creation.
    - Precompute expensive loop constants.
 
@@ -248,3 +248,14 @@ Use this section as the source of truth for what is done vs still outstanding.
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
 2. Execute remaining **Phase 3** items (lint/smoke CI expansion).
 3. Execute remaining CI/lint expansion and keep phase coverage green in maintenance PRs.
+
+
+## Optimization backlog (exporting/parsing focus)
+- **Export path**
+  - Profile chart-heavy exports and batch chart/worksheet operations where possible.
+  - Reduce repeated formula/text assembly in inner header loops by precomputing static string fragments.
+  - Evaluate optional toggles to skip expensive chart generation for large ad-hoc exports.
+- **Parsing path**
+  - Add lightweight timing instrumentation around PDF open/split/DB-write stages to identify dominant cost centers.
+  - Batch parser DB writes where safe and avoid repeated existence checks when fingerprints already prove novelty.
+  - Investigate memoizing filename-derived metadata during parse batches to avoid repeated regex work.
