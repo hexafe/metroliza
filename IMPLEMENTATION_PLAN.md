@@ -174,12 +174,12 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Phase 4 — Test coverage baseline (Priority P1/P2, 2–4 days)
 
-### Status: 🟡 Partially implemented
+### Status: ✅ Completed
 
 ### Implementation checklist
 - **Unit tests for Phase 0 regressions** — ✅ done.
 - **Additional unit tests (grouping merge key correctness + deterministic label/value order)** — ✅ done (coverage now includes deterministic ordering plus merge-key fallback behavior for blank `GROUP_KEY`/`REPORT_ID` values).
-- **Integration test (parse → DB → export happy path)** — 🔴 not started.
+- **Integration test (parse → DB → export happy path)** — ✅ done (`tests/test_phase4_integration_happy_path.py`).
 
 ### Unit tests
 - License parsing and validation edge cases.
@@ -234,10 +234,11 @@ Use this section as the source of truth for what is done vs still outstanding.
 - [x] Docs updated with architecture and operating instructions.
 - [x] CI executes compile + tests + baseline scoped lint successfully.
 - [ ] CI executes compile + tests + full-project lint successfully.
+- [x] Integration happy-path parse → DB → export test added and passing locally.
 
 ## Remaining execution order (updated)
 1. Execute remaining **Phase 2** structural items in small mergeable PRs:
    - worker decomposition,
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
 2. Execute remaining **Phase 3** items (lint/smoke CI expansion).
-3. Execute **Phase 4** coverage expansion (grouping regressions + integration happy path).
+3. Execute remaining CI/lint expansion and keep phase coverage green in maintenance PRs.
