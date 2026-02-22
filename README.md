@@ -15,7 +15,7 @@ source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 
 ```bash
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 ### 3) Run the application
@@ -23,6 +23,13 @@ pip install -r requirements.txt
 ```bash
 python metroliza.py
 ```
+
+
+Dependency files are split by purpose:
+
+- `requirements.txt` for runtime.
+- `requirements-dev.txt` for local development/tests.
+- `requirements-build.txt` for packaging executables.
 
 ## What the app does
 
@@ -77,7 +84,7 @@ The generated executable is placed under `dist/`.
 - Reinstall dependencies:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 ### Qt plugin/display issues in headless shells

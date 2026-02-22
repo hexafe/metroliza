@@ -143,8 +143,8 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ### Implementation checklist
 1. **Rewrite `README.md` (quickstart/setup/run/package/troubleshooting)** — ✅ done.
-2. **Dependency hygiene (UTF-8 + split runtime/dev/build)** — 🔴 not started.
-3. **Baseline CI (`compileall`, lint, smoke tests)** — 🟡 partially done (`compileall` + unit test workflow added; dedicated lint/smoke steps still pending).
+2. **Dependency hygiene (UTF-8 + split runtime/dev/build)** — ✅ completed.
+3. **Baseline CI (`compileall`, lint, smoke tests)** — 🟡 partially done (`compileall`, unit tests, and lightweight smoke-import checks are in CI; dedicated lint step still pending).
 4. **Add `CONTRIBUTING.md` + architecture notes** — ✅ done (initial contributor setup, checks, architecture flow, and contracts guidance added).
 
 ### Scope
@@ -154,8 +154,8 @@ Use this section as the source of truth for what is done vs still outstanding.
    - Run/package commands.
    - Troubleshooting.
 2. Dependency hygiene.
-   - Normalize `requirements.txt` to UTF-8.
-   - Split runtime vs dev/build dependencies where practical.
+   - ✅ `requirements.txt` normalized to UTF-8 and reduced to runtime dependencies.
+   - ✅ Added `requirements-dev.txt` and `requirements-build.txt` for development/test and packaging tools.
 3. Add baseline CI.
    - `compileall`.
    - Lint step.
@@ -237,5 +237,5 @@ Use this section as the source of truth for what is done vs still outstanding.
 1. Execute remaining **Phase 2** structural items in small mergeable PRs:
    - worker decomposition,
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
-2. Execute remaining **Phase 3** items (dependency cleanup and lint/smoke CI expansion).
+2. Execute remaining **Phase 3** items (lint/smoke CI expansion).
 3. Execute **Phase 4** coverage expansion (grouping regressions + integration happy path).
