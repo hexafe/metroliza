@@ -65,6 +65,7 @@ Run focused checks when iterating on specific areas:
 
 ```bash
 PYTHONPATH=. python -m unittest tests.test_contracts tests.test_export_grouping_and_sorting tests.test_db_utils -v
+PYTHONPATH=. python -m unittest tests.test_phase4_integration_happy_path -v
 ```
 
 ## Packaging (one-file executable)
