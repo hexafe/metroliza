@@ -1,7 +1,10 @@
-VERSION_DATE = "260216"
+VERSION_DATE = "260222"
 
 release_notes = f"""
-    <br><b>Current Version 260216:</b><br>
+    <br><b>Current Version 260222:</b><br>
+    - Performance optimizations<br>
+
+    <br><b>Version 260216:</b><br>
     - Bugfixes and improvements (grouping, interfaces between modules)<br>
     
     <br><b>Version 240225:</b><br>
