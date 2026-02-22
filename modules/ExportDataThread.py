@@ -89,6 +89,22 @@ def build_trend_plot_payload(header_group):
     }
 
 
+def build_histogram_density_curve_payload(measurements, point_count=100):
+    """Return x/y density curve data for histogram overlays, if available."""
+    mu, std = norm.fit(measurements)
+    if std <= 0:
+        return None
+
+    x_min = float(np.min(measurements))
+    x_max = float(np.max(measurements))
+    x_values = np.linspace(x_min, x_max, point_count)
+    y_values = norm.pdf(x_values, mu, std)
+    return {
+        'x': x_values,
+        'y': y_values,
+    }
+
+
 def compute_scaled_y_limits(current_limits, scale_factor):
     """Return y-axis limits expanded by a symmetric scale factor."""
     y_min, y_max = current_limits
@@ -738,15 +754,9 @@ class ExportDataThread(QThread):
             ax_table.auto_set_font_size(False)
             ax_table.set_fontsize(8)
 
-            # Fit a normal distribution to the data. If the measured values are
-            # constant, std can be 0 and scipy emits divide-by-zero warnings.
-            mu, std = norm.fit(header_group['MEAS'])
-            if std > 0:
-                # Plot the Gaussian curve
-                xmin, xmax = plt.xlim()
-                x = np.linspace(xmin, xmax, 100)
-                p = norm.pdf(x, mu, std)
-                render_density_line(ax, x, p)
+            density_curve = build_histogram_density_curve_payload(header_group['MEAS'])
+            if density_curve is not None:
+                render_density_line(ax, density_curve['x'], density_curve['y'])
             
             # Add vertical lines for mean, LSL and USL
             plt.axvline(average, color='red', linestyle='dashed', linewidth=2, label=f'Mean = {average:.3f}')
