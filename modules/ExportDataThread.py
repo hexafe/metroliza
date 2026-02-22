@@ -67,6 +67,13 @@ class ExportDataThread(QThread):
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
         self.export_canceled = False
+        self._prepared_grouping_df = None
+
+    @property
+    def prepared_grouping_df(self):
+        if self._prepared_grouping_df is None:
+            self._prepared_grouping_df = self._prepare_grouping_df()
+        return self._prepared_grouping_df
 
     @staticmethod
     def _is_sample_sort_mode(sort_mode):
@@ -84,10 +91,10 @@ class ExportDataThread(QThread):
     @staticmethod
     def _build_violin_payload(header_group, group_column, min_samplesize):
         grouped_meas = (
-            header_group.groupby(group_column, sort=False)['MEAS']
-            .apply(lambda values: [value for value in values.tolist() if pd.notna(value)])
+            header_group.dropna(subset=['MEAS'])
+            .groupby(group_column, sort=False)['MEAS']
+            .agg(list)
         )
-        grouped_meas = grouped_meas[grouped_meas.apply(len) > 0]
 
         if grouped_meas.empty:
             return [], [], False
@@ -540,8 +547,8 @@ class ExportDataThread(QThread):
             if data.empty:
                 return 12  # Return a default width 12 if the data is empty
 
-            # Convert series to a list and calculate the column width based on the maximum length of the data in the column
-            column_width = data.astype(str).apply(len).max()
+            # Vectorized string-length calculation for improved performance on large exports.
+            column_width = data.astype(str).str.len().max()
             column_width = min(column_width, 40)
             column_width = max(column_width, 12)
             return column_width
@@ -576,7 +583,7 @@ class ExportDataThread(QThread):
             plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
             fig, ax = plt.subplots(figsize=(6, 4))
             
-            grouping_df = self._prepare_grouping_df()
+            grouping_df = self.prepared_grouping_df
             header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
             if grouping_applied:
                 labels, values, can_render_violin = self._build_violin_payload(

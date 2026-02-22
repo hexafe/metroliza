@@ -16,18 +16,29 @@ class ParseBatchResult:
 
 def build_report_fingerprints_from_rows(rows, should_cancel=lambda: False):
     report_fingerprints = set()
+    add_fingerprint = report_fingerprints.add
+
     for row in rows:
         if should_cancel():
             break
-        report = {
-            'ID': row[0],
-            'REFERENCE': row[1],
-            'FILELOC': row[2],
-            'FILENAME': row[3],
-            'DATE': row[4],
-            'SAMPLE_NUMBER': row[5],
-        }
-        report_fingerprints.add(build_report_fingerprint(report))
+
+        report_id, reference, fileloc, filename, date_value, sample_number = row
+        if report_id is not None:
+            add_fingerprint(f"id:{report_id}")
+            continue
+
+        add_fingerprint(
+            "|".join(
+                str(part)
+                for part in (
+                    reference or '',
+                    fileloc or '',
+                    filename or '',
+                    date_value or '',
+                    sample_number or '',
+                )
+            )
+        )
     return report_fingerprints
 
 

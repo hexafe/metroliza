@@ -72,6 +72,18 @@ class TestParseHelpers(unittest.TestCase):
         fingerprints = build_report_fingerprints_from_rows(rows, should_cancel=should_cancel)
         self.assertEqual(len(fingerprints), 1)
 
+
+    def test_build_report_fingerprints_matches_id_and_composite_behavior(self):
+        rows = [
+            (5, 'R1', '/a', 'one.pdf', '2024-01-01', '1'),
+            (None, 'R2', '/b', 'two.pdf', '2024-01-02', '2'),
+        ]
+
+        fingerprints = build_report_fingerprints_from_rows(rows)
+
+        self.assertIn('id:5', fingerprints)
+        self.assertIn('R2|/b|two.pdf|2024-01-02|2', fingerprints)
+
     def test_parse_new_reports_skips_existing_and_honors_cancel(self):
         class DummyParser:
             def __init__(self, report):
