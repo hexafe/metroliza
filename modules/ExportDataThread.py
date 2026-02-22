@@ -53,6 +53,37 @@ def build_sparse_unique_labels(labels):
     return sparse_labels
 
 
+def build_histogram_table_data(summary_stats):
+    """Build stable, display-ready statistics rows for histogram summary tables."""
+
+    def _rounded_or_text(value, digits):
+        return value if isinstance(value, str) else round(value, digits)
+
+    return [
+        ('Min', round(summary_stats['minimum'], 3)),
+        ('Max', round(summary_stats['maximum'], 3)),
+        ('Mean', round(summary_stats['average'], 3)),
+        ('Median', round(summary_stats['median'], 3)),
+        ('Std Dev', round(summary_stats['sigma'], 3)),
+        ('Cp', _rounded_or_text(summary_stats['cp'], 2)),
+        ('Cpk', _rounded_or_text(summary_stats['cpk'], 2)),
+        ('Samples', round(summary_stats['sample_size'], 1)),
+        ('NOK nb', round(summary_stats['nok_count'], 1)),
+        ('NOK %', round(summary_stats['nok_pct'], 2)),
+    ]
+
+
+def build_trend_plot_payload(header_group):
+    """Return x/y points and sparse labels for the summary trend plot."""
+    measurements = list(header_group['MEAS'])
+    sample_labels = list(header_group['SAMPLE_NUMBER'])
+    return {
+        'x': list(range(len(measurements))),
+        'y': measurements,
+        'labels': build_sparse_unique_labels(sample_labels),
+    }
+
+
 class ExportDataThread(QThread):
     update_label = pyqtSignal(str)
     update_progress = pyqtSignal(int)
@@ -582,16 +613,7 @@ class ExportDataThread(QThread):
             LSL = limits['lsl']
 
             summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
-            minimum = summary_stats['minimum']
-            maximum = summary_stats['maximum']
-            sigma = summary_stats['sigma']
             average = summary_stats['average']
-            median = summary_stats['median']
-            Cp = summary_stats['cp']
-            Cpk = summary_stats['cpk']
-            samplesize = summary_stats['sample_size']
-            NOK_nb = summary_stats['nok_count']
-            NOK_pct = summary_stats['nok_pct']
             
             # Create a Matplotlib figure and plot the scatter chart with lines
             # Set global font size
@@ -670,18 +692,7 @@ class ExportDataThread(QThread):
             n, bins, patches = plt.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color='blue', edgecolor='black')
             
             # Add a table with statistics
-            table_data = [
-                ('Min', round(minimum, 3)),
-                ('Max', round(maximum, 3)),
-                ('Mean', round(average, 3)),
-                ('Median', round(median, 3)),
-                ('Std Dev', round(sigma, 3)),
-                ('Cp', Cp if isinstance(Cp, str) else round(Cp, 2)),
-                ('Cpk', Cpk if isinstance(Cpk, str) else round(Cpk, 2)),
-                ('Samples', round(samplesize, 1)),
-                ('NOK nb', round(NOK_nb, 1)),
-                ('NOK %', round(NOK_pct, 2)),
-            ]
+            table_data = build_histogram_table_data(summary_stats)
 
             ax_table = plt.table(cellText=table_data,
                             colLabels=['Statistic', 'Value'],
@@ -736,10 +747,10 @@ class ExportDataThread(QThread):
             imgplot = BytesIO()
             plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
             
-            data_x = list(range(0, header_group['MEAS'].count()))
-            data_y = header_group['MEAS']
-
-            unique_labels = build_sparse_unique_labels(list(header_group['SAMPLE_NUMBER']))
+            trend_payload = build_trend_plot_payload(header_group)
+            data_x = trend_payload['x']
+            data_y = trend_payload['y']
+            unique_labels = trend_payload['labels']
 
             fig, ax = plt.subplots(figsize=(6, 4))
 
