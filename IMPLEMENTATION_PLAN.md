@@ -178,7 +178,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ### Implementation checklist
 - **Unit tests for Phase 0 regressions** — ✅ done.
-- **Additional unit tests (grouping merge key correctness + deterministic label/value order)** — 🟡 partially done (deterministic label/value order coverage added; merge-key scenario expansion still pending).
+- **Additional unit tests (grouping merge key correctness + deterministic label/value order)** — ✅ done (coverage now includes deterministic ordering plus merge-key fallback behavior for blank `GROUP_KEY`/`REPORT_ID` values).
 - **Integration test (parse → DB → export happy path)** — 🔴 not started.
 
 ### Unit tests

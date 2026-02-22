@@ -98,7 +98,7 @@ Recent code paths use retry-aware helpers from `modules/db.py`. If a lock persis
 
 ### Empty or partial charts in exports
 
-Check grouping and filtering choices first. Group/plot alignment and NaN-only bucket handling were hardened in the Phase 2 correctness work; rerun export after verifying source rows in the selected date/reference scope.
+Check grouping and filtering choices first. Group/plot alignment, NaN-only bucket handling, and merge-key fallback selection (blank `GROUP_KEY`/`REPORT_ID` now fall back to composite identity) were hardened in the Phase 2 correctness work; rerun export after verifying source rows in the selected date/reference scope.
 
 ## Roadmap status
 

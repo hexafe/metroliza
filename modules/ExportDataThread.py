@@ -175,19 +175,48 @@ class ExportDataThread(QThread):
         return merged_group, True
 
     @staticmethod
+    def _keys_have_usable_values(df, keys):
+        if df.empty:
+            return False
+
+        required = [key for key in keys if key in df.columns]
+        if len(required) != len(keys):
+            return False
+
+        normalized = df[required].copy()
+        for key in required:
+            normalized[key] = normalized[key].apply(
+                lambda value: str(value).strip() if pd.notna(value) else ''
+            )
+
+        return (normalized != '').all(axis=1).any()
+
+    @staticmethod
     def _resolve_group_merge_keys(header_group, grouping_df):
-        if 'GROUP_KEY' in header_group.columns and 'GROUP_KEY' in grouping_df.columns:
+        if (
+            ExportDataThread._keys_have_usable_values(header_group, ['GROUP_KEY'])
+            and ExportDataThread._keys_have_usable_values(grouping_df, ['GROUP_KEY'])
+        ):
             return ['GROUP_KEY']
 
-        if 'REPORT_ID' in header_group.columns and 'REPORT_ID' in grouping_df.columns:
+        if (
+            ExportDataThread._keys_have_usable_values(header_group, ['REPORT_ID'])
+            and ExportDataThread._keys_have_usable_values(grouping_df, ['REPORT_ID'])
+        ):
             return ['REPORT_ID']
 
         composite_key = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
-        if all(column in header_group.columns and column in grouping_df.columns for column in composite_key):
+        if (
+            ExportDataThread._keys_have_usable_values(header_group, composite_key)
+            and ExportDataThread._keys_have_usable_values(grouping_df, composite_key)
+        ):
             return composite_key
 
         fallback_key = ['REFERENCE', 'SAMPLE_NUMBER']
-        if all(column in header_group.columns and column in grouping_df.columns for column in fallback_key):
+        if (
+            ExportDataThread._keys_have_usable_values(header_group, fallback_key)
+            and ExportDataThread._keys_have_usable_values(grouping_df, fallback_key)
+        ):
             return fallback_key
 
         return None

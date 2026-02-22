@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import pandas as pd
+import numpy as np
 
 
 # Test-only stubs to avoid importing GUI/system libraries in headless environments.
@@ -119,6 +120,37 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         grouping_with_id = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['G1']})
         self.assertEqual(ExportDataThread._resolve_group_merge_keys(header_with_id, grouping_with_id), ['REPORT_ID'])
 
+
+    def test_resolve_group_merge_keys_skips_blank_group_key_and_uses_report_id(self):
+        header_group = pd.DataFrame({'GROUP_KEY': [''], 'REPORT_ID': [10], 'REFERENCE': ['R1'], 'SAMPLE_NUMBER': ['1']})
+        grouping_df = pd.DataFrame({'GROUP_KEY': [''], 'REPORT_ID': [10], 'GROUP': ['A']})
+
+        keys = ExportDataThread._resolve_group_merge_keys(header_group, grouping_df)
+
+        self.assertEqual(keys, ['REPORT_ID'])
+
+    def test_resolve_group_merge_keys_skips_blank_report_id_and_uses_composite(self):
+        header_group = pd.DataFrame({
+            'REPORT_ID': [np.nan],
+            'REFERENCE': ['R1'],
+            'FILELOC': ['/a'],
+            'FILENAME': ['one.pdf'],
+            'DATE': ['2024-01-01'],
+            'SAMPLE_NUMBER': ['1'],
+        })
+        grouping_df = pd.DataFrame({
+            'REPORT_ID': [None],
+            'REFERENCE': ['R1'],
+            'FILELOC': ['/a'],
+            'FILENAME': ['one.pdf'],
+            'DATE': ['2024-01-01'],
+            'SAMPLE_NUMBER': ['1'],
+            'GROUP': ['A'],
+        })
+
+        keys = ExportDataThread._resolve_group_merge_keys(header_group, grouping_df)
+
+        self.assertEqual(keys, ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER'])
 
     def test_build_violin_payload_drops_nan_and_empty_groups(self):
         header_group = pd.DataFrame(
