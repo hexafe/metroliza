@@ -144,7 +144,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 ### Implementation checklist
 1. **Rewrite `README.md` (quickstart/setup/run/package/troubleshooting)** — ✅ done.
 2. **Dependency hygiene (UTF-8 + split runtime/dev/build)** — ✅ completed.
-3. **Baseline CI (`compileall`, lint, smoke tests)** — 🟡 partially done (`compileall`, unit tests, and lightweight smoke-import checks are in CI; dedicated lint step still pending).
+3. **Baseline CI (`compileall`, lint, smoke tests)** — 🟡 partially done (`compileall`, unit tests, and lightweight smoke-import checks are in CI; a baseline scoped lint step is now in CI, full-repo lint rollout remains pending).
 4. **Add `CONTRIBUTING.md` + architecture notes** — ✅ done (initial contributor setup, checks, architecture flow, and contracts guidance added).
 
 ### Scope
@@ -168,6 +168,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 ### Acceptance criteria
 - New contributor can install, run, and package from docs alone.
 - CI runs on each PR with basic quality gates.
+- Baseline scoped linting gate runs in CI; full-project lint enablement can be expanded incrementally.
 
 ---
 
@@ -231,7 +232,8 @@ Use this section as the source of truth for what is done vs still outstanding.
 - [x] Normal operation avoids forced thread termination.
 - [x] Reliability fixes merged for dedupe, sheet naming, stats edge cases, and license parsing.
 - [x] Docs updated with architecture and operating instructions.
-- [ ] CI executes compile + tests + lint successfully.
+- [x] CI executes compile + tests + baseline scoped lint successfully.
+- [ ] CI executes compile + tests + full-project lint successfully.
 
 ## Remaining execution order (updated)
 1. Execute remaining **Phase 2** structural items in small mergeable PRs:

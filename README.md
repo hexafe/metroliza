@@ -57,6 +57,7 @@ Run the baseline checks locally:
 
 ```bash
 python -m compileall .
+ruff check modules/contracts.py modules/db.py modules/excel_sheet_utils.py modules/stats_utils.py tests/test_contracts.py tests/test_db_utils.py tests/test_phase0_hotfixes.py tests/test_requirements_hygiene.py
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
