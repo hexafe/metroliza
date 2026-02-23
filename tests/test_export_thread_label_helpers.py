@@ -45,6 +45,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (
     all_measurements_within_limits,
+    build_sheet_series_range,
     build_histogram_table_data,
     build_sparse_unique_labels,
     build_trend_plot_payload,
@@ -77,6 +78,11 @@ class TestExportThreadToleranceHelpers(unittest.TestCase):
 
 
 class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
+    def test_build_sheet_series_range_uses_absolute_excel_range(self):
+        series_range = build_sheet_series_range('REF_A', 21, 30, 2)
+
+        self.assertEqual(series_range, '=REF_A!$C22:C31')
+
     def test_build_histogram_table_data_rounds_numeric_values(self):
         summary_stats = {
             'minimum': 1.23456,
