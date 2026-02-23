@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import warnings
 import matplotlib
 import pandas as pd
 import numpy as np
@@ -195,6 +196,19 @@ def apply_minimal_axis_style(ax, grid_axis='y'):
 
 def build_violin_group_stats_rows(labels, values):
     """Return per-group stats rows with p-values against a reference distribution."""
+
+    def _safe_ttest_p_value(group_values, reference_values):
+        if group_values.size < 2 or reference_values.size < 2:
+            return np.nan
+
+        if np.isclose(np.std(group_values, ddof=1), 0.0) or np.isclose(np.std(reference_values, ddof=1), 0.0):
+            return np.nan
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            _, p_value = ttest_ind(group_values, reference_values, equal_var=False, nan_policy='omit')
+        return p_value
+
     cleaned_groups = [np.asarray(group_values, dtype=float) for group_values in values]
     if not cleaned_groups:
         return []
@@ -211,7 +225,7 @@ def build_violin_group_stats_rows(labels, values):
         if len(cleaned_groups) > 1 and str(label) == reference_name:
             p_value_display = 'Ref'
         else:
-            _, p_value = ttest_ind(group_values, reference, equal_var=False, nan_policy='omit')
+            p_value = _safe_ttest_p_value(group_values, reference)
             p_value_display = 'N/A' if np.isnan(p_value) else f"{p_value:.4f}"
 
         rows.append([

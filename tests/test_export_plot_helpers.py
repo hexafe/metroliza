@@ -117,6 +117,16 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(rows[0][0], 'Only')
         self.assertNotEqual(rows[0][-1], 'Ref')
 
+    def test_build_violin_group_stats_rows_returns_na_for_nearly_identical_groups(self):
+        labels = ['A', 'B']
+        values = [[1.0, 1.0, 1.0], [1.2, 1.2, 1.2]]
+
+        rows = build_violin_group_stats_rows(labels, values)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][-1], 'Ref')
+        self.assertEqual(rows[1][-1], 'N/A')
+
 
 if __name__ == '__main__':
     unittest.main()
