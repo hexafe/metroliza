@@ -81,6 +81,37 @@ pyinstaller metroliza_onefile.spec
 
 The generated executable is placed under `dist/`.
 
+### Nuitka build notes (Windows + PyQt6)
+
+If you package with Nuitka instead of PyInstaller, prefer:
+
+```powershell
+python -m nuitka metroliza.py `
+  --onefile `
+  --windows-console-mode=disable `
+  --enable-plugin=pyqt6 `
+  --windows-icon-from-ico=metroliza_icon2.ico `
+  --output-filename=metroliza.exe `
+  --assume-yes-for-downloads `
+  --remove-output `
+  --jobs=%NUMBER_OF_PROCESSORS%
+```
+
+### What to install/check on your machine (based on your build log)
+
+- **Remove PyQt5 from the build venv** if you build a PyQt6 app (`pip uninstall PyQt5`). Your log shows a direct PyQt5/PyQt6 conflict warning from the Nuitka PyQt plugin.
+- **Install Microsoft Visual C++ Redistributable (x64, 2015-2022)** on target systems. Your log warns that Windows Runtime DLLs were not bundled automatically.
+- **Use a clean dedicated build venv** (`requirements-build.txt`) and keep only runtime + build tooling to avoid accidental heavy imports.
+- **Keep build/cache/output on SSD** (project folder + `%LocalAppData%\Nuitka\Nuitka\Cache`) for much faster compile/link and onefile compression stages.
+- **Exclude Nuitka cache/build folders from realtime AV scanning** (if your security policy allows) to reduce C object and archive churn overhead.
+
+### Build-time and exe-size tuning
+
+- Use `--report=nuitka-build-report.xml` to inspect unexpectedly included packages and prune imports.
+- For **faster iteration**, use standalone builds while developing (`--standalone` + no `--onefile`), then switch to `--onefile` for release.
+- For **smaller onefile outputs**, keep compression enabled (default) and avoid importing heavy libraries in top-level module scope when possible.
+- For large scientific stacks (`scipy`, `pymupdf`), expect long first full rebuilds; subsequent builds improve if Python/Nuitka/toolchain versions remain stable (better cache hits).
+
 ## Troubleshooting
 
 ### `ModuleNotFoundError` on launch
