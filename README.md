@@ -43,6 +43,7 @@ Metroliza supports an end-to-end flow:
    - grouped violin plots,
    - trend charts by date or sample order.
 5. Run CSV Summary to quickly generate per-column worksheets, trend plots, and an aggregated `CSV_SUMMARY` sheet from manufacturing CSV exports.
+6. Optionally set per-column NOM/USL/LSL offsets in CSV Summary before export so Cp/Cpk and conditional highlighting use part-specific limits.
 
 ## Project layout
 
@@ -119,7 +120,7 @@ Recent performance-focused changes include:
 - extracted/tested worksheet statistic-formula builder (`build_measurement_stat_formulas`) for MIN/AVG/MAX/STD/Cp/Cpk/NOK cells to support ongoing `ExportDataThread` decomposition,
 - cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops),
 - worksheet-backed `USL_SERIES` / `LSL_SERIES` columns, explicit `USL_MAX`/`USL_MIN`/`LSL_MAX`/`LSL_MIN` anchor helper cells near per-header stats, and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring),
-- CSV Summary auto-detect for common delimiter/decimal combinations with numeric-column-aware defaults and an aggregated `CSV_SUMMARY` overview sheet for faster first-pass diagnostics.
+- CSV Summary auto-detect for common delimiter/decimal combinations with numeric-column-aware defaults, optional per-column NOM/USL/LSL inputs, and an aggregated `CSV_SUMMARY` overview sheet for faster first-pass diagnostics.
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 

@@ -10,6 +10,9 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QProgressBar,
     QLabel,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
 )
 from pathlib import Path
 import pandas as pd
@@ -101,10 +104,67 @@ class FilterDialog(QDialog):
         return self.selected_indexes, self.selected_data_columns
 
 
+class SpecLimitsDialog(QDialog):
+    def __init__(self, parent, data_columns, existing_limits):
+        super().__init__(parent)
+        self.setWindowTitle("Column spec limits")
+        self.setGeometry(220, 220, 700, 380)
+        self.data_columns = data_columns
+
+        layout = QVBoxLayout()
+        self.table = QTableWidget(len(data_columns), 4, self)
+        self.table.setHorizontalHeaderLabels(["Column", "NOM", "USL", "LSL"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for index in (1, 2, 3):
+            self.table.horizontalHeader().setSectionResizeMode(index, QHeaderView.ResizeMode.ResizeToContents)
+
+        for row, column_name in enumerate(data_columns):
+            self.table.setItem(row, 0, QTableWidgetItem(column_name))
+            defaults = existing_limits.get(column_name, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
+            self.table.setItem(row, 1, QTableWidgetItem(str(defaults.get('nom', 0.0))))
+            self.table.setItem(row, 2, QTableWidgetItem(str(defaults.get('usl', 0.0))))
+            self.table.setItem(row, 3, QTableWidgetItem(str(defaults.get('lsl', 0.0))))
+
+        layout.addWidget(self.table)
+
+        button_layout = QHBoxLayout()
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self.accept)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+
+        self.setLayout(layout)
+
+    def _cell_to_float(self, row, col):
+        item = self.table.item(row, col)
+        if item is None:
+            return 0.0
+        value = (item.text() or "").strip()
+        if value == "":
+            return 0.0
+        try:
+            return float(value.replace(',', '.'))
+        except ValueError:
+            return 0.0
+
+    def get_limits(self):
+        limits = {}
+        for row, column_name in enumerate(self.data_columns):
+            limits[column_name] = {
+                'nom': self._cell_to_float(row, 1),
+                'usl': self._cell_to_float(row, 2),
+                'lsl': self._cell_to_float(row, 3),
+            }
+        return limits
+
+
 class DataProcessingThread(QThread):
     progress_signal = pyqtSignal(int)
 
-    def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None):
+    def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None, column_spec_limits=None):
         super().__init__()
         self.selected_indexes = selected_indexes
         self.selected_data_columns = selected_data_columns
@@ -113,24 +173,25 @@ class DataProcessingThread(QThread):
         self.data_frame = data_frame
         self.canceled = False
         self.csv_config = csv_config or {}
+        self.column_spec_limits = column_spec_limits or {}
 
-    def write_summary_data(self, worksheet, data_column, selected_data):
+    def write_summary_data(self, worksheet, data_column, selected_data, spec_limits):
         col = selected_data.shape[1]
+        nom = spec_limits.get('nom', 0.0)
+        usl_offset = spec_limits.get('usl', 0.0)
+        lsl_offset = spec_limits.get('lsl', 0.0)
 
         worksheet.write(0, col + 2, 'NOM')
-        nom = 0
         worksheet.write(0, col + 3, nom)
 
         worksheet.write(1, col + 2, 'USL')
-        USL = 0
-        worksheet.write(1, col + 3, USL)
-        USL = nom + USL
+        worksheet.write(1, col + 3, usl_offset)
+        USL = nom + usl_offset
         USL_cell = xl_rowcol_to_cell(1, col + 3, row_abs=True, col_abs=True)
 
         worksheet.write(2, col + 2, 'LSL')
-        LSL = 0
-        worksheet.write(2, col + 3, LSL)
-        LSL = nom + LSL
+        worksheet.write(2, col + 3, lsl_offset)
+        LSL = nom + lsl_offset
         LSL_cell = xl_rowcol_to_cell(2, col + 3, row_abs=True, col_abs=True)
 
         worksheet.write(3, col + 2, 'MIN')
@@ -261,7 +322,8 @@ class DataProcessingThread(QThread):
 
                     worksheet = writer.sheets[sheet_name]
 
-                    col, USL_cell, LSL_cell = self.write_summary_data(worksheet, data_column, selected_data)
+                    spec_limits = self.column_spec_limits.get(data_column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
+                    col, USL_cell, LSL_cell = self.write_summary_data(worksheet, data_column, selected_data, spec_limits)
                     
                     # Set the number format for the data column
                     worksheet.set_column(col, col, None, num_format)
@@ -270,7 +332,12 @@ class DataProcessingThread(QThread):
 
                     self.add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
 
-                    stats = compute_column_summary_stats(selected_data[data_column])
+                    stats = compute_column_summary_stats(
+                        selected_data[data_column],
+                        usl=spec_limits.get('usl', 0.0),
+                        lsl=spec_limits.get('lsl', 0.0),
+                        nom=spec_limits.get('nom', 0.0),
+                    )
                     overview_rows.append({
                         'column': data_column,
                         'sheet_name': sheet_name,
@@ -281,6 +348,9 @@ class DataProcessingThread(QThread):
                         'std': stats['std'],
                         'cp': stats['cp'],
                         'cpk': stats['cpk'],
+                        'nom': stats['nom'],
+                        'usl': stats['usl'],
+                        'lsl': stats['lsl'],
                     })
 
                     # Calculate the progress percentage and emit the progress signal
@@ -317,6 +387,7 @@ class CSVSummaryDialog(QDialog):
         self.selected_indexes = []
         self.selected_data_columns = []
         self.csv_config = {}
+        self.column_spec_limits = {}
 
         # Initialize the layout
         layout = QVBoxLayout()
@@ -324,21 +395,25 @@ class CSVSummaryDialog(QDialog):
         # Add the buttons to the layout
         self.input_button = QPushButton("Select input file (CSV)")
         self.filter_button = QPushButton("Filter columns (optional)")
+        self.spec_limits_button = QPushButton("Set spec limits (optional)")
         self.output_button = QPushButton("Select output file (xlsx)")
         self.start_button = QPushButton("START")  # Add the START button
         layout.addWidget(self.input_button)
         layout.addWidget(self.filter_button)
+        layout.addWidget(self.spec_limits_button)
         layout.addWidget(self.output_button)
         layout.addWidget(self.start_button)  # Add the START button to the layout
 
         # Connect the buttons to their respective functions
         self.input_button.clicked.connect(self.handle_input_button)
         self.filter_button.clicked.connect(self.handle_filter_button)
+        self.spec_limits_button.clicked.connect(self.handle_spec_limits_button)
         self.output_button.clicked.connect(self.handle_output_button)
         self.start_button.clicked.connect(self.handle_start_button)  # Connect the START button
 
         # Initially, disable the FILTER, OUTPUT, and START buttons
         self.filter_button.setEnabled(False)
+        self.spec_limits_button.setEnabled(False)
         self.output_button.setEnabled(False)
         self.start_button.setEnabled(False)
 
@@ -356,6 +431,7 @@ class CSVSummaryDialog(QDialog):
             self.input_file = filename
             # Enable the FILTER and OUTPUT buttons after the input file is selected
             self.filter_button.setEnabled(True)
+            self.spec_limits_button.setEnabled(True)
             self.output_button.setEnabled(True)
 
             # Load CSV with delimiter/decimal fallbacks.
@@ -364,6 +440,7 @@ class CSVSummaryDialog(QDialog):
             except Exception as exc:
                 QMessageBox.critical(self, 'CSV load failed', f'Could not load CSV file.\n\n{exc}')
                 self.filter_button.setEnabled(False)
+                self.spec_limits_button.setEnabled(False)
                 self.output_button.setEnabled(False)
                 self.start_button.setEnabled(False)
                 return
@@ -371,6 +448,7 @@ class CSVSummaryDialog(QDialog):
             self.column_names = self.data_frame.columns.tolist()
             self.selected_indexes = self.column_names[:1]
             self.selected_data_columns = resolve_default_data_columns(self.data_frame, self.selected_indexes)
+            self.column_spec_limits = {}
 
     def handle_filter_button(self):
         print("FILTER button clicked")
@@ -387,8 +465,21 @@ class CSVSummaryDialog(QDialog):
                     print("Selected Indexes:", self.selected_indexes)
                 if self.selected_data_columns:
                     print("Selected Data Columns:", self.selected_data_columns)
+                    self.column_spec_limits = {
+                        column: self.column_spec_limits.get(column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
+                        for column in self.selected_data_columns
+                    }
         else:
             QMessageBox.warning(self, "Warning", "No data loaded. Please select an input file first.")
+
+    def handle_spec_limits_button(self):
+        if not self.selected_data_columns:
+            QMessageBox.information(self, "No data columns", "Select input/filter columns before setting spec limits.")
+            return
+
+        spec_dialog = SpecLimitsDialog(self, self.selected_data_columns, self.column_spec_limits)
+        if spec_dialog.exec() == QDialog.DialogCode.Accepted:
+            self.column_spec_limits = spec_dialog.get_limits()
 
     def handle_output_button(self):
         # options = QFileDialog.Option.DontUseNativeDialog
@@ -474,6 +565,7 @@ class CSVSummaryDialog(QDialog):
             self.output_file,
             self.data_frame,
             self.csv_config,
+            self.column_spec_limits,
         )
         # Connect the progress signal to the update_progress_bar slot
         self.worker_thread.progress_signal.connect(self.update_progress_bar)
