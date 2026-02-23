@@ -128,6 +128,41 @@ def build_spec_limit_anchor_rows(usl, lsl):
     ]
 
 
+def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
+    """Build stable worksheet formulas for per-header measurement statistics."""
+    usl_formula = f"({summary_col}1 + {summary_col}2)"
+    lsl_formula = f"({summary_col}1 + {summary_col}3)"
+    sigma_formula = f"({summary_col}7)"
+    average_formula = f"({summary_col}5)"
+
+    if nom_value == 0 and lsl_value == 0:
+        cpk_formula = f"=ROUND(({usl_formula} - {average_formula})/(3 * {sigma_formula}), 3)"
+    else:
+        cpk_formula = (
+            "=ROUND(MIN( "
+            f"({usl_formula} - {average_formula})/(3 * {sigma_formula}), "
+            f"({average_formula} - {lsl_formula})/(3 * {sigma_formula}) "
+            "), 3)"
+        )
+
+    nok_high = f'COUNTIF({data_range_y}, ">"&({nom_cell}+{usl_cell}))'
+    nok_low = f'COUNTIF({data_range_y}, "<"&({nom_cell}+{lsl_cell}))'
+    nok_cell = f"${summary_col}$10"
+    sample_size_cell = f"${summary_col}$12"
+
+    return {
+        'min': f"=ROUND(MIN({data_range_y}), 3)",
+        'avg': f"=ROUND(AVERAGE({data_range_y}), 3)",
+        'max': f"=ROUND(MAX({data_range_y}), 3)",
+        'std': f"=ROUND(STDEV({data_range_y}), 3)",
+        'cp': f"=ROUND(({usl_formula} - {lsl_formula})/(6 * {sigma_formula}), 3)",
+        'cpk': cpk_formula,
+        'nok_total': f'={nok_high}+{nok_low}',
+        'nok_percent': f"=ROUND(({nok_cell}/{sample_size_cell})*100%, 3)",
+        'sample_size': f"=COUNT({data_range_y})",
+    }
+
+
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
     if _HAS_SEABORN:
@@ -482,54 +517,43 @@ class ExportDataThread(QThread):
                     data_range_y = f'{xl_col_to_name(col + 2)}22:{xl_col_to_name(col + 2)}{len(header_group) + 21}'
                     data_range_x = f'{xl_col_to_name(col + 1)}22:{xl_col_to_name(col + 1)}{len(header_group) + 21}'
                     
-                    worksheet.write(3, col, 'MIN')
-                    min_formula = f"=ROUND(MIN({data_range_y}), 3)"
-                    worksheet.write_formula(3, col + 1, min_formula)
-                    
-                    worksheet.write(4, col, 'AVG')
-                    avg_formula = f"=ROUND(AVERAGE({data_range_y}), 3)"
-                    worksheet.write_formula(4, col + 1, avg_formula)
-                    
-                    worksheet.write(5, col, 'MAX')
-                    max_formula = f"=ROUND(MAX({data_range_y}), 3)"
-                    worksheet.write_formula(5, col + 1, max_formula)
-                    
-                    worksheet.write(6, col, 'STD')
-                    std_formula = f"=ROUND(STDEV({data_range_y}), 3)"
-                    worksheet.write_formula(6, col + 1, std_formula)
-                    
-                    worksheet.write(7, col, 'Cp')
                     summary_col = xl_col_to_name(col + 1)
-                    USL_formula = f"({summary_col}1 + {summary_col}2)"
-                    LSL_formula = f"({summary_col}1 + {summary_col}3)"
-                    sigma_formula = f"({summary_col}7)"
-                    cp_formula = f"=ROUND(({USL_formula} - {LSL_formula})/(6 * {sigma_formula}), 3)"
-                    worksheet.write_formula(7, col + 1, cp_formula)
-                    
+                    stat_formulas = build_measurement_stat_formulas(
+                        summary_col=summary_col,
+                        data_range_y=data_range_y,
+                        nom_cell=NOM_cell,
+                        usl_cell=USL_cell,
+                        lsl_cell=LSL_cell,
+                        nom_value=nom,
+                        lsl_value=LSL,
+                    )
+
+                    worksheet.write(3, col, 'MIN')
+                    worksheet.write_formula(3, col + 1, stat_formulas['min'])
+
+                    worksheet.write(4, col, 'AVG')
+                    worksheet.write_formula(4, col + 1, stat_formulas['avg'])
+
+                    worksheet.write(5, col, 'MAX')
+                    worksheet.write_formula(5, col + 1, stat_formulas['max'])
+
+                    worksheet.write(6, col, 'STD')
+                    worksheet.write_formula(6, col + 1, stat_formulas['std'])
+
+                    worksheet.write(7, col, 'Cp')
+                    worksheet.write_formula(7, col + 1, stat_formulas['cp'])
+
                     worksheet.write(8, col, 'Cpk')
-                    average_formula = f"({summary_col}5)"
-                    # Check if NOM and LSL are both equal to 0
-                    if nom == 0 and LSL == 0:
-                        cpk_formula = f"=ROUND(({USL_formula} - {average_formula})/(3 * {sigma_formula}), 3)"
-                    else:
-                        cpk_formula = f"=ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
-                    worksheet.write_formula(8, col + 1, cpk_formula)
-                    
+                    worksheet.write_formula(8, col + 1, stat_formulas['cpk'])
+
                     worksheet.write(9, col, "NOK number")
-                    NOK_HIGH = f'COUNTIF({data_range_y}, ">"&({NOM_cell}+{USL_cell}))'
-                    NOK_LOW = f'COUNTIF({data_range_y}, "<"&({NOM_cell}+{LSL_cell}))'
-                    NOK_TOTAL = f'={NOK_HIGH}+{NOK_LOW}'
-                    worksheet.write_formula(9, col + 1, NOK_TOTAL)
-                    
+                    worksheet.write_formula(9, col + 1, stat_formulas['nok_total'])
+
                     worksheet.write(10, col, "NOK %")
-                    NOK_cell = xl_rowcol_to_cell(9, col + 1, row_abs=True, col_abs=True)
-                    SAMPLESIZE_cell = xl_rowcol_to_cell(11, col + 1, row_abs=True, col_abs=True)
-                    NOK_perc_formula = f"=ROUND(({NOK_cell}/{SAMPLESIZE_cell})*100%, 3)"
-                    worksheet.write_formula(10, col + 1, NOK_perc_formula, percent_format)
-                    
+                    worksheet.write_formula(10, col + 1, stat_formulas['nok_percent'], percent_format)
+
                     worksheet.write(11, col, "Sample size")
-                    count_formula = f"=COUNT({data_range_y})"
-                    worksheet.write_formula(11, col + 1, count_formula)
+                    worksheet.write_formula(11, col + 1, stat_formulas['sample_size'])
 
                     for anchor_row_offset, (anchor_label, anchor_value) in enumerate(
                         build_spec_limit_anchor_rows(USL, LSL),
