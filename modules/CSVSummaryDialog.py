@@ -15,6 +15,11 @@ from pathlib import Path
 import pandas as pd
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 from modules.excel_sheet_utils import unique_sheet_name
+from modules.csv_summary_utils import (
+    compute_column_summary_stats,
+    load_csv_with_fallbacks,
+    resolve_default_data_columns,
+)
 import base64
 from modules import Base64EncodedFiles
 
@@ -99,7 +104,7 @@ class FilterDialog(QDialog):
 class DataProcessingThread(QThread):
     progress_signal = pyqtSignal(int)
 
-    def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame):
+    def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None):
         super().__init__()
         self.selected_indexes = selected_indexes
         self.selected_data_columns = selected_data_columns
@@ -107,6 +112,7 @@ class DataProcessingThread(QThread):
         self.output_file = output_file
         self.data_frame = data_frame
         self.canceled = False
+        self.csv_config = csv_config or {}
 
     def write_summary_data(self, worksheet, data_column, selected_data):
         col = selected_data.shape[1]
@@ -210,6 +216,13 @@ class DataProcessingThread(QThread):
         # Insert the chart into the worksheet.
         worksheet.insert_chart(12, col + 5, chart)
 
+
+    def write_overview_sheet(self, writer, overview_rows):
+        overview_df = pd.DataFrame(overview_rows)
+        if overview_df.empty:
+            return
+        overview_df.to_excel(writer, sheet_name='CSV_SUMMARY', index=False)
+
     def run(self):
         # Perform the data processing and save to the Excel file here
 
@@ -224,6 +237,8 @@ class DataProcessingThread(QThread):
 
                 num_format = writer.book.add_format({'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0.000'})
 
+                overview_rows = []
+
                 # Update the progress bar for each selected data column
                 for i, data_column in enumerate(self.selected_data_columns):
                     # Check if the processing has been canceled
@@ -231,10 +246,14 @@ class DataProcessingThread(QThread):
                         break
 
                     # Create a new DataFrame with the selected data column and indexes
-                    selected_data = self.data_frame[self.selected_indexes + [data_column]]
-                    
+                    selected_data = self.data_frame[self.selected_indexes + [data_column]].copy()
+
                     selected_data.loc[:, data_column] = pd.to_numeric(selected_data[data_column], errors='coerce')
-                    selected_data = selected_data.dropna(subset=data_column)
+                    selected_data = selected_data.dropna(subset=[data_column])
+                    if selected_data.empty:
+                        progress_percentage = int((i + 1) * 100 / total_filtered_columns)
+                        self.progress_signal.emit(progress_percentage)
+                        continue
 
                     # Write the data to a new sheet with a safe unique name
                     sheet_name = unique_sheet_name(data_column, used_sheet_names)
@@ -251,9 +270,24 @@ class DataProcessingThread(QThread):
 
                     self.add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
 
+                    stats = compute_column_summary_stats(selected_data[data_column])
+                    overview_rows.append({
+                        'column': data_column,
+                        'sheet_name': sheet_name,
+                        'sample_size': stats['sample_size'],
+                        'min': stats['min'],
+                        'avg': stats['avg'],
+                        'max': stats['max'],
+                        'std': stats['std'],
+                        'cp': stats['cp'],
+                        'cpk': stats['cpk'],
+                    })
+
                     # Calculate the progress percentage and emit the progress signal
                     progress_percentage = int((i + 1) * 100 / total_filtered_columns)
                     self.progress_signal.emit(progress_percentage)
+
+                self.write_overview_sheet(writer, overview_rows)
 
                 # Save the Excel file
                 writer.close()
@@ -282,6 +316,7 @@ class CSVSummaryDialog(QDialog):
         self.column_names = []
         self.selected_indexes = []
         self.selected_data_columns = []
+        self.csv_config = {}
 
         # Initialize the layout
         layout = QVBoxLayout()
@@ -323,11 +358,19 @@ class CSVSummaryDialog(QDialog):
             self.filter_button.setEnabled(True)
             self.output_button.setEnabled(True)
 
-            # Load the CSV file into a Pandas DataFrame
-            self.data_frame = pd.read_csv(filename, delimiter=';', decimal=',', low_memory=False)
+            # Load CSV with delimiter/decimal fallbacks.
+            try:
+                self.data_frame, self.csv_config = load_csv_with_fallbacks(filename)
+            except Exception as exc:
+                QMessageBox.critical(self, 'CSV load failed', f'Could not load CSV file.\n\n{exc}')
+                self.filter_button.setEnabled(False)
+                self.output_button.setEnabled(False)
+                self.start_button.setEnabled(False)
+                return
+
             self.column_names = self.data_frame.columns.tolist()
             self.selected_indexes = self.column_names[:1]
-            self.selected_data_columns = self.column_names[1:]
+            self.selected_data_columns = resolve_default_data_columns(self.data_frame, self.selected_indexes)
 
     def handle_filter_button(self):
         print("FILTER button clicked")
@@ -430,6 +473,7 @@ class CSVSummaryDialog(QDialog):
             self.input_file,
             self.output_file,
             self.data_frame,
+            self.csv_config,
         )
         # Connect the progress signal to the update_progress_bar slot
         self.worker_thread.progress_signal.connect(self.update_progress_bar)

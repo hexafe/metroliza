@@ -42,6 +42,7 @@ Metroliza supports an end-to-end flow:
    - statistical summaries,
    - grouped violin plots,
    - trend charts by date or sample order.
+5. Run CSV Summary to quickly generate per-column worksheets, trend plots, and an aggregated `CSV_SUMMARY` sheet from manufacturing CSV exports.
 
 ## Project layout
 
@@ -57,7 +58,7 @@ Run the baseline checks locally:
 
 ```bash
 python -m compileall .
-ruff check VersionDate.py modules/AboutWindow.py modules/CSVSummaryDialog.py modules/contracts.py modules/db.py modules/excel_sheet_utils.py modules/ParseReportsThread.py modules/stats_utils.py tests/test_contracts.py tests/test_db_utils.py tests/test_phase0_hotfixes.py tests/test_requirements_hygiene.py
+ruff check VersionDate.py modules/AboutWindow.py modules/CSVSummaryDialog.py modules/contracts.py modules/csv_summary_utils.py modules/db.py modules/excel_sheet_utils.py modules/ParseReportsThread.py modules/stats_utils.py tests/test_contracts.py tests/test_csv_summary_utils.py tests/test_db_utils.py tests/test_phase0_hotfixes.py tests/test_requirements_hygiene.py
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
@@ -117,7 +118,8 @@ Recent performance-focused changes include:
 - extracted/tested histogram density-curve payload helper (`build_histogram_density_curve_payload`) to isolate normal-fit rendering decisions in histogram overlays,
 - extracted/tested worksheet statistic-formula builder (`build_measurement_stat_formulas`) for MIN/AVG/MAX/STD/Cp/Cpk/NOK cells to support ongoing `ExportDataThread` decomposition,
 - cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops),
-- worksheet-backed `USL_SERIES` / `LSL_SERIES` columns, explicit `USL_MAX`/`USL_MIN`/`LSL_MAX`/`LSL_MIN` anchor helper cells near per-header stats, and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring).
+- worksheet-backed `USL_SERIES` / `LSL_SERIES` columns, explicit `USL_MAX`/`USL_MIN`/`LSL_MAX`/`LSL_MIN` anchor helper cells near per-header stats, and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring),
+- CSV Summary auto-detect for common delimiter/decimal combinations with numeric-column-aware defaults and an aggregated `CSV_SUMMARY` overview sheet for faster first-pass diagnostics.
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 
