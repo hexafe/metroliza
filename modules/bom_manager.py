@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QMainWindow,
     QLabel,
     QWidget,
@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QComboBox,
 )
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 
 from modules.db import connect_sqlite, execute_select_with_columns
 
@@ -126,8 +126,8 @@ class BOMManager(QMainWindow):
         self.bom_table.setHorizontalHeaderLabels(
         ['Product Reference', 'Description', 'Part Reference', 'Part Description', 'Parent Reference']
         )
-        self.bom_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.bom_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.bom_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.bom_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.bom_table.cellDoubleClicked.connect(self.modify_bom_entry)
         # Add the BOM table widget to the layout
         self.layout.addWidget(self.bom_table)
@@ -252,8 +252,8 @@ class BOMManager(QMainWindow):
 
         # Confirm the deletion with the user
         confirm_dialog = QMessageBox.question(self, "Confirm Deletion", "Are you sure you want to delete the selected row(s)?",
-                                            QMessageBox.Yes | QMessageBox.No)
-        if confirm_dialog == QMessageBox.Yes:
+                                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if confirm_dialog == QMessageBox.StandardButton.Yes:
             # Delete the selected BOM entries from the database
             cursor = self.conn.cursor()
             for item in selected_rows:

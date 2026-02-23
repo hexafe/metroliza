@@ -45,6 +45,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (
     all_measurements_within_limits,
+    build_spec_limit_anchor_rows,
     build_sheet_series_range,
     build_histogram_table_data,
     build_sparse_unique_labels,
@@ -78,6 +79,19 @@ class TestExportThreadToleranceHelpers(unittest.TestCase):
 
 
 class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
+    def test_build_spec_limit_anchor_rows_builds_expected_labels_and_values(self):
+        rows = build_spec_limit_anchor_rows(usl=1.2, lsl=0.8)
+
+        self.assertEqual(
+            rows,
+            [
+                ('USL_MAX', 1.2),
+                ('USL_MIN', 1.2),
+                ('LSL_MAX', 0.8),
+                ('LSL_MIN', 0.8),
+            ],
+        )
+
     def test_build_sheet_series_range_uses_absolute_excel_range(self):
         series_range = build_sheet_series_range('REF_A', 21, 30, 2)
 

@@ -118,6 +118,16 @@ def compute_scaled_y_limits(current_limits, scale_factor):
     return y_min - padding, y_max + padding
 
 
+def build_spec_limit_anchor_rows(usl, lsl):
+    """Return helper-row labels/values for explicit spec-limit anchor cells."""
+    return [
+        ('USL_MAX', usl),
+        ('USL_MIN', usl),
+        ('LSL_MAX', lsl),
+        ('LSL_MIN', lsl),
+    ]
+
+
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
     if _HAS_SEABORN:
@@ -520,6 +530,13 @@ class ExportDataThread(QThread):
                     worksheet.write(11, col, "Sample size")
                     count_formula = f"=COUNT({data_range_y})"
                     worksheet.write_formula(11, col + 1, count_formula)
+
+                    for anchor_row_offset, (anchor_label, anchor_value) in enumerate(
+                        build_spec_limit_anchor_rows(USL, LSL),
+                        start=12,
+                    ):
+                        worksheet.write(anchor_row_offset, col, anchor_label)
+                        worksheet.write(anchor_row_offset, col + 1, anchor_value)
                     
                     worksheet.write(20, col, 'Date')
                     worksheet.write_column(21, col, header_group['DATE'])

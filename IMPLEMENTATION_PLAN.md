@@ -216,10 +216,10 @@ This roadmap extension captures the approved migration path from Excel-first exp
    - Default selection must remain **Excel** for now (`excel_xlsx`), with `google_sheets` as the secondary option.
    - Extend export option validation with Google destination metadata.
    - Keep existing Excel behavior unchanged by default.
-2. **Phase GS1 — First requested step: USL/LSL anchors + series columns** — 🟡 in progress
+2. **Phase GS1 — First requested step: USL/LSL anchors + series columns** — ✅ completed
    - ✅ Added per-header `USL_SERIES` and `LSL_SERIES` worksheet columns in the same measurement block row range as measured values.
    - ✅ Switched USL/LSL chart series from inline array-literals to worksheet cell-range series references.
-   - ⏳ Remaining: add explicit `USL_MAX`, `USL_MIN`, `LSL_MAX`, and `LSL_MIN` helper-anchor cells near statistics headers for backend-neutral chart generation.
+   - ✅ Added explicit `USL_MAX`, `USL_MIN`, `LSL_MAX`, and `LSL_MIN` helper-anchor cells near statistics headers for backend-neutral chart generation.
    - Add `USL_SERIES` and `LSL_SERIES` columns in the same measurement block as measured values.
    - Add helper cells near statistics header with **2x USL** and **2x LSL** (`USL_MAX`, `USL_MIN`, `LSL_MAX`, `LSL_MIN`).
    - Switch chart limits from Excel inline array-literals to sheet **cell-range based** series.
