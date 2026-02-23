@@ -203,6 +203,43 @@ Use this section as the source of truth for what is done vs still outstanding.
 ---
 
 
+
+## Google Sheets compatibility roadmap (Excel → Google Sheets)
+
+### Status: 🔴 Not implemented
+
+This roadmap extension captures the approved migration path from Excel-first export to Google Sheets-compatible export while preserving analytics and visuals.
+
+### Scope and sequencing
+1. **Phase GS0 — Export target contract/UX**
+   - Add an explicit export target selector in **Export Dialog** so the user can choose **Excel** or **Google Sheets** at export time.
+   - Default selection must remain **Excel** for now (`excel_xlsx`), with `google_sheets` as the secondary option.
+   - Extend export option validation with Google destination metadata.
+   - Keep existing Excel behavior unchanged by default.
+2. **Phase GS1 — First requested step: USL/LSL anchors + series columns**
+   - Add `USL_SERIES` and `LSL_SERIES` columns in the same measurement block as measured values.
+   - Add helper cells near statistics header with **2x USL** and **2x LSL** (`USL_MAX`, `USL_MIN`, `LSL_MAX`, `LSL_MIN`).
+   - Switch chart limits from Excel inline array-literals to sheet **cell-range based** series.
+   - Build upper/lower spec visuals from these ranges (or 2-point anchors where chart type requires).
+3. **Phase GS2 — Backend abstraction split**
+   - Separate shared export data/layout logic from output renderer logic.
+   - Retain `ExcelExportBackend`; implement `GoogleSheetsExportBackend`.
+4. **Phase GS3 — Google Sheets chart parity**
+   - Recreate per-header measurement + USL + LSL charts with Google chart specs.
+5. **Phase GS4 — Matplotlib/seaborn summary plots in Google Sheets**
+   - Preserve summary plots by rendering PNGs and inserting them into target sheets via supported Google path.
+6. **Phase GS5 — Auth/ops hardening + testing**
+   - OAuth/service account, retries/backoff, API-progress reporting.
+   - Unit + integration + visual checks for parity and regressions.
+
+### Acceptance criteria
+- Google Sheets export target is selectable and functional.
+- USL/LSL are represented using range-backed series (Google-compatible).
+- Per-header charts include measurement, USL, and LSL series.
+- Summary matplotlib/seaborn outputs remain present in Google Sheets export.
+
+---
+
 ## Branching and merge strategy
 - Primary implementation branch: `roadmap/phase-implementation`.
 - Use short-lived child branches per phase (for example, `roadmap/phase-0-safety-hotfixes`, `roadmap/phase-1-reliability`).
