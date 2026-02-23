@@ -5,8 +5,10 @@ from pathlib import Path
 import pandas as pd
 
 from modules.csv_summary_utils import (
+    build_default_plot_toggles,
     compute_column_summary_stats,
     load_csv_with_fallbacks,
+    normalize_plot_toggles,
     resolve_default_data_columns,
 )
 
@@ -59,6 +61,30 @@ class CsvSummaryUtilsTests(unittest.TestCase):
         self.assertEqual(0, stats['sample_size'])
         self.assertEqual('N/A', stats['cp'])
         self.assertEqual('N/A', stats['cpk'])
+
+
+    def test_build_default_plot_toggles_full_report(self):
+        toggles = build_default_plot_toggles(['LENGTH', 'WIDTH'])
+
+        self.assertEqual(
+            {
+                'LENGTH': {'histogram': True, 'boxplot': True},
+                'WIDTH': {'histogram': True, 'boxplot': True},
+            },
+            toggles,
+        )
+
+    def test_normalize_plot_toggles_quick_look_with_override(self):
+        toggles = normalize_plot_toggles(
+            ['LENGTH', 'WIDTH'],
+            {'WIDTH': {'histogram': True}},
+            full_report=False,
+        )
+
+        self.assertEqual(False, toggles['LENGTH']['histogram'])
+        self.assertEqual(False, toggles['LENGTH']['boxplot'])
+        self.assertEqual(True, toggles['WIDTH']['histogram'])
+        self.assertEqual(False, toggles['WIDTH']['boxplot'])
 
 
 if __name__ == '__main__':
