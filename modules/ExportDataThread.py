@@ -119,16 +119,6 @@ def compute_scaled_y_limits(current_limits, scale_factor):
     return y_min - padding, y_max + padding
 
 
-def build_spec_limit_anchor_rows(usl, lsl):
-    """Return helper-row labels/values for explicit spec-limit anchor cells."""
-    return [
-        ('USL_MAX', usl),
-        ('USL_MIN', usl),
-        ('LSL_MAX', lsl),
-        ('LSL_MIN', lsl),
-    ]
-
-
 def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
     """Build stable worksheet formulas for per-header measurement statistics."""
     usl_formula = f"({summary_col}1 + {summary_col}2)"
@@ -597,30 +587,38 @@ class ExportDataThread(QThread):
                         return
                     header_group = self._sort_header_group(header_group)
                     
-                    worksheet.write(0, col, 'NOM')
+                    base_col = col
+
+                    worksheet.write(0, base_col, 'NOM')
                     nom = round(header_group['NOM'].iloc[0], 3)
-                    worksheet.write(0, col + 1, nom)
-                    NOM_cell = xl_rowcol_to_cell(0, col + 1, row_abs=True, col_abs=True)
+                    worksheet.write(0, base_col + 1, nom)
+                    NOM_cell = xl_rowcol_to_cell(0, base_col + 1, row_abs=True, col_abs=True)
                     
-                    worksheet.write(1, col, '+TOL')
+                    worksheet.write(1, base_col, '+TOL')
                     USL = round(header_group['+TOL'].iloc[0], 3)
-                    worksheet.write(1, col + 1, USL)
+                    worksheet.write(1, base_col + 1, USL)
                     USL = nom + USL
-                    USL_cell = xl_rowcol_to_cell(1, col + 1, row_abs=True, col_abs=True)
+                    USL_cell = xl_rowcol_to_cell(1, base_col + 1, row_abs=True, col_abs=True)
                     
-                    worksheet.write(2, col, '-TOL')
+                    worksheet.write(2, base_col, '-TOL')
                     if header_group['-TOL'].iloc[0]:
                         LSL = round(header_group['-TOL'].iloc[0], 3)
                     else:
                         LSL = 0
-                    worksheet.write(2, col + 1, LSL)
+                    worksheet.write(2, base_col + 1, LSL)
                     LSL = nom + LSL
-                    LSL_cell = xl_rowcol_to_cell(2, col + 1, row_abs=True, col_abs=True)
+                    LSL_cell = xl_rowcol_to_cell(2, base_col + 1, row_abs=True, col_abs=True)
+
+                    # Spec-limit anchor points for horizontal limit lines in charts (no labels).
+                    worksheet.write(0, base_col + 2, USL)
+                    worksheet.write(1, base_col + 2, USL)
+                    worksheet.write(2, base_col + 2, LSL)
+                    worksheet.write(3, base_col + 2, LSL)
                     
-                    data_range_y = f'{xl_col_to_name(col + 2)}22:{xl_col_to_name(col + 2)}{len(header_group) + 21}'
-                    data_range_x = f'{xl_col_to_name(col + 1)}22:{xl_col_to_name(col + 1)}{len(header_group) + 21}'
+                    data_range_y = f'{xl_col_to_name(base_col + 2)}22:{xl_col_to_name(base_col + 2)}{len(header_group) + 21}'
+                    data_range_x = f'{xl_col_to_name(base_col + 1)}22:{xl_col_to_name(base_col + 1)}{len(header_group) + 21}'
                     
-                    summary_col = xl_col_to_name(col + 1)
+                    summary_col = xl_col_to_name(base_col + 1)
                     stat_formulas = build_measurement_stat_formulas(
                         summary_col=summary_col,
                         data_range_y=data_range_y,
@@ -631,67 +629,53 @@ class ExportDataThread(QThread):
                         lsl_value=LSL,
                     )
 
-                    worksheet.write(3, col, 'MIN')
-                    worksheet.write_formula(3, col + 1, stat_formulas['min'])
+                    worksheet.write(3, base_col, 'MIN')
+                    worksheet.write_formula(3, base_col + 1, stat_formulas['min'])
 
-                    worksheet.write(4, col, 'AVG')
-                    worksheet.write_formula(4, col + 1, stat_formulas['avg'])
+                    worksheet.write(4, base_col, 'AVG')
+                    worksheet.write_formula(4, base_col + 1, stat_formulas['avg'])
 
-                    worksheet.write(5, col, 'MAX')
-                    worksheet.write_formula(5, col + 1, stat_formulas['max'])
+                    worksheet.write(5, base_col, 'MAX')
+                    worksheet.write_formula(5, base_col + 1, stat_formulas['max'])
 
-                    worksheet.write(6, col, 'STD')
-                    worksheet.write_formula(6, col + 1, stat_formulas['std'])
+                    worksheet.write(6, base_col, 'STD')
+                    worksheet.write_formula(6, base_col + 1, stat_formulas['std'])
 
-                    worksheet.write(7, col, 'Cp')
-                    worksheet.write_formula(7, col + 1, stat_formulas['cp'])
+                    worksheet.write(7, base_col, 'Cp')
+                    worksheet.write_formula(7, base_col + 1, stat_formulas['cp'])
 
-                    worksheet.write(8, col, 'Cpk')
-                    worksheet.write_formula(8, col + 1, stat_formulas['cpk'])
+                    worksheet.write(8, base_col, 'Cpk')
+                    worksheet.write_formula(8, base_col + 1, stat_formulas['cpk'])
 
-                    worksheet.write(9, col, "NOK number")
-                    worksheet.write_formula(9, col + 1, stat_formulas['nok_total'])
+                    worksheet.write(9, base_col, "NOK number")
+                    worksheet.write_formula(9, base_col + 1, stat_formulas['nok_total'])
 
-                    worksheet.write(10, col, "NOK %")
-                    worksheet.write_formula(10, col + 1, stat_formulas['nok_percent'], percent_format)
+                    worksheet.write(10, base_col, "NOK %")
+                    worksheet.write_formula(10, base_col + 1, stat_formulas['nok_percent'], percent_format)
 
-                    worksheet.write(11, col, "Sample size")
-                    worksheet.write_formula(11, col + 1, stat_formulas['sample_size'])
-
-                    for anchor_row_offset, (anchor_label, anchor_value) in enumerate(
-                        build_spec_limit_anchor_rows(USL, LSL),
-                        start=12,
-                    ):
-                        worksheet.write(anchor_row_offset, col, anchor_label)
-                        worksheet.write(anchor_row_offset, col + 1, anchor_value)
+                    worksheet.write(11, base_col, "Sample size")
+                    worksheet.write_formula(11, base_col + 1, stat_formulas['sample_size'])
                     
-                    worksheet.write(20, col, 'Date')
-                    worksheet.write_column(21, col, header_group['DATE'])
+                    worksheet.write(20, base_col, 'Date')
+                    worksheet.write_column(21, base_col, header_group['DATE'])
                     
-                    worksheet.write(20, col + 1, 'Sample #')
-                    worksheet.write_column(21, col + 1, header_group['SAMPLE_NUMBER'])
+                    worksheet.write(20, base_col + 1, 'Sample #')
+                    worksheet.write_column(21, base_col + 1, header_group['SAMPLE_NUMBER'])
                     
-                    worksheet.write(20, col + 2, header, wrap_format)
+                    worksheet.write(20, base_col + 2, header, wrap_format)
                     rounded_meas = header_group['MEAS'].round(3)
-                    worksheet.write_column(21, col + 2, rounded_meas)
-
-                    helper_block_index = int(col / 3)
-                    helper_col = max_col + 2 + (helper_block_index * 3)
-                    worksheet.write(20, helper_col, 'USL_SERIES')
-                    worksheet.write(20, helper_col + 1, 'LSL_SERIES')
-                    worksheet.write_column(21, helper_col, [USL] * len(header_group))
-                    worksheet.write_column(21, helper_col + 1, [LSL] * len(header_group))
+                    worksheet.write_column(21, base_col + 2, rounded_meas)
 
                     # Apply conditional formatting to highlight cells greater than USL in red
-                    worksheet.conditional_format(21, col + 2, len(header_group) + 20, col + 2,
+                    worksheet.conditional_format(21, base_col + 2, len(header_group) + 20, base_col + 2,
                                                 {'type': 'cell', 'criteria': '>', 'value': f'({NOM_cell}+{USL_cell})', 'format': red_format})
 
                     # Apply conditional formatting to highlight cells lower than LSL in red
-                    worksheet.conditional_format(21, col + 2, len(header_group) + 20, col + 2,
+                    worksheet.conditional_format(21, base_col + 2, len(header_group) + 20, base_col + 2,
                                                 {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format})
                     
                     # Apply conditional formatting to highlight if NOK% > 0
-                    worksheet.conditional_format(10, col + 1, 10, col + 1,
+                    worksheet.conditional_format(10, base_col + 1, 10, base_col + 1,
                                                 {'type': 'cell', 'criteria': '>', 'value': f'0', 'format': red_format})                
                     
                     col += 3
@@ -708,10 +692,11 @@ class ExportDataThread(QThread):
                     # Add data to the chart with the specified x and y ranges
                     first_data_row = 21
                     last_data_row = len(header_group) + 20
-                    x_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, col)
-                    y_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, col + 2)
-                    usl_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, helper_col)
-                    lsl_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, helper_col + 1)
+                    x_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, base_col + 1)
+                    y_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, base_col + 2)
+                    usl_range = build_sheet_series_range(safe_ref_sheet_name, 0, 1, base_col + 2)
+                    lsl_range = build_sheet_series_range(safe_ref_sheet_name, 2, 3, base_col + 2)
+                    limit_x_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, first_data_row + 1, base_col + 1)
 
                     # Add the series to the chart
                     chart.add_series({
@@ -733,7 +718,7 @@ class ExportDataThread(QThread):
                     
                     chart.add_series({
                         'name': 'USL',
-                        'categories': x_range,
+                        'categories': limit_x_range,
                         'values': usl_range,
                         'line': {'color': 'red', 'width': 1},
                         'marker': {'type': 'none'},
@@ -742,7 +727,7 @@ class ExportDataThread(QThread):
                     })
                     chart.add_series({
                         'name': 'LSL',
-                        'categories': x_range,
+                        'categories': limit_x_range,
                         'values': lsl_range,
                         'line': {'color': 'red', 'width': 1},
                         'marker': {'type': 'none'},
@@ -852,17 +837,24 @@ class ExportDataThread(QThread):
                     render_violin(ax, values, labels)
                     violin_table_rows = build_violin_group_stats_rows(labels, values)
                     if violin_table_rows:
+                        max_rows = 12
+                        display_rows = violin_table_rows[:max_rows]
+                        if len(violin_table_rows) > max_rows:
+                            display_rows.append(['…', '…', '…', '…', '…', '…', f'+{len(violin_table_rows) - max_rows} more'])
+
                         violin_table = ax.table(
-                            cellText=violin_table_rows,
+                            cellText=display_rows,
                             colLabels=['Group', 'n', 'Min', 'Avg', 'Max', 'Std', 't-test p'],
                             cellLoc='center',
                             loc='upper left',
-                            bbox=[1.02, 0.05, 0.58, 0.9],
+                            bbox=[1.02, 0.03, 0.74, 0.94],
                         )
                         violin_table.auto_set_font_size(False)
-                        violin_table.set_fontsize(7)
+                        violin_table.set_fontsize(6)
+                        row_height = 0.94 / (len(display_rows) + 1)
                         for _, cell in violin_table.get_celld().items():
                             cell.set_linewidth(0.25)
+                            cell.set_height(row_height)
                 else:
                     render_scatter(ax, data=header_group, x='GROUP', y='MEAS')
             else:
