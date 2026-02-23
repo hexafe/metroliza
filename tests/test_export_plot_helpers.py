@@ -44,6 +44,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 from modules.ExportDataThread import (
     build_histogram_density_curve_payload,
     build_measurement_stat_formulas,
+    build_violin_group_stats_rows,
     compute_scaled_y_limits,
 )
 
@@ -96,6 +97,25 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertIn('MIN(', formulas['cpk'])
         self.assertEqual(formulas['nok_total'], '=COUNTIF(E22:E40, ">"&($D$1+$D$2))+COUNTIF(E22:E40, "<"&($D$1+$D$3))')
+
+    def test_build_violin_group_stats_rows_marks_reference_and_computes_pvalues(self):
+        labels = ['A', 'B']
+        values = [[1.0, 1.2, 0.8], [1.5, 1.6, 1.4]]
+
+        rows = build_violin_group_stats_rows(labels, values)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], 'A')
+        self.assertEqual(rows[0][-1], 'Ref')
+        self.assertEqual(rows[1][0], 'B')
+        self.assertNotEqual(rows[1][-1], 'Ref')
+
+    def test_build_violin_group_stats_rows_uses_population_reference_for_single_group(self):
+        rows = build_violin_group_stats_rows(['Only'], [[2.0, 2.1, 1.9]])
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], 'Only')
+        self.assertNotEqual(rows[0][-1], 'Ref')
 
 
 if __name__ == '__main__':
