@@ -3,7 +3,7 @@ from modules.CustomLogger import CustomLogger
 from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass
 from pathlib import Path
-from modules.report_fingerprint import build_report_fingerprint, build_parser_fingerprint
+from modules.report_fingerprint import build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.db import execute_with_retry
 

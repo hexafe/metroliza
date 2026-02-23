@@ -292,7 +292,7 @@ This roadmap extension captures the approved migration path from Excel-first exp
    - continue worker decomposition (remaining chart/workbook sections),
    - continue extracting + testing pure plotting/data-shaping helpers from `ExportDataThread` (histogram/trend payload + y-limit scaling + histogram density payload helpers completed; next targets are worksheet write segments and additional chart rendering decomposition),
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
-2. Execute remaining **Phase 3** items (lint/smoke CI expansion).
+2. Execute remaining **Phase 3** items (continue incremental lint/smoke CI expansion and fix baseline-scoped violations as touched files are migrated).
 3. Execute remaining CI/lint expansion and keep phase coverage green in maintenance PRs.
 
 

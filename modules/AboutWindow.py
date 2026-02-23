@@ -69,7 +69,7 @@ class AboutWindow(QDialog):
         
         # Add the clickable label with email
         # author_label = ClickableLabel(f"Grzegorz Ozimek (grzegorz.ozimek@valeo.com)", "mailto:grzegorz.ozimek@valeo.com")
-        author_label = QLabel(f"Grzegorz Ozimek")
+        author_label = QLabel("Grzegorz Ozimek")
         author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         author_label.setOpenExternalLinks(True)
         self.layout.addWidget(author_label)

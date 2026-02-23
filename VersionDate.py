@@ -1,6 +1,6 @@
 VERSION_DATE = "260222"
 
-release_notes = f"""
+release_notes = """
     <br><b>Current Version 260222:</b><br>
     - Performance optimizations<br>
 

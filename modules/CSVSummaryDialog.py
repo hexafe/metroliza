@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
 )
 from pathlib import Path
 import pandas as pd
-import xlsxwriter
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 from modules.excel_sheet_utils import unique_sheet_name
 import base64
