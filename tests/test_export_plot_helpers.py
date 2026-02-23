@@ -2,6 +2,10 @@ import sys
 import types
 import unittest
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 
 qtcore_stub = types.ModuleType('PyQt6.QtCore')
 
@@ -46,6 +50,7 @@ from modules.ExportDataThread import (
     build_measurement_stat_formulas,
     build_violin_group_stats_rows,
     compute_scaled_y_limits,
+    render_iqr_boxplot,
 )
 
 
@@ -126,6 +131,15 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0][-1], 'Ref')
         self.assertEqual(rows[1][-1], 'N/A')
+
+    def test_render_iqr_boxplot_sets_labels(self):
+        fig, ax = plt.subplots()
+
+        render_iqr_boxplot(ax, [[1.0, 1.1, 1.2], [2.0, 2.1, 3.5]], ['G1', 'G2'])
+
+        rendered_labels = [tick.get_text() for tick in ax.get_xticklabels()]
+        self.assertEqual(rendered_labels, ['G1', 'G2'])
+        plt.close(fig)
 
 
 if __name__ == '__main__':

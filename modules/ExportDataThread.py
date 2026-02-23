@@ -243,9 +243,16 @@ def annotate_violin_group_stats(ax, labels, values):
         min_val = float(np.min(arr))
         max_val = float(np.max(arr))
 
+        text_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#d0d0d0', 'alpha': 0.9}
+
         ax.scatter([xpos], [min_val], color='#4f4f4f', s=12, marker='v', zorder=4)
+        ax.annotate(f"min={min_val:.3f}", (xpos, min_val), textcoords='offset points', xytext=(4, -10), fontsize=6, bbox=text_box)
+
         ax.scatter([xpos], [mean_val], color='#111111', s=18, marker='o', zorder=4)
+        ax.annotate(f"μ={mean_val:.3f}", (xpos, mean_val), textcoords='offset points', xytext=(4, 2), fontsize=6, bbox=text_box)
+
         ax.scatter([xpos], [max_val], color='#4f4f4f', s=12, marker='^', zorder=4)
+        ax.annotate(f"max={max_val:.3f}", (xpos, max_val), textcoords='offset points', xytext=(4, 2), fontsize=6, bbox=text_box)
 
         if std_val > 0:
             sigma_low = mean_val - (3 * std_val)
@@ -260,6 +267,8 @@ def annotate_violin_group_stats(ax, labels, values):
                 alpha=0.8,
                 zorder=3,
             )
+            ax.annotate(f"-3σ={sigma_low:.3f}", (xpos, sigma_low), textcoords='offset points', xytext=(4, -10), fontsize=6, color='#5a5a5a', bbox=text_box)
+            ax.annotate(f"+3σ={sigma_high:.3f}", (xpos, sigma_high), textcoords='offset points', xytext=(4, 2), fontsize=6, color='#5a5a5a', bbox=text_box)
 
 
 def render_violin(ax, values, labels):
@@ -285,6 +294,27 @@ def render_histogram(ax, header_group):
         sns.histplot(data=header_group, x='MEAS', bins='auto', stat='density', alpha=0.7, color='#90b7d4', edgecolor='white', ax=ax)
     else:
         ax.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color='#90b7d4', edgecolor='white')
+
+
+def render_iqr_boxplot(ax, values, labels):
+    """Render a standard 1.5*IQR box plot used for outlier detection."""
+    if not values:
+        return
+
+    positions = list(range(1, len(values) + 1))
+    ax.boxplot(
+        values,
+        labels=[str(label) for label in labels],
+        whis=1.5,
+        patch_artist=True,
+        boxprops={'facecolor': '#d9e9f5', 'edgecolor': '#4f6f8f', 'linewidth': 0.9},
+        medianprops={'color': '#1f1f1f', 'linewidth': 1.0},
+        whiskerprops={'color': '#4f6f8f', 'linewidth': 0.9},
+        capprops={'color': '#4f6f8f', 'linewidth': 0.9},
+        flierprops={'marker': 'o', 'markersize': 3, 'markerfacecolor': '#b23a48', 'markeredgecolor': '#b23a48', 'alpha': 0.8},
+    )
+    ax.set_xticks(positions)
+    ax.set_xticklabels([str(label) for label in labels], rotation=45, ha='right')
 
 
 def render_density_line(ax, x, p):
@@ -835,26 +865,6 @@ class ExportDataThread(QThread):
                 )
                 if can_render_violin:
                     render_violin(ax, values, labels)
-                    violin_table_rows = build_violin_group_stats_rows(labels, values)
-                    if violin_table_rows:
-                        max_rows = 12
-                        display_rows = violin_table_rows[:max_rows]
-                        if len(violin_table_rows) > max_rows:
-                            display_rows.append(['…', '…', '…', '…', '…', '…', f'+{len(violin_table_rows) - max_rows} more'])
-
-                        violin_table = ax.table(
-                            cellText=display_rows,
-                            colLabels=['Group', 'n', 'Min', 'Avg', 'Max', 'Std', 't-test p'],
-                            cellLoc='center',
-                            loc='upper left',
-                            bbox=[1.02, 0.03, 0.74, 0.94],
-                        )
-                        violin_table.auto_set_font_size(False)
-                        violin_table.set_fontsize(6)
-                        row_height = 0.94 / (len(display_rows) + 1)
-                        for _, cell in violin_table.get_celld().items():
-                            cell.set_linewidth(0.25)
-                            cell.set_height(row_height)
                 else:
                     render_scatter(ax, data=header_group, x='GROUP', y='MEAS')
             else:
@@ -881,8 +891,6 @@ class ExportDataThread(QThread):
             ax.set_xlabel('Sample #')
             ax.set_ylabel('Measurement')
             ax.set_title(f'{header}')
-            if grouping_applied:
-                plt.subplots_adjust(right=0.64)
             fig.savefig(imgplot, format="png")
             
             imgplot.seek(0)
@@ -892,6 +900,35 @@ class ExportDataThread(QThread):
                 row = int(((col/3)-1)*20)
             summary_worksheet.write(row, 0, header)
             summary_worksheet.insert_image(row + 1, 0, "", {'image_data': imgplot})
+
+            if self._check_canceled():
+                plt.close(fig)
+                return
+
+            plt.close(fig)
+
+            if self._check_canceled():
+                return
+
+            imgplot = BytesIO()
+            fig, ax = plt.subplots(figsize=(6, 4))
+            boxplot_labels = labels if labels else ['All']
+            boxplot_values = values if values else [list(header_group['MEAS'])]
+            render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
+            apply_minimal_axis_style(ax, grid_axis='y')
+            ax.axhline(y=USL, color='#9b1c1c', linestyle='--', linewidth=1.0)
+            ax.axhline(y=LSL, color='#9b1c1c', linestyle='--', linewidth=1.0)
+            ax.set_xlabel('Group')
+            ax.set_ylabel('Measurement')
+            ax.set_title(f'{header} - IQR Outlier Detection')
+
+            current_y_limits = ax.get_ylim()
+            y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+            ax.set_ylim(y_min, y_max)
+
+            fig.savefig(imgplot, format="png", bbox_inches='tight')
+            imgplot.seek(0)
+            summary_worksheet.insert_image(row + 1, 9, "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -933,15 +970,16 @@ class ExportDataThread(QThread):
             apply_minimal_axis_style(ax, grid_axis='y')
 
             y_min, y_max = ax.get_ylim()
-            ax.text(average, y_max*0.95, f'μ={average:.3f}', color='#9b1c1c', ha='left', va='top', fontsize=7)
-            ax.text(USL, y_max*0.9, f'USL={USL:.3f}', color='#1f7a4d', ha='right', va='top', fontsize=7)
-            ax.text(LSL, y_max*0.85, f'LSL={LSL:.3f}', color='#1f7a4d', ha='left', va='top', fontsize=7)
+            annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#d0d0d0', 'alpha': 0.9}
+            ax.text(average, y_max*0.95, f'μ={average:.3f}', color='#9b1c1c', ha='left', va='top', fontsize=7, bbox=annotation_box)
+            ax.text(USL, y_max*0.9, f'USL={USL:.3f}', color='#1f7a4d', ha='right', va='top', fontsize=7, bbox=annotation_box)
+            ax.text(LSL, y_max*0.85, f'LSL={LSL:.3f}', color='#1f7a4d', ha='left', va='top', fontsize=7, bbox=annotation_box)
 
             plt.subplots_adjust(right=0.75)
             
             fig.savefig(imgplot, format="png")
             imgplot.seek(0)
-            summary_worksheet.insert_image(row + 1, 9, "", {'image_data': imgplot})
+            summary_worksheet.insert_image(row + 1, 19, "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -989,7 +1027,7 @@ class ExportDataThread(QThread):
             imgplot = BytesIO()
             fig.savefig(imgplot, format="png", bbox_inches='tight')
             imgplot.seek(0)
-            summary_worksheet.insert_image(row + 1, 19, "", {'image_data': imgplot})
+            summary_worksheet.insert_image(row + 1, 29, "", {'image_data': imgplot})
             plt.close(fig)
             
         except Exception as e:
