@@ -37,6 +37,22 @@ class CsvSummaryUtilsTests(unittest.TestCase):
 
         self.assertEqual(['THICKNESS', 'WEIGHT'], selected)
 
+
+    def test_compute_column_summary_stats_uses_spec_limits(self):
+        stats = compute_column_summary_stats(
+            pd.Series([9.8, 10.0, 10.2]),
+            nom=10.0,
+            usl=0.5,
+            lsl=-0.5,
+        )
+
+        self.assertEqual(3, stats['sample_size'])
+        self.assertEqual(10.0, stats['nom'])
+        self.assertEqual(0.5, stats['usl'])
+        self.assertEqual(-0.5, stats['lsl'])
+        self.assertNotEqual('N/A', stats['cp'])
+        self.assertNotEqual('N/A', stats['cpk'])
+
     def test_compute_column_summary_stats_handles_empty_series(self):
         stats = compute_column_summary_stats(pd.Series(['x', None]))
 
