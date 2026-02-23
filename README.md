@@ -114,7 +114,7 @@ Recent performance-focused changes include:
 - extracted/tested y-axis scaling helper for summary charts (`compute_scaled_y_limits`) to reduce duplicated chart math,
 - extracted/tested histogram density-curve payload helper (`build_histogram_density_curve_payload`) to isolate normal-fit rendering decisions in histogram overlays,
 - cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops),
-- worksheet-backed `USL_SERIES` / `LSL_SERIES` columns and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring).
+- worksheet-backed `USL_SERIES` / `LSL_SERIES` columns, explicit `USL_MAX`/`USL_MIN`/`LSL_MAX`/`LSL_MIN` anchor helper cells near per-header stats, and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring).
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 
