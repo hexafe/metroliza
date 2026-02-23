@@ -13,7 +13,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "Missing build requirements. Install with: pip install -r requirements-build.txt"
 }
 
-if (python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('PyQt5') else 1)" 2>$null; $LASTEXITCODE -eq 0) {
+python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('PyQt5') else 1)" 2>$null
+if ($LASTEXITCODE -eq 0) {
     Write-Warning "PyQt5 detected in this environment. Remove it to avoid PyQt6 plugin/import conflicts: pip uninstall PyQt5"
 }
 
