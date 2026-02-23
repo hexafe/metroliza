@@ -40,6 +40,11 @@ def run_export_steps(steps, should_cancel):
     return not should_cancel()
 
 
+def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
+    """Build an absolute worksheet range string for xlsxwriter series definitions."""
+    return f"={sheet_name}!${xl_range(first_row, column_index, last_row, column_index)}"
+
+
 def all_measurements_within_limits(measurements, lower_limit, upper_limit):
     series = pd.Series(measurements)
     return series.between(lower_limit, upper_limit, inclusive='both').all()
@@ -526,6 +531,13 @@ class ExportDataThread(QThread):
                     rounded_meas = header_group['MEAS'].round(3)
                     worksheet.write_column(21, col + 2, rounded_meas)
 
+                    helper_block_index = int(col / 3)
+                    helper_col = max_col + 2 + (helper_block_index * 3)
+                    worksheet.write(20, helper_col, 'USL_SERIES')
+                    worksheet.write(20, helper_col + 1, 'LSL_SERIES')
+                    worksheet.write_column(21, helper_col, [USL] * len(header_group))
+                    worksheet.write_column(21, helper_col + 1, [LSL] * len(header_group))
+
                     # Apply conditional formatting to highlight cells greater than USL in red
                     worksheet.conditional_format(21, col + 2, len(header_group) + 20, col + 2,
                                                 {'type': 'cell', 'criteria': '>', 'value': f'({NOM_cell}+{USL_cell})', 'format': red_format})
@@ -550,9 +562,12 @@ class ExportDataThread(QThread):
                     chart = workbook.add_chart({'type': self.selected_export_type})
 
                     # Add data to the chart with the specified x and y ranges
-                    num_rows = len(header_group) + 20
-                    x_range = f"={safe_ref_sheet_name}!${data_range_x}"
-                    y_range = f"={safe_ref_sheet_name}!${data_range_y}"
+                    first_data_row = 21
+                    last_data_row = len(header_group) + 20
+                    x_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, col)
+                    y_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, col + 2)
+                    usl_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, helper_col)
+                    lsl_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, helper_col + 1)
 
                     # Add the series to the chart
                     chart.add_series({
@@ -572,14 +587,10 @@ class ExportDataThread(QThread):
 
                     chart.set_legend({'position': 'none'})
                     
-                    USL_y_values_list = [USL] * len(header_group)
-                    LSL_y_values_list = [LSL] * len(header_group)
-                    USL_limits_y_values = '={' + ','.join(str(item) for item in USL_y_values_list) + '}'
-                    LSL_limits_y_values = '={' + ','.join(str(item) for item in LSL_y_values_list) + '}'
                     chart.add_series({
                         'name': 'USL',
                         'categories': x_range,
-                        'values': USL_limits_y_values,
+                        'values': usl_range,
                         'line': {'color': 'red', 'width': 1},
                         'marker': {'type': 'none'},
                         'data_labels': {'value': False},
@@ -588,7 +599,7 @@ class ExportDataThread(QThread):
                     chart.add_series({
                         'name': 'LSL',
                         'categories': x_range,
-                        'values': LSL_limits_y_values,
+                        'values': lsl_range,
                         'line': {'color': 'red', 'width': 1},
                         'marker': {'type': 'none'},
                         'data_labels': {'value': False},
