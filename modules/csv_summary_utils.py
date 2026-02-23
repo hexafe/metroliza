@@ -101,6 +101,31 @@ def compute_column_summary_stats(series, usl=0.0, lsl=0.0, nom=0.0):
     }
 
 
+def build_default_plot_toggles(data_columns, full_report=True):
+    """Build per-column plot toggles for CSV Summary export."""
+    return {
+        column: {
+            'histogram': bool(full_report),
+            'boxplot': bool(full_report),
+        }
+        for column in (data_columns or [])
+    }
+
+
+def normalize_plot_toggles(data_columns, plot_toggles, full_report=True):
+    """Ensure each selected column has a complete toggle payload."""
+    normalized = build_default_plot_toggles(data_columns, full_report=full_report)
+    plot_toggles = plot_toggles or {}
+
+    for column in normalized:
+        column_payload = plot_toggles.get(column, {})
+        if isinstance(column_payload, dict):
+            normalized[column]['histogram'] = bool(column_payload.get('histogram', normalized[column]['histogram']))
+            normalized[column]['boxplot'] = bool(column_payload.get('boxplot', normalized[column]['boxplot']))
+
+    return normalized
+
+
 def parse_delimiter_with_sniffer(file_path):
     """Best-effort delimiter detection used for UX diagnostics."""
     with open(file_path, 'r', encoding='utf-8', newline='') as handle:

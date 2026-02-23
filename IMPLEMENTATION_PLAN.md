@@ -260,11 +260,11 @@ This roadmap extension captures the approved migration path from Excel-first exp
 - ✅ Added aggregated `CSV_SUMMARY` worksheet output (per selected column: sample size, min/avg/max/std/Cp/Cpk).
 - ✅ Added focused utility tests for CSV load fallback, default-column resolution, and empty-series stats safety.
 - ✅ Added optional per-column spec-limit inputs (NOM/USL/LSL) in CSV Summary UI and wired them into exported Cp/Cpk + overview stats.
+- ✅ Added quick-look/full-report plot toggles for CSV Summary so histogram and boxplot-profile chart generation can be skipped per run.
 
 ### Next steps
-1. Add histogram/boxplot generation toggle per selected column to support "quick-look" vs "full-report" execution times.
-2. Add export presets (remember last delimiter/decimal + selected columns per source file pattern).
-3. Add a light integration test that validates generated XLSX contains both detail sheets and `CSV_SUMMARY`.
+1. Add export presets (remember last delimiter/decimal + selected columns per source file pattern).
+2. Add a light integration test that validates generated XLSX contains both detail sheets and `CSV_SUMMARY`.
 
 ---
 

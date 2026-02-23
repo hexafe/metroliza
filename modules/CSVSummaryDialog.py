@@ -13,14 +13,17 @@ from PyQt6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
+    QCheckBox,
 )
 from pathlib import Path
 import pandas as pd
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.csv_summary_utils import (
+    build_default_plot_toggles,
     compute_column_summary_stats,
     load_csv_with_fallbacks,
+    normalize_plot_toggles,
     resolve_default_data_columns,
 )
 import base64
@@ -164,7 +167,7 @@ class SpecLimitsDialog(QDialog):
 class DataProcessingThread(QThread):
     progress_signal = pyqtSignal(int)
 
-    def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None, column_spec_limits=None):
+    def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None, column_spec_limits=None, plot_toggles=None):
         super().__init__()
         self.selected_indexes = selected_indexes
         self.selected_data_columns = selected_data_columns
@@ -174,6 +177,7 @@ class DataProcessingThread(QThread):
         self.canceled = False
         self.csv_config = csv_config or {}
         self.column_spec_limits = column_spec_limits or {}
+        self.plot_toggles = normalize_plot_toggles(selected_data_columns, plot_toggles)
 
     def write_summary_data(self, worksheet, data_column, selected_data, spec_limits):
         col = selected_data.shape[1]
@@ -278,6 +282,70 @@ class DataProcessingThread(QThread):
         worksheet.insert_chart(12, col + 5, chart)
 
 
+
+    def add_histogram_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
+        numeric_series = pd.to_numeric(selected_data[data_column], errors='coerce').dropna()
+        if numeric_series.empty:
+            return
+
+        histogram_col_start = col + 6
+        worksheet.write(0, histogram_col_start, 'Histogram Bin')
+        worksheet.write(0, histogram_col_start + 1, 'Count')
+
+        bin_count = min(12, max(5, int(len(numeric_series) ** 0.5)))
+        bins = pd.cut(numeric_series, bins=bin_count)
+        counts = bins.value_counts().sort_index()
+
+        for row_index, (bin_interval, count) in enumerate(counts.items(), start=1):
+            worksheet.write(row_index, histogram_col_start, str(bin_interval))
+            worksheet.write(row_index, histogram_col_start + 1, int(count))
+
+        chart = writer.book.add_chart({'type': 'column'})
+        chart.add_series({
+            'name': f'{data_column} histogram',
+            'categories': [sheet_name, 1, histogram_col_start, len(counts), histogram_col_start],
+            'values': [sheet_name, 1, histogram_col_start + 1, len(counts), histogram_col_start + 1],
+            'gap': 2,
+        })
+        chart.set_title({'name': f'{sheet_name} histogram'})
+        chart.set_x_axis({'name': 'Bins'})
+        chart.set_y_axis({'name': 'Count'})
+        chart.set_legend({'position': 'none'})
+        worksheet.insert_chart(30, col + 5, chart)
+
+    def add_boxplot_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
+        numeric_series = pd.to_numeric(selected_data[data_column], errors='coerce').dropna()
+        if numeric_series.empty:
+            return
+
+        stats_col_start = col + 9
+        worksheet.write(0, stats_col_start, 'Five-number summary')
+        worksheet.write(0, stats_col_start + 1, data_column)
+
+        summary_rows = [
+            ('Min', float(numeric_series.min())),
+            ('Q1', float(numeric_series.quantile(0.25))),
+            ('Median', float(numeric_series.median())),
+            ('Q3', float(numeric_series.quantile(0.75))),
+            ('Max', float(numeric_series.max())),
+        ]
+        for row_index, (label, value) in enumerate(summary_rows, start=1):
+            worksheet.write(row_index, stats_col_start, label)
+            worksheet.write(row_index, stats_col_start + 1, round(value, 3))
+
+        chart = writer.book.add_chart({'type': 'line'})
+        chart.add_series({
+            'name': f'{data_column} boxplot profile',
+            'categories': [sheet_name, 1, stats_col_start, len(summary_rows), stats_col_start],
+            'values': [sheet_name, 1, stats_col_start + 1, len(summary_rows), stats_col_start + 1],
+            'marker': {'type': 'circle', 'size': 6},
+        })
+        chart.set_title({'name': f'{sheet_name} boxplot profile'})
+        chart.set_x_axis({'name': 'Summary point'})
+        chart.set_y_axis({'name': 'Value'})
+        chart.set_legend({'position': 'none'})
+        worksheet.insert_chart(48, col + 5, chart)
+
     def write_overview_sheet(self, writer, overview_rows):
         overview_df = pd.DataFrame(overview_rows)
         if overview_df.empty:
@@ -331,6 +399,12 @@ class DataProcessingThread(QThread):
                     self.apply_conditional_formatting(worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer)
 
                     self.add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+
+                    plot_options = self.plot_toggles.get(data_column, {'histogram': True, 'boxplot': True})
+                    if plot_options.get('histogram', True):
+                        self.add_histogram_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+                    if plot_options.get('boxplot', True):
+                        self.add_boxplot_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
 
                     stats = compute_column_summary_stats(
                         selected_data[data_column],
@@ -388,6 +462,7 @@ class CSVSummaryDialog(QDialog):
         self.selected_data_columns = []
         self.csv_config = {}
         self.column_spec_limits = {}
+        self.plot_toggles = {}
 
         # Initialize the layout
         layout = QVBoxLayout()
@@ -396,11 +471,13 @@ class CSVSummaryDialog(QDialog):
         self.input_button = QPushButton("Select input file (CSV)")
         self.filter_button = QPushButton("Filter columns (optional)")
         self.spec_limits_button = QPushButton("Set spec limits (optional)")
+        self.include_extended_plots = QCheckBox("Include histogram and boxplot charts")
         self.output_button = QPushButton("Select output file (xlsx)")
         self.start_button = QPushButton("START")  # Add the START button
         layout.addWidget(self.input_button)
         layout.addWidget(self.filter_button)
         layout.addWidget(self.spec_limits_button)
+        layout.addWidget(self.include_extended_plots)
         layout.addWidget(self.output_button)
         layout.addWidget(self.start_button)  # Add the START button to the layout
 
@@ -410,6 +487,8 @@ class CSVSummaryDialog(QDialog):
         self.spec_limits_button.clicked.connect(self.handle_spec_limits_button)
         self.output_button.clicked.connect(self.handle_output_button)
         self.start_button.clicked.connect(self.handle_start_button)  # Connect the START button
+
+        self.include_extended_plots.setChecked(True)
 
         # Initially, disable the FILTER, OUTPUT, and START buttons
         self.filter_button.setEnabled(False)
@@ -449,6 +528,7 @@ class CSVSummaryDialog(QDialog):
             self.selected_indexes = self.column_names[:1]
             self.selected_data_columns = resolve_default_data_columns(self.data_frame, self.selected_indexes)
             self.column_spec_limits = {}
+            self.plot_toggles = build_default_plot_toggles(self.selected_data_columns, full_report=self.include_extended_plots.isChecked())
 
     def handle_filter_button(self):
         print("FILTER button clicked")
@@ -469,6 +549,11 @@ class CSVSummaryDialog(QDialog):
                         column: self.column_spec_limits.get(column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
                         for column in self.selected_data_columns
                     }
+                    self.plot_toggles = normalize_plot_toggles(
+                        self.selected_data_columns,
+                        self.plot_toggles,
+                        full_report=self.include_extended_plots.isChecked(),
+                    )
         else:
             QMessageBox.warning(self, "Warning", "No data loaded. Please select an input file first.")
 
@@ -566,6 +651,7 @@ class CSVSummaryDialog(QDialog):
             self.data_frame,
             self.csv_config,
             self.column_spec_limits,
+            self.plot_toggles if self.include_extended_plots.isChecked() else build_default_plot_toggles(self.selected_data_columns, full_report=False),
         )
         # Connect the progress signal to the update_progress_bar slot
         self.worker_thread.progress_signal.connect(self.update_progress_bar)
