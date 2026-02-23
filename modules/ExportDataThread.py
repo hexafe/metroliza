@@ -8,7 +8,7 @@ matplotlib.use('Agg')
 
 import matplotlib.pyplot as plt
 import importlib.util
-from scipy.stats import norm
+from scipy.stats import norm, ttest_ind
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
 if _HAS_SEABORN:
@@ -166,39 +166,128 @@ def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cel
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
     if _HAS_SEABORN:
-        sns.set_theme(style='whitegrid', context='paper')
-    plt.rcParams.update({'font.size': 8, 'axes.labelsize': 8, 'axes.titlesize': 10})
+        sns.set_theme(style='white', context='paper')
+    plt.rcParams.update({
+        'font.size': 8,
+        'axes.labelsize': 8,
+        'axes.titlesize': 10,
+        'axes.edgecolor': '#9aa0a6',
+        'axes.linewidth': 0.8,
+        'grid.color': '#d5d7db',
+        'grid.linewidth': 0.6,
+        'grid.alpha': 0.35,
+    })
+
+
+def apply_minimal_axis_style(ax, grid_axis='y'):
+    """Apply a clean, minimal visual style on a chart axis."""
+    ax.set_facecolor('white')
+    ax.grid(True, axis=grid_axis, linestyle='-', alpha=0.25)
+    if grid_axis == 'y':
+        ax.grid(False, axis='x')
+    elif grid_axis == 'x':
+        ax.grid(False, axis='y')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_color('#c2c6cc')
+    ax.spines['bottom'].set_color('#c2c6cc')
+
+
+def build_violin_group_stats_rows(labels, values):
+    """Return per-group stats rows with p-values against a reference distribution."""
+    cleaned_groups = [np.asarray(group_values, dtype=float) for group_values in values]
+    if not cleaned_groups:
+        return []
+
+    population = np.concatenate(cleaned_groups)
+    reference = cleaned_groups[0] if len(cleaned_groups) > 1 else population
+    reference_name = str(labels[0]) if len(cleaned_groups) > 1 else 'Population'
+
+    rows = []
+    for label, group_values in zip(labels, cleaned_groups):
+        if group_values.size == 0:
+            continue
+
+        if len(cleaned_groups) > 1 and str(label) == reference_name:
+            p_value_display = 'Ref'
+        else:
+            _, p_value = ttest_ind(group_values, reference, equal_var=False, nan_policy='omit')
+            p_value_display = 'N/A' if np.isnan(p_value) else f"{p_value:.4f}"
+
+        rows.append([
+            str(label),
+            int(group_values.size),
+            round(float(np.min(group_values)), 3),
+            round(float(np.mean(group_values)), 3),
+            round(float(np.max(group_values)), 3),
+            round(float(np.std(group_values, ddof=1)) if group_values.size > 1 else 0.0, 3),
+            p_value_display,
+        ])
+
+    return rows
+
+
+def annotate_violin_group_stats(ax, labels, values):
+    """Annotate min/mean/max and ±3σ markers for each violin group."""
+    for idx, group_values in enumerate(values):
+        arr = np.asarray(group_values, dtype=float)
+        if arr.size == 0:
+            continue
+        xpos = idx
+        mean_val = float(np.mean(arr))
+        std_val = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
+        min_val = float(np.min(arr))
+        max_val = float(np.max(arr))
+
+        ax.scatter([xpos], [min_val], color='#4f4f4f', s=12, marker='v', zorder=4)
+        ax.scatter([xpos], [mean_val], color='#111111', s=18, marker='o', zorder=4)
+        ax.scatter([xpos], [max_val], color='#4f4f4f', s=12, marker='^', zorder=4)
+
+        if std_val > 0:
+            sigma_low = mean_val - (3 * std_val)
+            sigma_high = mean_val + (3 * std_val)
+            ax.vlines(
+                xpos,
+                sigma_low,
+                sigma_high,
+                colors='#7a7a7a',
+                linestyles=':',
+                linewidth=0.9,
+                alpha=0.8,
+                zorder=3,
+            )
 
 
 def render_violin(ax, values, labels):
     if _HAS_SEABORN:
-        sns.violinplot(data=values, inner='quartile', cut=0, ax=ax)
+        sns.violinplot(data=values, inner=None, cut=0, linewidth=0.9, color='#b9d7ea', ax=ax)
         ax.set_xticks(range(len(labels)))
     else:
-        ax.violinplot(values, showmeans=True, showmedians=False, showextrema=True)
+        ax.violinplot(values, showmeans=False, showmedians=False, showextrema=False)
         ax.set_xticks(range(1, len(labels) + 1))
     ax.set_xticklabels(labels)
+    annotate_violin_group_stats(ax, labels, values)
 
 
 def render_scatter(ax, data=None, x=None, y=None):
     if _HAS_SEABORN:
-        sns.scatterplot(data=data, x=x, y=y, ax=ax, s=20, legend=False)
+        sns.scatterplot(data=data, x=x, y=y, ax=ax, s=18, color='#2f6f9f', legend=False)
     else:
-        ax.scatter(data[x], data[y], color='blue', marker='.')
+        ax.scatter(data[x], data[y], color='#2f6f9f', marker='.', s=18)
 
 
 def render_histogram(ax, header_group):
     if _HAS_SEABORN:
-        sns.histplot(data=header_group, x='MEAS', bins='auto', stat='density', alpha=0.7, color='steelblue', edgecolor='black', ax=ax)
+        sns.histplot(data=header_group, x='MEAS', bins='auto', stat='density', alpha=0.7, color='#90b7d4', edgecolor='white', ax=ax)
     else:
-        ax.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color='blue', edgecolor='black')
+        ax.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color='#90b7d4', edgecolor='white')
 
 
 def render_density_line(ax, x, p):
     if _HAS_SEABORN:
-        sns.lineplot(x=x, y=p, color='black', linewidth=2, ax=ax)
+        sns.lineplot(x=x, y=p, color='#1f1f1f', linewidth=1.4, ax=ax)
     else:
-        ax.plot(x, p, 'k', linewidth=2)
+        ax.plot(x, p, color='#1f1f1f', linewidth=1.4)
 
 
 class ExportDataThread(QThread):
@@ -747,6 +836,19 @@ class ExportDataThread(QThread):
                 )
                 if can_render_violin:
                     render_violin(ax, values, labels)
+                    violin_table_rows = build_violin_group_stats_rows(labels, values)
+                    if violin_table_rows:
+                        violin_table = ax.table(
+                            cellText=violin_table_rows,
+                            colLabels=['Group', 'n', 'Min', 'Avg', 'Max', 'Std', 't-test p'],
+                            cellLoc='center',
+                            loc='upper left',
+                            bbox=[1.02, 0.05, 0.58, 0.9],
+                        )
+                        violin_table.auto_set_font_size(False)
+                        violin_table.set_fontsize(7)
+                        for _, cell in violin_table.get_celld().items():
+                            cell.set_linewidth(0.25)
                 else:
                     render_scatter(ax, data=header_group, x='GROUP', y='MEAS')
             else:
@@ -759,19 +861,22 @@ class ExportDataThread(QThread):
                     render_violin(ax, values, labels)
                 else:
                     render_scatter(ax, data=header_group, x='SAMPLE_NUMBER', y='MEAS')
-            
-            ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
-            ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
-            
+
+            apply_minimal_axis_style(ax, grid_axis='y')
+            ax.axhline(y=USL, color='#9b1c1c', linestyle='--', linewidth=1.0)
+            ax.axhline(y=LSL, color='#9b1c1c', linestyle='--', linewidth=1.0)
+
             current_y_limits = ax.get_ylim()
             y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
 
             # Set y-axis limits using the Axes object
             ax.set_ylim(y_min, y_max)
-            
+
             ax.set_xlabel('Sample #')
             ax.set_ylabel('Measurement')
             ax.set_title(f'{header}')
+            if grouping_applied:
+                plt.subplots_adjust(right=0.64)
             fig.savefig(imgplot, format="png")
             
             imgplot.seek(0)
@@ -811,23 +916,21 @@ class ExportDataThread(QThread):
                 render_density_line(ax, density_curve['x'], density_curve['y'])
             
             # Add vertical lines for mean, LSL and USL
-            plt.axvline(average, color='red', linestyle='dashed', linewidth=2, label=f'Mean = {average:.3f}')
-            plt.axvline(USL, color='green', linestyle='dashed', linewidth=2, label=f'USL = {USL:.3f}')
-            plt.axvline(LSL, color='green', linestyle='dashed', linewidth=2, label=f'LSL = {LSL:.3f}')
-            
-            # Get current y-axis limits
-            y_min, y_max = plt.ylim()
-
-            # Add text annotations for mean, LSL and USL
-            plt.text(average, y_max*0.95, f'Mean = {average:.3f}', color='red', ha='left', va='top', bbox = dict(facecolor = 'white'))
-            plt.text(USL, y_max*0.9, f'USL = {USL:.3f}', color='green', ha='right', va='top', bbox = dict(facecolor = 'white'))
-            plt.text(LSL, y_max*0.85, f'LSL = {LSL:.3f}', color='green', ha='left', va='top', bbox = dict(facecolor = 'white'))
+            ax.axvline(average, color='#9b1c1c', linestyle='dashed', linewidth=1.0)
+            ax.axvline(USL, color='#1f7a4d', linestyle='dashed', linewidth=1.0)
+            ax.axvline(LSL, color='#1f7a4d', linestyle='dashed', linewidth=1.0)
 
             # Set labels and title
-            plt.xlabel('Measurement')
-            plt.ylabel('Frequency')
-            plt.title(f'{header}')
-            
+            ax.set_xlabel('Measurement')
+            ax.set_ylabel('Density')
+            ax.set_title(f'{header}')
+            apply_minimal_axis_style(ax, grid_axis='y')
+
+            y_min, y_max = ax.get_ylim()
+            ax.text(average, y_max*0.95, f'μ={average:.3f}', color='#9b1c1c', ha='left', va='top', fontsize=7)
+            ax.text(USL, y_max*0.9, f'USL={USL:.3f}', color='#1f7a4d', ha='right', va='top', fontsize=7)
+            ax.text(LSL, y_max*0.85, f'LSL={LSL:.3f}', color='#1f7a4d', ha='left', va='top', fontsize=7)
+
             plt.subplots_adjust(right=0.75)
             
             fig.savefig(imgplot, format="png")
@@ -856,11 +959,12 @@ class ExportDataThread(QThread):
             else:
                 ax.scatter(data_x, data_y, color='blue', marker='.')
 
-            ax.axhline(y=USL, color='red', linestyle='--', label='Upper Limit (USL)')
-            ax.axhline(y=LSL, color='red', linestyle='--', label='Lower Limit (LSL)')
+            ax.axhline(y=USL, color='#9b1c1c', linestyle='--', linewidth=1.0)
+            ax.axhline(y=LSL, color='#9b1c1c', linestyle='--', linewidth=1.0)
             ax.set_xlabel('Sample #')
             ax.set_ylabel('Measurement')
             ax.set_title(f'{header}')
+            apply_minimal_axis_style(ax, grid_axis='y')
 
             # Set ticks and labels
             ax.set_xticks(data_x)
