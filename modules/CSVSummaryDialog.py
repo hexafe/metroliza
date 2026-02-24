@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
 )
 from pathlib import Path
+import logging
 import pandas as pd
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 from modules.excel_sheet_utils import unique_sheet_name
@@ -28,6 +29,9 @@ from modules.csv_summary_utils import (
 )
 import base64
 from modules import Base64EncodedFiles
+
+
+logger = logging.getLogger(__name__)
 
 
 class FilterDialog(QDialog):
@@ -437,11 +441,15 @@ class DataProcessingThread(QThread):
                 writer.close()
 
             except Exception as e:
-                print("Error during data processing:", e)
+                logger.exception(
+                    "CSV summary data processing failed for input '%s' and output '%s'.",
+                    self.input_file,
+                    self.output_file,
+                )
                 self.canceled = True
 
         else:
-            print("No data selected for processing.")
+            logger.error("CSV summary processing skipped because no data columns were selected.")
 
     def cancel(self):
         self.canceled = True
@@ -517,6 +525,7 @@ class CSVSummaryDialog(QDialog):
             try:
                 self.data_frame, self.csv_config = load_csv_with_fallbacks(filename)
             except Exception as exc:
+                logger.exception("CSV summary failed to load input file '%s'.", filename)
                 QMessageBox.critical(self, 'CSV load failed', f'Could not load CSV file.\n\n{exc}')
                 self.filter_button.setEnabled(False)
                 self.spec_limits_button.setEnabled(False)
