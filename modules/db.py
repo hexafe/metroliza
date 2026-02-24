@@ -1,5 +1,6 @@
 import sqlite3
 import time
+from contextlib import closing
 from typing import Any
 
 import pandas as pd
@@ -31,10 +32,12 @@ def execute_with_retry(
 
     for attempt in range(attempts):
         try:
-            with connect_sqlite(db_path) as conn:
+            with closing(connect_sqlite(db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query, params)
-                return cursor.fetchall()
+                rows = cursor.fetchall()
+                conn.commit()
+                return rows
         except sqlite3.OperationalError as exc:
             message = str(exc).lower()
             is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
@@ -59,7 +62,7 @@ def execute_select_with_columns(
 
     for attempt in range(attempts):
         try:
-            with connect_sqlite(db_path) as conn:
+            with closing(connect_sqlite(db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute(query, params)
                 rows = cursor.fetchall()
@@ -77,5 +80,5 @@ def execute_select_with_columns(
 
 def read_sql_dataframe(db_path: str, query: str) -> pd.DataFrame:
     """Read a SQL query into a DataFrame using a managed SQLite connection."""
-    with connect_sqlite(db_path) as conn:
+    with closing(connect_sqlite(db_path)) as conn:
         return pd.read_sql_query(query, conn)

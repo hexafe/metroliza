@@ -43,7 +43,7 @@ Metroliza supports an end-to-end flow:
    - grouped violin plots,
    - trend charts by date or sample order.
 5. Run CSV Summary to quickly generate per-column worksheets, trend plots, and an aggregated `CSV_SUMMARY` sheet from manufacturing CSV exports.
-6. Optionally set per-column NOM/USL/LSL offsets in CSV Summary before export so Cp/Cpk and conditional highlighting use part-specific limits.
+6. Optionally set per-column NOM/USL/LSL offsets in CSV Summary before export so Cp/Cpk and conditional highlighting use part-specific limits. Invalid limit order (LSL > NOM or NOM > USL) is now flagged in `CSV_SUMMARY`, and Cp/Cpk are emitted as `N/A` for that column.
 7. Choose quick-look mode (trend only) or full-report mode (trend + histogram + boxplot-profile charts) to balance runtime vs chart depth.
 8. CSV Summary now auto-defaults to quick-look mode for large selected-column sets, reducing first-run export time for wide datasets.
 9. For chart-heavy exports, CSV Summary warns about estimated chart count and offers one-click fallback to quick-look mode before generation starts.
@@ -157,6 +157,8 @@ Recent performance-focused changes include:
 - cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops),
 - worksheet-backed `USL_SERIES` / `LSL_SERIES` columns, explicit `USL_MAX`/`USL_MIN`/`LSL_MAX`/`LSL_MIN` anchor helper cells near per-header stats, and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring),
 - CSV Summary auto-detect for common delimiter/decimal combinations with numeric-column-aware defaults, optional per-column NOM/USL/LSL inputs, and an aggregated `CSV_SUMMARY` overview sheet for faster first-pass diagnostics.
+- CSV Summary validates spec-limit ordering (`LSL <= NOM <= USL`) and records invalid-limit notes in `CSV_SUMMARY` while keeping the export successful (`Cp`/`Cpk` become `N/A` for invalid columns).
+- CSV Summary now emits lightweight per-column timing telemetry (sheet write + chart generation) to help tune chart-heavy runs.
 - CSV Summary preset persistence for recurring file families (remembers preferred delimiter/decimal parse settings, selected index/data columns, per-column NOM/USL/LSL limits, per-column plot toggles, and summary-only preference in `~/.metroliza/.csv_summary_presets.json`, with migration of older preset formats).
 - CSV Summary includes an in-dialog control to clear saved presets when changing data families or starting fresh.
 - CSV Summary cancellation now cleans up partial workbook outputs and is covered by regression tests.

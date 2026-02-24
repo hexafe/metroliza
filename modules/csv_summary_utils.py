@@ -162,6 +162,11 @@ def resolve_default_data_columns(data_frame, selected_indexes):
 
 
 def compute_column_summary_stats(series, usl=0.0, lsl=0.0, nom=0.0):
+    absolute_usl = nom + usl
+    absolute_lsl = nom + lsl
+    spec_limits_valid = absolute_lsl <= nom <= absolute_usl
+    spec_limits_note = '' if spec_limits_valid else 'Invalid spec limits: expected LSL <= NOM <= USL after applying NOM offsets.'
+
     numeric_series = pd.to_numeric(series, errors='coerce').dropna()
     if numeric_series.empty:
         return {
@@ -175,6 +180,8 @@ def compute_column_summary_stats(series, usl=0.0, lsl=0.0, nom=0.0):
             'usl': usl,
             'lsl': lsl,
             'nom': nom,
+            'spec_limits_valid': spec_limits_valid,
+            'spec_limits_note': spec_limits_note,
         }
 
     minimum = round(float(numeric_series.min()), 3)
@@ -182,7 +189,10 @@ def compute_column_summary_stats(series, usl=0.0, lsl=0.0, nom=0.0):
     maximum = round(float(numeric_series.max()), 3)
     sigma = round(float(numeric_series.std(ddof=1)), 3) if len(numeric_series) > 1 else 0.0
 
-    cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
+    if spec_limits_valid:
+        cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
+    else:
+        cp, cpk = 'N/A', 'N/A'
 
     return {
         'sample_size': int(numeric_series.count()),
@@ -195,6 +205,8 @@ def compute_column_summary_stats(series, usl=0.0, lsl=0.0, nom=0.0):
         'usl': usl,
         'lsl': lsl,
         'nom': nom,
+        'spec_limits_valid': spec_limits_valid,
+        'spec_limits_note': spec_limits_note,
     }
 
 

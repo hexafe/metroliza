@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 from pathlib import Path
 import logging
 import re
+import time
 import pandas as pd
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 from modules.excel_sheet_utils import unique_sheet_name
@@ -378,6 +379,8 @@ class DataProcessingThread(QThread):
                 num_format = writer.book.add_format({'align': 'center', 'valign': 'vcenter', 'num_format': '#,##0.000'})
 
                 overview_rows = []
+                total_write_seconds = 0.0
+                total_chart_seconds = 0.0
 
                 # Update the progress bar for each selected data column
                 for i, data_column in enumerate(self.selected_data_columns):
@@ -398,6 +401,7 @@ class DataProcessingThread(QThread):
                     spec_limits = self.column_spec_limits.get(data_column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
 
                     if not self.summary_only:
+                        write_start = time.perf_counter()
                         # Write the data to a new sheet with a safe unique name
                         sheet_name = unique_sheet_name(data_column, used_sheet_names)
                         selected_data.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -411,6 +415,10 @@ class DataProcessingThread(QThread):
 
                         self.apply_conditional_formatting(worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer)
 
+                        write_elapsed = time.perf_counter() - write_start
+                        total_write_seconds += write_elapsed
+
+                        chart_start = time.perf_counter()
                         self.add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
 
                         plot_options = self.plot_toggles.get(data_column, {'histogram': True, 'boxplot': True})
@@ -418,6 +426,16 @@ class DataProcessingThread(QThread):
                             self.add_histogram_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
                         if plot_options.get('boxplot', True):
                             self.add_boxplot_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+
+                        chart_elapsed = time.perf_counter() - chart_start
+                        total_chart_seconds += chart_elapsed
+                        logger.info(
+                            "CSV Summary column '%s' timings: write=%.3fs, chart=%.3fs, rows=%d",
+                            data_column,
+                            write_elapsed,
+                            chart_elapsed,
+                            len(selected_data),
+                        )
                     else:
                         sheet_name = ''
 
@@ -440,6 +458,8 @@ class DataProcessingThread(QThread):
                         'nom': stats['nom'],
                         'usl': stats['usl'],
                         'lsl': stats['lsl'],
+                        'spec_limits_valid': stats['spec_limits_valid'],
+                        'spec_limits_note': stats['spec_limits_note'],
                     })
 
                     # Calculate the progress percentage and emit the progress signal
@@ -458,6 +478,14 @@ class DataProcessingThread(QThread):
 
                 # Save the Excel file
                 writer.close()
+
+                if not self.summary_only and total_filtered_columns > 0:
+                    logger.info(
+                        "CSV Summary timing totals: write=%.3fs, chart=%.3fs, columns=%d",
+                        total_write_seconds,
+                        total_chart_seconds,
+                        total_filtered_columns,
+                    )
 
             except Exception:
                 logger.exception(
