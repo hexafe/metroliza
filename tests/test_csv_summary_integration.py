@@ -86,5 +86,46 @@ class CsvSummaryIntegrationTests(unittest.TestCase):
             self.assertIn('LENGTH', workbook_xml)
 
 
+
+
+    def test_csv_summary_canceled_run_removes_partial_output(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / 'canceled.xlsx'
+            df = pd.DataFrame({'PART': ['A', 'B', 'C'], 'LENGTH': [10.0, 10.1, 10.2]})
+
+            worker = DataProcessingThread(
+                selected_indexes=['PART'],
+                selected_data_columns=['LENGTH'],
+                input_file='input.csv',
+                output_file=str(output_file),
+                data_frame=df,
+            )
+            worker.cancel()
+            worker.run()
+
+            self.assertFalse(output_file.exists())
+
+    def test_csv_summary_summary_only_mode_skips_detail_sheets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / 'summary_only.xlsx'
+            df = pd.DataFrame({'PART': ['A', 'B', 'C'], 'LENGTH': [10.0, 10.1, 10.2]})
+
+            worker = DataProcessingThread(
+                selected_indexes=['PART'],
+                selected_data_columns=['LENGTH'],
+                input_file='input.csv',
+                output_file=str(output_file),
+                data_frame=df,
+                summary_only=True,
+            )
+            worker.run()
+
+            self.assertTrue(output_file.exists())
+            with zipfile.ZipFile(output_file, 'r') as workbook_zip:
+                workbook_xml = workbook_zip.read('xl/workbook.xml').decode('utf-8')
+
+            self.assertIn('CSV_SUMMARY', workbook_xml)
+            self.assertNotIn('LENGTH', workbook_xml)
+
 if __name__ == '__main__':
     unittest.main()

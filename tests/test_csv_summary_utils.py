@@ -9,6 +9,7 @@ from modules.csv_summary_utils import (
     build_default_plot_toggles,
     compute_column_summary_stats,
     load_csv_summary_presets,
+    migrate_csv_summary_presets,
     load_csv_with_fallbacks,
     normalize_column_spec_limits,
     normalize_plot_toggles,
@@ -126,6 +127,43 @@ class CsvSummaryUtilsTests(unittest.TestCase):
 
         self.assertEqual({'nom': 10.0, 'usl': 0.5, 'lsl': 0.0}, limits['LENGTH'])
         self.assertEqual({'nom': 0.0, 'usl': 0.0, 'lsl': 0.0}, limits['WIDTH'])
+
+
+    def test_migrate_csv_summary_presets_upgrades_legacy_payload(self):
+        presets = {
+            'line.csv': {
+                'selected_indexes': ['PART'],
+                'selected_data_columns': ['LENGTH'],
+                'csv_config': {'delimiter': ';', 'decimal': ','},
+            }
+        }
+
+        migrated, changed = migrate_csv_summary_presets(presets)
+
+        self.assertTrue(changed)
+        self.assertIn('line.csv', migrated)
+        payload = migrated['line.csv']
+        self.assertEqual(False, payload['summary_only'])
+        self.assertIn('column_spec_limits', payload)
+        self.assertIn('plot_toggles', payload)
+
+    def test_migrate_csv_summary_presets_no_change_for_current_schema(self):
+        presets = {
+            'line.csv': {
+                'selected_indexes': ['PART'],
+                'selected_data_columns': ['LENGTH'],
+                'csv_config': {'delimiter': ';', 'decimal': ','},
+                'column_spec_limits': {'LENGTH': {'nom': 10.0, 'usl': 0.5, 'lsl': -0.5}},
+                'include_extended_plots': False,
+                'summary_only': True,
+                'plot_toggles': {'LENGTH': {'histogram': False, 'boxplot': False}},
+            }
+        }
+
+        migrated, changed = migrate_csv_summary_presets(presets)
+
+        self.assertFalse(changed)
+        self.assertEqual(presets, migrated)
 
     def test_build_csv_summary_preset_key(self):
         key = build_csv_summary_preset_key('/tmp/Line_01_Report.csv')
