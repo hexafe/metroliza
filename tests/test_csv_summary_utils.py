@@ -61,6 +61,23 @@ class CsvSummaryUtilsTests(unittest.TestCase):
         self.assertEqual(-0.5, stats['lsl'])
         self.assertNotEqual('N/A', stats['cp'])
         self.assertNotEqual('N/A', stats['cpk'])
+        self.assertTrue(stats['spec_limits_valid'])
+        self.assertEqual('', stats['spec_limits_note'])
+
+
+    def test_compute_column_summary_stats_invalid_spec_limit_order_sets_na(self):
+        stats = compute_column_summary_stats(
+            pd.Series([9.8, 10.0, 10.2]),
+            nom=10.0,
+            usl=0.5,
+            lsl=0.6,
+        )
+
+        self.assertFalse(stats['spec_limits_valid'])
+        self.assertEqual('N/A', stats['cp'])
+        self.assertEqual('N/A', stats['cpk'])
+        self.assertFalse(stats['spec_limits_valid'])
+        self.assertIn('Invalid spec limits', stats['spec_limits_note'])
 
     def test_compute_column_summary_stats_handles_empty_series(self):
         stats = compute_column_summary_stats(pd.Series(['x', None]))
@@ -68,6 +85,7 @@ class CsvSummaryUtilsTests(unittest.TestCase):
         self.assertEqual(0, stats['sample_size'])
         self.assertEqual('N/A', stats['cp'])
         self.assertEqual('N/A', stats['cpk'])
+        self.assertTrue(stats['spec_limits_valid'])
 
 
     def test_build_default_plot_toggles_full_report(self):

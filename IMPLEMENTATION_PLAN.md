@@ -260,6 +260,11 @@ This roadmap extension captures the approved migration path from Excel-first exp
 
 ### Status: ✅ Completed
 
+Recent completion updates:
+- ✅ Added CSV Summary spec-limit-order validation (`LSL <= NOM <= USL`) so invalid limit sets are flagged in `CSV_SUMMARY` and capability values fall back to `N/A` instead of producing misleading values.
+- ✅ Added lightweight CSV Summary timing telemetry (per-column sheet-write and chart-generation timing logs) to better tune chart thresholds over real datasets.
+- ✅ Fixed cross-platform CI unit-test invocation by setting `PYTHONPATH` via workflow `env`, avoiding PowerShell inline env assignment errors on Windows runners.
+
 ### Completed in current step
 - ✅ Added robust CSV load fallback logic for common manufacturing delimiters/decimals (`;`, `,`, `\t`, `|` with `,`/`.` decimals).
 - ✅ Added numeric-column-aware default selection to reduce manual filtering for first-pass analysis.
@@ -277,7 +282,7 @@ This roadmap extension captures the approved migration path from Excel-first exp
 2. ✅ Add CSV Summary cancellation-path regression coverage for long-running workbook generation.
 3. ✅ Add a summary-only mode that skips per-column sheets/charts while still generating the `CSV_SUMMARY` worksheet, and persist this preference in presets.
 4. ✅ Profile CSV Summary chart generation on large column counts and tune defaults (adaptive full-report default + pre-run chart-count advisory with quick-look fallback).
-5. Add lightweight CSV Summary timing telemetry (per-column write/chart time buckets) to better tune chart generation thresholds over real datasets.
+5. ✅ Add lightweight CSV Summary timing telemetry (per-column write/chart time buckets) to better tune chart generation thresholds over real datasets.
 
 ---
 
