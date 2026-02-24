@@ -29,6 +29,8 @@ from modules.csv_summary_utils import (
     normalize_column_spec_limits,
     resolve_default_data_columns,
     build_csv_summary_preset_key,
+    estimate_enabled_chart_count,
+    recommend_extended_plots_default,
     load_csv_summary_presets,
     migrate_csv_summary_presets,
     save_csv_summary_presets,
@@ -609,7 +611,10 @@ class CSVSummaryDialog(QDialog):
             default_data_columns = resolve_default_data_columns(self.data_frame, self.selected_indexes)
             self.selected_data_columns = [col for col in preset_data_columns if col in default_data_columns] or default_data_columns
 
-            preset_include_extended_plots = bool(preset.get('include_extended_plots', True)) if isinstance(preset, dict) else True
+            if isinstance(preset, dict):
+                preset_include_extended_plots = bool(preset.get('include_extended_plots', True))
+            else:
+                preset_include_extended_plots = recommend_extended_plots_default(self.selected_data_columns)
             self.include_extended_plots.setChecked(preset_include_extended_plots)
             self.summary_only = bool(preset.get('summary_only', False)) if isinstance(preset, dict) else False
             self.summary_only_checkbox.setChecked(self.summary_only)
@@ -790,11 +795,38 @@ class CSVSummaryDialog(QDialog):
         # Reset the worker thread
         self.worker_thread = None
 
+
+    def _show_chart_generation_advisory(self):
+        chart_count = estimate_enabled_chart_count(
+            self.selected_data_columns,
+            self.plot_toggles,
+            full_report=self.include_extended_plots.isChecked(),
+            summary_only=self.summary_only_checkbox.isChecked(),
+        )
+        if chart_count <= 40:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Large chart workload detected",
+            (
+                f"This export is configured to generate about {chart_count} charts.\n\n"
+                "This may be slow for large datasets.\n"
+                "Would you like to switch to Quick-look mode (disable charts)?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.include_extended_plots.setChecked(False)
+
     def handle_start_button(self):
         # Perform the desired action when the START button is clicked
         # You can access the input_file, output_file, and data_frame variables here for further processing
 
         if self.data_frame is not None:
+            self._show_chart_generation_advisory()
+
             self._save_presets(
                 build_csv_summary_preset_key(self.input_file),
                 self.selected_indexes,

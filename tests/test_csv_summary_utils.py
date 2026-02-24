@@ -7,12 +7,14 @@ import pandas as pd
 from modules.csv_summary_utils import (
     build_csv_summary_preset_key,
     build_default_plot_toggles,
+    estimate_enabled_chart_count,
     compute_column_summary_stats,
     load_csv_summary_presets,
     migrate_csv_summary_presets,
     load_csv_with_fallbacks,
     normalize_column_spec_limits,
     normalize_plot_toggles,
+    recommend_extended_plots_default,
     resolve_default_data_columns,
     save_csv_summary_presets,
 )
@@ -90,6 +92,21 @@ class CsvSummaryUtilsTests(unittest.TestCase):
         self.assertEqual(False, toggles['LENGTH']['boxplot'])
         self.assertEqual(True, toggles['WIDTH']['histogram'])
         self.assertEqual(False, toggles['WIDTH']['boxplot'])
+
+    def test_recommend_extended_plots_default_tunes_for_large_column_sets(self):
+        self.assertTrue(recommend_extended_plots_default(['A'] * 20))
+        self.assertFalse(recommend_extended_plots_default(['A'] * 21))
+
+    def test_estimate_enabled_chart_count_accounts_for_toggles_and_modes(self):
+        self.assertEqual(0, estimate_enabled_chart_count(['LENGTH'], {}, full_report=False))
+        self.assertEqual(0, estimate_enabled_chart_count(['LENGTH'], {}, summary_only=True))
+
+        count = estimate_enabled_chart_count(
+            ['LENGTH', 'WIDTH'],
+            {'WIDTH': {'histogram': False, 'boxplot': True}},
+            full_report=True,
+        )
+        self.assertEqual(3, count)
 
 
     def test_load_csv_with_preferred_config_is_applied(self):

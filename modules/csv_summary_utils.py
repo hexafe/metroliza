@@ -209,6 +209,23 @@ def build_default_plot_toggles(data_columns, full_report=True):
     }
 
 
+def recommend_extended_plots_default(data_columns, max_full_report_columns=20):
+    """Return a default full-report toggle tuned for export size."""
+    return len(data_columns or []) <= int(max_full_report_columns)
+
+
+def estimate_enabled_chart_count(data_columns, plot_toggles, full_report=True, summary_only=False):
+    """Estimate how many charts will be generated for a CSV Summary export."""
+    if summary_only or not full_report:
+        return 0
+
+    toggles = normalize_plot_toggles(data_columns, plot_toggles, full_report=True)
+    return sum(
+        int(column_toggles.get('histogram', False)) + int(column_toggles.get('boxplot', False))
+        for column_toggles in toggles.values()
+    )
+
+
 def normalize_plot_toggles(data_columns, plot_toggles, full_report=True):
     """Ensure each selected column has a complete toggle payload."""
     normalized = build_default_plot_toggles(data_columns, full_report=full_report)
