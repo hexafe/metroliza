@@ -276,7 +276,8 @@ This roadmap extension captures the approved migration path from Excel-first exp
 1. ✅ Add a small migration utility for older preset payloads (pre-spec-limit / pre-plot-toggle format) and cover it with tests.
 2. ✅ Add CSV Summary cancellation-path regression coverage for long-running workbook generation.
 3. ✅ Add a summary-only mode that skips per-column sheets/charts while still generating the `CSV_SUMMARY` worksheet, and persist this preference in presets.
-4. Profile CSV Summary chart generation on large column counts and tune defaults if needed.
+4. ✅ Profile CSV Summary chart generation on large column counts and tune defaults (adaptive full-report default + pre-run chart-count advisory with quick-look fallback).
+5. Add lightweight CSV Summary timing telemetry (per-column write/chart time buckets) to better tune chart generation thresholds over real datasets.
 
 ---
 

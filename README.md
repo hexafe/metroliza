@@ -45,8 +45,10 @@ Metroliza supports an end-to-end flow:
 5. Run CSV Summary to quickly generate per-column worksheets, trend plots, and an aggregated `CSV_SUMMARY` sheet from manufacturing CSV exports.
 6. Optionally set per-column NOM/USL/LSL offsets in CSV Summary before export so Cp/Cpk and conditional highlighting use part-specific limits.
 7. Choose quick-look mode (trend only) or full-report mode (trend + histogram + boxplot-profile charts) to balance runtime vs chart depth.
-8. Use summary-only mode to generate just the aggregated `CSV_SUMMARY` worksheet for faster large-column exports.
-9. Reuse CSV presets for recurring file families (delimiter/decimal, selected columns, spec limits, plot mode/toggles, and summary-only preference), or clear saved presets directly from the CSV Summary dialog.
+8. CSV Summary now auto-defaults to quick-look mode for large selected-column sets, reducing first-run export time for wide datasets.
+9. For chart-heavy exports, CSV Summary warns about estimated chart count and offers one-click fallback to quick-look mode before generation starts.
+10. Use summary-only mode to generate just the aggregated `CSV_SUMMARY` worksheet for faster large-column exports.
+11. Reuse CSV presets for recurring file families (delimiter/decimal, selected columns, spec limits, plot mode/toggles, and summary-only preference), or clear saved presets directly from the CSV Summary dialog.
 
 ## Project layout
 
@@ -158,6 +160,7 @@ Recent performance-focused changes include:
 - CSV Summary preset persistence for recurring file families (remembers preferred delimiter/decimal parse settings, selected index/data columns, per-column NOM/USL/LSL limits, per-column plot toggles, and summary-only preference in `~/.metroliza/.csv_summary_presets.json`, with migration of older preset formats).
 - CSV Summary includes an in-dialog control to clear saved presets when changing data families or starting fresh.
 - CSV Summary cancellation now cleans up partial workbook outputs and is covered by regression tests.
+- CSV Summary performance tuning now applies an adaptive default (quick-look for large column selections) and warns when a run is configured to generate a high chart count, with an in-flow one-click switch to quicker mode.
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 
