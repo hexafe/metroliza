@@ -72,6 +72,64 @@ def load_csv_summary_presets(preset_path):
     return data if isinstance(data, dict) else {}
 
 
+def migrate_csv_summary_presets(presets):
+    """Migrate legacy CSV Summary presets to the current schema."""
+    if not isinstance(presets, dict):
+        return {}, True
+
+    migrated = {}
+    changed = False
+
+    for key, payload in presets.items():
+        if not isinstance(payload, dict):
+            changed = True
+            continue
+
+        selected_indexes = payload.get('selected_indexes', [])
+        if not isinstance(selected_indexes, list):
+            selected_indexes = []
+            changed = True
+
+        selected_data_columns = payload.get('selected_data_columns', [])
+        if not isinstance(selected_data_columns, list):
+            selected_data_columns = []
+            changed = True
+
+        include_extended_plots = bool(payload.get('include_extended_plots', True))
+        summary_only = bool(payload.get('summary_only', False))
+        csv_config = payload.get('csv_config', {})
+        if not isinstance(csv_config, dict):
+            csv_config = {}
+            changed = True
+
+        column_spec_limits = normalize_column_spec_limits(
+            selected_data_columns,
+            payload.get('column_spec_limits', {}),
+        )
+        plot_toggles = normalize_plot_toggles(
+            selected_data_columns,
+            payload.get('plot_toggles', {}),
+            full_report=include_extended_plots,
+        )
+
+        normalized_payload = {
+            'selected_indexes': selected_indexes,
+            'selected_data_columns': selected_data_columns,
+            'csv_config': csv_config,
+            'column_spec_limits': column_spec_limits,
+            'include_extended_plots': include_extended_plots,
+            'summary_only': summary_only,
+            'plot_toggles': plot_toggles,
+        }
+
+        if payload != normalized_payload:
+            changed = True
+
+        migrated[key] = normalized_payload
+
+    return migrated, changed
+
+
 def save_csv_summary_presets(preset_path, presets):
     path = Path(preset_path)
     path.parent.mkdir(parents=True, exist_ok=True)

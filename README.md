@@ -45,7 +45,8 @@ Metroliza supports an end-to-end flow:
 5. Run CSV Summary to quickly generate per-column worksheets, trend plots, and an aggregated `CSV_SUMMARY` sheet from manufacturing CSV exports.
 6. Optionally set per-column NOM/USL/LSL offsets in CSV Summary before export so Cp/Cpk and conditional highlighting use part-specific limits.
 7. Choose quick-look mode (trend only) or full-report mode (trend + histogram + boxplot-profile charts) to balance runtime vs chart depth.
-8. Reuse CSV presets for recurring file families (delimiter/decimal, selected columns, spec limits, and plot mode/toggles), or clear saved presets directly from the CSV Summary dialog.
+8. Use summary-only mode to generate just the aggregated `CSV_SUMMARY` worksheet for faster large-column exports.
+9. Reuse CSV presets for recurring file families (delimiter/decimal, selected columns, spec limits, plot mode/toggles, and summary-only preference), or clear saved presets directly from the CSV Summary dialog.
 
 ## Project layout
 
@@ -154,8 +155,9 @@ Recent performance-focused changes include:
 - cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops),
 - worksheet-backed `USL_SERIES` / `LSL_SERIES` columns, explicit `USL_MAX`/`USL_MIN`/`LSL_MAX`/`LSL_MIN` anchor helper cells near per-header stats, and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring),
 - CSV Summary auto-detect for common delimiter/decimal combinations with numeric-column-aware defaults, optional per-column NOM/USL/LSL inputs, and an aggregated `CSV_SUMMARY` overview sheet for faster first-pass diagnostics.
-- CSV Summary preset persistence for recurring file families (remembers preferred delimiter/decimal parse settings, selected index/data columns, per-column NOM/USL/LSL limits, and per-column plot toggles in `~/.metroliza/.csv_summary_presets.json`).
+- CSV Summary preset persistence for recurring file families (remembers preferred delimiter/decimal parse settings, selected index/data columns, per-column NOM/USL/LSL limits, per-column plot toggles, and summary-only preference in `~/.metroliza/.csv_summary_presets.json`, with migration of older preset formats).
 - CSV Summary includes an in-dialog control to clear saved presets when changing data families or starting fresh.
+- CSV Summary cancellation now cleans up partial workbook outputs and is covered by regression tests.
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 

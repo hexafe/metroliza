@@ -30,6 +30,7 @@ from modules.csv_summary_utils import (
     resolve_default_data_columns,
     build_csv_summary_preset_key,
     load_csv_summary_presets,
+    migrate_csv_summary_presets,
     save_csv_summary_presets,
 )
 import base64
@@ -176,7 +177,7 @@ class SpecLimitsDialog(QDialog):
 class DataProcessingThread(QThread):
     progress_signal = pyqtSignal(int)
 
-    def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None, column_spec_limits=None, plot_toggles=None):
+    def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None, column_spec_limits=None, plot_toggles=None, summary_only=False):
         super().__init__()
         self.selected_indexes = selected_indexes
         self.selected_data_columns = selected_data_columns
@@ -187,6 +188,7 @@ class DataProcessingThread(QThread):
         self.csv_config = csv_config or {}
         self.column_spec_limits = column_spec_limits or {}
         self.plot_toggles = normalize_plot_toggles(selected_data_columns, plot_toggles)
+        self.summary_only = bool(summary_only)
 
     def write_summary_data(self, worksheet, data_column, selected_data, spec_limits):
         col = selected_data.shape[1]
@@ -391,27 +393,31 @@ class DataProcessingThread(QThread):
                         self.progress_signal.emit(progress_percentage)
                         continue
 
-                    # Write the data to a new sheet with a safe unique name
-                    sheet_name = unique_sheet_name(data_column, used_sheet_names)
-                    selected_data.to_excel(writer, sheet_name=sheet_name, index=False)
-
-                    worksheet = writer.sheets[sheet_name]
-
                     spec_limits = self.column_spec_limits.get(data_column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
-                    col, USL_cell, LSL_cell = self.write_summary_data(worksheet, data_column, selected_data, spec_limits)
-                    
-                    # Set the number format for the data column
-                    worksheet.set_column(col, col, None, num_format)
 
-                    self.apply_conditional_formatting(worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer)
+                    if not self.summary_only:
+                        # Write the data to a new sheet with a safe unique name
+                        sheet_name = unique_sheet_name(data_column, used_sheet_names)
+                        selected_data.to_excel(writer, sheet_name=sheet_name, index=False)
 
-                    self.add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+                        worksheet = writer.sheets[sheet_name]
 
-                    plot_options = self.plot_toggles.get(data_column, {'histogram': True, 'boxplot': True})
-                    if plot_options.get('histogram', True):
-                        self.add_histogram_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
-                    if plot_options.get('boxplot', True):
-                        self.add_boxplot_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+                        col, USL_cell, LSL_cell = self.write_summary_data(worksheet, data_column, selected_data, spec_limits)
+
+                        # Set the number format for the data column
+                        worksheet.set_column(col, col, None, num_format)
+
+                        self.apply_conditional_formatting(worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer)
+
+                        self.add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+
+                        plot_options = self.plot_toggles.get(data_column, {'histogram': True, 'boxplot': True})
+                        if plot_options.get('histogram', True):
+                            self.add_histogram_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+                        if plot_options.get('boxplot', True):
+                            self.add_boxplot_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+                    else:
+                        sheet_name = ''
 
                     stats = compute_column_summary_stats(
                         selected_data[data_column],
@@ -437,6 +443,14 @@ class DataProcessingThread(QThread):
                     # Calculate the progress percentage and emit the progress signal
                     progress_percentage = int((i + 1) * 100 / total_filtered_columns)
                     self.progress_signal.emit(progress_percentage)
+
+                if self.canceled:
+                    writer.close()
+                    try:
+                        Path(self.output_file).unlink(missing_ok=True)
+                    except Exception:
+                        logger.warning("Failed to remove canceled CSV summary output '%s'.", self.output_file)
+                    return
 
                 self.write_overview_sheet(writer, overview_rows)
 
@@ -474,6 +488,7 @@ class CSVSummaryDialog(QDialog):
         self.csv_config = {}
         self.column_spec_limits = {}
         self.plot_toggles = {}
+        self.summary_only = False
 
         # Initialize the layout
         layout = QVBoxLayout()
@@ -484,6 +499,7 @@ class CSVSummaryDialog(QDialog):
         self.spec_limits_button = QPushButton("Set spec limits (optional)")
         self.clear_presets_button = QPushButton("Clear saved presets (optional)")
         self.include_extended_plots = QCheckBox("Include histogram and boxplot charts")
+        self.summary_only_checkbox = QCheckBox("Summary-only mode (skip per-column sheets/charts)")
         self.output_button = QPushButton("Select output file (xlsx)")
         self.start_button = QPushButton("START")  # Add the START button
         layout.addWidget(self.input_button)
@@ -491,6 +507,7 @@ class CSVSummaryDialog(QDialog):
         layout.addWidget(self.spec_limits_button)
         layout.addWidget(self.clear_presets_button)
         layout.addWidget(self.include_extended_plots)
+        layout.addWidget(self.summary_only_checkbox)
         layout.addWidget(self.output_button)
         layout.addWidget(self.start_button)  # Add the START button to the layout
 
@@ -503,6 +520,7 @@ class CSVSummaryDialog(QDialog):
         self.start_button.clicked.connect(self.handle_start_button)  # Connect the START button
 
         self.include_extended_plots.setChecked(True)
+        self.summary_only_checkbox.setChecked(False)
 
         # Initially, disable the FILTER, OUTPUT, and START buttons
         self.filter_button.setEnabled(False)
@@ -516,9 +534,13 @@ class CSVSummaryDialog(QDialog):
         self.preset_path = Path.home() / '.metroliza' / '.csv_summary_presets.json'
 
     def _load_presets(self):
-        return load_csv_summary_presets(self.preset_path)
+        presets = load_csv_summary_presets(self.preset_path)
+        migrated, changed = migrate_csv_summary_presets(presets)
+        if changed:
+            save_csv_summary_presets(self.preset_path, migrated)
+        return migrated
 
-    def _save_presets(self, preset_key, selected_indexes, selected_data_columns, csv_config, column_spec_limits, include_extended_plots, plot_toggles):
+    def _save_presets(self, preset_key, selected_indexes, selected_data_columns, csv_config, column_spec_limits, include_extended_plots, summary_only, plot_toggles):
         if not preset_key:
             return
         presets = self._load_presets()
@@ -528,6 +550,7 @@ class CSVSummaryDialog(QDialog):
             "csv_config": csv_config or {},
             "column_spec_limits": normalize_column_spec_limits(selected_data_columns, column_spec_limits),
             "include_extended_plots": bool(include_extended_plots),
+            "summary_only": bool(summary_only),
             "plot_toggles": normalize_plot_toggles(selected_data_columns, plot_toggles, full_report=include_extended_plots),
         }
         save_csv_summary_presets(self.preset_path, presets)
@@ -588,6 +611,8 @@ class CSVSummaryDialog(QDialog):
 
             preset_include_extended_plots = bool(preset.get('include_extended_plots', True)) if isinstance(preset, dict) else True
             self.include_extended_plots.setChecked(preset_include_extended_plots)
+            self.summary_only = bool(preset.get('summary_only', False)) if isinstance(preset, dict) else False
+            self.summary_only_checkbox.setChecked(self.summary_only)
 
             preset_spec_limits = preset.get('column_spec_limits', {}) if isinstance(preset, dict) else {}
             self.column_spec_limits = normalize_column_spec_limits(self.selected_data_columns, preset_spec_limits)
@@ -729,6 +754,7 @@ class CSVSummaryDialog(QDialog):
             self.csv_config,
             self.column_spec_limits,
             self.plot_toggles if self.include_extended_plots.isChecked() else build_default_plot_toggles(self.selected_data_columns, full_report=False),
+            summary_only=self.summary_only_checkbox.isChecked(),
         )
         # Connect the progress signal to the update_progress_bar slot
         self.worker_thread.progress_signal.connect(self.update_progress_bar)
@@ -776,6 +802,7 @@ class CSVSummaryDialog(QDialog):
                 self.csv_config,
                 self.column_spec_limits,
                 self.include_extended_plots.isChecked(),
+                self.summary_only_checkbox.isChecked(),
                 self.plot_toggles,
             )
             # Show the loading screen and progress bar
