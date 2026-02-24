@@ -45,6 +45,7 @@ Metroliza supports an end-to-end flow:
 5. Run CSV Summary to quickly generate per-column worksheets, trend plots, and an aggregated `CSV_SUMMARY` sheet from manufacturing CSV exports.
 6. Optionally set per-column NOM/USL/LSL offsets in CSV Summary before export so Cp/Cpk and conditional highlighting use part-specific limits.
 7. Choose quick-look mode (trend only) or full-report mode (trend + histogram + boxplot-profile charts) to balance runtime vs chart depth.
+8. Reuse CSV presets for recurring file families (delimiter/decimal, selected columns, spec limits, and plot mode/toggles), or clear saved presets directly from the CSV Summary dialog.
 
 ## Project layout
 
@@ -60,7 +61,7 @@ Run the baseline checks locally:
 
 ```bash
 python -m compileall .
-ruff check VersionDate.py modules/AboutWindow.py modules/CSVSummaryDialog.py modules/contracts.py modules/csv_summary_utils.py modules/db.py modules/excel_sheet_utils.py modules/ParseReportsThread.py modules/stats_utils.py tests/test_contracts.py tests/test_csv_summary_utils.py tests/test_db_utils.py tests/test_phase0_hotfixes.py tests/test_requirements_hygiene.py
+ruff check VersionDate.py modules/AboutWindow.py modules/CSVSummaryDialog.py modules/contracts.py modules/csv_summary_utils.py modules/db.py modules/excel_sheet_utils.py modules/ParseReportsThread.py modules/stats_utils.py tests/test_contracts.py tests/test_csv_summary_integration.py tests/test_csv_summary_utils.py tests/test_db_utils.py tests/test_phase0_hotfixes.py tests/test_requirements_hygiene.py
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
@@ -153,7 +154,8 @@ Recent performance-focused changes include:
 - cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops),
 - worksheet-backed `USL_SERIES` / `LSL_SERIES` columns, explicit `USL_MAX`/`USL_MIN`/`LSL_MAX`/`LSL_MIN` anchor helper cells near per-header stats, and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring),
 - CSV Summary auto-detect for common delimiter/decimal combinations with numeric-column-aware defaults, optional per-column NOM/USL/LSL inputs, and an aggregated `CSV_SUMMARY` overview sheet for faster first-pass diagnostics.
-- CSV Summary preset persistence for recurring file families (remembers preferred delimiter/decimal parse settings plus selected index/data columns in `~/.metroliza/.csv_summary_presets.json`).
+- CSV Summary preset persistence for recurring file families (remembers preferred delimiter/decimal parse settings, selected index/data columns, per-column NOM/USL/LSL limits, and per-column plot toggles in `~/.metroliza/.csv_summary_presets.json`).
+- CSV Summary includes an in-dialog control to clear saved presets when changing data families or starting fresh.
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 
