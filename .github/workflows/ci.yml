@@ -46,10 +46,14 @@ jobs:
             tests/test_requirements_hygiene.py
 
       - name: Unit tests
-        run: PYTHONPATH=. python -m unittest discover -s tests -v
+        env:
+          PYTHONPATH: .
+        run: python -m unittest discover -s tests -v
 
       - name: Smoke imports
-        run: PYTHONPATH=. python -c "import modules.contracts; import modules.db; import modules.excel_sheet_utils; import modules.stats_utils"
+        env:
+          PYTHONPATH: .
+        run: python -c "import modules.contracts; import modules.db; import modules.excel_sheet_utils; import modules.stats_utils"
 
   windows-smoke:
     runs-on: windows-latest
@@ -72,7 +76,9 @@ jobs:
         run: python -m compileall .
 
       - name: Unit tests
-        run: PYTHONPATH=. python -m unittest discover -s tests -v
+        env:
+          PYTHONPATH: .
+        run: python -m unittest discover -s tests -v
 
       - name: Install build dependencies
         run: pip install -r requirements-build.txt
