@@ -163,14 +163,14 @@ For very large databases, prefer narrow filter scopes before export to reduce Ex
 
 ## Roadmap status
 
-Roadmap progress and next actions are maintained in `IMPLEMENTATION_PLAN.md`.
+Detailed, canonical roadmap lives in `IMPLEMENTATION_PLAN.md`.
 
 Current high-level state:
-- Phase 0: completed.
-- Phase 1: completed.
-- Phase 2: partially completed (remaining structural/performance items).
-- Phase 3: partially completed (docs/dependency hygiene/contributor guide done; CI lint rollout remains incremental).
-- Phase 4: completed.
+- Phase 0: ✅ Completed.
+- Phase 1: ✅ Completed.
+- Phase 2: 🟡 Partially implemented (remaining structural/performance items).
+- Phase 3: 🟡 Partially implemented (docs/dependency hygiene/contributor guide done; CI lint rollout remains incremental).
+- Phase 4: ✅ Completed.
 
 
 ### Planned optimization follow-ups
