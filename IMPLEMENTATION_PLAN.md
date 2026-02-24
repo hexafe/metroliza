@@ -4,12 +4,18 @@ This is the single, execution-ready plan that combines all previously discussed 
 
 ## Current implementation status (repo audit)
 
+Last audited on 2026-02-24.
+
+Canonical phase mapping used throughout this plan:
+- ✅ Completed
+- 🟡 Partially implemented
+
 Audit result based on the current repository state:
-- **Phase 0:** ✅ Implemented.
-- **Phase 1:** 🟡 Partially implemented.
+- **Phase 0:** ✅ Completed.
+- **Phase 1:** ✅ Completed.
 - **Phase 2:** 🟡 Partially implemented (core correctness and contract migration landed; structural decomposition and remaining DB call-site migration continue).
-- **Phase 3:** 🔴 Not implemented.
-- **Phase 4:** 🟡 Partially implemented (Phase 0 regression tests exist; broader baseline missing).
+- **Phase 3:** 🟡 Partially implemented (docs/dependency split/contributor guidance landed; CI lint rollout is still incremental).
+- **Phase 4:** ✅ Completed.
 
 Use this section as the source of truth for what is done vs still outstanding.
 
@@ -303,22 +309,20 @@ This roadmap extension captures the approved migration path from Excel-first exp
 ---
 
 ## Definition of Done (global)
-- [x] Grouping mismatch bug fixed and covered by tests.
-- [x] Export/parse entrypoints use dataclass contracts (grouping internals still being hardened).
-- [x] Normal operation avoids forced thread termination.
-- [x] Reliability fixes merged for dedupe, sheet naming, stats edge cases, and license parsing.
-- [x] Docs updated with architecture and operating instructions.
-- [x] CI executes compile + tests + baseline scoped lint successfully.
-- [ ] CI executes compile + tests + full-project lint successfully.
-- [x] Integration happy-path parse → DB → export test added and passing locally.
+- [x] **Phase 0:** Safety hotfixes merged and covered (dedupe, sheet naming, stats edge cases, license parsing).
+- [x] **Phase 1:** Reliability/cancellation behavior shipped (cooperative cancellation + non-blocking cancel flows + logger guardrails).
+- [x] **Phase 2 (implemented slice):** Grouping correctness fixes and dataclass contract migration are merged and regression-covered; remaining structural decomposition/DB call-site migration is tracked as open.
+- [x] **Phase 3 (implemented slice):** README, dependency split, contributor + architecture docs, and baseline CI checks are in place.
+- [ ] **Phase 3 (remaining slice):** Full-project lint enablement in CI is complete.
+- [x] **Phase 4:** Unit + integration coverage baseline for known regressions and happy-path parse → DB → export is present.
 
 ## Remaining execution order (updated)
 1. Execute remaining **Phase 2** structural items in small mergeable PRs:
    - continue worker decomposition (remaining chart/workbook sections),
    - continue extracting + testing pure plotting/data-shaping helpers from `ExportDataThread` (histogram/trend payload + y-limit scaling + histogram density payload helpers completed; next targets are worksheet write segments and additional chart rendering decomposition),
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
-2. Execute remaining **Phase 3** items (continue incremental lint/smoke CI expansion and fix baseline-scoped violations as touched files are migrated).
-3. Execute remaining CI/lint expansion and keep phase coverage green in maintenance PRs.
+2. Finish the remaining **Phase 3** slice by expanding lint coverage from baseline-scoped checks to full-project CI lint gates.
+3. Keep **Phase 0/1/4 (completed)** coverage green while Phase 2/3 residual tasks land.
 
 
 ## Optimization backlog (exporting/parsing focus)
