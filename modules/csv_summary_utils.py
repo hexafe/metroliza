@@ -1,4 +1,5 @@
 import csv
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -6,7 +7,7 @@ import pandas as pd
 from modules.stats_utils import safe_process_capability
 
 
-def load_csv_with_fallbacks(file_path):
+def load_csv_with_fallbacks(file_path, preferred_config=None):
     """Load CSV with delimiter/decimal fallbacks for common manufacturing exports."""
     path = Path(file_path)
     if not path.exists():
@@ -15,34 +16,72 @@ def load_csv_with_fallbacks(file_path):
     delimiter_candidates = [';', ',', '\t', '|']
     decimal_candidates = [',', '.']
 
+    ordered_candidates = []
+    if isinstance(preferred_config, dict):
+        preferred_delimiter = preferred_config.get('delimiter')
+        preferred_decimal = preferred_config.get('decimal')
+        if preferred_delimiter in delimiter_candidates and preferred_decimal in decimal_candidates:
+            ordered_candidates.append((preferred_delimiter, preferred_decimal))
+
+    for delimiter in delimiter_candidates:
+        for decimal in decimal_candidates:
+            pair = (delimiter, decimal)
+            if pair not in ordered_candidates:
+                ordered_candidates.append(pair)
+
     best_df = None
     best_score = -1
     best_config = None
 
-    for delimiter in delimiter_candidates:
-        for decimal in decimal_candidates:
-            try:
-                df = pd.read_csv(path, delimiter=delimiter, decimal=decimal, low_memory=False)
-            except Exception:
-                continue
+    for delimiter, decimal in ordered_candidates:
+        try:
+            df = pd.read_csv(path, delimiter=delimiter, decimal=decimal, low_memory=False)
+        except Exception:
+            continue
 
-            if df.empty:
-                score = 0
-            else:
-                numeric_cells = 0
-                for col in df.columns:
-                    numeric_cells += pd.to_numeric(df[col], errors='coerce').notna().sum()
-                score = (len(df.columns) * 10) + numeric_cells
+        if df.empty:
+            score = 0
+        else:
+            numeric_cells = 0
+            for col in df.columns:
+                numeric_cells += pd.to_numeric(df[col], errors='coerce').notna().sum()
+            score = (len(df.columns) * 10) + numeric_cells
 
-            if score > best_score:
-                best_df = df
-                best_score = score
-                best_config = {'delimiter': delimiter, 'decimal': decimal}
+        if score > best_score:
+            best_df = df
+            best_score = score
+            best_config = {'delimiter': delimiter, 'decimal': decimal}
 
     if best_df is None:
         raise ValueError(f"Unable to read CSV file: {file_path}")
 
     return best_df, best_config
+
+
+def load_csv_summary_presets(preset_path):
+    path = Path(preset_path)
+    if not path.exists():
+        return {}
+
+    try:
+        with path.open('r', encoding='utf-8') as handle:
+            data = json.load(handle)
+    except Exception:
+        return {}
+
+    return data if isinstance(data, dict) else {}
+
+
+def save_csv_summary_presets(preset_path, presets):
+    path = Path(preset_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('w', encoding='utf-8') as handle:
+        json.dump(presets, handle, indent=2, sort_keys=True)
+
+
+def build_csv_summary_preset_key(file_path):
+    path = Path(file_path)
+    return path.name.lower()
 
 
 def resolve_default_data_columns(data_frame, selected_indexes):

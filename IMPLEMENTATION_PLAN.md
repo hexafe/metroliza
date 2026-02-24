@@ -7,7 +7,7 @@ This is the single, execution-ready plan that combines all previously discussed 
 Audit result based on the current repository state:
 - **Phase 0:** ✅ Implemented.
 - **Phase 1:** 🟡 Partially implemented.
-- **Phase 2:** 🟡 Partially implemented (limited correctness work landed, structural refactor pending).
+- **Phase 2:** 🟡 Partially implemented (core correctness and contract migration landed; structural decomposition and remaining DB call-site migration continue).
 - **Phase 3:** 🔴 Not implemented.
 - **Phase 4:** 🟡 Partially implemented (Phase 0 regression tests exist; broader baseline missing).
 
@@ -252,7 +252,7 @@ This roadmap extension captures the approved migration path from Excel-first exp
 
 ## CSV Summary module roadmap (new)
 
-### Status: 🟡 Started
+### Status: 🟡 In progress
 
 ### Completed in current step
 - ✅ Added robust CSV load fallback logic for common manufacturing delimiters/decimals (`;`, `,`, `\t`, `|` with `,`/`.` decimals).
@@ -261,10 +261,12 @@ This roadmap extension captures the approved migration path from Excel-first exp
 - ✅ Added focused utility tests for CSV load fallback, default-column resolution, and empty-series stats safety.
 - ✅ Added optional per-column spec-limit inputs (NOM/USL/LSL) in CSV Summary UI and wired them into exported Cp/Cpk + overview stats.
 - ✅ Added quick-look/full-report plot toggles for CSV Summary so histogram and boxplot-profile chart generation can be skipped per run.
+- ✅ Added CSV Summary preset persistence (JSON in user home) to remember delimiter/decimal detection preferences and selected index/data columns by source-file pattern.
 
 ### Next steps
-1. Add export presets (remember last delimiter/decimal + selected columns per source file pattern).
+1. Extend CSV presets to also remember per-column spec limits and plot toggle choices for recurring file families.
 2. Add a light integration test that validates generated XLSX contains both detail sheets and `CSV_SUMMARY`.
+3. Add optional UI control to clear saved CSV presets from disk.
 
 ---
 
