@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 from pathlib import Path
 import logging
+import re
 import pandas as pd
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 from modules.excel_sheet_utils import unique_sheet_name
@@ -26,6 +27,9 @@ from modules.csv_summary_utils import (
     load_csv_with_fallbacks,
     normalize_plot_toggles,
     resolve_default_data_columns,
+    build_csv_summary_preset_key,
+    load_csv_summary_presets,
+    save_csv_summary_presets,
 )
 import base64
 from modules import Base64EncodedFiles
@@ -507,6 +511,39 @@ class CSVSummaryDialog(QDialog):
         # Set the layout for the dialog
         self.setLayout(layout)
 
+        self.preset_path = Path.home() / '.metroliza' / '.csv_summary_presets.json'
+
+    def _load_presets(self):
+        return load_csv_summary_presets(self.preset_path)
+
+    def _save_presets(self, preset_key, selected_indexes, selected_data_columns, csv_config):
+        if not preset_key:
+            return
+        presets = self._load_presets()
+        presets[preset_key] = {
+            "selected_indexes": list(selected_indexes or []),
+            "selected_data_columns": list(selected_data_columns or []),
+            "csv_config": csv_config or {},
+        }
+        save_csv_summary_presets(self.preset_path, presets)
+
+    @staticmethod
+    def _preset_key_candidates(file_path):
+        path = Path(file_path)
+        normalized_stem = re.sub(r"\d+", "", path.stem).strip("_- ").lower()
+        candidates = [build_csv_summary_preset_key(path)]
+        if normalized_stem:
+            candidates.append(f"{normalized_stem}.csv")
+        return candidates
+
+    def _resolve_preset_for_file(self, file_path):
+        presets = self._load_presets()
+        for key in self._preset_key_candidates(file_path):
+            preset = presets.get(key)
+            if isinstance(preset, dict):
+                return preset
+        return {}
+
     # Define functions for button clicks
     def handle_input_button(self):
         options = QFileDialog.Option.ReadOnly
@@ -521,9 +558,12 @@ class CSVSummaryDialog(QDialog):
             self.spec_limits_button.setEnabled(True)
             self.output_button.setEnabled(True)
 
+            preset = self._resolve_preset_for_file(filename)
+            preset_csv_config = preset.get('csv_config', {}) if isinstance(preset, dict) else {}
+
             # Load CSV with delimiter/decimal fallbacks.
             try:
-                self.data_frame, self.csv_config = load_csv_with_fallbacks(filename)
+                self.data_frame, self.csv_config = load_csv_with_fallbacks(filename, preferred_config=preset_csv_config)
             except Exception as exc:
                 logger.exception("CSV summary failed to load input file '%s'.", filename)
                 QMessageBox.critical(self, 'CSV load failed', f'Could not load CSV file.\n\n{exc}')
@@ -534,8 +574,12 @@ class CSVSummaryDialog(QDialog):
                 return
 
             self.column_names = self.data_frame.columns.tolist()
-            self.selected_indexes = self.column_names[:1]
-            self.selected_data_columns = resolve_default_data_columns(self.data_frame, self.selected_indexes)
+            preset_indexes = preset.get('selected_indexes', []) if isinstance(preset, dict) else []
+            preset_data_columns = preset.get('selected_data_columns', []) if isinstance(preset, dict) else []
+
+            self.selected_indexes = [col for col in preset_indexes if col in self.column_names] or self.column_names[:1]
+            default_data_columns = resolve_default_data_columns(self.data_frame, self.selected_indexes)
+            self.selected_data_columns = [col for col in preset_data_columns if col in default_data_columns] or default_data_columns
             self.column_spec_limits = {}
             self.plot_toggles = build_default_plot_toggles(self.selected_data_columns, full_report=self.include_extended_plots.isChecked())
 
@@ -701,6 +745,12 @@ class CSVSummaryDialog(QDialog):
         # You can access the input_file, output_file, and data_frame variables here for further processing
 
         if self.data_frame is not None:
+            self._save_presets(
+                build_csv_summary_preset_key(self.input_file),
+                self.selected_indexes,
+                self.selected_data_columns,
+                self.csv_config,
+            )
             # Show the loading screen and progress bar
             self.show_loading_screen()
         else:

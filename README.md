@@ -153,6 +153,7 @@ Recent performance-focused changes include:
 - cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops),
 - worksheet-backed `USL_SERIES` / `LSL_SERIES` columns, explicit `USL_MAX`/`USL_MIN`/`LSL_MAX`/`LSL_MIN` anchor helper cells near per-header stats, and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring),
 - CSV Summary auto-detect for common delimiter/decimal combinations with numeric-column-aware defaults, optional per-column NOM/USL/LSL inputs, and an aggregated `CSV_SUMMARY` overview sheet for faster first-pass diagnostics.
+- CSV Summary preset persistence for recurring file families (remembers preferred delimiter/decimal parse settings plus selected index/data columns in `~/.metroliza/.csv_summary_presets.json`).
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 
