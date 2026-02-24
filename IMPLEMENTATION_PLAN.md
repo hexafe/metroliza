@@ -252,7 +252,7 @@ This roadmap extension captures the approved migration path from Excel-first exp
 
 ## CSV Summary module roadmap (new)
 
-### Status: 🟡 In progress
+### Status: ✅ Completed
 
 ### Completed in current step
 - ✅ Added robust CSV load fallback logic for common manufacturing delimiters/decimals (`;`, `,`, `\t`, `|` with `,`/`.` decimals).
@@ -262,11 +262,14 @@ This roadmap extension captures the approved migration path from Excel-first exp
 - ✅ Added optional per-column spec-limit inputs (NOM/USL/LSL) in CSV Summary UI and wired them into exported Cp/Cpk + overview stats.
 - ✅ Added quick-look/full-report plot toggles for CSV Summary so histogram and boxplot-profile chart generation can be skipped per run.
 - ✅ Added CSV Summary preset persistence (JSON in user home) to remember delimiter/decimal detection preferences and selected index/data columns by source-file pattern.
+- ✅ Extended CSV Summary preset persistence to include per-column NOM/USL/LSL limits, full-report/quick-look choice, and per-column plot toggles.
+- ✅ Added an optional CSV Summary UI action to clear saved presets from disk.
+- ✅ Added a light integration test validating generated XLSX contains both detail sheets and `CSV_SUMMARY`.
 
 ### Next steps
-1. Extend CSV presets to also remember per-column spec limits and plot toggle choices for recurring file families.
-2. Add a light integration test that validates generated XLSX contains both detail sheets and `CSV_SUMMARY`.
-3. Add optional UI control to clear saved CSV presets from disk.
+1. Add a small migration utility for older preset payloads (pre-spec-limit / pre-plot-toggle format) and cover it with tests.
+2. Add CSV Summary cancellation-path regression coverage for long-running workbook generation.
+3. Profile CSV Summary chart generation on large column counts and consider a "summary-only" mode that skips per-column sheets.
 
 ---
 

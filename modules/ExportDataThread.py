@@ -46,6 +46,17 @@ def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
     return f"={sheet_name}!${xl_range(first_row, column_index, last_row, column_index)}"
 
 
+
+
+def build_spec_limit_anchor_rows(usl, lsl):
+    """Return worksheet helper rows for USL/LSL anchor points."""
+    return [
+        ('USL_MAX', usl),
+        ('USL_MIN', usl),
+        ('LSL_MAX', lsl),
+        ('LSL_MIN', lsl),
+    ]
+
 def all_measurements_within_limits(measurements, lower_limit, upper_limit):
     series = pd.Series(measurements)
     return series.between(lower_limit, upper_limit, inclusive='both').all()

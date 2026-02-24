@@ -10,6 +10,7 @@ from modules.csv_summary_utils import (
     compute_column_summary_stats,
     load_csv_summary_presets,
     load_csv_with_fallbacks,
+    normalize_column_spec_limits,
     normalize_plot_toggles,
     resolve_default_data_columns,
     save_csv_summary_presets,
@@ -115,6 +116,16 @@ class CsvSummaryUtilsTests(unittest.TestCase):
             loaded = load_csv_summary_presets(preset_path)
 
             self.assertEqual(payload, loaded)
+
+
+    def test_normalize_column_spec_limits_defaults_and_casts(self):
+        limits = normalize_column_spec_limits(
+            ['LENGTH', 'WIDTH'],
+            {'LENGTH': {'nom': '10', 'usl': 0.5}},
+        )
+
+        self.assertEqual({'nom': 10.0, 'usl': 0.5, 'lsl': 0.0}, limits['LENGTH'])
+        self.assertEqual({'nom': 0.0, 'usl': 0.0, 'lsl': 0.0}, limits['WIDTH'])
 
     def test_build_csv_summary_preset_key(self):
         key = build_csv_summary_preset_key('/tmp/Line_01_Report.csv')

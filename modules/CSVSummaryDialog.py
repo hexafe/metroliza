@@ -26,6 +26,7 @@ from modules.csv_summary_utils import (
     compute_column_summary_stats,
     load_csv_with_fallbacks,
     normalize_plot_toggles,
+    normalize_column_spec_limits,
     resolve_default_data_columns,
     build_csv_summary_preset_key,
     load_csv_summary_presets,
@@ -198,12 +199,10 @@ class DataProcessingThread(QThread):
 
         worksheet.write(1, col + 2, 'USL')
         worksheet.write(1, col + 3, usl_offset)
-        USL = nom + usl_offset
         USL_cell = xl_rowcol_to_cell(1, col + 3, row_abs=True, col_abs=True)
 
         worksheet.write(2, col + 2, 'LSL')
         worksheet.write(2, col + 3, lsl_offset)
-        LSL = nom + lsl_offset
         LSL_cell = xl_rowcol_to_cell(2, col + 3, row_abs=True, col_abs=True)
 
         worksheet.write(3, col + 2, 'MIN')
@@ -444,7 +443,7 @@ class DataProcessingThread(QThread):
                 # Save the Excel file
                 writer.close()
 
-            except Exception as e:
+            except Exception:
                 logger.exception(
                     "CSV summary data processing failed for input '%s' and output '%s'.",
                     self.input_file,
@@ -483,12 +482,14 @@ class CSVSummaryDialog(QDialog):
         self.input_button = QPushButton("Select input file (CSV)")
         self.filter_button = QPushButton("Filter columns (optional)")
         self.spec_limits_button = QPushButton("Set spec limits (optional)")
+        self.clear_presets_button = QPushButton("Clear saved presets (optional)")
         self.include_extended_plots = QCheckBox("Include histogram and boxplot charts")
         self.output_button = QPushButton("Select output file (xlsx)")
         self.start_button = QPushButton("START")  # Add the START button
         layout.addWidget(self.input_button)
         layout.addWidget(self.filter_button)
         layout.addWidget(self.spec_limits_button)
+        layout.addWidget(self.clear_presets_button)
         layout.addWidget(self.include_extended_plots)
         layout.addWidget(self.output_button)
         layout.addWidget(self.start_button)  # Add the START button to the layout
@@ -497,6 +498,7 @@ class CSVSummaryDialog(QDialog):
         self.input_button.clicked.connect(self.handle_input_button)
         self.filter_button.clicked.connect(self.handle_filter_button)
         self.spec_limits_button.clicked.connect(self.handle_spec_limits_button)
+        self.clear_presets_button.clicked.connect(self.handle_clear_presets_button)
         self.output_button.clicked.connect(self.handle_output_button)
         self.start_button.clicked.connect(self.handle_start_button)  # Connect the START button
 
@@ -516,7 +518,7 @@ class CSVSummaryDialog(QDialog):
     def _load_presets(self):
         return load_csv_summary_presets(self.preset_path)
 
-    def _save_presets(self, preset_key, selected_indexes, selected_data_columns, csv_config):
+    def _save_presets(self, preset_key, selected_indexes, selected_data_columns, csv_config, column_spec_limits, include_extended_plots, plot_toggles):
         if not preset_key:
             return
         presets = self._load_presets()
@@ -524,6 +526,9 @@ class CSVSummaryDialog(QDialog):
             "selected_indexes": list(selected_indexes or []),
             "selected_data_columns": list(selected_data_columns or []),
             "csv_config": csv_config or {},
+            "column_spec_limits": normalize_column_spec_limits(selected_data_columns, column_spec_limits),
+            "include_extended_plots": bool(include_extended_plots),
+            "plot_toggles": normalize_plot_toggles(selected_data_columns, plot_toggles, full_report=include_extended_plots),
         }
         save_csv_summary_presets(self.preset_path, presets)
 
@@ -580,8 +585,19 @@ class CSVSummaryDialog(QDialog):
             self.selected_indexes = [col for col in preset_indexes if col in self.column_names] or self.column_names[:1]
             default_data_columns = resolve_default_data_columns(self.data_frame, self.selected_indexes)
             self.selected_data_columns = [col for col in preset_data_columns if col in default_data_columns] or default_data_columns
-            self.column_spec_limits = {}
-            self.plot_toggles = build_default_plot_toggles(self.selected_data_columns, full_report=self.include_extended_plots.isChecked())
+
+            preset_include_extended_plots = bool(preset.get('include_extended_plots', True)) if isinstance(preset, dict) else True
+            self.include_extended_plots.setChecked(preset_include_extended_plots)
+
+            preset_spec_limits = preset.get('column_spec_limits', {}) if isinstance(preset, dict) else {}
+            self.column_spec_limits = normalize_column_spec_limits(self.selected_data_columns, preset_spec_limits)
+
+            preset_plot_toggles = preset.get('plot_toggles', {}) if isinstance(preset, dict) else {}
+            self.plot_toggles = normalize_plot_toggles(
+                self.selected_data_columns,
+                preset_plot_toggles,
+                full_report=self.include_extended_plots.isChecked(),
+            )
 
     def handle_filter_button(self):
         print("FILTER button clicked")
@@ -618,6 +634,14 @@ class CSVSummaryDialog(QDialog):
         spec_dialog = SpecLimitsDialog(self, self.selected_data_columns, self.column_spec_limits)
         if spec_dialog.exec() == QDialog.DialogCode.Accepted:
             self.column_spec_limits = spec_dialog.get_limits()
+
+    def handle_clear_presets_button(self):
+        if not self.preset_path.exists():
+            QMessageBox.information(self, "No presets", "No saved CSV presets were found.")
+            return
+
+        self.preset_path.unlink(missing_ok=True)
+        QMessageBox.information(self, "Presets cleared", "Saved CSV presets were removed.")
 
     def handle_output_button(self):
         # options = QFileDialog.Option.DontUseNativeDialog
@@ -750,6 +774,9 @@ class CSVSummaryDialog(QDialog):
                 self.selected_indexes,
                 self.selected_data_columns,
                 self.csv_config,
+                self.column_spec_limits,
+                self.include_extended_plots.isChecked(),
+                self.plot_toggles,
             )
             # Show the loading screen and progress bar
             self.show_loading_screen()

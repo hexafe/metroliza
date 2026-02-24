@@ -165,6 +165,25 @@ def normalize_plot_toggles(data_columns, plot_toggles, full_report=True):
     return normalized
 
 
+def normalize_column_spec_limits(data_columns, column_spec_limits):
+    """Ensure selected columns have numeric NOM/USL/LSL payloads."""
+    normalized = {}
+    column_spec_limits = column_spec_limits or {}
+
+    for column in (data_columns or []):
+        raw_payload = column_spec_limits.get(column, {})
+        if not isinstance(raw_payload, dict):
+            raw_payload = {}
+
+        normalized[column] = {
+            'nom': float(raw_payload.get('nom', 0.0) or 0.0),
+            'usl': float(raw_payload.get('usl', 0.0) or 0.0),
+            'lsl': float(raw_payload.get('lsl', 0.0) or 0.0),
+        }
+
+    return normalized
+
+
 def parse_delimiter_with_sniffer(file_path):
     """Best-effort delimiter detection used for UX diagnostics."""
     with open(file_path, 'r', encoding='utf-8', newline='') as handle:
