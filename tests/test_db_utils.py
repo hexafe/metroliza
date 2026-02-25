@@ -116,6 +116,52 @@ class TestDbUtils(unittest.TestCase):
         rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
         self.assertEqual(rows, [('alpha',), ('beta',), ('gamma',)])
 
+    def test_run_transaction_with_retry_retries_on_transient_lock(self):
+        from modules import db as db_module
+
+        original_connect = db_module.connect_sqlite
+        attempts = {'count': 0}
+
+        def flaky_connect(path, timeout_s=5.0):
+            attempts['count'] += 1
+            if attempts['count'] == 1:
+                raise sqlite3.OperationalError('database is locked')
+            return original_connect(path, timeout_s)
+
+        with mock.patch('modules.db.connect_sqlite', side_effect=flaky_connect), mock.patch('modules.db.time.sleep') as sleep_mock:
+            def operation(cursor):
+                cursor.execute("SELECT COUNT(*) FROM sample")
+                return cursor.fetchone()[0]
+
+            result = run_transaction_with_retry(
+                self.db_path,
+                operation,
+                retries=2,
+                retry_delay_s=0.001,
+            )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(attempts['count'], 2)
+        sleep_mock.assert_called_once_with(0.001)
+
+    def test_execute_many_with_retry_supports_duplicate_safe_writes(self):
+        execute_many_with_retry(
+            self.db_path,
+            [('CREATE TABLE IF NOT EXISTS dedupe (name TEXT UNIQUE)', ())],
+        )
+
+        execute_many_with_retry(
+            self.db_path,
+            [
+                ('INSERT OR IGNORE INTO dedupe (name) VALUES (?)', ('alpha',)),
+                ('INSERT OR IGNORE INTO dedupe (name) VALUES (?)', ('alpha',)),
+                ('INSERT OR IGNORE INTO dedupe (name) VALUES (?)', ('beta',)),
+            ],
+        )
+
+        rows = execute_with_retry(self.db_path, 'SELECT name FROM dedupe ORDER BY name')
+        self.assertEqual(rows, [('alpha',), ('beta',)])
+
 
 if __name__ == '__main__':
     unittest.main()
