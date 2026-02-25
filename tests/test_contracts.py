@@ -30,6 +30,7 @@ class TestValidateExportOptions(unittest.TestCase):
     def test_coerces_bounds_and_normalizes_case(self):
         options = validate_export_options(
             ExportOptions(
+                preset='Full_Report',
                 export_type='Line',
                 sorting_parameter='Sample #',
                 violin_plot_min_samplesize=1,
@@ -39,6 +40,7 @@ class TestValidateExportOptions(unittest.TestCase):
             )
         )
 
+        self.assertEqual(options.preset, 'full_report')
         self.assertEqual(options.export_type, 'line')
         self.assertEqual(options.sorting_parameter, 'sample #')
         self.assertEqual(options.violin_plot_min_samplesize, 2)
