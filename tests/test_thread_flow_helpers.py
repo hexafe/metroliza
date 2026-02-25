@@ -1,4 +1,6 @@
+import os
 import sys
+import tempfile
 import types
 import unittest
 
@@ -53,7 +55,13 @@ class _DummyCmmReportParser:
 
 cmm_parser_stub.CMMReportParser = _DummyCmmReportParser
 sys.modules['modules.CMMReportParser'] = cmm_parser_stub
-from modules.ExportDataThread import build_export_dataframe, execute_export_query, run_export_steps  # noqa: E402
+from modules.ExportDataThread import (  # noqa: E402
+    ExcelExportBackend,
+    ExportDataThread,
+    build_export_dataframe,
+    execute_export_query,
+    run_export_steps,
+)
 from modules.ParseReportsThread import build_report_fingerprints_from_rows, parse_new_reports  # noqa: E402
 
 
@@ -152,6 +160,51 @@ class TestExportHelpers(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             execute_export_query(':memory:', 'SELECT 1', select_reader=failing_reader)
 
+
+class TestExportBackendSmoke(unittest.TestCase):
+    def test_default_export_target_uses_excel_backend(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(),
+            )
+            thread = ExportDataThread(request)
+
+            self.assertEqual(thread.export_target, 'excel_xlsx')
+            self.assertIsInstance(thread.get_export_backend(), ExcelExportBackend)
+
+    def test_excel_backend_preserves_existing_export_flow(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        calls = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(),
+            )
+            thread = ExportDataThread(request)
+
+            def fake_export_filtered_data(excel_writer):
+                self.assertIsNotNone(excel_writer)
+                calls.append('filtered')
+
+            def fake_add_measurements(excel_writer):
+                self.assertIsNotNone(excel_writer)
+                calls.append('measurements')
+
+            thread.export_filtered_data = fake_export_filtered_data
+            thread.add_measurements_horizontal_sheet = fake_add_measurements
+
+            completed = thread.get_export_backend().run(thread)
+
+            self.assertTrue(completed)
+            self.assertEqual(calls, ['filtered', 'measurements'])
+            self.assertTrue(os.path.exists(out_file))
 
 if __name__ == '__main__':
     unittest.main()
