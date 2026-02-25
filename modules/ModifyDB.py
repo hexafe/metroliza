@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from modules.CustomLogger import CustomLogger
-from modules.db import execute_many_with_retry, execute_select_with_columns
+from modules.db import execute_select_with_columns, run_transaction_with_retry
 
 
 class ModifyDB(QDialog):
@@ -203,7 +203,10 @@ class ModifyDB(QDialog):
                 QMessageBox.information(self, "No changes", "No changes were detected.")
                 return
 
-            execute_many_with_retry(self.db_file, statements)
+            run_transaction_with_retry(
+                self.db_file,
+                lambda cursor: self._apply_update_statements(cursor, statements),
+            )
 
             # Display a message box with confirmation
             QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
@@ -212,6 +215,11 @@ class ModifyDB(QDialog):
             self.close()
         except Exception as e:
             self.log_and_exit(e)
+
+
+    def _apply_update_statements(self, cursor, statements):
+        for query, params in statements:
+            cursor.execute(query, params)
 
     def build_update_statements(self, table_widget, table_name, column_name):
         statements = []

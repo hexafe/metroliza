@@ -90,6 +90,39 @@ class TestDbUtils(unittest.TestCase):
         rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
         self.assertEqual(rows, [('alpha',), ('beta',), ('gamma',)])
 
+    def test_run_transaction_with_retry_rolls_back_on_mid_transaction_failure(self):
+        def failing_operation(cursor):
+            cursor.execute("INSERT INTO sample (name) VALUES (?)", ("gamma",))
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            run_transaction_with_retry(self.db_path, failing_operation)
+
+        rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
+        self.assertEqual(rows, [('alpha',), ('beta',)])
+
+    def test_run_transaction_with_retry_avoids_partial_or_duplicate_rows_after_retry(self):
+        execute_with_retry(self.db_path, 'CREATE TABLE retried_writes (name TEXT)')
+        attempts = {'count': 0}
+
+        def flaky_operation(cursor):
+            attempts['count'] += 1
+            cursor.execute('INSERT INTO retried_writes (name) VALUES (?)', ('alpha',))
+            cursor.execute('INSERT INTO retried_writes (name) VALUES (?)', ('beta',))
+            if attempts['count'] == 1:
+                raise sqlite3.OperationalError('database is locked')
+
+        run_transaction_with_retry(
+            self.db_path,
+            flaky_operation,
+            retries=1,
+            retry_delay_s=0.001,
+        )
+
+        rows = execute_with_retry(self.db_path, 'SELECT name FROM retried_writes ORDER BY name')
+        self.assertEqual(rows, [('alpha',), ('beta',)])
+        self.assertEqual(attempts['count'], 2)
+
     def test_execute_many_with_retry_retries_on_transient_lock(self):
         from modules import db as db_module
 

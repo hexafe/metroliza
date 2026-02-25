@@ -17,7 +17,8 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
         self.assertNotIn('sqlite3.connect(', modify_db)
 
         self.assertIn('from modules.db import execute_with_retry', parse_thread)
-        self.assertIn('from modules.db import execute_many_with_retry, execute_select_with_columns', modify_db)
+        self.assertIn('run_transaction_with_retry(', modify_db)
+        self.assertIn('from modules.db import execute_select_with_columns, run_transaction_with_retry', modify_db)
 
     def test_cmm_and_bom_manager_no_longer_use_direct_sqlite_connect(self):
         cmm_parser = self._read('modules/CMMReportParser.py')
