@@ -43,7 +43,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 
-from modules.ExportDataThread import (
+from modules.ExportDataThread import (  # noqa: E402
     all_measurements_within_limits,
     build_spec_limit_anchor_rows,
     build_sheet_series_range,

@@ -46,8 +46,8 @@ class _DummyLogger:
 custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
-from modules.ExportDataThread import ExportDataThread
-from modules.contracts import AppPaths, ExportOptions, ExportRequest
+from modules.ExportDataThread import ExportDataThread  # noqa: E402
+from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 
 
 class TestExportSortingAndGrouping(unittest.TestCase):

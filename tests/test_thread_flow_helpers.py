@@ -53,8 +53,8 @@ class _DummyCmmReportParser:
 
 cmm_parser_stub.CMMReportParser = _DummyCmmReportParser
 sys.modules['modules.CMMReportParser'] = cmm_parser_stub
-from modules.ExportDataThread import build_export_dataframe, execute_export_query, run_export_steps
-from modules.ParseReportsThread import build_report_fingerprints_from_rows, parse_new_reports
+from modules.ExportDataThread import build_export_dataframe, execute_export_query, run_export_steps  # noqa: E402
+from modules.ParseReportsThread import build_report_fingerprints_from_rows, parse_new_reports  # noqa: E402
 
 
 class TestParseHelpers(unittest.TestCase):

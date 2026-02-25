@@ -45,7 +45,7 @@ class _DummyLogger:
 custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
-from modules.ExportDataThread import (
+from modules.ExportDataThread import (  # noqa: E402
     build_histogram_density_curve_payload,
     build_measurement_stat_formulas,
     build_violin_group_stats_rows,

@@ -64,7 +64,7 @@ Run the baseline checks locally:
 
 ```bash
 python -m compileall .
-ruff check VersionDate.py modules/AboutWindow.py modules/CSVSummaryDialog.py modules/contracts.py modules/csv_summary_utils.py modules/db.py modules/excel_sheet_utils.py modules/ParseReportsThread.py modules/stats_utils.py tests/test_contracts.py tests/test_csv_summary_integration.py tests/test_csv_summary_utils.py tests/test_db_utils.py tests/test_phase0_hotfixes.py tests/test_requirements_hygiene.py
+ruff check .
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
@@ -174,9 +174,15 @@ Current high-level state:
 - Phase 0: ✅ Completed.
 - Phase 1: ✅ Completed.
 - Phase 2: 🟡 Partially implemented (remaining structural/performance items).
-- Phase 3: 🟡 Partially implemented (docs/dependency hygiene/contributor guide done; CI lint rollout remains incremental).
+- Phase 3: ✅ Completed (docs/dependency hygiene/contributor guide + full-repository CI lint gate).
 - Phase 4: ✅ Completed.
 
+
+
+### Candidate new capabilities
+- Add direct Google Sheets export backend once GS2 begins (target selector is already staged in the roadmap).
+- Add export-profile presets (chart-heavy vs fast diagnostics) to reduce repetitive dialog setup.
+- Add optional parse pipeline benchmark report output (CSV/JSON) for factory-scale ingest tuning.
 
 ### Planned optimization follow-ups
 - Export: additional profiling and inner-loop precomputation for chart-heavy workbooks.

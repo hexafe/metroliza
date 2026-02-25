@@ -4,7 +4,7 @@ import types
 import unittest
 from pathlib import Path
 
-from modules.db import execute_with_retry
+from modules.db import execute_with_retry  # noqa: E402
 
 
 # Stubs for optional GUI/parser dependencies pulled in by thread modules.
@@ -50,8 +50,8 @@ cmm_parser_stub = types.ModuleType('modules.CMMReportParser')
 cmm_parser_stub.CMMReportParser = object
 sys.modules['modules.CMMReportParser'] = cmm_parser_stub
 
-from modules.ExportDataThread import build_export_dataframe, execute_export_query
-from modules.ParseReportsThread import parse_new_reports
+from modules.ExportDataThread import build_export_dataframe, execute_export_query  # noqa: E402
+from modules.ParseReportsThread import parse_new_reports  # noqa: E402
 
 
 class _FakeParser:

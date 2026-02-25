@@ -1,5 +1,14 @@
 import importlib.metadata
 import importlib.util
+import re
+import sqlite3
+import time
+from pathlib import Path
+
+import pandas
+
+from modules.CustomLogger import CustomLogger
+from modules.db import connect_sqlite, execute_with_retry
 
 
 def _resolve_pymupdf_backend_module() -> str | None:
@@ -24,14 +33,6 @@ elif _PYMUPDF_BACKEND_MODULE == "fitz":
     import fitz
 else:
     fitz = None
-
-import pandas
-import re
-import sqlite3
-import time
-from pathlib import Path
-from modules.CustomLogger import CustomLogger
-from modules.db import connect_sqlite, execute_with_retry
 
 
 class CMMReportParser:

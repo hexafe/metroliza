@@ -27,7 +27,7 @@ custom_logger_stub = types.ModuleType('modules.CustomLogger')
 custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *a, **k: None})
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
-from modules.DataGrouping import DataGrouping
+from modules.DataGrouping import DataGrouping  # noqa: E402
 
 
 class TestDataGroupingFilterQuery(unittest.TestCase):

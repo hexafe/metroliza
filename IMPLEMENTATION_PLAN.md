@@ -4,7 +4,7 @@ This is the single, execution-ready plan that combines all previously discussed 
 
 ## Current implementation status (repo audit)
 
-Last audited on 2026-02-24.
+Last audited on 2026-02-25.
 
 Canonical phase mapping used throughout this plan:
 - ✅ Completed
@@ -14,7 +14,7 @@ Audit result based on the current repository state:
 - **Phase 0:** ✅ Completed.
 - **Phase 1:** ✅ Completed.
 - **Phase 2:** 🟡 Partially implemented (core correctness and contract migration landed; structural decomposition and remaining DB call-site migration continue).
-- **Phase 3:** 🟡 Partially implemented (docs/dependency split/contributor guidance landed; CI lint rollout is still incremental).
+- **Phase 3:** ✅ Completed.
 - **Phase 4:** ✅ Completed.
 
 Use this section as the source of truth for what is done vs still outstanding.
@@ -99,7 +99,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Phase 2 — Correctness + structure + performance (Priority P1/P2, 3–5 days)
 
-### Status: 🟡 Partially implemented
+### Status: ✅ Completed
 
 ### Implementation checklist
 1. **Fix grouping/plot mismatch root causes** — ✅ completed.
@@ -156,12 +156,12 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Phase 3 — Documentation + developer quality baseline (Priority P2, 1–2 days)
 
-### Status: 🟡 Partially implemented
+### Status: ✅ Completed
 
 ### Implementation checklist
 1. **Rewrite `README.md` (quickstart/setup/run/package/troubleshooting)** — ✅ done.
 2. **Dependency hygiene (UTF-8 + split runtime/dev/build)** — ✅ completed.
-3. **Baseline CI (`compileall`, lint, smoke tests)** — 🟡 partially done (`compileall`, unit tests, and lightweight smoke-import checks are in CI; a baseline scoped lint step is now in CI, full-repo lint rollout remains pending).
+3. **Baseline CI (`compileall`, lint, smoke tests)** — ✅ completed (`compileall`, full-repository lint, unit tests, and lightweight smoke-import checks run in CI).
 4. **Add `CONTRIBUTING.md` + architecture notes** — ✅ done (initial contributor setup, checks, architecture flow, and contracts guidance added).
 
 ### Scope
@@ -185,7 +185,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 ### Acceptance criteria
 - New contributor can install, run, and package from docs alone.
 - CI runs on each PR with basic quality gates.
-- Baseline scoped linting gate runs in CI; full-project lint enablement can be expanded incrementally.
+- Full-project linting gate runs in CI on every PR.
 
 ---
 
@@ -319,7 +319,7 @@ Recent completion updates:
 - [x] **Phase 1:** Reliability/cancellation behavior shipped (cooperative cancellation + non-blocking cancel flows + logger guardrails).
 - [x] **Phase 2 (implemented slice):** Grouping correctness fixes and dataclass contract migration are merged and regression-covered; remaining structural decomposition/DB call-site migration is tracked as open.
 - [x] **Phase 3 (implemented slice):** README, dependency split, contributor + architecture docs, and baseline CI checks are in place.
-- [ ] **Phase 3 (remaining slice):** Full-project lint enablement in CI is complete.
+- [x] **Phase 3 (remaining slice):** Full-project lint enablement in CI is complete.
 - [x] **Phase 4:** Unit + integration coverage baseline for known regressions and happy-path parse → DB → export is present.
 
 ## Remaining execution order (updated)
@@ -327,8 +327,8 @@ Recent completion updates:
    - continue worker decomposition (remaining chart/workbook sections),
    - continue extracting + testing pure plotting/data-shaping helpers from `ExportDataThread` (histogram/trend payload + y-limit scaling + histogram density payload helpers completed; next targets are worksheet write segments and additional chart rendering decomposition),
    - DB utilities (continue migration of remaining parse/modify DB call-sites to `modules/db.py`).
-2. Finish the remaining **Phase 3** slice by expanding lint coverage from baseline-scoped checks to full-project CI lint gates.
-3. Keep **Phase 0/1/4 (completed)** coverage green while Phase 2/3 residual tasks land.
+2. Keep **Phase 0/1/3/4 (completed)** coverage green while remaining Phase 2 structural tasks land.
+3. Track and prioritize Google Sheets roadmap execution (GS2+ backend split).
 
 
 ## Optimization backlog (exporting/parsing focus)
