@@ -2,6 +2,7 @@ import gc
 import os
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -218,6 +219,46 @@ class TestDbUtils(unittest.TestCase):
 
         rows = execute_with_retry(self.db_path, 'SELECT name FROM dedupe ORDER BY name')
         self.assertEqual(rows, [('alpha',), ('beta',)])
+
+    def test_run_transaction_with_retry_recovers_after_real_db_lock_overlap(self):
+        """Covers parse/export-style overlap where one writer temporarily locks the DB."""
+        errors: list[Exception] = []
+
+        lock_conn = sqlite3.connect(self.db_path, timeout=5.0)
+        try:
+            lock_conn.execute('BEGIN EXCLUSIVE')
+
+            def export_like_writer():
+                try:
+                    def operation(cursor):
+                        cursor.execute("INSERT INTO sample (name) VALUES (?)", ("overlap-write",))
+
+                    run_transaction_with_retry(
+                        self.db_path,
+                        operation,
+                        retries=10,
+                        retry_delay_s=0.02,
+                    )
+                except Exception as exc:  # pragma: no cover - assertion handled below
+                    errors.append(exc)
+
+            with mock.patch(
+                'modules.db.connect_sqlite',
+                side_effect=lambda path, timeout_s=5.0: sqlite3.connect(path, timeout=0.01),
+            ):
+                writer_thread = threading.Thread(target=export_like_writer)
+                writer_thread.start()
+                time.sleep(0.08)
+                lock_conn.commit()
+                writer_thread.join(timeout=3)
+
+            self.assertFalse(writer_thread.is_alive(), 'Writer thread should complete after lock release')
+            self.assertEqual(errors, [])
+        finally:
+            lock_conn.close()
+
+        rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
+        self.assertEqual(rows, [('alpha',), ('beta',), ('overlap-write',)])
 
 
 if __name__ == '__main__':

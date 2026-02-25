@@ -6,7 +6,7 @@
   - [x] chart insertion/format policy helper
   - [x] per-header worksheet write bundle helper
 - [x] Add regression tests for extracted writer helpers to preserve worksheet range and chart-series parity.
-- [ ] Add one focused locked-db retry/rollback regression test covering parse/export overlap behavior.
+- [x] Add one focused locked-db retry/rollback regression test covering parse/export overlap behavior.
 
 ## Google Sheets roadmap follow-up
 - [ ] Start GS2 backend split skeleton (`ExcelExportBackend` / `GoogleSheetsExportBackend`) while keeping Excel as default.
