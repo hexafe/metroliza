@@ -1,14 +1,12 @@
 import importlib.metadata
 import importlib.util
 import re
-import sqlite3
-import time
 from pathlib import Path
 
 import pandas
 
 from modules.CustomLogger import CustomLogger
-from modules.db import connect_sqlite, execute_with_retry
+from modules.db import connect_sqlite, execute_with_retry, run_transaction_with_retry
 
 
 def _resolve_pymupdf_backend_module() -> str | None:
@@ -602,50 +600,39 @@ class CMMReportParser:
                         print(f'Report ({self.pdf_file_name}) already exists in the database.')
                         return
 
-                    # Retry mechanism for handling database lock
-                    max_retry_attempts = 5
-                    retry_delay = 1  # seconds
-                    retry_attempt = 1
+                    def insert_report_and_measurements(transaction_cursor):
+                        transaction_cursor.execute(
+                            'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                            (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number),
+                        )
+                        report_id = transaction_cursor.lastrowid
 
-                    while retry_attempt <= max_retry_attempts:
-                        try:
-                            # Attempt to insert report data into the REPORTS table
-                            cursor.execute('INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                                        (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number))
-                            report_id = cursor.lastrowid
+                        for lst in self.pdf_blocks_text:
+                            table_name = ""
+                            for sublist in lst[0]:
+                                if isinstance(sublist, str):
+                                    table_name += sublist
+                                    table_name += ", "
+                                else:
+                                    for item in sublist:
+                                        if isinstance(item, str):
+                                            table_name += item
+                                            table_name += ", "
 
-                            # Insert measurements data into the MEASUREMENTS table
-                            for lst in self.pdf_blocks_text:
-                                table_name = ""
-                                for sublist in lst[0]:
-                                    if isinstance(sublist, str):
-                                        table_name += sublist
-                                        table_name += ", "
-                                    else:
-                                        for item in sublist:
-                                            if isinstance(item, str):
-                                                table_name += item
-                                                table_name += ", "
+                            table_name = table_name.replace('"', '')
+                            table_name = table_name[:-2]
 
-                                table_name = table_name.replace('"', '')
-                                table_name = table_name[:-2]
+                            rows = [
+                                (None, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], table_name, report_id)
+                                for row in lst[1]
+                            ]
+                            transaction_cursor.executemany(
+                                'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                                rows,
+                            )
 
-                                rows = [(None, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], table_name, report_id) for row in lst[1]]
-                                cursor.executemany('INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', rows)
-
-                            print(f'Report ({self.pdf_file_name}) - measurements inserted into the database.')
-                            return
-
-                        except sqlite3.OperationalError as e:
-                            error_message = str(e)
-                            if 'database is locked' in error_message:
-                                print(f"Database is locked. Retrying attempt {retry_attempt}...")
-                                retry_attempt += 1
-                                time.sleep(retry_delay)
-                            else:
-                                print(f"Error occurred: {error_message}.")  # Handle other database errors
-
-                    print(f"Failed to insert data into the database after {max_retry_attempts} attempts.")
+                    run_transaction_with_retry(self.database, insert_report_and_measurements, retries=4, retry_delay_s=1)
+                    print(f'Report ({self.pdf_file_name}) - measurements inserted into the database.')
                     return
         except Exception as e:
             self.log_and_exit(e)
