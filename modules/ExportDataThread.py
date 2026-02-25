@@ -227,71 +227,29 @@ def build_measurement_chart_series_specs(
     ]
 
 
-def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column):
-    """Build reusable chart range references independent of charting backend writes."""
-    return {
-        'data_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
-        'data_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column),
-        'usl_y': build_sheet_series_range(sheet_name, 0, 1, y_column),
-        'lsl_y': build_sheet_series_range(sheet_name, 2, 3, y_column),
-        'limit_x': build_sheet_series_range(sheet_name, first_data_row, first_data_row + 1, x_column),
-    }
+def build_measurement_block_plan(*, base_col, sample_size):
+    """Return worksheet/chart coordinate plan for one measurement header block."""
+    if sample_size < 1:
+        raise ValueError('sample_size must be >= 1')
 
-
-def build_measurement_header_block_plan(header_group, base_col, first_data_row=21):
-    """Build worksheet layout and formula plan for a single measurement header block."""
-    nom = round(header_group['NOM'].iloc[0], 3)
-    plus_tol = round(header_group['+TOL'].iloc[0], 3)
-    minus_tol = round(header_group['-TOL'].iloc[0], 3) if header_group['-TOL'].iloc[0] else 0
-
-    usl = nom + plus_tol
-    lsl = nom + minus_tol
-    summary_col = xl_col_to_name(base_col + 1)
-    first_excel_row = first_data_row + 1
-    last_excel_row = len(header_group) + first_data_row
-    data_range_y = f'{xl_col_to_name(base_col + 2)}{first_excel_row}:{xl_col_to_name(base_col + 2)}{last_excel_row}'
-
-    nom_cell = xl_rowcol_to_cell(0, base_col + 1, row_abs=True, col_abs=True)
-    usl_cell = xl_rowcol_to_cell(1, base_col + 1, row_abs=True, col_abs=True)
-    lsl_cell = xl_rowcol_to_cell(2, base_col + 1, row_abs=True, col_abs=True)
-
-    stat_formulas = build_measurement_stat_formulas(
-        summary_col=summary_col,
-        data_range_y=data_range_y,
-        nom_cell=nom_cell,
-        usl_cell=usl_cell,
-        lsl_cell=lsl_cell,
-        nom_value=nom,
-        lsl_value=lsl,
-    )
+    data_header_row = 20
+    data_start_row = data_header_row + 1
+    last_data_row = data_start_row + sample_size - 1
+    y_column = base_col + 2
+    summary_column = base_col + 1
 
     return {
-        'nom': nom,
-        'plus_tol': plus_tol,
-        'minus_tol': minus_tol,
-        'usl': usl,
-        'lsl': lsl,
-        'nom_cell': nom_cell,
-        'usl_cell': usl_cell,
-        'lsl_cell': lsl_cell,
-        'first_data_row': first_data_row,
-        'last_data_row': len(header_group) + first_data_row - 1,
-        'stat_rows': build_measurement_stat_row_specs(stat_formulas),
-        'spec_limit_rows': build_spec_limit_anchor_rows(usl, lsl),
-    }
-
-
-def build_summary_sheet_position_plan(col, block_width=3, block_row_span=20, start_row=0):
-    """Return summary-sheet anchor positions for a header block."""
-    if col > block_width:
-        row = int(((col / block_width) - 1) * block_row_span)
-    else:
-        row = start_row
-    return {
-        'row': row,
-        'header_row': row,
-        'image_row': row + 1,
-        'column': 0,
+        'data_header_row': data_header_row,
+        'data_start_row': data_start_row,
+        'last_data_row': last_data_row,
+        'summary_column': summary_column,
+        'y_column': y_column,
+        'data_range_y': (
+            f'{xl_col_to_name(y_column)}{data_start_row + 1}:'
+            f'{xl_col_to_name(y_column)}{last_data_row + 1}'
+        ),
+        'nok_percent_row': 10,
+        'chart_insert_row': 12,
     }
 
 
@@ -785,8 +743,25 @@ class ExportDataThread(QThread):
                     worksheet.write(2, base_col + 1, header_plan['minus_tol'])
 
                     # Spec-limit anchor points for horizontal limit lines in charts (no labels).
-                    for row_offset, (_, value) in enumerate(header_plan['spec_limit_rows']):
-                        worksheet.write(row_offset, base_col + 2, value)
+                    worksheet.write(0, base_col + 2, USL)
+                    worksheet.write(1, base_col + 2, USL)
+                    worksheet.write(2, base_col + 2, LSL)
+                    worksheet.write(3, base_col + 2, LSL)
+                    
+                    measurement_plan = build_measurement_block_plan(
+                        base_col=base_col,
+                        sample_size=len(header_group),
+                    )
+                    summary_col = xl_col_to_name(measurement_plan['summary_column'])
+                    stat_formulas = build_measurement_stat_formulas(
+                        summary_col=summary_col,
+                        data_range_y=measurement_plan['data_range_y'],
+                        nom_cell=NOM_cell,
+                        usl_cell=USL_cell,
+                        lsl_cell=LSL_cell,
+                        nom_value=nom,
+                        lsl_value=LSL,
+                    )
 
                     for row_offset, (label, formula, cell_style) in enumerate(header_plan['stat_rows'], start=3):
                         worksheet.write(row_offset, base_col, label)
@@ -795,27 +770,42 @@ class ExportDataThread(QThread):
                         else:
                             worksheet.write_formula(row_offset, base_col + 1, formula)
                     
-                    worksheet.write(20, base_col, 'Date')
-                    worksheet.write_column(21, base_col, header_group['DATE'])
-                    
-                    worksheet.write(20, base_col + 1, 'Sample #')
-                    worksheet.write_column(21, base_col + 1, header_group['SAMPLE_NUMBER'])
-                    
-                    worksheet.write(20, base_col + 2, header, wrap_format)
+                    worksheet.write(measurement_plan['data_header_row'], base_col, 'Date')
+                    worksheet.write_column(measurement_plan['data_start_row'], base_col, header_group['DATE'])
+
+                    worksheet.write(measurement_plan['data_header_row'], base_col + 1, 'Sample #')
+                    worksheet.write_column(measurement_plan['data_start_row'], base_col + 1, header_group['SAMPLE_NUMBER'])
+
+                    worksheet.write(measurement_plan['data_header_row'], base_col + 2, header, wrap_format)
                     rounded_meas = header_group['MEAS'].round(3)
-                    worksheet.write_column(21, base_col + 2, rounded_meas)
+                    worksheet.write_column(measurement_plan['data_start_row'], base_col + 2, rounded_meas)
 
                     # Apply conditional formatting to highlight cells greater than USL in red
-                    worksheet.conditional_format(21, base_col + 2, len(header_group) + 20, base_col + 2,
-                                                {'type': 'cell', 'criteria': '>', 'value': f"({header_plan['nom_cell']}+{header_plan['usl_cell']})", 'format': red_format})
+                    worksheet.conditional_format(
+                        measurement_plan['data_start_row'],
+                        measurement_plan['y_column'],
+                        measurement_plan['last_data_row'],
+                        measurement_plan['y_column'],
+                        {'type': 'cell', 'criteria': '>', 'value': f'({NOM_cell}+{USL_cell})', 'format': red_format},
+                    )
 
                     # Apply conditional formatting to highlight cells lower than LSL in red
-                    worksheet.conditional_format(21, base_col + 2, len(header_group) + 20, base_col + 2,
-                                                {'type': 'cell', 'criteria': '<', 'value': f"({header_plan['nom_cell']}+{header_plan['lsl_cell']})", 'format': red_format})
-                    
+                    worksheet.conditional_format(
+                        measurement_plan['data_start_row'],
+                        measurement_plan['y_column'],
+                        measurement_plan['last_data_row'],
+                        measurement_plan['y_column'],
+                        {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format},
+                    )
+
                     # Apply conditional formatting to highlight if NOK% > 0
-                    worksheet.conditional_format(10, base_col + 1, 10, base_col + 1,
-                                                {'type': 'cell', 'criteria': '>', 'value': '0', 'format': red_format})                
+                    worksheet.conditional_format(
+                        measurement_plan['nok_percent_row'],
+                        measurement_plan['summary_column'],
+                        measurement_plan['nok_percent_row'],
+                        measurement_plan['summary_column'],
+                        {'type': 'cell', 'criteria': '>', 'value': '0', 'format': red_format},
+                    )
                     
                     col += 3
 
@@ -831,10 +821,10 @@ class ExportDataThread(QThread):
                     series_specs = build_measurement_chart_series_specs(
                         header=header,
                         sheet_name=safe_ref_sheet_name,
-                        first_data_row=header_plan['first_data_row'],
-                        last_data_row=header_plan['last_data_row'],
-                        x_column=base_col + 1,
-                        y_column=base_col + 2,
+                        first_data_row=measurement_plan['data_start_row'],
+                        last_data_row=measurement_plan['last_data_row'],
+                        x_column=measurement_plan['summary_column'],
+                        y_column=measurement_plan['y_column'],
                     )
 
                     for series_spec in series_specs:
@@ -854,7 +844,7 @@ class ExportDataThread(QThread):
                     chart.set_size({'width': 240, 'height': 160})
 
                     # Insert the chart into the worksheet.
-                    worksheet.insert_chart(12, col - 3, chart)
+                    worksheet.insert_chart(measurement_plan['chart_insert_row'], col - 3, chart)
 
                     if self._check_canceled():
                         return

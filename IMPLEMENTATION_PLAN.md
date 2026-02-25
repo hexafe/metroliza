@@ -348,7 +348,8 @@ Based on the latest repository audit, these are the highest-value next slices to
 
 3. **Phase 2 / Export worker decomposition PR: target large worksheet/chart writer paths first.**
    - `modules/ExportDataThread.py` remains the largest hot-path module and still combines orchestration, SQL loading, payload shaping, and worksheet/chart rendering.
-   - Prioritize extraction of high-complexity writer sections: (a) header-block write plan objects, (b) chart series/range spec builders, (c) summary-sheet row layout planners.
+   - ✅ Header-block write plan object extraction has started (`build_measurement_block_plan`) and now drives data-range, conditional-format, and chart-placement coordinates in the per-header export loop.
+   - Next extraction targets remain: (a) additional chart series/range spec builders, and (b) summary-sheet row layout planners.
    - Maintain existing output parity by snapshot-style tests over generated worksheet ranges/series configuration.
 
 ### Suggested acceptance checks for the next slice
