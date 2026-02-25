@@ -12,7 +12,11 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from modules.db import connect_sqlite, execute_select_with_columns
+from modules.db import (
+    connect_sqlite,
+    execute_many_with_retry,
+    execute_select_with_columns,
+)
 
 
 class BOMManager(QMainWindow):
@@ -53,10 +57,7 @@ class BOMManager(QMainWindow):
         self.selected_entry_id = None
 
     def _execute_write(self, query, params=()):
-        cursor = self.conn.cursor()
-        cursor.execute(query, params)
-        self.conn.commit()
-        return cursor
+        execute_many_with_retry(self.database_path, [(query, params)])
 
     def _execute_read(self, query, params=()):
         rows, _ = execute_select_with_columns(self.database_path, query, params)
@@ -255,12 +256,13 @@ class BOMManager(QMainWindow):
                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if confirm_dialog == QMessageBox.StandardButton.Yes:
             # Delete the selected BOM entries from the database
-            cursor = self.conn.cursor()
+            delete_statements = []
             for item in selected_rows:
                 row = item.row()
                 entry_id = self.bom_table.item(row, 0).data(Qt.UserRole)[0]
-                cursor.execute("DELETE FROM bom WHERE id = ?", (entry_id,))
-            self.conn.commit()
+                delete_statements.append(("DELETE FROM bom WHERE id = ?", (entry_id,)))
+
+            execute_many_with_retry(self.database_path, delete_statements)
 
             # Refresh the table and clear the input fields
             self.refresh_table()
