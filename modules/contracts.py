@@ -67,6 +67,7 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
 _ALLOWED_EXPORT_PRESETS = {"fast_diagnostics", "full_report"}
+_ALLOWED_EXPORT_TARGETS = {"excel_xlsx"}
 _SAMPLE_SORT_ALIASES = {"sample", "sample #", "sample number", "part #", "part number"}
 
 
@@ -94,25 +95,26 @@ def validate_parse_request(request: ParseRequest) -> ParseRequest:
 
 
 def validate_export_options(options: ExportOptions) -> ExportOptions:
-    preset = options.preset.strip().lower() if isinstance(options.preset, str) else ""
+    preset_value = getattr(options, "preset", ExportOptions.preset)
+    preset = preset_value.strip().lower() if isinstance(preset_value, str) else ""
     if preset not in _ALLOWED_EXPORT_PRESETS:
         preset = "fast_diagnostics"
 
-    export_type = options.export_type.strip().lower()
+    export_type = getattr(options, "export_type", ExportOptions.export_type).strip().lower()
     if export_type not in _ALLOWED_EXPORT_TYPES:
-        raise ValueError(f"Unsupported export type '{options.export_type}'.")
+        raise ValueError(f"Unsupported export type '{getattr(options, 'export_type', None)}'.")
 
-    export_target = options.export_target.strip().lower()
+    export_target = getattr(options, "export_target", ExportOptions.export_target).strip().lower()
     if export_target not in _ALLOWED_EXPORT_TARGETS:
-        raise ValueError(f"Unsupported export target '{options.export_target}'.")
+        raise ValueError(f"Unsupported export target '{getattr(options, 'export_target', None)}'.")
 
-    sorting_parameter = options.sorting_parameter.strip().lower()
+    sorting_parameter = getattr(options, "sorting_parameter", ExportOptions.sorting_parameter).strip().lower()
     allowed_sorting = {"date"}.union(_SAMPLE_SORT_ALIASES)
     if sorting_parameter not in allowed_sorting:
-        raise ValueError(f"Unsupported sorting parameter '{options.sorting_parameter}'.")
+        raise ValueError(f"Unsupported sorting parameter '{getattr(options, 'sorting_parameter', None)}'.")
 
-    violin_min = max(2, int(options.violin_plot_min_samplesize))
-    summary_scale = max(0, int(options.summary_plot_scale))
+    violin_min = max(2, int(getattr(options, "violin_plot_min_samplesize", ExportOptions.violin_plot_min_samplesize)))
+    summary_scale = max(0, int(getattr(options, "summary_plot_scale", ExportOptions.summary_plot_scale)))
 
     return ExportOptions(
         preset=preset,
@@ -121,8 +123,8 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
         sorting_parameter=sorting_parameter,
         violin_plot_min_samplesize=violin_min,
         summary_plot_scale=summary_scale,
-        hide_ok_results=bool(options.hide_ok_results),
-        generate_summary_sheet=bool(options.generate_summary_sheet),
+        hide_ok_results=bool(getattr(options, "hide_ok_results", ExportOptions.hide_ok_results)),
+        generate_summary_sheet=bool(getattr(options, "generate_summary_sheet", ExportOptions.generate_summary_sheet)),
     )
 
 
