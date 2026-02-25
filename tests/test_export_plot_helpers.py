@@ -46,6 +46,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (  # noqa: E402
+    build_measurement_chart_series_specs,
     build_histogram_density_curve_payload,
     build_measurement_stat_formulas,
     build_violin_group_stats_rows,
@@ -102,6 +103,27 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertIn('MIN(', formulas['cpk'])
         self.assertEqual(formulas['nok_total'], '=COUNTIF(E22:E40, ">"&($D$1+$D$2))+COUNTIF(E22:E40, "<"&($D$1+$D$3))')
+
+    def test_build_measurement_chart_series_specs_uses_range_backed_series(self):
+        series = build_measurement_chart_series_specs(
+            header='DIA',
+            sheet_name='REF_PART_A',
+            first_data_row=21,
+            last_data_row=30,
+            x_column=4,
+            y_column=5,
+        )
+
+        self.assertEqual(len(series), 3)
+        self.assertEqual(series[0]['name'], 'DIA')
+        self.assertEqual(series[0]['categories'], '=REF_PART_A!$E22:E31')
+        self.assertEqual(series[0]['values'], '=REF_PART_A!$F22:F31')
+
+        self.assertEqual(series[1]['name'], 'USL')
+        self.assertEqual(series[1]['values'], '=REF_PART_A!$F1:F2')
+
+        self.assertEqual(series[2]['name'], 'LSL')
+        self.assertEqual(series[2]['values'], '=REF_PART_A!$F3:F4')
 
     def test_build_violin_group_stats_rows_marks_reference_and_computes_pvalues(self):
         labels = ['A', 'B']

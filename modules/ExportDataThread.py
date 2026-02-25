@@ -166,6 +166,49 @@ def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cel
     }
 
 
+def build_measurement_chart_series_specs(
+    *,
+    header,
+    sheet_name,
+    first_data_row,
+    last_data_row,
+    x_column,
+    y_column,
+):
+    """Build stable chart series definitions for measurement and spec-limit overlays."""
+    x_range = build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column)
+    y_range = build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column)
+    usl_range = build_sheet_series_range(sheet_name, 0, 1, y_column)
+    lsl_range = build_sheet_series_range(sheet_name, 2, 3, y_column)
+    limit_x_range = build_sheet_series_range(sheet_name, first_data_row, first_data_row + 1, x_column)
+
+    return [
+        {
+            'name': header,
+            'categories': x_range,
+            'values': y_range,
+        },
+        {
+            'name': 'USL',
+            'categories': limit_x_range,
+            'values': usl_range,
+            'line': {'color': 'red', 'width': 1},
+            'marker': {'type': 'none'},
+            'data_labels': {'value': False},
+            'show_legend_key': False,
+        },
+        {
+            'name': 'LSL',
+            'categories': limit_x_range,
+            'values': lsl_range,
+            'line': {'color': 'red', 'width': 1},
+            'marker': {'type': 'none'},
+            'data_labels': {'value': False},
+            'show_legend_key': False,
+        },
+    ]
+
+
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
     if _HAS_SEABORN:
@@ -758,21 +801,19 @@ class ExportDataThread(QThread):
                     # Create an XY chart object
                     chart = workbook.add_chart({'type': self.selected_export_type})
 
-                    # Add data to the chart with the specified x and y ranges
                     first_data_row = 21
                     last_data_row = len(header_group) + 20
-                    x_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, base_col + 1)
-                    y_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, last_data_row, base_col + 2)
-                    usl_range = build_sheet_series_range(safe_ref_sheet_name, 0, 1, base_col + 2)
-                    lsl_range = build_sheet_series_range(safe_ref_sheet_name, 2, 3, base_col + 2)
-                    limit_x_range = build_sheet_series_range(safe_ref_sheet_name, first_data_row, first_data_row + 1, base_col + 1)
+                    series_specs = build_measurement_chart_series_specs(
+                        header=header,
+                        sheet_name=safe_ref_sheet_name,
+                        first_data_row=first_data_row,
+                        last_data_row=last_data_row,
+                        x_column=base_col + 1,
+                        y_column=base_col + 2,
+                    )
 
-                    # Add the series to the chart
-                    chart.add_series({
-                        'name': header,
-                        'categories': x_range,
-                        'values': y_range,
-                    })
+                    for series_spec in series_specs:
+                        chart.add_series(series_spec)
 
                     # Configure the chart properties
                     chart.set_title({'name': f'{header}', 'name_font': {'size': 10}})
@@ -784,25 +825,6 @@ class ExportDataThread(QThread):
                     })
 
                     chart.set_legend({'position': 'none'})
-                    
-                    chart.add_series({
-                        'name': 'USL',
-                        'categories': limit_x_range,
-                        'values': usl_range,
-                        'line': {'color': 'red', 'width': 1},
-                        'marker': {'type': 'none'},
-                        'data_labels': {'value': False},
-                        'show_legend_key': False,
-                    })
-                    chart.add_series({
-                        'name': 'LSL',
-                        'categories': limit_x_range,
-                        'values': lsl_range,
-                        'line': {'color': 'red', 'width': 1},
-                        'marker': {'type': 'none'},
-                        'data_labels': {'value': False},
-                        'show_legend_key': False,
-                    })
                     
                     chart.set_size({'width': 240, 'height': 160})
 
