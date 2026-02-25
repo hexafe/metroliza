@@ -99,7 +99,7 @@ class BOMManager(QMainWindow):
         # Create the parent combo box
         self.parent_label = QLabel("Parent Entry:")
         self.parent_combo_box = QComboBox()
-        self.parent_combo_box.addItems(self.get_bom_entries())
+        self.populate_parent_combo_box()
 
         # Add the parent combo box to the layout
         self.layout.addWidget(self.parent_label)
@@ -144,6 +144,7 @@ class BOMManager(QMainWindow):
     def refresh_table(self):
         # Clear the table
         self.bom_table.setRowCount(0)
+        self.populate_parent_combo_box()
 
         # Retrieve the BOM entries from the database
         bom_entries = self._execute_read("SELECT * FROM bom")
@@ -195,17 +196,27 @@ class BOMManager(QMainWindow):
 
         return entries
 
+    def populate_parent_combo_box(self):
+        self.parent_combo_box.clear()
+        for entry_id, product_reference in self._execute_read("SELECT id, product_reference FROM bom"):
+            self.parent_combo_box.addItem(f"{entry_id} - {product_reference}", entry_id)
+
+    def find_parent_index_by_id(self, parent_id):
+        if parent_id is None:
+            return -1
+
+        for index in range(self.parent_combo_box.count()):
+            if self.parent_combo_box.itemData(index, Qt.ItemDataRole.UserRole) == parent_id:
+                return index
+
+        return -1
+
     def add_bom_entry(self):
         product_reference = self.product_reference_input.text()
         description = self.description_input.text()
         part_reference = self.part_reference_input.text()
         part_description = self.part_description_input.text()
-        parent_entry = self.parent_combo_box.currentText()  # Get the selected parent entry
-
-        # Extract the parent ID from the combo box text
-        parent_id = None
-        if parent_entry and " - " in parent_entry:
-            parent_id = int(parent_entry.split(" - ")[0])
+        parent_id = self.parent_combo_box.currentData(Qt.ItemDataRole.UserRole)
 
         # Insert the BOM entry into the database
         self._execute_write(
@@ -223,12 +234,7 @@ class BOMManager(QMainWindow):
         description = self.description_input.text()
         part_reference = self.part_reference_input.text()
         part_description = self.part_description_input.text()
-        parent_entry = self.parent_combo_box.currentText()  # Get the selected parent entry
-
-        # Extract the parent ID from the combo box text
-        parent_id = None
-        if parent_entry and " - " in parent_entry:
-            parent_id = int(parent_entry.split(" - ")[0])
+        parent_id = self.parent_combo_box.currentData(Qt.ItemDataRole.UserRole)
 
         # Update the modified BOM entry in the database
         self._execute_write(
@@ -288,8 +294,7 @@ class BOMManager(QMainWindow):
             self.part_description_input.setText(selected_data[4])
 
             # Set the selected parent in the combo box
-            parent_reference = self.get_parent_reference(selected_data[5])
-            parent_index = self.parent_combo_box.findText(parent_reference)
+            parent_index = self.find_parent_index_by_id(selected_data[5])
             self.parent_combo_box.setCurrentIndex(parent_index)
 
             # Enable the save button
