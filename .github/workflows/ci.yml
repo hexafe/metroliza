@@ -24,12 +24,17 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Compile check
-        run: python -m compileall .
+        run: python -m compileall VersionDate.py metroliza.py modules tests
 
       - name: Lint (full repository)
         run: ruff check .
 
-      - name: Unit tests
+      - name: Unit tests (pytest)
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q
+
+      - name: Unit tests (unittest)
         env:
           PYTHONPATH: .
         run: python -m unittest discover -s tests -v
@@ -57,9 +62,14 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Compile check
-        run: python -m compileall .
+        run: python -m compileall VersionDate.py metroliza.py modules tests
 
-      - name: Unit tests
+      - name: Unit tests (pytest)
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q
+
+      - name: Unit tests (unittest)
         env:
           PYTHONPATH: .
         run: python -m unittest discover -s tests -v
