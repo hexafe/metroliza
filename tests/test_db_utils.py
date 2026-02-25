@@ -58,6 +58,30 @@ class TestDbUtils(unittest.TestCase):
         self.assertIsInstance(df, pd.DataFrame)
         self.assertListEqual(df['name'].tolist(), ['alpha', 'beta'])
 
+    def test_read_sql_dataframe_retries_on_transient_lock(self):
+        from modules import db as db_module
+
+        original_connect = db_module.connect_sqlite
+        attempts = {'count': 0}
+
+        def flaky_connect(path, timeout_s=5.0):
+            attempts['count'] += 1
+            if attempts['count'] == 1:
+                raise sqlite3.OperationalError('database is locked')
+            return original_connect(path, timeout_s)
+
+        with mock.patch('modules.db.connect_sqlite', side_effect=flaky_connect), mock.patch('modules.db.time.sleep') as sleep_mock:
+            df = read_sql_dataframe(
+                self.db_path,
+                'SELECT id, name FROM sample ORDER BY id',
+                retries=2,
+                retry_delay_s=0.001,
+            )
+
+        self.assertEqual(attempts['count'], 2)
+        sleep_mock.assert_called_once_with(0.001)
+        self.assertListEqual(df['name'].tolist(), ['alpha', 'beta'])
+
     def test_execute_select_with_columns_returns_rows_and_columns(self):
         rows, column_names = execute_select_with_columns(
             self.db_path,
