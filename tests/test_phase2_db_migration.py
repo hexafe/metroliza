@@ -26,8 +26,16 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
         self.assertNotIn('sqlite3.connect(', cmm_parser)
         self.assertNotIn('sqlite3.connect(', bom_manager)
 
-        self.assertIn('from modules.db import connect_sqlite, execute_with_retry', cmm_parser)
+        self.assertIn('from modules.db import connect_sqlite, execute_with_retry, run_transaction_with_retry', cmm_parser)
         self.assertIn('from modules.db import connect_sqlite, execute_select_with_columns', bom_manager)
+
+
+    def test_cmm_parser_uses_shared_transaction_retry_helper_for_writes(self):
+        cmm_parser = self._read('modules/CMMReportParser.py')
+
+        self.assertNotIn('while retry_attempt <=', cmm_parser)
+        self.assertNotIn('max_retry_attempts =', cmm_parser)
+        self.assertIn('run_transaction_with_retry(self.database, insert_report_and_measurements', cmm_parser)
 
     def test_migrated_result_shape_usage_is_tuple_based(self):
         cmm_parser = self._read('modules/CMMReportParser.py')

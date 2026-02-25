@@ -10,6 +10,7 @@ from modules.db import (
     execute_select_with_columns,
     execute_with_retry,
     read_sql_dataframe,
+    run_transaction_with_retry,
 )
 
 
@@ -59,6 +60,18 @@ class TestDbUtils(unittest.TestCase):
         )
         rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
         self.assertEqual(rows, [('alpha-updated',), ('beta',), ('gamma',)])
+
+    def test_run_transaction_with_retry_executes_callback_and_commits(self):
+        def operation(cursor):
+            cursor.execute("INSERT INTO sample (name) VALUES (?)", ("gamma",))
+            cursor.execute("SELECT COUNT(*) FROM sample")
+            return cursor.fetchone()[0]
+
+        count = run_transaction_with_retry(self.db_path, operation)
+        self.assertEqual(count, 3)
+
+        rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
+        self.assertEqual(rows, [('alpha',), ('beta',), ('gamma',)])
 
 
 if __name__ == '__main__':

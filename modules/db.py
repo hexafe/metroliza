@@ -1,7 +1,7 @@
 import sqlite3
 import time
 from contextlib import closing
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import pandas as pd
 
@@ -11,6 +11,8 @@ TRANSIENT_SQLITE_ERRORS = (
     'database schema is locked',
     'unable to open database file',
 )
+
+T = TypeVar('T')
 
 
 def connect_sqlite(db_path: str, timeout_s: float = 5.0) -> sqlite3.Connection:
@@ -103,6 +105,33 @@ def execute_many_with_retry(
             if not is_transient or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
+
+
+def run_transaction_with_retry(
+    db_path: str,
+    operation: Callable[[sqlite3.Cursor], T],
+    *,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> T:
+    """Run a cursor operation in a transaction with retry on transient SQLite errors."""
+    attempts = retries + 1
+
+    for attempt in range(attempts):
+        try:
+            with closing(connect_sqlite(db_path)) as conn:
+                cursor = conn.cursor()
+                result = operation(cursor)
+                conn.commit()
+                return result
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
+            if not is_transient or attempt >= attempts - 1:
+                raise
+            time.sleep(retry_delay_s)
+
+    raise sqlite3.OperationalError('Failed to complete SQLite transaction after retries')
 
 
 def read_sql_dataframe(db_path: str, query: str) -> pd.DataFrame:
