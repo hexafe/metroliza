@@ -19,6 +19,7 @@ class AppPaths:
 class ExportOptions:
     preset: str = "fast_diagnostics"
     export_type: str = "line"
+    export_target: str = "excel_xlsx"
     sorting_parameter: str = "date"
     violin_plot_min_samplesize: int = 6
     summary_plot_scale: int = 0
@@ -101,6 +102,10 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
     if export_type not in _ALLOWED_EXPORT_TYPES:
         raise ValueError(f"Unsupported export type '{options.export_type}'.")
 
+    export_target = options.export_target.strip().lower()
+    if export_target not in _ALLOWED_EXPORT_TARGETS:
+        raise ValueError(f"Unsupported export target '{options.export_target}'.")
+
     sorting_parameter = options.sorting_parameter.strip().lower()
     allowed_sorting = {"date"}.union(_SAMPLE_SORT_ALIASES)
     if sorting_parameter not in allowed_sorting:
@@ -112,6 +117,7 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
     return ExportOptions(
         preset=preset,
         export_type=export_type,
+        export_target=export_target,
         sorting_parameter=sorting_parameter,
         violin_plot_min_samplesize=violin_min,
         summary_plot_scale=summary_scale,

@@ -42,6 +42,7 @@ class TestValidateExportOptions(unittest.TestCase):
 
         self.assertEqual(options.preset, 'full_report')
         self.assertEqual(options.export_type, 'line')
+        self.assertEqual(options.export_target, 'excel_xlsx')
         self.assertEqual(options.sorting_parameter, 'sample #')
         self.assertEqual(options.violin_plot_min_samplesize, 2)
         self.assertEqual(options.summary_plot_scale, 0)
@@ -51,6 +52,14 @@ class TestValidateExportOptions(unittest.TestCase):
     def test_rejects_unknown_export_type(self):
         with self.assertRaises(ValueError):
             validate_export_options(ExportOptions(export_type='bar'))
+
+    def test_normalizes_export_target_case(self):
+        options = validate_export_options(ExportOptions(export_target='Excel_XLSX'))
+        self.assertEqual(options.export_target, 'excel_xlsx')
+
+    def test_rejects_unknown_export_target(self):
+        with self.assertRaises(ValueError):
+            validate_export_options(ExportOptions(export_target='csv'))
 
 
 class TestValidatePaths(unittest.TestCase):
@@ -86,6 +95,7 @@ class TestValidateExportRequest(unittest.TestCase):
         validated = validate_export_request(request)
 
         self.assertEqual(validated.options.export_type, 'scatter')
+        self.assertEqual(validated.options.export_target, 'excel_xlsx')
         self.assertEqual(validated.options.sorting_parameter, 'part #')
         self.assertEqual(validated.options.violin_plot_min_samplesize, 2)
 

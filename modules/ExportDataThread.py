@@ -339,6 +339,42 @@ def render_density_line(ax, x, p):
         ax.plot(x, p, color='#1f1f1f', linewidth=1.4)
 
 
+class ExportBackend:
+    """Backend interface for executing export targets."""
+
+    def run(self, thread):
+        raise NotImplementedError
+
+
+class ExcelExportBackend(ExportBackend):
+    export_target = 'excel_xlsx'
+
+    def run(self, thread):
+        excel_writer = pd.ExcelWriter(thread.excel_file, engine='xlsxwriter')
+        try:
+            completed = run_export_steps(
+                [
+                    lambda: (
+                        thread.update_label.emit("Exporting filtered data..."),
+                        thread.export_filtered_data(excel_writer),
+                        thread.update_progress.emit(50),
+                    ),
+                    lambda: (
+                        thread.update_label.emit("Building measurement sheets..."),
+                        thread.add_measurements_horizontal_sheet(excel_writer),
+                        thread.update_progress.emit(100),
+                    ),
+                ],
+                should_cancel=thread._check_canceled,
+            )
+            if not completed:
+                return False
+        finally:
+            excel_writer.close()
+
+        return True
+
+
 class ExportDataThread(QThread):
     update_label = pyqtSignal(str)
     update_progress = pyqtSignal(int)
@@ -365,6 +401,7 @@ class ExportDataThread(QThread):
         self.filter_query = validated_request.filter_query or default_filter_query
         self.df_for_grouping = validated_request.grouping_df
         self.selected_export_type = validated_request.options.export_type
+        self.export_target = validated_request.options.export_target
         self.selected_sorting_parameter = validated_request.options.sorting_parameter
         self.violin_plot_min_samplesize = validated_request.options.violin_plot_min_samplesize
         self.summary_plot_scale = validated_request.options.summary_plot_scale
@@ -543,6 +580,12 @@ class ExportDataThread(QThread):
             return True
         return False
 
+    def get_export_backend(self):
+        target_to_backend = {
+            'excel_xlsx': ExcelExportBackend(),
+        }
+        return target_to_backend[self.export_target]
+
     def run(self):
         try:
             if self._check_canceled():
@@ -551,27 +594,10 @@ class ExportDataThread(QThread):
             self.update_progress.emit(0)
             self.update_label.emit("Preparing export...")
 
-            excel_writer = pd.ExcelWriter(self.excel_file, engine='xlsxwriter')
-            try:
-                completed = run_export_steps(
-                    [
-                        lambda: (
-                            self.update_label.emit("Exporting filtered data..."),
-                            self.export_filtered_data(excel_writer),
-                            self.update_progress.emit(50),
-                        ),
-                        lambda: (
-                            self.update_label.emit("Building measurement sheets..."),
-                            self.add_measurements_horizontal_sheet(excel_writer),
-                            self.update_progress.emit(100),
-                        ),
-                    ],
-                    should_cancel=self._check_canceled,
-                )
-                if not completed:
-                    return
-            finally:
-                excel_writer.close()
+            backend = self.get_export_backend()
+            completed = backend.run(self)
+            if not completed:
+                return
 
             self.update_label.emit("Export completed successfully.")
             self.finished.emit()
