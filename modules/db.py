@@ -15,6 +15,12 @@ TRANSIENT_SQLITE_ERRORS = (
 T = TypeVar('T')
 
 
+def _is_transient_sqlite_error(exc: sqlite3.OperationalError) -> bool:
+    """Return True when the sqlite OperationalError message indicates a retryable lock/open issue."""
+    message = str(exc).lower()
+    return any(token in message for token in TRANSIENT_SQLITE_ERRORS)
+
+
 def connect_sqlite(db_path: str, timeout_s: float = 5.0) -> sqlite3.Connection:
     """Create a SQLite connection with common defaults for the app."""
     return sqlite3.connect(db_path, timeout=timeout_s)
@@ -41,9 +47,7 @@ def execute_with_retry(
                 conn.commit()
                 return rows
         except sqlite3.OperationalError as exc:
-            message = str(exc).lower()
-            is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
-            if not is_transient or attempt >= attempts - 1:
+            if not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
 
@@ -71,9 +75,7 @@ def execute_select_with_columns(
                     column_names = [description[0] for description in (cursor.description or [])]
                 return rows, column_names
         except sqlite3.OperationalError as exc:
-            message = str(exc).lower()
-            is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
-            if not is_transient or attempt >= attempts - 1:
+            if not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
 
@@ -124,9 +126,7 @@ def run_transaction_with_retry(
             if conn is not None:
                 conn.rollback()
 
-            message = str(exc).lower()
-            is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
-            if not is_transient or attempt >= attempts - 1:
+            if not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
         except Exception:
@@ -142,7 +142,23 @@ def run_transaction_with_retry(
     raise sqlite3.OperationalError('Failed to complete SQLite transaction after retries')
 
 
-def read_sql_dataframe(db_path: str, query: str) -> pd.DataFrame:
-    """Read a SQL query into a DataFrame using a managed SQLite connection."""
-    with closing(connect_sqlite(db_path)) as conn:
-        return pd.read_sql_query(query, conn)
+def read_sql_dataframe(
+    db_path: str,
+    query: str,
+    *,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> pd.DataFrame:
+    """Read a SQL query into a DataFrame using a managed SQLite connection with transient retry handling."""
+    attempts = retries + 1
+
+    for attempt in range(attempts):
+        try:
+            with closing(connect_sqlite(db_path)) as conn:
+                return pd.read_sql_query(query, conn)
+        except sqlite3.OperationalError as exc:
+            if not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
+                raise
+            time.sleep(retry_delay_s)
+
+    return pd.DataFrame()
