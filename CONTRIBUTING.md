@@ -55,4 +55,6 @@ Request/option contracts live in `modules/contracts.py`.
 
 - Keep changes incremental and phase-aligned with `IMPLEMENTATION_PLAN.md`.
 - Prefer shared helpers in `modules/db.py` over direct `sqlite3.connect` in feature modules.
+- **Transaction granularity:** each logical write unit (e.g., inserting one parsed report and all related measurements, or applying all edits from one Modify DB submission) must execute inside a single `run_transaction_with_retry` call so retries are atomic and rollback-safe.
+- Use `run_transaction_with_retry` for multi-statement write workflows; keep retries centralized in `modules/db.py` rather than implementing ad-hoc retry loops in feature modules.
 - Add or update tests in `tests/` for each behavior change.

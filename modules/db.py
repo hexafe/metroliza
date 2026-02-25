@@ -89,22 +89,16 @@ def execute_many_with_retry(
     retry_delay_s: float = 0.05,
 ) -> None:
     """Execute many write statements in a single transaction with retry on transient SQLite errors."""
-    attempts = retries + 1
+    def operation(cursor: sqlite3.Cursor) -> None:
+        for query, params in statements:
+            cursor.execute(query, params)
 
-    for attempt in range(attempts):
-        try:
-            with closing(connect_sqlite(db_path)) as conn:
-                with closing(conn.cursor()) as cursor:
-                    for query, params in statements:
-                        cursor.execute(query, params)
-                conn.commit()
-                return
-        except sqlite3.OperationalError as exc:
-            message = str(exc).lower()
-            is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
-            if not is_transient or attempt >= attempts - 1:
-                raise
-            time.sleep(retry_delay_s)
+    run_transaction_with_retry(
+        db_path,
+        operation,
+        retries=retries,
+        retry_delay_s=retry_delay_s,
+    )
 
 
 def run_transaction_with_retry(
@@ -118,18 +112,32 @@ def run_transaction_with_retry(
     attempts = retries + 1
 
     for attempt in range(attempts):
+        conn: sqlite3.Connection | None = None
+        cursor: sqlite3.Cursor | None = None
         try:
-            with closing(connect_sqlite(db_path)) as conn:
-                with closing(conn.cursor()) as cursor:
-                    result = operation(cursor)
-                conn.commit()
-                return result
+            conn = connect_sqlite(db_path)
+            cursor = conn.cursor()
+            result = operation(cursor)
+            conn.commit()
+            return result
         except sqlite3.OperationalError as exc:
+            if conn is not None:
+                conn.rollback()
+
             message = str(exc).lower()
             is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
             if not is_transient or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if conn is not None:
+                conn.close()
 
     raise sqlite3.OperationalError('Failed to complete SQLite transaction after retries')
 
