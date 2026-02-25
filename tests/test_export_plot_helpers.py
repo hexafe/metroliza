@@ -47,6 +47,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (  # noqa: E402
     build_measurement_chart_series_specs,
+    build_measurement_stat_row_specs,
     build_histogram_density_curve_payload,
     build_measurement_stat_formulas,
     build_violin_group_stats_rows,
@@ -103,6 +104,29 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertIn('MIN(', formulas['cpk'])
         self.assertEqual(formulas['nok_total'], '=COUNTIF(E22:E40, ">"&($D$1+$D$2))+COUNTIF(E22:E40, "<"&($D$1+$D$3))')
+
+
+    def test_build_measurement_stat_row_specs_returns_expected_order_and_styles(self):
+        formulas = {
+            'min': '=MIN(C22:C30)',
+            'avg': '=AVERAGE(C22:C30)',
+            'max': '=MAX(C22:C30)',
+            'std': '=STDEV(C22:C30)',
+            'cp': '=1.11',
+            'cpk': '=1.02',
+            'nok_total': '=2',
+            'nok_percent': '=10%',
+            'sample_size': '=20',
+        }
+
+        rows = build_measurement_stat_row_specs(formulas)
+
+        self.assertEqual([row[0] for row in rows], [
+            'MIN', 'AVG', 'MAX', 'STD', 'Cp', 'Cpk', 'NOK number', 'NOK %', 'Sample size'
+        ])
+        self.assertEqual(rows[7][2], 'percent')
+        self.assertTrue(all(style is None for _, _, style in rows[:7]))
+        self.assertIsNone(rows[8][2])
 
     def test_build_measurement_chart_series_specs_uses_range_backed_series(self):
         series = build_measurement_chart_series_specs(
