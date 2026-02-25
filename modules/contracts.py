@@ -17,6 +17,7 @@ class AppPaths:
 
 @dataclass(frozen=True)
 class ExportOptions:
+    preset: str = "fast_diagnostics"
     export_type: str = "line"
     sorting_parameter: str = "date"
     violin_plot_min_samplesize: int = 6
@@ -64,6 +65,7 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
 
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
+_ALLOWED_EXPORT_PRESETS = {"fast_diagnostics", "full_report"}
 _SAMPLE_SORT_ALIASES = {"sample", "sample #", "sample number", "part #", "part number"}
 
 
@@ -91,6 +93,10 @@ def validate_parse_request(request: ParseRequest) -> ParseRequest:
 
 
 def validate_export_options(options: ExportOptions) -> ExportOptions:
+    preset = options.preset.strip().lower() if isinstance(options.preset, str) else ""
+    if preset not in _ALLOWED_EXPORT_PRESETS:
+        preset = "fast_diagnostics"
+
     export_type = options.export_type.strip().lower()
     if export_type not in _ALLOWED_EXPORT_TYPES:
         raise ValueError(f"Unsupported export type '{options.export_type}'.")
@@ -104,6 +110,7 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
     summary_scale = max(0, int(options.summary_plot_scale))
 
     return ExportOptions(
+        preset=preset,
         export_type=export_type,
         sorting_parameter=sorting_parameter,
         violin_plot_min_samplesize=violin_min,
