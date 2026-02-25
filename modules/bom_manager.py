@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from modules.db import (
-    connect_sqlite,
     execute_many_with_retry,
     execute_select_with_columns,
 )
@@ -25,9 +24,6 @@ class BOMManager(QMainWindow):
         self.setWindowTitle("BOM Manager")
         self.setGeometry(200, 200, 600, 400)
         self.database_path = database_path
-
-        # Create a connection to the SQLite database
-        self.conn = connect_sqlite(database_path)
 
         # Create the BOM table if it doesn't exist
         self.create_bom_table()
@@ -312,5 +308,5 @@ class BOMManager(QMainWindow):
             self.save_button.setEnabled(True)
 
     def closeEvent(self, event):
-        # Close the database connection when the application is closed
-        self.conn.close()
+        # No persistent database handle is maintained; call the parent handler.
+        super().closeEvent(event)

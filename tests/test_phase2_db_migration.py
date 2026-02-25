@@ -30,7 +30,8 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
         self.assertIn('from modules.db import (', bom_manager)
         self.assertIn('execute_many_with_retry', bom_manager)
         self.assertIn('execute_select_with_columns', bom_manager)
-
+        self.assertNotIn('connect_sqlite', bom_manager)
+        self.assertNotIn('self.conn =', bom_manager)
 
     def test_cmm_parser_uses_shared_transaction_retry_helper_for_writes(self):
         cmm_parser = self._read('modules/CMMReportParser.py')
@@ -39,7 +40,6 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
         self.assertNotIn('max_retry_attempts =', cmm_parser)
         self.assertIn('was_inserted = run_transaction_with_retry(', cmm_parser)
 
-
     def test_bom_manager_write_paths_use_centralized_helpers(self):
         bom_manager = self._read('modules/bom_manager.py')
 
@@ -47,6 +47,7 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
         self.assertIn('execute_many_with_retry(self.database_path, delete_statements)', bom_manager)
         self.assertNotIn('self.conn.commit()', bom_manager)
         self.assertNotIn('cursor = self.conn.cursor()', bom_manager)
+        self.assertIn('super().closeEvent(event)', bom_manager)
 
     def test_migrated_result_shape_usage_is_tuple_based(self):
         cmm_parser = self._read('modules/CMMReportParser.py')
