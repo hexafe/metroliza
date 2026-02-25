@@ -20,6 +20,7 @@ class ExportOptions:
     preset: str = "fast_diagnostics"
     export_type: str = "line"
     export_target: str = "excel_xlsx"
+    backend_target: str = "excel"
     sorting_parameter: str = "date"
     violin_plot_min_samplesize: int = 6
     summary_plot_scale: int = 0
@@ -68,6 +69,8 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
 _ALLOWED_EXPORT_PRESETS = {"fast_diagnostics", "full_report"}
 _ALLOWED_EXPORT_TARGETS = {"excel_xlsx"}
+_ALLOWED_BACKEND_TARGETS = {"excel", "google"}
+_BACKEND_TARGET_ALIASES = {"google_sheets": "google", "googlesheets": "google"}
 _SAMPLE_SORT_ALIASES = {"sample", "sample #", "sample number", "part #", "part number"}
 
 
@@ -108,6 +111,12 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
     if export_target not in _ALLOWED_EXPORT_TARGETS:
         raise ValueError(f"Unsupported export target '{getattr(options, 'export_target', None)}'.")
 
+    backend_target_raw = getattr(options, "backend_target", ExportOptions.backend_target)
+    backend_target = backend_target_raw.strip().lower() if isinstance(backend_target_raw, str) else ""
+    backend_target = _BACKEND_TARGET_ALIASES.get(backend_target, backend_target)
+    if backend_target not in _ALLOWED_BACKEND_TARGETS:
+        backend_target = ExportOptions.backend_target
+
     sorting_parameter = getattr(options, "sorting_parameter", ExportOptions.sorting_parameter).strip().lower()
     allowed_sorting = {"date"}.union(_SAMPLE_SORT_ALIASES)
     if sorting_parameter not in allowed_sorting:
@@ -120,6 +129,7 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
         preset=preset,
         export_type=export_type,
         export_target=export_target,
+        backend_target=backend_target,
         sorting_parameter=sorting_parameter,
         violin_plot_min_samplesize=violin_min,
         summary_plot_scale=summary_scale,
