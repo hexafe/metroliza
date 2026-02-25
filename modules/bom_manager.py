@@ -269,12 +269,15 @@ class BOMManager(QMainWindow):
         if confirm_dialog == QMessageBox.StandardButton.Yes:
             # Delete the selected BOM entries from the database
             delete_statements = []
-            for item in selected_rows:
-                row = item.row()
+            for row in selected_rows:
                 entry_id = self.bom_table.item(row, 0).data(Qt.UserRole)[0]
                 delete_statements.append(("DELETE FROM bom WHERE id = ?", (entry_id,)))
 
-            execute_many_with_retry(self.database_path, delete_statements)
+            if hasattr(self, "database_path"):
+                execute_many_with_retry(self.database_path, delete_statements)
+            else:
+                for query, params in delete_statements:
+                    self._execute_write(query, params)
 
             # Refresh the table and clear the input fields
             self.refresh_table()
