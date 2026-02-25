@@ -322,6 +322,41 @@ def build_summary_sheet_position_plan(base_col):
     }
 
 
+def build_measurement_chart_format_policy(header):
+    """Return chart formatting and insertion policy for one measurement block."""
+    return {
+        'title': {'name': f'{header}', 'name_font': {'size': 10}},
+        'y_axis': {'major_gridlines': {'visible': False}},
+        'legend': {'position': 'none'},
+        'size': {'width': 240, 'height': 160},
+    }
+
+
+def build_measurement_write_bundle(header, header_group, base_col):
+    """Return the write-plan bundle used for one per-header worksheet section."""
+    header_plan = build_measurement_header_block_plan(header_group, base_col)
+    measurement_plan = header_plan['measurement_plan']
+
+    static_rows = [
+        (0, 'NOM', header_plan['nom']),
+        (1, '+TOL', header_plan['plus_tol']),
+        (2, '-TOL', header_plan['minus_tol']),
+    ]
+
+    data_columns = [
+        (measurement_plan['data_header_row'], base_col, 'Date', header_group['DATE'], None),
+        (measurement_plan['data_header_row'], base_col + 1, 'Sample #', header_group['SAMPLE_NUMBER'], None),
+        (measurement_plan['data_header_row'], base_col + 2, header, header_group['MEAS'].round(3), 'wrap'),
+    ]
+
+    return {
+        'header_plan': header_plan,
+        'measurement_plan': measurement_plan,
+        'static_rows': static_rows,
+        'data_columns': data_columns,
+    }
+
+
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
     if _HAS_SEABORN:
@@ -800,16 +835,12 @@ class ExportDataThread(QThread):
                     header_group = self._sort_header_group(header_group)
                     
                     base_col = col
-                    header_plan = build_measurement_header_block_plan(header_group, base_col)
+                    write_bundle = build_measurement_write_bundle(header, header_group, base_col)
+                    header_plan = write_bundle['header_plan']
 
-                    worksheet.write(0, base_col, 'NOM')
-                    worksheet.write(0, base_col + 1, header_plan['nom'])
-                    
-                    worksheet.write(1, base_col, '+TOL')
-                    worksheet.write(1, base_col + 1, header_plan['plus_tol'])
-                    
-                    worksheet.write(2, base_col, '-TOL')
-                    worksheet.write(2, base_col + 1, header_plan['minus_tol'])
+                    for row_index, row_label, row_value in write_bundle['static_rows']:
+                        worksheet.write(row_index, base_col, row_label)
+                        worksheet.write(row_index, base_col + 1, row_value)
 
                     # Spec-limit anchor points for horizontal limit lines in charts (no labels).
                     worksheet.write(0, base_col + 2, header_plan['usl'])
@@ -817,7 +848,7 @@ class ExportDataThread(QThread):
                     worksheet.write(2, base_col + 2, header_plan['lsl'])
                     worksheet.write(3, base_col + 2, header_plan['lsl'])
                     
-                    measurement_plan = header_plan['measurement_plan']
+                    measurement_plan = write_bundle['measurement_plan']
                     nom_cell = header_plan['nom_cell']
                     usl_cell = header_plan['usl_cell']
                     lsl_cell = header_plan['lsl_cell']
@@ -829,15 +860,12 @@ class ExportDataThread(QThread):
                         else:
                             worksheet.write_formula(row_offset, base_col + 1, formula)
                     
-                    worksheet.write(measurement_plan['data_header_row'], base_col, 'Date')
-                    worksheet.write_column(measurement_plan['data_start_row'], base_col, header_group['DATE'])
-
-                    worksheet.write(measurement_plan['data_header_row'], base_col + 1, 'Sample #')
-                    worksheet.write_column(measurement_plan['data_start_row'], base_col + 1, header_group['SAMPLE_NUMBER'])
-
-                    worksheet.write(measurement_plan['data_header_row'], base_col + 2, header, wrap_format)
-                    rounded_meas = header_group['MEAS'].round(3)
-                    worksheet.write_column(measurement_plan['data_start_row'], base_col + 2, rounded_meas)
+                    for data_header_row, data_col, data_label, data_values, data_style in write_bundle['data_columns']:
+                        if data_style == 'wrap':
+                            worksheet.write(data_header_row, data_col, data_label, wrap_format)
+                        else:
+                            worksheet.write(data_header_row, data_col, data_label)
+                        worksheet.write_column(measurement_plan['data_start_row'], data_col, data_values)
 
                     # Apply conditional formatting to highlight cells greater than USL in red
                     worksheet.conditional_format(
@@ -890,17 +918,11 @@ class ExportDataThread(QThread):
                         chart.add_series(series_spec)
 
                     # Configure the chart properties
-                    chart.set_title({'name': f'{header}', 'name_font': {'size': 10}})
-                    
-                    chart.set_y_axis({
-                        'major_gridlines': {
-                            'visible': False,
-                        }
-                    })
-
-                    chart.set_legend({'position': 'none'})
-                    
-                    chart.set_size({'width': 240, 'height': 160})
+                    chart_policy = build_measurement_chart_format_policy(header)
+                    chart.set_title(chart_policy['title'])
+                    chart.set_y_axis(chart_policy['y_axis'])
+                    chart.set_legend(chart_policy['legend'])
+                    chart.set_size(chart_policy['size'])
 
                     # Insert the chart into the worksheet.
                     worksheet.insert_chart(measurement_plan['chart_insert_row'], col - 3, chart)

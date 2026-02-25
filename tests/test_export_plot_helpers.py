@@ -46,10 +46,12 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (  # noqa: E402
+    build_measurement_chart_format_policy,
     build_measurement_block_plan,
     build_measurement_chart_range_specs,
     build_measurement_chart_series_specs,
     build_measurement_header_block_plan,
+    build_measurement_write_bundle,
     build_measurement_stat_row_specs,
     build_histogram_density_curve_payload,
     build_measurement_stat_formulas,
@@ -214,6 +216,39 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(plan['spec_limit_rows'][0], ('USL_MAX', 10.5))
         self.assertEqual(plan['spec_limit_rows'][2], ('LSL_MAX', 9.8))
         self.assertEqual(plan['stat_rows'][0][1], '=ROUND(MIN(F22:F24), 3)')
+
+    def test_build_measurement_write_bundle_keeps_per_header_layout_contract(self):
+        import pandas as pd
+
+        header_group = pd.DataFrame(
+            {
+                'NOM': [10.0, 10.0],
+                '+TOL': [0.5, 0.5],
+                '-TOL': [-0.2, -0.2],
+                'MEAS': [10.125, 9.995],
+                'DATE': ['2026-02-25', '2026-02-26'],
+                'SAMPLE_NUMBER': ['1', '2'],
+            }
+        )
+
+        bundle = build_measurement_write_bundle('DIA - X', header_group, base_col=6)
+
+        self.assertEqual(bundle['static_rows'], [(0, 'NOM', 10.0), (1, '+TOL', 0.5), (2, '-TOL', -0.2)])
+        self.assertEqual(bundle['measurement_plan']['data_start_row'], 21)
+        self.assertEqual(bundle['data_columns'][0][:4], (20, 6, 'Date', header_group['DATE']))
+        self.assertEqual(bundle['data_columns'][1][:4], (20, 7, 'Sample #', header_group['SAMPLE_NUMBER']))
+        self.assertEqual(bundle['data_columns'][2][0:3], (20, 8, 'DIA - X'))
+        self.assertEqual(bundle['data_columns'][2][4], 'wrap')
+        self.assertEqual(list(bundle['data_columns'][2][3]), [10.125, 9.995])
+
+    def test_build_measurement_chart_format_policy_returns_expected_defaults(self):
+        policy = build_measurement_chart_format_policy('DIA - X')
+
+        self.assertEqual(policy['title']['name'], 'DIA - X')
+        self.assertEqual(policy['title']['name_font']['size'], 10)
+        self.assertEqual(policy['y_axis']['major_gridlines']['visible'], False)
+        self.assertEqual(policy['legend']['position'], 'none')
+        self.assertEqual(policy['size'], {'width': 240, 'height': 160})
 
     def test_build_violin_group_stats_rows_marks_reference_and_computes_pvalues(self):
         labels = ['A', 'B']
