@@ -5,7 +5,12 @@ import unittest
 
 import pandas as pd
 
-from modules.db import execute_select_with_columns, execute_with_retry, read_sql_dataframe
+from modules.db import (
+    execute_many_with_retry,
+    execute_select_with_columns,
+    execute_with_retry,
+    read_sql_dataframe,
+)
 
 
 class TestDbUtils(unittest.TestCase):
@@ -42,6 +47,18 @@ class TestDbUtils(unittest.TestCase):
         )
         self.assertEqual(rows, [(1, 'alpha'), (2, 'beta')])
         self.assertEqual(column_names, ['id', 'name'])
+
+
+    def test_execute_many_with_retry_applies_all_statements_in_single_transaction(self):
+        execute_many_with_retry(
+            self.db_path,
+            [
+                ("INSERT INTO sample (name) VALUES (?)", ("gamma",)),
+                ("UPDATE sample SET name = ? WHERE name = ?", ("alpha-updated", "alpha")),
+            ],
+        )
+        rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
+        self.assertEqual(rows, [('alpha-updated',), ('beta',), ('gamma',)])
 
 
 if __name__ == '__main__':

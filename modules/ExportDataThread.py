@@ -314,17 +314,20 @@ def render_iqr_boxplot(ax, values, labels):
         return
 
     positions = list(range(1, len(values) + 1))
-    ax.boxplot(
-        values,
-        tick_labels=[str(label) for label in labels],
-        whis=1.5,
-        patch_artist=True,
-        boxprops={'facecolor': '#d9e9f5', 'edgecolor': '#4f6f8f', 'linewidth': 0.9},
-        medianprops={'color': '#1f1f1f', 'linewidth': 1.0},
-        whiskerprops={'color': '#4f6f8f', 'linewidth': 0.9},
-        capprops={'color': '#4f6f8f', 'linewidth': 0.9},
-        flierprops={'marker': 'o', 'markersize': 3, 'markerfacecolor': '#b23a48', 'markeredgecolor': '#b23a48', 'alpha': 0.8},
-    )
+    boxplot_kwargs = {
+        'whis': 1.5,
+        'patch_artist': True,
+        'boxprops': {'facecolor': '#d9e9f5', 'edgecolor': '#4f6f8f', 'linewidth': 0.9},
+        'medianprops': {'color': '#1f1f1f', 'linewidth': 1.0},
+        'whiskerprops': {'color': '#4f6f8f', 'linewidth': 0.9},
+        'capprops': {'color': '#4f6f8f', 'linewidth': 0.9},
+        'flierprops': {'marker': 'o', 'markersize': 3, 'markerfacecolor': '#b23a48', 'markeredgecolor': '#b23a48', 'alpha': 0.8},
+    }
+    label_values = [str(label) for label in labels]
+    try:
+        ax.boxplot(values, tick_labels=label_values, **boxplot_kwargs)
+    except TypeError:
+        ax.boxplot(values, labels=label_values, **boxplot_kwargs)
     ax.set_xticks(positions)
     ax.set_xticklabels([str(label) for label in labels], rotation=45, ha='right')
 

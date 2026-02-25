@@ -78,6 +78,33 @@ def execute_select_with_columns(
     return [], []
 
 
+
+def execute_many_with_retry(
+    db_path: str,
+    statements: list[tuple[str, tuple[Any, ...]]],
+    *,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> None:
+    """Execute many write statements in a single transaction with retry on transient SQLite errors."""
+    attempts = retries + 1
+
+    for attempt in range(attempts):
+        try:
+            with closing(connect_sqlite(db_path)) as conn:
+                cursor = conn.cursor()
+                for query, params in statements:
+                    cursor.execute(query, params)
+                conn.commit()
+                return
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            is_transient = any(token in message for token in TRANSIENT_SQLITE_ERRORS)
+            if not is_transient or attempt >= attempts - 1:
+                raise
+            time.sleep(retry_delay_s)
+
+
 def read_sql_dataframe(db_path: str, query: str) -> pd.DataFrame:
     """Read a SQL query into a DataFrame using a managed SQLite connection."""
     with closing(connect_sqlite(db_path)) as conn:
