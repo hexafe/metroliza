@@ -251,7 +251,13 @@ class BOMManager(QMainWindow):
         self.selected_entry_id = None
 
     def delete_bom_entry(self):
-        selected_rows = self.bom_table.selectedItems()
+        selection_model = self.bom_table.selectionModel()
+        selected_row_indexes = selection_model.selectedRows() if selection_model else []
+
+        if selected_row_indexes:
+            selected_rows = sorted({index.row() for index in selected_row_indexes})
+        else:
+            selected_rows = sorted({item.row() for item in self.bom_table.selectedItems()})
 
         if not selected_rows:
             QMessageBox.warning(self, "No Selection", "Please select a row to delete.")
