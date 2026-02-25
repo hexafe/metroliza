@@ -166,6 +166,21 @@ def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cel
     }
 
 
+def build_measurement_stat_row_specs(stat_formulas):
+    """Return ordered worksheet row specs for measurement statistics."""
+    return [
+        ('MIN', stat_formulas['min'], None),
+        ('AVG', stat_formulas['avg'], None),
+        ('MAX', stat_formulas['max'], None),
+        ('STD', stat_formulas['std'], None),
+        ('Cp', stat_formulas['cp'], None),
+        ('Cpk', stat_formulas['cpk'], None),
+        ('NOK number', stat_formulas['nok_total'], None),
+        ('NOK %', stat_formulas['nok_percent'], 'percent'),
+        ('Sample size', stat_formulas['sample_size'], None),
+    ]
+
+
 def build_measurement_chart_series_specs(
     *,
     header,
@@ -741,32 +756,13 @@ class ExportDataThread(QThread):
                         lsl_value=LSL,
                     )
 
-                    worksheet.write(3, base_col, 'MIN')
-                    worksheet.write_formula(3, base_col + 1, stat_formulas['min'])
-
-                    worksheet.write(4, base_col, 'AVG')
-                    worksheet.write_formula(4, base_col + 1, stat_formulas['avg'])
-
-                    worksheet.write(5, base_col, 'MAX')
-                    worksheet.write_formula(5, base_col + 1, stat_formulas['max'])
-
-                    worksheet.write(6, base_col, 'STD')
-                    worksheet.write_formula(6, base_col + 1, stat_formulas['std'])
-
-                    worksheet.write(7, base_col, 'Cp')
-                    worksheet.write_formula(7, base_col + 1, stat_formulas['cp'])
-
-                    worksheet.write(8, base_col, 'Cpk')
-                    worksheet.write_formula(8, base_col + 1, stat_formulas['cpk'])
-
-                    worksheet.write(9, base_col, "NOK number")
-                    worksheet.write_formula(9, base_col + 1, stat_formulas['nok_total'])
-
-                    worksheet.write(10, base_col, "NOK %")
-                    worksheet.write_formula(10, base_col + 1, stat_formulas['nok_percent'], percent_format)
-
-                    worksheet.write(11, base_col, "Sample size")
-                    worksheet.write_formula(11, base_col + 1, stat_formulas['sample_size'])
+                    stat_rows = build_measurement_stat_row_specs(stat_formulas)
+                    for row_offset, (label, formula, cell_style) in enumerate(stat_rows, start=3):
+                        worksheet.write(row_offset, base_col, label)
+                        if cell_style == 'percent':
+                            worksheet.write_formula(row_offset, base_col + 1, formula, percent_format)
+                        else:
+                            worksheet.write_formula(row_offset, base_col + 1, formula)
                     
                     worksheet.write(20, base_col, 'Date')
                     worksheet.write_column(21, base_col, header_group['DATE'])
