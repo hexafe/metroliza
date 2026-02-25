@@ -47,6 +47,7 @@ from modules.ExportDataThread import (  # noqa: E402
     all_measurements_within_limits,
     build_spec_limit_anchor_rows,
     build_sheet_series_range,
+    build_summary_sheet_position_plan,
     build_histogram_table_data,
     build_sparse_unique_labels,
     build_trend_plot_payload,
@@ -150,6 +151,17 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(payload['x'], [0, 1, 2, 3])
         self.assertEqual(payload['y'], [1.0, 1.1, 1.2, 1.3])
         self.assertEqual(payload['labels'], ['1', '', '2', ''])
+
+    def test_build_summary_sheet_position_plan_matches_existing_column_block_math(self):
+        first_block = build_summary_sheet_position_plan(3)
+        second_block = build_summary_sheet_position_plan(6)
+
+        self.assertEqual(first_block['row'], 0)
+        self.assertEqual(first_block['header_row'], 0)
+        self.assertEqual(first_block['image_row'], 1)
+        self.assertEqual(second_block['row'], 20)
+        self.assertEqual(second_block['header_row'], 20)
+        self.assertEqual(second_block['image_row'], 21)
 
 if __name__ == '__main__':
     unittest.main()
