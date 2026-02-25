@@ -4,6 +4,15 @@ from modules.FilterDialog import FilterDialog
 from modules.DataGrouping import DataGrouping
 from modules.CustomLogger import CustomLogger
 from modules.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_options, validate_paths
+from modules.export_preset_utils import (
+    build_export_options_for_preset,
+    get_export_preset_id_for_label,
+    get_export_preset_ids,
+    get_export_preset_label,
+    load_export_dialog_config,
+    migrate_export_dialog_config,
+    save_export_dialog_config,
+)
 from PyQt6.QtCore import QSize, QTemporaryFile, Qt
 from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import(
@@ -21,6 +30,21 @@ from PyQt6.QtWidgets import(
 )
 import base64
 from pathlib import Path
+
+
+def build_export_options_payload(selected_preset, export_type, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, generate_summary_sheet):
+    preset_options = build_export_options_for_preset(selected_preset)
+    return ExportOptions(
+        preset=selected_preset,
+        export_type=export_type or preset_options['export_type'],
+        sorting_parameter=sorting_parameter or preset_options['sorting_parameter'],
+        violin_plot_min_samplesize=int(violin_input if violin_input not in (None, "") else preset_options['violin_plot_min_samplesize']),
+        summary_plot_scale=int(summary_scale_input if summary_scale_input not in (None, "") else preset_options['summary_plot_scale']),
+        hide_ok_results=bool(hide_ok_results),
+        generate_summary_sheet=bool(generate_summary_sheet),
+    )
+
+
 
 
 class ExportDialog(QDialog):
@@ -46,9 +70,44 @@ class ExportDialog(QDialog):
         
         self.filter_window = None
         self.grouping_window = None
+        self.config_path = Path.home() / '.metroliza' / '.export_dialog_config.json'
+        self.config = self._load_dialog_config()
 
         self.init_widgets()
         self.init_layout()
+
+    def _load_dialog_config(self):
+        try:
+            config = load_export_dialog_config(self.config_path)
+            migrated, changed = migrate_export_dialog_config(config)
+            if changed:
+                save_export_dialog_config(self.config_path, migrated)
+            return migrated
+        except Exception:
+            return {'selected_preset': 'fast_diagnostics'}
+
+    def _save_dialog_config(self):
+        try:
+            selected_label = self.preset_combobox.currentText()
+            selected_preset = get_export_preset_id_for_label(selected_label)
+            self.config['selected_preset'] = selected_preset
+            save_export_dialog_config(self.config_path, self.config)
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def apply_selected_preset(self):
+        try:
+            selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
+            preset_options = build_export_options_for_preset(selected_preset)
+            self.export_type_combobox.setCurrentText(preset_options['export_type'].title())
+            self.sort_measurements_combobox.setCurrentText('Date' if preset_options['sorting_parameter'] == 'date' else 'Sample #')
+            self.violin_plot_min_samplesize.setText(str(preset_options['violin_plot_min_samplesize']))
+            self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
+            self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))
+            self.generate_summary_sheet_checkbox.setChecked(bool(preset_options['generate_summary_sheet']))
+            self._save_dialog_config()
+        except Exception as e:
+            self.log_and_exit(e)
 
     def init_widgets(self):
         try:
@@ -100,6 +159,15 @@ class ExportDialog(QDialog):
                 self.excel_file_text_label = QLabel("None selected")
                 self.export_button.setEnabled(False)
                 
+            # Export preset selector
+            self.preset_label = QLabel("Export preset:")
+            self.preset_combobox = QComboBox()
+            for preset_id in get_export_preset_ids():
+                self.preset_combobox.addItem(get_export_preset_label(preset_id))
+            selected_preset = self.config.get('selected_preset', 'fast_diagnostics')
+            self.preset_combobox.setCurrentText(get_export_preset_label(selected_preset))
+            self.preset_combobox.currentTextChanged.connect(lambda _: self.apply_selected_preset())
+
             # Add dropdown list for chart type
             self.export_type_label = QLabel("Chart type:")
             self.export_type_combobox = QComboBox()
@@ -171,6 +239,8 @@ class ExportDialog(QDialog):
             self.generate_summary_sheet_checkbox.setToolTip(
                 "When enabled, additional sheets will be created for each reference with additional graphs (grouped scatter/violin, histograms with basic statistics)"
             )
+
+            self.apply_selected_preset()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -199,21 +269,24 @@ class ExportDialog(QDialog):
 
             self.layout.addWidget(self.export_button, 14, 0, 1, 2)
 
-            self.layout.addWidget(self.export_type_label, 15, 0)
-            self.layout.addWidget(self.export_type_combobox, 15, 1)
+            self.layout.addWidget(self.preset_label, 15, 0)
+            self.layout.addWidget(self.preset_combobox, 15, 1)
+
+            self.layout.addWidget(self.export_type_label, 16, 0)
+            self.layout.addWidget(self.export_type_combobox, 16, 1)
             
-            self.layout.addWidget(self.sort_measurements_label, 16, 0)
-            self.layout.addWidget(self.sort_measurements_combobox, 16, 1)
+            self.layout.addWidget(self.sort_measurements_label, 17, 0)
+            self.layout.addWidget(self.sort_measurements_combobox, 17, 1)
             
-            self.layout.addWidget(self.violin_plot_min_samplesize_label, 17, 0)
-            self.layout.addWidget(self.violin_plot_min_samplesize, 17, 1)
+            self.layout.addWidget(self.violin_plot_min_samplesize_label, 18, 0)
+            self.layout.addWidget(self.violin_plot_min_samplesize, 18, 1)
             
-            self.layout.addWidget(self.summary_plot_scale_label, 18, 0)
-            self.layout.addWidget(self.summary_plot_scale, 18, 1)
+            self.layout.addWidget(self.summary_plot_scale_label, 19, 0)
+            self.layout.addWidget(self.summary_plot_scale, 19, 1)
             
-            self.layout.addWidget(self.hide_ok_results_checkbox, 19, 0)
+            self.layout.addWidget(self.hide_ok_results_checkbox, 20, 0)
             
-            self.layout.addWidget(self.generate_summary_sheet_checkbox, 19, 1)
+            self.layout.addWidget(self.generate_summary_sheet_checkbox, 20, 1)
             
             self.setLayout(self.layout)
         except Exception as e:
@@ -429,12 +502,17 @@ class ExportDialog(QDialog):
             violin_input = self.violin_plot_min_samplesize.text() or "6"
             summary_scale_input = self.summary_plot_scale.text() or "0"
 
+            selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
+            self.config['selected_preset'] = selected_preset
+            save_export_dialog_config(self.config_path, self.config)
+
             options = validate_export_options(
-                ExportOptions(
+                build_export_options_payload(
+                    selected_preset=selected_preset,
                     export_type=self.export_type_combobox.currentText(),
                     sorting_parameter=self.sort_measurements_combobox.currentText(),
-                    violin_plot_min_samplesize=int(violin_input),
-                    summary_plot_scale=int(summary_scale_input),
+                    violin_input=violin_input,
+                    summary_scale_input=summary_scale_input,
                     hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
                     generate_summary_sheet=self.generate_summary_sheet_checkbox.isChecked(),
                 )
