@@ -7,22 +7,23 @@ import numpy as np
 
 matplotlib.use('Agg')
 
-import matplotlib.pyplot as plt
 import importlib.util
+from io import BytesIO
+
+import matplotlib.pyplot as plt
+from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from scipy.stats import norm, ttest_ind
+from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
+
+from modules.contracts import ExportRequest, validate_export_request
+from modules.CustomLogger import CustomLogger
+from modules.db import execute_select_with_columns, read_sql_dataframe
+from modules.excel_sheet_utils import unique_sheet_name
+from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
 if _HAS_SEABORN:
     import seaborn as sns
-from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
-from io import BytesIO
-from modules.CustomLogger import CustomLogger
-import xlsxwriter
-from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
-from modules.excel_sheet_utils import unique_sheet_name
-from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
-from modules.contracts import ExportRequest, validate_export_request
-from modules.db import execute_select_with_columns, read_sql_dataframe
 
 
 def build_export_dataframe(data, column_names):
@@ -315,7 +316,7 @@ def render_iqr_boxplot(ax, values, labels):
     positions = list(range(1, len(values) + 1))
     ax.boxplot(
         values,
-        labels=[str(label) for label in labels],
+        tick_labels=[str(label) for label in labels],
         whis=1.5,
         patch_artist=True,
         boxprops={'facecolor': '#d9e9f5', 'edgecolor': '#4f6f8f', 'linewidth': 0.9},
@@ -657,8 +658,6 @@ class ExportDataThread(QThread):
                     worksheet.write(3, base_col + 2, LSL)
                     
                     data_range_y = f'{xl_col_to_name(base_col + 2)}22:{xl_col_to_name(base_col + 2)}{len(header_group) + 21}'
-                    data_range_x = f'{xl_col_to_name(base_col + 1)}22:{xl_col_to_name(base_col + 1)}{len(header_group) + 21}'
-                    
                     summary_col = xl_col_to_name(base_col + 1)
                     stat_formulas = build_measurement_stat_formulas(
                         summary_col=summary_col,
@@ -717,7 +716,7 @@ class ExportDataThread(QThread):
                     
                     # Apply conditional formatting to highlight if NOK% > 0
                     worksheet.conditional_format(10, base_col + 1, 10, base_col + 1,
-                                                {'type': 'cell', 'criteria': '>', 'value': f'0', 'format': red_format})                
+                                                {'type': 'cell', 'criteria': '>', 'value': '0', 'format': red_format})                
                     
                     col += 3
 
