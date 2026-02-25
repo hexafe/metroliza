@@ -26,7 +26,7 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
         self.assertNotIn('sqlite3.connect(', cmm_parser)
         self.assertNotIn('sqlite3.connect(', bom_manager)
 
-        self.assertIn('from modules.db import connect_sqlite, execute_with_retry, run_transaction_with_retry', cmm_parser)
+        self.assertIn('from modules.db import execute_with_retry, run_transaction_with_retry', cmm_parser)
         self.assertIn('from modules.db import (', bom_manager)
         self.assertIn('execute_many_with_retry', bom_manager)
         self.assertIn('execute_select_with_columns', bom_manager)
@@ -37,7 +37,7 @@ class TestPhase2DbMigrationGuardrails(unittest.TestCase):
 
         self.assertNotIn('while retry_attempt <=', cmm_parser)
         self.assertNotIn('max_retry_attempts =', cmm_parser)
-        self.assertIn('run_transaction_with_retry(self.database, insert_report_and_measurements', cmm_parser)
+        self.assertIn('was_inserted = run_transaction_with_retry(', cmm_parser)
 
 
     def test_bom_manager_write_paths_use_centralized_helpers(self):

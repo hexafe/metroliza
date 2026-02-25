@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas
 
 from modules.CustomLogger import CustomLogger
-from modules.db import connect_sqlite, execute_with_retry, run_transaction_with_retry
+from modules.db import execute_with_retry, run_transaction_with_retry
 
 
 def _resolve_pymupdf_backend_module() -> str | None:
@@ -558,82 +558,85 @@ class CMMReportParser:
                 print(f"Report ({self.pdf_file_name}) - no measurements data available. Skipping database insertion.")
                 return
 
-            with connect_sqlite(self.database) as conn:
-                with conn:
-                    cursor = conn.cursor()
+            def create_tables_and_insert_report(transaction_cursor):
+                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS MEASUREMENTS (
+                                    ID INTEGER PRIMARY KEY,
+                                    AX TEXT,
+                                    NOM REAL,
+                                    "+TOL" REAL,
+                                    "-TOL" REAL,
+                                    BONUS REAL,
+                                    MEAS REAL,
+                                    DEV REAL,
+                                    OUTTOL REAL,
+                                    HEADER TEXT,
+                                    REPORT_ID INTEGER,
+                                    FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
+                                )''')
 
-                    # Create MEASUREMENTS table if it doesn't exist
-                    cursor.execute('''CREATE TABLE IF NOT EXISTS MEASUREMENTS (
-                                        ID INTEGER PRIMARY KEY,
-                                        AX TEXT,
-                                        NOM REAL,
-                                        "+TOL" REAL,
-                                        "-TOL" REAL,
-                                        BONUS REAL,
-                                        MEAS REAL,
-                                        DEV REAL,
-                                        OUTTOL REAL,
-                                        HEADER TEXT,
-                                        REPORT_ID INTEGER,
-                                        FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
-                                    )''')
+                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS REPORTS (
+                                    ID INTEGER PRIMARY KEY,
+                                    REFERENCE TEXT,
+                                    FILELOC TEXT,
+                                    FILENAME TEXT,
+                                    DATE TEXT,
+                                    SAMPLE_NUMBER TEXT
+                                )''')
 
-                    # Create REPORTS table if it doesn't exist
-                    cursor.execute('''CREATE TABLE IF NOT EXISTS REPORTS (
-                                        ID INTEGER PRIMARY KEY,
-                                        REFERENCE TEXT,
-                                        FILELOC TEXT,
-                                        FILENAME TEXT,
-                                        DATE TEXT,
-                                        SAMPLE_NUMBER TEXT
-                                    )''')
+                transaction_cursor.execute(
+                    'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
+                    (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number),
+                )
+                count_rows = transaction_cursor.fetchall()
+                count = count_rows[0][0] if count_rows else 0
 
-                    # Check if the report already exists in the database
-                    count_rows = execute_with_retry(
-                        self.database,
-                        'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
-                        (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number),
-                    )
-                    count = count_rows[0][0] if count_rows else 0
+                if count > 0:
+                    return False
 
-                    if count > 0:
-                        print(f'Report ({self.pdf_file_name}) already exists in the database.')
-                        return
+                transaction_cursor.execute(
+                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                    (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number),
+                )
+                report_id = transaction_cursor.lastrowid
 
-                    def insert_report_and_measurements(transaction_cursor):
-                        transaction_cursor.execute(
-                            'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                            (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number),
-                        )
-                        report_id = transaction_cursor.lastrowid
-
-                        for lst in self.pdf_blocks_text:
-                            table_name = ""
-                            for sublist in lst[0]:
-                                if isinstance(sublist, str):
-                                    table_name += sublist
+                for lst in self.pdf_blocks_text:
+                    table_name = ""
+                    for sublist in lst[0]:
+                        if isinstance(sublist, str):
+                            table_name += sublist
+                            table_name += ", "
+                        else:
+                            for item in sublist:
+                                if isinstance(item, str):
+                                    table_name += item
                                     table_name += ", "
-                                else:
-                                    for item in sublist:
-                                        if isinstance(item, str):
-                                            table_name += item
-                                            table_name += ", "
 
-                            table_name = table_name.replace('"', '')
-                            table_name = table_name[:-2]
+                    table_name = table_name.replace('"', '')
+                    table_name = table_name[:-2]
 
-                            rows = [
-                                (None, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], table_name, report_id)
-                                for row in lst[1]
-                            ]
-                            transaction_cursor.executemany(
-                                'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                                rows,
-                            )
+                    rows = [
+                        (None, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], table_name, report_id)
+                        for row in lst[1]
+                    ]
+                    transaction_cursor.executemany(
+                        'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        rows,
+                    )
 
-                    run_transaction_with_retry(self.database, insert_report_and_measurements, retries=4, retry_delay_s=1)
-                    print(f'Report ({self.pdf_file_name}) - measurements inserted into the database.')
-                    return
+                return True
+
+            was_inserted = run_transaction_with_retry(
+                self.database,
+                create_tables_and_insert_report,
+                retries=4,
+                retry_delay_s=1,
+            )
+            if was_inserted:
+                print(f'Report ({self.pdf_file_name}) - measurements inserted into the database.')
+                return
+
+            print(f'Report ({self.pdf_file_name}) already exists in the database.')
+            return
         except Exception as e:
             self.log_and_exit(e)
 
