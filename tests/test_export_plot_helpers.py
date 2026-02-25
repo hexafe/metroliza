@@ -235,8 +235,13 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual(bundle['static_rows'], [(0, 'NOM', 10.0), (1, '+TOL', 0.5), (2, '-TOL', -0.2)])
         self.assertEqual(bundle['measurement_plan']['data_start_row'], 21)
-        self.assertEqual(bundle['data_columns'][0][:4], (20, 6, 'Date', header_group['DATE']))
-        self.assertEqual(bundle['data_columns'][1][:4], (20, 7, 'Sample #', header_group['SAMPLE_NUMBER']))
+
+        self.assertEqual(bundle['data_columns'][0][0:3], (20, 6, 'Date'))
+        pd.testing.assert_series_equal(bundle['data_columns'][0][3], header_group['DATE'])
+
+        self.assertEqual(bundle['data_columns'][1][0:3], (20, 7, 'Sample #'))
+        pd.testing.assert_series_equal(bundle['data_columns'][1][3], header_group['SAMPLE_NUMBER'])
+
         self.assertEqual(bundle['data_columns'][2][0:3], (20, 8, 'DIA - X'))
         self.assertEqual(bundle['data_columns'][2][4], 'wrap')
         self.assertEqual(list(bundle['data_columns'][2][3]), [10.125, 9.995])
