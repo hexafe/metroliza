@@ -182,6 +182,63 @@ def build_measurement_stat_row_specs(stat_formulas):
     ]
 
 
+def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    """Return worksheet range specs shared by chart backend helpers."""
+    return {
+        'data_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
+        'data_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column),
+        'usl_y': build_sheet_series_range(sheet_name, 0, 1, y_column),
+        'lsl_y': build_sheet_series_range(sheet_name, 2, 3, y_column),
+        'limit_x': build_sheet_series_range(sheet_name, first_data_row, first_data_row + 1, x_column),
+    }
+
+
+def build_measurement_header_block_plan(header_group, base_col):
+    """Build a stable per-header worksheet write plan used by export writers."""
+    limits = resolve_nominal_and_limits(header_group)
+    nom = limits['nom']
+    usl = limits['usl']
+    lsl = limits['lsl']
+
+    measurement_plan = build_measurement_block_plan(base_col=base_col, sample_size=len(header_group))
+    summary_col_name = xl_col_to_name(measurement_plan['summary_column'])
+
+    nom_cell = f'${summary_col_name}$1'
+    usl_cell = f'${summary_col_name}$2'
+    lsl_cell = f'${summary_col_name}$3'
+
+    stat_formulas = build_measurement_stat_formulas(
+        summary_col=summary_col_name,
+        data_range_y=measurement_plan['data_range_y'],
+        nom_cell=nom_cell,
+        usl_cell=usl_cell,
+        lsl_cell=lsl_cell,
+        nom_value=nom,
+        lsl_value=lsl,
+    )
+
+    plus_tol = round(usl - nom, 3)
+    minus_tol = round(lsl - nom, 3)
+
+    return {
+        'nom': nom,
+        'plus_tol': plus_tol,
+        'minus_tol': minus_tol,
+        'usl': usl,
+        'lsl': lsl,
+        'first_data_row': measurement_plan['data_start_row'],
+        'last_data_row': measurement_plan['last_data_row'],
+        'summary_column': measurement_plan['summary_column'],
+        'y_column': measurement_plan['y_column'],
+        'nom_cell': nom_cell,
+        'usl_cell': usl_cell,
+        'lsl_cell': lsl_cell,
+        'stat_rows': build_measurement_stat_row_specs(stat_formulas),
+        'spec_limit_rows': build_spec_limit_anchor_rows(usl, lsl),
+        'measurement_plan': measurement_plan,
+    }
+
+
 def build_measurement_chart_series_specs(
     *,
     header,
@@ -743,25 +800,15 @@ class ExportDataThread(QThread):
                     worksheet.write(2, base_col + 1, header_plan['minus_tol'])
 
                     # Spec-limit anchor points for horizontal limit lines in charts (no labels).
-                    worksheet.write(0, base_col + 2, USL)
-                    worksheet.write(1, base_col + 2, USL)
-                    worksheet.write(2, base_col + 2, LSL)
-                    worksheet.write(3, base_col + 2, LSL)
+                    worksheet.write(0, base_col + 2, header_plan['usl'])
+                    worksheet.write(1, base_col + 2, header_plan['usl'])
+                    worksheet.write(2, base_col + 2, header_plan['lsl'])
+                    worksheet.write(3, base_col + 2, header_plan['lsl'])
                     
-                    measurement_plan = build_measurement_block_plan(
-                        base_col=base_col,
-                        sample_size=len(header_group),
-                    )
-                    summary_col = xl_col_to_name(measurement_plan['summary_column'])
-                    stat_formulas = build_measurement_stat_formulas(
-                        summary_col=summary_col,
-                        data_range_y=measurement_plan['data_range_y'],
-                        nom_cell=NOM_cell,
-                        usl_cell=USL_cell,
-                        lsl_cell=LSL_cell,
-                        nom_value=nom,
-                        lsl_value=LSL,
-                    )
+                    measurement_plan = header_plan['measurement_plan']
+                    nom_cell = header_plan['nom_cell']
+                    usl_cell = header_plan['usl_cell']
+                    lsl_cell = header_plan['lsl_cell']
 
                     for row_offset, (label, formula, cell_style) in enumerate(header_plan['stat_rows'], start=3):
                         worksheet.write(row_offset, base_col, label)
@@ -786,7 +833,7 @@ class ExportDataThread(QThread):
                         measurement_plan['y_column'],
                         measurement_plan['last_data_row'],
                         measurement_plan['y_column'],
-                        {'type': 'cell', 'criteria': '>', 'value': f'({NOM_cell}+{USL_cell})', 'format': red_format},
+                        {'type': 'cell', 'criteria': '>', 'value': f'({nom_cell}+{usl_cell})', 'format': red_format},
                     )
 
                     # Apply conditional formatting to highlight cells lower than LSL in red
@@ -795,7 +842,7 @@ class ExportDataThread(QThread):
                         measurement_plan['y_column'],
                         measurement_plan['last_data_row'],
                         measurement_plan['y_column'],
-                        {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format},
+                        {'type': 'cell', 'criteria': '<', 'value': f'({nom_cell}+{lsl_cell})', 'format': red_format},
                     )
 
                     # Apply conditional formatting to highlight if NOK% > 0

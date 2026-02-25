@@ -47,6 +47,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (  # noqa: E402
     build_measurement_block_plan,
+    build_measurement_chart_range_specs,
     build_measurement_chart_series_specs,
     build_measurement_header_block_plan,
     build_measurement_stat_row_specs,
