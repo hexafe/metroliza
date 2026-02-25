@@ -163,6 +163,7 @@ Recent performance-focused changes include:
 - CSV Summary includes an in-dialog control to clear saved presets when changing data families or starting fresh.
 - CSV Summary cancellation now cleans up partial workbook outputs and is covered by regression tests.
 - CSV Summary performance tuning now applies an adaptive default (quick-look for large column selections) and warns when a run is configured to generate a high chart count, with an in-flow one-click switch to quicker mode.
+- Modify DB updates are now batched and committed transactionally via shared retry-aware DB helpers, improving reliability under transient SQLite lock contention.
 
 For very large databases, prefer narrow filter scopes before export to reduce Excel-writing and charting time.
 

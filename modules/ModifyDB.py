@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from modules.CustomLogger import CustomLogger
-from modules.db import connect_sqlite, execute_select_with_columns
+from modules.db import execute_many_with_retry, execute_select_with_columns
 
 
 class ModifyDB(QDialog):
@@ -194,17 +194,16 @@ class ModifyDB(QDialog):
 
     def apply_changes(self):
         try:
-            with connect_sqlite(self.db_file) as conn:
-                cursor = conn.cursor()
+            statements = []
+            statements.extend(self.build_update_statements(self.reference_table, "REPORTS", "REFERENCE"))
+            statements.extend(self.build_update_statements(self.part_number_table, "REPORTS", "SAMPLE_NUMBER"))
+            statements.extend(self.build_update_statements(self.header_table, "MEASUREMENTS", "HEADER"))
 
-                # Update reference values
-                self.update_table_values(cursor, conn, self.reference_table, "REPORTS", "REFERENCE")
+            if not statements:
+                QMessageBox.information(self, "No changes", "No changes were detected.")
+                return
 
-                # Update part number values
-                self.update_table_values(cursor, conn, self.part_number_table, "REPORTS", "SAMPLE_NUMBER")
-
-                # Update header values
-                self.update_table_values(cursor, conn, self.header_table, "MEASUREMENTS", "HEADER")
+            execute_many_with_retry(self.db_file, statements)
 
             # Display a message box with confirmation
             QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
@@ -214,15 +213,17 @@ class ModifyDB(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
-    def update_table_values(self, cursor, conn, table_widget, table_name, column_name):
+    def build_update_statements(self, table_widget, table_name, column_name):
+        statements = []
         for row in range(table_widget.rowCount()):
             new_value = str(table_widget.item(row, 0).text())
             old_value = str(table_widget.item(row, 0).data(Qt.ItemDataRole.UserRole))
 
             if new_value != old_value:
                 query = f"UPDATE {table_name} SET {column_name} = ? WHERE {column_name} = ?"
-                cursor.execute(query, (new_value, old_value))
-                conn.commit()
+                statements.append((query, (new_value, old_value)))
+
+        return statements
 
     def undo_last_change(self):
         try:

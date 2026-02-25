@@ -37,7 +37,7 @@ jobs:
       - name: Smoke imports
         env:
           PYTHONPATH: .
-        run: python -c "import modules.contracts; import modules.db; import modules.excel_sheet_utils; import modules.stats_utils"
+        run: python -c "import modules.contracts; import modules.db; from modules.db import execute_many_with_retry; import modules.excel_sheet_utils; import modules.stats_utils"
 
   windows-smoke:
     runs-on: windows-latest
