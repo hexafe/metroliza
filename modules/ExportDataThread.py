@@ -13,7 +13,7 @@ from io import BytesIO
 import matplotlib.pyplot as plt
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from scipy.stats import norm, ttest_ind
-from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell, xl_range
+from xlsxwriter.utility import xl_col_to_name, xl_range
 
 from modules.contracts import ExportRequest, validate_export_request
 from modules.CustomLogger import CustomLogger
@@ -307,6 +307,18 @@ def build_measurement_block_plan(*, base_col, sample_size):
         ),
         'nok_percent_row': 10,
         'chart_insert_row': 12,
+    }
+
+
+def build_summary_sheet_position_plan(base_col):
+    """Return summary sheet anchors aligned with the 3-column measurement block layout."""
+    block_index = max((base_col - 3) // 3, 0)
+    row = block_index * 20
+    return {
+        'row': row,
+        'column': 0,
+        'header_row': row,
+        'image_row': row + 1,
     }
 
 
