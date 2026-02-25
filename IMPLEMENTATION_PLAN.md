@@ -332,22 +332,24 @@ Recent completion updates:
 3. Track and prioritize Google Sheets roadmap execution (GS2+ backend split).
 
 ### Audit-backed next implementation steps (next 2-3 PRs)
+Audit date: 2026-02-25.
+
 Based on the latest repository audit, these are the highest-value next slices to execute:
 
-1. **Phase 2 / DB consolidation PR: remove remaining ad-hoc retry/write loops in parser path.**
-   - `modules/CMMReportParser.py` still contains a manual retry loop around `cursor.execute` + `executemany` with `sqlite3.OperationalError` handling.
-   - Replace this with `modules/db.py` helper-driven transactional write APIs so lock/backoff behavior is centralized and testable.
-   - Add/extend tests to assert parser write path no longer uses inline retry loops and remains duplicate-safe.
+1. **Phase 2 / DB consolidation PR: finish remaining DB helper migration outside parser path.**
+   - Parser paths already use shared retry helpers (`execute_with_retry` for statements and `run_transaction_with_retry` for transactional units).
+   - Continue migrating remaining direct `sqlite3` call-sites in other modules onto `modules/db.py` helpers so retry/timeout behavior is centralized.
+   - Add/extend tests to assert migrated modules use helper-backed DB paths and preserve existing duplicate-safe behavior.
 
-2. **Phase 2 / Export worker decomposition PR: split `ExportDataThread` worksheet+chart writers into pure payload builders + thin renderer.**
+2. **Phase 2 / transactional consistency PR: align read/write transaction boundaries across parse/export flows.**
+   - Standardize transactional write sections on `run_transaction_with_retry` and remove mixed transaction styles that can drift across modules.
+   - Ensure shared lock/backoff semantics are applied consistently when parse and export flows touch the same database.
+   - Add targeted regression checks for locked-db retry behavior and transaction rollback integrity.
+
+3. **Phase 2 / Export worker decomposition PR: target large worksheet/chart writer paths first.**
    - `modules/ExportDataThread.py` remains the largest hot-path module and still combines orchestration, SQL loading, payload shaping, and worksheet/chart rendering.
-   - Prioritize extraction of: (a) header-block write plan objects, (b) chart series/range spec builders, (c) summary-sheet row layout planners.
+   - Prioritize extraction of high-complexity writer sections: (a) header-block write plan objects, (b) chart series/range spec builders, (c) summary-sheet row layout planners.
    - Maintain existing output parity by snapshot-style tests over generated worksheet ranges/series configuration.
-
-3. **Phase GS2 kickoff PR: introduce backend interface skeleton without behavior change.**
-   - Add backend abstraction interfaces/classes (`ExcelExportBackend` first) and route existing Excel write calls through the abstraction.
-   - Keep default export target at `excel_xlsx`; do not enable Google Sheets rendering yet.
-   - This de-risks GS3+ by separating data/layout planning from output mechanics before API integration.
 
 ### Suggested acceptance checks for the next slice
 - Parser+DB migration checks: parser write transactionality, duplicate detection, locked-db retry behavior, and regression tests for existing parse happy path.
