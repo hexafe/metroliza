@@ -19,6 +19,7 @@ from modules.contracts import ExportRequest, validate_export_request
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_select_with_columns, read_sql_dataframe
 from modules.excel_sheet_utils import unique_sheet_name
+from modules.export_backends import ExcelExportBackend
 from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
@@ -467,42 +468,6 @@ def render_density_line(ax, x, p):
         ax.plot(x, p, color='#1f1f1f', linewidth=1.4)
 
 
-class ExportBackend:
-    """Backend interface for executing export targets."""
-
-    def run(self, thread):
-        raise NotImplementedError
-
-
-class ExcelExportBackend(ExportBackend):
-    export_target = 'excel_xlsx'
-
-    def run(self, thread):
-        excel_writer = pd.ExcelWriter(thread.excel_file, engine='xlsxwriter')
-        try:
-            completed = run_export_steps(
-                [
-                    lambda: (
-                        thread.update_label.emit("Exporting filtered data..."),
-                        thread.export_filtered_data(excel_writer),
-                        thread.update_progress.emit(50),
-                    ),
-                    lambda: (
-                        thread.update_label.emit("Building measurement sheets..."),
-                        thread.add_measurements_horizontal_sheet(excel_writer),
-                        thread.update_progress.emit(100),
-                    ),
-                ],
-                should_cancel=thread._check_canceled,
-            )
-            if not completed:
-                return False
-        finally:
-            excel_writer.close()
-
-        return True
-
-
 class ExportDataThread(QThread):
     update_label = pyqtSignal(str)
     update_progress = pyqtSignal(int)
@@ -530,6 +495,8 @@ class ExportDataThread(QThread):
         self.df_for_grouping = validated_request.grouping_df
         self.selected_export_type = validated_request.options.export_type
         self.export_target = validated_request.options.export_target
+        self.backend_target = validated_request.options.backend_target
+        self._active_backend = None
         self.selected_sorting_parameter = validated_request.options.sorting_parameter
         self.violin_plot_min_samplesize = validated_request.options.violin_plot_min_samplesize
         self.summary_plot_scale = validated_request.options.summary_plot_scale
@@ -708,6 +675,23 @@ class ExportDataThread(QThread):
             return True
         return False
 
+    def run_export_pipeline(self, excel_writer):
+        return run_export_steps(
+            [
+                lambda: (
+                    self.update_label.emit("Exporting filtered data..."),
+                    self.export_filtered_data(excel_writer),
+                    self.update_progress.emit(50),
+                ),
+                lambda: (
+                    self.update_label.emit("Building measurement sheets..."),
+                    self.add_measurements_horizontal_sheet(excel_writer),
+                    self.update_progress.emit(100),
+                ),
+            ],
+            should_cancel=self._check_canceled,
+        )
+
     def get_export_backend(self):
         target_to_backend = {
             'excel_xlsx': ExcelExportBackend(),
@@ -723,6 +707,7 @@ class ExportDataThread(QThread):
             self.update_label.emit("Preparing export...")
 
             backend = self.get_export_backend()
+            self._active_backend = backend
             completed = backend.run(self)
             if not completed:
                 return
@@ -743,8 +728,9 @@ class ExportDataThread(QThread):
             reference_groups = df.groupby('REFERENCE', as_index=False)
 
             # Create the summary worksheet
-            workbook = excel_writer.book
-            used_sheet_names = set(excel_writer.sheets.keys())
+            backend = self._active_backend or self.get_export_backend()
+            workbook = backend.get_workbook(excel_writer)
+            used_sheet_names = backend.list_sheet_names(excel_writer)
 
             # Initialize variables for column and summary column tracking
             col = 0
@@ -906,9 +892,10 @@ class ExportDataThread(QThread):
             df = build_export_dataframe(data, column_names)
 
             # Write the DataFrame to the Excel file
-            safe_table_name = unique_sheet_name(table_name, set(excel_writer.sheets.keys()))
-            df.to_excel(excel_writer, sheet_name=safe_table_name, index=False)
-            worksheet = excel_writer.sheets[safe_table_name]
+            backend = self._active_backend or self.get_export_backend()
+            safe_table_name = unique_sheet_name(table_name, backend.list_sheet_names(excel_writer))
+            backend.write_dataframe(excel_writer, df, safe_table_name)
+            worksheet = backend.get_worksheet(excel_writer, safe_table_name)
 
             # Apply autofilter to enable filtering
             worksheet.autofilter(0, 0, df.shape[0], df.shape[1] - 1)
