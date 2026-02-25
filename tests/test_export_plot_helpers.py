@@ -48,6 +48,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 from modules.ExportDataThread import (  # noqa: E402
     build_measurement_block_plan,
     build_measurement_chart_series_specs,
+    build_measurement_header_block_plan,
     build_measurement_stat_row_specs,
     build_histogram_density_curve_payload,
     build_measurement_stat_formulas,
@@ -164,6 +165,54 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual(series[2]['name'], 'LSL')
         self.assertEqual(series[2]['values'], '=REF_PART_A!$F3:F4')
+
+    def test_build_measurement_chart_range_specs_returns_backend_agnostic_ranges(self):
+        ranges = build_measurement_chart_range_specs(
+            sheet_name='REF_PART_A',
+            first_data_row=21,
+            last_data_row=30,
+            x_column=4,
+            y_column=5,
+        )
+
+        self.assertEqual(
+            ranges,
+            {
+                'data_x': '=REF_PART_A!$E22:E31',
+                'data_y': '=REF_PART_A!$F22:F31',
+                'usl_y': '=REF_PART_A!$F1:F2',
+                'lsl_y': '=REF_PART_A!$F3:F4',
+                'limit_x': '=REF_PART_A!$E22:E23',
+            },
+        )
+
+    def test_build_measurement_header_block_plan_keeps_legacy_row_math(self):
+        import pandas as pd
+
+        header_group = pd.DataFrame(
+            {
+                'NOM': [10.0, 10.0, 10.0],
+                '+TOL': [0.5, 0.5, 0.5],
+                '-TOL': [-0.2, -0.2, -0.2],
+                'MEAS': [10.1, 10.3, 9.95],
+            }
+        )
+
+        plan = build_measurement_header_block_plan(header_group, base_col=3)
+
+        self.assertEqual(plan['nom'], 10.0)
+        self.assertEqual(plan['plus_tol'], 0.5)
+        self.assertEqual(plan['minus_tol'], -0.2)
+        self.assertEqual(plan['usl'], 10.5)
+        self.assertEqual(plan['lsl'], 9.8)
+        self.assertEqual(plan['first_data_row'], 21)
+        self.assertEqual(plan['last_data_row'], 23)
+        self.assertEqual(plan['nom_cell'], '$E$1')
+        self.assertEqual(plan['usl_cell'], '$E$2')
+        self.assertEqual(plan['lsl_cell'], '$E$3')
+        self.assertEqual(plan['spec_limit_rows'][0], ('USL_MAX', 10.5))
+        self.assertEqual(plan['spec_limit_rows'][2], ('LSL_MAX', 9.8))
+        self.assertEqual(plan['stat_rows'][0][1], '=ROUND(MIN(F22:F24), 3)')
 
     def test_build_violin_group_stats_rows_marks_reference_and_computes_pvalues(self):
         labels = ['A', 'B']

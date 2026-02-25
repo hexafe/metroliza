@@ -56,12 +56,12 @@ class _DummyCmmReportParser:
 cmm_parser_stub.CMMReportParser = _DummyCmmReportParser
 sys.modules['modules.CMMReportParser'] = cmm_parser_stub
 from modules.ExportDataThread import (  # noqa: E402
-    ExcelExportBackend,
     ExportDataThread,
     build_export_dataframe,
     execute_export_query,
     run_export_steps,
 )
+from modules.export_backends import ExcelExportBackend  # noqa: E402
 from modules.ParseReportsThread import build_report_fingerprints_from_rows, parse_new_reports  # noqa: E402
 
 
@@ -175,6 +175,20 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             self.assertEqual(thread.export_target, 'excel_xlsx')
             self.assertIsInstance(thread.get_export_backend(), ExcelExportBackend)
+
+
+    def test_backend_target_metadata_defaults_to_excel(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(),
+            )
+            thread = ExportDataThread(request)
+
+            self.assertEqual(thread.backend_target, 'excel')
 
     def test_excel_backend_preserves_existing_export_flow(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest

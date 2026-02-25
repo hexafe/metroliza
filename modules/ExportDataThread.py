@@ -19,6 +19,7 @@ from modules.contracts import ExportRequest, validate_export_request
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_select_with_columns, read_sql_dataframe
 from modules.excel_sheet_utils import unique_sheet_name
+from modules.export_backends import ExcelExportBackend
 from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
@@ -191,22 +192,24 @@ def build_measurement_chart_series_specs(
     y_column,
 ):
     """Build stable chart series definitions for measurement and spec-limit overlays."""
-    x_range = build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column)
-    y_range = build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column)
-    usl_range = build_sheet_series_range(sheet_name, 0, 1, y_column)
-    lsl_range = build_sheet_series_range(sheet_name, 2, 3, y_column)
-    limit_x_range = build_sheet_series_range(sheet_name, first_data_row, first_data_row + 1, x_column)
+    range_specs = build_measurement_chart_range_specs(
+        sheet_name=sheet_name,
+        first_data_row=first_data_row,
+        last_data_row=last_data_row,
+        x_column=x_column,
+        y_column=y_column,
+    )
 
     return [
         {
             'name': header,
-            'categories': x_range,
-            'values': y_range,
+            'categories': range_specs['data_x'],
+            'values': range_specs['data_y'],
         },
         {
             'name': 'USL',
-            'categories': limit_x_range,
-            'values': usl_range,
+            'categories': range_specs['limit_x'],
+            'values': range_specs['usl_y'],
             'line': {'color': 'red', 'width': 1},
             'marker': {'type': 'none'},
             'data_labels': {'value': False},
@@ -214,8 +217,8 @@ def build_measurement_chart_series_specs(
         },
         {
             'name': 'LSL',
-            'categories': limit_x_range,
-            'values': lsl_range,
+            'categories': range_specs['limit_x'],
+            'values': range_specs['lsl_y'],
             'line': {'color': 'red', 'width': 1},
             'marker': {'type': 'none'},
             'data_labels': {'value': False},
@@ -423,42 +426,6 @@ def render_density_line(ax, x, p):
         ax.plot(x, p, color='#1f1f1f', linewidth=1.4)
 
 
-class ExportBackend:
-    """Backend interface for executing export targets."""
-
-    def run(self, thread):
-        raise NotImplementedError
-
-
-class ExcelExportBackend(ExportBackend):
-    export_target = 'excel_xlsx'
-
-    def run(self, thread):
-        excel_writer = pd.ExcelWriter(thread.excel_file, engine='xlsxwriter')
-        try:
-            completed = run_export_steps(
-                [
-                    lambda: (
-                        thread.update_label.emit("Exporting filtered data..."),
-                        thread.export_filtered_data(excel_writer),
-                        thread.update_progress.emit(50),
-                    ),
-                    lambda: (
-                        thread.update_label.emit("Building measurement sheets..."),
-                        thread.add_measurements_horizontal_sheet(excel_writer),
-                        thread.update_progress.emit(100),
-                    ),
-                ],
-                should_cancel=thread._check_canceled,
-            )
-            if not completed:
-                return False
-        finally:
-            excel_writer.close()
-
-        return True
-
-
 class ExportDataThread(QThread):
     update_label = pyqtSignal(str)
     update_progress = pyqtSignal(int)
@@ -486,6 +453,8 @@ class ExportDataThread(QThread):
         self.df_for_grouping = validated_request.grouping_df
         self.selected_export_type = validated_request.options.export_type
         self.export_target = validated_request.options.export_target
+        self.backend_target = validated_request.options.backend_target
+        self._active_backend = None
         self.selected_sorting_parameter = validated_request.options.sorting_parameter
         self.violin_plot_min_samplesize = validated_request.options.violin_plot_min_samplesize
         self.summary_plot_scale = validated_request.options.summary_plot_scale
@@ -664,6 +633,23 @@ class ExportDataThread(QThread):
             return True
         return False
 
+    def run_export_pipeline(self, excel_writer):
+        return run_export_steps(
+            [
+                lambda: (
+                    self.update_label.emit("Exporting filtered data..."),
+                    self.export_filtered_data(excel_writer),
+                    self.update_progress.emit(50),
+                ),
+                lambda: (
+                    self.update_label.emit("Building measurement sheets..."),
+                    self.add_measurements_horizontal_sheet(excel_writer),
+                    self.update_progress.emit(100),
+                ),
+            ],
+            should_cancel=self._check_canceled,
+        )
+
     def get_export_backend(self):
         target_to_backend = {
             'excel_xlsx': ExcelExportBackend(),
@@ -679,6 +665,7 @@ class ExportDataThread(QThread):
             self.update_label.emit("Preparing export...")
 
             backend = self.get_export_backend()
+            self._active_backend = backend
             completed = backend.run(self)
             if not completed:
                 return
@@ -699,8 +686,9 @@ class ExportDataThread(QThread):
             reference_groups = df.groupby('REFERENCE', as_index=False)
 
             # Create the summary worksheet
-            workbook = excel_writer.book
-            used_sheet_names = set(excel_writer.sheets.keys())
+            backend = self._active_backend or self.get_export_backend()
+            workbook = backend.get_workbook(excel_writer)
+            used_sheet_names = backend.list_sheet_names(excel_writer)
 
             # Initialize variables for column and summary column tracking
             col = 0
@@ -743,26 +731,16 @@ class ExportDataThread(QThread):
                     header_group = self._sort_header_group(header_group)
                     
                     base_col = col
+                    header_plan = build_measurement_header_block_plan(header_group, base_col)
 
                     worksheet.write(0, base_col, 'NOM')
-                    nom = round(header_group['NOM'].iloc[0], 3)
-                    worksheet.write(0, base_col + 1, nom)
-                    NOM_cell = xl_rowcol_to_cell(0, base_col + 1, row_abs=True, col_abs=True)
+                    worksheet.write(0, base_col + 1, header_plan['nom'])
                     
                     worksheet.write(1, base_col, '+TOL')
-                    USL = round(header_group['+TOL'].iloc[0], 3)
-                    worksheet.write(1, base_col + 1, USL)
-                    USL = nom + USL
-                    USL_cell = xl_rowcol_to_cell(1, base_col + 1, row_abs=True, col_abs=True)
+                    worksheet.write(1, base_col + 1, header_plan['plus_tol'])
                     
                     worksheet.write(2, base_col, '-TOL')
-                    if header_group['-TOL'].iloc[0]:
-                        LSL = round(header_group['-TOL'].iloc[0], 3)
-                    else:
-                        LSL = 0
-                    worksheet.write(2, base_col + 1, LSL)
-                    LSL = nom + LSL
-                    LSL_cell = xl_rowcol_to_cell(2, base_col + 1, row_abs=True, col_abs=True)
+                    worksheet.write(2, base_col + 1, header_plan['minus_tol'])
 
                     # Spec-limit anchor points for horizontal limit lines in charts (no labels).
                     worksheet.write(0, base_col + 2, USL)
@@ -785,8 +763,7 @@ class ExportDataThread(QThread):
                         lsl_value=LSL,
                     )
 
-                    stat_rows = build_measurement_stat_row_specs(stat_formulas)
-                    for row_offset, (label, formula, cell_style) in enumerate(stat_rows, start=3):
+                    for row_offset, (label, formula, cell_style) in enumerate(header_plan['stat_rows'], start=3):
                         worksheet.write(row_offset, base_col, label)
                         if cell_style == 'percent':
                             worksheet.write_formula(row_offset, base_col + 1, formula, percent_format)
@@ -878,7 +855,7 @@ class ExportDataThread(QThread):
                             return
                     
                     if self.hide_ok_results:
-                        hide_columns = all_measurements_within_limits(header_group['MEAS'], LSL, USL)
+                        hide_columns = all_measurements_within_limits(header_group['MEAS'], header_plan['lsl'], header_plan['usl'])
                         if hide_columns:
                             worksheet.set_column(col - 3, col - 1, 0)
                     
@@ -905,9 +882,10 @@ class ExportDataThread(QThread):
             df = build_export_dataframe(data, column_names)
 
             # Write the DataFrame to the Excel file
-            safe_table_name = unique_sheet_name(table_name, set(excel_writer.sheets.keys()))
-            df.to_excel(excel_writer, sheet_name=safe_table_name, index=False)
-            worksheet = excel_writer.sheets[safe_table_name]
+            backend = self._active_backend or self.get_export_backend()
+            safe_table_name = unique_sheet_name(table_name, backend.list_sheet_names(excel_writer))
+            backend.write_dataframe(excel_writer, df, safe_table_name)
+            worksheet = backend.get_worksheet(excel_writer, safe_table_name)
 
             # Apply autofilter to enable filtering
             worksheet.autofilter(0, 0, df.shape[0], df.shape[1] - 1)
@@ -994,11 +972,9 @@ class ExportDataThread(QThread):
             
             imgplot.seek(0)
             
-            row = 0
-            if col > 3:
-                row = int(((col/3)-1)*20)
-            summary_worksheet.write(row, 0, header)
-            summary_worksheet.insert_image(row + 1, 0, "", {'image_data': imgplot})
+            summary_position = build_summary_sheet_position_plan(col)
+            summary_worksheet.write(summary_position['header_row'], summary_position['column'], header)
+            summary_worksheet.insert_image(summary_position['image_row'], summary_position['column'], "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -1027,7 +1003,7 @@ class ExportDataThread(QThread):
 
             fig.savefig(imgplot, format="png", bbox_inches='tight')
             imgplot.seek(0)
-            summary_worksheet.insert_image(row + 1, 9, "", {'image_data': imgplot})
+            summary_worksheet.insert_image(summary_position['image_row'], 9, "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -1078,7 +1054,7 @@ class ExportDataThread(QThread):
             
             fig.savefig(imgplot, format="png")
             imgplot.seek(0)
-            summary_worksheet.insert_image(row + 1, 19, "", {'image_data': imgplot})
+            summary_worksheet.insert_image(summary_position['image_row'], 19, "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -1126,7 +1102,7 @@ class ExportDataThread(QThread):
             imgplot = BytesIO()
             fig.savefig(imgplot, format="png", bbox_inches='tight')
             imgplot.seek(0)
-            summary_worksheet.insert_image(row + 1, 29, "", {'image_data': imgplot})
+            summary_worksheet.insert_image(summary_position['image_row'], 29, "", {'image_data': imgplot})
             plt.close(fig)
             
         except Exception as e:
