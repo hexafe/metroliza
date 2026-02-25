@@ -191,22 +191,24 @@ def build_measurement_chart_series_specs(
     y_column,
 ):
     """Build stable chart series definitions for measurement and spec-limit overlays."""
-    x_range = build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column)
-    y_range = build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column)
-    usl_range = build_sheet_series_range(sheet_name, 0, 1, y_column)
-    lsl_range = build_sheet_series_range(sheet_name, 2, 3, y_column)
-    limit_x_range = build_sheet_series_range(sheet_name, first_data_row, first_data_row + 1, x_column)
+    range_specs = build_measurement_chart_range_specs(
+        sheet_name=sheet_name,
+        first_data_row=first_data_row,
+        last_data_row=last_data_row,
+        x_column=x_column,
+        y_column=y_column,
+    )
 
     return [
         {
             'name': header,
-            'categories': x_range,
-            'values': y_range,
+            'categories': range_specs['data_x'],
+            'values': range_specs['data_y'],
         },
         {
             'name': 'USL',
-            'categories': limit_x_range,
-            'values': usl_range,
+            'categories': range_specs['limit_x'],
+            'values': range_specs['usl_y'],
             'line': {'color': 'red', 'width': 1},
             'marker': {'type': 'none'},
             'data_labels': {'value': False},
@@ -214,14 +216,82 @@ def build_measurement_chart_series_specs(
         },
         {
             'name': 'LSL',
-            'categories': limit_x_range,
-            'values': lsl_range,
+            'categories': range_specs['limit_x'],
+            'values': range_specs['lsl_y'],
             'line': {'color': 'red', 'width': 1},
             'marker': {'type': 'none'},
             'data_labels': {'value': False},
             'show_legend_key': False,
         },
     ]
+
+
+def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    """Build reusable chart range references independent of charting backend writes."""
+    return {
+        'data_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
+        'data_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column),
+        'usl_y': build_sheet_series_range(sheet_name, 0, 1, y_column),
+        'lsl_y': build_sheet_series_range(sheet_name, 2, 3, y_column),
+        'limit_x': build_sheet_series_range(sheet_name, first_data_row, first_data_row + 1, x_column),
+    }
+
+
+def build_measurement_header_block_plan(header_group, base_col, first_data_row=21):
+    """Build worksheet layout and formula plan for a single measurement header block."""
+    nom = round(header_group['NOM'].iloc[0], 3)
+    plus_tol = round(header_group['+TOL'].iloc[0], 3)
+    minus_tol = round(header_group['-TOL'].iloc[0], 3) if header_group['-TOL'].iloc[0] else 0
+
+    usl = nom + plus_tol
+    lsl = nom + minus_tol
+    summary_col = xl_col_to_name(base_col + 1)
+    first_excel_row = first_data_row + 1
+    last_excel_row = len(header_group) + first_data_row
+    data_range_y = f'{xl_col_to_name(base_col + 2)}{first_excel_row}:{xl_col_to_name(base_col + 2)}{last_excel_row}'
+
+    nom_cell = xl_rowcol_to_cell(0, base_col + 1, row_abs=True, col_abs=True)
+    usl_cell = xl_rowcol_to_cell(1, base_col + 1, row_abs=True, col_abs=True)
+    lsl_cell = xl_rowcol_to_cell(2, base_col + 1, row_abs=True, col_abs=True)
+
+    stat_formulas = build_measurement_stat_formulas(
+        summary_col=summary_col,
+        data_range_y=data_range_y,
+        nom_cell=nom_cell,
+        usl_cell=usl_cell,
+        lsl_cell=lsl_cell,
+        nom_value=nom,
+        lsl_value=lsl,
+    )
+
+    return {
+        'nom': nom,
+        'plus_tol': plus_tol,
+        'minus_tol': minus_tol,
+        'usl': usl,
+        'lsl': lsl,
+        'nom_cell': nom_cell,
+        'usl_cell': usl_cell,
+        'lsl_cell': lsl_cell,
+        'first_data_row': first_data_row,
+        'last_data_row': len(header_group) + first_data_row - 1,
+        'stat_rows': build_measurement_stat_row_specs(stat_formulas),
+        'spec_limit_rows': build_spec_limit_anchor_rows(usl, lsl),
+    }
+
+
+def build_summary_sheet_position_plan(col, block_width=3, block_row_span=20, start_row=0):
+    """Return summary-sheet anchor positions for a header block."""
+    if col > block_width:
+        row = int(((col / block_width) - 1) * block_row_span)
+    else:
+        row = start_row
+    return {
+        'row': row,
+        'header_row': row,
+        'image_row': row + 1,
+        'column': 0,
+    }
 
 
 def apply_summary_plot_theme():
@@ -717,47 +787,22 @@ class ExportDataThread(QThread):
                     header_group = self._sort_header_group(header_group)
                     
                     base_col = col
+                    header_plan = build_measurement_header_block_plan(header_group, base_col)
 
                     worksheet.write(0, base_col, 'NOM')
-                    nom = round(header_group['NOM'].iloc[0], 3)
-                    worksheet.write(0, base_col + 1, nom)
-                    NOM_cell = xl_rowcol_to_cell(0, base_col + 1, row_abs=True, col_abs=True)
+                    worksheet.write(0, base_col + 1, header_plan['nom'])
                     
                     worksheet.write(1, base_col, '+TOL')
-                    USL = round(header_group['+TOL'].iloc[0], 3)
-                    worksheet.write(1, base_col + 1, USL)
-                    USL = nom + USL
-                    USL_cell = xl_rowcol_to_cell(1, base_col + 1, row_abs=True, col_abs=True)
+                    worksheet.write(1, base_col + 1, header_plan['plus_tol'])
                     
                     worksheet.write(2, base_col, '-TOL')
-                    if header_group['-TOL'].iloc[0]:
-                        LSL = round(header_group['-TOL'].iloc[0], 3)
-                    else:
-                        LSL = 0
-                    worksheet.write(2, base_col + 1, LSL)
-                    LSL = nom + LSL
-                    LSL_cell = xl_rowcol_to_cell(2, base_col + 1, row_abs=True, col_abs=True)
+                    worksheet.write(2, base_col + 1, header_plan['minus_tol'])
 
                     # Spec-limit anchor points for horizontal limit lines in charts (no labels).
-                    worksheet.write(0, base_col + 2, USL)
-                    worksheet.write(1, base_col + 2, USL)
-                    worksheet.write(2, base_col + 2, LSL)
-                    worksheet.write(3, base_col + 2, LSL)
-                    
-                    data_range_y = f'{xl_col_to_name(base_col + 2)}22:{xl_col_to_name(base_col + 2)}{len(header_group) + 21}'
-                    summary_col = xl_col_to_name(base_col + 1)
-                    stat_formulas = build_measurement_stat_formulas(
-                        summary_col=summary_col,
-                        data_range_y=data_range_y,
-                        nom_cell=NOM_cell,
-                        usl_cell=USL_cell,
-                        lsl_cell=LSL_cell,
-                        nom_value=nom,
-                        lsl_value=LSL,
-                    )
+                    for row_offset, (_, value) in enumerate(header_plan['spec_limit_rows']):
+                        worksheet.write(row_offset, base_col + 2, value)
 
-                    stat_rows = build_measurement_stat_row_specs(stat_formulas)
-                    for row_offset, (label, formula, cell_style) in enumerate(stat_rows, start=3):
+                    for row_offset, (label, formula, cell_style) in enumerate(header_plan['stat_rows'], start=3):
                         worksheet.write(row_offset, base_col, label)
                         if cell_style == 'percent':
                             worksheet.write_formula(row_offset, base_col + 1, formula, percent_format)
@@ -776,11 +821,11 @@ class ExportDataThread(QThread):
 
                     # Apply conditional formatting to highlight cells greater than USL in red
                     worksheet.conditional_format(21, base_col + 2, len(header_group) + 20, base_col + 2,
-                                                {'type': 'cell', 'criteria': '>', 'value': f'({NOM_cell}+{USL_cell})', 'format': red_format})
+                                                {'type': 'cell', 'criteria': '>', 'value': f"({header_plan['nom_cell']}+{header_plan['usl_cell']})", 'format': red_format})
 
                     # Apply conditional formatting to highlight cells lower than LSL in red
                     worksheet.conditional_format(21, base_col + 2, len(header_group) + 20, base_col + 2,
-                                                {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format})
+                                                {'type': 'cell', 'criteria': '<', 'value': f"({header_plan['nom_cell']}+{header_plan['lsl_cell']})", 'format': red_format})
                     
                     # Apply conditional formatting to highlight if NOK% > 0
                     worksheet.conditional_format(10, base_col + 1, 10, base_col + 1,
@@ -797,13 +842,11 @@ class ExportDataThread(QThread):
                     # Create an XY chart object
                     chart = workbook.add_chart({'type': self.selected_export_type})
 
-                    first_data_row = 21
-                    last_data_row = len(header_group) + 20
                     series_specs = build_measurement_chart_series_specs(
                         header=header,
                         sheet_name=safe_ref_sheet_name,
-                        first_data_row=first_data_row,
-                        last_data_row=last_data_row,
+                        first_data_row=header_plan['first_data_row'],
+                        last_data_row=header_plan['last_data_row'],
                         x_column=base_col + 1,
                         y_column=base_col + 2,
                     )
@@ -836,7 +879,7 @@ class ExportDataThread(QThread):
                             return
                     
                     if self.hide_ok_results:
-                        hide_columns = all_measurements_within_limits(header_group['MEAS'], LSL, USL)
+                        hide_columns = all_measurements_within_limits(header_group['MEAS'], header_plan['lsl'], header_plan['usl'])
                         if hide_columns:
                             worksheet.set_column(col - 3, col - 1, 0)
                     
@@ -952,11 +995,9 @@ class ExportDataThread(QThread):
             
             imgplot.seek(0)
             
-            row = 0
-            if col > 3:
-                row = int(((col/3)-1)*20)
-            summary_worksheet.write(row, 0, header)
-            summary_worksheet.insert_image(row + 1, 0, "", {'image_data': imgplot})
+            summary_position = build_summary_sheet_position_plan(col)
+            summary_worksheet.write(summary_position['header_row'], summary_position['column'], header)
+            summary_worksheet.insert_image(summary_position['image_row'], summary_position['column'], "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -985,7 +1026,7 @@ class ExportDataThread(QThread):
 
             fig.savefig(imgplot, format="png", bbox_inches='tight')
             imgplot.seek(0)
-            summary_worksheet.insert_image(row + 1, 9, "", {'image_data': imgplot})
+            summary_worksheet.insert_image(summary_position['image_row'], 9, "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -1036,7 +1077,7 @@ class ExportDataThread(QThread):
             
             fig.savefig(imgplot, format="png")
             imgplot.seek(0)
-            summary_worksheet.insert_image(row + 1, 19, "", {'image_data': imgplot})
+            summary_worksheet.insert_image(summary_position['image_row'], 19, "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -1084,7 +1125,7 @@ class ExportDataThread(QThread):
             imgplot = BytesIO()
             fig.savefig(imgplot, format="png", bbox_inches='tight')
             imgplot.seek(0)
-            summary_worksheet.insert_image(row + 1, 29, "", {'image_data': imgplot})
+            summary_worksheet.insert_image(summary_position['image_row'], 29, "", {'image_data': imgplot})
             plt.close(fig)
             
         except Exception as e:
