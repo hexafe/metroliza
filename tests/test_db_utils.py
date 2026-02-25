@@ -1,6 +1,8 @@
+import gc
 import os
 import sqlite3
 import tempfile
+import time
 import unittest
 
 import pandas as pd
@@ -25,8 +27,22 @@ class TestDbUtils(unittest.TestCase):
             conn.commit()
 
     def tearDown(self):
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
+        if not os.path.exists(self.db_path):
+            return
+
+        # SQLite file handles can be released asynchronously on Windows runners.
+        # Retry cleanup briefly to avoid flaky WinError 32 teardown failures.
+        last_error = None
+        for _ in range(20):
+            try:
+                os.remove(self.db_path)
+                return
+            except PermissionError as exc:
+                last_error = exc
+                gc.collect()
+                time.sleep(0.05)
+
+        raise last_error
 
     def test_execute_with_retry_returns_rows(self):
         rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
