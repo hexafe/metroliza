@@ -2,15 +2,25 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
 
-from modules.bom_manager import BOMManager
+try:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication
+    from modules.bom_manager import BOMManager
+except ImportError as exc:  # pragma: no cover - environment-dependent import
+    Qt = None
+    QApplication = None
+    BOMManager = None
+    PYQT_IMPORT_ERROR = exc
+else:
+    PYQT_IMPORT_ERROR = None
 
 
 class TestBOMManagerParentSelection(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        if PYQT_IMPORT_ERROR is not None:
+            raise unittest.SkipTest(f'PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}')
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
