@@ -224,6 +224,28 @@ def build_measurement_chart_series_specs(
     ]
 
 
+def build_measurement_block_plan(*, base_col, sample_size):
+    """Return worksheet/chart coordinate plan for one measurement header block."""
+    data_start_row = 21
+    last_data_row = data_start_row + sample_size - 1
+    y_column = base_col + 2
+    summary_column = base_col + 1
+
+    return {
+        'data_start_row': data_start_row,
+        'last_data_row': last_data_row,
+        'date_header_row': 20,
+        'summary_column': summary_column,
+        'y_column': y_column,
+        'data_range_y': (
+            f'{xl_col_to_name(y_column)}{data_start_row + 1}:'
+            f'{xl_col_to_name(y_column)}{last_data_row + 1}'
+        ),
+        'nok_percent_row': 10,
+        'chart_insert_row': 12,
+    }
+
+
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
     if _HAS_SEABORN:
@@ -744,11 +766,14 @@ class ExportDataThread(QThread):
                     worksheet.write(2, base_col + 2, LSL)
                     worksheet.write(3, base_col + 2, LSL)
                     
-                    data_range_y = f'{xl_col_to_name(base_col + 2)}22:{xl_col_to_name(base_col + 2)}{len(header_group) + 21}'
-                    summary_col = xl_col_to_name(base_col + 1)
+                    measurement_plan = build_measurement_block_plan(
+                        base_col=base_col,
+                        sample_size=len(header_group),
+                    )
+                    summary_col = xl_col_to_name(measurement_plan['summary_column'])
                     stat_formulas = build_measurement_stat_formulas(
                         summary_col=summary_col,
-                        data_range_y=data_range_y,
+                        data_range_y=measurement_plan['data_range_y'],
                         nom_cell=NOM_cell,
                         usl_cell=USL_cell,
                         lsl_cell=LSL_cell,
@@ -775,16 +800,31 @@ class ExportDataThread(QThread):
                     worksheet.write_column(21, base_col + 2, rounded_meas)
 
                     # Apply conditional formatting to highlight cells greater than USL in red
-                    worksheet.conditional_format(21, base_col + 2, len(header_group) + 20, base_col + 2,
-                                                {'type': 'cell', 'criteria': '>', 'value': f'({NOM_cell}+{USL_cell})', 'format': red_format})
+                    worksheet.conditional_format(
+                        measurement_plan['data_start_row'],
+                        measurement_plan['y_column'],
+                        measurement_plan['last_data_row'],
+                        measurement_plan['y_column'],
+                        {'type': 'cell', 'criteria': '>', 'value': f'({NOM_cell}+{USL_cell})', 'format': red_format},
+                    )
 
                     # Apply conditional formatting to highlight cells lower than LSL in red
-                    worksheet.conditional_format(21, base_col + 2, len(header_group) + 20, base_col + 2,
-                                                {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format})
-                    
+                    worksheet.conditional_format(
+                        measurement_plan['data_start_row'],
+                        measurement_plan['y_column'],
+                        measurement_plan['last_data_row'],
+                        measurement_plan['y_column'],
+                        {'type': 'cell', 'criteria': '<', 'value': f'({NOM_cell}+{LSL_cell})', 'format': red_format},
+                    )
+
                     # Apply conditional formatting to highlight if NOK% > 0
-                    worksheet.conditional_format(10, base_col + 1, 10, base_col + 1,
-                                                {'type': 'cell', 'criteria': '>', 'value': '0', 'format': red_format})                
+                    worksheet.conditional_format(
+                        measurement_plan['nok_percent_row'],
+                        measurement_plan['summary_column'],
+                        measurement_plan['nok_percent_row'],
+                        measurement_plan['summary_column'],
+                        {'type': 'cell', 'criteria': '>', 'value': '0', 'format': red_format},
+                    )
                     
                     col += 3
 
@@ -797,15 +837,13 @@ class ExportDataThread(QThread):
                     # Create an XY chart object
                     chart = workbook.add_chart({'type': self.selected_export_type})
 
-                    first_data_row = 21
-                    last_data_row = len(header_group) + 20
                     series_specs = build_measurement_chart_series_specs(
                         header=header,
                         sheet_name=safe_ref_sheet_name,
-                        first_data_row=first_data_row,
-                        last_data_row=last_data_row,
-                        x_column=base_col + 1,
-                        y_column=base_col + 2,
+                        first_data_row=measurement_plan['data_start_row'],
+                        last_data_row=measurement_plan['last_data_row'],
+                        x_column=measurement_plan['summary_column'],
+                        y_column=measurement_plan['y_column'],
                     )
 
                     for series_spec in series_specs:
@@ -825,7 +863,7 @@ class ExportDataThread(QThread):
                     chart.set_size({'width': 240, 'height': 160})
 
                     # Insert the chart into the worksheet.
-                    worksheet.insert_chart(12, col - 3, chart)
+                    worksheet.insert_chart(measurement_plan['chart_insert_row'], col - 3, chart)
 
                     if self._check_canceled():
                         return

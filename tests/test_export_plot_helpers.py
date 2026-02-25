@@ -46,6 +46,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (  # noqa: E402
+    build_measurement_block_plan,
     build_measurement_chart_series_specs,
     build_measurement_stat_row_specs,
     build_histogram_density_curve_payload,
@@ -127,6 +128,16 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(rows[7][2], 'percent')
         self.assertTrue(all(style is None for _, _, style in rows[:7]))
         self.assertIsNone(rows[8][2])
+
+
+    def test_build_measurement_block_plan_returns_expected_coordinates(self):
+        plan = build_measurement_block_plan(base_col=6, sample_size=10)
+
+        self.assertEqual(plan['data_start_row'], 21)
+        self.assertEqual(plan['last_data_row'], 30)
+        self.assertEqual(plan['summary_column'], 7)
+        self.assertEqual(plan['y_column'], 8)
+        self.assertEqual(plan['data_range_y'], 'I22:I31')
 
     def test_build_measurement_chart_series_specs_uses_range_backed_series(self):
         series = build_measurement_chart_series_specs(

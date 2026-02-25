@@ -154,6 +154,7 @@ Recent performance-focused changes include:
 - extracted/tested y-axis scaling helper for summary charts (`compute_scaled_y_limits`) to reduce duplicated chart math,
 - extracted/tested histogram density-curve payload helper (`build_histogram_density_curve_payload`) to isolate normal-fit rendering decisions in histogram overlays,
 - extracted/tested worksheet statistic-formula builder (`build_measurement_stat_formulas`) for MIN/AVG/MAX/STD/Cp/Cpk/NOK cells to support ongoing `ExportDataThread` decomposition,
+- extracted/tested measurement-block coordinate planner (`build_measurement_block_plan`) and wired header worksheet/chart writes to use the plan object for data-range, conditional-format, and chart-placement coordinates (reduces duplicated row/column math in `ExportDataThread`),
 - cached conditional-format workbook style objects during horizontal-sheet export (avoids repeated format allocations in per-header loops),
 - worksheet-backed `USL_SERIES` / `LSL_SERIES` columns, explicit `USL_MAX`/`USL_MIN`/`LSL_MAX`/`LSL_MIN` anchor helper cells near per-header stats, and range-based chart spec-limit series (removes inline array-literal chart ranges and prepares Google Sheets-compatible chart data wiring),
 - CSV Summary auto-detect for common delimiter/decimal combinations with numeric-column-aware defaults, optional per-column NOM/USL/LSL inputs, and an aggregated `CSV_SUMMARY` overview sheet for faster first-pass diagnostics.
@@ -178,6 +179,12 @@ Current high-level state:
 - Phase 3: ✅ Completed (docs/dependency hygiene/contributor guide + full-repository CI lint gate).
 - Phase 4: ✅ Completed.
 
+
+
+### Next implementation steps
+- Continue Phase 2 decomposition by extracting chart/write helpers from `ExportDataThread` (series/range builders and summary-row layout planners).
+- Continue migrating any future SQLite call-sites to `modules/db.py` retry/transaction helpers.
+- Keep parity checks green while Google Sheets GS2 backend split starts.
 
 
 ### Candidate new capabilities
