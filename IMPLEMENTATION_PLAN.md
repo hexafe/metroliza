@@ -331,6 +331,29 @@ Recent completion updates:
 2. Keep **Phase 0/1/3/4 (completed)** coverage green while remaining Phase 2 structural tasks land.
 3. Track and prioritize Google Sheets roadmap execution (GS2+ backend split).
 
+### Audit-backed next implementation steps (next 2-3 PRs)
+Based on the latest repository audit, these are the highest-value next slices to execute:
+
+1. **Phase 2 / DB consolidation PR: remove remaining ad-hoc retry/write loops in parser path.**
+   - `modules/CMMReportParser.py` still contains a manual retry loop around `cursor.execute` + `executemany` with `sqlite3.OperationalError` handling.
+   - Replace this with `modules/db.py` helper-driven transactional write APIs so lock/backoff behavior is centralized and testable.
+   - Add/extend tests to assert parser write path no longer uses inline retry loops and remains duplicate-safe.
+
+2. **Phase 2 / Export worker decomposition PR: split `ExportDataThread` worksheet+chart writers into pure payload builders + thin renderer.**
+   - `modules/ExportDataThread.py` remains the largest hot-path module and still combines orchestration, SQL loading, payload shaping, and worksheet/chart rendering.
+   - Prioritize extraction of: (a) header-block write plan objects, (b) chart series/range spec builders, (c) summary-sheet row layout planners.
+   - Maintain existing output parity by snapshot-style tests over generated worksheet ranges/series configuration.
+
+3. **Phase GS2 kickoff PR: introduce backend interface skeleton without behavior change.**
+   - Add backend abstraction interfaces/classes (`ExcelExportBackend` first) and route existing Excel write calls through the abstraction.
+   - Keep default export target at `excel_xlsx`; do not enable Google Sheets rendering yet.
+   - This de-risks GS3+ by separating data/layout planning from output mechanics before API integration.
+
+### Suggested acceptance checks for the next slice
+- Parser+DB migration checks: parser write transactionality, duplicate detection, locked-db retry behavior, and regression tests for existing parse happy path.
+- Export decomposition checks: deterministic grouping/order tests and chart-range parity assertions remain green.
+- Google backend skeleton checks: no behavior delta in generated Excel output for representative fixtures.
+
 
 ## Optimization backlog (exporting/parsing focus)
 - **Export path**
