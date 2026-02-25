@@ -35,9 +35,9 @@ def execute_with_retry(
     for attempt in range(attempts):
         try:
             with closing(connect_sqlite(db_path)) as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
+                with closing(conn.cursor()) as cursor:
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall()
                 conn.commit()
                 return rows
         except sqlite3.OperationalError as exc:
@@ -65,10 +65,10 @@ def execute_select_with_columns(
     for attempt in range(attempts):
         try:
             with closing(connect_sqlite(db_path)) as conn:
-                cursor = conn.cursor()
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-                column_names = [description[0] for description in (cursor.description or [])]
+                with closing(conn.cursor()) as cursor:
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall()
+                    column_names = [description[0] for description in (cursor.description or [])]
                 return rows, column_names
         except sqlite3.OperationalError as exc:
             message = str(exc).lower()
@@ -94,9 +94,9 @@ def execute_many_with_retry(
     for attempt in range(attempts):
         try:
             with closing(connect_sqlite(db_path)) as conn:
-                cursor = conn.cursor()
-                for query, params in statements:
-                    cursor.execute(query, params)
+                with closing(conn.cursor()) as cursor:
+                    for query, params in statements:
+                        cursor.execute(query, params)
                 conn.commit()
                 return
         except sqlite3.OperationalError as exc:
@@ -120,8 +120,8 @@ def run_transaction_with_retry(
     for attempt in range(attempts):
         try:
             with closing(connect_sqlite(db_path)) as conn:
-                cursor = conn.cursor()
-                result = operation(cursor)
+                with closing(conn.cursor()) as cursor:
+                    result = operation(cursor)
                 conn.commit()
                 return result
         except sqlite3.OperationalError as exc:
