@@ -1,6 +1,10 @@
 import unittest
 
-from modules.export_chart_writer import build_measurement_chart_series_specs, insert_measurement_chart
+from modules.export_chart_writer import (
+    build_measurement_chart_series_specs,
+    build_measurement_chart_series_specs_from_plan,
+    insert_measurement_chart,
+)
 
 
 class DummyChart:
@@ -73,6 +77,32 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(workbook.spec['type'], 'scatter')
         self.assertEqual(len(workbook.chart.series), 3)
         self.assertEqual(worksheet.insert_calls[0][0:2], (12, 3))
+
+    def test_series_specs_from_plan_matches_direct_builder(self):
+        plan = {
+            'data_start_row': 21,
+            'last_data_row': 30,
+            'summary_column': 1,
+            'y_column': 2,
+        }
+
+        from_plan = build_measurement_chart_series_specs_from_plan(
+            header='H',
+            sheet_name='Ref',
+            measurement_plan=plan,
+        )
+        direct = build_measurement_chart_series_specs(
+            header='H',
+            sheet_name='Ref',
+            first_data_row=21,
+            last_data_row=30,
+            x_column=1,
+            y_column=2,
+        )
+
+        self.assertEqual(from_plan, direct)
+        self.assertEqual(from_plan[0]['categories'], '=Ref!$B22:B31')
+        self.assertEqual(from_plan[0]['values'], '=Ref!$C22:C31')
 
 
 if __name__ == '__main__':

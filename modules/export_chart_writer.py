@@ -62,6 +62,18 @@ def build_measurement_chart_series_specs(
     ]
 
 
+def build_measurement_chart_series_specs_from_plan(*, header, sheet_name, measurement_plan):
+    """Build chart series specs from the stable measurement-plan contract."""
+    return build_measurement_chart_series_specs(
+        header=header,
+        sheet_name=sheet_name,
+        first_data_row=measurement_plan['data_start_row'],
+        last_data_row=measurement_plan['last_data_row'],
+        x_column=measurement_plan['summary_column'],
+        y_column=measurement_plan['y_column'],
+    )
+
+
 def build_measurement_chart_format_policy(header):
     """Return chart formatting and insertion policy for one measurement block."""
     return {
@@ -83,13 +95,10 @@ def insert_measurement_chart(
     chart_anchor_col,
 ):
     chart = workbook.add_chart({'type': chart_type})
-    series_specs = build_measurement_chart_series_specs(
+    series_specs = build_measurement_chart_series_specs_from_plan(
         header=header,
         sheet_name=sheet_name,
-        first_data_row=measurement_plan['data_start_row'],
-        last_data_row=measurement_plan['last_data_row'],
-        x_column=measurement_plan['summary_column'],
-        y_column=measurement_plan['y_column'],
+        measurement_plan=measurement_plan,
     )
     for series_spec in series_specs:
         chart.add_series(series_spec)

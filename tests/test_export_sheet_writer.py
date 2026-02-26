@@ -2,7 +2,12 @@ import unittest
 
 import pandas as pd
 
-from modules.export_sheet_writer import build_measurement_write_bundle, write_measurement_block
+from modules.export_sheet_writer import (
+    build_measurement_summary_row_layout,
+    build_measurement_write_bundle,
+    write_measurement_block,
+    write_measurement_summary_rows,
+)
 
 
 class DummyWorksheet:
@@ -46,6 +51,35 @@ class TestExportSheetWriter(unittest.TestCase):
         self.assertEqual(measurement_plan['data_start_row'], 21)
         self.assertEqual(len(worksheet.conditional_formats), 3)
         self.assertTrue(any(w[2] == 'NOK %' for w in worksheet.writes if isinstance(w[2], str)))
+
+
+    def test_build_measurement_summary_row_layout_keeps_legacy_coordinates(self):
+        stat_rows = [
+            ('MIN', '=MIN(C22:C30)', None),
+            ('NOK %', '=10%', 'percent'),
+        ]
+
+        layout = build_measurement_summary_row_layout(base_col=6, stat_rows=stat_rows)
+
+        self.assertEqual(layout[0]['row'], 3)
+        self.assertEqual(layout[0]['label_col'], 6)
+        self.assertEqual(layout[0]['value_col'], 7)
+        self.assertEqual(layout[1]['row'], 4)
+        self.assertEqual(layout[1]['style'], 'percent')
+
+    def test_write_measurement_summary_rows_writes_formula_and_percent_style(self):
+        worksheet = DummyWorksheet()
+        summary_rows = [
+            {'row': 3, 'label_col': 0, 'value_col': 1, 'label': 'MIN', 'formula': '=MIN(C22:C30)', 'style': None},
+            {'row': 4, 'label_col': 0, 'value_col': 1, 'label': 'NOK %', 'formula': '=10%', 'style': 'percent'},
+        ]
+
+        write_measurement_summary_rows(worksheet, summary_rows, formats={'percent': object()})
+
+        self.assertIn((3, 0, 'MIN'), worksheet.writes)
+        self.assertIn((4, 0, 'NOK %'), worksheet.writes)
+        self.assertEqual(worksheet.formulas[0], (3, 1, '=MIN(C22:C30)'))
+        self.assertEqual(worksheet.formulas[1], (4, 1, '=10%'))
 
 
 if __name__ == '__main__':
