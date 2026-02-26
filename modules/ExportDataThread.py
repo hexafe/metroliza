@@ -529,6 +529,23 @@ class ExportDataThread(QThread):
         }
         return target_to_backend[self.export_target]
 
+    def _emit_google_stage(self, stage, detail=""):
+        stage_labels = {
+            "generating": "Google export stage: generating workbook",
+            "uploading": "Google export stage: uploading",
+            "converting": "Google export stage: converting",
+            "validating": "Google export stage: validating",
+            "completed": "Google export stage: completed",
+            "fallback": "Google export stage: fallback",
+        }
+        base = stage_labels.get(stage)
+        if not base:
+            return
+        if detail:
+            self.update_label.emit(f"{base} ({detail})")
+            return
+        self.update_label.emit(base)
+
     def run(self):
         try:
             if self._check_canceled():
@@ -536,6 +553,8 @@ class ExportDataThread(QThread):
 
             self.update_progress.emit(0)
             self.update_label.emit("Preparing export...")
+            if self.export_target == "google_sheets_drive_convert":
+                self._emit_google_stage("generating")
 
             backend = self.get_export_backend()
             self._active_backend = backend
@@ -544,10 +563,23 @@ class ExportDataThread(QThread):
                 return
 
             if self.export_target == "google_sheets_drive_convert":
-                self.update_label.emit("Uploading workbook to Google Drive for Sheets conversion...")
+                def _stage_callback(stage_message):
+                    if stage_message == "uploading":
+                        self._emit_google_stage("uploading")
+                        return
+                    if stage_message == "converting":
+                        self._emit_google_stage("converting")
+                        return
+                    if stage_message == "validating":
+                        self._emit_google_stage("validating")
+                        return
+                    if stage_message.startswith("uploading retry"):
+                        self._emit_google_stage("uploading", detail=stage_message)
+
                 conversion = upload_and_convert_workbook(
                     self.excel_file,
                     expected_sheet_names=sorted(self._exported_sheet_names),
+                    status_callback=_stage_callback,
                 )
                 self.completion_metadata.update(
                     {
@@ -562,12 +594,29 @@ class ExportDataThread(QThread):
                 for warning in conversion.warnings:
                     self.update_label.emit(f"Warning: {warning}")
 
-                self.update_label.emit(f"Google Sheets conversion ready: {conversion.web_url}. {conversion.fallback_message}")
+                if conversion.warnings:
+                    self._emit_google_stage("fallback", detail=conversion.fallback_message)
+                else:
+                    self._emit_google_stage("completed", detail=conversion.web_url)
 
             self.update_label.emit("Export completed successfully.")
             self.finished.emit()
             QCoreApplication.processEvents()
         except GoogleDriveExportError as e:
+            if self.export_target == "google_sheets_drive_convert":
+                self.completion_metadata.update(
+                    {
+                        "fallback_message": f"Google export failed; using local .xlsx fallback: {self.excel_file}",
+                        "conversion_warnings": [str(e)],
+                    }
+                )
+                self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
+                self.update_label.emit(f"Warning: {e}")
+                self.update_label.emit("Export completed successfully.")
+                self.finished.emit()
+                QCoreApplication.processEvents()
+                self.log_and_exit(e)
+                return
             self.log_and_exit(e)
         except Exception as e:
             self.log_and_exit(e)
