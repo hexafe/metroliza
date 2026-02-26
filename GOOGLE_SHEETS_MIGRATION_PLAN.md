@@ -1,5 +1,7 @@
 # Google Sheets Migration Plan (Drive conversion from generated `.xlsx`)
 
+> **Canonical source note:** This file is the canonical source for Google Sheets migration phase names, acceptance criteria wording, and status updates. `IMPLEMENTATION_PLAN.md` contains only a companion summary with a reference back here.
+
 ## Goal
 Keep Metroliza export Excel-first (`xlsxwriter`) and add a Google mode that uploads the generated `.xlsx` to Google Drive for server-side conversion to a native Google Sheet, while preserving current analytical output:
 - raw measurement tables,
@@ -40,20 +42,18 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 
 ## Phased implementation plan
 
-### Phase 0 — Export target plumbing (UI/contracts)
+### Phase GS0 — Export target plumbing (UI/contracts)
 1. Add export target option in UI/contracts:
    - `excel_xlsx` (default),
    - `google_sheets_drive_convert`.
 2. Add Google destination metadata (folder, sharing option, account profile).
 3. Keep existing Excel export path unchanged when target is `excel_xlsx`.
 
-Acceptance criteria:
-- export options validate target + required Google metadata,
-- no behavior change for existing Excel export users.
+### Phase GS1 — Excel output hardening for conversion (completed)
+1. Keep worksheet-backed USL/LSL series ranges and helper anchor cells so chart source ranges remain deterministic for conversion.
+2. Preserve existing hardening changes because they reduce conversion drift risk.
 
----
-
-### Phase 1 — Generate workbook + upload conversion
+### Phase GS2 — Generate workbook + upload conversion
 1. Run existing workbook generation flow to produce `.xlsx` artifact.
 2. Add Drive API uploader:
    - upload file bytes,
@@ -61,33 +61,19 @@ Acceptance criteria:
    - capture converted file ID + web link.
 3. Surface converted link in UI/logs and optionally open browser.
 
-Acceptance criteria:
-- Google target yields a converted Google Sheet from the same generated `.xlsx`,
-- local `.xlsx` can be retained as fallback artifact.
-
----
-
-### Phase 2 — Auth, permissions, and ops
+### Phase GS3 — Auth, permissions, and ops
 1. Add OAuth configuration path using local `credentials.json` and generated `token.json`.
 2. Ensure `credentials.json`/`token.json` are gitignored and never logged in plaintext.
 3. Use minimal scopes (`drive.file`; optionally `spreadsheets.readonly` for checks).
 4. Add retry/backoff for upload/convert transient failures.
 5. Add progress labels for “generating workbook”, “uploading”, and “converting”.
 
----
-
-### Phase 3 — Post-conversion validation + fallback policy
+### Phase GS4 — Post-conversion validation + fallback policy
 1. Add lightweight validation after conversion (expected tabs exist, non-empty key sheets).
 2. Detect and warn on known conversion degradations (if any formatting/chart losses appear).
 3. Keep `.xlsx` as guaranteed fallback and include path in completion message.
 
-Acceptance criteria:
-- conversion issues are surfaced without silent failure,
-- users always retain a valid `.xlsx` export.
-
----
-
-### Phase 4 — Testing strategy
+### Phase GS5 — Testing strategy
 1. Unit tests
    - target/metadata validation,
    - upload request payload builder,
@@ -99,7 +85,14 @@ Acceptance criteria:
 3. Optional live smoke check
    - manual/CI gated test against a sandbox Drive account with local-only credentials.
 
+### Unified acceptance criteria (single-source wording)
+- Google Sheets export target is selectable and functional.
+- Selecting Google Sheets generates the same `.xlsx` content and uploads it through Drive conversion.
+- User receives converted Google Sheet link/identifier after successful upload.
+- On conversion degradation/failure, app preserves and reports `.xlsx` fallback without data loss.
+
 ---
+
 
 ## Detailed task list for the immediate next step
 1. Extend export options/contracts with `google_sheets_drive_convert` target.
