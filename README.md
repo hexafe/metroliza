@@ -75,6 +75,24 @@ PYTHONPATH=. python -m unittest tests.test_contracts tests.test_export_grouping_
 PYTHONPATH=. python -m unittest tests.test_phase4_integration_happy_path -v
 ```
 
+### Release-only Google conversion smoke check (manual / CI-gated)
+
+Use the dedicated smoke harness for a real end-to-end sandbox Google Drive →
+Google Sheets conversion check:
+
+```bash
+METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
+METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH=credentials.json \
+METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
+PYTHONPATH=. python tests/google_conversion_smoke.py
+```
+
+- This smoke check is **non-default** and is intentionally excluded from the
+  standard unit-test discover run.
+- It is intended for release validation only (or explicitly gated CI jobs).
+- It fails fast with actionable configuration errors when the local
+  credentials/token files are missing or misconfigured.
+
 ## Packaging (one-file executable)
 
 Build with PyInstaller:
