@@ -240,14 +240,17 @@ This roadmap extension captures the approved migration path from Excel-first exp
    - Upload the generated `.xlsx` to Google Drive and request server-side conversion to Google Sheets format.
    - Return/open/share the converted Google Sheet ID/URL as export output metadata.
 4. **Phase GS3 — Auth/ops hardening for upload flow**
-   - OAuth/service account setup with minimal scopes (`drive.file`, optional `spreadsheets.readonly` for post-conversion validation).
+   - OAuth setup based on local `credentials.json`; first-run consent generates local `token.json`.
+   - Ensure both secret files are gitignored and never committed; keep only `config/google/credentials.example.json` in repo.
+   - Use minimal scopes (`drive.file`, optional `spreadsheets.readonly` for post-conversion validation).
    - Add retry/backoff for upload/convert API failures and user-facing progress states.
 5. **Phase GS4 — Compatibility validation + fallback handling**
    - Add an automated post-conversion smoke check for critical worksheet/tab/chart presence.
    - If conversion loses unsupported formatting/charts, surface non-blocking warnings and keep `.xlsx` as guaranteed fallback.
 6. **Phase GS5 — Testing and rollout**
    - Unit tests for export-target validation + upload request payloads.
-   - Integration tests with mocked Drive conversion API.
+   - Add credential/token hygiene tests (`credentials.json` and `token.json` are ignored, example credentials template is valid JSON).
+   - Integration tests with mocked Drive conversion API (including stub credentials payload).
    - Optional live smoke test in CI/manual release checklist for representative exports.
 
 ### Acceptance criteria

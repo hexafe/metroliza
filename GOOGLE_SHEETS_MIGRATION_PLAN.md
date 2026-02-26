@@ -30,6 +30,14 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 
 ---
 
+
+## Credential and token handling policy
+- Use a local OAuth client secret file named `credentials.json` (user-provided) for Google Drive API authorization.
+- OAuth refresh/access token cache is written to `token.json` after first consent.
+- Both files are **local-only secrets** and must never be committed.
+- Repository includes only a redacted template: `config/google/credentials.example.json`.
+- `.gitignore` must include `credentials.json` and `token.json` (plus wildcard variants) to prevent accidental uploads.
+
 ## Phased implementation plan
 
 ### Phase 0 — Export target plumbing (UI/contracts)
@@ -60,10 +68,11 @@ Acceptance criteria:
 ---
 
 ### Phase 2 — Auth, permissions, and ops
-1. Add OAuth/service-account configuration path.
-2. Use minimal scopes (`drive.file`; optionally `spreadsheets.readonly` for checks).
-3. Add retry/backoff for upload/convert transient failures.
-4. Add progress labels for “generating workbook”, “uploading”, and “converting”.
+1. Add OAuth configuration path using local `credentials.json` and generated `token.json`.
+2. Ensure `credentials.json`/`token.json` are gitignored and never logged in plaintext.
+3. Use minimal scopes (`drive.file`; optionally `spreadsheets.readonly` for checks).
+4. Add retry/backoff for upload/convert transient failures.
+5. Add progress labels for “generating workbook”, “uploading”, and “converting”.
 
 ---
 
@@ -82,12 +91,13 @@ Acceptance criteria:
 1. Unit tests
    - target/metadata validation,
    - upload request payload builder,
-   - conversion response parser.
+   - conversion response parser,
+   - credential-file hygiene (`credentials.json`/`token.json` gitignore coverage).
 2. Integration tests
    - Excel export unchanged,
-   - Google export smoke test with mocked Drive API.
+   - Google export smoke test with mocked Drive API and stub credentials payload.
 3. Optional live smoke check
-   - manual/CI gated test against a sandbox Drive account.
+   - manual/CI gated test against a sandbox Drive account with local-only credentials.
 
 ---
 
