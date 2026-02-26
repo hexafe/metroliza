@@ -24,6 +24,13 @@ class TestGoogleDriveCredentialsHygiene(unittest.TestCase):
         self.assertIn('YOUR_CLIENT_ID', installed['client_id'])
         self.assertIn('YOUR_CLIENT_SECRET', installed['client_secret'])
 
+    def test_example_credentials_template_does_not_embed_runtime_tokens(self):
+        payload_text = Path('config/google/credentials.example.json').read_text(encoding='utf-8')
+
+        self.assertNotIn('access_token', payload_text)
+        self.assertNotIn('refresh_token', payload_text)
+        self.assertNotIn('expires_at', payload_text)
+
 
 if __name__ == '__main__':
     unittest.main()

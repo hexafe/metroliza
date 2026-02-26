@@ -364,6 +364,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.')
             self.assertEqual(thread.completion_metadata['converted_tab_titles'], ['MEASUREMENTS'])
             self.assertTrue(any(text.startswith('Warning:') for text in emitted))
+            conversion_ready_messages = [text for text in emitted if text.startswith('Google Sheets conversion ready:')]
+            self.assertTrue(conversion_ready_messages)
+            self.assertIn('https://docs.google.com/spreadsheets/d/sheet-id/edit', conversion_ready_messages[0])
+            self.assertIn(out_file, conversion_ready_messages[0])
 
 if __name__ == '__main__':
     unittest.main()
