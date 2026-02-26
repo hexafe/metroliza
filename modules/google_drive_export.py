@@ -254,6 +254,7 @@ def upload_and_convert_workbook(
     expected_sheet_names: list[str] | None = None,
     max_retries: int = 3,
     retry_delay_seconds: float = 1.0,
+    status_callback=None,
 ) -> GoogleDriveConversionResult:
     excel_file = Path(excel_path)
     if not excel_file.exists():
@@ -287,6 +288,9 @@ def upload_and_convert_workbook(
     )
 
     payload: dict[str, Any] | None = None
+    if callable(status_callback):
+        status_callback("uploading")
+
     for attempt in range(1, max_retries + 1):
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
@@ -296,12 +300,16 @@ def upload_and_convert_workbook(
             body_text = exc.read().decode("utf-8", errors="replace")
             mapped = map_google_http_error(exc.code, body_text)
             if isinstance(mapped, (GoogleDriveTransientError, GoogleDriveQuotaError)) and attempt < max_retries:
+                if callable(status_callback):
+                    status_callback(f"uploading retry {attempt}/{max_retries - 1}: {mapped}")
                 time.sleep(retry_delay_seconds)
                 continue
             raise mapped from exc
         except urllib.error.URLError as exc:
             mapped = map_google_network_error("Google Drive upload failed", exc)
             if attempt < max_retries:
+                if callable(status_callback):
+                    status_callback(f"uploading retry {attempt}/{max_retries - 1}: {mapped}")
                 time.sleep(retry_delay_seconds)
                 continue
             raise mapped from exc
@@ -310,9 +318,14 @@ def upload_and_convert_workbook(
         raise GoogleDriveTransientError("Google Drive upload exhausted retries without response payload.")
 
     parsed = parse_drive_conversion_response(payload)
+    if callable(status_callback):
+        status_callback("converting")
+
     warnings: list[str] = []
     converted_tab_titles: list[str] = []
     if expected_sheet_names:
+        if callable(status_callback):
+            status_callback("validating")
         try:
             converted_tab_titles = _fetch_converted_sheet_titles(file_id=parsed.file_id, access_token=access_token)
             validation_warning = _build_tab_validation_warning(expected_sheet_names, converted_tab_titles)

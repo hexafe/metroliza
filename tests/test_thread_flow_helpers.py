@@ -320,6 +320,158 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(calls, ['filtered', 'measurements'])
             self.assertTrue(os.path.exists(out_file))
 
+    def test_google_target_emits_canonical_stage_sequence_on_success(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+            thread._exported_sheet_names = {'MEASUREMENTS'}
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+
+            emitted = []
+            thread.update_label.emit = lambda text: emitted.append(text)
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _fake_upload(*_args, **kwargs):
+                kwargs['status_callback']('uploading')
+                kwargs['status_callback']('converting')
+                kwargs['status_callback']('validating')
+                return GoogleDriveConversionResult(
+                    file_id='sheet-id',
+                    web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                    local_xlsx_path=out_file,
+                    fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
+                    warnings=(),
+                    converted_tab_titles=('MEASUREMENTS',),
+                )
+
+            module.upload_and_convert_workbook = _fake_upload
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+
+            stages = [text for text in emitted if text.startswith('Google export stage:')]
+            self.assertEqual(
+                stages,
+                [
+                    'Google export stage: generating workbook',
+                    'Google export stage: uploading',
+                    'Google export stage: converting',
+                    'Google export stage: validating',
+                    'Google export stage: completed (https://docs.google.com/spreadsheets/d/sheet-id/edit)',
+                ],
+            )
+
+    def test_google_target_emits_retry_stage_message_before_completion(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+
+            emitted = []
+            thread.update_label.emit = lambda text: emitted.append(text)
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _fake_upload(*_args, **kwargs):
+                kwargs['status_callback']('uploading')
+                kwargs['status_callback']('uploading retry 1/2: temporary network issue')
+                kwargs['status_callback']('converting')
+                kwargs['status_callback']('validating')
+                return GoogleDriveConversionResult(
+                    file_id='sheet-id',
+                    web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                    local_xlsx_path=out_file,
+                    fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
+                    warnings=(),
+                    converted_tab_titles=('MEASUREMENTS',),
+                )
+
+            module.upload_and_convert_workbook = _fake_upload
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+
+            retry_messages = [text for text in emitted if 'uploading retry' in text]
+            self.assertEqual(len(retry_messages), 1)
+            self.assertIn('Google export stage: uploading (uploading retry 1/2: temporary network issue)', retry_messages[0])
+            stages = [text for text in emitted if text.startswith('Google export stage:')]
+            self.assertEqual(stages[-1], 'Google export stage: completed (https://docs.google.com/spreadsheets/d/sheet-id/edit)')
+
+    def test_google_target_final_fallback_is_non_crashing_and_emits_fallback_stage(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+
+            emitted = []
+            finished_calls = []
+            logger_calls = []
+            thread.update_label.emit = lambda text: emitted.append(text)
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: finished_calls.append('finished')
+            thread.log_and_exit = lambda exc: logger_calls.append(str(exc))
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _raise_transient(*_args, **_kwargs):
+                raise module.GoogleDriveExportError('temporary outage')
+
+            module.upload_and_convert_workbook = _raise_transient
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+
+            self.assertEqual(finished_calls, ['finished'])
+            self.assertEqual(logger_calls, ['temporary outage'])
+            self.assertIn('fallback_message', thread.completion_metadata)
+            self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
+            stages = [text for text in emitted if text.startswith('Google export stage:')]
+            self.assertEqual(stages[-1], f'Google export stage: fallback (Google export failed; using local .xlsx fallback: {out_file})')
+
     def test_google_target_run_keeps_xlsx_fallback_and_conversion_warnings(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
@@ -364,10 +516,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.')
             self.assertEqual(thread.completion_metadata['converted_tab_titles'], ['MEASUREMENTS'])
             self.assertTrue(any(text.startswith('Warning:') for text in emitted))
-            conversion_ready_messages = [text for text in emitted if text.startswith('Google Sheets conversion ready:')]
-            self.assertTrue(conversion_ready_messages)
-            self.assertIn('https://docs.google.com/spreadsheets/d/sheet-id/edit', conversion_ready_messages[0])
-            self.assertIn(out_file, conversion_ready_messages[0])
+            fallback_stage_messages = [text for text in emitted if text.startswith('Google export stage: fallback')]
+            self.assertTrue(fallback_stage_messages)
+            self.assertIn(out_file, fallback_stage_messages[0])
 
 if __name__ == '__main__':
     unittest.main()
