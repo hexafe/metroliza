@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import warnings
 import matplotlib
@@ -12,7 +11,7 @@ from io import BytesIO
 
 import matplotlib.pyplot as plt
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
-from scipy.stats import norm, ttest_ind
+from scipy.stats import ttest_ind
 
 from modules.contracts import ExportRequest, validate_export_request
 from modules.CustomLogger import CustomLogger
@@ -20,7 +19,13 @@ from modules.db import execute_select_with_columns, read_sql_dataframe
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
 from modules.google_drive_export import GoogleDriveExportError, upload_and_convert_workbook
-from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
+from modules.export_summary_utils import (
+    build_histogram_density_curve_payload as _build_histogram_density_curve_payload,
+    build_sparse_unique_labels as _build_sparse_unique_labels,
+    build_trend_plot_payload as _build_trend_plot_payload,
+    compute_measurement_summary,
+    resolve_nominal_and_limits,
+)
 from modules.export_chart_writer import (
     build_measurement_chart_format_policy as _build_measurement_chart_format_policy,
     build_measurement_chart_range_specs as _build_measurement_chart_range_specs,
@@ -32,6 +37,13 @@ from modules.export_query_service import (
     build_export_dataframe as _build_export_dataframe,
     build_measurement_export_dataframe,
     execute_export_query as _execute_export_query,
+)
+from modules.export_grouping_utils import (
+    add_group_key as _add_group_key,
+    apply_group_assignments as _apply_group_assignments,
+    keys_have_usable_values as _keys_have_usable_values,
+    prepare_grouping_dataframe as _prepare_grouping_dataframe,
+    resolve_group_merge_keys as _resolve_group_merge_keys,
 )
 from modules.export_sheet_writer import (
     build_measurement_block_plan as _build_measurement_block_plan,
@@ -124,16 +136,15 @@ def all_measurements_within_limits(measurements, lower_limit, upper_limit):
 
 
 def build_sparse_unique_labels(labels):
-    """Return labels with repeated values blanked for clearer x-axis display."""
-    seen = set()
-    sparse_labels = []
-    for label in labels:
-        if label in seen:
-            sparse_labels.append('')
-            continue
-        seen.add(label)
-        sparse_labels.append(label)
-    return sparse_labels
+    return _build_sparse_unique_labels(labels)
+
+
+def build_trend_plot_payload(header_group):
+    return _build_trend_plot_payload(header_group)
+
+
+def build_histogram_density_curve_payload(measurements, point_count=100):
+    return _build_histogram_density_curve_payload(measurements, point_count=point_count)
 
 
 def build_histogram_table_data(summary_stats):
@@ -154,33 +165,6 @@ def build_histogram_table_data(summary_stats):
         ('NOK nb', round(summary_stats['nok_count'], 1)),
         ('NOK %', round(summary_stats['nok_pct'], 2)),
     ]
-
-
-def build_trend_plot_payload(header_group):
-    """Return x/y points and sparse labels for the summary trend plot."""
-    measurements = list(header_group['MEAS'])
-    sample_labels = list(header_group['SAMPLE_NUMBER'])
-    return {
-        'x': list(range(len(measurements))),
-        'y': measurements,
-        'labels': build_sparse_unique_labels(sample_labels),
-    }
-
-
-def build_histogram_density_curve_payload(measurements, point_count=100):
-    """Return x/y density curve data for histogram overlays, if available."""
-    mu, std = norm.fit(measurements)
-    if std <= 0:
-        return None
-
-    x_min = float(np.min(measurements))
-    x_max = float(np.max(measurements))
-    x_values = np.linspace(x_min, x_max, point_count)
-    y_values = norm.pdf(x_values, mu, std)
-    return {
-        'x': x_values,
-        'y': y_values,
-    }
 
 
 def compute_scaled_y_limits(current_limits, scale_factor):
@@ -477,30 +461,8 @@ class ExportDataThread(QThread):
 
         return sorted_group
 
-    @staticmethod
-    def _add_group_key(df):
-        composite_key = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
-        if not all(column in df.columns for column in composite_key):
-            return df
-
-        keyed_df = df.copy()
-        raw_key = keyed_df[composite_key].fillna('').astype(str).agg('|'.join, axis=1)
-        keyed_df['GROUP_KEY'] = raw_key.apply(lambda value: hashlib.sha1(value.encode('utf-8')).hexdigest())
-        return keyed_df
-
     def _prepare_grouping_df(self):
-        if not isinstance(self.df_for_grouping, pd.DataFrame) or self.df_for_grouping.empty:
-            return None
-
-        if 'GROUP' not in self.df_for_grouping.columns:
-            return None
-
-        optional_cols = ['REPORT_ID', 'REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
-        available_cols = [column for column in optional_cols if column in self.df_for_grouping.columns]
-
-        grouping_df = self.df_for_grouping[available_cols + ['GROUP']].copy()
-        grouping_df = self._add_group_key(grouping_df)
-        return grouping_df
+        return _prepare_grouping_dataframe(self.df_for_grouping)
 
     def _warn_duplicate_group_assignments(self, grouping_df, merge_keys):
         duplicated_mask = grouping_df.duplicated(subset=merge_keys, keep=False)
@@ -516,68 +478,22 @@ class ExportDataThread(QThread):
         self.update_label.emit("Grouping data contains duplicate keys; using latest assignment.")
 
     def _apply_group_assignments(self, header_group, grouping_df):
-        if grouping_df is None:
-            return header_group, False
+        merged_group, grouping_applied, merge_keys, duplicate_count = _apply_group_assignments(header_group, grouping_df)
+        if grouping_applied and duplicate_count:
+            self._warn_duplicate_group_assignments(grouping_df, merge_keys)
+        return merged_group, grouping_applied
 
-        keyed_header = self._add_group_key(header_group)
-        merge_keys = self._resolve_group_merge_keys(keyed_header, grouping_df)
-        if merge_keys is None:
-            return keyed_header, False
-
-        self._warn_duplicate_group_assignments(grouping_df, merge_keys)
-        deduped_grouping_df = grouping_df.drop_duplicates(subset=merge_keys, keep='last')
-        merge_projection = deduped_grouping_df[merge_keys + ['GROUP']]
-        merged_group = pd.merge(keyed_header, merge_projection, on=merge_keys, how='left')
-        merged_group['GROUP'] = merged_group['GROUP'].fillna('UNGROUPED')
-        return merged_group, True
+    @staticmethod
+    def _add_group_key(df):
+        return _add_group_key(df)
 
     @staticmethod
     def _keys_have_usable_values(df, keys):
-        if df.empty:
-            return False
-
-        required = [key for key in keys if key in df.columns]
-        if len(required) != len(keys):
-            return False
-
-        normalized = df[required].copy()
-        for key in required:
-            normalized[key] = normalized[key].apply(
-                lambda value: str(value).strip() if pd.notna(value) else ''
-            )
-
-        return (normalized != '').all(axis=1).any()
+        return _keys_have_usable_values(df, keys)
 
     @staticmethod
     def _resolve_group_merge_keys(header_group, grouping_df):
-        if (
-            ExportDataThread._keys_have_usable_values(header_group, ['GROUP_KEY'])
-            and ExportDataThread._keys_have_usable_values(grouping_df, ['GROUP_KEY'])
-        ):
-            return ['GROUP_KEY']
-
-        if (
-            ExportDataThread._keys_have_usable_values(header_group, ['REPORT_ID'])
-            and ExportDataThread._keys_have_usable_values(grouping_df, ['REPORT_ID'])
-        ):
-            return ['REPORT_ID']
-
-        composite_key = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
-        if (
-            ExportDataThread._keys_have_usable_values(header_group, composite_key)
-            and ExportDataThread._keys_have_usable_values(grouping_df, composite_key)
-        ):
-            return composite_key
-
-        fallback_key = ['REFERENCE', 'SAMPLE_NUMBER']
-        if (
-            ExportDataThread._keys_have_usable_values(header_group, fallback_key)
-            and ExportDataThread._keys_have_usable_values(grouping_df, fallback_key)
-        ):
-            return fallback_key
-
-        return None
-        
+        return _resolve_group_merge_keys(header_group, grouping_df)
 
     def stop_exporting(self):
         self.export_canceled = True

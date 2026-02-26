@@ -48,9 +48,47 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import ExportDataThread  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
+from modules.export_grouping_utils import apply_group_assignments, prepare_grouping_dataframe  # noqa: E402
 
 
 class TestExportSortingAndGrouping(unittest.TestCase):
+
+    def test_prepare_grouping_dataframe_returns_none_for_missing_group_column(self):
+        grouping_df = pd.DataFrame({'REFERENCE': ['R1']})
+
+        prepared = prepare_grouping_dataframe(grouping_df)
+
+        self.assertIsNone(prepared)
+
+    def test_apply_group_assignments_returns_contract_metadata(self):
+        header_group = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'],
+                'FILELOC': ['/a'],
+                'FILENAME': ['one.pdf'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'MEAS': [1.0],
+            }
+        )
+        grouping_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'],
+                'FILELOC': ['/a'],
+                'FILENAME': ['one.pdf'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'GROUP': ['G1'],
+            }
+        )
+        grouping_df = prepare_grouping_dataframe(grouping_df)
+
+        merged, applied, merge_keys, duplicate_count = apply_group_assignments(header_group, grouping_df)
+
+        self.assertTrue(applied)
+        self.assertEqual(merge_keys, ['GROUP_KEY'])
+        self.assertEqual(duplicate_count, 0)
+        self.assertEqual(merged['GROUP'].tolist(), ['G1'])
 
     def test_constructor_accepts_export_request_contract(self):
         request = ExportRequest(
