@@ -92,6 +92,58 @@ class TestParseHelpers(unittest.TestCase):
         self.assertIn('id:5', fingerprints)
         self.assertIn('R2|/b|two.pdf|2024-01-02|2', fingerprints)
 
+
+    def test_get_list_of_reports_supports_zip_source(self):
+        import zipfile
+
+        from modules.ParseReportsThread import ParseReportsThread
+        from modules.contracts import ParseRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = os.path.join(tmpdir, 'reports.zip')
+            with zipfile.ZipFile(zip_path, 'w') as archive:
+                archive.writestr('nested/one.pdf', b'pdf content')
+                archive.writestr('nested/skip.txt', b'not a pdf')
+
+            thread = ParseReportsThread(ParseRequest(source_directory=zip_path, db_file='test.db'))
+            reports = thread.get_list_of_reports()
+
+            self.assertEqual(len(reports), 1)
+            self.assertTrue(str(reports[0]).lower().endswith('one.pdf'))
+
+            # Explicit cleanup here because this test does not call run().
+            thread._extracted_archive_dir.cleanup()
+            thread._extracted_archive_dir = None
+
+
+    def test_get_list_of_reports_supports_tar_source(self):
+        import tarfile
+
+        from modules.ParseReportsThread import ParseReportsThread
+        from modules.contracts import ParseRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tar_path = os.path.join(tmpdir, 'reports.tar')
+            pdf_path = os.path.join(tmpdir, 'one.pdf')
+            txt_path = os.path.join(tmpdir, 'skip.txt')
+            with open(pdf_path, 'wb') as pdf_file:
+                pdf_file.write(b'pdf content')
+            with open(txt_path, 'wb') as txt_file:
+                txt_file.write(b'not a pdf')
+
+            with tarfile.open(tar_path, 'w') as archive:
+                archive.add(pdf_path, arcname='nested/one.pdf')
+                archive.add(txt_path, arcname='nested/skip.txt')
+
+            thread = ParseReportsThread(ParseRequest(source_directory=tar_path, db_file='test.db'))
+            reports = thread.get_list_of_reports()
+
+            self.assertEqual(len(reports), 1)
+            self.assertTrue(str(reports[0]).lower().endswith('one.pdf'))
+
+            thread._extracted_archive_dir.cleanup()
+            thread._extracted_archive_dir = None
+
     def test_parse_new_reports_skips_existing_and_honors_cancel(self):
         class DummyParser:
             def __init__(self, report):
