@@ -11,6 +11,16 @@ Keep Metroliza export Excel-first (`xlsxwriter`) and add a Google mode that uplo
 
 ---
 
+## Migration status (audited 2026-02-26)
+- **Phase GS0:** ✅ Completed.
+- **Phase GS1:** ✅ Completed.
+- **Phase GS2:** ✅ Completed.
+- **Phase GS3:** ✅ Completed.
+- **Phase GS4:** ✅ Completed.
+- **Phase GS5:** 🟡 Partially implemented (core automated coverage landed; broader scenario/live-sandbox coverage remains).
+
+---
+
 ## Current-state constraints to address
 The current export path already produces rich `.xlsx` output with formulas, charts, and summary images. Re-implementing that surface directly via Sheets API would be high effort and high drift risk.
 
@@ -42,18 +52,18 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 
 ## Phased implementation plan
 
-### Phase GS0 — Export target plumbing (UI/contracts)
+### Phase GS0 — Export target plumbing (UI/contracts) ✅ Completed
 1. Add export target option in UI/contracts:
    - `excel_xlsx` (default),
    - `google_sheets_drive_convert`.
 2. Add Google destination metadata (folder, sharing option, account profile).
 3. Keep existing Excel export path unchanged when target is `excel_xlsx`.
 
-### Phase GS1 — Excel output hardening for conversion (completed)
+### Phase GS1 — Excel output hardening for conversion ✅ Completed
 1. Keep worksheet-backed USL/LSL series ranges and helper anchor cells so chart source ranges remain deterministic for conversion.
 2. Preserve existing hardening changes because they reduce conversion drift risk.
 
-### Phase GS2 — Generate workbook + upload conversion
+### Phase GS2 — Generate workbook + upload conversion ✅ Completed
 1. Run existing workbook generation flow to produce `.xlsx` artifact.
 2. Add Drive API uploader:
    - upload file bytes,
@@ -61,19 +71,19 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
    - capture converted file ID + web link.
 3. Surface converted link in UI/logs and optionally open browser.
 
-### Phase GS3 — Auth, permissions, and ops
+### Phase GS3 — Auth, permissions, and ops ✅ Completed
 1. Add OAuth configuration path using local `credentials.json` and generated `token.json`.
 2. Ensure `credentials.json`/`token.json` are gitignored and never logged in plaintext.
 3. Use minimal scopes (`drive.file`; optionally `spreadsheets.readonly` for checks).
 4. Add retry/backoff for upload/convert transient failures.
 5. Add progress labels for “generating workbook”, “uploading”, and “converting”.
 
-### Phase GS4 — Post-conversion validation + fallback policy
+### Phase GS4 — Post-conversion validation + fallback policy ✅ Completed
 1. Add lightweight validation after conversion (expected tabs exist, non-empty key sheets).
 2. Detect and warn on known conversion degradations (if any formatting/chart losses appear).
 3. Keep `.xlsx` as guaranteed fallback and include path in completion message.
 
-### Phase GS5 — Testing strategy
+### Phase GS5 — Testing strategy 🟡 Partially implemented
 1. Unit tests
    - target/metadata validation,
    - upload request payload builder,
@@ -94,12 +104,10 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 ---
 
 
-## Detailed task list for the immediate next step
-1. Extend export options/contracts with `google_sheets_drive_convert` target.
-2. After workbook generation, branch to Drive upload+convert when target is Google.
-3. Persist/report converted sheet URL + local fallback path.
-4. Add retries and clear error messages for auth/quota/network failures.
-5. Add tests for option validation and Drive request/response handling.
+## Remaining execution order (GS follow-through)
+1. Keep GS0-GS4 behavior stable while Phase GS5 testing depth is expanded.
+2. Add broader mocked scenario coverage for conversion warnings, edge-case validation, and fallback messaging.
+3. Maintain an optional/manual sandbox Drive smoke-check path and document expected outcomes.
 
 ---
 

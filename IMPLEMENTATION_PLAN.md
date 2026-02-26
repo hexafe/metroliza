@@ -4,7 +4,7 @@ This is the single, execution-ready plan that combines all previously discussed 
 
 ## Current implementation status (repo audit)
 
-Last audited on 2026-02-25.
+Last audited on 2026-02-26.
 
 Canonical phase mapping used throughout this plan:
 - ✅ Completed
@@ -13,7 +13,7 @@ Canonical phase mapping used throughout this plan:
 Audit result based on the current repository state:
 - **Phase 0:** ✅ Completed.
 - **Phase 1:** ✅ Completed.
-- **Phase 2:** 🟡 Partially implemented (core correctness and contract migration landed; structural decomposition and remaining DB call-site migration continue).
+- **Phase 2:** 🟡 Partially implemented (correctness/contract work, DB helper migration, and major export-worker extraction landed; remaining decomposition/performance follow-through continues).
 - **Phase 3:** ✅ Completed.
 - **Phase 4:** ✅ Completed.
 
@@ -99,7 +99,7 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Phase 2 — Correctness + structure + performance (Priority P1/P2, 3–5 days)
 
-### Status: 🟡 Partially implemented
+### Status: 🟡 Partially implemented (correctness/contract work, DB helper migration, and major export-worker extraction landed; decomposition/performance follow-through remains).
 
 ### Implementation checklist
 1. **Fix grouping/plot mismatch root causes** — ✅ completed.
@@ -220,14 +220,14 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Google Sheets compatibility roadmap (Excel → Google Sheets)
 
-### Status: 🟡 Partially implemented
+### Status: 🟡 Partially implemented (GS0-GS4 completed; GS5 testing-depth follow-through remains).
 
 > **Canonical source note:** The detailed Google Sheets migration phases, acceptance criteria, and status language are maintained in `GOOGLE_SHEETS_MIGRATION_PLAN.md`. This section is a concise companion summary only.
 
 ### Companion summary
-- Google Sheets support follows a Drive conversion strategy: generate the standard `.xlsx`, upload to Drive, convert to Google Sheets, and return the resulting link while preserving the `.xlsx` fallback.
-- Phase naming and acceptance criteria are single-sourced in the canonical migration plan to keep status updates consistent.
-- GS1 hardening work (worksheet-backed USL/LSL ranges and helper anchors) is already complete and remains foundational for conversion reliability.
+- Google Sheets support follows a Drive conversion strategy: generate the standard `.xlsx`, upload to Drive, convert to Google Sheets, and return the resulting link while preserving/reporting the `.xlsx` fallback.
+- GS0-GS4 implementation work is merged (target plumbing, upload/convert flow, auth/ops handling, and post-conversion validation/fallback messaging).
+- Remaining work is GS5 depth: broaden automated/manual conversion-path testing coverage while keeping wording and acceptance criteria single-sourced in the canonical migration plan.
 
 ### Canonical reference
 - See `GOOGLE_SHEETS_MIGRATION_PLAN.md` for:
@@ -299,39 +299,36 @@ Recent completion updates:
 ## Definition of Done (global)
 - [x] **Phase 0:** Safety hotfixes merged and covered (dedupe, sheet naming, stats edge cases, license parsing).
 - [x] **Phase 1:** Reliability/cancellation behavior shipped (cooperative cancellation + non-blocking cancel flows + logger guardrails).
-- [x] **Phase 2 (implemented slice):** Grouping correctness fixes and dataclass contract migration are merged and regression-covered; remaining structural decomposition/DB call-site migration is tracked as open.
+- [x] **Phase 2 (implemented slice):** Grouping correctness fixes, dataclass contract migration, DB helper consolidation, and major export-worker helper extraction are merged and regression-covered; remaining decomposition/performance follow-through is tracked as open.
 - [x] **Phase 3 (implemented slice):** README, dependency split, contributor + architecture docs, and baseline CI checks are in place.
 - [x] **Phase 3 (remaining slice):** Full-project lint enablement in CI is complete.
 - [x] **Phase 4:** Unit + integration coverage baseline for known regressions and happy-path parse → DB → export is present.
 
 ## Remaining execution order (updated)
-1. Execute remaining **Phase 2** structural items in small mergeable PRs:
-   - continue worker decomposition (remaining chart/workbook sections),
-   - continue extracting + testing pure plotting/data-shaping helpers from `ExportDataThread` (histogram/trend payload + y-limit scaling + histogram density payload helpers completed; next targets are worksheet write segments and additional chart rendering decomposition),
-   - DB utilities (continue migration of remaining direct connection call-sites to richer `modules/db.py` helpers and keep write paths transactional).
-2. Keep **Phase 0/1/3/4 (completed)** coverage green while remaining Phase 2 structural tasks land.
-3. Track and prioritize Google Sheets roadmap execution (GS2+ backend split).
+1. Execute remaining **Phase 2** structural/performance items in small mergeable PRs:
+   - continue worker decomposition (remaining worksheet/chart write sections in `ExportDataThread`),
+   - continue extracting + testing pure plotting/data-shaping helpers to keep worksheet ranges and chart series deterministic,
+   - follow up on performance profiling/precomputation opportunities once decomposition slices land.
+2. Keep **Phase 0/1/3/4 (completed)** coverage green while remaining Phase 2 tasks land.
+3. Keep Google Sheets migration status aligned with the canonical GS plan (GS0-GS4 completed, GS5 test-depth follow-through ongoing).
 
 ### Audit-backed next implementation steps (next 2-3 PRs)
-Audit date: 2026-02-25.
+Audit date: 2026-02-26.
 
 Based on the latest repository audit, these are the highest-value next slices to execute:
 
-1. **Phase 2 / DB consolidation PR: finish remaining DB helper migration outside parser path.**
-   - Parser paths already use shared retry helpers (`execute_with_retry` for statements and `run_transaction_with_retry` for transactional units).
-   - Continue migrating remaining direct `sqlite3` call-sites in other modules onto `modules/db.py` helpers so retry/timeout behavior is centralized.
-   - Add/extend tests to assert migrated modules use helper-backed DB paths and preserve existing duplicate-safe behavior.
+1. **Phase 2 / Export worker decomposition PR: continue worksheet/chart extraction in bounded slices.**
+   - Recent PRs already extracted shared chart/summary helpers and landed parity coverage.
+   - Target the remaining large write/render segments so orchestration and payload building are further separated.
+   - Maintain output parity via deterministic worksheet-range and chart-series assertions after each slice.
 
-2. **Phase 2 / transactional consistency PR: align read/write transaction boundaries across parse/export flows.**
-   - Standardize transactional write sections on `run_transaction_with_retry` and remove mixed transaction styles that can drift across modules.
-   - Ensure shared lock/backoff semantics are applied consistently when parse and export flows touch the same database.
-   - Add targeted regression checks for locked-db retry behavior and transaction rollback integrity.
+2. **Phase 2 / performance follow-through PR: profile + precompute hot loops after each extraction slice.**
+   - Use decomposition seams to reduce repeated formula/string assembly and chart-spec recomputation.
+   - Keep regressions guarded with existing export parity tests plus targeted timing-oriented checks.
 
-3. **Phase 2 / Export worker decomposition PR: target large worksheet/chart writer paths first.**
-   - `modules/ExportDataThread.py` remains the largest hot-path module and still combines orchestration, SQL loading, payload shaping, and worksheet/chart rendering.
-   - ✅ Header-block write plan object extraction has started (`build_measurement_block_plan`) and now drives data-range, conditional-format, and chart-placement coordinates in the per-header export loop.
-   - Next extraction targets remain: (a) additional chart series/range spec builders, and (b) summary-sheet row layout planners.
-   - Maintain existing output parity by snapshot-style tests over generated worksheet ranges/series configuration.
+3. **Google Sheets / GS5 testing-depth PR: broaden conversion-path validation coverage.**
+   - Keep mocked upload/convert and fallback validation tests as baseline, then extend scenario coverage.
+   - Add optional/manual sandbox Drive smoke checks and document expected conversion-warning behavior.
 
 ### Suggested acceptance checks for the next slice
 - Parser+DB migration checks: parser write transactionality, duplicate detection, locked-db retry behavior, and regression tests for existing parse happy path.

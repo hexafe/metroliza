@@ -175,20 +175,19 @@ Detailed, canonical roadmap lives in `IMPLEMENTATION_PLAN.md`.
 Current high-level state:
 - Phase 0: ✅ Completed.
 - Phase 1: ✅ Completed.
-- Phase 2: 🟡 Partially implemented (remaining structural/performance items).
+- Phase 2: 🟡 Partially implemented (DB helper migration and major export-worker extraction landed; remaining decomposition/performance follow-through continues).
 - Phase 3: ✅ Completed (docs/dependency hygiene/contributor guide + full-repository CI lint gate).
 - Phase 4: ✅ Completed.
 
 
 
 ### Next implementation steps
-- Continue Phase 2 decomposition by extracting chart/write helpers from `ExportDataThread` (series/range builders and summary-row layout planners).
-- Continue migrating any future SQLite call-sites to `modules/db.py` retry/transaction helpers.
-- Keep parity checks green while Google Sheets Drive-conversion pipeline implementation starts.
+- Continue the remaining Phase 2 decomposition slices in `ExportDataThread` (worksheet-write and chart-rendering helper extraction with parity tests).
+- Keep Phase 0/1/3/4 regression checks green while the remaining Phase 2 slices land.
+- Expand optional Google export validation/testing coverage (including broader mocked and live-sandbox smoke checks as needed).
 
 
 ### Candidate new capabilities
-- Add Drive upload/convert integration once target selector and credential/token handling are in place (target selector is already in Export Dialog).
 - Add export-profile presets (chart-heavy vs fast diagnostics) to reduce repetitive dialog setup.
 - Add optional parse pipeline benchmark report output (CSV/JSON) for factory-scale ingest tuning.
 
