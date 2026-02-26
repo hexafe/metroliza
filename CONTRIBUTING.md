@@ -58,3 +58,22 @@ Request/option contracts live in `modules/contracts.py`.
 - **Transaction granularity:** each logical write unit (e.g., inserting one parsed report and all related measurements, or applying all edits from one Modify DB submission) must execute inside a single `run_transaction_with_retry` call so retries are atomic and rollback-safe.
 - Use `run_transaction_with_retry` for multi-statement write workflows; keep retries centralized in `modules/db.py` rather than implementing ad-hoc retry loops in feature modules.
 - Add or update tests in `tests/` for each behavior change.
+
+
+## Documentation sync policy
+
+- Keep documentation-only sync PRs separate from implementation PRs when updating roadmap/project-state docs.
+- Update `IMPLEMENTATION_PLAN.md` and `GOOGLE_SHEETS_MIGRATION_PLAN.md` **after** implementation/testing PRs merge so status text reflects shipped behavior.
+- For Google export docs, explicitly describe both:
+  - required local secret files (`credentials.json`, `token.json`) and
+  - fallback expectations (`.xlsx` remains the guaranteed artifact when conversion warns/fails).
+
+## Google export contributor checklist
+
+When touching Google conversion/auth flows, validate and document:
+
+1. **Prerequisites:** local OAuth setup, required env vars for optional smoke check, and sandbox-account usage.
+2. **Secrets posture:** `credentials.json`/`token.json` are local-only, never committed, and covered by `.gitignore` patterns.
+3. **Fallback behavior:** conversion degradation/failure messaging still reports the preserved `.xlsx` output path.
+4. **Testing strategy:** baseline automated tests remain passing; optional live smoke check stays release-gated/non-default.
+5. **Troubleshooting notes:** conversion warning guidance stays current in `README.md`.
