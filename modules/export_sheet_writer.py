@@ -160,6 +160,36 @@ def build_measurement_write_bundle(header, header_group, base_col):
     }
 
 
+def build_measurement_summary_row_layout(*, base_col, stat_rows, start_row=3):
+    """Return stable summary-row coordinates/style for one measurement block."""
+    return [
+        {
+            'row': row_offset,
+            'label_col': base_col,
+            'value_col': base_col + 1,
+            'label': label,
+            'formula': formula,
+            'style': cell_style,
+        }
+        for row_offset, (label, formula, cell_style) in enumerate(stat_rows, start=start_row)
+    ]
+
+
+def write_measurement_summary_rows(worksheet, summary_rows, formats):
+    """Write summary row labels and formulas using the provided layout specs."""
+    for row_spec in summary_rows:
+        worksheet.write(row_spec['row'], row_spec['label_col'], row_spec['label'])
+        if row_spec['style'] == 'percent':
+            worksheet.write_formula(
+                row_spec['row'],
+                row_spec['value_col'],
+                row_spec['formula'],
+                formats['percent'],
+            )
+        else:
+            worksheet.write_formula(row_spec['row'], row_spec['value_col'], row_spec['formula'])
+
+
 def create_measurement_formats(workbook):
     return {
         'default': workbook.add_format({'align': 'center', 'valign': 'vcenter'}),
@@ -183,12 +213,8 @@ def write_measurement_block(worksheet, write_bundle, formats, *, base_col):
     worksheet.write(2, base_col + 2, header_plan['lsl'])
     worksheet.write(3, base_col + 2, header_plan['lsl'])
 
-    for row_offset, (label, formula, cell_style) in enumerate(header_plan['stat_rows'], start=3):
-        worksheet.write(row_offset, base_col, label)
-        if cell_style == 'percent':
-            worksheet.write_formula(row_offset, base_col + 1, formula, formats['percent'])
-        else:
-            worksheet.write_formula(row_offset, base_col + 1, formula)
+    summary_rows = build_measurement_summary_row_layout(base_col=base_col, stat_rows=header_plan['stat_rows'])
+    write_measurement_summary_rows(worksheet, summary_rows, formats)
 
     for data_header_row, data_col, data_label, data_values, data_style in write_bundle['data_columns']:
         if data_style == 'wrap':
