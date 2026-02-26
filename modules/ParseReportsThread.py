@@ -3,6 +3,8 @@ from modules.CustomLogger import CustomLogger
 from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
+import shutil
 from modules.report_fingerprint import build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.db import execute_with_retry
@@ -84,11 +86,30 @@ class ParseReportsThread(QThread):
         self.directory = validated_request.source_directory
         self.db_file = validated_request.db_file
         self.parsing_canceled = False
+        self._extracted_archive_dir = None
+
+    @staticmethod
+    def _build_archive_extension_set():
+        archive_extensions = set()
+        for _format_name, extensions, _description in shutil.get_unpack_formats():
+            archive_extensions.update(ext.lower() for ext in extensions)
+        return archive_extensions
+
+    def _resolve_report_root(self):
+        source_path = Path(self.directory)
+
+        if source_path.is_file() and source_path.suffix.lower() in self._build_archive_extension_set():
+            self._extracted_archive_dir = TemporaryDirectory()
+            shutil.unpack_archive(str(source_path), self._extracted_archive_dir.name)
+            return Path(self._extracted_archive_dir.name)
+
+        return source_path
 
     def get_list_of_reports(self):
         try:
             pdf_files = []
-            for path in Path(self.directory).glob("**/*.[Pp][Dd][Ff]"):
+            report_root = self._resolve_report_root()
+            for path in report_root.glob("**/*.[Pp][Dd][Ff]"):
                 if self.parsing_canceled:
                     break
                 if path.is_file() and path.stat().st_size:
@@ -166,6 +187,10 @@ class ParseReportsThread(QThread):
             self.parsing_finished.emit()
         except Exception as e:
             self.log_and_exit(e)
+        finally:
+            if self._extracted_archive_dir is not None:
+                self._extracted_archive_dir.cleanup()
+                self._extracted_archive_dir = None
         
     def log_and_exit(self, exception):
         CustomLogger(exception, reraise=False)

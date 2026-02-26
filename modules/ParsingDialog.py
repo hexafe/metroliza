@@ -6,6 +6,7 @@ from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
 import base64
 from modules.contracts import ParseRequest, validate_parse_request
+import shutil
 
 
 class ParsingDialog(QDialog):
@@ -21,11 +22,11 @@ class ParsingDialog(QDialog):
         self.db_file = db_file
 
         # Initialize the widgets
-        self.directory_label = QLabel("Select a directory:")
+        self.directory_label = QLabel("Select a source (directory or archive file):")
         self.directory_button = QPushButton("Browse")
         self.directory_button.clicked.connect(self.select_directory)
-        self.directory_label.setToolTip("Use this button to select the path to PDF reports")
-        self.directory_button.setToolTip("Use this button to select the path to PDF reports")
+        self.directory_label.setToolTip("Use this button to select a folder with PDF reports or a supported archive directly")
+        self.directory_button.setToolTip("Use this button to select a folder with PDF reports or a supported archive directly")
 
         self.database_label = QLabel("Select a database file:")
         self.database_button = QPushButton("Browse")
@@ -78,14 +79,24 @@ class ParsingDialog(QDialog):
     @pyqtSlot()
     def select_directory(self):
         try:
-            # Open a dialog to select a directory
-            directory = QFileDialog.getExistingDirectory(self, "Select directory")
-            if directory:
-                print(f"{directory=}")
-                self.directory = directory
-                self.directory_text_label.setText(directory)
+            # Open a dialog to select a directory first; if canceled, offer ZIP selection.
+            selected_source = QFileDialog.getExistingDirectory(self, "Select directory")
+            if not selected_source:
+                archive_patterns = sorted({f"*{ext}" for _, extensions, _ in shutil.get_unpack_formats() for ext in extensions})
+                archive_filter = "Supported archives (" + " ".join(archive_patterns) + ")" if archive_patterns else "All Files (*)"
+                selected_source, _ = QFileDialog.getOpenFileName(
+                    self,
+                    "Select archive",
+                    "",
+                    f"{archive_filter};;All Files (*)",
+                )
+
+            if selected_source:
+                print(f"{selected_source=}")
+                self.directory = selected_source
+                self.directory_text_label.setText(selected_source)
                 self.database_button.setEnabled(True)
-                self.parent().set_directory(directory)
+                self.parent().set_directory(selected_source)
 
                 if self.db_file and self.directory:
                     self.parse_button.setEnabled(True)
