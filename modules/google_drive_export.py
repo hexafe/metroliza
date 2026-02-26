@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+import json
+import logging
+import mimetypes
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+GOOGLE_DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
+GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+
+
+class GoogleDriveExportError(RuntimeError):
+    """Base exception for Google Drive export failures."""
+
+
+class GoogleDriveAuthError(GoogleDriveExportError):
+    """Authentication or authorization failure."""
+
+
+class GoogleDriveQuotaError(GoogleDriveExportError):
+    """API quota/rate-limit failure."""
+
+
+class GoogleDriveTransientError(GoogleDriveExportError):
+    """Retryable transient/network/server failure."""
+
+
+class GoogleDriveResponseError(GoogleDriveExportError):
+    """Unexpected response payload shape or non-retryable API failure."""
+
+
+@dataclass(frozen=True)
+class GoogleDriveConversionResult:
+    file_id: str
+    web_url: str
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise GoogleDriveAuthError(f"Required file not found: {path}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise GoogleDriveAuthError(f"Invalid JSON content in {path}: {exc}") from exc
+
+
+def _read_credentials(credentials_path: Path) -> dict[str, Any]:
+    payload = _read_json_file(credentials_path)
+    installed = payload.get("installed") or payload.get("web")
+    if not isinstance(installed, dict):
+        raise GoogleDriveAuthError("credentials.json must include an 'installed' or 'web' OAuth client section.")
+
+    for key in ("client_id", "client_secret", "token_uri"):
+        if not installed.get(key):
+            raise GoogleDriveAuthError(f"credentials.json missing required field: {key}")
+    return installed
+
+
+def _load_token_payload(token_path: Path) -> dict[str, Any]:
+    if not token_path.exists():
+        raise GoogleDriveAuthError(
+            "Missing token.json for Google Drive export. Please complete OAuth authorization first."
+        )
+    return _read_json_file(token_path)
+
+
+def _token_is_valid(token_payload: dict[str, Any]) -> bool:
+    access_token = token_payload.get("access_token")
+    expires_at = token_payload.get("expires_at")
+    if not access_token or not expires_at:
+        return False
+    return float(expires_at) > (time.time() + 60)
+
+
+def _refresh_access_token(token_payload: dict[str, Any], credentials: dict[str, Any]) -> dict[str, Any]:
+    refresh_token = token_payload.get("refresh_token")
+    if not refresh_token:
+        raise GoogleDriveAuthError(
+            "token.json is missing refresh_token. Re-authenticate to continue Google Drive export."
+        )
+
+    refresh_form = urllib.parse.urlencode(
+        {
+            "client_id": credentials["client_id"],
+            "client_secret": credentials["client_secret"],
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }
+    ).encode("utf-8")
+
+    request = urllib.request.Request(
+        credentials["token_uri"],
+        data=refresh_form,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise map_google_http_error(exc.code, body) from exc
+    except urllib.error.URLError as exc:
+        raise map_google_network_error("OAuth token refresh failed", exc) from exc
+
+    if "access_token" not in payload:
+        raise GoogleDriveAuthError("OAuth refresh response did not include access_token.")
+
+    expires_in = int(payload.get("expires_in", 3600))
+    token_payload["access_token"] = payload["access_token"]
+    token_payload["expires_at"] = time.time() + expires_in
+    if payload.get("refresh_token"):
+        token_payload["refresh_token"] = payload["refresh_token"]
+    token_payload.setdefault("scope", GOOGLE_DRIVE_SCOPE)
+    token_payload.setdefault("token_type", payload.get("token_type", "Bearer"))
+    return token_payload
+
+
+def _save_token_payload(token_path: Path, token_payload: dict[str, Any]) -> None:
+    token_path.write_text(json.dumps(token_payload, indent=2), encoding="utf-8")
+
+
+def _ensure_access_token(credentials_path: Path, token_path: Path) -> str:
+    credentials = _read_credentials(credentials_path)
+    token_payload = _load_token_payload(token_path)
+    if _token_is_valid(token_payload):
+        return str(token_payload["access_token"])
+
+    refreshed = _refresh_access_token(token_payload, credentials)
+    _save_token_payload(token_path, refreshed)
+    return str(refreshed["access_token"])
+
+
+def parse_drive_conversion_response(payload: dict[str, Any]) -> GoogleDriveConversionResult:
+    file_id = payload.get("id")
+    web_url = payload.get("webViewLink") or payload.get("webContentLink")
+    if not file_id or not web_url:
+        raise GoogleDriveResponseError("Drive conversion response missing id/webViewLink fields.")
+    return GoogleDriveConversionResult(file_id=file_id, web_url=web_url)
+
+
+def map_google_http_error(status_code: int, payload_text: str) -> GoogleDriveExportError:
+    reason = ""
+    message = payload_text
+    try:
+        payload = json.loads(payload_text)
+        error_payload = payload.get("error", {})
+        message = error_payload.get("message", message)
+        errors = error_payload.get("errors", [])
+        if errors and isinstance(errors, list):
+            first = errors[0]
+            if isinstance(first, dict):
+                reason = str(first.get("reason", "")).lower()
+    except json.JSONDecodeError:
+        reason = ""
+
+    lower_message = str(message).lower()
+    if status_code in (401, 403) and ("auth" in lower_message or "credential" in lower_message or reason in {"autherror", "insufficientpermissions"}):
+        return GoogleDriveAuthError(f"Google auth error ({status_code}): {message}")
+    if reason in {"userratelimitexceeded", "ratelimitexceeded", "quotaexceeded"}:
+        return GoogleDriveQuotaError(f"Google quota error ({status_code}): {message}")
+    if status_code >= 500 or reason in {"backenderror", "internalerror"}:
+        return GoogleDriveTransientError(f"Google transient error ({status_code}): {message}")
+    if status_code == 429:
+        return GoogleDriveQuotaError(f"Google rate limit error ({status_code}): {message}")
+    return GoogleDriveResponseError(f"Google API error ({status_code}): {message}")
+
+
+def map_google_network_error(context: str, exc: urllib.error.URLError) -> GoogleDriveTransientError:
+    return GoogleDriveTransientError(f"{context} due to network error: {exc}")
+
+
+def upload_and_convert_workbook(
+    excel_path: str,
+    credentials_path: str = "credentials.json",
+    token_path: str = "token.json",
+) -> GoogleDriveConversionResult:
+    excel_file = Path(excel_path)
+    if not excel_file.exists():
+        raise GoogleDriveResponseError(f"Excel export file not found: {excel_path}")
+
+    access_token = _ensure_access_token(Path(credentials_path), Path(token_path))
+
+    excel_mime = mimetypes.guess_type(excel_file.name)[0] or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    metadata = {
+        "name": excel_file.stem,
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+    }
+
+    boundary = f"metroliza-{int(time.time() * 1000)}"
+    metadata_part = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        f"{json.dumps(metadata)}\r\n"
+    ).encode("utf-8")
+
+    file_bytes = excel_file.read_bytes()
+    file_part_header = (
+        f"--{boundary}\r\n"
+        f"Content-Type: {excel_mime}\r\n\r\n"
+    ).encode("utf-8")
+    closing = f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    body = metadata_part + file_part_header + file_bytes + closing
+
+    request = urllib.request.Request(
+        GOOGLE_DRIVE_UPLOAD_URL,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": f"multipart/related; boundary={boundary}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        raise map_google_http_error(exc.code, body_text) from exc
+    except urllib.error.URLError as exc:
+        raise map_google_network_error("Google Drive upload failed", exc) from exc
+
+    result = parse_drive_conversion_response(payload)
+    logging.info("Google Sheets conversion completed for '%s' (%s)", excel_file, result.web_url)
+    return result

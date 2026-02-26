@@ -20,6 +20,7 @@ from modules.CustomLogger import CustomLogger
 from modules.db import execute_select_with_columns, read_sql_dataframe
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
+from modules.google_drive_export import GoogleDriveExportError, upload_and_convert_workbook
 from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
@@ -566,6 +567,7 @@ class ExportDataThread(QThread):
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
         self.export_canceled = False
         self._prepared_grouping_df = None
+        self.completion_metadata = {"local_xlsx_path": self.excel_file}
 
     @property
     def prepared_grouping_df(self):
@@ -775,9 +777,24 @@ class ExportDataThread(QThread):
             if not completed:
                 return
 
+            if self.export_target == "google_sheets_drive_convert":
+                self.update_label.emit("Uploading workbook to Google Drive for Sheets conversion...")
+                conversion = upload_and_convert_workbook(self.excel_file)
+                self.completion_metadata.update(
+                    {
+                        "converted_file_id": conversion.file_id,
+                        "converted_url": conversion.web_url,
+                    }
+                )
+                self.update_label.emit(
+                    f"Google Sheets conversion ready: {conversion.web_url} (local fallback: {self.excel_file})"
+                )
+
             self.update_label.emit("Export completed successfully.")
             self.finished.emit()
             QCoreApplication.processEvents()
+        except GoogleDriveExportError as e:
+            self.log_and_exit(e)
         except Exception as e:
             self.log_and_exit(e)
 
