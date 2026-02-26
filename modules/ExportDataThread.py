@@ -13,7 +13,6 @@ from io import BytesIO
 import matplotlib.pyplot as plt
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from scipy.stats import norm, ttest_ind
-from xlsxwriter.utility import xl_col_to_name
 
 from modules.contracts import ExportRequest, validate_export_request
 from modules.CustomLogger import CustomLogger
@@ -23,9 +22,10 @@ from modules.export_backends import ExcelExportBackend
 from modules.google_drive_export import GoogleDriveExportError, upload_and_convert_workbook
 from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
 from modules.export_chart_writer import (
-    build_measurement_chart_format_policy,
-    build_measurement_chart_series_specs,
-    build_sheet_series_range,
+    build_measurement_chart_format_policy as _build_measurement_chart_format_policy,
+    build_measurement_chart_range_specs as _build_measurement_chart_range_specs,
+    build_measurement_chart_series_specs as _build_measurement_chart_series_specs,
+    build_sheet_series_range as _build_sheet_series_range,
     insert_measurement_chart,
 )
 from modules.export_query_service import (
@@ -34,10 +34,12 @@ from modules.export_query_service import (
     execute_export_query as _execute_export_query,
 )
 from modules.export_sheet_writer import (
-    build_measurement_header_block_plan,
-    build_measurement_stat_formulas,
-    build_measurement_stat_row_specs,
-    build_measurement_write_bundle,
+    build_measurement_block_plan as _build_measurement_block_plan,
+    build_measurement_header_block_plan as _build_measurement_header_block_plan,
+    build_measurement_stat_formulas as _build_measurement_stat_formulas,
+    build_measurement_stat_row_specs as _build_measurement_stat_row_specs,
+    build_measurement_write_bundle as _build_measurement_write_bundle,
+    build_spec_limit_anchor_rows as _build_spec_limit_anchor_rows,
     create_measurement_formats,
     write_measurement_block,
 )
@@ -53,6 +55,59 @@ def build_export_dataframe(data, column_names):
 
 def execute_export_query(db_file, export_query, select_reader=execute_select_with_columns):
     return _execute_export_query(db_file, export_query, select_reader=select_reader)
+
+
+def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
+    return _build_sheet_series_range(sheet_name, first_row, last_row, column_index)
+
+
+def build_spec_limit_anchor_rows(usl, lsl):
+    return _build_spec_limit_anchor_rows(usl, lsl)
+
+
+def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
+    return _build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value)
+
+
+def build_measurement_stat_row_specs(stat_formulas):
+    return _build_measurement_stat_row_specs(stat_formulas)
+
+
+def build_measurement_block_plan(*, base_col, sample_size):
+    return _build_measurement_block_plan(base_col=base_col, sample_size=sample_size)
+
+
+def build_measurement_header_block_plan(header_group, base_col):
+    return _build_measurement_header_block_plan(header_group, base_col)
+
+
+def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    return _build_measurement_chart_range_specs(
+        sheet_name=sheet_name,
+        first_data_row=first_data_row,
+        last_data_row=last_data_row,
+        x_column=x_column,
+        y_column=y_column,
+    )
+
+
+def build_measurement_chart_series_specs(*, header, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    return _build_measurement_chart_series_specs(
+        header=header,
+        sheet_name=sheet_name,
+        first_data_row=first_data_row,
+        last_data_row=last_data_row,
+        x_column=x_column,
+        y_column=y_column,
+    )
+
+
+def build_measurement_chart_format_policy(header):
+    return _build_measurement_chart_format_policy(header)
+
+
+def build_measurement_write_bundle(header, header_group, base_col):
+    return _build_measurement_write_bundle(header, header_group, base_col)
 
 
 def run_export_steps(steps, should_cancel):
@@ -622,7 +677,7 @@ class ExportDataThread(QThread):
 
                     header_group = self._sort_header_group(header_group)
                     base_col = col
-                    write_bundle = build_measurement_write_bundle(header, header_group, base_col)
+                    write_bundle = _build_measurement_write_bundle(header, header_group, base_col)
                     header_plan = write_bundle['header_plan']
                     measurement_plan = write_measurement_block(worksheet, write_bundle, formats, base_col=base_col)
 
