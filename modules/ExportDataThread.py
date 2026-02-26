@@ -18,7 +18,7 @@ from modules.CustomLogger import CustomLogger
 from modules.db import execute_select_with_columns, read_sql_dataframe
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
-from modules.google_drive_export import GoogleDriveExportError, upload_and_convert_workbook
+from modules.google_drive_export import GoogleDriveAuthError, GoogleDriveExportError, upload_and_convert_workbook
 from modules.export_summary_utils import (
     build_histogram_density_curve_payload as _build_histogram_density_curve_payload,
     build_sparse_unique_labels as _build_sparse_unique_labels,
@@ -615,6 +615,9 @@ class ExportDataThread(QThread):
                 self.update_label.emit("Export completed successfully.")
                 self.finished.emit()
                 QCoreApplication.processEvents()
+                if isinstance(e, GoogleDriveAuthError):
+                    logging.warning("Google export authentication unavailable; completed with local fallback: %s", e)
+                    return
                 self.log_and_exit(e)
                 return
             self.log_and_exit(e)

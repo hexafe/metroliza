@@ -428,6 +428,50 @@ class TestExportBackendSmoke(unittest.TestCase):
             stages = [text for text in emitted if text.startswith('Google export stage:')]
             self.assertEqual(stages[-1], 'Google export stage: completed (https://docs.google.com/spreadsheets/d/sheet-id/edit)')
 
+    def test_google_target_auth_fallback_skips_error_logging(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+
+            emitted = []
+            finished_calls = []
+            logger_calls = []
+            thread.update_label.emit = lambda text: emitted.append(text)
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: finished_calls.append('finished')
+            thread.log_and_exit = lambda exc: logger_calls.append(str(exc))
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _raise_auth_error(*_args, **_kwargs):
+                raise module.GoogleDriveAuthError('Missing token.json for Google Drive export. Please complete OAuth authorization first.')
+
+            module.upload_and_convert_workbook = _raise_auth_error
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+
+            self.assertEqual(finished_calls, ['finished'])
+            self.assertEqual(logger_calls, [])
+            self.assertIn('fallback_message', thread.completion_metadata)
+            self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
+            stages = [text for text in emitted if text.startswith('Google export stage:')]
+            self.assertEqual(stages[-1], f'Google export stage: fallback (Google export failed; using local .xlsx fallback: {out_file})')
+
     def test_google_target_final_fallback_is_non_crashing_and_emits_fallback_stage(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
