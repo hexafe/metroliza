@@ -222,42 +222,18 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ### Status: 🟡 Partially implemented
 
-This roadmap extension captures the approved migration path from Excel-first export to Google Sheets-compatible export while preserving analytics and visuals.
+> **Canonical source note:** The detailed Google Sheets migration phases, acceptance criteria, and status language are maintained in `GOOGLE_SHEETS_MIGRATION_PLAN.md`. This section is a concise companion summary only.
 
-### Scope and sequencing
-1. **Phase GS0 — Export target contract/UX**
-   - Add an explicit export target selector in **Export Dialog** so the user can choose **Excel** or **Google Sheets** at export time.
-   - Default selection must remain **Excel** for now (`excel_xlsx`), with `google_sheets` as the secondary option.
-   - Extend export option validation with Google destination metadata.
-   - Keep existing Excel behavior unchanged by default.
-2. **Phase GS1 — Excel output hardening for conversion** — ✅ completed
-   - ✅ Added per-header `USL_SERIES` and `LSL_SERIES` worksheet columns in the same measurement block row range as measured values.
-   - ✅ Switched USL/LSL chart series from inline array-literals to worksheet cell-range series references.
-   - ✅ Added explicit `USL_MAX`, `USL_MIN`, `LSL_MAX`, and `LSL_MIN` helper-anchor cells near statistics headers for backend-neutral chart generation.
-   - These changes are retained because they improve deterministic chart source ranges before Drive conversion.
-3. **Phase GS2 — Drive conversion pipeline (preferred strategy)**
-   - Keep generating the existing `.xlsx` workbook as the canonical export artifact.
-   - Upload the generated `.xlsx` to Google Drive and request server-side conversion to Google Sheets format.
-   - Return/open/share the converted Google Sheet ID/URL as export output metadata.
-4. **Phase GS3 — Auth/ops hardening for upload flow**
-   - OAuth setup based on local `credentials.json`; first-run consent generates local `token.json`.
-   - Ensure both secret files are gitignored and never committed; keep only `config/google/credentials.example.json` in repo.
-   - Use minimal scopes (`drive.file`, optional `spreadsheets.readonly` for post-conversion validation).
-   - Add retry/backoff for upload/convert API failures and user-facing progress states.
-5. **Phase GS4 — Compatibility validation + fallback handling**
-   - Add an automated post-conversion smoke check for critical worksheet/tab/chart presence.
-   - If conversion loses unsupported formatting/charts, surface non-blocking warnings and keep `.xlsx` as guaranteed fallback.
-6. **Phase GS5 — Testing and rollout**
-   - Unit tests for export-target validation + upload request payloads.
-   - Add credential/token hygiene tests (`credentials.json` and `token.json` are ignored, example credentials template is valid JSON).
-   - Integration tests with mocked Drive conversion API (including stub credentials payload).
-   - Optional live smoke test in CI/manual release checklist for representative exports.
+### Companion summary
+- Google Sheets support follows a Drive conversion strategy: generate the standard `.xlsx`, upload to Drive, convert to Google Sheets, and return the resulting link while preserving the `.xlsx` fallback.
+- Phase naming and acceptance criteria are single-sourced in the canonical migration plan to keep status updates consistent.
+- GS1 hardening work (worksheet-backed USL/LSL ranges and helper anchors) is already complete and remains foundational for conversion reliability.
 
-### Acceptance criteria
-- Google Sheets export target is selectable and functional.
-- Selecting Google Sheets generates the same `.xlsx` content and uploads it through Drive conversion.
-- User receives converted Google Sheet link/identifier after successful upload.
-- On conversion degradation/failure, app preserves and reports `.xlsx` fallback without data loss.
+### Canonical reference
+- See `GOOGLE_SHEETS_MIGRATION_PLAN.md` for:
+  - GS0-GS5 scope and sequence,
+  - unified acceptance criteria wording,
+  - implementation task breakdown and risk management.
 
 ---
 
