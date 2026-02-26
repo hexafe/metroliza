@@ -257,6 +257,38 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             self.assertEqual(thread.backend_target, 'excel')
 
+
+    def test_export_filtered_data_passes_dataframe_to_writer(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(),
+            )
+            thread = ExportDataThread(request)
+
+            captured = {}
+
+            def fake_writer(df, table_name, excel_writer):
+                captured['columns'] = list(df.columns)
+                captured['table'] = table_name
+                captured['writer_type'] = type(excel_writer).__name__
+
+            thread.write_data_to_excel = fake_writer
+
+            original_query = __import__('modules.ExportDataThread', fromlist=['execute_export_query'])
+            previous = original_query.execute_export_query
+            original_query.execute_export_query = lambda *_args, **_kwargs: ([(1, 'A')], ['ID', 'LABEL'])
+            try:
+                thread.export_filtered_data(excel_writer=object())
+            finally:
+                original_query.execute_export_query = previous
+
+            self.assertEqual(captured['columns'], ['ID', 'LABEL'])
+            self.assertEqual(captured['table'], 'MEASUREMENTS')
+
     def test_excel_backend_preserves_existing_export_flow(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
