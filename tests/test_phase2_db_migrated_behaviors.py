@@ -33,9 +33,9 @@ pymupdf_stub = types.ModuleType('pymupdf')
 pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec('pymupdf', loader=None)
 sys.modules.setdefault('pymupdf', pymupdf_stub)
 
-from modules.CMMReportParser import CMMReportParser
-from modules.ModifyDB import ModifyDB
-from modules.db import execute_with_retry, run_transaction_with_retry
+from modules.CMMReportParser import CMMReportParser  # noqa: E402
+from modules.ModifyDB import ModifyDB  # noqa: E402
+from modules.db import execute_with_retry, run_transaction_with_retry  # noqa: E402
 
 
 class TestPhase2DbMigratedBehaviors(unittest.TestCase):
