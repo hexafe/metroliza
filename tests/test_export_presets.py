@@ -93,6 +93,7 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
             build_export_options_payload(
                 selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
                 export_type='Line',
+                export_target='excel_xlsx',
                 sorting_parameter='Date',
                 violin_input='8',
                 summary_scale_input='0',
@@ -104,6 +105,7 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
             build_export_options_payload(
                 selected_preset=EXPORT_PRESET_FULL_REPORT,
                 export_type='Line',
+                export_target='excel_xlsx',
                 sorting_parameter='Date',
                 violin_input='6',
                 summary_scale_input='0',

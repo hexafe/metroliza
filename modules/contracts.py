@@ -68,7 +68,7 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
 _ALLOWED_EXPORT_PRESETS = {"fast_diagnostics", "full_report"}
-_ALLOWED_EXPORT_TARGETS = {"excel_xlsx"}
+_ALLOWED_EXPORT_TARGETS = {"excel_xlsx", "google_sheets_drive_convert"}
 _ALLOWED_BACKEND_TARGETS = {"excel", "google"}
 _BACKEND_TARGET_ALIASES = {"google_sheets": "google", "googlesheets": "google"}
 _SAMPLE_SORT_ALIASES = {"sample", "sample #", "sample number", "part #", "part number"}
@@ -116,6 +116,8 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
     backend_target = _BACKEND_TARGET_ALIASES.get(backend_target, backend_target)
     if backend_target not in _ALLOWED_BACKEND_TARGETS:
         backend_target = ExportOptions.backend_target
+    if export_target == "google_sheets_drive_convert" and backend_target == ExportOptions.backend_target:
+        backend_target = "google"
 
     sorting_parameter = getattr(options, "sorting_parameter", ExportOptions.sorting_parameter).strip().lower()
     allowed_sorting = {"date"}.union(_SAMPLE_SORT_ALIASES)

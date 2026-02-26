@@ -9,8 +9,9 @@
 - [x] Add one focused locked-db retry/rollback regression test covering parse/export overlap behavior.
 
 ## Google Sheets roadmap follow-up
-- [ ] Start GS2 backend split skeleton (`ExcelExportBackend` / `GoogleSheetsExportBackend`) while keeping Excel as default.
-- [ ] Add backend selection plumbing to contract validation and export dialog wiring.
+- [ ] Start Google Drive conversion pipeline for Google Sheets target (upload generated `.xlsx` and convert server-side).
+- [ ] Add Google target selection + destination metadata plumbing to contract validation and export dialog wiring.
+- [ ] Add post-conversion validation + `.xlsx` fallback reporting in export completion flow.
 
 ## Maintenance
 - [ ] Keep `README.md` and `IMPLEMENTATION_PLAN.md` in sync after each roadmap PR.

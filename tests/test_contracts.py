@@ -71,6 +71,11 @@ class TestValidateExportOptions(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_export_options(ExportOptions(export_target='csv'))
 
+    def test_accepts_google_drive_conversion_target(self):
+        options = validate_export_options(ExportOptions(export_target='google_sheets_drive_convert'))
+        self.assertEqual(options.export_target, 'google_sheets_drive_convert')
+        self.assertEqual(options.backend_target, 'google')
+
 
 class TestValidatePaths(unittest.TestCase):
     def test_accepts_xlsx_target(self):

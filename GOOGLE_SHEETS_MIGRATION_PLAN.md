@@ -1,7 +1,7 @@
-# Google Sheets Migration Plan (from Excel `.xlsx` export)
+# Google Sheets Migration Plan (Drive conversion from generated `.xlsx`)
 
 ## Goal
-Migrate Metroliza export output from Excel-first (`xlsxwriter`) to Google Sheets-compatible export while keeping all current analytical output:
+Keep Metroliza export Excel-first (`xlsxwriter`) and add a Google mode that uploads the generated `.xlsx` to Google Drive for server-side conversion to a native Google Sheet, while preserving current analytical output:
 - raw measurement tables,
 - computed statistics,
 - per-header trend charts,
@@ -10,183 +10,115 @@ Migrate Metroliza export output from Excel-first (`xlsxwriter`) to Google Sheets
 ---
 
 ## Current-state constraints to address
-The current export path writes `.xlsx` files with `xlsxwriter` and injects chart series (including USL/LSL) using Excel-specific chart APIs and in-memory array literals. These constructs are not directly portable to Google Sheets API chart definitions and can break compatibility.
+The current export path already produces rich `.xlsx` output with formulas, charts, and summary images. Re-implementing that surface directly via Sheets API would be high effort and high drift risk.
 
-Key constraints in current implementation:
-1. Horizontal-sheet export is tightly coupled to `xlsxwriter` workbook/worksheet/chart calls.
-2. USL/LSL chart series are generated via per-row in-memory list literals (`={1,1,1...}` style), which are Excel-oriented.
-3. Formulas and chart ranges are built using Excel A1 ranges and helper utilities.
-4. Summary images are generated via matplotlib/seaborn and inserted into worksheets; Google Sheets needs explicit image insertion strategy.
+Key constraints and implications:
+1. Horizontal-sheet export is tightly coupled to mature `xlsxwriter` logic that we should reuse.
+2. Full chart/style parity through native Sheets chart specs is expensive to maintain.
+3. Summary images and worksheet layout are already solved in Excel output.
+4. Google Drive supports direct import/conversion of `.xlsx` files, which can offload most translation complexity to Google.
 
 ---
 
 ## Proposed target architecture
-Introduce an **export backend abstraction** with two writers:
-- `ExcelExportBackend` (existing behavior retained).
-- `GoogleSheetsExportBackend` (new behavior using Google Sheets API).
+Adopt a **conversion pipeline** instead of a full backend rewrite:
+- Continue generating `.xlsx` exactly as today (single source of truth).
+- If export target is Google Sheets, upload the generated file with Google Drive API and request conversion (`application/vnd.google-apps.spreadsheet`).
+- Return the converted file ID/URL to the user and optionally keep local `.xlsx` for backup/audit.
 
-Shared data prep logic should remain backend-agnostic:
-- grouping/sorting,
-- statistics calculations,
-- USL/LSL/NOM resolution,
-- plot rendering to PNG buffers.
-
-Only output mechanics (sheet creation, cells, formulas, charts, image placement) should differ by backend.
+This minimizes implementation risk and keeps Excel + Google outputs aligned by construction.
 
 ---
 
-## Implementation phases
+## Phased implementation plan
 
-### Phase 0 — Contract & UX changes
+### Phase 0 — Export target plumbing (UI/contracts)
 1. Add export target option in UI/contracts:
    - `excel_xlsx` (default),
-   - `google_sheets`.
-2. Extend `ExportOptions` validation to include target backend and Google destination metadata (spreadsheet id or create-new flag).
-3. Keep current `.xlsx` flow unchanged for backwards compatibility.
-
-Deliverable: no behavior change for Excel users, but request payload can select Google Sheets.
-
----
-
-### Phase 1 — **First requested step**: explicit max/min limits + USL/LSL series columns (Google-compatible)
-This phase implements exactly what you described as first priority.
-
-#### 1.1 Data layout update per header block
-In the measurement table area (same region as measurement values, adjacent to statistics header), add two new columns:
-- `USL_SERIES`
-- `LSL_SERIES`
-
-Populate each row with constant values:
-- `USL_SERIES[row] = NOM + +TOL`
-- `LSL_SERIES[row] = NOM + -TOL`
-
-Also write explicit scalar helper cells near stats header:
-- `USL_MAX`, `USL_MIN` (both equal to USL),
-- `LSL_MAX`, `LSL_MIN` (both equal to LSL).
-
-Why include these pairs:
-- they provide deterministic anchor values for downstream chart construction,
-- they allow both line-series and 2-point trendline style generation in Google Sheets,
-- they satisfy your requirement of “2x USL and 2x LSL next to statistics header.”
-
-#### 1.2 Series construction update
-Replace array-literal based chart series with **cell-range based series** only.
-
-- Measurement series: existing measurement column range.
-- USL series: `USL_SERIES` column range.
-- LSL series: `LSL_SERIES` column range.
-
-This structure is portable to Google Sheets chart specs because all series are explicit grid ranges.
-
-#### 1.3 Trendline/limit line behavior
-Create upper/lower spec limit visuals from the two-point anchors (`USL_MAX/MIN`, `LSL_MAX/MIN`) and/or from full constant columns:
-- preferred: full constant columns as dedicated line series,
-- optional fallback: 2-point helper data with chart trendline enabled (if needed by chart type).
-
-Acceptance criteria for Phase 1:
-- USL/LSL visible as separate chart series using ranges (not array literals),
-- helper cells contain 2x USL + 2x LSL near stats header,
-- chart output equivalent in Excel and mappable to Google Sheets.
-
----
-
-### Phase 2 — Backend abstraction and writer split
-1. Refactor current `add_measurements_horizontal_sheet` into:
-   - shared “layout + data model builder” function,
-   - backend-specific renderer.
-2. Implement `ExcelExportBackend` as thin wrapper around current worksheet/chart calls.
-3. Implement `GoogleSheetsExportBackend` with batched API operations:
-   - sheet creation,
-   - batch cell writes,
-   - formulas/ranges,
-   - chart specs.
+   - `google_sheets_drive_convert`.
+2. Add Google destination metadata (folder, sharing option, account profile).
+3. Keep existing Excel export path unchanged when target is `excel_xlsx`.
 
 Acceptance criteria:
-- no duplication of grouping/stat logic,
-- backend unit tests confirm equivalent grid content for core stats/series.
+- export options validate target + required Google metadata,
+- no behavior change for existing Excel export users.
 
 ---
 
-### Phase 3 — Google Sheets charts parity
-For each header chart, generate Google Sheets BasicChartSpec (line or scatter parity with current option):
-- categories: Sample # / x-axis range,
-- series 1: measurements,
-- series 2: USL,
-- series 3: LSL.
-
-Set style rules:
-- USL/LSL red lines,
-- no markers on limit lines,
-- hide legend optionally to match current compact layout.
+### Phase 1 — Generate workbook + upload conversion
+1. Run existing workbook generation flow to produce `.xlsx` artifact.
+2. Add Drive API uploader:
+   - upload file bytes,
+   - set destination mime type to Google Sheet,
+   - capture converted file ID + web link.
+3. Surface converted link in UI/logs and optionally open browser.
 
 Acceptance criteria:
-- charts render correctly in Google Sheets with persistent USL/LSL lines,
-- no Excel-only formula/literal dependency.
+- Google target yields a converted Google Sheet from the same generated `.xlsx`,
+- local `.xlsx` can be retained as fallback artifact.
 
 ---
 
-### Phase 4 — Matplotlib/seaborn summary plots in Google Sheets
-Current summary plots are rendered to PNG buffers. For Google Sheets:
-1. Persist PNGs to temporary files or in-memory upload staging.
-2. Upload/host images in a retrievable location (Drive file, public URL, or app-managed storage).
-3. Insert images into target sheet using Google Sheets image insertion method (`=IMAGE(url)` or AddImageRequest equivalent based on chosen API path).
-4. Maintain row spacing/layout so each header keeps the same visual grouping as current summary sheet.
+### Phase 2 — Auth, permissions, and ops
+1. Add OAuth/service-account configuration path.
+2. Use minimal scopes (`drive.file`; optionally `spreadsheets.readonly` for checks).
+3. Add retry/backoff for upload/convert transient failures.
+4. Add progress labels for “generating workbook”, “uploading”, and “converting”.
+
+---
+
+### Phase 3 — Post-conversion validation + fallback policy
+1. Add lightweight validation after conversion (expected tabs exist, non-empty key sheets).
+2. Detect and warn on known conversion degradations (if any formatting/chart losses appear).
+3. Keep `.xlsx` as guaranteed fallback and include path in completion message.
 
 Acceptance criteria:
-- all 4 summary plot types preserved (scatter/group, histogram+density+stats table, trend plot with USL/LSL, violin where applicable),
-- images anchored consistently and reproducibly.
+- conversion issues are surfaced without silent failure,
+- users always retain a valid `.xlsx` export.
 
 ---
 
-### Phase 5 — Security, auth, and operations
-1. Add Google OAuth/service-account configuration path.
-2. Define scopes minimally (`spreadsheets`, optional `drive.file` for image handling).
-3. Add retry/backoff for API quotas and transient errors.
-4. Add progress labels for “uploading sheet/charts/images”.
-
----
-
-### Phase 6 — Testing strategy
+### Phase 4 — Testing strategy
 1. Unit tests
-   - series column generation (USL/LSL constants),
-   - helper anchor cells (2x USL/2x LSL),
-   - backend-neutral layout model.
+   - target/metadata validation,
+   - upload request payload builder,
+   - conversion response parser.
 2. Integration tests
    - Excel export unchanged,
-   - Google Sheets export smoke test with mock API,
-   - chart spec validation for measurement+USL+LSL series.
-3. Visual regression checks
-   - compare generated PNG plots baseline hashes,
-   - spot-check chart data ranges.
+   - Google export smoke test with mocked Drive API.
+3. Optional live smoke check
+   - manual/CI gated test against a sandbox Drive account.
 
 ---
 
-## Detailed task list for your requested first step
-1. Extend header-block writer to allocate two additional data columns (`USL_SERIES`, `LSL_SERIES`).
-2. Write 2x USL and 2x LSL helper values near current stats header cells.
-3. Update chart series source from inline arrays to sheet cell ranges.
-4. Validate limit lines visually in Excel backend (parity check before Google backend).
-5. Add tests for:
-   - series columns filled for all rows,
-   - helper cells populated,
-   - chart series config references ranges.
+## Detailed task list for the immediate next step
+1. Extend export options/contracts with `google_sheets_drive_convert` target.
+2. After workbook generation, branch to Drive upload+convert when target is Google.
+3. Persist/report converted sheet URL + local fallback path.
+4. Add retries and clear error messages for auth/quota/network failures.
+5. Add tests for option validation and Drive request/response handling.
 
 ---
 
 ## Risks and mitigations
-- **Risk:** Google Sheets chart feature gaps vs Excel chart options.
-  - **Mitigation:** normalize on supported subset (line/scatter + fixed styling).
-- **Risk:** image insertion complexity for matplotlib outputs.
-  - **Mitigation:** phase-gate with URL-based insertion first, then optimize storage flow.
-- **Risk:** large exports hitting API limits.
-  - **Mitigation:** batchUpdate chunking + exponential backoff + resumable progress states.
+- **Risk:** Google conversion may alter some advanced chart/formatting details.
+  - **Mitigation:** keep `.xlsx` fallback, add post-conversion warnings, document known differences.
+- **Risk:** OAuth/service-account setup friction.
+  - **Mitigation:** provide clear setup guide + validation screen + actionable error mapping.
+- **Risk:** API quotas and transient failures.
+  - **Mitigation:** implement exponential backoff and resumable status logging.
 
 ---
 
 ## Success definition
 Migration is complete when:
 1. User can choose Google Sheets export target.
-2. Raw and summary sheets are generated with equivalent data/statistics.
-3. All charts include measurement, USL, and LSL series.
-4. USL/LSL are represented via Google-compatible sheet ranges.
-5. Matplotlib/seaborn summary plots are visible in Google Sheets.
+2. App generates `.xlsx` exactly as today and uploads it for Drive conversion.
+3. User receives a working Google Sheet link/ID from converted file.
+4. `.xlsx` fallback is always preserved/reported.
+5. Excel export remains unchanged for default users.
+
+---
+
+## Deprecated approach (historical)
+The earlier plan to build a full `GoogleSheetsExportBackend` and recreate charts/image placement natively in Sheets is intentionally deprioritized in favor of Drive conversion due to complexity and parity risk.

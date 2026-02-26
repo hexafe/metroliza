@@ -229,6 +229,21 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertIsInstance(thread.get_export_backend(), ExcelExportBackend)
 
 
+    def test_google_drive_target_reuses_excel_backend_until_upload_phase(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            self.assertEqual(thread.export_target, 'google_sheets_drive_convert')
+            self.assertEqual(thread.backend_target, 'google')
+            self.assertIsInstance(thread.get_export_backend(), ExcelExportBackend)
+
     def test_backend_target_metadata_defaults_to_excel(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
