@@ -13,6 +13,7 @@ from typing import Any
 
 GOOGLE_DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+GOOGLE_SHEETS_METADATA_URL_TEMPLATE = "https://sheets.googleapis.com/v4/spreadsheets/{file_id}?fields=sheets.properties.title"
 
 
 class GoogleDriveExportError(RuntimeError):
@@ -39,6 +40,10 @@ class GoogleDriveResponseError(GoogleDriveExportError):
 class GoogleDriveConversionResult:
     file_id: str
     web_url: str
+    local_xlsx_path: str
+    fallback_message: str
+    warnings: tuple[str, ...] = ()
+    converted_tab_titles: tuple[str, ...] = ()
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -143,7 +148,12 @@ def parse_drive_conversion_response(payload: dict[str, Any]) -> GoogleDriveConve
     web_url = payload.get("webViewLink") or payload.get("webContentLink")
     if not file_id or not web_url:
         raise GoogleDriveResponseError("Drive conversion response missing id/webViewLink fields.")
-    return GoogleDriveConversionResult(file_id=file_id, web_url=web_url)
+    return GoogleDriveConversionResult(
+        file_id=file_id,
+        web_url=web_url,
+        local_xlsx_path="",
+        fallback_message="",
+    )
 
 
 def map_google_http_error(status_code: int, payload_text: str) -> GoogleDriveExportError:
@@ -177,10 +187,73 @@ def map_google_network_error(context: str, exc: urllib.error.URLError) -> Google
     return GoogleDriveTransientError(f"{context} due to network error: {exc}")
 
 
+def _build_upload_request_body(*, boundary: str, metadata: dict[str, Any], file_mime_type: str, file_bytes: bytes) -> bytes:
+    metadata_part = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        f"{json.dumps(metadata)}\r\n"
+    ).encode("utf-8")
+    file_part_header = (
+        f"--{boundary}\r\n"
+        f"Content-Type: {file_mime_type}\r\n\r\n"
+    ).encode("utf-8")
+    closing = f"\r\n--{boundary}--\r\n".encode("utf-8")
+    return metadata_part + file_part_header + file_bytes + closing
+
+
+def _fetch_converted_sheet_titles(*, file_id: str, access_token: str) -> list[str]:
+    metadata_url = GOOGLE_SHEETS_METADATA_URL_TEMPLATE.format(file_id=urllib.parse.quote(file_id, safe=""))
+    request = urllib.request.Request(
+        metadata_url,
+        headers={"Authorization": f"Bearer {access_token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        raise map_google_http_error(exc.code, body_text) from exc
+    except urllib.error.URLError as exc:
+        raise map_google_network_error("Google Sheets metadata read failed", exc) from exc
+
+    sheets = payload.get("sheets")
+    if not isinstance(sheets, list):
+        raise GoogleDriveResponseError("Google Sheets metadata response missing sheets list.")
+
+    titles: list[str] = []
+    for sheet in sheets:
+        if not isinstance(sheet, dict):
+            continue
+        properties = sheet.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        title = properties.get("title")
+        if isinstance(title, str) and title.strip():
+            titles.append(title)
+    return titles
+
+
+def _build_tab_validation_warning(expected_sheet_names: list[str], actual_sheet_titles: list[str]) -> str | None:
+    expected = {name for name in expected_sheet_names if isinstance(name, str) and name.strip()}
+    actual = {name for name in actual_sheet_titles if isinstance(name, str) and name.strip()}
+    missing = sorted(expected - actual)
+    if not missing:
+        return None
+
+    return (
+        "Google Sheets conversion appears partial. Missing expected tab(s): "
+        f"{', '.join(missing)}."
+    )
+
+
 def upload_and_convert_workbook(
     excel_path: str,
     credentials_path: str = "credentials.json",
     token_path: str = "token.json",
+    expected_sheet_names: list[str] | None = None,
+    max_retries: int = 3,
+    retry_delay_seconds: float = 1.0,
 ) -> GoogleDriveConversionResult:
     excel_file = Path(excel_path)
     if not excel_file.exists():
@@ -195,20 +268,13 @@ def upload_and_convert_workbook(
     }
 
     boundary = f"metroliza-{int(time.time() * 1000)}"
-    metadata_part = (
-        f"--{boundary}\r\n"
-        "Content-Type: application/json; charset=UTF-8\r\n\r\n"
-        f"{json.dumps(metadata)}\r\n"
-    ).encode("utf-8")
-
     file_bytes = excel_file.read_bytes()
-    file_part_header = (
-        f"--{boundary}\r\n"
-        f"Content-Type: {excel_mime}\r\n\r\n"
-    ).encode("utf-8")
-    closing = f"\r\n--{boundary}--\r\n".encode("utf-8")
-
-    body = metadata_part + file_part_header + file_bytes + closing
+    body = _build_upload_request_body(
+        boundary=boundary,
+        metadata=metadata,
+        file_mime_type=excel_mime,
+        file_bytes=file_bytes,
+    )
 
     request = urllib.request.Request(
         GOOGLE_DRIVE_UPLOAD_URL,
@@ -220,15 +286,55 @@ def upload_and_convert_workbook(
         method="POST",
     )
 
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body_text = exc.read().decode("utf-8", errors="replace")
-        raise map_google_http_error(exc.code, body_text) from exc
-    except urllib.error.URLError as exc:
-        raise map_google_network_error("Google Drive upload failed", exc) from exc
+    payload: dict[str, Any] | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            body_text = exc.read().decode("utf-8", errors="replace")
+            mapped = map_google_http_error(exc.code, body_text)
+            if isinstance(mapped, (GoogleDriveTransientError, GoogleDriveQuotaError)) and attempt < max_retries:
+                time.sleep(retry_delay_seconds)
+                continue
+            raise mapped from exc
+        except urllib.error.URLError as exc:
+            mapped = map_google_network_error("Google Drive upload failed", exc)
+            if attempt < max_retries:
+                time.sleep(retry_delay_seconds)
+                continue
+            raise mapped from exc
 
-    result = parse_drive_conversion_response(payload)
+    if payload is None:
+        raise GoogleDriveTransientError("Google Drive upload exhausted retries without response payload.")
+
+    parsed = parse_drive_conversion_response(payload)
+    warnings: list[str] = []
+    converted_tab_titles: list[str] = []
+    if expected_sheet_names:
+        try:
+            converted_tab_titles = _fetch_converted_sheet_titles(file_id=parsed.file_id, access_token=access_token)
+            validation_warning = _build_tab_validation_warning(expected_sheet_names, converted_tab_titles)
+            if validation_warning:
+                warnings.append(validation_warning)
+        except GoogleDriveExportError as exc:
+            warnings.append(
+                "Google Sheets tab validation could not be completed. "
+                f"{exc}"
+            )
+
+    fallback_message = f"Use local .xlsx fallback if needed: {excel_file}"
+    if warnings:
+        fallback_message = f"Conversion completed with warnings. {fallback_message}"
+
+    result = GoogleDriveConversionResult(
+        file_id=parsed.file_id,
+        web_url=parsed.web_url,
+        local_xlsx_path=str(excel_file),
+        fallback_message=fallback_message,
+        warnings=tuple(warnings),
+        converted_tab_titles=tuple(converted_tab_titles),
+    )
     logging.info("Google Sheets conversion completed for '%s' (%s)", excel_file, result.web_url)
     return result
