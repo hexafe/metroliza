@@ -50,6 +50,17 @@ Metroliza supports an end-to-end flow:
 10. Use summary-only mode to generate just the aggregated `CSV_SUMMARY` worksheet for faster large-column exports.
 11. Reuse CSV presets for recurring file families (delimiter/decimal, selected columns, spec limits, plot mode/toggles, and summary-only preference), or clear saved presets directly from the CSV Summary dialog.
 
+## Google Sheets export prerequisites and secret handling
+
+Before using the Google Sheets export target (`google_sheets_drive_convert`), ensure:
+
+- You have a Google Cloud OAuth client secret file available locally as `credentials.json` (or a local path you explicitly point the smoke harness to).
+- A local OAuth token cache (`token.json`) is generated after first consent; keep it local-only and rotate/revoke if shared machine access changes.
+- `credentials.json` and `token.json` are ignored by git (including wildcard/path variants) and never committed to the repository.
+- Only redacted examples/templates (for example `config/google/credentials.example.json`) are allowed in-repo.
+
+If conversion fails or warnings indicate degraded chart/format fidelity, Metroliza keeps and reports the generated `.xlsx` path as the guaranteed fallback artifact.
+
 ## Project layout
 
 - `metroliza.py` — application entry point.
@@ -87,11 +98,12 @@ METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
 PYTHONPATH=. python tests/google_conversion_smoke.py
 ```
 
-- This smoke check is **non-default** and is intentionally excluded from the
+- This smoke check is **optional/non-default** and is intentionally excluded from the
   standard unit-test discover run.
-- It is intended for release validation only (or explicitly gated CI jobs).
-- It fails fast with actionable configuration errors when the local
+- Use it for release validation (or explicitly gated CI jobs) to verify live Drive conversion behavior against a sandbox account.
+- It fails fast with actionable configuration errors when local
   credentials/token files are missing or misconfigured.
+- Recommended cadence: run when preparing release candidates or when changing Google conversion/auth logic.
 
 ## Packaging (one-file executable)
 
@@ -156,6 +168,15 @@ Recent code paths use retry-aware helpers from `modules/db.py`. If a lock persis
 ### Empty or partial charts in exports
 
 Check grouping and filtering choices first. Group/plot alignment, NaN-only bucket handling, and merge-key fallback selection (blank `GROUP_KEY`/`REPORT_ID` now fall back to composite identity) were hardened in the Phase 2 correctness work; rerun export after verifying source rows in the selected date/reference scope.
+
+### Google conversion warnings or degraded formatting
+
+Google Drive conversion can alter some advanced Excel chart/style details. When warnings appear:
+
+- Treat the converted Google Sheet as a convenience output and the generated `.xlsx` as the fidelity baseline.
+- Review the warning message and verify critical tabs/charts in the converted sheet.
+- Re-run the optional live smoke check when changing credentials, scopes, or conversion-related logic.
+- Confirm `credentials.json`/`token.json` are local-only and gitignored if auth errors or missing-file warnings appear.
 
 ### Export and parsing performance notes
 

@@ -13,7 +13,9 @@ Canonical phase mapping used throughout this plan:
 Audit result based on the current repository state:
 - **Phase 0:** ✅ Completed.
 - **Phase 1:** ✅ Completed.
-- **Phase 2:** 🟡 Partially implemented (correctness/contract work, DB helper migration, and major export-worker extraction landed; remaining decomposition/performance follow-through continues).
+- **Phase 2:** 🟡 Partially implemented.
+  - **Completed:** grouping/plot correctness fixes, dataclass request-contract migration, shared DB helper adoption (including transactional modify flows), and major summary/worksheet helper extraction with regression coverage.
+  - **Remaining:** final `ExportDataThread` worksheet/chart decomposition slices plus post-extraction profiling/precompute follow-through on large chart-heavy exports.
 - **Phase 3:** ✅ Completed.
 - **Phase 4:** ✅ Completed.
 
@@ -99,7 +101,11 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Phase 2 — Correctness + structure + performance (Priority P1/P2, 3–5 days)
 
-### Status: 🟡 Partially implemented (correctness/contract work, DB helper migration, and major export-worker extraction landed; decomposition/performance follow-through remains).
+### Status: 🟡 Partially implemented.
+
+Completed vs remaining split:
+- **Completed:** correctness hardening (deterministic grouping + merge-key fallback + NaN-bucket filtering), parse/export dataclass contracts, DB helper consolidation (including retry-aware transactional modify flow), and major export summary/helper extraction with tests.
+- **Remaining:** continue extracting the last high-complexity worksheet/chart write sections from `ExportDataThread`, then run targeted profiling/precompute cleanup after each extraction slice.
 
 ### Implementation checklist
 1. **Fix grouping/plot mismatch root causes** — ✅ completed.
@@ -220,7 +226,11 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 ## Google Sheets compatibility roadmap (Excel → Google Sheets)
 
-### Status: 🟡 Partially implemented (GS0-GS4 completed; GS5 testing-depth follow-through remains).
+### Status: 🟡 Partially implemented.
+
+Completed vs remaining split:
+- **Completed:** GS0-GS4 implementation is merged (target plumbing, Drive conversion flow, auth/ops handling, post-conversion validation, and `.xlsx` fallback reporting).
+- **Remaining (GS5):** expand conversion-path test depth beyond current baseline mocked coverage and maintain optional release-gated live smoke checks.
 
 > **Canonical source note:** The detailed Google Sheets migration phases, acceptance criteria, and status language are maintained in `GOOGLE_SHEETS_MIGRATION_PLAN.md`. This section is a concise companion summary only.
 
