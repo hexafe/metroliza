@@ -62,6 +62,7 @@ from modules.ExportDataThread import (  # noqa: E402
     run_export_steps,
 )
 from modules.export_backends import ExcelExportBackend  # noqa: E402
+from modules.google_drive_export import GoogleDriveConversionResult  # noqa: E402
 from modules.ParseReportsThread import build_report_fingerprints_from_rows, parse_new_reports  # noqa: E402
 
 
@@ -318,6 +319,51 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertTrue(completed)
             self.assertEqual(calls, ['filtered', 'measurements'])
             self.assertTrue(os.path.exists(out_file))
+
+    def test_google_target_run_keeps_xlsx_fallback_and_conversion_warnings(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+            thread._exported_sheet_names = {'MEASUREMENTS', 'REF_A'}
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+
+            emitted = []
+            thread.update_label.emit = lambda text: emitted.append(text)
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+            module.upload_and_convert_workbook = lambda *_args, **_kwargs: GoogleDriveConversionResult(
+                file_id='sheet-id',
+                web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                local_xlsx_path=out_file,
+                fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
+                warnings=('Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',),
+                converted_tab_titles=('MEASUREMENTS',),
+            )
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+
+            self.assertEqual(thread.completion_metadata['converted_file_id'], 'sheet-id')
+            self.assertEqual(thread.completion_metadata['converted_url'], 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
+            self.assertEqual(thread.completion_metadata['local_xlsx_path'], out_file)
+            self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.')
+            self.assertEqual(thread.completion_metadata['converted_tab_titles'], ['MEASUREMENTS'])
+            self.assertTrue(any(text.startswith('Warning:') for text in emitted))
 
 if __name__ == '__main__':
     unittest.main()

@@ -413,6 +413,11 @@ class ExportDataThread(QThread):
         self.export_canceled = False
         self._prepared_grouping_df = None
         self.completion_metadata = {"local_xlsx_path": self.excel_file}
+        self._exported_sheet_names = set()
+
+    def _record_exported_sheet_name(self, sheet_name):
+        if isinstance(sheet_name, str) and sheet_name.strip():
+            self._exported_sheet_names.add(sheet_name)
 
     @property
     def prepared_grouping_df(self):
@@ -624,16 +629,24 @@ class ExportDataThread(QThread):
 
             if self.export_target == "google_sheets_drive_convert":
                 self.update_label.emit("Uploading workbook to Google Drive for Sheets conversion...")
-                conversion = upload_and_convert_workbook(self.excel_file)
+                conversion = upload_and_convert_workbook(
+                    self.excel_file,
+                    expected_sheet_names=sorted(self._exported_sheet_names),
+                )
                 self.completion_metadata.update(
                     {
                         "converted_file_id": conversion.file_id,
                         "converted_url": conversion.web_url,
+                        "local_xlsx_path": conversion.local_xlsx_path,
+                        "fallback_message": conversion.fallback_message,
+                        "conversion_warnings": list(conversion.warnings),
+                        "converted_tab_titles": list(conversion.converted_tab_titles),
                     }
                 )
-                self.update_label.emit(
-                    f"Google Sheets conversion ready: {conversion.web_url} (local fallback: {self.excel_file})"
-                )
+                for warning in conversion.warnings:
+                    self.update_label.emit(f"Warning: {warning}")
+
+                self.update_label.emit(f"Google Sheets conversion ready: {conversion.web_url}. {conversion.fallback_message}")
 
             self.update_label.emit("Export completed successfully.")
             self.finished.emit()
@@ -663,10 +676,12 @@ class ExportDataThread(QThread):
                 col = 0
                 safe_ref_sheet_name = unique_sheet_name(ref, used_sheet_names)
                 worksheet = workbook.add_worksheet(safe_ref_sheet_name)
+                self._record_exported_sheet_name(safe_ref_sheet_name)
                 summary_worksheet = None
                 if self.generate_summary_sheet:
                     summary_sheet_name = unique_sheet_name(f"{safe_ref_sheet_name}_summary", used_sheet_names)
                     summary_worksheet = workbook.add_worksheet(summary_sheet_name)
+                    self._record_exported_sheet_name(summary_sheet_name)
 
                 worksheet.set_column(0, max_col, column_width, cell_format=formats['default'])
 
@@ -730,6 +745,7 @@ class ExportDataThread(QThread):
             backend = self._active_backend or self.get_export_backend()
             safe_table_name = unique_sheet_name(table_name, backend.list_sheet_names(excel_writer))
             backend.write_dataframe(excel_writer, df, safe_table_name)
+            self._record_exported_sheet_name(safe_table_name)
             worksheet = backend.get_worksheet(excel_writer, safe_table_name)
 
             # Apply autofilter to enable filtering
