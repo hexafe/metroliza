@@ -79,9 +79,19 @@ class ParsingDialog(QDialog):
     @pyqtSlot()
     def select_directory(self):
         try:
-            # Open a dialog to select a directory first; if canceled, offer ZIP selection.
+            # Open a dialog to select a directory first.
             selected_source = QFileDialog.getExistingDirectory(self, "Select directory")
             if not selected_source:
+                choose_archive = QMessageBox.question(
+                    self,
+                    "No directory selected",
+                    "No directory was selected. Do you want to choose an archive file instead?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if choose_archive != QMessageBox.StandardButton.Yes:
+                    return
+
                 archive_patterns = sorted({f"*{ext}" for _, extensions, _ in shutil.get_unpack_formats() for ext in extensions})
                 archive_filter = "Supported archives (" + " ".join(archive_patterns) + ")" if archive_patterns else "All Files (*)"
                 selected_source, _ = QFileDialog.getOpenFileName(
