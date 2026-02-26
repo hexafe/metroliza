@@ -13,7 +13,6 @@ from io import BytesIO
 import matplotlib.pyplot as plt
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from scipy.stats import norm, ttest_ind
-from xlsxwriter.utility import xl_col_to_name, xl_range
 
 from modules.contracts import ExportRequest, validate_export_request
 from modules.CustomLogger import CustomLogger
@@ -22,6 +21,28 @@ from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
 from modules.google_drive_export import GoogleDriveExportError, upload_and_convert_workbook
 from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
+from modules.export_chart_writer import (
+    build_measurement_chart_format_policy as _build_measurement_chart_format_policy,
+    build_measurement_chart_range_specs as _build_measurement_chart_range_specs,
+    build_measurement_chart_series_specs as _build_measurement_chart_series_specs,
+    build_sheet_series_range as _build_sheet_series_range,
+    insert_measurement_chart,
+)
+from modules.export_query_service import (
+    build_export_dataframe as _build_export_dataframe,
+    build_measurement_export_dataframe,
+    execute_export_query as _execute_export_query,
+)
+from modules.export_sheet_writer import (
+    build_measurement_block_plan as _build_measurement_block_plan,
+    build_measurement_header_block_plan as _build_measurement_header_block_plan,
+    build_measurement_stat_formulas as _build_measurement_stat_formulas,
+    build_measurement_stat_row_specs as _build_measurement_stat_row_specs,
+    build_measurement_write_bundle as _build_measurement_write_bundle,
+    build_spec_limit_anchor_rows as _build_spec_limit_anchor_rows,
+    create_measurement_formats,
+    write_measurement_block,
+)
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
 if _HAS_SEABORN:
@@ -29,11 +50,64 @@ if _HAS_SEABORN:
 
 
 def build_export_dataframe(data, column_names):
-    return pd.DataFrame(data, columns=column_names)
+    return _build_export_dataframe(data, column_names)
 
 
 def execute_export_query(db_file, export_query, select_reader=execute_select_with_columns):
-    return select_reader(db_file, export_query)
+    return _execute_export_query(db_file, export_query, select_reader=select_reader)
+
+
+def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
+    return _build_sheet_series_range(sheet_name, first_row, last_row, column_index)
+
+
+def build_spec_limit_anchor_rows(usl, lsl):
+    return _build_spec_limit_anchor_rows(usl, lsl)
+
+
+def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
+    return _build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value)
+
+
+def build_measurement_stat_row_specs(stat_formulas):
+    return _build_measurement_stat_row_specs(stat_formulas)
+
+
+def build_measurement_block_plan(*, base_col, sample_size):
+    return _build_measurement_block_plan(base_col=base_col, sample_size=sample_size)
+
+
+def build_measurement_header_block_plan(header_group, base_col):
+    return _build_measurement_header_block_plan(header_group, base_col)
+
+
+def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    return _build_measurement_chart_range_specs(
+        sheet_name=sheet_name,
+        first_data_row=first_data_row,
+        last_data_row=last_data_row,
+        x_column=x_column,
+        y_column=y_column,
+    )
+
+
+def build_measurement_chart_series_specs(*, header, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    return _build_measurement_chart_series_specs(
+        header=header,
+        sheet_name=sheet_name,
+        first_data_row=first_data_row,
+        last_data_row=last_data_row,
+        x_column=x_column,
+        y_column=y_column,
+    )
+
+
+def build_measurement_chart_format_policy(header):
+    return _build_measurement_chart_format_policy(header)
+
+
+def build_measurement_write_bundle(header, header_group, base_col):
+    return _build_measurement_write_bundle(header, header_group, base_col)
 
 
 def run_export_steps(steps, should_cancel):
@@ -43,22 +117,6 @@ def run_export_steps(steps, should_cancel):
         step()
     return not should_cancel()
 
-
-def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
-    """Build an absolute worksheet range string for xlsxwriter series definitions."""
-    return f"={sheet_name}!${xl_range(first_row, column_index, last_row, column_index)}"
-
-
-
-
-def build_spec_limit_anchor_rows(usl, lsl):
-    """Return worksheet helper rows for USL/LSL anchor points."""
-    return [
-        ('USL_MAX', usl),
-        ('USL_MIN', usl),
-        ('LSL_MAX', lsl),
-        ('LSL_MIN', lsl),
-    ]
 
 def all_measurements_within_limits(measurements, lower_limit, upper_limit):
     series = pd.Series(measurements)
@@ -133,184 +191,6 @@ def compute_scaled_y_limits(current_limits, scale_factor):
     return y_min - padding, y_max + padding
 
 
-def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
-    """Build stable worksheet formulas for per-header measurement statistics."""
-    usl_formula = f"({summary_col}1 + {summary_col}2)"
-    lsl_formula = f"({summary_col}1 + {summary_col}3)"
-    sigma_formula = f"({summary_col}7)"
-    average_formula = f"({summary_col}5)"
-
-    if nom_value == 0 and lsl_value == 0:
-        cpk_formula = f"=ROUND(({usl_formula} - {average_formula})/(3 * {sigma_formula}), 3)"
-    else:
-        cpk_formula = (
-            "=ROUND(MIN( "
-            f"({usl_formula} - {average_formula})/(3 * {sigma_formula}), "
-            f"({average_formula} - {lsl_formula})/(3 * {sigma_formula}) "
-            "), 3)"
-        )
-
-    nok_high = f'COUNTIF({data_range_y}, ">"&({nom_cell}+{usl_cell}))'
-    nok_low = f'COUNTIF({data_range_y}, "<"&({nom_cell}+{lsl_cell}))'
-    nok_cell = f"${summary_col}$10"
-    sample_size_cell = f"${summary_col}$12"
-
-    return {
-        'min': f"=ROUND(MIN({data_range_y}), 3)",
-        'avg': f"=ROUND(AVERAGE({data_range_y}), 3)",
-        'max': f"=ROUND(MAX({data_range_y}), 3)",
-        'std': f"=ROUND(STDEV({data_range_y}), 3)",
-        'cp': f"=ROUND(({usl_formula} - {lsl_formula})/(6 * {sigma_formula}), 3)",
-        'cpk': cpk_formula,
-        'nok_total': f'={nok_high}+{nok_low}',
-        'nok_percent': f"=ROUND(({nok_cell}/{sample_size_cell})*100%, 3)",
-        'sample_size': f"=COUNT({data_range_y})",
-    }
-
-
-def build_measurement_stat_row_specs(stat_formulas):
-    """Return ordered worksheet row specs for measurement statistics."""
-    return [
-        ('MIN', stat_formulas['min'], None),
-        ('AVG', stat_formulas['avg'], None),
-        ('MAX', stat_formulas['max'], None),
-        ('STD', stat_formulas['std'], None),
-        ('Cp', stat_formulas['cp'], None),
-        ('Cpk', stat_formulas['cpk'], None),
-        ('NOK number', stat_formulas['nok_total'], None),
-        ('NOK %', stat_formulas['nok_percent'], 'percent'),
-        ('Sample size', stat_formulas['sample_size'], None),
-    ]
-
-
-def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column):
-    """Return worksheet range specs shared by chart backend helpers."""
-    return {
-        'data_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
-        'data_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column),
-        'usl_y': build_sheet_series_range(sheet_name, 0, 1, y_column),
-        'lsl_y': build_sheet_series_range(sheet_name, 2, 3, y_column),
-        'limit_x': build_sheet_series_range(sheet_name, first_data_row, first_data_row + 1, x_column),
-    }
-
-
-def build_measurement_header_block_plan(header_group, base_col):
-    """Build a stable per-header worksheet write plan used by export writers."""
-    limits = resolve_nominal_and_limits(header_group)
-    nom = limits['nom']
-    usl = limits['usl']
-    lsl = limits['lsl']
-
-    measurement_plan = build_measurement_block_plan(base_col=base_col, sample_size=len(header_group))
-    summary_col_name = xl_col_to_name(measurement_plan['summary_column'])
-
-    nom_cell = f'${summary_col_name}$1'
-    usl_cell = f'${summary_col_name}$2'
-    lsl_cell = f'${summary_col_name}$3'
-
-    stat_formulas = build_measurement_stat_formulas(
-        summary_col=summary_col_name,
-        data_range_y=measurement_plan['data_range_y'],
-        nom_cell=nom_cell,
-        usl_cell=usl_cell,
-        lsl_cell=lsl_cell,
-        nom_value=nom,
-        lsl_value=lsl,
-    )
-
-    plus_tol = round(usl - nom, 3)
-    minus_tol = round(lsl - nom, 3)
-
-    return {
-        'nom': nom,
-        'plus_tol': plus_tol,
-        'minus_tol': minus_tol,
-        'usl': usl,
-        'lsl': lsl,
-        'first_data_row': measurement_plan['data_start_row'],
-        'last_data_row': measurement_plan['last_data_row'],
-        'summary_column': measurement_plan['summary_column'],
-        'y_column': measurement_plan['y_column'],
-        'nom_cell': nom_cell,
-        'usl_cell': usl_cell,
-        'lsl_cell': lsl_cell,
-        'stat_rows': build_measurement_stat_row_specs(stat_formulas),
-        'spec_limit_rows': build_spec_limit_anchor_rows(usl, lsl),
-        'measurement_plan': measurement_plan,
-    }
-
-
-def build_measurement_chart_series_specs(
-    *,
-    header,
-    sheet_name,
-    first_data_row,
-    last_data_row,
-    x_column,
-    y_column,
-):
-    """Build stable chart series definitions for measurement and spec-limit overlays."""
-    range_specs = build_measurement_chart_range_specs(
-        sheet_name=sheet_name,
-        first_data_row=first_data_row,
-        last_data_row=last_data_row,
-        x_column=x_column,
-        y_column=y_column,
-    )
-
-    return [
-        {
-            'name': header,
-            'categories': range_specs['data_x'],
-            'values': range_specs['data_y'],
-        },
-        {
-            'name': 'USL',
-            'categories': range_specs['limit_x'],
-            'values': range_specs['usl_y'],
-            'line': {'color': 'red', 'width': 1},
-            'marker': {'type': 'none'},
-            'data_labels': {'value': False},
-            'show_legend_key': False,
-        },
-        {
-            'name': 'LSL',
-            'categories': range_specs['limit_x'],
-            'values': range_specs['lsl_y'],
-            'line': {'color': 'red', 'width': 1},
-            'marker': {'type': 'none'},
-            'data_labels': {'value': False},
-            'show_legend_key': False,
-        },
-    ]
-
-
-def build_measurement_block_plan(*, base_col, sample_size):
-    """Return worksheet/chart coordinate plan for one measurement header block."""
-    if sample_size < 1:
-        raise ValueError('sample_size must be >= 1')
-
-    data_header_row = 20
-    data_start_row = data_header_row + 1
-    last_data_row = data_start_row + sample_size - 1
-    y_column = base_col + 2
-    summary_column = base_col + 1
-
-    return {
-        'data_header_row': data_header_row,
-        'data_start_row': data_start_row,
-        'last_data_row': last_data_row,
-        'summary_column': summary_column,
-        'y_column': y_column,
-        'data_range_y': (
-            f'{xl_col_to_name(y_column)}{data_start_row + 1}:'
-            f'{xl_col_to_name(y_column)}{last_data_row + 1}'
-        ),
-        'nok_percent_row': 10,
-        'chart_insert_row': 12,
-    }
-
-
 def build_summary_sheet_position_plan(base_col):
     """Return summary sheet anchors aligned with the 3-column measurement block layout."""
     block_index = max((base_col - 3) // 3, 0)
@@ -320,41 +200,6 @@ def build_summary_sheet_position_plan(base_col):
         'column': 0,
         'header_row': row,
         'image_row': row + 1,
-    }
-
-
-def build_measurement_chart_format_policy(header):
-    """Return chart formatting and insertion policy for one measurement block."""
-    return {
-        'title': {'name': f'{header}', 'name_font': {'size': 10}},
-        'y_axis': {'major_gridlines': {'visible': False}},
-        'legend': {'position': 'none'},
-        'size': {'width': 240, 'height': 160},
-    }
-
-
-def build_measurement_write_bundle(header, header_group, base_col):
-    """Return the write-plan bundle used for one per-header worksheet section."""
-    header_plan = build_measurement_header_block_plan(header_group, base_col)
-    measurement_plan = header_plan['measurement_plan']
-
-    static_rows = [
-        (0, 'NOM', header_plan['nom']),
-        (1, '+TOL', header_plan['plus_tol']),
-        (2, '-TOL', header_plan['minus_tol']),
-    ]
-
-    data_columns = [
-        (measurement_plan['data_header_row'], base_col, 'Date', header_group['DATE'], None),
-        (measurement_plan['data_header_row'], base_col + 1, 'Sample #', header_group['SAMPLE_NUMBER'], None),
-        (measurement_plan['data_header_row'], base_col + 2, header, header_group['MEAS'].round(3), 'wrap'),
-    ]
-
-    return {
-        'header_plan': header_plan,
-        'measurement_plan': measurement_plan,
-        'static_rows': static_rows,
-        'data_columns': data_columns,
     }
 
 
@@ -800,186 +645,87 @@ class ExportDataThread(QThread):
 
     def add_measurements_horizontal_sheet(self, excel_writer):
         try:
-            df = read_sql_dataframe(self.db_file, self.filter_query)
-            df = self._ensure_sample_number_column(df)
-            df['HEADER - AX'] = df['HEADER'] + ' - ' + df['AX']
+            df = build_measurement_export_dataframe(read_sql_dataframe(self.db_file, self.filter_query))
 
-            # Group the data by reference
             reference_groups = df.groupby('REFERENCE', as_index=False)
-
-            # Create the summary worksheet
             backend = self._active_backend or self.get_export_backend()
             workbook = backend.get_workbook(excel_writer)
             used_sheet_names = backend.list_sheet_names(excel_writer)
 
-            # Initialize variables for column and summary column tracking
-            col = 0
-
-            # Define cell formats
-            default_format = workbook.add_format({'align': 'center', 'valign': 'vcenter'})
-            border_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'right': 1})
-            wrap_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'text_wrap': True})
-            percent_format = workbook.add_format({'align': 'center', 'valign': 'vcenter', 'num_format': '0.00%'})
-            red_format = workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1})
-
+            formats = create_measurement_formats(workbook)
             column_width = 12
-
-            # Set the default cell format for the summary worksheet
             max_col = len(df['HEADER - AX'].unique()) * 3
 
             for (ref, ref_group) in reference_groups:
                 if self._check_canceled():
                     return
-                # Reset the column tracking for new sheet
-                col = 0
-                
-                safe_ref_sheet_name = unique_sheet_name(ref, used_sheet_names)
 
-                # Create a worksheet for each reference
+                col = 0
+                safe_ref_sheet_name = unique_sheet_name(ref, used_sheet_names)
                 worksheet = workbook.add_worksheet(safe_ref_sheet_name)
+                summary_worksheet = None
                 if self.generate_summary_sheet:
                     summary_sheet_name = unique_sheet_name(f"{safe_ref_sheet_name}_summary", used_sheet_names)
                     summary_worksheet = workbook.add_worksheet(summary_sheet_name)
 
-                # Set the default cell format for the worksheet
-                worksheet.set_column(0, max_col, column_width, cell_format=default_format)
+                worksheet.set_column(0, max_col, column_width, cell_format=formats['default'])
 
-                # Group the data by header within the reference
                 header_groups = ref_group.groupby('HEADER - AX', as_index=False)
-
                 for (header, header_group) in header_groups:
                     if self._check_canceled():
                         return
+
                     header_group = self._sort_header_group(header_group)
-                    
                     base_col = col
-                    write_bundle = build_measurement_write_bundle(header, header_group, base_col)
+                    write_bundle = _build_measurement_write_bundle(header, header_group, base_col)
                     header_plan = write_bundle['header_plan']
+                    measurement_plan = write_measurement_block(worksheet, write_bundle, formats, base_col=base_col)
 
-                    for row_index, row_label, row_value in write_bundle['static_rows']:
-                        worksheet.write(row_index, base_col, row_label)
-                        worksheet.write(row_index, base_col + 1, row_value)
-
-                    # Spec-limit anchor points for horizontal limit lines in charts (no labels).
-                    worksheet.write(0, base_col + 2, header_plan['usl'])
-                    worksheet.write(1, base_col + 2, header_plan['usl'])
-                    worksheet.write(2, base_col + 2, header_plan['lsl'])
-                    worksheet.write(3, base_col + 2, header_plan['lsl'])
-                    
-                    measurement_plan = write_bundle['measurement_plan']
-                    nom_cell = header_plan['nom_cell']
-                    usl_cell = header_plan['usl_cell']
-                    lsl_cell = header_plan['lsl_cell']
-
-                    for row_offset, (label, formula, cell_style) in enumerate(header_plan['stat_rows'], start=3):
-                        worksheet.write(row_offset, base_col, label)
-                        if cell_style == 'percent':
-                            worksheet.write_formula(row_offset, base_col + 1, formula, percent_format)
-                        else:
-                            worksheet.write_formula(row_offset, base_col + 1, formula)
-                    
-                    for data_header_row, data_col, data_label, data_values, data_style in write_bundle['data_columns']:
-                        if data_style == 'wrap':
-                            worksheet.write(data_header_row, data_col, data_label, wrap_format)
-                        else:
-                            worksheet.write(data_header_row, data_col, data_label)
-                        worksheet.write_column(measurement_plan['data_start_row'], data_col, data_values)
-
-                    # Apply conditional formatting to highlight cells greater than USL in red
-                    worksheet.conditional_format(
-                        measurement_plan['data_start_row'],
-                        measurement_plan['y_column'],
-                        measurement_plan['last_data_row'],
-                        measurement_plan['y_column'],
-                        {'type': 'cell', 'criteria': '>', 'value': f'({nom_cell}+{usl_cell})', 'format': red_format},
-                    )
-
-                    # Apply conditional formatting to highlight cells lower than LSL in red
-                    worksheet.conditional_format(
-                        measurement_plan['data_start_row'],
-                        measurement_plan['y_column'],
-                        measurement_plan['last_data_row'],
-                        measurement_plan['y_column'],
-                        {'type': 'cell', 'criteria': '<', 'value': f'({nom_cell}+{lsl_cell})', 'format': red_format},
-                    )
-
-                    # Apply conditional formatting to highlight if NOK% > 0
-                    worksheet.conditional_format(
-                        measurement_plan['nok_percent_row'],
-                        measurement_plan['summary_column'],
-                        measurement_plan['nok_percent_row'],
-                        measurement_plan['summary_column'],
-                        {'type': 'cell', 'criteria': '>', 'value': '0', 'format': red_format},
-                    )
-                    
                     col += 3
-
-                    # Merge cells for the header
                     header_col_end = col - 1
+                    worksheet.set_column(header_col_end, header_col_end, None, cell_format=formats['border'])
 
-                    # Set border format for last column of header for worksheet
-                    worksheet.set_column(header_col_end, header_col_end, None, cell_format=border_format)
-                    
-                    # Create an XY chart object
-                    chart = workbook.add_chart({'type': self.selected_export_type})
-
-                    series_specs = build_measurement_chart_series_specs(
+                    insert_measurement_chart(
+                        workbook,
+                        worksheet,
+                        chart_type=self.selected_export_type,
                         header=header,
                         sheet_name=safe_ref_sheet_name,
-                        first_data_row=measurement_plan['data_start_row'],
-                        last_data_row=measurement_plan['last_data_row'],
-                        x_column=measurement_plan['summary_column'],
-                        y_column=measurement_plan['y_column'],
+                        measurement_plan=measurement_plan,
+                        chart_anchor_col=col - 3,
                     )
-
-                    for series_spec in series_specs:
-                        chart.add_series(series_spec)
-
-                    # Configure the chart properties
-                    chart_policy = build_measurement_chart_format_policy(header)
-                    chart.set_title(chart_policy['title'])
-                    chart.set_y_axis(chart_policy['y_axis'])
-                    chart.set_legend(chart_policy['legend'])
-                    chart.set_size(chart_policy['size'])
-
-                    # Insert the chart into the worksheet.
-                    worksheet.insert_chart(measurement_plan['chart_insert_row'], col - 3, chart)
 
                     if self._check_canceled():
                         return
-                    
+
                     if self.generate_summary_sheet:
                         self.summary_sheet_fill(summary_worksheet, header, header_group, col)
                         if self._check_canceled():
                             return
-                    
+
                     if self.hide_ok_results:
                         hide_columns = all_measurements_within_limits(header_group['MEAS'], header_plan['lsl'], header_plan['usl'])
                         if hide_columns:
                             worksheet.set_column(col - 3, col - 1, 0)
-                    
 
-                # Freeze panes in the reference worksheet
                 worksheet.freeze_panes(12, 0)
         except Exception as e:
             self.log_and_exit(e)
-        
+
     def export_filtered_data(self, excel_writer):
         try:
             if self._check_canceled():
                 return
             data, column_names = execute_export_query(self.db_file, self.filter_query)
-            self.write_data_to_excel(data, column_names, "MEASUREMENTS", excel_writer)
+            export_df = build_export_dataframe(data, column_names)
+            self.write_data_to_excel(export_df, "MEASUREMENTS", excel_writer)
         except Exception as e:
             self.log_and_exit(e)
 
-    def write_data_to_excel(self, data, column_names, table_name, excel_writer):
+    def write_data_to_excel(self, df, table_name, excel_writer):
         try:
             if self._check_canceled():
                 return
-            # Convert the data to a DataFrame
-            df = build_export_dataframe(data, column_names)
-
             # Write the DataFrame to the Excel file
             backend = self._active_backend or self.get_export_backend()
             safe_table_name = unique_sheet_name(table_name, backend.list_sheet_names(excel_writer))
