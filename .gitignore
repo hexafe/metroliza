@@ -14,3 +14,8 @@ testing.py
 metroliza.log
 __pycache__/VersionDate.cpython-39.pyc
 license.key
+# Google API local secrets
+credentials.json
+token.json
+*.credentials.json
+*.token.json

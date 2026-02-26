@@ -757,6 +757,7 @@ class ExportDataThread(QThread):
     def get_export_backend(self):
         target_to_backend = {
             'excel_xlsx': ExcelExportBackend(),
+            'google_sheets_drive_convert': ExcelExportBackend(),
         }
         return target_to_backend[self.export_target]
 

@@ -184,11 +184,11 @@ Current high-level state:
 ### Next implementation steps
 - Continue Phase 2 decomposition by extracting chart/write helpers from `ExportDataThread` (series/range builders and summary-row layout planners).
 - Continue migrating any future SQLite call-sites to `modules/db.py` retry/transaction helpers.
-- Keep parity checks green while Google Sheets GS2 backend split starts.
+- Keep parity checks green while Google Sheets Drive-conversion pipeline implementation starts.
 
 
 ### Candidate new capabilities
-- Add direct Google Sheets export backend once GS2 begins (target selector is already staged in the roadmap).
+- Add Drive upload/convert integration once target selector and credential/token handling are in place (target selector is already in Export Dialog).
 - Add export-profile presets (chart-heavy vs fast diagnostics) to reduce repetitive dialog setup.
 - Add optional parse pipeline benchmark report output (CSV/JSON) for factory-scale ingest tuning.
 
