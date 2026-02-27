@@ -1,6 +1,7 @@
 from modules.MainWindow import MainWindow
 from modules.CustomLogger import CustomLogger
 from modules.Base64EncodedFiles import public_key_b64, encoded_icon
+from modules.logging_utils import ensure_application_logging
 from modules.LicenseKeyManager import LicenseKeyManager
 import VersionDate
 from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QVBoxLayout, QHBoxLayout, QPushButton
@@ -12,7 +13,6 @@ from datetime import datetime
 import sys
 import logging
 import base64
-from pathlib import Path
 
 VERSION_DATE = VersionDate.VERSION_DATE
 LICENSE_VERIFICATION_ENABLED = False
@@ -123,15 +123,8 @@ def get_days_until_expiration(license_key):
     return days_until_expiration
 
 if __name__ == "__main__":
-    # Setup logging configuration in a stable user-writable location.
-    log_dir = Path.home() / '.metroliza'
-    log_dir.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        filename=str(log_dir / 'metroliza.log'),
-        level=logging.ERROR,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        force=True,
-    )
+    # Setup logging configuration in both legacy and user-writable locations.
+    ensure_application_logging(level=logging.ERROR)
 
     try:
         app = QApplication(sys.argv)
