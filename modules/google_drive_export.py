@@ -11,7 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-GOOGLE_DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
+GOOGLE_DRIVE_UPLOAD_URL = (
+    "https://www.googleapis.com/upload/drive/v3/files"
+    "?uploadType=multipart&fields=id,webViewLink,webContentLink,alternateLink"
+)
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 GOOGLE_SHEETS_METADATA_URL_TEMPLATE = "https://sheets.googleapis.com/v4/spreadsheets/{file_id}?fields=sheets.properties.title"
 
@@ -201,9 +204,9 @@ def _ensure_access_token(credentials_path: Path, token_path: Path) -> str:
 
 def parse_drive_conversion_response(payload: dict[str, Any]) -> GoogleDriveConversionResult:
     file_id = payload.get("id")
-    web_url = payload.get("webViewLink") or payload.get("webContentLink")
+    web_url = payload.get("webViewLink") or payload.get("webContentLink") or payload.get("alternateLink")
     if not file_id or not web_url:
-        raise GoogleDriveResponseError("Drive conversion response missing id/webViewLink fields.")
+        raise GoogleDriveResponseError("Drive conversion response missing id and/or sheet URL fields.")
     return GoogleDriveConversionResult(
         file_id=file_id,
         web_url=web_url,
