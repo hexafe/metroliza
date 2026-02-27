@@ -67,6 +67,8 @@ If conversion fails or warnings indicate degraded chart/format fidelity, Metroli
 
 Detailed smoke execution and troubleshooting guidance lives in the dedicated runbook:
 [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md).
+Record release-gated smoke outcomes in:
+[`docs/release_checks/google_conversion_smoke.md`](docs/release_checks/google_conversion_smoke.md).
 
 ## Project layout
 
@@ -110,7 +112,7 @@ PYTHONPATH=. python tests/google_conversion_smoke.py
 - Use it for release validation (or explicitly gated CI jobs) to verify live Drive conversion behavior against a sandbox account.
 - It fails fast with actionable configuration errors when local credentials/token files are missing or misconfigured.
 - **Required cadence:** run for each release candidate and for any PR that changes Google-auth or Google-conversion logic.
-- Current smoke expectations are release-gated conversion success + valid Google Sheet URL/ID metadata + zero conversion warnings; tab-title validation is covered by mocked tests, not by the live smoke script.
+- Current smoke expectations are release-gated conversion success + valid Google Sheet URL/ID metadata + `warnings=()`; keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated. Tab-title validation is covered by mocked tests, not by the live smoke script.
 
 ## Packaging (one-file executable)
 
@@ -181,9 +183,10 @@ Check grouping and filtering choices first. Group/plot alignment, NaN-only bucke
 Google Drive conversion can alter some advanced Excel chart/style details. Current release-gated smoke policy expects `warnings=()` on success.
 
 - If warnings appear in app logs or release validation output, treat them as release blockers until triaged.
-- Use the converted Google Sheet as convenience output and the generated `.xlsx` as the fidelity baseline during incident triage.
+- Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
 - Re-run the optional live smoke check when changing credentials, scopes, or conversion-related logic.
 - Confirm `credentials.json`/`token.json` are local-only and gitignored if auth errors or missing-file warnings appear.
+- Record each release-gated run in `docs/release_checks/google_conversion_smoke.md`.
 
 ### Export and parsing performance notes
 

@@ -25,7 +25,9 @@ Before running smoke:
 5. **Network path to Google APIs is available**
    - Outbound HTTPS access to Google OAuth/Drive endpoints.
 
-## Exact environment variables
+## Script usage contract (`tests/google_conversion_smoke.py`)
+
+### Required/optional inputs
 
 The smoke script reads these environment variables:
 
@@ -50,9 +52,7 @@ METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
 PYTHONPATH=. python tests/google_conversion_smoke.py
 ```
 
-## Expected outcomes
-
-### Pass criteria
+### Expected success signals
 
 A successful run prints:
 
@@ -66,7 +66,13 @@ And implies all of the following passed:
 - Spreadsheet ID parsed from URL matches `file_id`.
 - No post-conversion warnings were emitted (`warnings=()`).
 
-### Expected fail classes (intentional fail-fast)
+### Warning handling policy
+
+- Release-gated smoke runs require `warnings=()` to pass.
+- If warnings appear, treat them as release-blocking until triaged.
+- Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
+
+## Expected fail classes (intentional fail-fast)
 
 The smoke check is designed to fail with actionable messages when prerequisites or live dependencies are unhealthy. Common categories:
 
@@ -113,18 +119,38 @@ The smoke check is designed to fail with actionable messages when prerequisites 
 1. Treat any non-empty `warnings` result as a release-blocking signal until triaged.
 2. Inspect recent Google export logic changes for warning generation, conversion payload handling, or fallback-message behavior.
 3. Validate that mocked/unit tests still cover expected tab-title semantics and fallback behavior after recent changes.
-4. Treat generated `.xlsx` as fallback artifact while conversion issues are investigated.
+4. Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
 
 ## Recording outcomes for release-gated changes
 
 For release-candidate validations and PRs that modify Google auth/conversion behavior:
 
-- Record the smoke command used.
-- Record pass/fail result and timestamp.
-- Link to job logs (CI) or terminal capture (manual) in the PR description.
+- Record each run in `docs/release_checks/google_conversion_smoke.md`.
+- Include command, date, environment, credential source, pass/fail result, warnings, and links to logs/output.
+- Keep entries in reverse chronological order (newest first).
+
+Use this template:
+
+```md
+## YYYY-MM-DD
+- Environment: <!-- local workstation / CI job name + branch/commit -->
+- Credentials source: <!-- e.g., local sandbox OAuth client + token refresh date -->
+- Command:
+  ```bash
+  METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
+  METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH=credentials.json \
+  METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
+  PYTHONPATH=. python tests/google_conversion_smoke.py
+  ```
+- Result: <!-- PASS / FAIL -->
+- Warnings: <!-- warnings=() or exact warning tuple/message -->
+- Logs/evidence: <!-- CI URL or local log capture path -->
+- Notes/remediation: <!-- optional -->
+```
 
 ## Current warning interpretation policy
 
 - Release-gated smoke runs currently require `warnings=()` to pass.
 - If warnings appear, do not waive by default: record the exact warning text, impacted release candidate, and fallback implications before deciding next action.
+- Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
 - Tab-title verification is intentionally not performed by the live smoke script; keep that behavior covered in mocked/unit tests to avoid adding Sheets API dependency to the release gate.
