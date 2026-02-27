@@ -64,6 +64,7 @@ def _configure_file_handlers(logger: logging.Logger, formatter: logging.Formatte
     user_log_dir.mkdir(parents=True, exist_ok=True)
     target_paths.append(user_log_dir / LOG_FILE_NAME)
     target_paths.append(Path.cwd() / LOG_FILE_NAME)
+    target_resolved_paths = {path.resolve() for path in target_paths}
 
     existing_file_handlers = {
         Path(handler.baseFilename).resolve(): handler
@@ -71,12 +72,25 @@ def _configure_file_handlers(logger: logging.Logger, formatter: logging.Formatte
         if isinstance(handler, logging.FileHandler) and getattr(handler, 'baseFilename', None)
     }
 
+    for handler in list(logger.handlers):
+        if not isinstance(handler, logging.FileHandler) or not getattr(handler, 'baseFilename', None):
+            continue
+
+        resolved_path = Path(handler.baseFilename).resolve()
+        is_metroliza_handler = getattr(handler, '_metroliza_file_handler', False) or resolved_path.name == LOG_FILE_NAME
+        if is_metroliza_handler and resolved_path not in target_resolved_paths:
+            logger.removeHandler(handler)
+            handler.close()
+
     for log_path in target_paths:
         resolved_path = log_path.resolve()
         handler = existing_file_handlers.get(resolved_path)
         if handler is None:
             handler = logging.FileHandler(str(log_path), encoding='utf-8')
+            setattr(handler, '_metroliza_file_handler', True)
             logger.addHandler(handler)
+        else:
+            setattr(handler, '_metroliza_file_handler', True)
 
         handler.setLevel(file_level)
         handler.setFormatter(formatter)
