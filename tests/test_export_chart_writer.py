@@ -77,8 +77,14 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(len(specs), 3)
         self.assertEqual(specs[1]['name'], 'USL')
         self.assertEqual(specs[1]['categories'], '=Ref!$B22:B31')
+        self.assertEqual(specs[1]['line'], {'none': True})
+        self.assertEqual(specs[1]['trendline']['type'], 'linear')
+        self.assertEqual(specs[1]['trendline']['forward'], 8)
         self.assertEqual(specs[2]['name'], 'LSL')
         self.assertEqual(specs[2]['categories'], '=Ref!$B22:B31')
+        self.assertEqual(specs[2]['line'], {'none': True})
+        self.assertEqual(specs[2]['trendline']['type'], 'linear')
+        self.assertEqual(specs[2]['trendline']['forward'], 8)
 
     def test_insert_measurement_chart_wires_series_and_anchor(self):
         workbook = DummyWorkbook()

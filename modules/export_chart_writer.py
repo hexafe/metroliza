@@ -37,10 +37,21 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
 def _build_limit_series_template(*, limit_name):
     return {
         'name': limit_name,
-        'line': {'color': 'red', 'width': 1},
+        'line': {'none': True},
         'marker': {'type': 'none'},
         'data_labels': {'value': False},
         'show_legend_key': False,
+    }
+
+
+def _build_limit_trendline_spec(*, point_count):
+    """Return a linear trendline config that spans the full measurement domain."""
+    return {
+        'type': 'linear',
+        'line': {'color': 'red', 'width': 1},
+        # USL/LSL series are anchored with two helper points. Extend the linear
+        # trendline to cover the remaining measurement x-domain.
+        'forward': max(point_count - 2, 0),
     }
 
 
@@ -72,6 +83,9 @@ def build_measurement_chart_series_specs(
         usl_template = _build_limit_series_template(limit_name='USL')
         lsl_template = _build_limit_series_template(limit_name='LSL')
 
+    point_count = (last_data_row - first_data_row) + 1
+    trendline_spec = _build_limit_trendline_spec(point_count=point_count)
+
     return [
         {
             'name': header,
@@ -82,11 +96,13 @@ def build_measurement_chart_series_specs(
             **usl_template,
             'categories': range_specs['limit_x'],
             'values': range_specs['usl_y'],
+            'trendline': trendline_spec,
         },
         {
             **lsl_template,
             'categories': range_specs['limit_x'],
             'values': range_specs['lsl_y'],
+            'trendline': trendline_spec,
         },
     ]
 
