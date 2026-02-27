@@ -369,6 +369,13 @@ class DataProcessingThread(QThread):
 
         if self.selected_indexes and self.selected_data_columns:
             try:
+                logger.info(
+                    "CSV summary processing started: input='%s', output='%s', columns=%d, summary_only=%s",
+                    self.input_file,
+                    self.output_file,
+                    len(self.selected_data_columns),
+                    self.summary_only,
+                )
                 # Create an Excel writer with the selected output file
                 writer = pd.ExcelWriter(self.output_file, engine='xlsxwriter')
 
@@ -429,7 +436,7 @@ class DataProcessingThread(QThread):
 
                         chart_elapsed = time.perf_counter() - chart_start
                         total_chart_seconds += chart_elapsed
-                        logger.info(
+                        logger.debug(
                             "CSV Summary column '%s' timings: write=%.3fs, chart=%.3fs, rows=%d",
                             data_column,
                             write_elapsed,
@@ -472,6 +479,7 @@ class DataProcessingThread(QThread):
                         Path(self.output_file).unlink(missing_ok=True)
                     except Exception:
                         logger.warning("Failed to remove canceled CSV summary output '%s'.", self.output_file)
+                    logger.info("CSV summary processing canceled for output '%s'.", self.output_file)
                     return
 
                 self.write_overview_sheet(writer, overview_rows)
@@ -480,12 +488,13 @@ class DataProcessingThread(QThread):
                 writer.close()
 
                 if not self.summary_only and total_filtered_columns > 0:
-                    logger.info(
+                    logger.debug(
                         "CSV Summary timing totals: write=%.3fs, chart=%.3fs, columns=%d",
                         total_write_seconds,
                         total_chart_seconds,
                         total_filtered_columns,
                     )
+                logger.info("CSV summary processing completed successfully: output='%s'.", self.output_file)
 
             except Exception:
                 logger.exception(
@@ -496,7 +505,7 @@ class DataProcessingThread(QThread):
                 self.canceled = True
 
         else:
-            logger.error("CSV summary processing skipped because no data columns were selected.")
+            logger.warning("CSV summary processing skipped because no data columns were selected.")
 
     def cancel(self):
         self.canceled = True

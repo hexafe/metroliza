@@ -71,6 +71,9 @@ if _HAS_SEABORN:
     import seaborn as sns
 
 
+logger = logging.getLogger(__name__)
+
+
 def build_export_dataframe(data, column_names):
     return _build_export_dataframe(data, column_names)
 
@@ -492,7 +495,7 @@ class ExportDataThread(QThread):
             f"Detected {duplicate_count} grouping assignment rows with duplicate merge key(s) "
             f"{merge_keys}. Keeping the latest assignment per key."
         )
-        logging.warning(message)
+        logger.warning(message)
         self.update_label.emit("Grouping data contains duplicate keys; using latest assignment.")
 
     def _apply_group_assignments(self, header_group, grouping_df):
@@ -575,7 +578,8 @@ class ExportDataThread(QThread):
             details.append(f"error={error}")
 
         suffix = f" ({'; '.join(details)})" if details else ""
-        logging.error("Google export issue: %s%s", context, suffix)
+        log_method = logger.error if error is not None else logger.warning
+        log_method("Google export issue: %s%s", context, suffix)
 
     def run(self):
         try:
@@ -584,6 +588,7 @@ class ExportDataThread(QThread):
 
             self.update_progress.emit(0)
             self.update_label.emit("Preparing export...")
+            logger.info("Export started: target=%s, output=%s", self.export_target, self.excel_file)
             if self.export_target == "google_sheets_drive_convert":
                 self._emit_google_stage("generating")
 
@@ -636,6 +641,7 @@ class ExportDataThread(QThread):
                     self._emit_google_stage("completed", detail=conversion.web_url)
 
             self.update_label.emit("Export completed successfully.")
+            logger.info("Export completed successfully: target=%s, output=%s", self.export_target, self.excel_file)
             self.finished.emit()
             QCoreApplication.processEvents()
         except GoogleDriveExportError as e:
@@ -649,6 +655,7 @@ class ExportDataThread(QThread):
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
                 self.update_label.emit(f"Warning: {e}")
                 self.update_label.emit("Export completed successfully.")
+                logger.warning("Export completed with local fallback after Google conversion failure: output=%s", self.excel_file)
                 self.finished.emit()
                 QCoreApplication.processEvents()
                 self._log_google_issue(
@@ -748,7 +755,7 @@ class ExportDataThread(QThread):
                             worksheet.set_column(col - 3, col - 1, 0)
 
                 if timing_enabled:
-                    logging.debug(
+                    logger.debug(
                         'Export timing [ref=%s]: bundle_build=%.6fs chart_insert=%.6fs headers=%d',
                         ref,
                         build_bundle_elapsed,

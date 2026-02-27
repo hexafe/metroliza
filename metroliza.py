@@ -11,7 +11,6 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from datetime import datetime
 import sys
-import logging
 import base64
 
 VERSION_DATE = VersionDate.VERSION_DATE
@@ -124,7 +123,7 @@ def get_days_until_expiration(license_key):
 
 if __name__ == "__main__":
     # Setup logging configuration in both legacy and user-writable locations.
-    ensure_application_logging(level=logging.ERROR)
+    ensure_application_logging()
 
     try:
         app = QApplication(sys.argv)
