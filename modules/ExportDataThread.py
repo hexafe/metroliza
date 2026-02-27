@@ -388,6 +388,13 @@ def render_density_line(ax, x, p):
 
 
 class ExportDataThread(QThread):
+    PROGRESS_STAGE_RANGES = {
+        'preparing_query': (0, 10),
+        'filtered_sheet_write': (10, 30),
+        'measurement_sheets_charts': (30, 95),
+        'finalize': (95, 100),
+    }
+
     update_label = pyqtSignal(str)
     update_progress = pyqtSignal(int)
     finished = pyqtSignal()
@@ -426,6 +433,25 @@ class ExportDataThread(QThread):
         self._prepared_grouping_df = None
         self.completion_metadata = {"local_xlsx_path": self.excel_file}
         self._exported_sheet_names = set()
+        self._last_emitted_progress = -1
+
+    @staticmethod
+    def _clamp_progress(value):
+        return max(0, min(100, int(round(value))))
+
+    def _emit_progress(self, value):
+        clamped_value = self._clamp_progress(value)
+        progress_value = max(clamped_value, self._last_emitted_progress)
+        if progress_value == self._last_emitted_progress:
+            return
+        self._last_emitted_progress = progress_value
+        self.update_progress.emit(progress_value)
+
+    def _emit_stage_progress(self, stage_name, fraction=1.0):
+        start, end = self.PROGRESS_STAGE_RANGES[stage_name]
+        safe_fraction = max(0.0, min(1.0, float(fraction)))
+        stage_progress = start + ((end - start) * safe_fraction)
+        self._emit_progress(stage_progress)
 
     def _record_exported_sheet_name(self, sheet_name):
         if isinstance(sheet_name, str) and sheet_name.strip():
@@ -539,13 +565,16 @@ class ExportDataThread(QThread):
             [
                 lambda: (
                     self.update_label.emit("Exporting filtered data..."),
+                    self._emit_stage_progress('preparing_query', 1.0),
+                    self._emit_stage_progress('filtered_sheet_write', 0.0),
                     self.export_filtered_data(excel_writer),
-                    self.update_progress.emit(50),
+                    self._emit_stage_progress('filtered_sheet_write', 1.0),
                 ),
                 lambda: (
                     self.update_label.emit("Building measurement sheets..."),
+                    self._emit_stage_progress('measurement_sheets_charts', 0.0),
                     self.add_measurements_horizontal_sheet(excel_writer),
-                    self.update_progress.emit(100),
+                    self._emit_stage_progress('measurement_sheets_charts', 1.0),
                 ),
             ],
             should_cancel=self._check_canceled,
@@ -619,7 +648,7 @@ class ExportDataThread(QThread):
             if self._check_canceled():
                 return
 
-            self.update_progress.emit(0)
+            self._emit_stage_progress('preparing_query', 0.0)
             self.update_label.emit("Preparing export...")
             self._log_export_stage("Export started", stage="started")
             if self.export_target == "google_sheets_drive_convert":
@@ -694,6 +723,7 @@ class ExportDataThread(QThread):
                         ),
                     )
 
+            self._emit_stage_progress('finalize', 1.0)
             self.update_label.emit("Export completed successfully.")
             self._log_export_stage("Export completed successfully", stage="completed")
             self.finished.emit()
@@ -730,7 +760,10 @@ class ExportDataThread(QThread):
         try:
             df = build_measurement_export_dataframe(read_sql_dataframe(self.db_file, self.filter_query))
 
-            reference_groups = df.groupby('REFERENCE', as_index=False)
+            reference_groups = list(df.groupby('REFERENCE', as_index=False))
+            total_references = len(reference_groups)
+            total_header_units = sum(ref_group['HEADER - AX'].nunique(dropna=False) for _, ref_group in reference_groups)
+            completed_header_units = 0
             backend = self._active_backend or self.get_export_backend()
             workbook = backend.get_workbook(excel_writer)
             used_sheet_names = backend.list_sheet_names(excel_writer)
@@ -808,6 +841,13 @@ class ExportDataThread(QThread):
                         if hide_columns:
                             worksheet.set_column(col - 3, col - 1, 0)
 
+                    completed_header_units += 1
+                    if total_header_units > 0:
+                        self._emit_stage_progress(
+                            'measurement_sheets_charts',
+                            completed_header_units / total_header_units,
+                        )
+
                 if timing_enabled:
                     logger.debug(
                         'Export timing [ref=%s]: bundle_build=%.6fs chart_insert=%.6fs headers=%d',
@@ -818,6 +858,9 @@ class ExportDataThread(QThread):
                     )
 
                 worksheet.freeze_panes(12, 0)
+
+            if total_references == 0 or total_header_units == 0:
+                self._emit_stage_progress('measurement_sheets_charts', 1.0)
         except Exception as e:
             self.log_and_exit(e)
 
