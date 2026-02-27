@@ -558,6 +558,19 @@ class ExportDataThread(QThread):
             return
         self.update_label.emit(base)
 
+    def _log_google_issue(self, context, *, fallback_message="", warnings=None, error=None):
+        warning_list = [str(item) for item in (warnings or []) if str(item).strip()]
+        details = []
+        if fallback_message:
+            details.append(f"fallback={fallback_message}")
+        if warning_list:
+            details.append("warnings=" + " | ".join(warning_list))
+        if error is not None:
+            details.append(f"error={error}")
+
+        suffix = f" ({'; '.join(details)})" if details else ""
+        logging.error("Google export issue: %s%s", context, suffix)
+
     def run(self):
         try:
             if self._check_canceled():
@@ -607,6 +620,11 @@ class ExportDataThread(QThread):
                     self.update_label.emit(f"Warning: {warning}")
 
                 if conversion.warnings:
+                    self._log_google_issue(
+                        "conversion completed with warnings",
+                        fallback_message=conversion.fallback_message,
+                        warnings=conversion.warnings,
+                    )
                     self._emit_google_stage("fallback", detail=conversion.fallback_message)
                 else:
                     self._emit_google_stage("completed", detail=conversion.web_url)
@@ -627,8 +645,13 @@ class ExportDataThread(QThread):
                 self.update_label.emit("Export completed successfully.")
                 self.finished.emit()
                 QCoreApplication.processEvents()
+                self._log_google_issue(
+                    "conversion failed and fell back to local xlsx",
+                    fallback_message=self.completion_metadata["fallback_message"],
+                    warnings=self.completion_metadata.get("conversion_warnings", []),
+                    error=e,
+                )
                 if isinstance(e, GoogleDriveAuthError):
-                    logging.warning("Google export authentication unavailable; completed with local fallback: %s", e)
                     return
                 self.log_and_exit(e)
                 return

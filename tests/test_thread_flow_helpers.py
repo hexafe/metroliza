@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 import tempfile
@@ -564,6 +565,61 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertTrue(fallback_stage_messages)
             self.assertIn(out_file, fallback_stage_messages[0])
 
+
+    def test_google_target_warning_logs_issue_details(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+            thread._exported_sheet_names = {'MEASUREMENTS', 'REF_A'}
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+            module.upload_and_convert_workbook = lambda *_args, **_kwargs: GoogleDriveConversionResult(
+                file_id='sheet-id',
+                web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                local_xlsx_path=out_file,
+                fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
+                warnings=('Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',),
+                converted_tab_titles=('MEASUREMENTS',),
+            )
+            logger = logging.getLogger()
+            previous_handlers = list(logger.handlers)
+            previous_level = logger.level
+            records = []
+
+            class _ListHandler(logging.Handler):
+                def emit(self, record):
+                    records.append(record)
+
+            handler = _ListHandler()
+            logger.handlers = [handler]
+            logger.setLevel(logging.ERROR)
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+                logger.handlers = previous_handlers
+                logger.setLevel(previous_level)
+
+            error_messages = [record.getMessage() for record in records if record.levelno >= logging.ERROR]
+            self.assertTrue(any('Google export issue: conversion completed with warnings' in msg for msg in error_messages))
+            self.assertTrue(any('fallback=Conversion completed with warnings.' in msg for msg in error_messages))
+            self.assertTrue(any('warnings=Google Sheets conversion appears partial. Missing expected tab(s): REF_A.' in msg for msg in error_messages))
 
     def test_google_target_success_metadata_contains_expected_keys(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
