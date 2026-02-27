@@ -564,5 +564,87 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertTrue(fallback_stage_messages)
             self.assertIn(out_file, fallback_stage_messages[0])
 
+
+    def test_google_target_success_metadata_contains_expected_keys(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+            thread._exported_sheet_names = {'MEASUREMENTS'}
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+            module.upload_and_convert_workbook = lambda *_args, **_kwargs: GoogleDriveConversionResult(
+                file_id='sheet-id',
+                web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                local_xlsx_path=out_file,
+                fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
+                warnings=(),
+                converted_tab_titles=('MEASUREMENTS',),
+            )
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+
+            metadata = thread.completion_metadata
+            self.assertEqual(metadata['converted_url'], 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
+            self.assertEqual(metadata['fallback_message'], f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}')
+            self.assertEqual(metadata['conversion_warnings'], [])
+            self.assertEqual(metadata['converted_tab_titles'], ['MEASUREMENTS'])
+
+    def test_google_target_exception_fallback_metadata_contains_expected_keys(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+            thread.log_and_exit = lambda *_: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _raise_export_error(*_args, **_kwargs):
+                raise module.GoogleDriveExportError('temporary outage')
+
+            module.upload_and_convert_workbook = _raise_export_error
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+
+            metadata = thread.completion_metadata
+            self.assertEqual(metadata.get('converted_url'), None)
+            self.assertEqual(metadata.get('converted_tab_titles'), None)
+            self.assertEqual(metadata['fallback_message'], f'Google export failed; using local .xlsx fallback: {out_file}')
+            self.assertEqual(metadata['conversion_warnings'], ['temporary outage'])
+
 if __name__ == '__main__':
     unittest.main()

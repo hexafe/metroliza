@@ -128,32 +128,106 @@ class TestExportCompletionMessaging(unittest.TestCase):
     def test_google_success_includes_converted_link(self):
         from modules.ExportDialog import build_export_completion_message
 
+        metadata = {
+            'converted_url': 'https://docs.google.com/spreadsheets/d/abc/edit',
+            'fallback_message': '',
+            'conversion_warnings': [],
+            'converted_tab_titles': ['MEASUREMENTS'],
+        }
         level, title, message = build_export_completion_message(
             excel_file='out.xlsx',
             export_target='google_sheets_drive_convert',
-            completion_metadata={'converted_url': 'https://docs.google.com/spreadsheets/d/abc/edit'},
+            completion_metadata=metadata,
         )
 
         self.assertEqual(level, 'info')
         self.assertEqual(title, 'Export successful')
-        self.assertIn('Google Sheet:', message)
+        self.assertEqual(
+            message,
+            'Data exported successfully to out.xlsx.\nGoogle Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
+        )
 
     def test_google_fallback_promotes_warning_dialog(self):
+        from modules.ExportDialog import build_export_completion_message
+
+        metadata = {
+            'fallback_message': 'Google export failed; using local .xlsx fallback: out.xlsx',
+            'conversion_warnings': ['Missing token.json for Google Drive export. Please complete OAuth authorization first.'],
+            'converted_url': '',
+            'converted_tab_titles': [],
+        }
+        level, title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='google_sheets_drive_convert',
+            completion_metadata=metadata,
+        )
+
+        self.assertEqual(level, 'warning')
+        self.assertEqual(title, 'Export completed with Google fallback')
+        self.assertEqual(
+            message,
+            'Data exported locally to out.xlsx.\n'
+            'Google Sheets conversion was not fully completed.\n'
+            'Google export failed; using local .xlsx fallback: out.xlsx\n'
+            'Warnings:\n'
+            '- Missing token.json for Google Drive export. Please complete OAuth authorization first.',
+        )
+
+    def test_google_fallback_only_shows_conversion_partial_message(self):
+        from modules.ExportDialog import build_export_completion_message
+
+        metadata = {
+            'fallback_message': 'Google export failed; using local .xlsx fallback: out.xlsx',
+            'conversion_warnings': [],
+            'converted_url': '',
+            'converted_tab_titles': [],
+        }
+        level, title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='google_sheets_drive_convert',
+            completion_metadata=metadata,
+        )
+
+        self.assertEqual(level, 'warning')
+        self.assertEqual(title, 'Export completed with Google fallback')
+        self.assertEqual(
+            message,
+            'Data exported locally to out.xlsx.\n'
+            'Google Sheets conversion was not fully completed.\n'
+            'Google export failed; using local .xlsx fallback: out.xlsx',
+        )
+
+    def test_google_empty_metadata_defaults_to_standard_success_message(self):
         from modules.ExportDialog import build_export_completion_message
 
         level, title, message = build_export_completion_message(
             excel_file='out.xlsx',
             export_target='google_sheets_drive_convert',
-            completion_metadata={
-                'fallback_message': 'Google export failed; using local .xlsx fallback: out.xlsx',
-                'conversion_warnings': ['Missing token.json for Google Drive export. Please complete OAuth authorization first.'],
-            },
+            completion_metadata={},
         )
 
-        self.assertEqual(level, 'warning')
-        self.assertEqual(title, 'Export completed with Google fallback')
-        self.assertIn('Google Sheets conversion was not fully completed.', message)
-        self.assertIn('Missing token.json', message)
+        self.assertEqual(level, 'info')
+        self.assertEqual(title, 'Export successful')
+        self.assertEqual(message, 'Data exported successfully to out.xlsx!')
+
+    def test_excel_target_message_is_unchanged_even_with_google_metadata(self):
+        from modules.ExportDialog import build_export_completion_message
+
+        metadata = {
+            'converted_url': 'https://docs.google.com/spreadsheets/d/abc/edit',
+            'fallback_message': 'Google export failed; using local .xlsx fallback: out.xlsx',
+            'conversion_warnings': ['warning one'],
+            'converted_tab_titles': ['MEASUREMENTS'],
+        }
+        level, title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='excel_xlsx',
+            completion_metadata=metadata,
+        )
+
+        self.assertEqual(level, 'info')
+        self.assertEqual(title, 'Export successful')
+        self.assertEqual(message, 'Data exported successfully to out.xlsx!')
 
 
 class TestExportTargetSelection(unittest.TestCase):
