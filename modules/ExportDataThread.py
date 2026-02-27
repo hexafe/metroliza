@@ -22,6 +22,11 @@ from modules.db import execute_select_with_columns, read_sql_dataframe
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
 from modules.google_drive_export import GoogleDriveAuthError, GoogleDriveExportError, upload_and_convert_workbook
+from modules.log_context import (
+    build_export_log_extra,
+    build_google_conversion_log_extra,
+    get_operation_logger,
+)
 from modules.export_summary_utils import (
     build_histogram_density_curve_payload as _build_histogram_density_curve_payload,
     build_sparse_unique_labels as _build_sparse_unique_labels,
@@ -72,7 +77,7 @@ if _HAS_SEABORN:
     import seaborn as sns
 
 
-logger = logging.getLogger(__name__)
+logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 
 
 def build_export_dataframe(data, column_names):
@@ -524,6 +529,7 @@ class ExportDataThread(QThread):
     def _check_canceled(self):
         if self.export_canceled:
             self.update_label.emit("Export canceled.")
+            self._log_export_stage("Export cancellation observed", stage="canceled", cancel_flag=True)
             self.canceled.emit()
             return True
         return False
@@ -569,6 +575,21 @@ class ExportDataThread(QThread):
             return
         self.update_label.emit(base)
 
+    def _build_export_context(self, *, stage, fallback_reason=""):
+        return build_export_log_extra(
+            export_target=self.export_target,
+            output_path=self.excel_file,
+            stage=stage,
+            fallback_reason=fallback_reason,
+        )
+
+    def _log_export_stage(self, message, *, stage, level="info", fallback_reason="", **extra):
+        log_method = getattr(logger, level)
+        log_method(
+            message,
+            extra=self._build_export_context(stage=stage, fallback_reason=fallback_reason) | extra,
+        )
+
     def _log_google_issue(self, context, *, fallback_message="", warnings=None, error=None):
         warning_list = [str(item) for item in (warnings or []) if str(item).strip()]
         details = []
@@ -581,7 +602,17 @@ class ExportDataThread(QThread):
 
         suffix = f" ({'; '.join(details)})" if details else ""
         log_method = logger.error if error is not None else logger.warning
-        log_method("Google export issue: %s%s", context, suffix)
+        google_extra = build_google_conversion_log_extra(
+            file_ref=self.excel_file,
+            error_class=type(error).__name__ if error is not None else "",
+            outcome="fallback" if fallback_message else "warning",
+        )
+        log_method(
+            "Google export issue: %s%s",
+            context,
+            suffix,
+            extra=self._build_export_context(stage="google_issue", fallback_reason=fallback_message) | google_extra,
+        )
 
     def run(self):
         try:
@@ -590,7 +621,7 @@ class ExportDataThread(QThread):
 
             self.update_progress.emit(0)
             self.update_label.emit("Preparing export...")
-            logger.info("Export started: target=%s, output=%s", self.export_target, self.excel_file)
+            self._log_export_stage("Export started", stage="started")
             if self.export_target == "google_sheets_drive_convert":
                 self._emit_google_stage("generating")
 
@@ -604,15 +635,19 @@ class ExportDataThread(QThread):
                 def _stage_callback(stage_message):
                     if stage_message == "uploading":
                         self._emit_google_stage("uploading")
+                        self._log_export_stage("Google conversion stage", stage="uploading")
                         return
                     if stage_message == "converting":
                         self._emit_google_stage("converting")
+                        self._log_export_stage("Google conversion stage", stage="converting")
                         return
                     if stage_message == "validating":
                         self._emit_google_stage("validating")
+                        self._log_export_stage("Google conversion stage", stage="validating")
                         return
                     if stage_message.startswith("uploading retry"):
                         self._emit_google_stage("uploading", detail=stage_message)
+                        self._log_export_stage("Google conversion upload retry", stage="uploading_retry", level="warning")
 
                 conversion = upload_and_convert_workbook(
                     self.excel_file,
@@ -629,6 +664,15 @@ class ExportDataThread(QThread):
                         "converted_tab_titles": list(conversion.converted_tab_titles),
                     }
                 )
+                self._log_export_stage(
+                    "Google conversion returned",
+                    stage="google_conversion",
+                    fallback_reason=conversion.fallback_message,
+                    **build_google_conversion_log_extra(
+                        file_ref=conversion.web_url or conversion.file_id,
+                        outcome="warnings" if conversion.warnings else "success",
+                    ),
+                )
                 for warning in conversion.warnings:
                     self.update_label.emit(f"Warning: {warning}")
 
@@ -641,9 +685,17 @@ class ExportDataThread(QThread):
                     self._emit_google_stage("fallback", detail=conversion.fallback_message)
                 else:
                     self._emit_google_stage("completed", detail=conversion.web_url)
+                    self._log_export_stage(
+                        "Google conversion completed",
+                        stage="completed",
+                        **build_google_conversion_log_extra(
+                            file_ref=conversion.web_url,
+                            outcome="success",
+                        ),
+                    )
 
             self.update_label.emit("Export completed successfully.")
-            logger.info("Export completed successfully: target=%s, output=%s", self.export_target, self.excel_file)
+            self._log_export_stage("Export completed successfully", stage="completed")
             self.finished.emit()
             QCoreApplication.processEvents()
         except GoogleDriveExportError as e:
@@ -657,7 +709,7 @@ class ExportDataThread(QThread):
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
                 self.update_label.emit(f"Warning: {e}")
                 self.update_label.emit("Export completed successfully.")
-                logger.warning("Export completed with local fallback after Google conversion failure: output=%s", self.excel_file)
+                self._log_export_stage("Export completed with local fallback after Google conversion failure", stage="fallback", level="warning", fallback_reason=self.completion_metadata["fallback_message"])
                 self.finished.emit()
                 QCoreApplication.processEvents()
                 self._log_google_issue(
@@ -1033,11 +1085,18 @@ class ExportDataThread(QThread):
     def log_and_exit(self, exception):
         caller = inspect.stack()[1].function
         context = f"export operation ({caller})"
+        self._log_export_stage(
+            "Export operation failed",
+            stage="error",
+            level="error",
+            exception_class=type(exception).__name__,
+            operation_context=context,
+        )
         if hasattr(custom_logger, "handle_exception") and hasattr(custom_logger, "LOG_ONLY"):
             custom_logger.handle_exception(
                 exception,
                 behavior=custom_logger.LOG_ONLY,
-                logger_name=logger.name,
+                logger_name=logger.logger.name,
                 context=context,
                 reraise=False,
             )

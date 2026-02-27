@@ -11,13 +11,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from modules.log_context import build_google_conversion_log_extra, get_operation_logger
+
 GOOGLE_DRIVE_UPLOAD_URL = (
     "https://www.googleapis.com/upload/drive/v3/files"
     "?uploadType=multipart&fields=id,webViewLink,webContentLink"
 )
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
-logger = logging.getLogger(__name__)
+logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
 
 
 class GoogleDriveExportError(RuntimeError):
@@ -38,6 +40,14 @@ class GoogleDriveTransientError(GoogleDriveExportError):
 
 class GoogleDriveResponseError(GoogleDriveExportError):
     """Unexpected response payload shape or non-retryable API failure."""
+
+
+def _build_google_log_extra(*, file_ref="", error=None, outcome="") -> dict[str, str]:
+    return build_google_conversion_log_extra(
+        file_ref=file_ref,
+        error_class=type(error).__name__ if error is not None else "",
+        outcome=outcome,
+    )
 
 
 @dataclass(frozen=True)
@@ -316,20 +326,41 @@ def upload_and_convert_workbook(
             if isinstance(mapped, (GoogleDriveTransientError, GoogleDriveQuotaError)) and attempt < max_retries:
                 if callable(status_callback):
                     status_callback(f"uploading retry {attempt}/{max_retries - 1}: {mapped}")
+                logger.warning(
+                    "Google upload retry after HTTP error",
+                    extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="retry"),
+                )
                 time.sleep(retry_delay_seconds)
                 continue
+            logger.error(
+                "Google upload failed with HTTP error",
+                extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="failed"),
+            )
             raise mapped from exc
         except urllib.error.URLError as exc:
             mapped = map_google_network_error("Google Drive upload failed", exc)
             if attempt < max_retries:
                 if callable(status_callback):
                     status_callback(f"uploading retry {attempt}/{max_retries - 1}: {mapped}")
+                logger.warning(
+                    "Google upload retry after network error",
+                    extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="retry"),
+                )
                 time.sleep(retry_delay_seconds)
                 continue
+            logger.error(
+                "Google upload failed with network error",
+                extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="failed"),
+            )
             raise mapped from exc
 
     if payload is None:
-        raise GoogleDriveTransientError("Google Drive upload exhausted retries without response payload.")
+        exhausted_error = GoogleDriveTransientError("Google Drive upload exhausted retries without response payload.")
+        logger.error(
+            "Google upload exhausted retries",
+            extra=_build_google_log_extra(file_ref=str(excel_file), error=exhausted_error, outcome="failed"),
+        )
+        raise exhausted_error
 
     parsed = parse_drive_conversion_response(payload)
     if callable(status_callback):
@@ -351,5 +382,8 @@ def upload_and_convert_workbook(
         warnings=tuple(warnings),
         converted_tab_titles=tuple(converted_tab_titles),
     )
-    logger.info("Google Sheets conversion completed for '%s' (%s)", excel_file, result.web_url)
+    logger.info(
+        "Google Sheets conversion completed",
+        extra=_build_google_log_extra(file_ref=result.web_url or result.file_id, outcome="success"),
+    )
     return result
