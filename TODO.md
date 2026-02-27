@@ -28,7 +28,7 @@ Last audited on 2026-02-27.
   - [x] Keep regression coverage green for worksheet range parity and chart-series parity after each extraction slice.
 
 ### Google Sheets post-completion operational checks
-- [ ] Keep optional/manual sandbox Drive smoke checks release-gated and record outcomes when executed.
+- [x] Keep optional/manual sandbox Drive smoke checks release-gated and record outcomes when executed.
 
 ## Maintenance
 - [ ] Keep `README.md`, `IMPLEMENTATION_PLAN.md`, `TODO.md`, and `GOOGLE_SHEETS_MIGRATION_PLAN.md` synchronized after each roadmap PR.

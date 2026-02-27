@@ -1,5 +1,21 @@
 """Manual/CI-gated smoke check for live Google Drive -> Sheets conversion.
 
+Usage contract:
+- Inputs:
+  - Required gate: ``METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1``.
+  - Optional overrides: ``METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH``
+    (must end with ``credentials.json``) and ``METROLIZA_GOOGLE_SMOKE_TOKEN_PATH``
+    (must end with ``token.json``).
+- Expected success signals:
+  - Script exits 0 and prints ``Google conversion smoke check passed.``.
+  - Conversion metadata validates (non-empty file id + parseable HTTPS sheet URL).
+  - Warning policy validates as ``warnings=()``.
+- Warning handling:
+  - Any non-empty warnings tuple is release-blocking for smoke checks.
+  - Keep the converted Google Sheet as convenience output and treat the generated
+    ``.xlsx`` as the fidelity-baseline fallback artifact while warning root cause
+    is investigated.
+
 This module is intentionally excluded from default `unittest discover` runs by
 avoiding the `test_*.py` filename pattern. Invoke directly when release
 validation needs a real sandbox roundtrip.
