@@ -318,5 +318,76 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual("https://drive.google.com/file/d/abc123/view", result.web_url)
 
 
+class TestGoogleDriveOAuthBootstrap(unittest.TestCase):
+    def test_ensure_access_token_bootstraps_interactive_oauth_when_token_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            credentials_path = Path(tmpdir) / "credentials.json"
+            token_path = Path(tmpdir) / "token.json"
+            credentials_path.write_text(
+                json.dumps(
+                    {
+                        "installed": {
+                            "client_id": "client-id",
+                            "client_secret": "client-secret",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("modules.google_drive_export._interactive_oauth_authorization") as oauth_mock, patch(
+                "modules.google_drive_export._refresh_access_token"
+            ) as refresh_mock:
+                oauth_mock.return_value = {
+                    "access_token": "interactive-token",
+                    "refresh_token": "refresh-token",
+                    "expires_at": 9999999999,
+                }
+
+                from modules.google_drive_export import _ensure_access_token
+
+                token = _ensure_access_token(credentials_path, token_path)
+
+            self.assertEqual("interactive-token", token)
+            oauth_mock.assert_called_once_with(credentials_path, token_path)
+            refresh_mock.assert_not_called()
+
+    def test_ensure_access_token_reauthorizes_when_token_is_expired_without_refresh_token(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            credentials_path = Path(tmpdir) / "credentials.json"
+            token_path = Path(tmpdir) / "token.json"
+            credentials_path.write_text(
+                json.dumps(
+                    {
+                        "installed": {
+                            "client_id": "client-id",
+                            "client_secret": "client-secret",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            token_path.write_text(json.dumps({"access_token": "old", "expires_at": 0}), encoding="utf-8")
+
+            with patch("modules.google_drive_export._interactive_oauth_authorization") as oauth_mock, patch(
+                "modules.google_drive_export._refresh_access_token"
+            ) as refresh_mock:
+                oauth_mock.return_value = {
+                    "access_token": "reauthed-token",
+                    "refresh_token": "new-refresh-token",
+                    "expires_at": 9999999999,
+                }
+
+                from modules.google_drive_export import _ensure_access_token
+
+                token = _ensure_access_token(credentials_path, token_path)
+
+            self.assertEqual("reauthed-token", token)
+            oauth_mock.assert_called_once_with(credentials_path, token_path)
+            refresh_mock.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
