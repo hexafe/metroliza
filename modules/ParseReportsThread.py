@@ -11,6 +11,7 @@ import shutil
 from modules.report_fingerprint import build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.db import execute_with_retry
+from modules.log_context import build_parse_log_extra, get_operation_logger
 
 
 @dataclass(frozen=True)
@@ -75,7 +76,7 @@ def parse_new_reports(
     return ParseBatchResult(parsed_files=parsed_files, total_files=total_files)
 
 
-logger = logging.getLogger(__name__)
+logger = get_operation_logger(logging.getLogger(__name__), "parse_reports")
 
 
 class ParseReportsThread(QThread):
@@ -116,11 +117,28 @@ class ParseReportsThread(QThread):
         try:
             pdf_files = []
             report_root = self._resolve_report_root()
+            logger.info(
+                "Parse discovery started",
+                extra=build_parse_log_extra(
+                    source_path=report_root,
+                    parsed_count=0,
+                    cancel_flag=self.parsing_canceled,
+                ),
+            )
             for path in report_root.glob("**/*.[Pp][Dd][Ff]"):
                 if self.parsing_canceled:
                     break
                 if path.is_file() and path.stat().st_size:
                     pdf_files.append(path)
+            logger.info(
+                "Parse discovery finished",
+                extra=build_parse_log_extra(
+                    source_path=report_root,
+                    total_files=len(pdf_files),
+                    parsed_count=0,
+                    cancel_flag=self.parsing_canceled,
+                ),
+            )
             return pdf_files
         except Exception as e:
             self.log_and_exit(e)
@@ -163,6 +181,13 @@ class ParseReportsThread(QThread):
         try:
             # Set the flag to indicate parsing cancellation
             self.parsing_canceled = True
+            logger.info(
+                "Parse cancellation requested",
+                extra=build_parse_log_extra(
+                    source_path=self.directory,
+                    cancel_flag=True,
+                ),
+            )
         except Exception as e:
             self.log_and_exit(e)
 
@@ -170,10 +195,29 @@ class ParseReportsThread(QThread):
         try:
             list_of_reports = self.get_list_of_reports()
             if self.parsing_canceled:
+                logger.info(
+                    "Parse ended before processing due to cancellation",
+                    extra=build_parse_log_extra(
+                        source_path=self.directory,
+                        total_files=len(list_of_reports),
+                        parsed_count=0,
+                        cancel_flag=True,
+                    ),
+                )
                 self.parsing_finished.emit()
                 return
 
             report_fingerprints = self.get_report_fingerprints_in_database()
+
+            logger.info(
+                "Parse processing started",
+                extra=build_parse_log_extra(
+                    source_path=self.directory,
+                    total_files=len(list_of_reports),
+                    parsed_count=0,
+                    cancel_flag=self.parsing_canceled,
+                ),
+            )
 
             result = parse_new_reports(
                 list_of_reports,
@@ -184,12 +228,31 @@ class ParseReportsThread(QThread):
                 on_progress=lambda parsed_files, total_files: (
                     self.update_progress.emit(int(parsed_files / total_files * 100) if total_files else 100),
                     self.update_label.emit(f"Parsing file {parsed_files} of {total_files}"),
+                    logger.debug(
+                        "Parse progress update",
+                        extra=build_parse_log_extra(
+                            source_path=self.directory,
+                            total_files=total_files,
+                            parsed_count=parsed_files,
+                            cancel_flag=self.parsing_canceled,
+                        ),
+                    ),
                 ),
             )
 
             if result.total_files == 0:
                 self.update_progress.emit(100)
                 self.update_label.emit("No reports found to parse.")
+
+            logger.info(
+                "Parse processing finished",
+                extra=build_parse_log_extra(
+                    source_path=self.directory,
+                    total_files=result.total_files,
+                    parsed_count=result.parsed_files,
+                    cancel_flag=self.parsing_canceled,
+                ),
+            )
 
             self.parsing_finished.emit()
         except Exception as e:
@@ -202,11 +265,18 @@ class ParseReportsThread(QThread):
     def log_and_exit(self, exception):
         caller = inspect.stack()[1].function
         context = f"parse operation ({caller})"
+        logger.error(
+            "Parse operation failed",
+            extra=build_parse_log_extra(
+                source_path=self.directory,
+                cancel_flag=self.parsing_canceled,
+            ) | {"exception_class": type(exception).__name__, "operation_context": context},
+        )
         if hasattr(custom_logger, "handle_exception") and hasattr(custom_logger, "LOG_ONLY"):
             custom_logger.handle_exception(
                 exception,
                 behavior=custom_logger.LOG_ONLY,
-                logger_name=logger.name,
+                logger_name=logger.logger.name,
                 context=context,
                 reraise=False,
             )
