@@ -133,6 +133,8 @@ class ExportDialog(QDialog):
         
         self.filter_window = None
         self.grouping_window = None
+        self.export_thread = None
+        self.export_error_message = None
         self.config_path = Path.home() / '.metroliza' / '.export_dialog_config.json'
         self.config = self._load_dialog_config()
 
@@ -613,6 +615,7 @@ class ExportDialog(QDialog):
             self.export_thread = ExportDataThread(export_request=export_request)
             self.export_thread.update_label.connect(self.loading_label.setText)
             self.export_thread.update_progress.connect(self.loading_bar.setValue)
+            self.export_thread.error_occurred.connect(self.on_export_error)
             self.export_thread.finished.connect(self.on_export_finished)
             self.export_thread.canceled.connect(self.on_export_canceled)
             self.export_thread.start()
@@ -633,6 +636,11 @@ class ExportDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+
+    def on_export_error(self, message):
+        self.export_error_message = message
+        self.loading_label.setText("Export failed.")
+
     def on_export_canceled(self):
         try:
             QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
@@ -644,16 +652,19 @@ class ExportDialog(QDialog):
 
     def on_export_finished(self):
         try:
-            level, title, message = build_export_completion_message(
-                excel_file=self.excel_file,
-                export_target=getattr(self.export_thread, 'export_target', 'excel_xlsx'),
-                completion_metadata=getattr(self.export_thread, 'completion_metadata', {}),
-            )
-
-            if level == 'warning':
-                QMessageBox.warning(self, title, message)
+            if self.export_error_message:
+                QMessageBox.warning(self, "Export failed", self.export_error_message)
             else:
-                QMessageBox.information(self, title, message)
+                level, title, message = build_export_completion_message(
+                    excel_file=self.excel_file,
+                    export_target=getattr(self.export_thread, 'export_target', 'excel_xlsx'),
+                    completion_metadata=getattr(self.export_thread, 'completion_metadata', {}),
+                )
+
+                if level == 'warning':
+                    QMessageBox.warning(self, title, message)
+                else:
+                    QMessageBox.information(self, title, message)
 
             # Close the loading dialog
             self.loading_dialog.accept()
@@ -662,7 +673,7 @@ class ExportDialog(QDialog):
             self.export_button.setEnabled(True)
 
             exported_file = Path(str(self.excel_file))
-            if exported_file.exists():
+            if not self.export_error_message and exported_file.exists():
                 open_location = QMessageBox.question(
                     self,
                     "Export completed",
@@ -675,6 +686,8 @@ class ExportDialog(QDialog):
                         reveal_file_in_explorer(exported_file)
                     except Exception as e:
                         QMessageBox.warning(self, "Open location failed", f"Could not open export location: {e}")
+
+            self.export_error_message = None
 
             # Close the exporting dialog
             self.accept()

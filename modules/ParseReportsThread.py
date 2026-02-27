@@ -1,5 +1,8 @@
+import inspect
+import logging
+
 from modules.CMMReportParser import CMMReportParser
-from modules.CustomLogger import CustomLogger
+import modules.CustomLogger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,9 +75,13 @@ def parse_new_reports(
     return ParseBatchResult(parsed_files=parsed_files, total_files=total_files)
 
 
+logger = logging.getLogger(__name__)
+
+
 class ParseReportsThread(QThread):
     update_progress = pyqtSignal(int)
     update_label = pyqtSignal(str)
+    error_occurred = pyqtSignal(str)
     parsing_finished = pyqtSignal()
 
     def __init__(self, parse_request: ParseRequest):
@@ -193,4 +200,16 @@ class ParseReportsThread(QThread):
                 self._extracted_archive_dir = None
         
     def log_and_exit(self, exception):
-        CustomLogger(exception, reraise=False)
+        caller = inspect.stack()[1].function
+        context = f"parse operation ({caller})"
+        if hasattr(custom_logger, "handle_exception") and hasattr(custom_logger, "LOG_ONLY"):
+            custom_logger.handle_exception(
+                exception,
+                behavior=custom_logger.LOG_ONLY,
+                logger_name=logger.name,
+                context=context,
+                reraise=False,
+            )
+        else:
+            custom_logger.CustomLogger(exception, reraise=False)
+        self.error_occurred.emit(f"{context}: {exception}")

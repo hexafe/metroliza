@@ -63,6 +63,7 @@ class ParsingDialog(QDialog):
         # Initialize thread and flag
         self.parse_thread = None
         self.parsing_canceled = False
+        self.parse_error_message = None
 
         # Initialize the layout
         self.layout = QGridLayout()
@@ -207,6 +208,7 @@ class ParsingDialog(QDialog):
             self.parse_thread = ParseReportsThread(request)
             self.parse_thread.update_label.connect(self.loading_label.setText)
             self.parse_thread.update_progress.connect(self.loading_bar.setValue)
+            self.parse_thread.error_occurred.connect(self.on_parse_error)
             self.parse_thread.finished.connect(self.on_parse_finished)
             self.parse_thread.start()
         except Exception as e:
@@ -223,10 +225,18 @@ class ParsingDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+
+    @pyqtSlot(str)
+    def on_parse_error(self, message):
+        self.parse_error_message = message
+        self.loading_label.setText("Parsing failed.")
+
     @pyqtSlot()
     def on_parse_finished(self):
         try:
-            if self.parsing_canceled:
+            if self.parse_error_message:
+                QMessageBox.warning(self, "Parsing failed", self.parse_error_message)
+            elif self.parsing_canceled:
                 # Show a message box to inform the user that parsing has been canceled
                 QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
             else:
@@ -239,8 +249,9 @@ class ParsingDialog(QDialog):
             # Re-enable the parse button
             self.parse_button.setEnabled(True)
 
-            # Reset the parsing canceled flag
+            # Reset parse state flags
             self.parsing_canceled = False
+            self.parse_error_message = None
 
             # Close the parsing dialog
             self.accept()
