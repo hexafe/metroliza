@@ -4,42 +4,28 @@ This is the single, execution-ready plan that combines all previously discussed 
 
 ## Current implementation status (repo audit)
 
-Last audited on 2026-02-28.
+> **Source of truth note:** Release readiness is finalized in this file under **Current implementation status (repo audit)**. Open implementation items are tracked only in `TODO.md` and referenced from companion plans.
 
-Canonical phase mapping used throughout this plan:
-- ✅ Completed
-- 🟡 Partially implemented
+Last audited: 2026-02-27.
+
+Canonical phase-state labels used throughout this plan:
+- **Completed**
+- **Partial**
+- **Open**
 
 Audit result based on the current repository state:
-- **Phase 0:** ✅ Completed.
-- **Phase 1:** ✅ Completed.
-- **Phase 2:** ✅ Completed.
+- **Phase 0:** Completed.
+- **Phase 1:** Completed.
+- **Phase 2:** Completed.
   - **Completed:** grouping/plot correctness fixes, dataclass request-contract migration, shared DB helper adoption (including transactional modify flows), export worksheet/chart decomposition slices, and post-extraction profiling/precompute follow-through on chart-heavy exports.
-- **Phase 3:** ✅ Completed.
-- **Phase 4:** ✅ Completed.
+- **Phase 3:** Completed.
+- **Phase 4:** Completed.
 
 Use this section as the source of truth for what is done vs still outstanding.
 
 ## Next implementation plan (proposed PR sequence)
 
-The following plan assumes short, independent PRs. **The last PR is intentionally documentation-focused**.
-
-1. **PR #1 — Simplify the Google Sheets export experience (UX + messaging)**
-   - Standardize success/failure messaging in `modules/ExportDialog.py` and `modules/google_drive_export.py`.
-   - Add an explicit pointer to where the fallback `.xlsx` is saved.
-   - Success criterion: a non-technical user can understand the export outcome from a single message.
-2. **PR #2 — CSV Summary presets for repetitive workflows**
-   - Extend preset persistence with reusable column profiles and quality limits.
-   - Add a simple flow: “Load preset → one-click export”.
-   - Success criterion: fewer manual setup steps before export.
-3. **PR #3 — Reduce export time for wide datasets**
-   - Further reduce chart count in quick-look mode.
-   - Improve default thresholds for automatic quick-look switching.
-   - Success criterion: clearly faster export for large column selections.
-4. **PR #4 — Documentation update (final PR)**
-   - Update `README.md`, `CHANGELOG.md`, `IMPLEMENTATION_PLAN.md`, and runbooks.
-   - Add a “what’s new for users” section after each major delivery.
-   - Success criterion: consistent user-facing feature communication and clear update guidance.
+All previously proposed PR slices in this section are now completed. Any newly open implementation work is tracked only in `TODO.md`.
 
 ## Goals
 - Fix correctness issues first (grouping/plot mismatches, crashes, dedupe bugs).
@@ -57,7 +43,7 @@ The following plan assumes short, independent PRs. **The last PR is intentionall
 
 ## Phase 0 — Safety hotfixes (Priority P0, 1–2 days)
 
-### Status: ✅ Completed
+### Status: Completed
 
 ### Implementation checklist
 1. **Shared safe Excel sheet-name utility** — ✅ done.
@@ -89,7 +75,7 @@ The following plan assumes short, independent PRs. **The last PR is intentionall
 
 ## Phase 1 — Reliability and cancellation (Priority P1, 2–3 days)
 
-### Status: ✅ Completed
+### Status: Completed
 
 ### Implementation checklist
 1. **Cooperative cancellation in parse/export workers** — ✅ mostly done.
@@ -121,7 +107,7 @@ The following plan assumes short, independent PRs. **The last PR is intentionall
 
 ## Phase 2 — Correctness + structure + performance (Priority P1/P2, 3–5 days)
 
-### Status: ✅ Completed.
+### Status: Completed.
 
 Completion summary:
 - **Completed:** correctness hardening (deterministic grouping + merge-key fallback + NaN-bucket filtering), parse/export dataclass contracts, DB helper consolidation (including retry-aware transactional modify flow), full export worksheet/chart decomposition slices, and targeted profiling/precompute cleanup for chart-heavy exports.
@@ -183,7 +169,7 @@ Completion summary:
 
 ## Phase 3 — Documentation + developer quality baseline (Priority P2, 1–2 days)
 
-### Status: ✅ Completed
+### Status: Completed
 
 ### Implementation checklist
 1. **Rewrite `README.md` (quickstart/setup/run/package/troubleshooting)** — ✅ done.
@@ -218,7 +204,7 @@ Completion summary:
 
 ## Phase 4 — Test coverage baseline (Priority P1/P2, 2–4 days)
 
-### Status: ✅ Completed
+### Status: Completed
 
 ### Implementation checklist
 - **Unit tests for Phase 0 regressions** — ✅ done.
@@ -245,11 +231,11 @@ Completion summary:
 
 ## Google Sheets compatibility roadmap (Excel → Google Sheets)
 
-### Status: ✅ Completed.
+### Status: **Partial**
 
 Completion summary:
 - **Completed:** GS0-GS5 implementation is merged (target plumbing, Drive conversion flow, auth/ops handling, post-conversion validation, `.xlsx` fallback reporting, and expanded GS5 testing-depth coverage).
-- **Ongoing ops practice (non-blocking):** maintain optional release-gated live smoke checks.
+- **Open:** maintain optional release-gated live smoke checks as an operational release-readiness practice.
 
 > **Canonical source note:** The detailed Google Sheets migration phases, acceptance criteria, and status language are maintained in `GOOGLE_SHEETS_MIGRATION_PLAN.md`. This section is a concise companion summary only.
 
@@ -270,7 +256,7 @@ Completion summary:
 
 ## CSV Summary module roadmap (new)
 
-### Status: ✅ Completed
+### Status: Completed
 
 Recent completion updates:
 - ✅ Added CSV Summary spec-limit-order validation (`LSL <= NOM <= USL`) so invalid limit sets are flagged in `CSV_SUMMARY` and capability values fall back to `N/A` instead of producing misleading values.
@@ -336,33 +322,13 @@ Recent completion updates:
 
 ## Remaining execution order (updated)
 1. Keep **Phase 0-4 (completed)** regression coverage green as maintenance work lands.
-2. Maintain Google Sheets migration ops guidance alignment with the canonical GS plan (GS0-GS5 completed; optional release-gated smoke checks remain operational guidance).
-3. Prioritize post-roadmap enhancements (export profile presets, parse benchmark reporting, and additional optional validation automation) in small PRs.
-
-### Audit-backed next implementation steps (next 2-3 PRs)
-Audit date: 2026-02-28.
-
-Based on the latest repository audit, these are the highest-value next slices to execute:
-
-1. **Release validation operations PR: keep Google conversion smoke checks release-gated and documented.**
-   - Run the live sandbox smoke check for each release candidate and for PRs that modify Google auth/conversion behavior.
-   - Record command, timestamp, result, and warning interpretation in the PR/release notes.
-
-2. **Optional validation automation PR: broaden non-default Google conversion coverage without changing default CI cost.**
-   - Expand mocked conversion/fallback assertions where gaps appear.
-   - Keep live smoke execution explicitly gated/manual.
-
-3. **Post-roadmap performance ergonomics PR: add operator-facing toggles and metrics outputs.**
-   - Evaluate export profile presets (chart-heavy vs fast diagnostics).
-   - Evaluate optional parse benchmark report output (CSV/JSON) for factory-scale tuning.
-
-### Suggested acceptance checks for the next slice
-- Regression checks: Phase 0/1/2/3/4 unit + integration suites remain green.
-- Google conversion checks: release-gated live smoke run documented for auth/conversion changes; mocked conversion/fallback tests stay green by default.
-- Performance checks: chart-heavy export paths show no regression after helper or cache refactors.
-
+2. Track and execute open implementation work from `TODO.md` only (do not duplicate status here).
+3. Maintain companion-document summaries (`GOOGLE_SHEETS_MIGRATION_PLAN.md`) as references to the canonical open-item list in `TODO.md`.
 
 ## Optimization backlog (exporting/parsing focus)
+
+> Reference ideas only (non-canonical). Do not treat this backlog as open implementation status; canonical open items live in `TODO.md`.
+
 - **Export path**
   - Profile chart-heavy exports and batch chart/worksheet operations where possible.
   - Reduce repeated formula/text assembly in inner header loops by precomputing static string fragments.
