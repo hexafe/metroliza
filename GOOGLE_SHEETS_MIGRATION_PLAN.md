@@ -1,6 +1,8 @@
 # Google Sheets Migration Plan (Drive conversion from generated `.xlsx`)
 
 > **Canonical source note:** This file is the canonical source for Google Sheets migration phase names, acceptance criteria wording, and status updates. `IMPLEMENTATION_PLAN.md` contains only a companion summary with a reference back here.
+> **Release-readiness note:** Final release-readiness sign-off is finalized in `IMPLEMENTATION_PLAN.md` under **Current implementation status (repo audit)**.
+> **Open-items note:** Open implementation work is tracked only in `TODO.md`; this file references that list rather than duplicating it.
 
 ## Goal
 Keep Metroliza export Excel-first (`xlsxwriter`) and add a Google mode that uploads the generated `.xlsx` to Google Drive for server-side conversion to a native Google Sheet, while preserving current analytical output:
@@ -11,13 +13,15 @@ Keep Metroliza export Excel-first (`xlsxwriter`) and add a Google mode that uplo
 
 ---
 
-## Migration status (audited 2026-02-27)
-- **Phase GS0:** ✅ Completed.
-- **Phase GS1:** ✅ Completed.
-- **Phase GS2:** ✅ Completed.
-- **Phase GS3:** ✅ Completed.
-- **Phase GS4:** ✅ Completed.
-- **Phase GS5:** ✅ Completed.
+## Migration status (last audited: 2026-02-27)
+Phase-state labels: **Completed**, **Partial**, **Open**.
+- **Phase GS0:** Completed.
+- **Phase GS1:** Completed.
+- **Phase GS2:** Completed.
+- **Phase GS3:** Completed.
+- **Phase GS4:** Completed.
+- **Phase GS5:** Completed.
+- **Workstream status:** Partial (implementation complete; release-gated operational smoke-check practice remains open in `TODO.md`).
 
 ---
 
@@ -52,18 +56,18 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 
 ## Phased implementation plan
 
-### Phase GS0 — Export target plumbing (UI/contracts) ✅ Completed
+### Phase GS0 — Export target plumbing (UI/contracts) Completed
 1. Add export target option in UI/contracts:
    - `excel_xlsx` (default),
    - `google_sheets_drive_convert`.
 2. Add Google destination metadata (folder, sharing option, account profile).
 3. Keep existing Excel export path unchanged when target is `excel_xlsx`.
 
-### Phase GS1 — Excel output hardening for conversion ✅ Completed
+### Phase GS1 — Excel output hardening for conversion Completed
 1. Keep worksheet-backed USL/LSL series ranges and helper anchor cells so chart source ranges remain deterministic for conversion.
 2. Preserve existing hardening changes because they reduce conversion drift risk.
 
-### Phase GS2 — Generate workbook + upload conversion ✅ Completed
+### Phase GS2 — Generate workbook + upload conversion Completed
 1. Run existing workbook generation flow to produce `.xlsx` artifact.
 2. Add Drive API uploader:
    - upload file bytes,
@@ -71,19 +75,19 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
    - capture converted file ID + web link.
 3. Surface converted link in UI/logs and optionally open browser.
 
-### Phase GS3 — Auth, permissions, and ops ✅ Completed
+### Phase GS3 — Auth, permissions, and ops Completed
 1. Add OAuth configuration path using local `credentials.json` and generated `token.json`.
 2. Ensure `credentials.json`/`token.json` are gitignored and never logged in plaintext.
 3. Use minimal scopes (`drive.file`; optionally `spreadsheets.readonly` for checks).
 4. Add retry/backoff for upload/convert transient failures.
 5. Add progress labels for “generating workbook”, “uploading”, and “converting”.
 
-### Phase GS4 — Post-conversion validation + fallback policy ✅ Completed
+### Phase GS4 — Post-conversion validation + fallback policy Completed
 1. Add lightweight validation after conversion (expected tabs exist, non-empty key sheets).
 2. Detect and warn on known conversion degradations (if any formatting/chart losses appear).
 3. Keep `.xlsx` as guaranteed fallback and include path in completion message.
 
-### Phase GS5 — Testing strategy ✅ Completed
+### Phase GS5 — Testing strategy Completed
 1. **Automated coverage completed**
    - unit tests cover target/metadata validation, upload payload builder, conversion response parsing, credential-file hygiene (`credentials.json`/`token.json` gitignore coverage), conversion-warning surfaces, edge-case validation, fallback messaging/content assertions, and negative-path auth/setup + transient conversion-failure handling while preserving successful `.xlsx` completion semantics,
    - integration checks verify Excel export behavior remains unchanged and Google conversion flow works with mocked Drive API + stub credentials.
@@ -101,7 +105,7 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 
 ## Remaining execution order (GS follow-through)
 1. Keep GS0-GS5 behavior stable and treat GS5 automated coverage as the merge gate for regressions.
-2. Run optional/manual sandbox Drive smoke checks only in release-gated workflows, then fold outcomes back into docs/tests as needed.
+2. Execute open operational follow-through items from `TODO.md` (single canonical list) and reflect outcomes back here without duplicating task state.
 
 ---
 

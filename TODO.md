@@ -1,8 +1,15 @@
 # TODO
 
-Last audited on 2026-02-27.
+Last audited: 2026-02-27.
 
-## Completed (audited)
+> **Source of truth note:** Release readiness is finalized in `IMPLEMENTATION_PLAN.md` under **Current implementation status (repo audit)**. This file is the single source of truth for **open implementation items**.
+
+## Canonical workstream status
+- **Core roadmap phases (0-4): Completed**.
+- **Google Sheets migration (GS0-GS5): Partial** (implementation complete; release-gated operational smoke-check practice remains open).
+- **CSV Summary roadmap: Completed**.
+
+## Completed implementation items (audited)
 - [x] Added credential/token gitignore guardrails (`credentials.json` + `token.json`) and shipped `config/google/credentials.example.json` template.
 - [x] Added Google target selection + destination metadata contract plumbing in export dialog/validation flow.
 - [x] Implemented Drive upload+convert flow for Google Sheets target.
@@ -19,16 +26,8 @@ Last audited on 2026-02-27.
   - [x] Expanded mocked failure/edge-case coverage for conversion warnings and fallback messaging/content assertions.
   - [x] Documented optional/manual sandbox Drive smoke-check runbook and expected-result checklist.
 
-## Open implementation tasks
-
-### Phase 2 decomposition follow-through (`ExportDataThread`)
-- [x] Continue remaining `ExportDataThread` decomposition slices.
-  - [x] Extract next worksheet-write section into a pure helper and cover with focused parity tests.
-  - [x] Extract next chart-rendering section into helper(s) with deterministic series/range assertions.
-  - [x] Keep regression coverage green for worksheet range parity and chart-series parity after each extraction slice.
-
-### Google Sheets post-completion operational checks
-- [x] Keep optional/manual sandbox Drive smoke checks release-gated and record outcomes when executed.
+## Open implementation items (canonical list)
+- [ ] Keep optional/manual sandbox Drive smoke checks release-gated, and record outcomes in release notes when Google auth/conversion behavior changes.
 
 ## Maintenance
 - [ ] Keep `README.md`, `IMPLEMENTATION_PLAN.md`, `TODO.md`, and `GOOGLE_SHEETS_MIGRATION_PLAN.md` synchronized after each roadmap PR.
