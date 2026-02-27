@@ -291,7 +291,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         )
         grouping_df = thread._add_group_key(grouping_df)
 
-        with patch('modules.ExportDataThread.logging.warning') as warning_mock:
+        with patch('modules.ExportDataThread.logger.warning') as warning_mock:
             merged, applied = thread._apply_group_assignments(header_group, grouping_df)
 
         self.assertTrue(applied)

@@ -17,6 +17,8 @@ GOOGLE_DRIVE_UPLOAD_URL = (
 )
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
+logger = logging.getLogger(__name__)
+
 
 class GoogleDriveExportError(RuntimeError):
     """Base exception for Google Drive export failures."""
@@ -349,5 +351,5 @@ def upload_and_convert_workbook(
         warnings=tuple(warnings),
         converted_tab_titles=tuple(converted_tab_titles),
     )
-    logging.info("Google Sheets conversion completed for '%s' (%s)", excel_file, result.web_url)
+    logger.info("Google Sheets conversion completed for '%s' (%s)", excel_file, result.web_url)
     return result

@@ -608,7 +608,7 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             handler = _ListHandler()
             logger.handlers = [handler]
-            logger.setLevel(logging.ERROR)
+            logger.setLevel(logging.WARNING)
             try:
                 thread.run()
             finally:
@@ -616,10 +616,10 @@ class TestExportBackendSmoke(unittest.TestCase):
                 logger.handlers = previous_handlers
                 logger.setLevel(previous_level)
 
-            error_messages = [record.getMessage() for record in records if record.levelno >= logging.ERROR]
-            self.assertTrue(any('Google export issue: conversion completed with warnings' in msg for msg in error_messages))
-            self.assertTrue(any('fallback=Conversion completed with warnings.' in msg for msg in error_messages))
-            self.assertTrue(any('warnings=Google Sheets conversion appears partial. Missing expected tab(s): REF_A.' in msg for msg in error_messages))
+            warning_messages = [record.getMessage() for record in records if record.levelno >= logging.WARNING]
+            self.assertTrue(any('Google export issue: conversion completed with warnings' in msg for msg in warning_messages))
+            self.assertTrue(any('fallback=Conversion completed with warnings.' in msg for msg in warning_messages))
+            self.assertTrue(any('warnings=Google Sheets conversion appears partial. Missing expected tab(s): REF_A.' in msg for msg in warning_messages))
 
     def test_google_target_success_metadata_contains_expected_keys(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
