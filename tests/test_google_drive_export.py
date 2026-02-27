@@ -13,6 +13,8 @@ from modules.google_drive_export import (
     GoogleDriveResponseError,
     GoogleDriveTransientError,
     _build_upload_request_body,
+    _load_token_payload,
+    _refresh_access_token,
     map_google_http_error,
     map_google_network_error,
     parse_drive_conversion_response,
@@ -96,6 +98,21 @@ class TestGoogleDriveExport(unittest.TestCase):
         error = map_google_http_error(503, payload)
 
         self.assertIsInstance(error, GoogleDriveTransientError)
+
+    def test_map_google_http_error_edge_cases_for_401_403_429_and_5xx(self):
+        unauthorized = map_google_http_error(401, json.dumps({"error": {"message": "Denied"}}))
+        forbidden_auth = map_google_http_error(
+            403,
+            json.dumps({"error": {"message": "Forbidden", "errors": [{"reason": "insufficientPermissions"}]}}),
+        )
+        rate_limited = map_google_http_error(429, "not-json")
+        server_error = map_google_http_error(500, json.dumps({"error": {"message": "Server exploded"}}))
+
+        self.assertIsInstance(unauthorized, GoogleDriveResponseError)
+        self.assertIn("Google API error", str(unauthorized))
+        self.assertIsInstance(forbidden_auth, GoogleDriveAuthError)
+        self.assertIsInstance(rate_limited, GoogleDriveQuotaError)
+        self.assertIsInstance(server_error, GoogleDriveTransientError)
 
     def test_network_error_maps_to_transient(self):
         url_error = urllib.error.URLError("temporary network failure")
@@ -315,6 +332,54 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             self.assertIn("tab validation could not be completed", result.warnings[0].lower())
             self.assertEqual(result.local_xlsx_path, str(excel_path))
+            self.assertIn("local .xlsx fallback", result.fallback_message)
+            self.assertIn(str(excel_path), result.fallback_message)
+
+    def test_upload_and_convert_workbook_repeated_transient_upload_failures_then_validation_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            attempts = {"count": 0}
+
+            def _http_error(status_code: int, payload: dict):
+                return urllib.error.HTTPError(
+                    GOOGLE_DRIVE_UPLOAD_URL,
+                    status_code,
+                    "error",
+                    hdrs=None,
+                    fp=BytesIO(json.dumps(payload).encode("utf-8")),
+                )
+
+            def fake_urlopen(request, timeout=0):
+                url = request.full_url
+                if url.startswith(GOOGLE_DRIVE_UPLOAD_URL):
+                    attempts["count"] += 1
+                    if attempts["count"] < 3:
+                        raise _http_error(503, {"error": {"message": "Backend Error", "errors": [{"reason": "backendError"}]}})
+                    return _FakeResponse(
+                        {
+                            "id": "sheet-retry-fallback",
+                            "webViewLink": "https://docs.google.com/spreadsheets/d/sheet-retry-fallback/edit",
+                        }
+                    )
+                raise urllib.error.URLError("metadata unavailable")
+
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            ), patch("modules.google_drive_export.time.sleep") as sleep_mock:
+                result = upload_and_convert_workbook(
+                    str(excel_path),
+                    expected_sheet_names=["MEASUREMENTS"],
+                    max_retries=3,
+                    retry_delay_seconds=0,
+                )
+
+            self.assertEqual("sheet-retry-fallback", result.file_id)
+            self.assertEqual(attempts["count"], 3)
+            self.assertEqual(sleep_mock.call_count, 2)
+            self.assertIn("tab validation could not be completed", result.warnings[0].lower())
+            self.assertIn("local .xlsx fallback", result.fallback_message)
             self.assertIn(str(excel_path), result.fallback_message)
 
     def test_parse_drive_conversion_response_accepts_web_content_link_fallback(self):
@@ -327,6 +392,62 @@ class TestGoogleDriveExport(unittest.TestCase):
 
 
 class TestGoogleDriveOAuthBootstrap(unittest.TestCase):
+
+    def test_load_token_payload_missing_file_raises_auth_error_with_stable_guidance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            token_path = Path(tmpdir) / "token.json"
+
+            with self.assertRaises(GoogleDriveAuthError) as exc:
+                _load_token_payload(token_path)
+
+        self.assertIn("Missing token.json", str(exc.exception))
+
+    def test_refresh_access_token_without_refresh_token_requires_reauthentication(self):
+        with self.assertRaises(GoogleDriveAuthError) as exc:
+            _refresh_access_token(
+                {"access_token": "expired", "expires_at": 0},
+                {"client_id": "id", "client_secret": "secret", "token_uri": "https://oauth2.googleapis.com/token"},
+            )
+
+        self.assertIn("Re-authenticate", str(exc.exception))
+
+    def test_ensure_access_token_rejects_malformed_credentials_structure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            credentials_path = Path(tmpdir) / "credentials.json"
+            token_path = Path(tmpdir) / "token.json"
+            credentials_path.write_text(json.dumps({"installed": ["bad"]}), encoding="utf-8")
+
+            from modules.google_drive_export import _ensure_access_token
+
+            with self.assertRaises(GoogleDriveAuthError) as exc:
+                _ensure_access_token(credentials_path, token_path)
+
+        self.assertIn("must include an 'installed' or 'web' OAuth client section", str(exc.exception))
+
+    def test_ensure_access_token_rejects_invalid_token_json(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            credentials_path = Path(tmpdir) / "credentials.json"
+            token_path = Path(tmpdir) / "token.json"
+            credentials_path.write_text(
+                json.dumps(
+                    {
+                        "installed": {
+                            "client_id": "client-id",
+                            "client_secret": "client-secret",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            token_path.write_text("{not valid json", encoding="utf-8")
+
+            from modules.google_drive_export import _ensure_access_token
+
+            with self.assertRaises(GoogleDriveAuthError) as exc:
+                _ensure_access_token(credentials_path, token_path)
+
+        self.assertIn("Invalid JSON content", str(exc.exception))
 
     def test_interactive_oauth_authorization_maps_cancellation_to_auth_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:
