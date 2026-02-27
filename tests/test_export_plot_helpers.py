@@ -46,6 +46,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (  # noqa: E402
+    build_histogram_annotation_specs,
     build_measurement_chart_format_policy,
     build_measurement_block_plan,
     build_measurement_chart_range_specs,
@@ -53,6 +54,8 @@ from modules.ExportDataThread import (  # noqa: E402
     build_measurement_header_block_plan,
     build_measurement_write_bundle,
     build_measurement_stat_row_specs,
+    build_summary_image_anchor_plan,
+    build_summary_sheet_position_plan,
     build_histogram_density_curve_payload,
     build_measurement_stat_formulas,
     build_violin_group_stats_rows,
@@ -62,6 +65,34 @@ from modules.ExportDataThread import (  # noqa: E402
 
 
 class TestExportPlotHelpers(unittest.TestCase):
+    def test_build_summary_sheet_position_plan_matches_legacy_three_column_block_math(self):
+        first = build_summary_sheet_position_plan(3)
+        second = build_summary_sheet_position_plan(6)
+
+        self.assertEqual(first, {'row': 0, 'column': 0, 'header_row': 0, 'image_row': 1})
+        self.assertEqual(second, {'row': 20, 'column': 0, 'header_row': 20, 'image_row': 21})
+
+    def test_build_summary_image_anchor_plan_returns_stable_panel_coordinates(self):
+        anchors = build_summary_image_anchor_plan(9)
+
+        self.assertEqual(anchors['header'], (40, 0))
+        self.assertEqual(anchors['distribution'], (41, 0))
+        self.assertEqual(anchors['iqr'], (41, 9))
+        self.assertEqual(anchors['histogram'], (41, 19))
+        self.assertEqual(anchors['trend'], (41, 29))
+
+    def test_build_histogram_annotation_specs_returns_ordered_mean_usl_lsl_labels(self):
+        annotations = build_histogram_annotation_specs(average=10.1234, usl=10.6, lsl=9.8, y_max=2.0)
+
+        self.assertEqual(len(annotations), 3)
+        self.assertEqual(annotations[0]['text'], 'μ=10.123')
+        self.assertEqual(annotations[0]['x'], 10.1234)
+        self.assertEqual(annotations[0]['y'], 1.9)
+        self.assertEqual(annotations[1]['text'], 'USL=10.600')
+        self.assertEqual(annotations[1]['ha'], 'right')
+        self.assertEqual(annotations[2]['text'], 'LSL=9.800')
+        self.assertEqual(annotations[2]['ha'], 'left')
+
     def test_compute_scaled_y_limits_expands_symmetrically(self):
         y_min, y_max = compute_scaled_y_limits((10.0, 20.0), 0.4)
 
