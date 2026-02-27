@@ -27,6 +27,20 @@ Use this section as the source of truth for what is done vs still outstanding.
 
 All previously proposed PR slices in this section are now completed. Any newly open implementation work is tracked only in `TODO.md`.
 
+## Release-candidate documentation sequence (2026.02 build 260228)
+
+### Status: Completed
+
+Completed PR-sequence summary for release-candidate signoff docs:
+- Consolidated user-facing release notes/changelog wording for Google Sheets export target `google_sheets_drive_convert`.
+- Standardized fallback language so `.xlsx` retention is described identically across changelog, README, and smoke-check docs.
+- Synced performance-impact wording (chart-heavy export improvements for large reports) across release highlights and troubleshooting guidance.
+- Confirmed this release-candidate documentation PR is non-functional (docs/version metadata only).
+
+Carry-forward implementation work remains tracked only in `TODO.md`.
+
+---
+
 ## Goals
 - Fix correctness issues first (grouping/plot mismatches, crashes, dedupe bugs).
 - Standardize module communication through dataclass contracts.

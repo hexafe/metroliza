@@ -1,7 +1,13 @@
-VERSION_DATE = "260227"
+VERSION_DATE = "260228"
 
 release_notes = """
-    <br><b>Current version 2026.02 (build 260227):</b><br>
+    <br><b>Current version 2026.02 (build 260228):</b><br>
+    - Google Sheets export (`google_sheets_drive_convert`) provides clearer completion outcomes<br>
+    - Safe fallback remains guaranteed: if conversion fails, the generated Excel file stays available<br>
+    - Large report exports remain faster due to chart-heavy worksheet optimizations<br>
+    - CSV Summary flow remains clearer with stronger limit-order validation messaging<br>
+
+    <br><b>Version 2026.02 (build 260227):</b><br>
     - More stable Google Sheets export with clearer completion messages<br>
     - Safe fallback: if conversion fails, the generated Excel file remains available<br>
     - Faster export for large reports and chart-heavy outputs<br>

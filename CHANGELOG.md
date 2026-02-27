@@ -1,6 +1,12 @@
 # Changelog (for end users)
 
-## 2026.02 (build 260227) — current version
+## 2026.02 (build 260228) — current version
+- **Google Sheets export is easier to trust**: completion copy now consistently reflects the `google_sheets_drive_convert` flow and result states in plain language.
+- **Fallback behavior is explicit**: when conversion is unavailable, users keep the generated `.xlsx` artifact as the guaranteed delivery output.
+- **Large-export performance remains improved**: recent chart-heavy worksheet optimizations continue to reduce runtime on wide, high-chart reports versus pre-optimization builds.
+- **CSV Summary guidance is clearer**: limit-order validation messaging (`LSL <= NOM <= USL`) is now described consistently across release docs and troubleshooting guidance.
+
+## 2026.02 (build 260227)
 - **Google Sheets export is more reliable**: the app now guides Google sign-in and reports export results more clearly.
 - **Safe fallback path**: if Google Sheets conversion fails, you still receive a ready-to-use Excel file.
 - **Faster work on large reports**: workbook and chart export is more efficient for wide datasets.
