@@ -139,7 +139,7 @@ def _configure_console_handler(logger: logging.Logger, formatter: logging.Format
 def ensure_application_logging(config: LoggingConfig | None = None, level: int | None = None):
     """Ensure Metroliza logging writes to configured sinks with independent thresholds."""
     logger = logging.getLogger()
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter('%(asctime)s %(levelname)s [%(name)s] [%(threadName)s] %(message)s')
 
     resolved_config = config or resolve_logging_config()
     if level is not None and config is None:

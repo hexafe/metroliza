@@ -7,12 +7,13 @@ from PyQt6.QtWidgets import QMessageBox
 LOG_ONLY = "log_only"
 LOG_AND_DIALOG = "log_and_dialog"
 LogBehavior = Literal["log_only", "log_and_dialog"]
+logger = logging.getLogger(__name__)
 
 
 def log_exception(exception, *, logger_name=None, context="operation"):
     """Log an exception with traceback and operation context, without UI side effects."""
-    logger = logging.getLogger(logger_name) if logger_name else logging.getLogger(__name__)
-    logger.error(
+    active_logger = logging.getLogger(logger_name) if logger_name else logger
+    active_logger.error(
         "Unhandled exception during %s: %s",
         context,
         exception,
