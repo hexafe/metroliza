@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import(
     QCheckBox,
 )
 import base64
+import logging
 import shutil
 import subprocess
 import sys
@@ -104,6 +105,9 @@ def reveal_file_in_explorer(file_path):
     raise OSError("Unable to open file explorer on this platform.")
 
 
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExportDialog(QDialog):
@@ -412,7 +416,7 @@ class ExportDialog(QDialog):
             if filename:
                 if not filename.endswith(".db"):
                     filename += ".db"
-                print(f"{filename=}")
+                logger.info("Selected database file: %s", filename)
                 self.db_file = filename
                 self.database_text_label.setText(filename)
                 self.select_excel_button.setEnabled(True)
@@ -511,7 +515,7 @@ class ExportDialog(QDialog):
 
             if filename:
                 file_path = Path(filename)
-                print(f"{file_path=}")
+                logger.info("Selected export Excel file: %s", file_path)
                 self.excel_file = file_path
                 self.excel_file_text_label.setText(str(file_path))
                 self.export_button.setEnabled(True)

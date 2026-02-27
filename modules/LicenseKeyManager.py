@@ -1,10 +1,13 @@
 import uuid
 import base64
+import logging
 from datetime import datetime, timedelta
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes
+
+logger = logging.getLogger(__name__)
 
 class LicenseKeyManager:
     """
@@ -145,7 +148,7 @@ class LicenseKeyManager:
             )
             return True
         except Exception as e:
-            print("Signature verification failed:", e)
+            logger.warning("Signature verification failed: %s", e)
             return False
 
     @staticmethod

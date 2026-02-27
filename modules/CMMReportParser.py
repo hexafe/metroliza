@@ -1,5 +1,6 @@
 import importlib.metadata
 import importlib.util
+import logging
 import re
 from pathlib import Path
 
@@ -7,6 +8,9 @@ import pandas
 
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_with_retry, run_transaction_with_retry
+
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_pymupdf_backend_module() -> str | None:
@@ -149,7 +153,7 @@ class CMMReportParser:
             )
 
             if not table_exists:
-                print("REPORTS table does not exist. Creating...")
+                logger.info("REPORTS table does not exist; creating schema and importing report data.")
                 open_split_to_sql()
                 return
 
@@ -165,7 +169,7 @@ class CMMReportParser:
                 # File does not exist in the 'REPORTS' table, import the data
                 open_split_to_sql()
             else:
-                print(f"{self.pdf_file_name} already exists in the database. Skipping the file.")
+                logger.info("Report '%s' already exists in the database; skipping.", self.pdf_file_name)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -201,7 +205,7 @@ class CMMReportParser:
             It iterates over each line of text in the pdf_raw_text attribute and prints it.
             """
             for line in self.pdf_raw_text:
-                print(line)
+                logger.debug("%s", line)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -213,10 +217,10 @@ class CMMReportParser:
             Each block is surrounded by markers indicating the beginning and end of the block.
             """
             for block in self.pdf_blocks_text:
-                print("\n___[BEGINNING OF BLOCK]___")
+                logger.debug("___[BEGINNING OF BLOCK]___")
                 for line in block:
-                    print(f"{line} ({len(line)=}")
-                print(f"___[END OF BLOCK ({len(block)=})]___\n")
+                    logger.debug("%s (len(line)=%s)", line, len(line))
+                logger.debug("___[END OF BLOCK (len(block)=%s)]___", len(block))
         except Exception as e:
             self.log_and_exit(e)
 
@@ -228,9 +232,9 @@ class CMMReportParser:
             Each block is surrounded by markers indicating the beginning and end of the block.
             """
             for block in self.pdf_blocks_text:
-                print("\n___[BEGINNING OF BLOCK]___")
-                print(f"{block}")
-                print(f"___[END OF BLOCK ({len(block)=})]___\n")
+                logger.debug("___[BEGINNING OF BLOCK]___")
+                logger.debug("%s", block)
+                logger.debug("___[END OF BLOCK (len(block)=%s)]___", len(block))
         except Exception as e:
             self.log_and_exit(e)
 
@@ -555,7 +559,10 @@ class CMMReportParser:
             """
             # Check if there are measurements data
             if not any(lst[1] for lst in self.pdf_blocks_text):
-                print(f"Report ({self.pdf_file_name}) - no measurements data available. Skipping database insertion.")
+                logger.warning(
+                    "Report '%s' has no measurements data; skipping database insertion.",
+                    self.pdf_file_name,
+                )
                 return
 
             def create_tables_and_insert_report(transaction_cursor):
@@ -632,10 +639,10 @@ class CMMReportParser:
                 retry_delay_s=1,
             )
             if was_inserted:
-                print(f'Report ({self.pdf_file_name}) - measurements inserted into the database.')
+                logger.info("Report '%s' measurements inserted into the database.", self.pdf_file_name)
                 return
 
-            print(f'Report ({self.pdf_file_name}) already exists in the database.')
+            logger.info("Report '%s' already exists in the database.", self.pdf_file_name)
             return
         except Exception as e:
             self.log_and_exit(e)
@@ -643,7 +650,7 @@ class CMMReportParser:
     def show_df(self):
         try:
             """Prints the dataframe with measurements"""
-            print(f"{self.df}")
+            logger.debug("%s", self.df)
         except Exception as e:
             self.log_and_exit(e)
             

@@ -8,8 +8,12 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 from PyQt6.QtCore import Qt
+import logging
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_select_with_columns, run_transaction_with_retry
+
+
+logger = logging.getLogger(__name__)
 
 
 class ModifyDB(QDialog):
@@ -97,7 +101,7 @@ class ModifyDB(QDialog):
             if filename:
                 if not filename.endswith(".db"):
                     filename += ".db"
-                print(f"Selected DB file: {filename}")
+                logger.info("Selected DB file: %s", filename)
                 self.db_file = filename
                 self.populate_tables()
                 self.apply_button.setEnabled(True)

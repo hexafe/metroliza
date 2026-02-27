@@ -618,7 +618,7 @@ class CSVSummaryDialog(QDialog):
         if filename:
             if not filename.endswith(".csv"):
                 filename += ".csv"
-            print("Selected input file:", filename)
+            logger.info("Selected input CSV file: %s", filename)
             self.input_file = filename
             # Enable the FILTER and OUTPUT buttons after the input file is selected
             self.filter_button.setEnabled(True)
@@ -667,7 +667,7 @@ class CSVSummaryDialog(QDialog):
             )
 
     def handle_filter_button(self):
-        print("FILTER button clicked")
+        logger.debug("FILTER button clicked.")
 
         # Open the FilterDialog and pass the column names to it
         if self.data_frame is not None:
@@ -678,9 +678,9 @@ class CSVSummaryDialog(QDialog):
 
                 # Use the selected_indexes and selected_data_columns for further processing
                 if self.selected_indexes:
-                    print("Selected Indexes:", self.selected_indexes)
+                    logger.info("Selected index columns: %s", self.selected_indexes)
                 if self.selected_data_columns:
-                    print("Selected Data Columns:", self.selected_data_columns)
+                    logger.info("Selected data columns: %s", self.selected_data_columns)
                     self.column_spec_limits = {
                         column: self.column_spec_limits.get(column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
                         for column in self.selected_data_columns
@@ -730,7 +730,7 @@ class CSVSummaryDialog(QDialog):
                                                 "Excel Files (*.xlsx);;All Files (*)")#, options=options)
 
         if filename:
-            print("Selected output file:", filename)
+            logger.info("Selected output Excel file: %s", filename)
             self.output_file = filename
             # Enable the START button after the output file is selected
             self.start_button.setEnabled(True)
@@ -877,4 +877,4 @@ class CSVSummaryDialog(QDialog):
             # Show the loading screen and progress bar
             self.show_loading_screen()
         else:
-            print("No data loaded. Please select an input file first.")
+            logger.warning("Start requested without loaded data frame.")
