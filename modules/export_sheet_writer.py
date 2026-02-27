@@ -216,6 +216,25 @@ def build_measurement_summary_row_layout(*, base_col, stat_rows, start_row=3):
     ]
 
 
+def build_summary_panel_write_plan(summary_anchors, header):
+    """Return deterministic summary-sheet write coordinates for one header panel."""
+    header_row, header_col = summary_anchors['header']
+    distribution_row, distribution_col = summary_anchors['distribution']
+    iqr_row, iqr_col = summary_anchors['iqr']
+    histogram_row, histogram_col = summary_anchors['histogram']
+    trend_row, trend_col = summary_anchors['trend']
+
+    return {
+        'header_cell': {'row': header_row, 'col': header_col, 'value': header},
+        'image_slots': {
+            'distribution': {'row': distribution_row, 'col': distribution_col},
+            'iqr': {'row': iqr_row, 'col': iqr_col},
+            'histogram': {'row': histogram_row, 'col': histogram_col},
+            'trend': {'row': trend_row, 'col': trend_col},
+        },
+    }
+
+
 def write_measurement_summary_rows(worksheet, summary_rows, formats):
     """Write summary row labels and formulas using the provided layout specs."""
     for row_spec in summary_rows:

@@ -8,6 +8,7 @@ from modules.export_sheet_writer import (
     build_measurement_summary_row_layout,
     build_measurement_write_bundle,
     build_measurement_write_bundle_cached,
+    build_summary_panel_write_plan,
     write_measurement_block,
     write_measurement_summary_rows,
 )
@@ -83,6 +84,24 @@ class TestExportSheetWriter(unittest.TestCase):
         self.assertIn((4, 0, 'NOK %'), worksheet.writes)
         self.assertEqual(worksheet.formulas[0], (3, 1, '=MIN(C22:C30)'))
         self.assertEqual(worksheet.formulas[1], (4, 1, '=10%'))
+
+
+    def test_build_summary_panel_write_plan_maps_header_and_image_slots(self):
+        anchors = {
+            'header': (40, 0),
+            'distribution': (41, 0),
+            'iqr': (41, 9),
+            'histogram': (41, 19),
+            'trend': (41, 29),
+        }
+
+        plan = build_summary_panel_write_plan(anchors, 'DIA - X')
+
+        self.assertEqual(plan['header_cell'], {'row': 40, 'col': 0, 'value': 'DIA - X'})
+        self.assertEqual(plan['image_slots']['distribution'], {'row': 41, 'col': 0})
+        self.assertEqual(plan['image_slots']['iqr'], {'row': 41, 'col': 9})
+        self.assertEqual(plan['image_slots']['histogram'], {'row': 41, 'col': 19})
+        self.assertEqual(plan['image_slots']['trend'], {'row': 41, 'col': 29})
 
 
     def test_cached_write_bundle_matches_uncached_contract(self):

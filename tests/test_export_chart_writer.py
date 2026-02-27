@@ -2,6 +2,7 @@ import time
 import unittest
 
 from modules.export_chart_writer import (
+    build_horizontal_limit_line_specs,
     build_measurement_chart_range_specs,
     build_measurement_chart_series_specs,
     build_measurement_chart_series_specs_from_plan,
@@ -48,6 +49,22 @@ class DummyWorksheet:
 
 
 class TestExportChartWriter(unittest.TestCase):
+    def test_build_horizontal_limit_line_specs_is_deterministic(self):
+        specs = build_horizontal_limit_line_specs(10.5, 9.8)
+
+        self.assertEqual(
+            specs,
+            [
+                {'y': 10.5, 'color': '#9b1c1c', 'linestyle': '--', 'linewidth': 1.0},
+                {'y': 9.8, 'color': '#9b1c1c', 'linestyle': '--', 'linewidth': 1.0},
+            ],
+        )
+
+        custom = build_horizontal_limit_line_specs(5.0, 4.0, color='blue', linestyle=':', linewidth=2.5)
+        self.assertEqual(custom[0]['color'], 'blue')
+        self.assertEqual(custom[1]['linestyle'], ':')
+        self.assertEqual(custom[1]['linewidth'], 2.5)
+
     def test_series_specs_include_limits(self):
         specs = build_measurement_chart_series_specs(
             header='H',

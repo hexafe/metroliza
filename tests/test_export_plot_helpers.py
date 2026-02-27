@@ -51,6 +51,7 @@ from modules.ExportDataThread import (  # noqa: E402
     build_measurement_block_plan,
     build_measurement_chart_range_specs,
     build_measurement_chart_series_specs,
+    build_horizontal_limit_line_specs,
     build_measurement_header_block_plan,
     build_measurement_write_bundle,
     build_measurement_stat_row_specs,
@@ -178,6 +179,14 @@ class TestExportPlotHelpers(unittest.TestCase):
     def test_build_measurement_block_plan_rejects_empty_sample_size(self):
         with self.assertRaises(ValueError):
             build_measurement_block_plan(base_col=4, sample_size=0)
+
+    def test_build_horizontal_limit_line_specs_matches_summary_render_contract(self):
+        line_specs = build_horizontal_limit_line_specs(10.6, 9.8)
+
+        self.assertEqual(line_specs[0]['y'], 10.6)
+        self.assertEqual(line_specs[1]['y'], 9.8)
+        self.assertEqual(line_specs[0]['linestyle'], '--')
+        self.assertEqual(line_specs[1]['color'], '#9b1c1c')
 
     def test_build_measurement_chart_series_specs_uses_range_backed_series(self):
         series = build_measurement_chart_series_specs(
