@@ -55,6 +55,8 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
     warnings = [str(w) for w in metadata.get('conversion_warnings', []) if str(w).strip()]
     fallback_message = str(metadata.get('fallback_message', '')).strip()
     converted_url = str(metadata.get('converted_url', '')).strip()
+    converted_file_id = str(metadata.get('converted_file_id', '')).strip()
+    drive_file_url = f"https://drive.google.com/file/d/{converted_file_id}/view" if converted_file_id else ""
 
     if export_target == 'google_sheets_drive_convert':
         if warnings or fallback_message:
@@ -62,6 +64,10 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
                 f"Data exported locally to {excel_file}.",
                 "Google Sheets conversion was not fully completed.",
             ]
+            if converted_url:
+                message_lines.append(f"Google Sheet: {converted_url}")
+            if drive_file_url:
+                message_lines.append(f"Drive file: {drive_file_url}")
             if fallback_message:
                 message_lines.append(fallback_message)
             if warnings:
@@ -70,11 +76,13 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
             return 'warning', 'Export completed with Google fallback', "\n".join(message_lines)
 
         if converted_url:
-            return (
-                'info',
-                'Export successful',
-                f"Data exported successfully to {excel_file}.\nGoogle Sheet: {converted_url}",
-            )
+            message_lines = [
+                f"Data exported successfully to {excel_file}.",
+                f"Google Sheet: {converted_url}",
+            ]
+            if drive_file_url:
+                message_lines.append(f"Drive file: {drive_file_url}")
+            return 'info', 'Export successful', "\n".join(message_lines)
 
     return 'info', 'Export successful', f"Data exported successfully to {excel_file}!"
 
