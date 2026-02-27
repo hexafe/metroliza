@@ -71,13 +71,29 @@ def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -
     from google_auth_oauthlib.flow import InstalledAppFlow
 
     flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), scopes=[GOOGLE_DRIVE_SCOPE])
-    credentials = flow.run_local_server(
-        host="127.0.0.1",
-        port=0,
-        open_browser=True,
-        authorization_prompt_message="Please complete Google authorization in your browser.\n{url}\n",
-        success_message="Google authorization completed. You can close this browser tab.",
-    )
+    try:
+        credentials = flow.run_local_server(
+            host="127.0.0.1",
+            port=0,
+            open_browser=True,
+            authorization_prompt_message="Please complete Google authorization in your browser.\n{url}\n",
+            success_message="Google authorization completed. You can close this browser tab.",
+            timeout_seconds=120,
+        )
+    except TypeError:
+        # Older google-auth-oauthlib versions may not support timeout_seconds.
+        credentials = flow.run_local_server(
+            host="127.0.0.1",
+            port=0,
+            open_browser=True,
+            authorization_prompt_message="Please complete Google authorization in your browser.\n{url}\n",
+            success_message="Google authorization completed. You can close this browser tab.",
+        )
+    except Exception as exc:
+        raise GoogleDriveAuthError(
+            "Google OAuth authorization was canceled or timed out. "
+            "Please try again to enable Google Sheets export."
+        ) from exc
 
     expires_at = time.time() + 3600
     if getattr(credentials, "expiry", None) is not None:
