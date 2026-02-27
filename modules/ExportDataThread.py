@@ -1,5 +1,7 @@
 import logging
 import warnings
+import os
+import time
 import matplotlib
 import pandas as pd
 import numpy as np
@@ -56,6 +58,7 @@ from modules.export_sheet_writer import (
     build_measurement_stat_formulas as _build_measurement_stat_formulas,
     build_measurement_stat_row_specs as _build_measurement_stat_row_specs,
     build_measurement_write_bundle as _build_measurement_write_bundle,
+    build_measurement_write_bundle_cached as _build_measurement_write_bundle_cached,
     build_spec_limit_anchor_rows as _build_spec_limit_anchor_rows,
     create_measurement_formats,
     write_measurement_block,
@@ -125,6 +128,10 @@ def build_measurement_chart_format_policy(header):
 
 def build_measurement_write_bundle(header, header_group, base_col):
     return _build_measurement_write_bundle(header, header_group, base_col)
+
+
+def build_measurement_write_bundle_cached(header, header_group, base_col, cache=None):
+    return _build_measurement_write_bundle_cached(header, header_group, base_col, cache=cache)
 
 
 def run_export_steps(steps, should_cancel):
@@ -659,13 +666,22 @@ class ExportDataThread(QThread):
                 worksheet.set_column(0, max_col, column_width, cell_format=formats['default'])
 
                 header_groups = ref_group.groupby('HEADER - AX', as_index=False)
+                header_count = ref_group['HEADER - AX'].nunique(dropna=False)
+                optimization_cache = {}
+                timing_enabled = os.getenv('METROLIZA_EXPORT_TIMING', '').lower() in {'1', 'true', 'yes', 'on'}
+                build_bundle_elapsed = 0.0
+                chart_insert_elapsed = 0.0
                 for (header, header_group) in header_groups:
                     if self._check_canceled():
                         return
 
                     header_group = self._sort_header_group(header_group)
                     base_col = col
-                    write_bundle = _build_measurement_write_bundle(header, header_group, base_col)
+                    if timing_enabled:
+                        build_bundle_start = time.perf_counter()
+                    write_bundle = _build_measurement_write_bundle_cached(header, header_group, base_col, cache=optimization_cache)
+                    if timing_enabled:
+                        build_bundle_elapsed += time.perf_counter() - build_bundle_start
                     header_plan = write_bundle['header_plan']
                     measurement_plan = write_measurement_block(worksheet, write_bundle, formats, base_col=base_col)
 
@@ -673,6 +689,8 @@ class ExportDataThread(QThread):
                     header_col_end = col - 1
                     worksheet.set_column(header_col_end, header_col_end, None, cell_format=formats['border'])
 
+                    if timing_enabled:
+                        chart_insert_start = time.perf_counter()
                     insert_measurement_chart(
                         workbook,
                         worksheet,
@@ -681,7 +699,11 @@ class ExportDataThread(QThread):
                         sheet_name=safe_ref_sheet_name,
                         measurement_plan=measurement_plan,
                         chart_anchor_col=col - 3,
+                        cache=optimization_cache,
                     )
+
+                    if timing_enabled:
+                        chart_insert_elapsed += time.perf_counter() - chart_insert_start
 
                     if self._check_canceled():
                         return
@@ -695,6 +717,15 @@ class ExportDataThread(QThread):
                         hide_columns = all_measurements_within_limits(header_group['MEAS'], header_plan['lsl'], header_plan['usl'])
                         if hide_columns:
                             worksheet.set_column(col - 3, col - 1, 0)
+
+                if timing_enabled:
+                    logging.debug(
+                        'Export timing [ref=%s]: bundle_build=%.6fs chart_insert=%.6fs headers=%d',
+                        ref,
+                        build_bundle_elapsed,
+                        chart_insert_elapsed,
+                        header_count,
+                    )
 
                 worksheet.freeze_panes(12, 0)
         except Exception as e:

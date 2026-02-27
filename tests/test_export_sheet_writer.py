@@ -1,10 +1,13 @@
+import time
 import unittest
 
 import pandas as pd
 
 from modules.export_sheet_writer import (
+    build_measurement_header_block_plan,
     build_measurement_summary_row_layout,
     build_measurement_write_bundle,
+    build_measurement_write_bundle_cached,
     write_measurement_block,
     write_measurement_summary_rows,
 )
@@ -80,6 +83,55 @@ class TestExportSheetWriter(unittest.TestCase):
         self.assertIn((4, 0, 'NOK %'), worksheet.writes)
         self.assertEqual(worksheet.formulas[0], (3, 1, '=MIN(C22:C30)'))
         self.assertEqual(worksheet.formulas[1], (4, 1, '=10%'))
+
+
+    def test_cached_write_bundle_matches_uncached_contract(self):
+        header_group = pd.DataFrame(
+            {
+                'DATE': ['2024-01-01', '2024-01-02'],
+                'SAMPLE_NUMBER': ['1', '2'],
+                'MEAS': [10.1, 10.2],
+                'NOM': [10.0, 10.0],
+                '+TOL': [0.5, 0.5],
+                '-TOL': [-0.5, -0.5],
+            }
+        )
+
+        uncached = build_measurement_write_bundle('Diameter - X', header_group, 0)
+        cache = {}
+        cached = build_measurement_write_bundle_cached('Diameter - X', header_group, 0, cache=cache)
+
+        self.assertEqual(cached['static_rows'], uncached['static_rows'])
+        self.assertEqual(cached['header_plan']['stat_rows'], uncached['header_plan']['stat_rows'])
+        self.assertEqual(cached['measurement_plan'], uncached['measurement_plan'])
+
+    def test_debug_timing_cached_header_plan_path_runs(self):
+        header_group = pd.DataFrame(
+            {
+                'DATE': ['2024-01-01', '2024-01-02'],
+                'SAMPLE_NUMBER': ['1', '2'],
+                'MEAS': [10.1, 10.2],
+                'NOM': [10.0, 10.0],
+                '+TOL': [0.5, 0.5],
+                '-TOL': [-0.5, -0.5],
+            }
+        )
+
+        iterations = 1200
+        uncached_start = time.perf_counter()
+        for _ in range(iterations):
+            build_measurement_header_block_plan(header_group, 0)
+        uncached_elapsed = time.perf_counter() - uncached_start
+
+        cache = {}
+        cached_start = time.perf_counter()
+        for _ in range(iterations):
+            build_measurement_header_block_plan(header_group, 0, cache=cache)
+        cached_elapsed = time.perf_counter() - cached_start
+
+        self.assertGreater(uncached_elapsed, 0.0)
+        self.assertGreater(cached_elapsed, 0.0)
+        self.assertEqual(len(cache.get('measurement_block_templates', {})), 1)
 
 
 if __name__ == '__main__':

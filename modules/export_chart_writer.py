@@ -6,14 +6,38 @@ def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
     return f"={sheet_name}!${xl_range(first_row, column_index, last_row, column_index)}"
 
 
-def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column):
-    """Return worksheet range specs shared by chart backend helpers."""
-    return {
+def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column, cache=None):
+    """Return worksheet range specs shared by chart backend helpers.
+
+    The optional cache avoids rebuilding identical absolute range strings for repeated
+    chart fragments in the same export run.
+    """
+    if cache is not None:
+        range_cache = cache.setdefault('range_specs', {})
+        cache_key = (sheet_name, first_data_row, last_data_row, x_column, y_column)
+        cached = range_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    range_specs = {
         'data_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
         'data_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column),
         'usl_y': build_sheet_series_range(sheet_name, 0, 1, y_column),
         'lsl_y': build_sheet_series_range(sheet_name, 2, 3, y_column),
         'limit_x': build_sheet_series_range(sheet_name, first_data_row, first_data_row + 1, x_column),
+    }
+    if cache is not None:
+        range_cache[cache_key] = range_specs
+    return range_specs
+
+
+def _build_limit_series_template(*, limit_name):
+    return {
+        'name': limit_name,
+        'line': {'color': 'red', 'width': 1},
+        'marker': {'type': 'none'},
+        'data_labels': {'value': False},
+        'show_legend_key': False,
     }
 
 
@@ -25,6 +49,7 @@ def build_measurement_chart_series_specs(
     last_data_row,
     x_column,
     y_column,
+    cache=None,
 ):
     """Build stable chart series definitions for measurement and spec-limit overlays."""
     range_specs = build_measurement_chart_range_specs(
@@ -33,7 +58,16 @@ def build_measurement_chart_series_specs(
         last_data_row=last_data_row,
         x_column=x_column,
         y_column=y_column,
+        cache=cache,
     )
+
+    if cache is not None:
+        limit_template_cache = cache.setdefault('limit_series_templates', {})
+        usl_template = limit_template_cache.setdefault('USL', _build_limit_series_template(limit_name='USL'))
+        lsl_template = limit_template_cache.setdefault('LSL', _build_limit_series_template(limit_name='LSL'))
+    else:
+        usl_template = _build_limit_series_template(limit_name='USL')
+        lsl_template = _build_limit_series_template(limit_name='LSL')
 
     return [
         {
@@ -42,27 +76,19 @@ def build_measurement_chart_series_specs(
             'values': range_specs['data_y'],
         },
         {
-            'name': 'USL',
+            **usl_template,
             'categories': range_specs['limit_x'],
             'values': range_specs['usl_y'],
-            'line': {'color': 'red', 'width': 1},
-            'marker': {'type': 'none'},
-            'data_labels': {'value': False},
-            'show_legend_key': False,
         },
         {
-            'name': 'LSL',
+            **lsl_template,
             'categories': range_specs['limit_x'],
             'values': range_specs['lsl_y'],
-            'line': {'color': 'red', 'width': 1},
-            'marker': {'type': 'none'},
-            'data_labels': {'value': False},
-            'show_legend_key': False,
         },
     ]
 
 
-def build_measurement_chart_series_specs_from_plan(*, header, sheet_name, measurement_plan):
+def build_measurement_chart_series_specs_from_plan(*, header, sheet_name, measurement_plan, cache=None):
     """Build chart series specs from the stable measurement-plan contract."""
     return build_measurement_chart_series_specs(
         header=header,
@@ -71,6 +97,7 @@ def build_measurement_chart_series_specs_from_plan(*, header, sheet_name, measur
         last_data_row=measurement_plan['last_data_row'],
         x_column=measurement_plan['summary_column'],
         y_column=measurement_plan['y_column'],
+        cache=cache,
     )
 
 
@@ -93,12 +120,14 @@ def insert_measurement_chart(
     sheet_name,
     measurement_plan,
     chart_anchor_col,
+    cache=None,
 ):
     chart = workbook.add_chart({'type': chart_type})
     series_specs = build_measurement_chart_series_specs_from_plan(
         header=header,
         sheet_name=sheet_name,
         measurement_plan=measurement_plan,
+        cache=cache,
     )
     for series_spec in series_specs:
         chart.add_series(series_spec)
