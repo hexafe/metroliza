@@ -134,7 +134,8 @@ class TestLoggingUtils(unittest.TestCase):
 
                 self.assertTrue(all(h.maxBytes == 10 * 1024 * 1024 for h in file_handlers))
                 self.assertTrue(all(h.backupCount == 7 for h in file_handlers))
-                self.assertTrue(all(h.formatter._fmt == '%(asctime)s - %(levelname)s - %(message)s' for h in file_handlers))
+                self.assertTrue(all(h.formatter._fmt == '%(asctime)s %(levelname)s [%(name)s] [%(threadName)s] %(message)s' for h in file_handlers))
+                self.assertEqual(console_handlers[0].formatter._fmt, '%(asctime)s %(levelname)s [%(name)s] [%(threadName)s] %(message)s')
                 self.assertEqual(console_handlers[0].level, logging.WARNING)
             finally:
                 self._reset_logger(logger)
