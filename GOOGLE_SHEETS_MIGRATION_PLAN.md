@@ -11,13 +11,13 @@ Keep Metroliza export Excel-first (`xlsxwriter`) and add a Google mode that uplo
 
 ---
 
-## Migration status (audited 2026-02-26)
+## Migration status (audited 2026-02-27)
 - **Phase GS0:** ✅ Completed.
 - **Phase GS1:** ✅ Completed.
 - **Phase GS2:** ✅ Completed.
 - **Phase GS3:** ✅ Completed.
 - **Phase GS4:** ✅ Completed.
-- **Phase GS5:** 🟡 Partially implemented (baseline unit/integration coverage is in place; broader warning/fallback scenario coverage and live-sandbox depth remain).
+- **Phase GS5:** ✅ Completed.
 
 ---
 
@@ -83,15 +83,12 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 2. Detect and warn on known conversion degradations (if any formatting/chart losses appear).
 3. Keep `.xlsx` as guaranteed fallback and include path in completion message.
 
-### Phase GS5 — Testing strategy 🟡 Partially implemented
-1. **Completed baseline coverage**
-   - unit tests for target/metadata validation, upload payload builder, conversion response parsing, and credential-file hygiene (`credentials.json`/`token.json` gitignore coverage),
-   - integration checks that Excel export behavior remains unchanged and Google conversion flow works with mocked Drive API + stub credentials.
-2. **Remaining depth expansion**
-   - broaden mocked scenarios for conversion-warning surfaces, edge-case validation, and fallback messaging/content assertions,
-   - add more negative-path coverage for auth/setup and transient conversion failures while preserving successful `.xlsx` completion semantics.
-3. **Optional live smoke check (non-default)**
-   - maintain manual/CI-gated sandbox Drive smoke checks using local-only credentials files (`credentials.json`, `token.json`).
+### Phase GS5 — Testing strategy ✅ Completed
+1. **Automated coverage completed**
+   - unit tests cover target/metadata validation, upload payload builder, conversion response parsing, credential-file hygiene (`credentials.json`/`token.json` gitignore coverage), conversion-warning surfaces, edge-case validation, fallback messaging/content assertions, and negative-path auth/setup + transient conversion-failure handling while preserving successful `.xlsx` completion semantics,
+   - integration checks verify Excel export behavior remains unchanged and Google conversion flow works with mocked Drive API + stub credentials.
+2. **Optional live smoke check (non-default)**
+   - manual/CI-gated sandbox Drive smoke checks are documented for release-gated workflows using local-only credentials files (`credentials.json`, `token.json`).
 
 ### Unified acceptance criteria (single-source wording)
 - Google Sheets export target is selectable and functional.
@@ -103,9 +100,8 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 
 
 ## Remaining execution order (GS follow-through)
-1. Keep GS0-GS4 behavior stable and treat current GS5 baseline tests as the merge gate for regressions.
-2. Expand GS5 with broader mocked scenario coverage for conversion warnings, edge-case validation, and fallback messaging/content checks.
-3. Run optional/manual sandbox Drive smoke checks only in release-gated workflows, then fold outcomes back into docs/tests as needed.
+1. Keep GS0-GS5 behavior stable and treat GS5 automated coverage as the merge gate for regressions.
+2. Run optional/manual sandbox Drive smoke checks only in release-gated workflows, then fold outcomes back into docs/tests as needed.
 
 ---
 
@@ -126,7 +122,7 @@ Migration is complete when:
 3. User receives a working Google Sheet link/ID from converted file.
 4. `.xlsx` fallback is always preserved/reported, including warning/degradation paths.
 5. Excel export remains unchanged for default users.
-6. GS5 coverage includes baseline automated tests plus documented optional release-gated live smoke validation.
+6. GS5 coverage includes expanded automated tests plus documented optional release-gated live smoke validation.
 
 ---
 

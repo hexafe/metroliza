@@ -4,7 +4,7 @@ This is the single, execution-ready plan that combines all previously discussed 
 
 ## Current implementation status (repo audit)
 
-Last audited on 2026-02-26.
+Last audited on 2026-02-27.
 
 Canonical phase mapping used throughout this plan:
 - ✅ Completed
@@ -226,18 +226,19 @@ Completed vs remaining split:
 
 ## Google Sheets compatibility roadmap (Excel → Google Sheets)
 
-### Status: 🟡 Partially implemented.
+### Status: ✅ Completed.
 
-Completed vs remaining split:
-- **Completed:** GS0-GS4 implementation is merged (target plumbing, Drive conversion flow, auth/ops handling, post-conversion validation, and `.xlsx` fallback reporting).
-- **Remaining (GS5):** expand conversion-path test depth beyond current baseline mocked coverage and maintain optional release-gated live smoke checks.
+Completion summary:
+- **Completed:** GS0-GS5 implementation is merged (target plumbing, Drive conversion flow, auth/ops handling, post-conversion validation, `.xlsx` fallback reporting, and expanded GS5 testing-depth coverage).
+- **Ongoing ops practice (non-blocking):** maintain optional release-gated live smoke checks.
 
 > **Canonical source note:** The detailed Google Sheets migration phases, acceptance criteria, and status language are maintained in `GOOGLE_SHEETS_MIGRATION_PLAN.md`. This section is a concise companion summary only.
 
 ### Companion summary
 - Google Sheets support follows a Drive conversion strategy: generate the standard `.xlsx`, upload to Drive, convert to Google Sheets, and return the resulting link while preserving/reporting the `.xlsx` fallback.
-- GS0-GS4 implementation work is merged (target plumbing, upload/convert flow, auth/ops handling, and post-conversion validation/fallback messaging).
-- Remaining work is GS5 depth: broaden automated/manual conversion-path testing coverage while keeping wording and acceptance criteria single-sourced in the canonical migration plan.
+- **Phase GS5 — Testing strategy ✅ Completed.**
+- GS0-GS5 implementation work is merged (target plumbing, upload/convert flow, auth/ops handling, post-conversion validation/fallback messaging, and GS5 testing-depth completion).
+- GS5 testing-depth scope is complete in automation; keep optional/manual release-gated conversion smoke checks documented while preserving single-sourced wording and acceptance criteria in the canonical migration plan.
 
 ### Canonical reference
 - See `GOOGLE_SHEETS_MIGRATION_PLAN.md` for:
@@ -320,10 +321,10 @@ Recent completion updates:
    - continue extracting + testing pure plotting/data-shaping helpers to keep worksheet ranges and chart series deterministic,
    - follow up on performance profiling/precomputation opportunities once decomposition slices land.
 2. Keep **Phase 0/1/3/4 (completed)** coverage green while remaining Phase 2 tasks land.
-3. Keep Google Sheets migration status aligned with the canonical GS plan (GS0-GS4 completed, GS5 test-depth follow-through ongoing).
+3. Keep Google Sheets migration status aligned with the canonical GS plan (GS0-GS5 completed; optional release-gated smoke checks remain operational guidance).
 
 ### Audit-backed next implementation steps (next 2-3 PRs)
-Audit date: 2026-02-26.
+Audit date: 2026-02-27.
 
 Based on the latest repository audit, these are the highest-value next slices to execute:
 
@@ -336,9 +337,9 @@ Based on the latest repository audit, these are the highest-value next slices to
    - Use decomposition seams to reduce repeated formula/string assembly and chart-spec recomputation.
    - Keep regressions guarded with existing export parity tests plus targeted timing-oriented checks.
 
-3. **Google Sheets / GS5 testing-depth PR: broaden conversion-path validation coverage.**
-   - Keep mocked upload/convert and fallback validation tests as baseline, then extend scenario coverage.
-   - Add optional/manual sandbox Drive smoke checks and document expected conversion-warning behavior.
+3. **Google Sheets operational validation follow-through: maintain release-gated smoke-check discipline.**
+   - Keep expanded mocked upload/convert and fallback validation tests green as baseline coverage.
+   - Run optional/manual sandbox Drive smoke checks per release gate and document any observed conversion-warning behavior.
 
 ### Suggested acceptance checks for the next slice
 - Parser+DB migration checks: parser write transactionality, duplicate detection, locked-db retry behavior, and regression tests for existing parse happy path.
