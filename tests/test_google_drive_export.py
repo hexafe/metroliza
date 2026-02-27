@@ -47,6 +47,14 @@ class TestGoogleDriveExport(unittest.TestCase):
         with self.assertRaises(GoogleDriveResponseError):
             parse_drive_conversion_response({"name": "missing fields"})
 
+    def test_parse_drive_conversion_response_accepts_alternate_link_fallback(self):
+        payload = {"id": "alt987", "alternateLink": "https://docs.google.com/spreadsheets/d/alt987/edit"}
+
+        result = parse_drive_conversion_response(payload)
+
+        self.assertEqual("alt987", result.file_id)
+        self.assertEqual("https://docs.google.com/spreadsheets/d/alt987/edit", result.web_url)
+
     def test_map_google_http_error_auth(self):
         payload = json.dumps(
             {
