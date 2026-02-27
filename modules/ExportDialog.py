@@ -198,20 +198,16 @@ class ExportDialog(QDialog):
             self.preset_combobox.setCurrentText(get_export_preset_label(selected_preset))
             self.preset_combobox.currentTextChanged.connect(lambda _: self.apply_selected_preset())
 
-            self.export_target_label = QLabel("Export target:")
-            self.export_target_combobox = QComboBox()
-            self.export_target_combobox.addItem("Excel (.xlsx)", "excel_xlsx")
-            self.export_target_combobox.addItem("Google Sheets", "google_sheets_drive_convert")
-            self.export_target_combobox.setCurrentIndex(0)
+            self.export_target_label = QLabel("Google Sheets export:")
+            self.include_google_sheets_checkbox = QCheckBox("Include Google Sheets conversion")
+            self.include_google_sheets_checkbox.setChecked(False)
             self.export_target_label.setToolTip(
-                "Select where to export results.\n"
-                "Excel (.xlsx) is default.\n"
-                "Google Sheets keeps XLSX generation and uploads for Drive conversion."
+                "Excel (.xlsx) is always generated.\n"
+                "Enable this option to also upload and convert the workbook to Google Sheets."
             )
-            self.export_target_combobox.setToolTip(
-                "Select where to export results.\n"
-                "Excel (.xlsx) is default.\n"
-                "Google Sheets keeps XLSX generation and uploads for Drive conversion."
+            self.include_google_sheets_checkbox.setToolTip(
+                "Excel (.xlsx) is always generated.\n"
+                "Enable this option to also upload and convert the workbook to Google Sheets."
             )
 
             # Add dropdown list for chart type
@@ -319,7 +315,7 @@ class ExportDialog(QDialog):
             self.layout.addWidget(self.preset_combobox, 15, 1)
 
             self.layout.addWidget(self.export_target_label, 16, 0)
-            self.layout.addWidget(self.export_target_combobox, 16, 1)
+            self.layout.addWidget(self.include_google_sheets_checkbox, 16, 1)
 
             self.layout.addWidget(self.export_type_label, 17, 0)
             self.layout.addWidget(self.export_type_combobox, 17, 1)
@@ -559,7 +555,7 @@ class ExportDialog(QDialog):
                 build_export_options_payload(
                     selected_preset=selected_preset,
                     export_type=self.export_type_combobox.currentText(),
-                    export_target=self.export_target_combobox.currentData(),
+                    export_target=self._selected_export_target(),
                     sorting_parameter=self.sort_measurements_combobox.currentText(),
                     violin_input=violin_input,
                     summary_scale_input=summary_scale_input,
@@ -639,3 +635,8 @@ class ExportDialog(QDialog):
             
     def log_and_exit(self, exception):
         CustomLogger(exception, reraise=False)
+
+    def _selected_export_target(self):
+        if self.include_google_sheets_checkbox.isChecked():
+            return 'google_sheets_drive_convert'
+        return 'excel_xlsx'

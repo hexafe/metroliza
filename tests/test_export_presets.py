@@ -156,5 +156,29 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertIn('Missing token.json', message)
 
 
+class TestExportTargetSelection(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_selected_export_target_defaults_to_excel(self):
+        from modules.ExportDialog import ExportDialog
+
+        dialog = ExportDialog.__new__(ExportDialog)
+
+        class _Box:
+            def __init__(self, checked):
+                self._checked = checked
+
+            def isChecked(self):
+                return self._checked
+
+        dialog.include_google_sheets_checkbox = _Box(False)
+        self.assertEqual(dialog._selected_export_target(), 'excel_xlsx')
+
+        dialog.include_google_sheets_checkbox = _Box(True)
+        self.assertEqual(dialog._selected_export_target(), 'google_sheets_drive_convert')
+
+
 if __name__ == '__main__':
     unittest.main()

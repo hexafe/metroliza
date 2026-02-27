@@ -319,6 +319,43 @@ class TestGoogleDriveExport(unittest.TestCase):
 
 
 class TestGoogleDriveOAuthBootstrap(unittest.TestCase):
+
+    def test_interactive_oauth_authorization_maps_cancellation_to_auth_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            credentials_path = Path(tmpdir) / "credentials.json"
+            token_path = Path(tmpdir) / "token.json"
+            credentials_path.write_text(
+                json.dumps(
+                    {
+                        "installed": {
+                            "client_id": "client-id",
+                            "client_secret": "client-secret",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            class _FakeInstalledAppFlow:
+                @classmethod
+                def from_client_secrets_file(cls, _path, scopes=None):
+                    _ = scopes
+                    return cls()
+
+                def run_local_server(self, **_kwargs):
+                    raise RuntimeError("authorization canceled")
+
+            with patch.dict(
+                "sys.modules",
+                {"google_auth_oauthlib.flow": type("M", (), {"InstalledAppFlow": _FakeInstalledAppFlow})()},
+            ):
+                from modules.google_drive_export import _interactive_oauth_authorization
+
+                with self.assertRaises(GoogleDriveAuthError) as exc:
+                    _interactive_oauth_authorization(credentials_path, token_path)
+
+            self.assertIn("canceled or timed out", str(exc.exception).lower())
     def test_ensure_access_token_bootstraps_interactive_oauth_when_token_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             credentials_path = Path(tmpdir) / "credentials.json"
