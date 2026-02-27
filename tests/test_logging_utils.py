@@ -1,4 +1,5 @@
 import logging
+import logging.handlers
 import tempfile
 import unittest
 from pathlib import Path
@@ -40,6 +41,33 @@ class TestLoggingUtils(unittest.TestCase):
                 self.assertTrue(cwd_log.exists())
                 self.assertIn("google drive export failed", home_log.read_text())
                 self.assertIn("google drive export failed", cwd_log.read_text())
+            finally:
+                self._reset_logger(logger)
+
+    def test_ensure_application_logging_uses_rotating_file_handlers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            fake_home = root / "home"
+            fake_home.mkdir()
+            fake_cwd = root / "project"
+            fake_cwd.mkdir()
+
+            logger = logging.getLogger("metroliza_test_logging_rotating")
+            self._reset_logger(logger)
+            logger.setLevel(logging.NOTSET)
+            logger.propagate = False
+
+            try:
+                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
+                    "modules.logging_utils.Path.home", return_value=fake_home
+                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd):
+                    ensure_application_logging(level=logging.INFO)
+
+                file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+                self.assertEqual(len(file_handlers), 2)
+                self.assertTrue(all(isinstance(h, logging.handlers.RotatingFileHandler) for h in file_handlers))
+                self.assertTrue(all(h.maxBytes == 10 * 1024 * 1024 for h in file_handlers))
+                self.assertTrue(all(h.backupCount == 7 for h in file_handlers))
             finally:
                 self._reset_logger(logger)
 
@@ -92,7 +120,7 @@ class TestLoggingUtils(unittest.TestCase):
                 self.assertEqual(config.console_level, logging.WARNING)
                 self.assertEqual(logger.level, logging.INFO)
 
-                file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+                file_handlers = [h for h in logger.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
                 console_handlers = [
                     h
                     for h in logger.handlers
@@ -103,6 +131,10 @@ class TestLoggingUtils(unittest.TestCase):
                 self.assertEqual(len(file_handlers), 2)
                 self.assertEqual(len(console_handlers), 1)
                 self.assertTrue(all(h.level == logging.ERROR for h in file_handlers))
+
+                self.assertTrue(all(h.maxBytes == 10 * 1024 * 1024 for h in file_handlers))
+                self.assertTrue(all(h.backupCount == 7 for h in file_handlers))
+                self.assertTrue(all(h.formatter._fmt == '%(asctime)s - %(levelname)s - %(message)s' for h in file_handlers))
                 self.assertEqual(console_handlers[0].level, logging.WARNING)
             finally:
                 self._reset_logger(logger)

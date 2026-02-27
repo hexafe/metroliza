@@ -1,4 +1,5 @@
 import logging
+import logging.handlers
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,8 @@ _GLOBAL_LEVEL_ENV = "METROLIZA_LOG_LEVEL"
 _FILE_LEVEL_ENV = "METROLIZA_FILE_LOG_LEVEL"
 _CONSOLE_LEVEL_ENV = "METROLIZA_CONSOLE_LOG_LEVEL"
 _SUPPORT_BUILD_ENV = "METROLIZA_SUPPORT_BUILD"
+_FILE_MAX_BYTES = 10 * 1024 * 1024
+_FILE_BACKUP_COUNT = 7
 
 
 @dataclass(frozen=True)
@@ -85,8 +88,23 @@ def _configure_file_handlers(logger: logging.Logger, formatter: logging.Formatte
     for log_path in target_paths:
         resolved_path = log_path.resolve()
         handler = existing_file_handlers.get(resolved_path)
-        if handler is None:
-            handler = logging.FileHandler(str(log_path), encoding='utf-8')
+        requires_rotation_handler = not isinstance(handler, logging.handlers.RotatingFileHandler)
+        has_expected_rotation = (
+            isinstance(handler, logging.handlers.RotatingFileHandler)
+            and handler.maxBytes == _FILE_MAX_BYTES
+            and handler.backupCount == _FILE_BACKUP_COUNT
+        )
+
+        if handler is None or requires_rotation_handler or not has_expected_rotation:
+            if handler is not None:
+                logger.removeHandler(handler)
+                handler.close()
+            handler = logging.handlers.RotatingFileHandler(
+                str(log_path),
+                maxBytes=_FILE_MAX_BYTES,
+                backupCount=_FILE_BACKUP_COUNT,
+                encoding='utf-8',
+            )
             setattr(handler, '_metroliza_file_handler', True)
             logger.addHandler(handler)
         else:
