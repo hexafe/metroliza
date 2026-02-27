@@ -85,7 +85,11 @@ def reveal_file_in_explorer(file_path):
         raise FileNotFoundError(f"Exported file does not exist: {target_path}")
 
     if sys.platform.startswith('win'):
-        subprocess.run(["explorer", "/select,", str(target_path)], check=True)
+        # Windows explorer may return 1 even when the folder opens and the file is selected.
+        # Treat 0 and 1 as success to avoid showing a false error dialog.
+        completed = subprocess.run(["explorer", "/select,", str(target_path)], check=False)
+        if completed.returncode not in (0, 1):
+            raise subprocess.CalledProcessError(completed.returncode, completed.args)
         return
 
     if sys.platform == 'darwin':

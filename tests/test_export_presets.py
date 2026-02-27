@@ -273,8 +273,9 @@ class TestRevealFileInExplorer(unittest.TestCase):
             file_path = Path(tmpdir) / 'out.xlsx'
             file_path.write_text('content', encoding='utf-8')
             with patch('modules.ExportDialog.sys.platform', 'win32'), patch('modules.ExportDialog.subprocess.run') as run_mock:
+                run_mock.return_value.returncode = 1
                 reveal_file_in_explorer(file_path)
-            run_mock.assert_called_once_with(['explorer', '/select,', str(file_path)], check=True)
+            run_mock.assert_called_once_with(['explorer', '/select,', str(file_path)], check=False)
 
 
 if __name__ == '__main__':
