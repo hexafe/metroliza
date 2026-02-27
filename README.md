@@ -61,6 +61,9 @@ Before using the Google Sheets export target (`google_sheets_drive_convert`), en
 
 If conversion fails or warnings indicate degraded chart/format fidelity, Metroliza keeps and reports the generated `.xlsx` path as the guaranteed fallback artifact.
 
+Detailed smoke execution and troubleshooting guidance lives in the dedicated runbook:
+[`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md).
+
 ## Project layout
 
 - `metroliza.py` — application entry point.
@@ -89,7 +92,7 @@ PYTHONPATH=. python -m unittest tests.test_phase4_integration_happy_path -v
 ### Release-only Google conversion smoke check (manual / CI-gated)
 
 Use the dedicated smoke harness for a real end-to-end sandbox Google Drive →
-Google Sheets conversion check:
+Google Sheets conversion check (full runbook: [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md)):
 
 ```bash
 METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
@@ -103,7 +106,7 @@ PYTHONPATH=. python tests/google_conversion_smoke.py
 - Use it for release validation (or explicitly gated CI jobs) to verify live Drive conversion behavior against a sandbox account.
 - It fails fast with actionable configuration errors when local
   credentials/token files are missing or misconfigured.
-- Recommended cadence: run when preparing release candidates or when changing Google conversion/auth logic.
+- **Required cadence:** run for each release candidate and for any PR that changes Google-auth or Google-conversion logic.
 
 ## Packaging (one-file executable)
 
