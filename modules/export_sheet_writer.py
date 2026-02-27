@@ -89,19 +89,52 @@ def build_measurement_block_plan(*, base_col, sample_size):
     }
 
 
-def build_measurement_header_block_plan(header_group, base_col):
+def _get_measurement_block_template(*, base_col, sample_size, cache=None):
+    """Return cached per-column/per-size fragments for one measurement block.
+
+    Tradeoff: the cache grows with unique ``(base_col, sample_size)`` combinations.
+    In normal exports base columns advance by 3 and stay bounded by the header count,
+    so this remains small and predictable per export run.
+    """
+    cache_store = None
+    if cache is not None:
+        cache_store = cache.setdefault('measurement_block_templates', {})
+        cache_key = (base_col, sample_size)
+        cached = cache_store.get(cache_key)
+        if cached is not None:
+            return cached
+
+    measurement_plan = build_measurement_block_plan(base_col=base_col, sample_size=sample_size)
+    summary_col_name = xl_col_to_name(measurement_plan['summary_column'])
+
+    template = {
+        'measurement_plan': measurement_plan,
+        'summary_col_name': summary_col_name,
+        'nom_cell': f'${summary_col_name}$1',
+        'usl_cell': f'${summary_col_name}$2',
+        'lsl_cell': f'${summary_col_name}$3',
+        'static_row_labels': ((0, 'NOM'), (1, '+TOL'), (2, '-TOL')),
+    }
+
+    if cache_store is not None:
+        cache_store[cache_key] = template
+    return template
+
+
+def build_measurement_header_block_plan(header_group, base_col, cache=None):
     """Build a stable per-header worksheet write plan used by export writers."""
     limits = resolve_nominal_and_limits(header_group)
     nom = limits['nom']
     usl = limits['usl']
     lsl = limits['lsl']
 
-    measurement_plan = build_measurement_block_plan(base_col=base_col, sample_size=len(header_group))
-    summary_col_name = xl_col_to_name(measurement_plan['summary_column'])
+    block_template = _get_measurement_block_template(base_col=base_col, sample_size=len(header_group), cache=cache)
+    measurement_plan = block_template['measurement_plan']
+    summary_col_name = block_template['summary_col_name']
 
-    nom_cell = f'${summary_col_name}$1'
-    usl_cell = f'${summary_col_name}$2'
-    lsl_cell = f'${summary_col_name}$3'
+    nom_cell = block_template['nom_cell']
+    usl_cell = block_template['usl_cell']
+    lsl_cell = block_template['lsl_cell']
 
     stat_formulas = build_measurement_stat_formulas(
         summary_col=summary_col_name,
@@ -137,13 +170,21 @@ def build_measurement_header_block_plan(header_group, base_col):
 
 def build_measurement_write_bundle(header, header_group, base_col):
     """Return the write-plan bundle used for one per-header worksheet section."""
-    header_plan = build_measurement_header_block_plan(header_group, base_col)
+    return build_measurement_write_bundle_cached(header, header_group, base_col, cache=None)
+
+
+def build_measurement_write_bundle_cached(header, header_group, base_col, cache=None):
+    """Return the per-header write-plan bundle with optional export-run caching."""
+    header_plan = build_measurement_header_block_plan(header_group, base_col, cache=cache)
     measurement_plan = header_plan['measurement_plan']
+    block_template = _get_measurement_block_template(base_col=base_col, sample_size=len(header_group), cache=cache)
 
     static_rows = [
-        (0, 'NOM', header_plan['nom']),
-        (1, '+TOL', header_plan['plus_tol']),
-        (2, '-TOL', header_plan['minus_tol']),
+        (row_index, row_label, row_value)
+        for (row_index, row_label), row_value in zip(
+            block_template['static_row_labels'],
+            (header_plan['nom'], header_plan['plus_tol'], header_plan['minus_tol']),
+        )
     ]
 
     data_columns = [

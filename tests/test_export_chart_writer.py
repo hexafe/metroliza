@@ -1,6 +1,8 @@
+import time
 import unittest
 
 from modules.export_chart_writer import (
+    build_measurement_chart_range_specs,
     build_measurement_chart_series_specs,
     build_measurement_chart_series_specs_from_plan,
     insert_measurement_chart,
@@ -104,6 +106,64 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(from_plan[0]['categories'], '=Ref!$B22:B31')
         self.assertEqual(from_plan[0]['values'], '=Ref!$C22:C31')
 
+    def test_cached_series_specs_match_uncached_output(self):
+        args = {
+            'header': 'H',
+            'sheet_name': 'Ref',
+            'first_data_row': 21,
+            'last_data_row': 30,
+            'x_column': 1,
+            'y_column': 2,
+        }
+
+        uncached = build_measurement_chart_series_specs(**args)
+        cache = {}
+        cached_first = build_measurement_chart_series_specs(**args, cache=cache)
+        cached_second = build_measurement_chart_series_specs(**args, cache=cache)
+
+        self.assertEqual(cached_first, uncached)
+        self.assertEqual(cached_second, uncached)
+
+        range_specs = build_measurement_chart_range_specs(
+            sheet_name='Ref',
+            first_data_row=21,
+            last_data_row=30,
+            x_column=1,
+            y_column=2,
+            cache=cache,
+        )
+        self.assertEqual(range_specs['data_x'], '=Ref!$B22:B31')
+
+    def test_debug_timing_cached_range_builder_path_runs(self):
+        iterations = 1500
+
+        uncached_start = time.perf_counter()
+        for _ in range(iterations):
+            build_measurement_chart_range_specs(
+                sheet_name='Ref',
+                first_data_row=21,
+                last_data_row=30,
+                x_column=1,
+                y_column=2,
+            )
+        uncached_elapsed = time.perf_counter() - uncached_start
+
+        cache = {}
+        cached_start = time.perf_counter()
+        for _ in range(iterations):
+            build_measurement_chart_range_specs(
+                sheet_name='Ref',
+                first_data_row=21,
+                last_data_row=30,
+                x_column=1,
+                y_column=2,
+                cache=cache,
+            )
+        cached_elapsed = time.perf_counter() - cached_start
+
+        self.assertGreater(uncached_elapsed, 0.0)
+        self.assertGreater(cached_elapsed, 0.0)
+        self.assertEqual(len(cache.get('range_specs', {})), 1)
 
 if __name__ == '__main__':
     unittest.main()
