@@ -46,6 +46,35 @@ def build_export_options_payload(selected_preset, export_type, export_target, so
     )
 
 
+def build_export_completion_message(*, excel_file, export_target, completion_metadata):
+    metadata = completion_metadata or {}
+    warnings = [str(w) for w in metadata.get('conversion_warnings', []) if str(w).strip()]
+    fallback_message = str(metadata.get('fallback_message', '')).strip()
+    converted_url = str(metadata.get('converted_url', '')).strip()
+
+    if export_target == 'google_sheets_drive_convert':
+        if warnings or fallback_message:
+            message_lines = [
+                f"Data exported locally to {excel_file}.",
+                "Google Sheets conversion was not fully completed.",
+            ]
+            if fallback_message:
+                message_lines.append(fallback_message)
+            if warnings:
+                message_lines.append("Warnings:")
+                message_lines.extend(f"- {warning}" for warning in warnings)
+            return 'warning', 'Export completed with Google fallback', "\n".join(message_lines)
+
+        if converted_url:
+            return (
+                'info',
+                'Export successful',
+                f"Data exported successfully to {excel_file}.\nGoogle Sheet: {converted_url}",
+            )
+
+    return 'info', 'Export successful', f"Data exported successfully to {excel_file}!"
+
+
 
 
 class ExportDialog(QDialog):
@@ -586,8 +615,16 @@ class ExportDialog(QDialog):
 
     def on_export_finished(self):
         try:
-            # Show a message box to inform the user that exporting is complete
-            QMessageBox.information(self, "Export successful", f"Data exported successfully to {self.excel_file}!")
+            level, title, message = build_export_completion_message(
+                excel_file=self.excel_file,
+                export_target=getattr(self.export_thread, 'export_target', 'excel_xlsx'),
+                completion_metadata=getattr(self.export_thread, 'completion_metadata', {}),
+            )
+
+            if level == 'warning':
+                QMessageBox.warning(self, title, message)
+            else:
+                QMessageBox.information(self, title, message)
 
             # Close the loading dialog
             self.loading_dialog.accept()

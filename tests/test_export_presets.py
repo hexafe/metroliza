@@ -120,5 +120,41 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         self.assertTrue(full_payload.generate_summary_sheet)
 
 
+class TestExportCompletionMessaging(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_google_success_includes_converted_link(self):
+        from modules.ExportDialog import build_export_completion_message
+
+        level, title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='google_sheets_drive_convert',
+            completion_metadata={'converted_url': 'https://docs.google.com/spreadsheets/d/abc/edit'},
+        )
+
+        self.assertEqual(level, 'info')
+        self.assertEqual(title, 'Export successful')
+        self.assertIn('Google Sheet:', message)
+
+    def test_google_fallback_promotes_warning_dialog(self):
+        from modules.ExportDialog import build_export_completion_message
+
+        level, title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='google_sheets_drive_convert',
+            completion_metadata={
+                'fallback_message': 'Google export failed; using local .xlsx fallback: out.xlsx',
+                'conversion_warnings': ['Missing token.json for Google Drive export. Please complete OAuth authorization first.'],
+            },
+        )
+
+        self.assertEqual(level, 'warning')
+        self.assertEqual(title, 'Export completed with Google fallback')
+        self.assertIn('Google Sheets conversion was not fully completed.', message)
+        self.assertIn('Missing token.json', message)
+
+
 if __name__ == '__main__':
     unittest.main()
