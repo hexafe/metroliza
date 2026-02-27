@@ -131,6 +131,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         metadata = {
             'converted_url': 'https://docs.google.com/spreadsheets/d/abc/edit',
+            'converted_file_id': 'abc',
             'fallback_message': '',
             'conversion_warnings': [],
             'converted_tab_titles': ['MEASUREMENTS'],
@@ -145,7 +146,9 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(title, 'Export successful')
         self.assertEqual(
             message,
-            'Data exported successfully to out.xlsx.\nGoogle Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
+            'Data exported successfully to out.xlsx.\n'
+            'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit\n'
+            'Drive file: https://drive.google.com/file/d/abc/view',
         )
 
     def test_google_fallback_promotes_warning_dialog(self):
