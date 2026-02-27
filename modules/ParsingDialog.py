@@ -5,8 +5,12 @@ from PyQt6.QtCore import QSize, QTemporaryFile, Qt, pyqtSlot
 from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
 import base64
+import logging
 from modules.contracts import ParseRequest, validate_parse_request
 import shutil
+
+
+logger = logging.getLogger(__name__)
 
 
 class ParsingDialog(QDialog):
@@ -102,7 +106,7 @@ class ParsingDialog(QDialog):
                 )
 
             if selected_source:
-                print(f"{selected_source=}")
+                logger.info("Selected parse source: %s", selected_source)
                 self.directory = selected_source
                 self.directory_text_label.setText(selected_source)
                 self.database_button.setEnabled(True)
@@ -129,7 +133,7 @@ class ParsingDialog(QDialog):
             if filename:
                 if not filename.endswith(".db"):
                     filename += ".db"
-                print(f"{filename=}")
+                logger.info("Selected parse database file: %s", filename)
                 self.db_file = filename
                 self.database_text_label.setText(filename)
                 self.parent().set_db_file(filename)
