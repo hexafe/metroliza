@@ -214,6 +214,26 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(title, 'Export successful')
         self.assertEqual(message, 'Data exported successfully to out.xlsx!')
 
+
+    def test_link_formatting_converts_google_urls_to_anchors(self):
+        from modules.ExportDialog import format_message_with_clickable_links
+
+        formatted = format_message_with_clickable_links(
+            'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit\nDrive file: https://drive.google.com/file/d/abc/view'
+        )
+
+        self.assertIn('<a href="https://docs.google.com/spreadsheets/d/abc/edit">https://docs.google.com/spreadsheets/d/abc/edit</a>', formatted)
+        self.assertIn('<a href="https://drive.google.com/file/d/abc/view">https://drive.google.com/file/d/abc/view</a>', formatted)
+        self.assertIn('<br>', formatted)
+
+    def test_link_formatting_escapes_html_before_linking(self):
+        from modules.ExportDialog import format_message_with_clickable_links
+
+        formatted = format_message_with_clickable_links('Result <ok> https://example.com')
+
+        self.assertIn('Result &lt;ok&gt;', formatted)
+        self.assertIn('<a href="https://example.com">https://example.com</a>', formatted)
+
     def test_excel_target_message_is_unchanged_even_with_google_metadata(self):
         from modules.ExportDialog import build_export_completion_message
 

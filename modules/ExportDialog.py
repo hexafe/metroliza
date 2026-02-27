@@ -29,7 +29,9 @@ from PyQt6.QtWidgets import(
     QCheckBox,
 )
 import base64
+import html
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -85,6 +87,32 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
             return 'info', 'Export successful', "\n".join(message_lines)
 
     return 'info', 'Export successful', f"Data exported successfully to {excel_file}!"
+
+
+_URL_PATTERN = re.compile(r"(https?://[^\s]+)")
+
+
+def format_message_with_clickable_links(message):
+    """Convert plain-text message into rich text with clickable URLs."""
+    safe_message = html.escape(str(message or ""))
+    linked_message = _URL_PATTERN.sub(r'<a href="\1">\1</a>', safe_message)
+    return linked_message.replace("\n", "<br>")
+
+
+def show_export_result_message(parent, level, title, message):
+    """Display export result message with external links enabled when supported."""
+    dialog = QMessageBox(parent)
+    icon = QMessageBox.Icon.Warning if level == 'warning' else QMessageBox.Icon.Information
+    dialog.setIcon(icon)
+    dialog.setWindowTitle(title)
+    dialog.setText(format_message_with_clickable_links(message))
+    if hasattr(dialog, 'setTextFormat') and hasattr(Qt, 'TextFormat'):
+        dialog.setTextFormat(Qt.TextFormat.RichText)
+    if hasattr(dialog, 'setTextInteractionFlags') and hasattr(Qt, 'TextInteractionFlag'):
+        dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+    if hasattr(dialog, 'setStandardButtons'):
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+    dialog.exec()
 
 
 def reveal_file_in_explorer(file_path):
@@ -669,10 +697,7 @@ class ExportDialog(QDialog):
                     completion_metadata=getattr(self.export_thread, 'completion_metadata', {}),
                 )
 
-                if level == 'warning':
-                    QMessageBox.warning(self, title, message)
-                else:
-                    QMessageBox.information(self, title, message)
+                show_export_result_message(self, level, title, message)
 
             # Close the loading dialog
             self.loading_dialog.accept()
