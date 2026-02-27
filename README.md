@@ -104,9 +104,9 @@ PYTHONPATH=. python tests/google_conversion_smoke.py
 - This smoke check is **optional/non-default** and is intentionally excluded from the
   standard unit-test discover run.
 - Use it for release validation (or explicitly gated CI jobs) to verify live Drive conversion behavior against a sandbox account.
-- It fails fast with actionable configuration errors when local
-  credentials/token files are missing or misconfigured.
+- It fails fast with actionable configuration errors when local credentials/token files are missing or misconfigured.
 - **Required cadence:** run for each release candidate and for any PR that changes Google-auth or Google-conversion logic.
+- Current smoke expectations are release-gated conversion success + valid Google Sheet URL/ID metadata + zero conversion warnings; tab-title validation is covered by mocked tests, not by the live smoke script.
 
 ## Packaging (one-file executable)
 
@@ -174,10 +174,10 @@ Check grouping and filtering choices first. Group/plot alignment, NaN-only bucke
 
 ### Google conversion warnings or degraded formatting
 
-Google Drive conversion can alter some advanced Excel chart/style details. When warnings appear:
+Google Drive conversion can alter some advanced Excel chart/style details. Current release-gated smoke policy expects `warnings=()` on success.
 
-- Treat the converted Google Sheet as a convenience output and the generated `.xlsx` as the fidelity baseline.
-- Review the warning message and verify critical tabs/charts in the converted sheet.
+- If warnings appear in app logs or release validation output, treat them as release blockers until triaged.
+- Use the converted Google Sheet as convenience output and the generated `.xlsx` as the fidelity baseline during incident triage.
 - Re-run the optional live smoke check when changing credentials, scopes, or conversion-related logic.
 - Confirm `credentials.json`/`token.json` are local-only and gitignored if auth errors or missing-file warnings appear.
 
@@ -217,17 +217,22 @@ Detailed, canonical roadmap lives in `IMPLEMENTATION_PLAN.md`.
 Current high-level state:
 - Phase 0: ✅ Completed.
 - Phase 1: ✅ Completed.
-- Phase 2: 🟡 Partially implemented (DB helper migration and major export-worker extraction landed; remaining decomposition/performance follow-through continues).
+- Phase 2: ✅ Completed (correctness fixes, contracts migration, DB-helper consolidation, worker decomposition, and performance follow-through landed).
 - Phase 3: ✅ Completed (docs/dependency hygiene/contributor guide + full-repository CI lint gate).
 - Phase 4: ✅ Completed.
 
 
 
 ### Next implementation steps
-- Continue the remaining Phase 2 decomposition slices in `ExportDataThread` (worksheet-write and chart-rendering helper extraction with parity tests).
-- Keep Phase 0/1/3/4 regression checks green while the remaining Phase 2 slices land.
-- Expand optional Google export validation/testing coverage (including broader mocked and live-sandbox smoke checks as needed).
+- Keep Phase 0-4 regression checks green while maintenance/refinement work lands.
+- Maintain release-gated Google conversion smoke-check discipline for release candidates and auth/conversion-changing PRs.
+- Expand optional non-default validation coverage (additional mocked conversion/fallback cases and optional runbook automation).
 
+
+
+### Changelog highlights (last two merged PRs)
+- **PR #123:** optimized export header/chart spec assembly by caching repeated string/range construction in chart-heavy worksheet flows.
+- **PR #122:** removed Sheets API tab-validation dependency from Drive conversion flow, keeping conversion release-gated and reducing external API coupling for smoke verification.
 
 ### Candidate new capabilities
 - Add export-profile presets (chart-heavy vs fast diagnostics) to reduce repetitive dialog setup.
@@ -236,3 +241,8 @@ Current high-level state:
 ### Planned optimization follow-ups
 - Export: additional profiling and inner-loop precomputation for chart-heavy workbooks.
 - Parsing: stage-level timing + reduced redundant DB checks/regex work in large parse batches.
+
+### Remaining optional/manual release validation
+- Run the manual/CI-gated Google conversion smoke check for every release candidate.
+- Also run it for any PR that changes Google auth/conversion behavior, then record command, timestamp, and outcome in PR notes.
+- For conversion warnings, keep release blocked until warning cause + fallback impact are documented.

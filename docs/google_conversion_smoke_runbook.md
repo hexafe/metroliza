@@ -5,7 +5,7 @@ This runbook defines how maintainers run and interpret the release-gated live Go
 ## Scope and intent
 
 - Script: `tests/google_conversion_smoke.py`.
-- Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm expected tab/link metadata.
+- Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm release-gated conversion metadata/warning expectations.
 - Execution model: manual or explicitly gated CI job only (not part of default unit-test discovery).
 
 ## Prerequisites
@@ -22,9 +22,8 @@ Before running smoke:
    - Both files must remain local-only and gitignored.
 4. **Google APIs are enabled for the sandbox project**
    - Google Drive API.
-   - Google Sheets API.
 5. **Network path to Google APIs is available**
-   - Outbound HTTPS access to Google OAuth/Drive/Sheets endpoints.
+   - Outbound HTTPS access to Google OAuth/Drive endpoints.
 
 ## Exact environment variables
 
@@ -65,8 +64,7 @@ And implies all of the following passed:
 - Returned `file_id` is non-empty.
 - Returned `web_url` is a valid HTTPS Sheets link.
 - Spreadsheet ID parsed from URL matches `file_id`.
-- No post-conversion warnings were emitted.
-- Expected tabs (`MEASUREMENTS`, `REF_A`) exist in the converted sheet.
+- No post-conversion warnings were emitted (`warnings=()`).
 
 ### Expected fail classes (intentional fail-fast)
 
@@ -84,7 +82,6 @@ The smoke check is designed to fail with actionable messages when prerequisites 
   - Empty `file_id`.
   - Invalid/malformed `web_url`.
   - URL/file ID mismatch.
-  - Missing expected worksheet tabs.
   - Non-empty conversion warnings.
 
 ## Remediation guide for common failures
@@ -107,15 +104,15 @@ The smoke check is designed to fail with actionable messages when prerequisites 
 ### Network/connectivity failures (timeouts, DNS/TLS, proxy blocks)
 
 1. Validate outbound HTTPS connectivity from runner/workstation.
-2. Check proxy/firewall rules for Google OAuth, Drive, and Sheets endpoints.
+2. Check proxy/firewall rules for Google OAuth and Drive endpoints.
 3. Re-run from a known-good network to isolate local environment issues.
 4. If CI-only, inspect runner egress restrictions and update allowlists.
 
-### Conversion warning or tab-mismatch failures
+### Conversion warning failures
 
-1. Open returned Google Sheet link and verify tab presence/renaming behavior.
-2. Confirm the smoke workbook generation still produces `MEASUREMENTS` and `REF_A` tabs.
-3. Inspect recent Google export logic changes for tab mapping or post-conversion checks.
+1. Treat any non-empty `warnings` result as a release-blocking signal until triaged.
+2. Inspect recent Google export logic changes for warning generation, conversion payload handling, or fallback-message behavior.
+3. Validate that mocked/unit tests still cover expected tab-title semantics and fallback behavior after recent changes.
 4. Treat generated `.xlsx` as fallback artifact while conversion issues are investigated.
 
 ## Recording outcomes for release-gated changes
@@ -125,3 +122,9 @@ For release-candidate validations and PRs that modify Google auth/conversion beh
 - Record the smoke command used.
 - Record pass/fail result and timestamp.
 - Link to job logs (CI) or terminal capture (manual) in the PR description.
+
+## Current warning interpretation policy
+
+- Release-gated smoke runs currently require `warnings=()` to pass.
+- If warnings appear, do not waive by default: record the exact warning text, impacted release candidate, and fallback implications before deciding next action.
+- Tab-title verification is intentionally not performed by the live smoke script; keep that behavior covered in mocked/unit tests to avoid adding Sheets API dependency to the release gate.
