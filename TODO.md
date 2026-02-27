@@ -1,6 +1,6 @@
 # TODO
 
-Last audited on 2026-02-26.
+Last audited on 2026-02-27.
 
 ## Completed (audited)
 - [x] Added credential/token gitignore guardrails (`credentials.json` + `token.json`) and shipped `config/google/credentials.example.json` template.
@@ -15,6 +15,9 @@ Last audited on 2026-02-26.
   - [x] Ensure export completion reports `.xlsx` fallback path/link for conversion outcomes.
 - [x] Migrated direct SQLite call-sites to shared retry/transaction helpers in `modules/db.py`.
 - [x] Landed additional `ExportDataThread` decomposition slices with helper extraction + parity-focused tests.
+- [x] Completed Google Sheets GS5 testing-depth scope.
+  - [x] Expanded mocked failure/edge-case coverage for conversion warnings and fallback messaging/content assertions.
+  - [x] Documented optional/manual sandbox Drive smoke-check runbook and expected-result checklist.
 
 ## Open implementation tasks
 
@@ -24,10 +27,8 @@ Last audited on 2026-02-26.
   - [ ] Extract next chart-rendering section into helper(s) with deterministic series/range assertions.
   - [ ] Keep regression coverage green for worksheet range parity and chart-series parity after each extraction slice.
 
-### Google Sheets GS5 testing-depth follow-through
-- [ ] Expand conversion-path scenario coverage.
-  - [ ] Add more mocked failure/edge-case tests around conversion warnings and fallback messaging.
-  - [ ] Add optional/manual sandbox Drive smoke-check runbook and expected-result checklist.
+### Google Sheets post-completion operational checks
+- [ ] Keep optional/manual sandbox Drive smoke checks release-gated and record outcomes when executed.
 
 ## Maintenance
 - [ ] Keep `README.md`, `IMPLEMENTATION_PLAN.md`, `TODO.md`, and `GOOGLE_SHEETS_MIGRATION_PLAN.md` synchronized after each roadmap PR.
