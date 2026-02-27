@@ -38,6 +38,7 @@ from modules.export_chart_writer import (
     build_measurement_chart_range_specs as _build_measurement_chart_range_specs,
     build_measurement_chart_series_specs as _build_measurement_chart_series_specs,
     build_sheet_series_range as _build_sheet_series_range,
+    build_horizontal_limit_line_specs as _build_horizontal_limit_line_specs,
     insert_measurement_chart,
 )
 from modules.export_query_service import (
@@ -62,6 +63,7 @@ from modules.export_sheet_writer import (
     build_spec_limit_anchor_rows as _build_spec_limit_anchor_rows,
     create_measurement_formats,
     write_measurement_block,
+    build_summary_panel_write_plan,
 )
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
@@ -124,6 +126,10 @@ def build_measurement_chart_series_specs(*, header, sheet_name, first_data_row, 
 
 def build_measurement_chart_format_policy(header):
     return _build_measurement_chart_format_policy(header)
+
+
+def build_horizontal_limit_line_specs(usl, lsl, **style):
+    return _build_horizontal_limit_line_specs(usl, lsl, **style)
 
 
 def build_measurement_write_bundle(header, header_group, base_col):
@@ -844,8 +850,8 @@ class ExportDataThread(QThread):
                     render_scatter(ax, data=header_group, x='SAMPLE_NUMBER', y='MEAS')
 
             apply_minimal_axis_style(ax, grid_axis='y')
-            ax.axhline(y=USL, color='#9b1c1c', linestyle='--', linewidth=1.0)
-            ax.axhline(y=LSL, color='#9b1c1c', linestyle='--', linewidth=1.0)
+            for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                ax.axhline(**line_spec)
 
             current_y_limits = ax.get_ylim()
             y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
@@ -861,10 +867,16 @@ class ExportDataThread(QThread):
             imgplot.seek(0)
             
             summary_anchors = build_summary_image_anchor_plan(col)
-            header_row, header_col = summary_anchors['header']
-            distribution_row, distribution_col = summary_anchors['distribution']
-            summary_worksheet.write(header_row, header_col, header)
-            summary_worksheet.insert_image(distribution_row, distribution_col, "", {'image_data': imgplot})
+            panel_plan = build_summary_panel_write_plan(summary_anchors, header)
+            header_cell = panel_plan['header_cell']
+            summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
+            distribution_slot = panel_plan['image_slots']['distribution']
+            summary_worksheet.insert_image(
+                distribution_slot['row'],
+                distribution_slot['col'],
+                "",
+                {'image_data': imgplot},
+            )
 
             if self._check_canceled():
                 plt.close(fig)
@@ -881,8 +893,8 @@ class ExportDataThread(QThread):
             boxplot_values = values if values else [list(header_group['MEAS'])]
             render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
             apply_minimal_axis_style(ax, grid_axis='y')
-            ax.axhline(y=USL, color='#9b1c1c', linestyle='--', linewidth=1.0)
-            ax.axhline(y=LSL, color='#9b1c1c', linestyle='--', linewidth=1.0)
+            for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                ax.axhline(**line_spec)
             ax.set_xlabel('Group')
             ax.set_ylabel('Measurement')
             ax.set_title(f'{header} - IQR Outlier Detection')
@@ -893,8 +905,8 @@ class ExportDataThread(QThread):
 
             fig.savefig(imgplot, format="png", bbox_inches='tight')
             imgplot.seek(0)
-            iqr_row, iqr_col = summary_anchors['iqr']
-            summary_worksheet.insert_image(iqr_row, iqr_col, "", {'image_data': imgplot})
+            iqr_slot = panel_plan['image_slots']['iqr']
+            summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -953,8 +965,8 @@ class ExportDataThread(QThread):
             
             fig.savefig(imgplot, format="png")
             imgplot.seek(0)
-            histogram_row, histogram_col = summary_anchors['histogram']
-            summary_worksheet.insert_image(histogram_row, histogram_col, "", {'image_data': imgplot})
+            histogram_slot = panel_plan['image_slots']['histogram']
+            summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -978,8 +990,8 @@ class ExportDataThread(QThread):
             else:
                 ax.scatter(data_x, data_y, color='blue', marker='.')
 
-            ax.axhline(y=USL, color='#9b1c1c', linestyle='--', linewidth=1.0)
-            ax.axhline(y=LSL, color='#9b1c1c', linestyle='--', linewidth=1.0)
+            for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                ax.axhline(**line_spec)
             ax.set_xlabel('Sample #')
             ax.set_ylabel('Measurement')
             ax.set_title(f'{header}')
@@ -1002,8 +1014,8 @@ class ExportDataThread(QThread):
             imgplot = BytesIO()
             fig.savefig(imgplot, format="png", bbox_inches='tight')
             imgplot.seek(0)
-            trend_row, trend_col = summary_anchors['trend']
-            summary_worksheet.insert_image(trend_row, trend_col, "", {'image_data': imgplot})
+            trend_slot = panel_plan['image_slots']['trend']
+            summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], "", {'image_data': imgplot})
             plt.close(fig)
             
         except Exception as e:

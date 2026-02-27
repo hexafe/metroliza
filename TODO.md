@@ -22,10 +22,10 @@ Last audited on 2026-02-27.
 ## Open implementation tasks
 
 ### Phase 2 decomposition follow-through (`ExportDataThread`)
-- [ ] Continue remaining `ExportDataThread` decomposition slices.
-  - [ ] Extract next worksheet-write section into a pure helper and cover with focused parity tests.
-  - [ ] Extract next chart-rendering section into helper(s) with deterministic series/range assertions.
-  - [ ] Keep regression coverage green for worksheet range parity and chart-series parity after each extraction slice.
+- [x] Continue remaining `ExportDataThread` decomposition slices.
+  - [x] Extract next worksheet-write section into a pure helper and cover with focused parity tests.
+  - [x] Extract next chart-rendering section into helper(s) with deterministic series/range assertions.
+  - [x] Keep regression coverage green for worksheet range parity and chart-series parity after each extraction slice.
 
 ### Google Sheets post-completion operational checks
 - [ ] Keep optional/manual sandbox Drive smoke checks release-gated and record outcomes when executed.
