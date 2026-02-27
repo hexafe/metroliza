@@ -24,7 +24,10 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
         'data_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column),
         'usl_y': build_sheet_series_range(sheet_name, 0, 1, y_column),
         'lsl_y': build_sheet_series_range(sheet_name, 2, 3, y_column),
-        'limit_x': build_sheet_series_range(sheet_name, first_data_row, first_data_row + 1, x_column),
+        # Anchor the horizontal USL/LSL lines to the first and last x-value so the
+        # rendered segment spans the full trend domain in both native Excel and
+        # Google Sheets Drive-converted workbooks.
+        'limit_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
     }
     if cache is not None:
         range_cache[cache_key] = range_specs

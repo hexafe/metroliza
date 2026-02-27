@@ -225,7 +225,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 'data_y': '=REF_PART_A!$F22:F31',
                 'usl_y': '=REF_PART_A!$F1:F2',
                 'lsl_y': '=REF_PART_A!$F3:F4',
-                'limit_x': '=REF_PART_A!$E22:E23',
+                'limit_x': '=REF_PART_A!$E22:E31',
             },
         )
 

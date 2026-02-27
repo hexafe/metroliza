@@ -76,7 +76,9 @@ class TestExportChartWriter(unittest.TestCase):
         )
         self.assertEqual(len(specs), 3)
         self.assertEqual(specs[1]['name'], 'USL')
+        self.assertEqual(specs[1]['categories'], '=Ref!$B22:B31')
         self.assertEqual(specs[2]['name'], 'LSL')
+        self.assertEqual(specs[2]['categories'], '=Ref!$B22:B31')
 
     def test_insert_measurement_chart_wires_series_and_anchor(self):
         workbook = DummyWorkbook()
@@ -122,6 +124,8 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(from_plan, direct)
         self.assertEqual(from_plan[0]['categories'], '=Ref!$B22:B31')
         self.assertEqual(from_plan[0]['values'], '=Ref!$C22:C31')
+        self.assertEqual(from_plan[1]['categories'], '=Ref!$B22:B31')
+        self.assertEqual(from_plan[2]['categories'], '=Ref!$B22:B31')
 
     def test_cached_series_specs_match_uncached_output(self):
         args = {
