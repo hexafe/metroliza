@@ -67,6 +67,37 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any]:
     return installed
 
 
+def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -> dict[str, Any]:
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
+    flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), scopes=[GOOGLE_DRIVE_SCOPE])
+    credentials = flow.run_local_server(
+        host="127.0.0.1",
+        port=0,
+        open_browser=True,
+        authorization_prompt_message="Please complete Google authorization in your browser.\n{url}\n",
+        success_message="Google authorization completed. You can close this browser tab.",
+    )
+
+    expires_at = time.time() + 3600
+    if getattr(credentials, "expiry", None) is not None:
+        expires_at = credentials.expiry.timestamp()
+
+    token_payload: dict[str, Any] = {
+        "access_token": credentials.token,
+        "refresh_token": credentials.refresh_token,
+        "token_uri": credentials.token_uri,
+        "client_id": credentials.client_id,
+        "client_secret": credentials.client_secret,
+        "scopes": list(credentials.scopes or [GOOGLE_DRIVE_SCOPE]),
+        "scope": GOOGLE_DRIVE_SCOPE,
+        "token_type": "Bearer",
+        "expires_at": expires_at,
+    }
+    _save_token_payload(token_path, token_payload)
+    return token_payload
+
+
 def _load_token_payload(token_path: Path) -> dict[str, Any]:
     if not token_path.exists():
         raise GoogleDriveAuthError(
@@ -134,9 +165,18 @@ def _save_token_payload(token_path: Path, token_payload: dict[str, Any]) -> None
 
 def _ensure_access_token(credentials_path: Path, token_path: Path) -> str:
     credentials = _read_credentials(credentials_path)
-    token_payload = _load_token_payload(token_path)
+    if token_path.exists():
+        token_payload = _load_token_payload(token_path)
+    else:
+        token_payload = _interactive_oauth_authorization(credentials_path, token_path)
+
     if _token_is_valid(token_payload):
         return str(token_payload["access_token"])
+
+    if not token_payload.get("refresh_token"):
+        token_payload = _interactive_oauth_authorization(credentials_path, token_path)
+        if _token_is_valid(token_payload):
+            return str(token_payload["access_token"])
 
     refreshed = _refresh_access_token(token_payload, credentials)
     _save_token_payload(token_path, refreshed)

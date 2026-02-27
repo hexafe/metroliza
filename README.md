@@ -55,7 +55,7 @@ Metroliza supports an end-to-end flow:
 Before using the Google Sheets export target (`google_sheets_drive_convert`), ensure:
 
 - You have a Google Cloud OAuth client secret file available locally as `credentials.json` (or a local path you explicitly point the smoke harness to).
-- A local OAuth token cache (`token.json`) is generated after first consent; keep it local-only and rotate/revoke if shared machine access changes.
+- A local OAuth token cache (`token.json`) is generated after first consent (Metroliza now opens an interactive Google authorization flow automatically when the token is missing or no longer refreshable); keep it local-only and rotate/revoke if shared machine access changes.
 - `credentials.json` and `token.json` are ignored by git (including wildcard/path variants) and never committed to the repository.
 - Only redacted examples/templates (for example `config/google/credentials.example.json`) are allowed in-repo.
 
