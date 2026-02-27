@@ -26,6 +26,11 @@ from modules.export_summary_utils import (
     compute_measurement_summary,
     resolve_nominal_and_limits,
 )
+from modules.export_summary_sheet_planner import (
+    build_histogram_annotation_specs as _build_histogram_annotation_specs,
+    build_summary_image_anchor_plan as _build_summary_image_anchor_plan,
+    build_summary_sheet_position_plan as _build_summary_sheet_position_plan,
+)
 from modules.export_chart_writer import (
     build_measurement_chart_format_policy as _build_measurement_chart_format_policy,
     build_measurement_chart_range_specs as _build_measurement_chart_range_specs,
@@ -176,15 +181,15 @@ def compute_scaled_y_limits(current_limits, scale_factor):
 
 
 def build_summary_sheet_position_plan(base_col):
-    """Return summary sheet anchors aligned with the 3-column measurement block layout."""
-    block_index = max((base_col - 3) // 3, 0)
-    row = block_index * 20
-    return {
-        'row': row,
-        'column': 0,
-        'header_row': row,
-        'image_row': row + 1,
-    }
+    return _build_summary_sheet_position_plan(base_col)
+
+
+def build_summary_image_anchor_plan(base_col):
+    return _build_summary_image_anchor_plan(base_col)
+
+
+def build_histogram_annotation_specs(average, usl, lsl, y_max):
+    return _build_histogram_annotation_specs(average, usl, lsl, y_max)
 
 
 def apply_summary_plot_theme():
@@ -801,9 +806,11 @@ class ExportDataThread(QThread):
             
             imgplot.seek(0)
             
-            summary_position = build_summary_sheet_position_plan(col)
-            summary_worksheet.write(summary_position['header_row'], summary_position['column'], header)
-            summary_worksheet.insert_image(summary_position['image_row'], summary_position['column'], "", {'image_data': imgplot})
+            summary_anchors = build_summary_image_anchor_plan(col)
+            header_row, header_col = summary_anchors['header']
+            distribution_row, distribution_col = summary_anchors['distribution']
+            summary_worksheet.write(header_row, header_col, header)
+            summary_worksheet.insert_image(distribution_row, distribution_col, "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -832,7 +839,8 @@ class ExportDataThread(QThread):
 
             fig.savefig(imgplot, format="png", bbox_inches='tight')
             imgplot.seek(0)
-            summary_worksheet.insert_image(summary_position['image_row'], 9, "", {'image_data': imgplot})
+            iqr_row, iqr_col = summary_anchors['iqr']
+            summary_worksheet.insert_image(iqr_row, iqr_col, "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -873,17 +881,26 @@ class ExportDataThread(QThread):
             ax.set_title(f'{header}')
             apply_minimal_axis_style(ax, grid_axis='y')
 
-            y_min, y_max = ax.get_ylim()
+            _, y_max = ax.get_ylim()
             annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#d0d0d0', 'alpha': 0.9}
-            ax.text(average, y_max*0.95, f'μ={average:.3f}', color='#9b1c1c', ha='left', va='top', fontsize=7, bbox=annotation_box)
-            ax.text(USL, y_max*0.9, f'USL={USL:.3f}', color='#1f7a4d', ha='right', va='top', fontsize=7, bbox=annotation_box)
-            ax.text(LSL, y_max*0.85, f'LSL={LSL:.3f}', color='#1f7a4d', ha='left', va='top', fontsize=7, bbox=annotation_box)
+            for annotation in build_histogram_annotation_specs(average, USL, LSL, y_max):
+                ax.text(
+                    annotation['x'],
+                    annotation['y'],
+                    annotation['text'],
+                    color=annotation['color'],
+                    ha=annotation['ha'],
+                    va='top',
+                    fontsize=7,
+                    bbox=annotation_box,
+                )
 
             plt.subplots_adjust(right=0.75)
             
             fig.savefig(imgplot, format="png")
             imgplot.seek(0)
-            summary_worksheet.insert_image(summary_position['image_row'], 19, "", {'image_data': imgplot})
+            histogram_row, histogram_col = summary_anchors['histogram']
+            summary_worksheet.insert_image(histogram_row, histogram_col, "", {'image_data': imgplot})
 
             if self._check_canceled():
                 plt.close(fig)
@@ -931,7 +948,8 @@ class ExportDataThread(QThread):
             imgplot = BytesIO()
             fig.savefig(imgplot, format="png", bbox_inches='tight')
             imgplot.seek(0)
-            summary_worksheet.insert_image(summary_position['image_row'], 29, "", {'image_data': imgplot})
+            trend_row, trend_col = summary_anchors['trend']
+            summary_worksheet.insert_image(trend_row, trend_col, "", {'image_data': imgplot})
             plt.close(fig)
             
         except Exception as e:
