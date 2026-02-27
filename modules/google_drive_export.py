@@ -16,7 +16,6 @@ GOOGLE_DRIVE_UPLOAD_URL = (
     "?uploadType=multipart&fields=id,webViewLink,webContentLink"
 )
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
-GOOGLE_SHEETS_METADATA_URL_TEMPLATE = "https://sheets.googleapis.com/v4/spreadsheets/{file_id}?fields=sheets.properties.title"
 
 
 class GoogleDriveExportError(RuntimeError):
@@ -260,52 +259,6 @@ def _build_upload_request_body(*, boundary: str, metadata: dict[str, Any], file_
     return metadata_part + file_part_header + file_bytes + closing
 
 
-def _fetch_converted_sheet_titles(*, file_id: str, access_token: str) -> list[str]:
-    metadata_url = GOOGLE_SHEETS_METADATA_URL_TEMPLATE.format(file_id=urllib.parse.quote(file_id, safe=""))
-    request = urllib.request.Request(
-        metadata_url,
-        headers={"Authorization": f"Bearer {access_token}"},
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body_text = exc.read().decode("utf-8", errors="replace")
-        raise map_google_http_error(exc.code, body_text) from exc
-    except urllib.error.URLError as exc:
-        raise map_google_network_error("Google Sheets metadata read failed", exc) from exc
-
-    sheets = payload.get("sheets")
-    if not isinstance(sheets, list):
-        raise GoogleDriveResponseError("Google Sheets metadata response missing sheets list.")
-
-    titles: list[str] = []
-    for sheet in sheets:
-        if not isinstance(sheet, dict):
-            continue
-        properties = sheet.get("properties")
-        if not isinstance(properties, dict):
-            continue
-        title = properties.get("title")
-        if isinstance(title, str) and title.strip():
-            titles.append(title)
-    return titles
-
-
-def _build_tab_validation_warning(expected_sheet_names: list[str], actual_sheet_titles: list[str]) -> str | None:
-    expected = {name for name in expected_sheet_names if isinstance(name, str) and name.strip()}
-    actual = {name for name in actual_sheet_titles if isinstance(name, str) and name.strip()}
-    missing = sorted(expected - actual)
-    if not missing:
-        return None
-
-    return (
-        "Google Sheets conversion appears partial. Missing expected tab(s): "
-        f"{', '.join(missing)}."
-    )
-
-
 def upload_and_convert_workbook(
     excel_path: str,
     credentials_path: str = "credentials.json",
@@ -380,21 +333,9 @@ def upload_and_convert_workbook(
     if callable(status_callback):
         status_callback("converting")
 
+    _ = expected_sheet_names
     warnings: list[str] = []
     converted_tab_titles: list[str] = []
-    if expected_sheet_names:
-        if callable(status_callback):
-            status_callback("validating")
-        try:
-            converted_tab_titles = _fetch_converted_sheet_titles(file_id=parsed.file_id, access_token=access_token)
-            validation_warning = _build_tab_validation_warning(expected_sheet_names, converted_tab_titles)
-            if validation_warning:
-                warnings.append(validation_warning)
-        except GoogleDriveExportError as exc:
-            warnings.append(
-                "Google Sheets tab validation could not be completed. "
-                f"{exc}"
-            )
 
     fallback_message = f"Use local .xlsx fallback if needed: {excel_file}"
     if warnings:

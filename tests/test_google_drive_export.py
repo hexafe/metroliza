@@ -141,6 +141,7 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertIn("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", text)
         self.assertIn("xlsx-bytes", text)
 
+
     def test_upload_and_convert_workbook_success_mapping_and_payload(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_path = Path(tmpdir) / "report.xlsx"
@@ -149,23 +150,11 @@ class TestGoogleDriveExport(unittest.TestCase):
             captured = {"upload_data": None}
 
             def fake_urlopen(request, timeout=0):
-                url = request.full_url
-                if url.startswith(GOOGLE_DRIVE_UPLOAD_URL):
-                    captured["upload_data"] = request.data
-                    return _FakeResponse(
-                        {
-                            "id": "sheet123",
-                            "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit",
-                        }
-                    )
-
-                self.assertIn("sheets.googleapis.com/v4/spreadsheets/sheet123", url)
+                captured["upload_data"] = request.data
                 return _FakeResponse(
                     {
-                        "sheets": [
-                            {"properties": {"title": "MEASUREMENTS"}},
-                            {"properties": {"title": "REF_A"}},
-                        ]
+                        "id": "sheet123",
+                        "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit",
                     }
                 )
 
@@ -181,6 +170,7 @@ class TestGoogleDriveExport(unittest.TestCase):
             self.assertEqual("sheet123", result.file_id)
             self.assertEqual(str(excel_path), result.local_xlsx_path)
             self.assertEqual((), result.warnings)
+            self.assertEqual((), result.converted_tab_titles)
             self.assertIn("local .xlsx fallback", result.fallback_message)
             self.assertIn(b"application/vnd.google-apps.spreadsheet", captured["upload_data"])
 
@@ -249,143 +239,6 @@ class TestGoogleDriveExport(unittest.TestCase):
             self.assertEqual(attempts["count"], 3)
             self.assertEqual(sleep_mock.call_count, 2)
             sleep_mock.assert_any_call(0.25)
-
-    def test_upload_and_convert_workbook_warns_and_falls_back_when_validation_fails(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            excel_path = Path(tmpdir) / "report.xlsx"
-            excel_path.write_bytes(b"excel-content")
-
-            def fake_urlopen(request, timeout=0):
-                url = request.full_url
-                if url.startswith(GOOGLE_DRIVE_UPLOAD_URL):
-                    return _FakeResponse(
-                        {
-                            "id": "sheet789",
-                            "webViewLink": "https://docs.google.com/spreadsheets/d/sheet789/edit",
-                        }
-                    )
-                return _FakeResponse({"sheets": [{"properties": {"title": "MEASUREMENTS"}}]})
-
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
-            ):
-                result = upload_and_convert_workbook(
-                    str(excel_path),
-                    expected_sheet_names=["MEASUREMENTS", "REF_A"],
-                    max_retries=1,
-                )
-
-            self.assertIn("partial", result.warnings[0].lower())
-            self.assertIn("fallback", result.fallback_message.lower())
-            self.assertIn("warnings", result.fallback_message.lower())
-
-    def test_upload_and_convert_workbook_warns_when_expected_tabs_are_missing_or_empty(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            excel_path = Path(tmpdir) / "report.xlsx"
-            excel_path.write_bytes(b"excel-content")
-
-            def fake_urlopen(request, timeout=0):
-                url = request.full_url
-                if url.startswith(GOOGLE_DRIVE_UPLOAD_URL):
-                    return _FakeResponse(
-                        {
-                            "id": "sheet-empty",
-                            "webViewLink": "https://docs.google.com/spreadsheets/d/sheet-empty/edit",
-                        }
-                    )
-                return _FakeResponse({"sheets": []})
-
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
-            ):
-                result = upload_and_convert_workbook(
-                    str(excel_path),
-                    expected_sheet_names=["MEASUREMENTS", "REF_A"],
-                    max_retries=1,
-                )
-
-            self.assertEqual(result.converted_tab_titles, ())
-            self.assertIn("missing expected tab(s)", result.warnings[0].lower())
-            self.assertIn("MEASUREMENTS", result.warnings[0])
-            self.assertIn("REF_A", result.warnings[0])
-            self.assertIn(str(excel_path), result.fallback_message)
-
-    def test_upload_and_convert_workbook_preserves_fallback_when_tab_validation_api_errors(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            excel_path = Path(tmpdir) / "report.xlsx"
-            excel_path.write_bytes(b"excel-content")
-
-            def fake_urlopen(request, timeout=0):
-                url = request.full_url
-                if url.startswith(GOOGLE_DRIVE_UPLOAD_URL):
-                    return _FakeResponse(
-                        {
-                            "id": "sheet-metadata-fail",
-                            "webViewLink": "https://docs.google.com/spreadsheets/d/sheet-metadata-fail/edit",
-                        }
-                    )
-                raise urllib.error.URLError("sheets metadata temporarily unavailable")
-
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
-            ):
-                result = upload_and_convert_workbook(
-                    str(excel_path),
-                    expected_sheet_names=["MEASUREMENTS"],
-                    max_retries=1,
-                )
-
-            self.assertIn("tab validation could not be completed", result.warnings[0].lower())
-            self.assertEqual(result.local_xlsx_path, str(excel_path))
-            self.assertIn("local .xlsx fallback", result.fallback_message)
-            self.assertIn(str(excel_path), result.fallback_message)
-
-    def test_upload_and_convert_workbook_repeated_transient_upload_failures_then_validation_fallback(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            excel_path = Path(tmpdir) / "report.xlsx"
-            excel_path.write_bytes(b"excel-content")
-
-            attempts = {"count": 0}
-
-            def _http_error(status_code: int, payload: dict):
-                return urllib.error.HTTPError(
-                    GOOGLE_DRIVE_UPLOAD_URL,
-                    status_code,
-                    "error",
-                    hdrs=None,
-                    fp=BytesIO(json.dumps(payload).encode("utf-8")),
-                )
-
-            def fake_urlopen(request, timeout=0):
-                url = request.full_url
-                if url.startswith(GOOGLE_DRIVE_UPLOAD_URL):
-                    attempts["count"] += 1
-                    if attempts["count"] < 3:
-                        raise _http_error(503, {"error": {"message": "Backend Error", "errors": [{"reason": "backendError"}]}})
-                    return _FakeResponse(
-                        {
-                            "id": "sheet-retry-fallback",
-                            "webViewLink": "https://docs.google.com/spreadsheets/d/sheet-retry-fallback/edit",
-                        }
-                    )
-                raise urllib.error.URLError("metadata unavailable")
-
-            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
-                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
-            ), patch("modules.google_drive_export.time.sleep") as sleep_mock:
-                result = upload_and_convert_workbook(
-                    str(excel_path),
-                    expected_sheet_names=["MEASUREMENTS"],
-                    max_retries=3,
-                    retry_delay_seconds=0,
-                )
-
-            self.assertEqual("sheet-retry-fallback", result.file_id)
-            self.assertEqual(attempts["count"], 3)
-            self.assertEqual(sleep_mock.call_count, 2)
-            self.assertIn("tab validation could not be completed", result.warnings[0].lower())
-            self.assertIn("local .xlsx fallback", result.fallback_message)
-            self.assertIn(str(excel_path), result.fallback_message)
 
     def test_parse_drive_conversion_response_accepts_web_content_link_fallback(self):
         payload = {"id": "abc123", "webContentLink": "https://drive.google.com/file/d/abc123/view"}
