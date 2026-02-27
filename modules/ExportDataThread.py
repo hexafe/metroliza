@@ -1,5 +1,6 @@
 import logging
 import warnings
+import inspect
 import os
 import time
 import matplotlib
@@ -16,7 +17,7 @@ from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from scipy.stats import ttest_ind
 
 from modules.contracts import ExportRequest, validate_export_request
-from modules.CustomLogger import CustomLogger
+import modules.CustomLogger as custom_logger
 from modules.db import execute_select_with_columns, read_sql_dataframe
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
@@ -386,6 +387,7 @@ class ExportDataThread(QThread):
     update_progress = pyqtSignal(int)
     finished = pyqtSignal()
     canceled = pyqtSignal()
+    error_occurred = pyqtSignal(str)
 
     def __init__(self, export_request: ExportRequest):
 
@@ -1029,4 +1031,16 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
             
     def log_and_exit(self, exception):
-        CustomLogger(exception, reraise=False)
+        caller = inspect.stack()[1].function
+        context = f"export operation ({caller})"
+        if hasattr(custom_logger, "handle_exception") and hasattr(custom_logger, "LOG_ONLY"):
+            custom_logger.handle_exception(
+                exception,
+                behavior=custom_logger.LOG_ONLY,
+                logger_name=logger.name,
+                context=context,
+                reraise=False,
+            )
+        else:
+            custom_logger.CustomLogger(exception, reraise=False)
+        self.error_occurred.emit(f"{context}: {exception}")
