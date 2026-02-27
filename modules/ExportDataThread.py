@@ -457,6 +457,36 @@ class ExportDataThread(QThread):
         if isinstance(sheet_name, str) and sheet_name.strip():
             self._exported_sheet_names.add(sheet_name)
 
+    @staticmethod
+    def _format_elapsed_or_eta(seconds):
+        safe_seconds = max(0, int(seconds))
+        minutes, remaining_seconds = divmod(safe_seconds, 60)
+        hours, remaining_minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:d}:{remaining_minutes:02d}:{remaining_seconds:02d}"
+        return f"{remaining_minutes:d}:{remaining_seconds:02d}"
+
+    def _build_measurement_label(self, *, ref_index, total_references, completed_header_units, total_header_units, start_time):
+        label = f"Building measurement sheets... Ref {ref_index}/{total_references}"
+        if total_header_units <= 0:
+            return label
+
+        label += f", Header {completed_header_units}/{total_header_units}"
+
+        elapsed_seconds = max(0.0, time.perf_counter() - start_time)
+        if completed_header_units < 5 or elapsed_seconds < 2.0:
+            return label
+
+        headers_per_second = completed_header_units / elapsed_seconds if elapsed_seconds > 0 else 0.0
+        if headers_per_second <= 0:
+            return label
+
+        remaining_headers = max(0, total_header_units - completed_header_units)
+        eta_seconds = remaining_headers / headers_per_second
+        elapsed_display = self._format_elapsed_or_eta(elapsed_seconds)
+        eta_display = self._format_elapsed_or_eta(eta_seconds)
+        return f"{label} ({elapsed_display} elapsed, ETA {eta_display})"
+
     @property
     def prepared_grouping_df(self):
         if self._prepared_grouping_df is None:
@@ -764,6 +794,11 @@ class ExportDataThread(QThread):
             total_references = len(reference_groups)
             total_header_units = sum(ref_group['HEADER - AX'].nunique(dropna=False) for _, ref_group in reference_groups)
             completed_header_units = 0
+            measurement_stage_start = time.perf_counter()
+            label_emit_every_headers = 10
+            label_emit_min_interval_seconds = 0.4
+            last_label_emit_time = 0.0
+            last_label_emit_header_count = 0
             backend = self._active_backend or self.get_export_backend()
             workbook = backend.get_workbook(excel_writer)
             used_sheet_names = backend.list_sheet_names(excel_writer)
@@ -772,9 +807,19 @@ class ExportDataThread(QThread):
             column_width = 12
             max_col = len(df['HEADER - AX'].unique()) * 3
 
-            for (ref, ref_group) in reference_groups:
+            for ref_index, (ref, ref_group) in enumerate(reference_groups, start=1):
                 if self._check_canceled():
                     return
+
+                self.update_label.emit(
+                    self._build_measurement_label(
+                        ref_index=ref_index,
+                        total_references=total_references,
+                        completed_header_units=completed_header_units,
+                        total_header_units=total_header_units,
+                        start_time=measurement_stage_start,
+                    )
+                )
 
                 col = 0
                 safe_ref_sheet_name = unique_sheet_name(ref, used_sheet_names)
@@ -847,6 +892,25 @@ class ExportDataThread(QThread):
                             'measurement_sheets_charts',
                             completed_header_units / total_header_units,
                         )
+
+                    now = time.perf_counter()
+                    should_emit_progress_label = (
+                        completed_header_units == total_header_units
+                        or completed_header_units - last_label_emit_header_count >= label_emit_every_headers
+                        or (now - last_label_emit_time) >= label_emit_min_interval_seconds
+                    )
+                    if should_emit_progress_label:
+                        self.update_label.emit(
+                            self._build_measurement_label(
+                                ref_index=ref_index,
+                                total_references=total_references,
+                                completed_header_units=completed_header_units,
+                                total_header_units=total_header_units,
+                                start_time=measurement_stage_start,
+                            )
+                        )
+                        last_label_emit_time = now
+                        last_label_emit_header_count = completed_header_units
 
                 if timing_enabled:
                     logger.debug(
