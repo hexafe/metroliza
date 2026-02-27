@@ -13,7 +13,7 @@ from typing import Any
 
 GOOGLE_DRIVE_UPLOAD_URL = (
     "https://www.googleapis.com/upload/drive/v3/files"
-    "?uploadType=multipart&fields=id,webViewLink,webContentLink,alternateLink"
+    "?uploadType=multipart&fields=id,webViewLink,webContentLink"
 )
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 GOOGLE_SHEETS_METADATA_URL_TEMPLATE = "https://sheets.googleapis.com/v4/spreadsheets/{file_id}?fields=sheets.properties.title"

@@ -37,6 +37,11 @@ class _FakeResponse:
 
 
 class TestGoogleDriveExport(unittest.TestCase):
+    def test_upload_url_requests_only_drive_v3_supported_fields(self):
+        self.assertNotIn("alternateLink", GOOGLE_DRIVE_UPLOAD_URL)
+        self.assertIn("webViewLink", GOOGLE_DRIVE_UPLOAD_URL)
+        self.assertIn("webContentLink", GOOGLE_DRIVE_UPLOAD_URL)
+
     def test_parse_drive_conversion_response_success(self):
         payload = {"id": "abc123", "webViewLink": "https://docs.google.com/spreadsheets/d/abc123/edit"}
 
