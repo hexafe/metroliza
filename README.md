@@ -33,6 +33,10 @@ Dependency files are split by purpose:
 
 ## What the app does
 
+## Release highlights
+
+A short, non-technical changelog for end users is available in [`CHANGELOG.md`](CHANGELOG.md).
+
 Metroliza supports an end-to-end flow:
 
 1. Parse metrology source files (PDF/ZIP) and production CSV exports.

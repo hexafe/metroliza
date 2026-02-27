@@ -20,6 +20,27 @@ Audit result based on the current repository state:
 
 Use this section as the source of truth for what is done vs still outstanding.
 
+## Next implementation plan (proposed PR sequence)
+
+The following plan assumes short, independent PRs. **The last PR is intentionally documentation-focused**.
+
+1. **PR #1 — Simplify the Google Sheets export experience (UX + messaging)**
+   - Standardize success/failure messaging in `modules/ExportDialog.py` and `modules/google_drive_export.py`.
+   - Add an explicit pointer to where the fallback `.xlsx` is saved.
+   - Success criterion: a non-technical user can understand the export outcome from a single message.
+2. **PR #2 — CSV Summary presets for repetitive workflows**
+   - Extend preset persistence with reusable column profiles and quality limits.
+   - Add a simple flow: “Load preset → one-click export”.
+   - Success criterion: fewer manual setup steps before export.
+3. **PR #3 — Reduce export time for wide datasets**
+   - Further reduce chart count in quick-look mode.
+   - Improve default thresholds for automatic quick-look switching.
+   - Success criterion: clearly faster export for large column selections.
+4. **PR #4 — Documentation update (final PR)**
+   - Update `README.md`, `CHANGELOG.md`, `IMPLEMENTATION_PLAN.md`, and runbooks.
+   - Add a “what’s new for users” section after each major delivery.
+   - Success criterion: consistent user-facing feature communication and clear update guidance.
+
 ## Goals
 - Fix correctness issues first (grouping/plot mismatches, crashes, dedupe bugs).
 - Standardize module communication through dataclass contracts.
