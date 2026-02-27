@@ -37,6 +37,8 @@ Dependency files are split by purpose:
 
 A short, non-technical changelog for end users is available in [`CHANGELOG.md`](CHANGELOG.md).
 
+Current release highlight (`2026.02`, build `260228`): Google Sheets export target `google_sheets_drive_convert` now has aligned user-facing wording across docs, keeps `.xlsx` fallback behavior explicit, and documents expected large-export performance gains from chart-heavy optimizations.
+
 Metroliza supports an end-to-end flow:
 
 1. Parse metrology source files (PDF/ZIP) and production CSV exports.
@@ -180,7 +182,7 @@ Check grouping and filtering choices first. Group/plot alignment, NaN-only bucke
 
 ### Google conversion warnings or degraded formatting
 
-Google Drive conversion can alter some advanced Excel chart/style details. Current release-gated smoke policy expects `warnings=()` on success.
+Google Drive conversion can alter some advanced Excel chart/style details. Current release-gated smoke policy expects `warnings=()` on success for the Google Sheets export target (`google_sheets_drive_convert`).
 
 - If warnings appear in app logs or release validation output, treat them as release blockers until triaged.
 - Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
@@ -237,9 +239,10 @@ Current high-level state:
 
 
 
-### Changelog highlights (last two merged PRs)
-- **PR #123:** optimized export header/chart spec assembly by caching repeated string/range construction in chart-heavy worksheet flows.
-- **PR #122:** removed Sheets API tab-validation dependency from Drive conversion flow, keeping conversion release-gated and reducing external API coupling for smoke verification.
+### Changelog highlights (release `2026.02`, build `260228`)
+- Google Sheets export target (`google_sheets_drive_convert`) now has clearer, fully aligned completion/fallback wording across user-facing docs.
+- Conversion fallback behavior remains explicit: generated `.xlsx` output is always retained as the baseline artifact if Google conversion fails.
+- Chart-heavy export optimizations from recent PRs continue to provide better runtime on large reports, and troubleshooting guidance now reflects that expected impact.
 
 ### Candidate new capabilities
 - Add export-profile presets (chart-heavy vs fast diagnostics) to reduce repetitive dialog setup.
