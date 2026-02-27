@@ -8,6 +8,11 @@ from modules.logging_utils import ensure_application_logging, resolve_logging_co
 
 
 class TestLoggingUtils(unittest.TestCase):
+    def _reset_logger(self, logger: logging.Logger) -> None:
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            handler.close()
+
     def test_ensure_application_logging_writes_to_home_and_cwd_logs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -17,23 +22,26 @@ class TestLoggingUtils(unittest.TestCase):
             fake_cwd.mkdir()
 
             logger = logging.getLogger("metroliza_test_logging")
-            logger.handlers = []
+            self._reset_logger(logger)
             logger.setLevel(logging.NOTSET)
             logger.propagate = False
 
-            with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
-                "modules.logging_utils.Path.home", return_value=fake_home
-            ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd):
-                ensure_application_logging(level=logging.ERROR)
-                logger.error("google drive export failed")
+            try:
+                with patch("modules.logging_utils.logging.getLogger", return_value=logger), patch(
+                    "modules.logging_utils.Path.home", return_value=fake_home
+                ), patch("modules.logging_utils.Path.cwd", return_value=fake_cwd):
+                    ensure_application_logging(level=logging.ERROR)
+                    logger.error("google drive export failed")
 
-            home_log = fake_home / ".metroliza" / "metroliza.log"
-            cwd_log = fake_cwd / "metroliza.log"
+                home_log = fake_home / ".metroliza" / "metroliza.log"
+                cwd_log = fake_cwd / "metroliza.log"
 
-            self.assertTrue(home_log.exists())
-            self.assertTrue(cwd_log.exists())
-            self.assertIn("google drive export failed", home_log.read_text())
-            self.assertIn("google drive export failed", cwd_log.read_text())
+                self.assertTrue(home_log.exists())
+                self.assertTrue(cwd_log.exists())
+                self.assertIn("google drive export failed", home_log.read_text())
+                self.assertIn("google drive export failed", cwd_log.read_text())
+            finally:
+                self._reset_logger(logger)
 
     def test_resolve_logging_config_support_build_defaults_to_debug(self):
         with patch.dict(
@@ -61,7 +69,7 @@ class TestLoggingUtils(unittest.TestCase):
             fake_cwd.mkdir()
 
             logger = logging.getLogger("metroliza_test_logging_levels")
-            logger.handlers = []
+            self._reset_logger(logger)
             logger.setLevel(logging.NOTSET)
             logger.propagate = False
 
@@ -71,30 +79,33 @@ class TestLoggingUtils(unittest.TestCase):
                 "METROLIZA_CONSOLE_LOG_LEVEL": "WARNING",
                 "METROLIZA_SUPPORT_BUILD": "0",
             }
-            with patch.dict("os.environ", env, clear=False), patch(
-                "modules.logging_utils.logging.getLogger", return_value=logger
-            ), patch("modules.logging_utils.Path.home", return_value=fake_home), patch(
-                "modules.logging_utils.Path.cwd", return_value=fake_cwd
-            ):
-                config = ensure_application_logging()
+            try:
+                with patch.dict("os.environ", env, clear=False), patch(
+                    "modules.logging_utils.logging.getLogger", return_value=logger
+                ), patch("modules.logging_utils.Path.home", return_value=fake_home), patch(
+                    "modules.logging_utils.Path.cwd", return_value=fake_cwd
+                ):
+                    config = ensure_application_logging()
 
-            self.assertEqual(config.global_level, logging.INFO)
-            self.assertEqual(config.file_level, logging.ERROR)
-            self.assertEqual(config.console_level, logging.WARNING)
-            self.assertEqual(logger.level, logging.INFO)
+                self.assertEqual(config.global_level, logging.INFO)
+                self.assertEqual(config.file_level, logging.ERROR)
+                self.assertEqual(config.console_level, logging.WARNING)
+                self.assertEqual(logger.level, logging.INFO)
 
-            file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
-            console_handlers = [
-                h
-                for h in logger.handlers
-                if isinstance(h, logging.StreamHandler)
-                and not isinstance(h, logging.FileHandler)
-                and getattr(h, "_metroliza_console_handler", False)
-            ]
-            self.assertEqual(len(file_handlers), 2)
-            self.assertEqual(len(console_handlers), 1)
-            self.assertTrue(all(h.level == logging.ERROR for h in file_handlers))
-            self.assertEqual(console_handlers[0].level, logging.WARNING)
+                file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
+                console_handlers = [
+                    h
+                    for h in logger.handlers
+                    if isinstance(h, logging.StreamHandler)
+                    and not isinstance(h, logging.FileHandler)
+                    and getattr(h, "_metroliza_console_handler", False)
+                ]
+                self.assertEqual(len(file_handlers), 2)
+                self.assertEqual(len(console_handlers), 1)
+                self.assertTrue(all(h.level == logging.ERROR for h in file_handlers))
+                self.assertEqual(console_handlers[0].level, logging.WARNING)
+            finally:
+                self._reset_logger(logger)
 
 
 if __name__ == "__main__":
