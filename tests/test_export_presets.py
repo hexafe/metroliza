@@ -3,6 +3,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from modules.contracts import validate_export_options
 from modules.export_preset_utils import (
@@ -252,6 +253,28 @@ class TestExportTargetSelection(unittest.TestCase):
 
         dialog.include_google_sheets_checkbox = _Box(True)
         self.assertEqual(dialog._selected_export_target(), 'google_sheets_drive_convert')
+
+
+class TestRevealFileInExplorer(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_reveal_file_in_explorer_raises_for_missing_file(self):
+        from modules.ExportDialog import reveal_file_in_explorer
+
+        with self.assertRaises(FileNotFoundError):
+            reveal_file_in_explorer('does-not-exist.xlsx')
+
+    def test_reveal_file_in_explorer_windows_uses_select(self):
+        from modules.ExportDialog import reveal_file_in_explorer
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = Path(tmpdir) / 'out.xlsx'
+            file_path.write_text('content', encoding='utf-8')
+            with patch('modules.ExportDialog.sys.platform', 'win32'), patch('modules.ExportDialog.subprocess.run') as run_mock:
+                reveal_file_in_explorer(file_path)
+            run_mock.assert_called_once_with(['explorer', '/select,', str(file_path)], check=True)
 
 
 if __name__ == '__main__':

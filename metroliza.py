@@ -12,6 +12,7 @@ from datetime import datetime
 import sys
 import logging
 import base64
+from pathlib import Path
 
 VERSION_DATE = VersionDate.VERSION_DATE
 LICENSE_VERIFICATION_ENABLED = False
@@ -122,8 +123,15 @@ def get_days_until_expiration(license_key):
     return days_until_expiration
 
 if __name__ == "__main__":
-    # Setup logging configuration
-    logging.basicConfig(filename='metroliza.log', level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+    # Setup logging configuration in a stable user-writable location.
+    log_dir = Path.home() / '.metroliza'
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=str(log_dir / 'metroliza.log'),
+        level=logging.ERROR,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        force=True,
+    )
 
     try:
         app = QApplication(sys.argv)

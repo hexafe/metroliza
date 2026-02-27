@@ -29,6 +29,9 @@ from PyQt6.QtWidgets import(
     QCheckBox,
 )
 import base64
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -73,6 +76,28 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
             )
 
     return 'info', 'Export successful', f"Data exported successfully to {excel_file}!"
+
+
+def reveal_file_in_explorer(file_path):
+    """Open OS file explorer and highlight exported file when possible."""
+    target_path = Path(file_path)
+    if not target_path.exists():
+        raise FileNotFoundError(f"Exported file does not exist: {target_path}")
+
+    if sys.platform.startswith('win'):
+        subprocess.run(["explorer", "/select,", str(target_path)], check=True)
+        return
+
+    if sys.platform == 'darwin':
+        subprocess.run(["open", "-R", str(target_path)], check=True)
+        return
+
+    folder = target_path.parent
+    opener = shutil.which('xdg-open')
+    if opener:
+        subprocess.run([opener, str(folder)], check=True)
+        return
+    raise OSError("Unable to open file explorer on this platform.")
 
 
 
@@ -627,6 +652,21 @@ class ExportDialog(QDialog):
 
             # Re-enable the export button
             self.export_button.setEnabled(True)
+
+            exported_file = Path(str(self.excel_file))
+            if exported_file.exists():
+                open_location = QMessageBox.question(
+                    self,
+                    "Export completed",
+                    "Do you want to open the export location in file explorer?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if open_location == QMessageBox.StandardButton.Yes:
+                    try:
+                        reveal_file_in_explorer(exported_file)
+                    except Exception as e:
+                        QMessageBox.warning(self, "Open location failed", f"Could not open export location: {e}")
 
             # Close the exporting dialog
             self.accept()
