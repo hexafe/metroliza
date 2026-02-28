@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
+import math
 
 from modules.stats_utils import safe_process_capability
 
@@ -78,3 +79,70 @@ def build_histogram_density_curve_payload(measurements, point_count=100):
         'x': x_values,
         'y': y_values,
     }
+
+
+def apply_shared_x_axis_label_strategy(
+    ax,
+    labels,
+    *,
+    positions=None,
+    truncate_labels=True,
+    max_label_chars=18,
+    thinning_threshold=24,
+    target_tick_count=16,
+    tick_padding=6,
+):
+    """Apply a consistent x-axis label strategy for dense categorical charts."""
+    if ax is None:
+        return
+
+    safe_labels = [str(label) if label is not None else '' for label in labels]
+    if not safe_labels:
+        return
+
+    if positions is None:
+        positions = list(range(len(safe_labels)))
+
+    if len(positions) != len(safe_labels):
+        raise ValueError("positions and labels must have the same length")
+
+    max_length = max((len(label) for label in safe_labels), default=0)
+    label_count = len(safe_labels)
+
+    if label_count <= 6 and max_length <= 10:
+        rotation = 0
+    elif label_count <= 12 and max_length <= 20:
+        rotation = 30
+    elif label_count <= 24 and max_length <= 28:
+        rotation = 45
+    else:
+        rotation = 90
+
+    def _truncate(label):
+        if not truncate_labels:
+            return label
+        if max_label_chars < 2 or len(label) <= max_label_chars:
+            return label
+        return f"{label[:max_label_chars - 1]}…"
+
+    display_labels = [_truncate(label) for label in safe_labels]
+
+    indices = list(range(label_count))
+    if label_count > thinning_threshold:
+        step = max(1, int(math.ceil(label_count / max(target_tick_count, 1))))
+        indices = [idx for idx in indices if idx % step == 0]
+        if (label_count - 1) not in indices:
+            indices.append(label_count - 1)
+
+    display_positions = [positions[idx] for idx in indices]
+    display_text = [display_labels[idx] for idx in indices]
+    horizontal_alignment = 'center' if rotation == 0 else 'right'
+
+    ax.set_xticks(display_positions)
+    ax.set_xticklabels(display_text)
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(rotation)
+        tick.set_horizontalalignment(horizontal_alignment)
+        tick.set_rotation_mode('anchor')
+
+    ax.tick_params(axis='x', pad=tick_padding)
