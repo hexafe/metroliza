@@ -15,6 +15,7 @@ Complete before announcing code freeze or cutting an RC branch.
 - [ ] `README.md` **Release highlights** reflects the current RC/release line.
 - [ ] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
 - [ ] Open blockers are triaged against the defect criteria in section 5.
+- [ ] Open implementation-item gate triage in [`docs/archive/2026/TODO.md`](../archive/2026/TODO.md#open-item-rc-triage-decision-table) is completed (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
 
 ## 2) Open testing entry criteria
 
@@ -92,6 +93,7 @@ python -m nuitka metroliza.py `
 
 - [ ] Google conversion smoke procedure executed per runbook: [`docs/google_conversion_smoke_runbook.md`](../google_conversion_smoke_runbook.md). *(Owner: QA)*
 - [ ] Smoke evidence and outcomes recorded in: [`docs/release_checks/google_conversion_smoke.md`](google_conversion_smoke.md). *(Owner: QA/Release manager)*
+- [ ] Open-testing promotion is blocked unless smoke evidence exists for the **current build identity** (branch + commit SHA + artifact/build ID) in: [`docs/release_checks/google_conversion_smoke.md`](google_conversion_smoke.md). *(Owner: Release manager)*
 
 > Do not duplicate smoke steps in this checklist. Follow the linked runbook and evidence template as the source of procedure detail.
 

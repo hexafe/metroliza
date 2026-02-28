@@ -8,6 +8,14 @@ This runbook defines how maintainers run and interpret the release-gated live Go
 - Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm release-gated conversion metadata/warning expectations.
 - Execution model: manual or explicitly gated CI job only (not part of default unit-test discovery).
 
+## When smoke execution is mandatory
+
+Run `tests/google_conversion_smoke.py` in all of these cases:
+
+- Every RC candidate build before it can be promoted to open testing.
+- Any PR/change set that modifies Google auth, Drive/Sheets conversion/export logic, or fallback `.xlsx` behavior.
+- Any rebuilt RC artifact intended for promotion (smoke evidence must match the current build identity).
+
 ## Prerequisites
 
 Before running smoke:
@@ -127,12 +135,21 @@ For release-candidate validations and PRs that modify Google auth/conversion beh
 
 ## Evidence to record (required for each smoke execution)
 
-- Command run (exact command text, including env vars).
-- Date/time (with timezone).
-- Environment/sandbox account (local/CI context + sandbox Google account/project identifier).
-- Pass/fail outcome.
-- Fallback `.xlsx` behavior observed (path/link and whether fallback remained accessible as expected).
-- Link/log location (CI job URL, artifact URI, or local log file path).
+- Required evidence recorder owner role: **QA owner** (or delegated **Release manager** if QA owner is unavailable).
+- Minimum evidence set per run:
+  - Command run (exact command text, including env vars).
+  - Date/time (with timezone).
+  - Environment/sandbox account (local/CI context + sandbox Google account/project identifier).
+  - Build identity under test (branch + commit SHA + artifact/build identifier).
+  - Pass/fail outcome.
+  - Fallback `.xlsx` behavior observed (path/link and whether fallback remained accessible as expected).
+  - Link/log location (CI job URL, artifact URI, or local log file path).
+
+### Pass/fail escalation path
+
+- **PASS**: QA owner records evidence and notifies Release manager that the current build is eligible for open-testing promotion.
+- **FAIL**: QA owner marks the build release-blocked, links/creates incident ticket, and escalates to Release manager + responsible Dev owner for remediation.
+- **Evidence missing or incomplete for the current build**: treat as **FAIL (gate not met)**; promotion remains blocked until minimum evidence is complete.
 
 - Record each run in `docs/release_checks/google_conversion_smoke.md`.
 - Include the required evidence fields below for every smoke execution.
@@ -144,6 +161,8 @@ Use this template:
 ## YYYY-MM-DD
 - Date/time: <!-- YYYY-MM-DD HH:MM TZ -->
 - Environment/sandbox account: <!-- local workstation or CI job + branch/commit + sandbox account/project -->
+- Evidence recorder owner role: <!-- QA owner or delegated Release manager -->
+- Build identity under test: <!-- branch + commit SHA + build/artifact identifier -->
 - Command:
   ```bash
   METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
