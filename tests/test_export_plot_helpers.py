@@ -62,6 +62,7 @@ from modules.ExportDataThread import (  # noqa: E402
     build_violin_group_stats_rows,
     compute_scaled_y_limits,
     render_iqr_boxplot,
+    apply_shared_x_axis_label_strategy,
 )
 
 
@@ -323,6 +324,42 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0][-1], 'Ref')
         self.assertEqual(rows[1][-1], 'N/A')
+
+
+    def test_shared_x_axis_label_strategy_uses_zero_rotation_for_short_labels(self):
+        fig, ax = plt.subplots()
+
+        apply_shared_x_axis_label_strategy(ax, ['A', 'B', 'C'])
+
+        labels = ax.get_xticklabels()
+        self.assertEqual([tick.get_text() for tick in labels], ['A', 'B', 'C'])
+        self.assertTrue(all(int(tick.get_rotation()) == 0 for tick in labels))
+        self.assertTrue(all(tick.get_ha() == 'center' for tick in labels))
+        plt.close(fig)
+
+    def test_shared_x_axis_label_strategy_truncates_and_thins_dense_labels(self):
+        fig, ax = plt.subplots()
+        positions = list(range(30))
+        labels = [f'LONG_LABEL_{idx:02d}_ABCDEFGHIJ' for idx in positions]
+
+        apply_shared_x_axis_label_strategy(
+            ax,
+            labels,
+            positions=positions,
+            max_label_chars=10,
+            thinning_threshold=20,
+            target_tick_count=10,
+            tick_padding=11,
+        )
+
+        rendered = ax.get_xticklabels()
+        self.assertLess(len(rendered), len(labels))
+        self.assertTrue(all(tick.get_text().endswith('…') for tick in rendered[:-1]))
+        self.assertEqual(int(rendered[0].get_rotation()), 90)
+        self.assertTrue(all(tick.get_ha() == 'right' for tick in rendered))
+        self.assertEqual(ax.xaxis.majorTicks[0].get_pad(), 11)
+        self.assertEqual(ax.get_xticks()[-1], 29)
+        plt.close(fig)
 
     def test_render_iqr_boxplot_sets_labels(self):
         fig, ax = plt.subplots()

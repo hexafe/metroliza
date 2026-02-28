@@ -28,6 +28,7 @@ from modules.log_context import (
     get_operation_logger,
 )
 from modules.export_summary_utils import (
+    apply_shared_x_axis_label_strategy as _apply_shared_x_axis_label_strategy,
     build_histogram_density_curve_payload as _build_histogram_density_curve_payload,
     build_sparse_unique_labels as _build_sparse_unique_labels,
     build_trend_plot_payload as _build_trend_plot_payload,
@@ -173,6 +174,10 @@ def build_trend_plot_payload(header_group):
 
 def build_histogram_density_curve_payload(measurements, point_count=100):
     return _build_histogram_density_curve_payload(measurements, point_count=point_count)
+
+
+def apply_shared_x_axis_label_strategy(ax, labels, **kwargs):
+    return _apply_shared_x_axis_label_strategy(ax, labels, **kwargs)
 
 
 def build_histogram_table_data(summary_stats):
@@ -538,7 +543,7 @@ def render_iqr_boxplot(ax, values, labels):
     except TypeError:
         ax.boxplot(values, labels=label_values, **boxplot_kwargs)
     ax.set_xticks(positions)
-    ax.set_xticklabels([str(label) for label in labels], rotation=45, ha='right')
+    ax.set_xticklabels([str(label) for label in labels])
 
 
 def render_density_line(ax, x, p):
@@ -1208,6 +1213,7 @@ class ExportDataThread(QThread):
                     render_scatter(ax, data=header_group, x='SAMPLE_NUMBER', y='MEAS')
 
             apply_minimal_axis_style(ax, grid_axis='y')
+            apply_shared_x_axis_label_strategy(ax, labels)
             for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                 ax.axhline(**line_spec)
 
@@ -1251,6 +1257,7 @@ class ExportDataThread(QThread):
             boxplot_values = values if values else [list(header_group['MEAS'])]
             render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
             apply_minimal_axis_style(ax, grid_axis='y')
+            apply_shared_x_axis_label_strategy(ax, boxplot_labels, positions=list(range(1, len(boxplot_labels) + 1)))
             for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                 ax.axhline(**line_spec)
             ax.set_xlabel('Group')
@@ -1370,12 +1377,7 @@ class ExportDataThread(QThread):
             ax.set_title(f'{header}')
             apply_minimal_axis_style(ax, grid_axis='y')
 
-            # Set ticks and labels
-            ax.set_xticks(data_x)
-            ax.set_xticklabels(unique_labels)
-
-            # Rotate the tick labels for better visibility
-            plt.xticks(rotation=90)
+            apply_shared_x_axis_label_strategy(ax, unique_labels, positions=data_x)
             
             current_y_limits = ax.get_ylim()
             y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
