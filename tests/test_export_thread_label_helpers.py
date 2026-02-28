@@ -44,6 +44,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 
 from modules.ExportDataThread import (  # noqa: E402
+    ExportDataThread,
     all_measurements_within_limits,
     build_spec_limit_anchor_rows,
     build_sheet_series_range,
@@ -166,11 +167,7 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
 
 class TestExportThreadProgressLabelFormatting(unittest.TestCase):
     def test_measurement_label_uses_three_rows_with_eta_placeholder_early(self):
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-        from modules.ExportDataThread import ExportDataThread
-
-        request = ExportRequest(paths=AppPaths(db_file='db', excel_file='out.xlsx'), options=ExportOptions())
-        thread = ExportDataThread(request)
+        thread = ExportDataThread.__new__(ExportDataThread)
 
         import modules.ExportDataThread as export_module
         previous_perf_counter = export_module.time.perf_counter
@@ -193,11 +190,7 @@ class TestExportThreadProgressLabelFormatting(unittest.TestCase):
         self.assertEqual(lines[2], 'ETA --')
 
     def test_measurement_label_uses_three_rows_with_eta_and_elapsed(self):
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-        from modules.ExportDataThread import ExportDataThread
-
-        request = ExportRequest(paths=AppPaths(db_file='db', excel_file='out.xlsx'), options=ExportOptions())
-        thread = ExportDataThread(request)
+        thread = ExportDataThread.__new__(ExportDataThread)
 
         import modules.ExportDataThread as export_module
         previous_perf_counter = export_module.time.perf_counter
