@@ -1,5 +1,7 @@
 # Metroliza
 
+[![CI](https://github.com/hexafe/metroliza/actions/workflows/ci.yml/badge.svg)](https://github.com/hexafe/metroliza/actions/workflows/ci.yml)
+
 Metroliza is a Python desktop tool for industrial metrology data processing, grouping, and Excel report generation.
 
 ## Quickstart

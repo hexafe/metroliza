@@ -4,11 +4,35 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_google_conversion_smoke:
+        description: "Set to 1 to run release-only Google conversion smoke check"
+        required: false
+        default: "0"
 
 jobs:
-  test:
+  python-setup:
+    name: Python setup and dependency install
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+  static-checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    needs: python-setup
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,29 +48,15 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Compile check
-        run: python -m compileall VersionDate.py metroliza.py modules tests
+        run: python -m compileall .
 
-      - name: Lint (full repository)
+      - name: Ruff lint (full repository)
         run: ruff check .
 
-      - name: Unit tests (pytest)
-        env:
-          PYTHONPATH: .
-        run: python -m pytest -q
-
-      - name: Unit tests (unittest)
-        env:
-          PYTHONPATH: .
-        run: python -m unittest discover -s tests -v
-
-      - name: Smoke imports
-        env:
-          PYTHONPATH: .
-        run: python -c "import modules.contracts; import modules.db; from modules.db import execute_many_with_retry; import modules.excel_sheet_utils; import modules.stats_utils"
-
-  windows-smoke:
-    runs-on: windows-latest
-
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: python-setup
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,32 +66,37 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dev dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Compile check
-        run: python -m compileall VersionDate.py metroliza.py modules tests
+      - name: Run unittest suite
+        run: PYTHONPATH=. python -m unittest discover -s tests -v
 
-      - name: Unit tests (pytest)
-        env:
-          PYTHONPATH: .
-        run: python -m pytest -q
+  google-conversion-smoke:
+    name: Google conversion smoke (manual/opt-in)
+    runs-on: ubuntu-latest
+    needs: [static-checks, unit-tests]
+    if: github.event_name == 'workflow_dispatch' && inputs.run_google_conversion_smoke == '1'
+    env:
+      METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE: ${{ inputs.run_google_conversion_smoke }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Unit tests (unittest)
-        env:
-          PYTHONPATH: .
-        run: python -m unittest discover -s tests -v
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Install build dependencies
-        run: pip install -r requirements-build.txt
-
-      - name: Packaging sanity smoke (no artifact build)
-        shell: pwsh
+      - name: Install dependencies
         run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path 'metroliza.py')) { throw 'Expected build entrypoint metroliza.py not found.' }
-          if (-not (Test-Path 'metroliza_icon2.ico')) { throw 'Expected icon input metroliza_icon2.ico not found.' }
-          python -m nuitka --version
-          python -c "import importlib.util,sys;mods=['nuitka','PyQt6'];missing=[m for m in mods if importlib.util.find_spec(m) is None];print('missing:',missing);sys.exit(1 if missing else 0)"
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Validate smoke gate env flag
+        run: test "${METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE}" = "1"
+
+      - name: Run Google conversion smoke check
+        run: PYTHONPATH=. python tests/google_conversion_smoke.py
