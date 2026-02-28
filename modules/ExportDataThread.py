@@ -1587,7 +1587,7 @@ class ExportDataThread(QThread):
             # Add vertical lines for mean, LSL and USL
             ax.axvline(
                 average,
-                color=SUMMARY_PLOT_PALETTE['annotation_emphasis'],
+                color=SUMMARY_PLOT_PALETTE['central_tendency'],
                 linestyle='-',
                 linewidth=1.8,
                 alpha=0.95,

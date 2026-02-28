@@ -6,6 +6,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
+
 
 qtcore_stub = types.ModuleType('PyQt6.QtCore')
 
@@ -151,6 +153,12 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(annotations[1]['ha'], 'right')
         self.assertEqual(annotations[2]['text'], 'LSL=9.800')
         self.assertEqual(annotations[2]['ha'], 'left')
+
+    def test_summary_palette_keeps_annotation_emphasis_alias_for_backward_compatibility(self):
+        self.assertEqual(
+            SUMMARY_PLOT_PALETTE['annotation_emphasis'],
+            SUMMARY_PLOT_PALETTE['central_tendency'],
+        )
 
     def test_compute_scaled_y_limits_expands_symmetrically(self):
         y_min, y_max = compute_scaled_y_limits((10.0, 20.0), 0.4)

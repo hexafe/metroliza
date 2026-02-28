@@ -4,6 +4,7 @@ SUMMARY_PLOT_PALETTE = {
     'distribution_base': '#56B4E9',
     'distribution_foreground': '#0072B2',
     'central_tendency': '#E69F00',
+    'annotation_emphasis': '#E69F00',
     'spec_limit': '#9b1c1c',
     'outlier': '#CC79A7',
     'density_line': '#1F2933',
