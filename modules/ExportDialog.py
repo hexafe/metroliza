@@ -98,12 +98,12 @@ _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
 
 
 def build_export_directory_link_line(excel_file):
-    """Build a file:// URI pointing to the export directory for clickable dialogs."""
+    """Build a file:// URI pointing to the exported file for clickable dialogs."""
     try:
-        export_directory_uri = Path(str(excel_file)).resolve(strict=False).parent.as_uri()
+        export_file_uri = Path(str(excel_file)).resolve(strict=False).as_uri()
     except Exception:
         return ""
-    return f"Export directory: {export_directory_uri}"
+    return f"Export file: {export_file_uri}"
 
 
 def format_message_with_clickable_links(message):
@@ -113,7 +113,7 @@ def format_message_with_clickable_links(message):
     return linked_message.replace("\n", "<br>")
 
 
-def show_export_result_message(parent, level, title, message):
+def show_export_result_message(parent, level, title, message, excel_file=None):
     """Display export result message with external links enabled when supported."""
     dialog = QMessageBox(parent)
     icon = QMessageBox.Icon.Warning if level == 'warning' else QMessageBox.Icon.Information
@@ -124,9 +124,23 @@ def show_export_result_message(parent, level, title, message):
         dialog.setTextFormat(Qt.TextFormat.RichText)
     if hasattr(dialog, 'setTextInteractionFlags') and hasattr(Qt, 'TextInteractionFlag'):
         dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+    show_in_folder_button = None
+    if excel_file and hasattr(dialog, 'addButton'):
+        show_in_folder_button = dialog.addButton('Show in folder', QMessageBox.ButtonRole.ActionRole)
     if hasattr(dialog, 'setStandardButtons'):
         dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
     dialog.exec()
+
+    clicked_button = dialog.clickedButton() if hasattr(dialog, 'clickedButton') else None
+    if show_in_folder_button is not None and clicked_button is show_in_folder_button:
+        try:
+            reveal_file_in_explorer(excel_file)
+        except Exception as exc:
+            QMessageBox.warning(
+                parent,
+                "Unable to open file location",
+                f"Could not open the export location for {excel_file}.\n{exc}",
+            )
 
 
 def reveal_file_in_explorer(file_path):
@@ -713,7 +727,7 @@ class ExportDialog(QDialog):
                     completion_metadata=getattr(self.export_thread, 'completion_metadata', {}),
                 )
 
-                show_export_result_message(self, level, title, message)
+                show_export_result_message(self, level, title, message, excel_file=self.excel_file)
 
             # Close the loading dialog
             self.loading_dialog.accept()
