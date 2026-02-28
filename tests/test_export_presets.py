@@ -144,10 +144,11 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'info')
         self.assertEqual(title, 'Export successful')
+        expected_directory_uri = Path('out.xlsx').resolve().parent.as_uri()
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
-            'Export directory: file:///workspace/metroliza\n'
+            f'Export directory: {expected_directory_uri}\n'
             '\n'
             'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
         )
@@ -169,10 +170,11 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'warning')
         self.assertEqual(title, 'Export completed with Google fallback')
+        expected_directory_uri = Path('out.xlsx').resolve().parent.as_uri()
         self.assertEqual(
             message,
             'Data exported locally to out.xlsx.\n'
-            'Export directory: file:///workspace/metroliza\n'
+            f'Export directory: {expected_directory_uri}\n'
             '\n'
             'Google Sheets conversion was not fully completed.\n'
             'Google export failed; using local .xlsx fallback: out.xlsx\n'
@@ -197,10 +199,11 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'warning')
         self.assertEqual(title, 'Export completed with Google fallback')
+        expected_directory_uri = Path('out.xlsx').resolve().parent.as_uri()
         self.assertEqual(
             message,
             'Data exported locally to out.xlsx.\n'
-            'Export directory: file:///workspace/metroliza\n'
+            f'Export directory: {expected_directory_uri}\n'
             '\n'
             'Google Sheets conversion was not fully completed.\n'
             'Google export failed; using local .xlsx fallback: out.xlsx',
