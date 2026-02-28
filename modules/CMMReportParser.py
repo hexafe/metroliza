@@ -15,6 +15,24 @@ from modules.db import execute_with_retry, run_transaction_with_retry
 logger = logging.getLogger(__name__)
 
 
+SCHEMA_INDEX_STATEMENTS = (
+    'CREATE INDEX IF NOT EXISTS idx_reports_reference ON REPORTS(REFERENCE)',
+    'CREATE INDEX IF NOT EXISTS idx_reports_filename ON REPORTS(FILENAME)',
+    'CREATE INDEX IF NOT EXISTS idx_reports_date ON REPORTS(DATE)',
+    'CREATE INDEX IF NOT EXISTS idx_reports_sample_number ON REPORTS(SAMPLE_NUMBER)',
+    'CREATE INDEX IF NOT EXISTS idx_reports_identity ON REPORTS(REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER)',
+    'CREATE INDEX IF NOT EXISTS idx_measurements_report_id ON MEASUREMENTS(REPORT_ID)',
+    'CREATE INDEX IF NOT EXISTS idx_measurements_header ON MEASUREMENTS(HEADER)',
+    'CREATE INDEX IF NOT EXISTS idx_measurements_ax ON MEASUREMENTS(AX)',
+)
+
+
+def ensure_schema_indexes(cursor):
+    """Create app indexes in a migration-safe way."""
+    for statement in SCHEMA_INDEX_STATEMENTS:
+        cursor.execute(statement)
+
+
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
     if importlib.util.find_spec("pymupdf") is not None:
@@ -345,6 +363,8 @@ class CMMReportParser:
                                     DATE TEXT,
                                     SAMPLE_NUMBER TEXT
                                 )''')
+
+                ensure_schema_indexes(transaction_cursor)
 
                 transaction_cursor.execute(
                     'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
