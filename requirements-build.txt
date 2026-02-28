@@ -4,3 +4,6 @@ Nuitka>=1.9
 pyinstaller>=5.10.1
 pyinstaller-hooks-contrib>=2023.2
 zstandard>=0.22.0
+maturin>=1.6
+cibuildwheel>=2.19
+build>=1.2

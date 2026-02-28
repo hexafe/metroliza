@@ -32,7 +32,8 @@ $commonArgs = @(
     "--assume-yes-for-downloads",
     "--remove-output",
     "--jobs=$jobs",
-    "--report=nuitka-build-report.xml"
+    "--report=nuitka-build-report.xml",
+    "--include-module=_metroliza_cmm_native"
 )
 
 if (-not $FastDev) {
