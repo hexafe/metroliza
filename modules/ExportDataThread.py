@@ -293,6 +293,58 @@ def build_violin_group_stats_rows(labels, values):
 
 def annotate_violin_group_stats(ax, labels, values):
     """Annotate min/mean/max and ±3σ markers for each violin group."""
+
+    def _resolve_violin_annotation_style(group_count):
+        safe_group_count = max(0, int(group_count))
+        if safe_group_count <= 2:
+            return {
+                'font_size': 8,
+                'minmax_marker_size': 24,
+                'mean_marker_size': 30,
+                'offsets': {
+                    'min': (6, -12),
+                    'mean': (6, 4),
+                    'max': (6, 4),
+                    'sigma_low': (6, -12),
+                    'sigma_high': (6, 4),
+                },
+                'show_minmax': True,
+                'sigma_line_width': 1.0,
+            }
+
+        if safe_group_count <= 6:
+            return {
+                'font_size': 6,
+                'minmax_marker_size': 12,
+                'mean_marker_size': 18,
+                'offsets': {
+                    'min': (4, -10),
+                    'mean': (4, 2),
+                    'max': (4, 2),
+                    'sigma_low': (4, -10),
+                    'sigma_high': (4, 2),
+                },
+                'show_minmax': True,
+                'sigma_line_width': 0.9,
+            }
+
+        return {
+            'font_size': 5,
+            'minmax_marker_size': 8,
+            'mean_marker_size': 12,
+            'offsets': {
+                'min': (2, -8),
+                'mean': (2, 1),
+                'max': (2, 1),
+                'sigma_low': (2, -8),
+                'sigma_high': (2, 1),
+            },
+            'show_minmax': False,
+            'sigma_line_width': 0.7,
+        }
+
+    group_count = max(len(values), len(labels))
+    style = _resolve_violin_annotation_style(group_count)
     for idx, group_values in enumerate(values):
         arr = np.asarray(group_values, dtype=float)
         if arr.size == 0:
@@ -305,14 +357,37 @@ def annotate_violin_group_stats(ax, labels, values):
 
         text_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#d0d0d0', 'alpha': 0.9}
 
-        ax.scatter([xpos], [min_val], color='#4f4f4f', s=12, marker='v', zorder=4)
-        ax.annotate(f"min={min_val:.3f}", (xpos, min_val), textcoords='offset points', xytext=(4, -10), fontsize=6, bbox=text_box)
+        if style['show_minmax']:
+            ax.scatter([xpos], [min_val], color='#4f4f4f', s=style['minmax_marker_size'], marker='v', zorder=4)
+            ax.annotate(
+                f"min={min_val:.3f}",
+                (xpos, min_val),
+                textcoords='offset points',
+                xytext=style['offsets']['min'],
+                fontsize=style['font_size'],
+                bbox=text_box,
+            )
 
-        ax.scatter([xpos], [mean_val], color='#111111', s=18, marker='o', zorder=4)
-        ax.annotate(f"μ={mean_val:.3f}", (xpos, mean_val), textcoords='offset points', xytext=(4, 2), fontsize=6, bbox=text_box)
+        ax.scatter([xpos], [mean_val], color='#111111', s=style['mean_marker_size'], marker='o', zorder=4)
+        ax.annotate(
+            f"μ={mean_val:.3f}",
+            (xpos, mean_val),
+            textcoords='offset points',
+            xytext=style['offsets']['mean'],
+            fontsize=style['font_size'],
+            bbox=text_box,
+        )
 
-        ax.scatter([xpos], [max_val], color='#4f4f4f', s=12, marker='^', zorder=4)
-        ax.annotate(f"max={max_val:.3f}", (xpos, max_val), textcoords='offset points', xytext=(4, 2), fontsize=6, bbox=text_box)
+        if style['show_minmax']:
+            ax.scatter([xpos], [max_val], color='#4f4f4f', s=style['minmax_marker_size'], marker='^', zorder=4)
+            ax.annotate(
+                f"max={max_val:.3f}",
+                (xpos, max_val),
+                textcoords='offset points',
+                xytext=style['offsets']['max'],
+                fontsize=style['font_size'],
+                bbox=text_box,
+            )
 
         if std_val > 0:
             sigma_low = mean_val - (3 * std_val)
@@ -323,12 +398,28 @@ def annotate_violin_group_stats(ax, labels, values):
                 sigma_high,
                 colors='#7a7a7a',
                 linestyles=':',
-                linewidth=0.9,
+                linewidth=style['sigma_line_width'],
                 alpha=0.8,
                 zorder=3,
             )
-            ax.annotate(f"-3σ={sigma_low:.3f}", (xpos, sigma_low), textcoords='offset points', xytext=(4, -10), fontsize=6, color='#5a5a5a', bbox=text_box)
-            ax.annotate(f"+3σ={sigma_high:.3f}", (xpos, sigma_high), textcoords='offset points', xytext=(4, 2), fontsize=6, color='#5a5a5a', bbox=text_box)
+            ax.annotate(
+                f"-3σ={sigma_low:.3f}",
+                (xpos, sigma_low),
+                textcoords='offset points',
+                xytext=style['offsets']['sigma_low'],
+                fontsize=style['font_size'],
+                color='#5a5a5a',
+                bbox=text_box,
+            )
+            ax.annotate(
+                f"+3σ={sigma_high:.3f}",
+                (xpos, sigma_high),
+                textcoords='offset points',
+                xytext=style['offsets']['sigma_high'],
+                fontsize=style['font_size'],
+                color='#5a5a5a',
+                bbox=text_box,
+            )
 
 
 def render_violin(ax, values, labels):
