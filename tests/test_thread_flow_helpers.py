@@ -577,6 +577,48 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertTrue(expected_iqr_positions.issubset(inserted_positions))
         self.assertEqual(len(expected_iqr_positions), 2)
 
+
+    def test_summary_sheet_fill_includes_histogram_and_trend_slots_without_palette_key_errors(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+
+        worksheet = _FakeSummaryWorksheet()
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                'DATE': ['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-06'],
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+
+        inserted_positions = set(worksheet.inserted_images)
+        panel_slots = build_summary_image_anchor_plan(3)
+
+        self.assertIn(panel_slots['histogram'], inserted_positions)
+        self.assertIn(panel_slots['trend'], inserted_positions)
+
     def test_default_export_target_uses_excel_backend(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
