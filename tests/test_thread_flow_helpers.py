@@ -181,6 +181,37 @@ class TestParseHelpers(unittest.TestCase):
         self.assertEqual(persisted, ['a.pdf', 'b.pdf'])
         self.assertEqual(progress_updates, [(1, 3), (2, 3)])
 
+    def test_parse_label_includes_multiline_progress_details(self):
+        from modules.ParseReportsThread import ParseReportsThread
+        from modules.contracts import ParseRequest
+
+        thread = ParseReportsThread(ParseRequest(source_directory='.', db_file='test.db'))
+
+        label = thread._build_parse_label(parsed_files=1, total_files=4, start_time=10.0)
+
+        self.assertIn('Parsing reports...', label)
+        self.assertIn('File 1/4, remaining 3', label)
+        self.assertIn('ETA --', label)
+
+    def test_parse_progress_clamps_and_stays_monotonic(self):
+        from modules.ParseReportsThread import ParseReportsThread
+        from modules.contracts import ParseRequest
+
+        captured_values = []
+
+        class _CaptureSignal:
+            def emit(self, value):
+                captured_values.append(value)
+
+        thread = ParseReportsThread(ParseRequest(source_directory='.', db_file='test.db'))
+        thread.update_progress = _CaptureSignal()
+
+        thread._emit_progress(25)
+        thread._emit_progress(20)
+        thread._emit_progress(120)
+
+        self.assertEqual(captured_values, [25, 100])
+
 
 class TestExportHelpers(unittest.TestCase):
     def test_build_export_dataframe_maps_columns(self):

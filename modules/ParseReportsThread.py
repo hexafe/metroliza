@@ -1,5 +1,6 @@
 import inspect
 import logging
+import time
 
 from modules.CMMReportParser import CMMReportParser
 import modules.CustomLogger as custom_logger
@@ -80,6 +81,12 @@ logger = get_operation_logger(logging.getLogger(__name__), "parse_reports")
 
 
 class ParseReportsThread(QThread):
+    PROGRESS_STAGE_RANGES = {
+        'discover_reports': (0, 15),
+        'load_existing_reports': (15, 30),
+        'parse_reports': (30, 100),
+    }
+
     update_progress = pyqtSignal(int)
     update_label = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
@@ -95,6 +102,55 @@ class ParseReportsThread(QThread):
         self.db_file = validated_request.db_file
         self.parsing_canceled = False
         self._extracted_archive_dir = None
+        self._last_emitted_progress = -1
+
+    @staticmethod
+    def _clamp_progress(value):
+        return max(0, min(100, int(round(value))))
+
+    def _emit_progress(self, value):
+        clamped_value = self._clamp_progress(value)
+        progress_value = max(clamped_value, self._last_emitted_progress)
+        if progress_value == self._last_emitted_progress:
+            return
+
+        self._last_emitted_progress = progress_value
+        self.update_progress.emit(progress_value)
+
+    def _emit_stage_progress(self, stage_name, fraction=1.0):
+        start, end = self.PROGRESS_STAGE_RANGES[stage_name]
+        safe_fraction = max(0.0, min(1.0, float(fraction)))
+        self._emit_progress(start + ((end - start) * safe_fraction))
+
+    @staticmethod
+    def _format_elapsed_or_eta(seconds):
+        safe_seconds = max(0, int(seconds))
+        minutes, remaining_seconds = divmod(safe_seconds, 60)
+        hours, remaining_minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:d}:{remaining_minutes:02d}:{remaining_seconds:02d}"
+        return f"{remaining_minutes:d}:{remaining_seconds:02d}"
+
+    def _build_parse_label(self, *, parsed_files, total_files, start_time):
+        stage_line = "Parsing reports..."
+        if total_files <= 0:
+            return f"{stage_line}\nFiles remaining 0\nETA --"
+
+        remaining_files = max(0, total_files - parsed_files)
+        detail_line = f"File {parsed_files}/{total_files}, remaining {remaining_files}"
+
+        elapsed_seconds = max(0.0, time.perf_counter() - start_time)
+        if parsed_files < 2 or elapsed_seconds < 1.0:
+            return f"{stage_line}\n{detail_line}\nETA --"
+
+        files_per_second = parsed_files / elapsed_seconds if elapsed_seconds > 0 else 0.0
+        if files_per_second <= 0:
+            return f"{stage_line}\n{detail_line}\nETA --"
+
+        eta_seconds = remaining_files / files_per_second
+        elapsed_display = self._format_elapsed_or_eta(elapsed_seconds)
+        eta_display = self._format_elapsed_or_eta(eta_seconds)
+        return f"{stage_line}\n{detail_line}\n{elapsed_display} elapsed, ETA {eta_display}"
 
     @staticmethod
     def _build_archive_extension_set():
@@ -125,11 +181,14 @@ class ParseReportsThread(QThread):
                     cancel_flag=self.parsing_canceled,
                 ),
             )
+            self.update_label.emit("Discovering reports...")
+            self._emit_stage_progress('discover_reports', 0.0)
             for path in report_root.glob("**/*.[Pp][Dd][Ff]"):
                 if self.parsing_canceled:
                     break
                 if path.is_file() and path.stat().st_size:
                     pdf_files.append(path)
+            self._emit_stage_progress('discover_reports', 1.0)
             logger.info(
                 "Parse discovery finished",
                 extra=build_parse_log_extra(
@@ -151,6 +210,9 @@ class ParseReportsThread(QThread):
             if self.parsing_canceled:
                 return report_fingerprints
 
+            self.update_label.emit("Loading existing reports from database...")
+            self._emit_stage_progress('load_existing_reports', 0.0)
+
             table_exists = execute_with_retry(
                 self.db_file,
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='REPORTS'",
@@ -159,6 +221,7 @@ class ParseReportsThread(QThread):
             )
 
             if not table_exists:
+                self._emit_stage_progress('load_existing_reports', 1.0)
                 return report_fingerprints
 
             rows = execute_with_retry(
@@ -171,6 +234,7 @@ class ParseReportsThread(QThread):
             report_fingerprints.update(
                 build_report_fingerprints_from_rows(rows, should_cancel=lambda: self.parsing_canceled)
             )
+            self._emit_stage_progress('load_existing_reports', 1.0)
 
             # Return report fingerprints from fallback path
             return report_fingerprints
@@ -219,6 +283,7 @@ class ParseReportsThread(QThread):
                 ),
             )
 
+            start_time = time.perf_counter()
             result = parse_new_reports(
                 list_of_reports,
                 report_fingerprints,
@@ -226,8 +291,14 @@ class ParseReportsThread(QThread):
                 persist_report=lambda parser: parser.open_database_and_check_filename(),
                 should_cancel=lambda: self.parsing_canceled,
                 on_progress=lambda parsed_files, total_files: (
-                    self.update_progress.emit(int(parsed_files / total_files * 100) if total_files else 100),
-                    self.update_label.emit(f"Parsing file {parsed_files} of {total_files}"),
+                    self._emit_stage_progress('parse_reports', parsed_files / total_files if total_files else 1.0),
+                    self.update_label.emit(
+                        self._build_parse_label(
+                            parsed_files=parsed_files,
+                            total_files=total_files,
+                            start_time=start_time,
+                        )
+                    ),
                     logger.debug(
                         "Parse progress update",
                         extra=build_parse_log_extra(
@@ -241,7 +312,7 @@ class ParseReportsThread(QThread):
             )
 
             if result.total_files == 0:
-                self.update_progress.emit(100)
+                self._emit_stage_progress('parse_reports', 1.0)
                 self.update_label.emit("No reports found to parse.")
 
             logger.info(
