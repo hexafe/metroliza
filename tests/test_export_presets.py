@@ -73,7 +73,7 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         for name in [
             'QDialog', 'QFileDialog', 'QGridLayout', 'QLabel', 'QLineEdit',
             'QMessageBox', 'QProgressBar', 'QPushButton', 'QVBoxLayout',
-            'QComboBox', 'QCheckBox',
+            'QComboBox', 'QCheckBox', 'QHBoxLayout', 'QWidget',
         ]:
             setattr(qtwidgets_stub, name, object)
         sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
@@ -100,6 +100,7 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
                 summary_scale_input='0',
                 hide_ok_results=False,
                 generate_summary_sheet=False,
+                generate_summary_sheet_overridden=False,
             )
         )
         full_payload = validate_export_options(
@@ -112,6 +113,7 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
                 summary_scale_input='0',
                 hide_ok_results=False,
                 generate_summary_sheet=True,
+                generate_summary_sheet_overridden=False,
             )
         )
 
@@ -119,6 +121,47 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         self.assertEqual(full_payload.preset, EXPORT_PRESET_FULL_REPORT)
         self.assertFalse(fast_payload.generate_summary_sheet)
         self.assertTrue(full_payload.generate_summary_sheet)
+
+    def test_override_state_is_explicit(self):
+        from modules.ExportDialog import is_generate_summary_sheet_overridden
+
+        self.assertFalse(is_generate_summary_sheet_overridden(EXPORT_PRESET_FAST_DIAGNOSTICS, False))
+        self.assertTrue(is_generate_summary_sheet_overridden(EXPORT_PRESET_FAST_DIAGNOSTICS, True))
+        self.assertFalse(is_generate_summary_sheet_overridden(EXPORT_PRESET_FULL_REPORT, True))
+        self.assertTrue(is_generate_summary_sheet_overridden(EXPORT_PRESET_FULL_REPORT, False))
+
+    def test_payload_uses_advanced_override_only_when_explicitly_changed(self):
+        from modules.ExportDialog import build_export_options_payload
+
+        no_override = validate_export_options(
+            build_export_options_payload(
+                selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
+                export_type='Line',
+                export_target='excel_xlsx',
+                sorting_parameter='Date',
+                violin_input='8',
+                summary_scale_input='0',
+                hide_ok_results=False,
+                generate_summary_sheet=True,
+                generate_summary_sheet_overridden=False,
+            )
+        )
+        explicit_override = validate_export_options(
+            build_export_options_payload(
+                selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
+                export_type='Line',
+                export_target='excel_xlsx',
+                sorting_parameter='Date',
+                violin_input='8',
+                summary_scale_input='0',
+                hide_ok_results=False,
+                generate_summary_sheet=True,
+                generate_summary_sheet_overridden=True,
+            )
+        )
+
+        self.assertFalse(no_override.generate_summary_sheet)
+        self.assertTrue(explicit_override.generate_summary_sheet)
 
 
 class TestExportCompletionMessaging(unittest.TestCase):

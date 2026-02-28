@@ -27,6 +27,8 @@ from PyQt6.QtWidgets import(
     QVBoxLayout,
     QComboBox,
     QCheckBox,
+    QHBoxLayout,
+    QWidget,
 )
 import base64
 import html
@@ -38,7 +40,18 @@ import sys
 from pathlib import Path
 
 
-def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, generate_summary_sheet):
+def build_preset_summary_text(selected_preset):
+    preset_options = build_export_options_for_preset(selected_preset)
+    includes_summary_sheet = "Yes" if bool(preset_options['generate_summary_sheet']) else "No"
+    return f"Includes summary sheet: {includes_summary_sheet}"
+
+
+def is_generate_summary_sheet_overridden(selected_preset, generate_summary_sheet):
+    preset_options = build_export_options_for_preset(selected_preset)
+    return bool(generate_summary_sheet) != bool(preset_options['generate_summary_sheet'])
+
+
+def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, generate_summary_sheet, generate_summary_sheet_overridden=False):
     preset_options = build_export_options_for_preset(selected_preset)
     return ExportOptions(
         preset=selected_preset,
@@ -48,7 +61,7 @@ def build_export_options_payload(selected_preset, export_type, export_target, so
         violin_plot_min_samplesize=int(violin_input if violin_input not in (None, "") else preset_options['violin_plot_min_samplesize']),
         summary_plot_scale=int(summary_scale_input if summary_scale_input not in (None, "") else preset_options['summary_plot_scale']),
         hide_ok_results=bool(hide_ok_results),
-        generate_summary_sheet=bool(generate_summary_sheet),
+        generate_summary_sheet=bool(generate_summary_sheet) if generate_summary_sheet_overridden else bool(preset_options['generate_summary_sheet']),
     )
 
 
@@ -234,6 +247,8 @@ class ExportDialog(QDialog):
             self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
             self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))
             self.generate_summary_sheet_checkbox.setChecked(bool(preset_options['generate_summary_sheet']))
+            self.preset_summary_label.setText(build_preset_summary_text(selected_preset))
+            self._update_override_state()
             self._save_dialog_config()
         except Exception as e:
             self.log_and_exit(e)
@@ -296,6 +311,10 @@ class ExportDialog(QDialog):
             selected_preset = self.config.get('selected_preset', 'fast_diagnostics')
             self.preset_combobox.setCurrentText(get_export_preset_label(selected_preset))
             self.preset_combobox.currentTextChanged.connect(lambda _: self.apply_selected_preset())
+            self.preset_summary_label = QLabel("")
+            self.preset_customized_badge = QLabel("Customized")
+            self.preset_customized_badge.setStyleSheet("color: #b00020; font-weight: bold;")
+            self.preset_customized_badge.hide()
 
             self.export_target_label = QLabel("Google Sheets export:")
             self.include_google_sheets_checkbox = QCheckBox("Include Google Sheets conversion")
@@ -380,6 +399,18 @@ class ExportDialog(QDialog):
             self.generate_summary_sheet_checkbox.setToolTip(
                 "When enabled, additional sheets will be created for each reference with additional graphs (grouped scatter/violin, histograms with basic statistics)"
             )
+            self.generate_summary_sheet_checkbox.stateChanged.connect(lambda _: self._update_override_state())
+
+            self.advanced_options_toggle = QPushButton("Advanced options")
+            self.advanced_options_toggle.setCheckable(True)
+            self.advanced_options_toggle.setChecked(False)
+            self.advanced_options_toggle.toggled.connect(self._toggle_advanced_options)
+
+            self.advanced_options_container = QWidget()
+            advanced_options_layout = QVBoxLayout(self.advanced_options_container)
+            advanced_options_layout.setContentsMargins(0, 0, 0, 0)
+            advanced_options_layout.addWidget(self.generate_summary_sheet_checkbox)
+            self.advanced_options_container.hide()
 
             self.apply_selected_preset()
         except Exception as e:
@@ -411,26 +442,32 @@ class ExportDialog(QDialog):
             self.layout.addWidget(self.export_button, 14, 0, 1, 2)
 
             self.layout.addWidget(self.preset_label, 15, 0)
-            self.layout.addWidget(self.preset_combobox, 15, 1)
+            preset_selector_layout = QHBoxLayout()
+            preset_selector_layout.setContentsMargins(0, 0, 0, 0)
+            preset_selector_layout.addWidget(self.preset_combobox)
+            preset_selector_layout.addWidget(self.preset_customized_badge)
+            self.layout.addLayout(preset_selector_layout, 15, 1)
+            self.layout.addWidget(self.preset_summary_label, 16, 1)
 
-            self.layout.addWidget(self.export_target_label, 16, 0)
-            self.layout.addWidget(self.include_google_sheets_checkbox, 16, 1)
+            self.layout.addWidget(self.export_target_label, 17, 0)
+            self.layout.addWidget(self.include_google_sheets_checkbox, 17, 1)
 
-            self.layout.addWidget(self.export_type_label, 17, 0)
-            self.layout.addWidget(self.export_type_combobox, 17, 1)
+            self.layout.addWidget(self.export_type_label, 18, 0)
+            self.layout.addWidget(self.export_type_combobox, 18, 1)
 
-            self.layout.addWidget(self.sort_measurements_label, 18, 0)
-            self.layout.addWidget(self.sort_measurements_combobox, 18, 1)
+            self.layout.addWidget(self.sort_measurements_label, 19, 0)
+            self.layout.addWidget(self.sort_measurements_combobox, 19, 1)
 
-            self.layout.addWidget(self.violin_plot_min_samplesize_label, 19, 0)
-            self.layout.addWidget(self.violin_plot_min_samplesize, 19, 1)
+            self.layout.addWidget(self.violin_plot_min_samplesize_label, 20, 0)
+            self.layout.addWidget(self.violin_plot_min_samplesize, 20, 1)
 
-            self.layout.addWidget(self.summary_plot_scale_label, 20, 0)
-            self.layout.addWidget(self.summary_plot_scale, 20, 1)
+            self.layout.addWidget(self.summary_plot_scale_label, 21, 0)
+            self.layout.addWidget(self.summary_plot_scale, 21, 1)
 
-            self.layout.addWidget(self.hide_ok_results_checkbox, 21, 0)
+            self.layout.addWidget(self.hide_ok_results_checkbox, 22, 0)
 
-            self.layout.addWidget(self.generate_summary_sheet_checkbox, 21, 1)
+            self.layout.addWidget(self.advanced_options_toggle, 22, 1)
+            self.layout.addWidget(self.advanced_options_container, 23, 1)
             
             self.setLayout(self.layout)
         except Exception as e:
@@ -454,6 +491,17 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setText(str(input_value))
         except Exception as e:
             self.log_and_exit(e)
+
+    def _toggle_advanced_options(self, is_visible):
+        self.advanced_options_container.setVisible(bool(is_visible))
+
+    def _update_override_state(self):
+        selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
+        is_overridden = is_generate_summary_sheet_overridden(
+            selected_preset,
+            self.generate_summary_sheet_checkbox.isChecked(),
+        )
+        self.preset_customized_badge.setVisible(is_overridden)
             
     def validate_plot_scale_input(self):
         try:
@@ -662,6 +710,7 @@ class ExportDialog(QDialog):
                     summary_scale_input=summary_scale_input,
                     hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
                     generate_summary_sheet=self.generate_summary_sheet_checkbox.isChecked(),
+                    generate_summary_sheet_overridden=self.preset_customized_badge.isVisible(),
                 )
             )
             validate_paths(AppPaths(db_file=self.db_file, excel_file=str(self.excel_file)))
