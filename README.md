@@ -48,8 +48,10 @@ Release-candidate readiness is tracked in the canonical checklist:
 [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md).
 Branching/RC workflow guidance for solo maintenance is documented in:
 [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md).
-Repository cleanup/documentation organization plan is tracked in:
-[`docs/repo_cleanup_and_docs_plan.md`](docs/repo_cleanup_and_docs_plan.md).
+Repository cleanup/documentation organization notes were archived in:
+[`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md).
+Active documentation lifecycle rules are defined in:
+[`docs/documentation_policy.md`](docs/documentation_policy.md).
 
 Metroliza supports an end-to-end flow:
 
@@ -89,7 +91,7 @@ Record release-gated smoke outcomes in:
 - `metroliza.py` — application entry point.
 - `modules/` — core app modules (parsing, grouping, export, dialogs, contracts, DB helpers, export summary utilities).
 - `tests/` — regression/unit tests.
-- `IMPLEMENTATION_PLAN.md` — roadmap and phase status.
+- `docs/` — runbooks, release checks, policy docs, and archived planning notes.
 - `metroliza_onefile.spec` — PyInstaller one-file build spec.
 
 ## Development checks
@@ -233,7 +235,7 @@ For very large databases, prefer narrow filter scopes before export to reduce Ex
 
 ## Roadmap status
 
-Detailed, canonical roadmap lives in `IMPLEMENTATION_PLAN.md`.
+Previous implementation roadmaps were archived in `docs/archive/2026/IMPLEMENTATION_PLAN.md`.
 For release-candidate validation and documentation sync requirements, use the canonical checklist in [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md) (single RC source of truth).
 
 Current high-level state:
