@@ -115,24 +115,27 @@ def format_message_with_clickable_links(message):
 
 def show_export_result_message(parent, level, title, message, excel_file=None):
     """Display export result message with external links enabled when supported."""
-    dialog = QMessageBox(parent)
-    icon = QMessageBox.Icon.Warning if level == 'warning' else QMessageBox.Icon.Information
-    dialog.setIcon(icon)
-    dialog.setWindowTitle(title)
-    dialog.setText(format_message_with_clickable_links(message))
-    if hasattr(dialog, 'setTextFormat') and hasattr(Qt, 'TextFormat'):
-        dialog.setTextFormat(Qt.TextFormat.RichText)
-    if hasattr(dialog, 'setTextInteractionFlags') and hasattr(Qt, 'TextInteractionFlag'):
-        dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-    show_in_folder_button = None
-    if excel_file and hasattr(dialog, 'addButton'):
-        show_in_folder_button = dialog.addButton('Show in folder', QMessageBox.ButtonRole.ActionRole)
-    if hasattr(dialog, 'setStandardButtons'):
-        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
-    dialog.exec()
+    while True:
+        dialog = QMessageBox(parent)
+        icon = QMessageBox.Icon.Warning if level == 'warning' else QMessageBox.Icon.Information
+        dialog.setIcon(icon)
+        dialog.setWindowTitle(title)
+        dialog.setText(format_message_with_clickable_links(message))
+        if hasattr(dialog, 'setTextFormat') and hasattr(Qt, 'TextFormat'):
+            dialog.setTextFormat(Qt.TextFormat.RichText)
+        if hasattr(dialog, 'setTextInteractionFlags') and hasattr(Qt, 'TextInteractionFlag'):
+            dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        show_in_folder_button = None
+        if excel_file and hasattr(dialog, 'addButton'):
+            show_in_folder_button = dialog.addButton('Show in folder', QMessageBox.ButtonRole.ActionRole)
+        if hasattr(dialog, 'setStandardButtons'):
+            dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.exec()
 
-    clicked_button = dialog.clickedButton() if hasattr(dialog, 'clickedButton') else None
-    if show_in_folder_button is not None and clicked_button is show_in_folder_button:
+        clicked_button = dialog.clickedButton() if hasattr(dialog, 'clickedButton') else None
+        if show_in_folder_button is None or clicked_button is not show_in_folder_button:
+            return
+
         try:
             reveal_file_in_explorer(excel_file)
         except Exception as exc:
