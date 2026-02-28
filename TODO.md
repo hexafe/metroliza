@@ -28,6 +28,11 @@ Last audited: 2026-02-27.
 
 ## Open implementation items (canonical list)
 - [ ] Maintain optional/manual sandbox Drive smoke checks as an ongoing release practice, and record outcomes in release notes using the standard evidence format (command run, date/time, environment/sandbox account, pass/fail, fallback `.xlsx` behavior observed, link/log location) whenever Google auth/conversion behavior changes.
+- [ ] Execute an architectural cleanup pass for export flows with behavior parity as a strict requirement.
+  - [ ] Split `modules/ExportDataThread.py` responsibilities into smaller modules that separate orchestration, pure payload/data-prep logic, and backend I/O/post-processing concerns (for example: `export_orchestrator`, `export_payload_builders`, `export_postprocess`).
+  - [ ] Refactor `modules/CSVSummaryDialog.py` and `modules/ExportDialog.py` to isolate UI state management from validation and export request-building logic.
+  - [ ] Add or update focused unit tests for extracted pure functions before changing behavior, then keep those tests green throughout the decomposition.
+  - [ ] Add a non-blocking CI size/complexity guard that reports modules over an agreed threshold for visibility (informational reporting only; no merge block).
 
 ## Carry-forward maintenance items only
 - [ ] Keep `README.md`, `CHANGELOG.md`, `IMPLEMENTATION_PLAN.md`, `TODO.md`, and `GOOGLE_SHEETS_MIGRATION_PLAN.md` synchronized after each release-candidate documentation PR.
