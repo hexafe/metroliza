@@ -18,6 +18,7 @@ from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import(
     QDialog,
     QFileDialog,
+    QGroupBox,
     QGridLayout,
     QLabel,
     QLineEdit,
@@ -457,59 +458,83 @@ class ExportDialog(QDialog):
     def init_layout(self):
         try:
             """Initialize the layout"""
-            self.layout = QGridLayout()
+            self.layout = QVBoxLayout()
+            self.layout.setSpacing(10)
 
-            self.layout.addWidget(self.select_db_label, 0, 0)
-            self.layout.addWidget(self.database_text_label, 1, 0)
-            self.layout.addWidget(self.select_db_button, 2, 0, 1, 2)
-            self.layout.addWidget(self.spacer, 3, 0)
+            source_target_group = QGroupBox("Source / target files")
+            source_target_layout = QGridLayout(source_target_group)
+            source_target_layout.addWidget(self.select_db_label, 0, 0)
+            source_target_layout.addWidget(self.database_text_label, 1, 0)
+            source_target_layout.addWidget(self.select_db_button, 2, 0)
+            source_target_layout.addWidget(self.select_excel_label, 3, 0)
+            source_target_layout.addWidget(self.excel_file_text_label, 4, 0)
+            source_target_layout.addWidget(self.select_excel_button, 5, 0)
 
-            self.layout.addWidget(self.select_excel_label, 4, 0)
-            self.layout.addWidget(self.excel_file_text_label, 5, 0)
-            self.layout.addWidget(self.select_excel_button, 6, 0, 1, 2)
-            self.layout.addWidget(self.spacer, 7, 0)
+            data_scope_group = QGroupBox("Data scope")
+            data_scope_layout = QGridLayout(data_scope_group)
+            data_scope_layout.addWidget(self.select_filter_label, 0, 0)
+            data_scope_layout.addWidget(self.filter_button, 1, 0)
+            data_scope_layout.addWidget(self.select_group_label, 2, 0)
+            data_scope_layout.addWidget(self.group_button, 3, 0)
 
-            self.layout.addWidget(self.select_filter_label, 8, 0)
-            self.layout.addWidget(self.filter_button, 9, 0, 1, 2)
-            self.layout.addWidget(self.spacer, 10, 0)
-            
-            self.layout.addWidget(self.select_group_label, 11, 0)
-            self.layout.addWidget(self.group_button, 12, 0, 1, 2)
-            self.layout.addWidget(self.spacer, 13, 0)
-
-            self.layout.addWidget(self.export_button, 14, 0, 1, 2)
-
-            self.layout.addWidget(self.preset_label, 15, 0)
+            report_profile_group = QGroupBox("Report profile")
+            report_profile_layout = QGridLayout(report_profile_group)
+            report_profile_layout.addWidget(self.preset_label, 0, 0)
             preset_selector_layout = QHBoxLayout()
             preset_selector_layout.setContentsMargins(0, 0, 0, 0)
             preset_selector_layout.addWidget(self.preset_combobox)
             preset_selector_layout.addWidget(self.preset_customized_badge)
-            self.layout.addLayout(preset_selector_layout, 15, 1)
-            self.layout.addWidget(self.preset_summary_label, 16, 1)
+            report_profile_layout.addLayout(preset_selector_layout, 0, 1)
+            report_profile_layout.addWidget(self.preset_summary_label, 1, 1)
 
-            self.layout.addWidget(self.export_target_label, 17, 0)
-            self.layout.addWidget(self.include_google_sheets_checkbox, 17, 1)
+            report_profile_layout.addWidget(self.export_target_label, 2, 0)
+            report_profile_layout.addWidget(self.include_google_sheets_checkbox, 2, 1)
 
-            self.layout.addWidget(self.export_type_label, 18, 0)
-            self.layout.addWidget(self.export_type_combobox, 18, 1)
+            report_profile_layout.addWidget(self.export_type_label, 3, 0)
+            report_profile_layout.addWidget(self.export_type_combobox, 3, 1)
 
-            self.layout.addWidget(self.sort_measurements_label, 19, 0)
-            self.layout.addWidget(self.sort_measurements_combobox, 19, 1)
+            report_profile_layout.addWidget(self.sort_measurements_label, 4, 0)
+            report_profile_layout.addWidget(self.sort_measurements_combobox, 4, 1)
 
-            self.layout.addWidget(self.violin_plot_min_samplesize_label, 20, 0)
-            self.layout.addWidget(self.violin_plot_min_samplesize, 20, 1)
-            self.layout.addWidget(self.violin_plot_min_samplesize_helper_label, 20, 2)
+            report_profile_layout.addWidget(self.violin_plot_min_samplesize_label, 5, 0)
+            report_profile_layout.addWidget(self.violin_plot_min_samplesize, 5, 1)
+            report_profile_layout.addWidget(self.violin_plot_min_samplesize_helper_label, 5, 2)
 
-            self.layout.addWidget(self.summary_plot_scale_label, 21, 0)
-            self.layout.addWidget(self.summary_plot_scale, 21, 1)
-            self.layout.addWidget(self.summary_plot_scale_helper_label, 21, 2)
+            report_profile_layout.addWidget(self.summary_plot_scale_label, 6, 0)
+            report_profile_layout.addWidget(self.summary_plot_scale, 6, 1)
+            report_profile_layout.addWidget(self.summary_plot_scale_helper_label, 6, 2)
 
-            self.layout.addWidget(self.hide_ok_results_checkbox, 22, 0)
+            advanced_options_group = QGroupBox("Advanced options")
+            advanced_options_layout = QVBoxLayout(advanced_options_group)
+            advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
+            advanced_options_layout.addWidget(self.advanced_options_toggle)
+            advanced_options_layout.addWidget(self.advanced_options_container)
 
-            self.layout.addWidget(self.advanced_options_toggle, 22, 1)
-            self.layout.addWidget(self.advanced_options_container, 23, 1)
-            
+            action_group = QGroupBox("Primary action")
+            action_layout = QVBoxLayout(action_group)
+            action_layout.addWidget(self.export_button)
+
+            self.layout.addWidget(source_target_group)
+            self.layout.addWidget(data_scope_group)
+            self.layout.addWidget(report_profile_group)
+            self.layout.addWidget(advanced_options_group)
+            self.layout.addWidget(action_group)
+
             self.setLayout(self.layout)
+
+            self.setTabOrder(self.select_db_button, self.select_excel_button)
+            self.setTabOrder(self.select_excel_button, self.filter_button)
+            self.setTabOrder(self.filter_button, self.group_button)
+            self.setTabOrder(self.group_button, self.preset_combobox)
+            self.setTabOrder(self.preset_combobox, self.include_google_sheets_checkbox)
+            self.setTabOrder(self.include_google_sheets_checkbox, self.export_type_combobox)
+            self.setTabOrder(self.export_type_combobox, self.sort_measurements_combobox)
+            self.setTabOrder(self.sort_measurements_combobox, self.violin_plot_min_samplesize)
+            self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
+            self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
+            self.setTabOrder(self.hide_ok_results_checkbox, self.advanced_options_toggle)
+            self.setTabOrder(self.advanced_options_toggle, self.generate_summary_sheet_checkbox)
+            self.setTabOrder(self.generate_summary_sheet_checkbox, self.export_button)
         except Exception as e:
             self.log_and_exit(e)
         
