@@ -59,11 +59,17 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
     converted_url = str(metadata.get('converted_url', '')).strip()
 
     if export_target == 'google_sheets_drive_convert':
+        export_directory_line = build_export_directory_link_line(excel_file)
         if warnings or fallback_message:
             message_lines = [
                 f"Data exported locally to {excel_file}.",
-                "Google Sheets conversion was not fully completed.",
             ]
+            if export_directory_line:
+                message_lines.append(export_directory_line)
+            message_lines.extend([
+                "",
+                "Google Sheets conversion was not fully completed.",
+            ])
             if converted_url:
                 message_lines.append(f"Google Sheet: {converted_url}")
             if fallback_message:
@@ -76,14 +82,28 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
         if converted_url:
             message_lines = [
                 f"Data exported successfully to {excel_file}.",
-                f"Google Sheet: {converted_url}",
             ]
+            if export_directory_line:
+                message_lines.append(export_directory_line)
+            message_lines.extend([
+                "",
+                f"Google Sheet: {converted_url}",
+            ])
             return 'info', 'Export successful', "\n".join(message_lines)
 
     return 'info', 'Export successful', f"Data exported successfully to {excel_file}!"
 
 
-_URL_PATTERN = re.compile(r"(https?://[^\s]+)")
+_URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
+
+
+def build_export_directory_link_line(excel_file):
+    """Build a file:// URI pointing to the export directory for clickable dialogs."""
+    try:
+        export_directory_uri = Path(str(excel_file)).resolve(strict=False).parent.as_uri()
+    except Exception:
+        return ""
+    return f"Export directory: {export_directory_uri}"
 
 
 def format_message_with_clickable_links(message):
@@ -700,21 +720,6 @@ class ExportDialog(QDialog):
 
             # Re-enable the export button
             self.export_button.setEnabled(True)
-
-            exported_file = Path(str(self.excel_file))
-            if not self.export_error_message and exported_file.exists():
-                open_location = QMessageBox.question(
-                    self,
-                    "Export completed",
-                    "Do you want to open the export location in file explorer?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes,
-                )
-                if open_location == QMessageBox.StandardButton.Yes:
-                    try:
-                        reveal_file_in_explorer(exported_file)
-                    except Exception as e:
-                        QMessageBox.warning(self, "Open location failed", f"Could not open export location: {e}")
 
             self.export_error_message = None
 
