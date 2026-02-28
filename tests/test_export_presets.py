@@ -147,6 +147,8 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
+            'Export directory: file:///workspace/metroliza\n'
+            '\n'
             'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
         )
 
@@ -170,6 +172,8 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported locally to out.xlsx.\n'
+            'Export directory: file:///workspace/metroliza\n'
+            '\n'
             'Google Sheets conversion was not fully completed.\n'
             'Google export failed; using local .xlsx fallback: out.xlsx\n'
             'Warnings:\n'
@@ -196,6 +200,8 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported locally to out.xlsx.\n'
+            'Export directory: file:///workspace/metroliza\n'
+            '\n'
             'Google Sheets conversion was not fully completed.\n'
             'Google export failed; using local .xlsx fallback: out.xlsx',
         )
@@ -231,6 +237,13 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertIn('Result &lt;ok&gt;', formatted)
         self.assertIn('<a href="https://example.com">https://example.com</a>', formatted)
+
+    def test_link_formatting_also_converts_file_urls_to_anchors(self):
+        from modules.ExportDialog import format_message_with_clickable_links
+
+        formatted = format_message_with_clickable_links('Export directory: file:///tmp')
+
+        self.assertIn('<a href="file:///tmp">file:///tmp</a>', formatted)
 
     def test_excel_target_message_is_unchanged_even_with_google_metadata(self):
         from modules.ExportDialog import build_export_completion_message
