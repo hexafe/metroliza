@@ -185,19 +185,44 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             ]
         return processed_line
 
-    def extract_numerical_lines(lines: list[str]) -> tuple[list[str], int]:
-        prefixes = ["X", "Y", "Z", "TP", "M", "D", "RN", "DF", "PR", "PA", "D1", "A"]
-        numerical_lines: list[str] = []
-        counter = 0
-        for i, line in enumerate(lines):
-            if any(line.startswith(p) for p in prefixes) and not i:
-                numerical_lines.append(line)
-            elif not is_numerical(line):
-                counter = i - 1
+    def extract_measurement_tokens_and_raw_lines_consumed(lines: list[str]) -> tuple[list[str], int]:
+        if not lines:
+            return [], 0
+
+        code_tokens = lines[0].split()
+        if not code_tokens:
+            return [], 0
+
+        code, *first_line_tokens = code_tokens
+        parsed_tokens: list[str] = [code]
+        raw_lines_consumed = 1
+        max_token_count = MEASUREMENT_LINE_MAP.get(code, 0)
+
+        def append_numeric_tokens(tokens: list[str]) -> None:
+            for token in tokens:
+                if is_number(token):
+                    parsed_tokens.append(token)
+                    if max_token_count and len(parsed_tokens) >= max_token_count:
+                        break
+
+        append_numeric_tokens(first_line_tokens)
+
+        for raw_line in lines[1:]:
+            if max_token_count and len(parsed_tokens) >= max_token_count:
                 break
-            else:
-                numerical_lines.append(line)
-        return numerical_lines, counter
+
+            raw_line_tokens = raw_line.split()
+            if not raw_line_tokens:
+                raw_lines_consumed += 1
+                continue
+
+            if is_comment_or_header(raw_line) or is_dim_line(raw_line) or raw_line_tokens[0] in MEASUREMENT_LINE_MAP:
+                break
+
+            raw_lines_consumed += 1
+            append_numeric_tokens(raw_line_tokens)
+
+        return parsed_tokens, raw_lines_consumed
 
     def extract_header_comment(lines: list[str]) -> tuple[str, int]:
         header: list[str] = []
@@ -216,15 +241,15 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
     text_block: list[Any] = []
     dim_block: list[Any] = []
     header_comment: list[Any] = []
-    counter = 0
+    raw_lines_to_skip = 0
 
     for index, line in enumerate(raw_lines):
-        if counter:
-            counter -= 1
+        if raw_lines_to_skip:
+            raw_lines_to_skip -= 1
             continue
 
         if is_comment_or_header(line):
-            line, counter = extract_header_comment(raw_lines[index : index + 10])
+            line, raw_lines_to_skip = extract_header_comment(raw_lines[index : index + 10])
 
         if index == len(raw_lines) - 1:
             if text_block:
@@ -257,23 +282,14 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
 
             else:
                 if line in MEASUREMENT_LINE_MAP:
-                    next_lines = raw_lines[index : index + MEASUREMENT_LINE_MAP[line]]
-                    line_split: list[str] = []
-                    for item in next_lines:
-                        line_split.extend(item.split())
+                    candidate_lines = raw_lines[index:]
+                    parsed_tokens, raw_lines_consumed = extract_measurement_tokens_and_raw_lines_consumed(candidate_lines)
 
-                    if line_split[0] == "TP":
-                        line_split[1] = "0"
-                        if not is_number(line_split[3]):
-                            line_split.pop(3)
-                            line_split.pop(3)
-                            line_split.append(line_split[-1])
-                            if float(line_split[4]) > float(line_split[2]):
-                                line_split.append(str(float(line_split[4]) - float(line_split[2])))
-                            else:
-                                line_split.append("0")
-                    next_lines, counter = extract_numerical_lines(line_split)
-                    temp_line = process_line(next_lines)
+                    if parsed_tokens and parsed_tokens[0] == "TP" and len(parsed_tokens) > 1:
+                        parsed_tokens[1] = "0"
+
+                    raw_lines_to_skip = max(raw_lines_consumed - 1, 0)
+                    temp_line = process_line(parsed_tokens)
                     if temp_line:
                         dim_block.append(temp_line)
         else:
@@ -294,6 +310,11 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                     text_block, header_comment, dim_block = [], [], []
                     formatted_line = re.sub(r"^[#*/]+", "", line).strip()
                     header_comment.append([formatted_line])
+
+    if text_block:
+        candidate_block = [header_comment] + [dim_block]
+        if not pdf_blocks_text or pdf_blocks_text[-1] != candidate_block:
+            pdf_blocks_text.append(candidate_block)
 
     add_tolerances_to_blocks(pdf_blocks_text)
     return pdf_blocks_text

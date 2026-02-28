@@ -37,3 +37,37 @@ def test_native_parser_parity_with_python_backend(fixture):
     assert json.dumps(native, separators=(",", ":")) == json.dumps(
         python, separators=(",", ":")
     )
+
+
+def test_measurement_tokens_can_span_lines_with_interruptions_without_block_duplication():
+    raw_lines = [
+        "#INTERRUPTED",
+        "DIM",
+        "X",
+        "10",
+        "NOMINAL",
+        "0.2",
+        "TOL",
+        "-0.2",
+        "ACT",
+        "10.1",
+        "DEV",
+        "0.1",
+        "OUT",
+        "0",
+        "Y",
+        "5",
+        "0.1",
+        "-0.1",
+        "5.05",
+        "0.05",
+        "0",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert len(parsed) == 1
+    assert parsed[0][0] == [["INTERRUPTED"]]
+    assert [line[0] for line in parsed[0][1]] == ["X", "Y"]
+    assert parsed[0][1][0] == ["X", 10.0, 0.2, -0.2, 0, 10.1, 0.1, 0.0]
+    assert parsed[0][1][1] == ["Y", 5.0, 0.1, -0.1, 0, 5.05, 0.05, 0.0]
