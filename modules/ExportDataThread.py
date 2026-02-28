@@ -351,59 +351,70 @@ def build_violin_group_stats_rows(labels, values):
 
 
 def annotate_violin_group_stats(ax, labels, values):
-    """Annotate min/mean/max and ±3σ markers for each violin group."""
+    """Annotate group summary statistics on violin plots.
 
-    def _resolve_violin_annotation_style(group_count):
-        safe_group_count = max(0, int(group_count))
-        if safe_group_count <= 2:
-            return {
-                'font_size': 8,
-                'minmax_marker_size': 24,
-                'mean_marker_size': 30,
-                'offsets': {
-                    'min': (6, -12),
-                    'mean': (6, 4),
-                    'max': (6, 4),
-                    'sigma_low': (6, -12),
-                    'sigma_high': (6, 4),
-                },
-                'show_minmax': True,
-                'sigma_line_width': 1.0,
-            }
+    Modes:
+    - full: min/mean/max + ±3σ
+    - compact: mean + optional ±3σ
+    - auto: chooses full/compact based on group count and x-spacing
+    """
 
-        if safe_group_count <= 6:
-            return {
-                'font_size': 6,
-                'minmax_marker_size': 12,
-                'mean_marker_size': 18,
-                'offsets': {
-                    'min': (4, -10),
-                    'mean': (4, 2),
-                    'max': (4, 2),
-                    'sigma_low': (4, -10),
-                    'sigma_high': (4, 2),
-                },
-                'show_minmax': True,
-                'sigma_line_width': 0.9,
-            }
+    annotation_mode = 'auto'
 
-        return {
+    mode_styles = {
+        'full': {
+            'font_size': 6,
+            'minmax_marker_size': 12,
+            'mean_marker_size': 18,
+            'offsets': {
+                'min': (4, -10),
+                'mean': (4, 2),
+                'max': (4, 2),
+                'sigma_low': (4, -10),
+                'sigma_high': (4, 2),
+            },
+            'show_minmax': True,
+            'show_sigma': True,
+            'sigma_line_width': 0.9,
+        },
+        'compact': {
             'font_size': 5,
-            'minmax_marker_size': 8,
+            'minmax_marker_size': 0,
             'mean_marker_size': 12,
             'offsets': {
-                'min': (2, -8),
                 'mean': (2, 1),
-                'max': (2, 1),
                 'sigma_low': (2, -8),
                 'sigma_high': (2, 1),
             },
             'show_minmax': False,
+            'show_sigma': True,
             'sigma_line_width': 0.7,
-        }
+        },
+    }
+
+    def _resolve_violin_annotation_style(group_count, mode='auto'):
+        safe_group_count = max(0, int(group_count))
+        if safe_group_count <= 0:
+            return mode_styles['compact']
+
+        x_min, x_max = ax.get_xlim()
+        x_range = max(float(x_max - x_min), 1e-9)
+        x_spacing = x_range / safe_group_count
+
+        resolved_mode = mode
+        if mode == 'auto':
+            if safe_group_count <= 4 and x_spacing >= 0.75:
+                resolved_mode = 'full'
+            else:
+                resolved_mode = 'compact'
+
+        style = dict(mode_styles.get(resolved_mode, mode_styles['compact']))
+        if resolved_mode == 'compact' and (safe_group_count > 12 or x_spacing < 0.55):
+            style['show_sigma'] = False
+        return style
 
     group_count = max(len(values), len(labels))
-    style = _resolve_violin_annotation_style(group_count)
+    style = _resolve_violin_annotation_style(group_count, mode=annotation_mode)
     for idx, group_values in enumerate(values):
         arr = np.asarray(group_values, dtype=float)
         if arr.size == 0:
@@ -448,7 +459,7 @@ def annotate_violin_group_stats(ax, labels, values):
                 bbox=text_box,
             )
 
-        if std_val > 0:
+        if style['show_sigma'] and std_val > 0:
             sigma_low = mean_val - (3 * std_val)
             sigma_high = mean_val + (3 * std_val)
             ax.vlines(
