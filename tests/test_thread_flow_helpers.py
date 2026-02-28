@@ -216,6 +216,209 @@ class TestExportHelpers(unittest.TestCase):
 
 
 class TestExportBackendSmoke(unittest.TestCase):
+    @staticmethod
+    def _build_fake_measurement_backend():
+        class _FakeWorksheet:
+            def set_column(self, *_args, **_kwargs):
+                return None
+
+            def freeze_panes(self, *_args, **_kwargs):
+                return None
+
+        class _FakeWorkbook:
+            def add_worksheet(self, _name):
+                return _FakeWorksheet()
+
+        class _FakeBackend:
+            def __init__(self):
+                self._workbook = _FakeWorkbook()
+
+            def get_workbook(self, _excel_writer):
+                return self._workbook
+
+            def list_sheet_names(self, _excel_writer):
+                return set()
+
+        return _FakeBackend()
+
+    @staticmethod
+    def _build_multi_header_measurement_dataframe():
+        import pandas as pd
+
+        rows = []
+        references = ('REF_A', 'REF_B')
+        headers = ('H1', 'H2', 'H3')
+        for ref in references:
+            for header in headers:
+                for sample_idx in range(1, 3):
+                    rows.append(
+                        {
+                            'REFERENCE': ref,
+                            'HEADER - AX': header,
+                            'NOM': 10.0,
+                            '+TOL': 1.0,
+                            '-TOL': -1.0,
+                            'BONUS': 0.0,
+                            'MEAS': 10.0 + sample_idx,
+                            'DATE': f'2024-01-0{sample_idx}',
+                            'SAMPLE_NUMBER': str(sample_idx),
+                        }
+                    )
+
+        return pd.DataFrame(rows)
+
+    def test_export_run_emits_monotonic_progress_from_zero_to_hundred_for_multi_header_data(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        previous_reader = module.read_sql_dataframe
+        previous_builder = module.build_measurement_export_dataframe
+        previous_formats = module.create_measurement_formats
+        previous_write_block = module.write_measurement_block
+        previous_insert_chart = module.insert_measurement_chart
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(generate_summary_sheet=False),
+            )
+            thread = ExportDataThread(request)
+            fake_backend = self._build_fake_measurement_backend()
+
+            class _BackendRunner:
+                def run(self, runner_thread):
+                    return runner_thread.run_export_pipeline(excel_writer=object())
+
+            progress_values = []
+            thread.get_export_backend = lambda: _BackendRunner()
+            thread.export_filtered_data = lambda *_: None
+            thread.update_progress.emit = lambda value: progress_values.append(value)
+            thread.update_label.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+            thread._active_backend = fake_backend
+
+            module.read_sql_dataframe = lambda *_args, **_kwargs: object()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
+            module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
+            module.insert_measurement_chart = lambda *_args, **_kwargs: None
+            try:
+                thread.run()
+            finally:
+                module.read_sql_dataframe = previous_reader
+                module.build_measurement_export_dataframe = previous_builder
+                module.create_measurement_formats = previous_formats
+                module.write_measurement_block = previous_write_block
+                module.insert_measurement_chart = previous_insert_chart
+
+        self.assertEqual(progress_values[0], 0)
+        self.assertEqual(progress_values[-1], 100)
+        self.assertEqual(progress_values, sorted(progress_values))
+        self.assertGreater(len(progress_values), 3)
+
+    def test_add_measurements_stops_emitting_progress_when_canceled(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        previous_reader = module.read_sql_dataframe
+        previous_builder = module.build_measurement_export_dataframe
+        previous_formats = module.create_measurement_formats
+        previous_write_block = module.write_measurement_block
+        previous_insert_chart = module.insert_measurement_chart
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(generate_summary_sheet=False),
+            )
+            thread = ExportDataThread(request)
+            thread._active_backend = self._build_fake_measurement_backend()
+
+            progress_values = []
+            cancellation_state = {'triggered': False}
+
+            def _check_canceled():
+                if len(progress_values) >= 4:
+                    cancellation_state['triggered'] = True
+                    return True
+                return False
+
+            thread._check_canceled = _check_canceled
+            thread.update_progress.emit = lambda value: progress_values.append(value)
+            thread.update_label.emit = lambda *_: None
+
+            module.read_sql_dataframe = lambda *_args, **_kwargs: object()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
+            module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
+            module.insert_measurement_chart = lambda *_args, **_kwargs: None
+            try:
+                thread.add_measurements_horizontal_sheet(excel_writer=object())
+            finally:
+                module.read_sql_dataframe = previous_reader
+                module.build_measurement_export_dataframe = previous_builder
+                module.create_measurement_formats = previous_formats
+                module.write_measurement_block = previous_write_block
+                module.insert_measurement_chart = previous_insert_chart
+
+        self.assertTrue(cancellation_state['triggered'])
+        self.assertEqual(len(progress_values), 4)
+        self.assertLess(progress_values[-1], 95)
+
+    def test_add_measurements_emits_reference_and_header_label_details(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        previous_reader = module.read_sql_dataframe
+        previous_builder = module.build_measurement_export_dataframe
+        previous_formats = module.create_measurement_formats
+        previous_write_block = module.write_measurement_block
+        previous_insert_chart = module.insert_measurement_chart
+        previous_perf_counter = module.time.perf_counter
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(generate_summary_sheet=False),
+            )
+            thread = ExportDataThread(request)
+            thread._active_backend = self._build_fake_measurement_backend()
+
+            labels = []
+            counter = {'value': 0.0}
+
+            def _fake_perf_counter():
+                counter['value'] += 0.6
+                return counter['value']
+
+            thread.update_label.emit = lambda text: labels.append(text)
+            thread.update_progress.emit = lambda *_: None
+
+            module.read_sql_dataframe = lambda *_args, **_kwargs: object()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
+            module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
+            module.insert_measurement_chart = lambda *_args, **_kwargs: None
+            module.time.perf_counter = _fake_perf_counter
+            try:
+                thread.add_measurements_horizontal_sheet(excel_writer=object())
+            finally:
+                module.read_sql_dataframe = previous_reader
+                module.build_measurement_export_dataframe = previous_builder
+                module.create_measurement_formats = previous_formats
+                module.write_measurement_block = previous_write_block
+                module.insert_measurement_chart = previous_insert_chart
+                module.time.perf_counter = previous_perf_counter
+
+        detailed_labels = [text for text in labels if text.startswith('Building measurement sheets... Ref')]
+        self.assertTrue(detailed_labels)
+        self.assertTrue(any('Ref 1/2' in text for text in detailed_labels))
+        self.assertTrue(any('Ref 2/2' in text for text in detailed_labels))
+        self.assertTrue(all('Header ' in text for text in detailed_labels))
+
     def test_default_export_target_uses_excel_backend(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
