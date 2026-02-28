@@ -41,6 +41,9 @@ A short, non-technical changelog for end users is available in [`CHANGELOG.md`](
 
 Current release highlight (`2026.02`, build `260228`): Google Sheets export messaging is clearer, `.xlsx` fallback is explicit, and chart-heavy exports remain faster for daily use.
 
+Release-candidate readiness is tracked in the canonical checklist:
+[`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md).
+
 Metroliza supports an end-to-end flow:
 
 1. Parse metrology source files (PDF/ZIP) and production CSV exports.
@@ -224,7 +227,7 @@ For very large databases, prefer narrow filter scopes before export to reduce Ex
 ## Roadmap status
 
 Detailed, canonical roadmap lives in `IMPLEMENTATION_PLAN.md`.
-For release-candidate documentation sync requirements, use the canonical checklist in `CONTRIBUTING.md` under **Documentation sync policy** (source of truth for required cross-file updates).
+For release-candidate validation and documentation sync requirements, use the canonical checklist in [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md) (single RC source of truth).
 
 Current high-level state:
 - Phase 0: ✅ Completed.

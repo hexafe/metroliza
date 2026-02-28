@@ -49,13 +49,7 @@ Request/option contracts live in `modules/contracts.py`.
 
 - Keep documentation-only sync PRs separate from implementation PRs when updating roadmap/project-state docs.
 - Update `IMPLEMENTATION_PLAN.md` and `GOOGLE_SHEETS_MIGRATION_PLAN.md` **after** implementation/testing PRs merge so status text reflects shipped behavior.
-- For release-candidate documentation PRs, treat `CONTRIBUTING.md` (this section) as the source of truth for mandatory cross-file sync and update all of the following in the same PR:
-  - `README.md`
-  - `CHANGELOG.md`
-  - `IMPLEMENTATION_PLAN.md`
-  - `TODO.md`
-  - `GOOGLE_SHEETS_MIGRATION_PLAN.md`
-  - `VersionDate.py` (version/build text alignment).
+- For release-candidate documentation PRs, use [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md) as the single RC source of truth and update all files referenced there in the same PR.
 - For Google export docs, explicitly describe both:
   - required local secret files (`credentials.json`, `token.json`) and
   - fallback expectations (`.xlsx` remains the guaranteed artifact when conversion warns/fails).
