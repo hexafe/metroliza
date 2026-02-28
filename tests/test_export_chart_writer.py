@@ -55,8 +55,8 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(
             specs,
             [
-                {'y': 10.5, 'color': '#D55E00', 'linestyle': '--', 'linewidth': 1.0},
-                {'y': 9.8, 'color': '#D55E00', 'linestyle': '--', 'linewidth': 1.0},
+                {'y': 10.5, 'color': '#9b1c1c', 'linestyle': '--', 'linewidth': 1.0},
+                {'y': 9.8, 'color': '#9b1c1c', 'linestyle': '--', 'linewidth': 1.0},
             ],
         )
 
