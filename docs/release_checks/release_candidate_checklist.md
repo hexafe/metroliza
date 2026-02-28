@@ -7,7 +7,7 @@ Use this as the single source of truth for RC readiness and sign-off.
 - [ ] `VersionDate.py` version/build/date values are updated for this RC.
 - [ ] `CHANGELOG.md` includes the user-facing notes for this RC.
 - [ ] `README.md` **Release highlights** section reflects the current RC/release line.
-- [ ] Version/build/date text is consistent across all three files.
+- [ ] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
 
 ## 2) Mandatory automated checks
 

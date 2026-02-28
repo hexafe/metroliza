@@ -41,6 +41,9 @@ A short, non-technical changelog for end users is available in [`CHANGELOG.md`](
 
 Current release highlight (`2026.02`, build `260228`): Google Sheets export messaging is clearer, `.xlsx` fallback is explicit, and chart-heavy exports remain faster for daily use.
 
+Canonical release metadata lives in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
+Use `python scripts/sync_release_metadata.py` to propagate updates into docs and `python scripts/sync_release_metadata.py --check` to validate consistency in CI.
+
 Release-candidate readiness is tracked in the canonical checklist:
 [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md).
 
