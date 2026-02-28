@@ -222,6 +222,7 @@ For very large databases, prefer narrow filter scopes before export to reduce Ex
 ## Roadmap status
 
 Detailed, canonical roadmap lives in `IMPLEMENTATION_PLAN.md`.
+For release-candidate documentation sync requirements, use the canonical checklist in `CONTRIBUTING.md` under **Documentation sync policy** (source of truth for required cross-file updates).
 
 Current high-level state:
 - Phase 0: ✅ Completed.

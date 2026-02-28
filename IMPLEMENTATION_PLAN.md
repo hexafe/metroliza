@@ -37,6 +37,14 @@ Completed PR-sequence summary for release-candidate signoff docs:
 - Synced performance-impact wording (chart-heavy export improvements for large reports) across release highlights and troubleshooting guidance.
 - Confirmed this release-candidate documentation PR is non-functional (docs/version metadata only).
 
+Doc sync done when (release-candidate docs):
+- [ ] `README.md`
+- [ ] `CHANGELOG.md`
+- [ ] `IMPLEMENTATION_PLAN.md`
+- [ ] `TODO.md`
+- [ ] `GOOGLE_SHEETS_MIGRATION_PLAN.md`
+- [ ] `VersionDate.py` (version/build text alignment)
+
 Carry-forward implementation work remains tracked only in `TODO.md`.
 
 ---
