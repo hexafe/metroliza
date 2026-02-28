@@ -34,7 +34,9 @@ pymupdf_stub = types.ModuleType('pymupdf')
 pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec('pymupdf', loader=None)
 sys.modules.setdefault('pymupdf', pymupdf_stub)
 
-from modules.CMMReportParser import CMMReportParser, SCHEMA_INDEX_STATEMENTS  # noqa: E402
+import modules.CMMReportParser as cmm_report_parser_module  # noqa: E402
+
+CMMReportParser = cmm_report_parser_module.CMMReportParser
 
 
 class TestSchemaIndexQueryPlans(unittest.TestCase):
@@ -120,7 +122,16 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                     for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'").fetchall()
                 }
 
-            expected_index_names = {statement.split()[5] for statement in SCHEMA_INDEX_STATEMENTS}
+            expected_index_names = {
+                'idx_reports_reference',
+                'idx_reports_filename',
+                'idx_reports_date',
+                'idx_reports_sample_number',
+                'idx_reports_identity',
+                'idx_measurements_report_id',
+                'idx_measurements_header',
+                'idx_measurements_ax',
+            }
             self.assertEqual(actual_index_names, expected_index_names)
 
     def test_query_plans_use_indexes_for_filter_and_grouping_patterns(self):
