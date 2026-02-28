@@ -6,5 +6,6 @@ Archived one-off documents moved during documentation policy cleanup:
 - `IMPLEMENTATION_PLAN.md` — prior implementation phase tracker.
 - `TODO.md` — stale task checklist superseded by current workflows.
 - `repo_cleanup_and_docs_plan.md` — one-time repository cleanup planning notes.
+- `README_legacy_full.md` — previous verbose root README content retained as historical reference.
 
 These files are retained for historical context and should not be treated as active guidance.
