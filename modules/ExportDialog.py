@@ -351,8 +351,15 @@ class ExportDialog(QDialog):
             self.preset_customized_badge.hide()
 
             self.export_target_label = QLabel("Google Sheets export:")
-            self.include_google_sheets_checkbox = QCheckBox("Include Google Sheets conversion")
+            self.include_google_sheets_checkbox = QCheckBox(
+                "Also create Google Sheets version (Excel file is always kept locally)"
+            )
             self.include_google_sheets_checkbox.setChecked(False)
+            self.google_sheets_note_label = QLabel(
+                "Note: A local .xlsx is always created. Google Sheets conversion is optional and may look slightly different from Excel."
+            )
+            self.google_sheets_note_label.setStyleSheet("color: #666;")
+            self.google_sheets_note_label.setWordWrap(True)
             self.export_target_label.setToolTip(
                 "Excel (.xlsx) is always generated.\n"
                 "Enable this option to also upload and convert the workbook to Google Sheets."
@@ -360,6 +367,10 @@ class ExportDialog(QDialog):
             self.include_google_sheets_checkbox.setToolTip(
                 "Excel (.xlsx) is always generated.\n"
                 "Enable this option to also upload and convert the workbook to Google Sheets."
+            )
+            self.google_sheets_note_label.setToolTip(
+                "Excel (.xlsx) is always generated locally.\n"
+                "Google Sheets conversion can have minor fidelity differences."
             )
 
             # Add dropdown list for chart type
@@ -503,20 +514,21 @@ class ExportDialog(QDialog):
 
             report_profile_layout.addWidget(self.export_target_label, 2, 0)
             report_profile_layout.addWidget(self.include_google_sheets_checkbox, 2, 1)
+            report_profile_layout.addWidget(self.google_sheets_note_label, 3, 1)
 
-            report_profile_layout.addWidget(self.export_type_label, 3, 0)
-            report_profile_layout.addWidget(self.export_type_combobox, 3, 1)
+            report_profile_layout.addWidget(self.export_type_label, 4, 0)
+            report_profile_layout.addWidget(self.export_type_combobox, 4, 1)
 
-            report_profile_layout.addWidget(self.sort_measurements_label, 4, 0)
-            report_profile_layout.addWidget(self.sort_measurements_combobox, 4, 1)
+            report_profile_layout.addWidget(self.sort_measurements_label, 5, 0)
+            report_profile_layout.addWidget(self.sort_measurements_combobox, 5, 1)
 
-            report_profile_layout.addWidget(self.violin_plot_min_samplesize_label, 5, 0)
-            report_profile_layout.addWidget(self.violin_plot_min_samplesize, 5, 1)
-            report_profile_layout.addWidget(self.violin_plot_min_samplesize_helper_label, 5, 2)
+            report_profile_layout.addWidget(self.violin_plot_min_samplesize_label, 6, 0)
+            report_profile_layout.addWidget(self.violin_plot_min_samplesize, 6, 1)
+            report_profile_layout.addWidget(self.violin_plot_min_samplesize_helper_label, 6, 2)
 
-            report_profile_layout.addWidget(self.summary_plot_scale_label, 6, 0)
-            report_profile_layout.addWidget(self.summary_plot_scale, 6, 1)
-            report_profile_layout.addWidget(self.summary_plot_scale_helper_label, 6, 2)
+            report_profile_layout.addWidget(self.summary_plot_scale_label, 7, 0)
+            report_profile_layout.addWidget(self.summary_plot_scale, 7, 1)
+            report_profile_layout.addWidget(self.summary_plot_scale_helper_label, 7, 2)
 
             advanced_options_layout = QVBoxLayout()
             advanced_options_layout.setContentsMargins(0, 0, 0, 0)
