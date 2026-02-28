@@ -130,6 +130,31 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         self.assertFalse(is_generate_summary_sheet_overridden(EXPORT_PRESET_FULL_REPORT, True))
         self.assertTrue(is_generate_summary_sheet_overridden(EXPORT_PRESET_FULL_REPORT, False))
 
+
+    def test_effective_summary_sheet_state_helper(self):
+        from modules.ExportDialog import is_summary_sheet_effectively_enabled
+
+        self.assertFalse(is_summary_sheet_effectively_enabled(
+            EXPORT_PRESET_FAST_DIAGNOSTICS,
+            generate_summary_sheet=True,
+            generate_summary_sheet_overridden=False,
+        ))
+        self.assertTrue(is_summary_sheet_effectively_enabled(
+            EXPORT_PRESET_FAST_DIAGNOSTICS,
+            generate_summary_sheet=True,
+            generate_summary_sheet_overridden=True,
+        ))
+        self.assertTrue(is_summary_sheet_effectively_enabled(
+            EXPORT_PRESET_FULL_REPORT,
+            generate_summary_sheet=False,
+            generate_summary_sheet_overridden=False,
+        ))
+        self.assertFalse(is_summary_sheet_effectively_enabled(
+            EXPORT_PRESET_FULL_REPORT,
+            generate_summary_sheet=False,
+            generate_summary_sheet_overridden=True,
+        ))
+
     def test_payload_uses_advanced_override_only_when_explicitly_changed(self):
         from modules.ExportDialog import build_export_options_payload
 
