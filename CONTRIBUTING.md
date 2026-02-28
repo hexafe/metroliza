@@ -77,4 +77,4 @@ When touching Google conversion/auth flows, validate and document:
 3. **Fallback behavior:** conversion degradation/failure messaging still reports the preserved `.xlsx` output path.
 4. **Testing strategy:** baseline automated tests remain passing; optional live smoke check stays release-gated/non-default.
 5. **Troubleshooting notes:** conversion warning guidance stays current in `README.md`.
-6. **PR evidence for release-gated changes:** when a change is release-gated (release candidate work or Google auth/conversion logic updates), add smoke outcome references in the PR description (command, pass/fail result, and log/link evidence).
+6. **PR evidence for Google export surface changes:** any PR touching `modules/google_drive_export.py`, `modules/export_backends.py`, `modules/ExportDataThread.py`, or Google export UI/contract paths (for example `modules/ExportDialog.py`, `modules/contracts.py`) must include Google conversion smoke-check evidence in the PR description using the standard evidence format; if evidence is omitted, include explicit justification.

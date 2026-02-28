@@ -27,7 +27,7 @@ Last audited: 2026-02-27.
   - [x] Documented optional/manual sandbox Drive smoke-check runbook and expected-result checklist.
 
 ## Open implementation items (canonical list)
-- [ ] Keep optional/manual sandbox Drive smoke checks release-gated, and record outcomes in release notes when Google auth/conversion behavior changes.
+- [ ] Maintain optional/manual sandbox Drive smoke checks as an ongoing release practice, and record outcomes in release notes using the standard evidence format (command run, date/time, environment/sandbox account, pass/fail, fallback `.xlsx` behavior observed, link/log location) whenever Google auth/conversion behavior changes.
 
 ## Carry-forward maintenance items only
 - [ ] Keep `README.md`, `CHANGELOG.md`, `IMPLEMENTATION_PLAN.md`, `TODO.md`, and `GOOGLE_SHEETS_MIGRATION_PLAN.md` synchronized after each release-candidate documentation PR.

@@ -125,16 +125,25 @@ The smoke check is designed to fail with actionable messages when prerequisites 
 
 For release-candidate validations and PRs that modify Google auth/conversion behavior:
 
+## Evidence to record (required for each smoke execution)
+
+- Command run (exact command text, including env vars).
+- Date/time (with timezone).
+- Environment/sandbox account (local/CI context + sandbox Google account/project identifier).
+- Pass/fail outcome.
+- Fallback `.xlsx` behavior observed (path/link and whether fallback remained accessible as expected).
+- Link/log location (CI job URL, artifact URI, or local log file path).
+
 - Record each run in `docs/release_checks/google_conversion_smoke.md`.
-- Include command, date, environment, credential source, pass/fail result, warnings, and links to logs/output.
+- Include the required evidence fields below for every smoke execution.
 - Keep entries in reverse chronological order (newest first).
 
 Use this template:
 
 ```md
 ## YYYY-MM-DD
-- Environment: <!-- local workstation / CI job name + branch/commit -->
-- Credentials source: <!-- e.g., local sandbox OAuth client + token refresh date -->
+- Date/time: <!-- YYYY-MM-DD HH:MM TZ -->
+- Environment/sandbox account: <!-- local workstation or CI job + branch/commit + sandbox account/project -->
 - Command:
   ```bash
   METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
@@ -142,9 +151,9 @@ Use this template:
   METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
   PYTHONPATH=. python tests/google_conversion_smoke.py
   ```
-- Result: <!-- PASS / FAIL -->
-- Warnings: <!-- warnings=() or exact warning tuple/message -->
-- Logs/evidence: <!-- CI URL or local log capture path -->
+- Pass/fail: <!-- PASS / FAIL -->
+- Fallback `.xlsx` behavior observed: <!-- preserved output path/link + observed behavior -->
+- Link/log location: <!-- CI URL, artifact URI, or local log capture path -->
 - Notes/remediation: <!-- optional -->
 ```
 
