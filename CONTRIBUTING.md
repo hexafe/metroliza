@@ -6,8 +6,14 @@
 python -m venv .venv
 source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
+
+Dependency files are split by purpose:
+
+- `requirements.txt` for runtime.
+- `requirements-dev.txt` for local development/tests.
+- `requirements-build.txt` for packaging executables.
 
 ## Baseline checks
 
