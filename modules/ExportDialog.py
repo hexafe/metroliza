@@ -560,7 +560,9 @@ class ExportDialog(QDialog):
             self.loading_dialog = QDialog(self, Qt.WindowType.WindowTitleHint)
             self.loading_dialog.setWindowTitle("Exporting data...")
             self.loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-            self.loading_dialog.setFixedSize(400, 300)
+            # Keep enough vertical space for multi-line progress text (including ETA updates)
+            # so all lines remain visible during long-running exports.
+            self.loading_dialog.setFixedSize(400, 330)
 
             # Create a QLabel to display the loading GIF
             loading_gif_label = QLabel(self.loading_dialog)
