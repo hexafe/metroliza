@@ -1,14 +1,14 @@
 # Metroliza Unified Implementation Plan
 
-This is the single, execution-ready plan that combines all previously discussed work into one prioritized roadmap.
+This is a historical implementation plan preserved for archive/reference purposes.
+
+> **Historical context note:** This document is archived context. For active freeze/open-testing/release status, use [`docs/release_checks/release_status.md`](../../release_checks/release_status.md) first.
 
 ## Current implementation status (repo audit)
 
-> **Source of truth note:** Release readiness is finalized in this file under **Current implementation status (repo audit)**. Open implementation items are tracked only in `TODO.md` and referenced from companion plans.
-
 Last audited: 2026-02-27.
 
-Canonical phase-state labels used throughout this plan:
+Phase-state labels used throughout this archived plan:
 - **Completed**
 - **Partial**
 - **Open**
@@ -21,7 +21,7 @@ Audit result based on the current repository state:
 - **Phase 3:** Completed.
 - **Phase 4:** Completed.
 
-Use this section as the source of truth for what is done vs still outstanding.
+This section captures the historical snapshot of what was done vs outstanding at the time.
 
 ## Next implementation plan (proposed PR sequence)
 
@@ -259,15 +259,15 @@ Completion summary:
 - **Completed:** GS0-GS5 implementation is merged (target plumbing, Drive conversion flow, auth/ops handling, post-conversion validation, `.xlsx` fallback reporting, and expanded GS5 testing-depth coverage).
 - **Open:** maintain optional release-gated live smoke checks as an operational release-readiness practice.
 
-> **Canonical source note:** The detailed Google Sheets migration phases, acceptance criteria, and status language are maintained in `GOOGLE_SHEETS_MIGRATION_PLAN.md`. This section is a concise companion summary only.
+> **Historical cross-reference:** Google Sheets migration detail is archived in `GOOGLE_SHEETS_MIGRATION_PLAN.md`. This section remains a concise companion summary.
 
 ### Companion summary
 - Google Sheets support follows a Drive conversion strategy: generate the standard `.xlsx`, upload to Drive, convert to Google Sheets, and return the resulting link while preserving/reporting the `.xlsx` fallback.
 - **Phase GS5 — Testing strategy ✅ Completed.**
 - GS0-GS5 implementation work is merged (target plumbing, upload/convert flow, auth/ops handling, post-conversion validation/fallback messaging, and GS5 testing-depth completion).
-- GS5 testing-depth scope is complete in automation; keep optional/manual release-gated conversion smoke checks documented while preserving single-sourced wording and acceptance criteria in the canonical migration plan.
+- GS5 testing-depth scope is complete in automation; keep optional/manual release-gated conversion smoke checks documented while preserving historical wording and acceptance criteria in the archived migration plan.
 
-### Canonical reference
+### Historical reference
 - See `GOOGLE_SHEETS_MIGRATION_PLAN.md` for:
   - GS0-GS5 scope and sequence,
   - unified acceptance criteria wording,
@@ -345,11 +345,11 @@ Recent completion updates:
 ## Remaining execution order (updated)
 1. Keep **Phase 0-4 (completed)** regression coverage green as maintenance work lands.
 2. Track and execute open implementation work from `TODO.md` only (do not duplicate status here).
-3. Maintain companion-document summaries (`GOOGLE_SHEETS_MIGRATION_PLAN.md`) as references to the canonical open-item list in `TODO.md`.
+3. Maintain companion-document summaries (`GOOGLE_SHEETS_MIGRATION_PLAN.md`) as references to the archived open-item list in `TODO.md`.
 
 ## Optimization backlog (exporting/parsing focus)
 
-> Reference ideas only (non-canonical). Do not treat this backlog as open implementation status; canonical open items live in `TODO.md`.
+> Reference ideas only (non-canonical). Do not treat this backlog as open implementation status; historical open items were tracked in `TODO.md`.
 
 - **Export path**
   - Profile chart-heavy exports and batch chart/worksheet operations where possible.
