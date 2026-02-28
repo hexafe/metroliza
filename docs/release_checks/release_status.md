@@ -3,9 +3,12 @@
 This is the active operational status for release freeze, open testing, and final release readiness.
 Use this page first for current state, and use archived plans only for historical context.
 
-Last updated: 2026-02-28.
+Status timestamp is tracked in git history for this file.
 
-## Current release window (`2026.02` / build `260228`)
+## Current release window (metadata-driven)
+
+Release/window metadata is defined in `VersionDate.py` and synchronized into user-facing docs with `python scripts/sync_release_metadata.py` (or validated with `--check`).
+
 
 | Track | Status | Notes | Primary doc |
 |---|---|---|---|

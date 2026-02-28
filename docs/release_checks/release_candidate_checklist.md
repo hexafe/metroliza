@@ -22,7 +22,7 @@ Complete before announcing code freeze or cutting an RC branch.
 Complete before beginning open testing on an RC build.
 
 - [ ] Feature freeze timestamp is recorded in release tracker and announcement thread. *(Owner: Release manager)*
-- [ ] Active RC branch name is confirmed and documented (for example `release/1.8.0-rc1`). *(Owner: Release engineer)*
+- [ ] Active RC branch name is confirmed and documented (for example `release/2026.03-rc1`). *(Owner: Release engineer)*
 - [ ] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
 - [ ] Mandatory smoke baseline is completed and linked to evidence before open testing starts. *(Owner: QA)*
 - [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
@@ -35,18 +35,18 @@ Create the RC branch from the approved base commit (typically `main`):
 ```bash
 git checkout main
 git pull --ff-only origin main
-git checkout -b release/1.8.0-rc1
-git push -u origin release/1.8.0-rc1
+git checkout -b release/2026.03-rc1
+git push -u origin release/2026.03-rc1
 ```
 
 Alternative (single command if local main is already up to date):
 
 ```bash
-git checkout -b release/1.8.0-rc1 origin/main
-git push -u origin release/1.8.0-rc1
+git checkout -b release/2026.03-rc1 origin/main
+git push -u origin release/2026.03-rc1
 ```
 
-- [ ] RC branch follows naming convention (for example `release/1.8.0-rc1`).
+- [ ] RC branch follows naming convention (for example `release/2026.03-rc1`).
 - [ ] Branch creation commit SHA and timestamp are recorded in release notes/tracker.
 
 ## 4) Required test suites and sign-off owners
@@ -134,7 +134,7 @@ Only promote RC when all gates are green and approvals are complete.
 - [ ] No unresolved `must-fix` defects remain.
 - [ ] Release owner + QA sign-off recorded.
 - [ ] RC branch merged to `main` with approved strategy.
-- [ ] Release tag created from the merge commit (example: `v<version>`).
+- [ ] Release tag created from the merge commit (example: `vYYYY.MM` (for example `v2026.03`)).
 - [ ] Tag is pushed and visible on remote.
 
 Suggested commands:
@@ -142,8 +142,8 @@ Suggested commands:
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag -a v<version> <merge-commit-sha> -m "Release v<version>"
-git push origin v<version>
+git tag -a v2026.03 <merge-commit-sha> -m "Release v2026.03"
+git push origin v2026.03
 ```
 
 ## 8) Rollback plan and communication checklist
