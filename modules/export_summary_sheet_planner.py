@@ -1,5 +1,7 @@
 """Pure planning helpers for summary-sheet worksheet/chart rendering."""
 
+from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
+
 
 def build_summary_sheet_position_plan(base_col):
     """Return summary sheet anchors aligned with the 3-column measurement block layout."""
@@ -34,21 +36,21 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
             'x': average,
             'y': y_max * 0.95,
             'text': f'μ={average:.3f}',
-            'color': '#9b1c1c',
+            'color': SUMMARY_PLOT_PALETTE['central_tendency'],
             'ha': 'left',
         },
         {
             'x': usl,
             'y': y_max * 0.9,
             'text': f'USL={usl:.3f}',
-            'color': '#1f7a4d',
+            'color': SUMMARY_PLOT_PALETTE['spec_limit'],
             'ha': 'right',
         },
         {
             'x': lsl,
             'y': y_max * 0.85,
             'text': f'LSL={lsl:.3f}',
-            'color': '#1f7a4d',
+            'color': SUMMARY_PLOT_PALETTE['spec_limit'],
             'ha': 'left',
         },
     ]

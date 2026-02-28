@@ -59,6 +59,7 @@ from modules.export_grouping_utils import (
     prepare_grouping_dataframe as _prepare_grouping_dataframe,
     resolve_group_merge_keys as _resolve_group_merge_keys,
 )
+from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
 from modules.export_sheet_writer import (
     build_measurement_block_plan as _build_measurement_block_plan,
     build_measurement_header_block_plan as _build_measurement_header_block_plan,
@@ -275,26 +276,31 @@ def apply_summary_plot_theme():
         'font.size': 8,
         'axes.labelsize': 8,
         'axes.titlesize': 10,
-        'axes.edgecolor': '#9aa0a6',
-        'axes.linewidth': 0.8,
-        'grid.color': '#d5d7db',
+        'axes.edgecolor': SUMMARY_PLOT_PALETTE['axis_spine'],
+        'axes.linewidth': 0.9,
+        'axes.labelcolor': SUMMARY_PLOT_PALETTE['axis_text'],
+        'axes.titlecolor': SUMMARY_PLOT_PALETTE['annotation_text'],
+        'xtick.color': SUMMARY_PLOT_PALETTE['axis_text'],
+        'ytick.color': SUMMARY_PLOT_PALETTE['axis_text'],
+        'grid.color': SUMMARY_PLOT_PALETTE['grid'],
         'grid.linewidth': 0.6,
-        'grid.alpha': 0.35,
+        'grid.alpha': 0.55,
     })
 
 
 def apply_minimal_axis_style(ax, grid_axis='y'):
     """Apply a clean, minimal visual style on a chart axis."""
     ax.set_facecolor('white')
-    ax.grid(True, axis=grid_axis, linestyle='-', alpha=0.25)
+    ax.grid(True, axis=grid_axis, linestyle='-', color=SUMMARY_PLOT_PALETTE['grid'], alpha=0.55)
     if grid_axis == 'y':
         ax.grid(False, axis='x')
     elif grid_axis == 'x':
         ax.grid(False, axis='y')
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_color('#c2c6cc')
-    ax.spines['bottom'].set_color('#c2c6cc')
+    ax.spines['left'].set_color(SUMMARY_PLOT_PALETTE['axis_spine'])
+    ax.spines['bottom'].set_color(SUMMARY_PLOT_PALETTE['axis_spine'])
+    ax.tick_params(axis='both', colors=SUMMARY_PLOT_PALETTE['axis_text'])
 
 
 def build_violin_group_stats_rows(labels, values):
@@ -408,10 +414,10 @@ def annotate_violin_group_stats(ax, labels, values):
         min_val = float(np.min(arr))
         max_val = float(np.max(arr))
 
-        text_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#d0d0d0', 'alpha': 0.9}
+        text_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
 
         if style['show_minmax']:
-            ax.scatter([xpos], [min_val], color='#4f4f4f', s=style['minmax_marker_size'], marker='v', zorder=4)
+            ax.scatter([xpos], [min_val], color=SUMMARY_PLOT_PALETTE['annotation_text'], s=style['minmax_marker_size'], marker='v', zorder=4)
             ax.annotate(
                 f"min={min_val:.3f}",
                 (xpos, min_val),
@@ -421,7 +427,7 @@ def annotate_violin_group_stats(ax, labels, values):
                 bbox=text_box,
             )
 
-        ax.scatter([xpos], [mean_val], color='#111111', s=style['mean_marker_size'], marker='o', zorder=4)
+        ax.scatter([xpos], [mean_val], color=SUMMARY_PLOT_PALETTE['central_tendency'], s=style['mean_marker_size'], marker='o', zorder=4)
         ax.annotate(
             f"μ={mean_val:.3f}",
             (xpos, mean_val),
@@ -432,7 +438,7 @@ def annotate_violin_group_stats(ax, labels, values):
         )
 
         if style['show_minmax']:
-            ax.scatter([xpos], [max_val], color='#4f4f4f', s=style['minmax_marker_size'], marker='^', zorder=4)
+            ax.scatter([xpos], [max_val], color=SUMMARY_PLOT_PALETTE['annotation_text'], s=style['minmax_marker_size'], marker='^', zorder=4)
             ax.annotate(
                 f"max={max_val:.3f}",
                 (xpos, max_val),
@@ -449,7 +455,7 @@ def annotate_violin_group_stats(ax, labels, values):
                 xpos,
                 sigma_low,
                 sigma_high,
-                colors='#7a7a7a',
+                colors=SUMMARY_PLOT_PALETTE['sigma_band'],
                 linestyles=':',
                 linewidth=style['sigma_line_width'],
                 alpha=0.8,
@@ -461,7 +467,7 @@ def annotate_violin_group_stats(ax, labels, values):
                 textcoords='offset points',
                 xytext=style['offsets']['sigma_low'],
                 fontsize=style['font_size'],
-                color='#5a5a5a',
+                color=SUMMARY_PLOT_PALETTE['annotation_text'],
                 bbox=text_box,
             )
             ax.annotate(
@@ -470,14 +476,14 @@ def annotate_violin_group_stats(ax, labels, values):
                 textcoords='offset points',
                 xytext=style['offsets']['sigma_high'],
                 fontsize=style['font_size'],
-                color='#5a5a5a',
+                color=SUMMARY_PLOT_PALETTE['annotation_text'],
                 bbox=text_box,
             )
 
 
 def render_violin(ax, values, labels):
     if _HAS_SEABORN:
-        sns.violinplot(data=values, inner=None, cut=0, linewidth=0.9, color='#b9d7ea', ax=ax)
+        sns.violinplot(data=values, inner=None, cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
         ax.set_xticks(range(len(labels)))
     else:
         ax.violinplot(values, showmeans=False, showmedians=False, showextrema=False)
@@ -488,16 +494,16 @@ def render_violin(ax, values, labels):
 
 def render_scatter(ax, data=None, x=None, y=None):
     if _HAS_SEABORN:
-        sns.scatterplot(data=data, x=x, y=y, ax=ax, s=18, color='#2f6f9f', legend=False)
+        sns.scatterplot(data=data, x=x, y=y, ax=ax, s=18, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], legend=False)
     else:
-        ax.scatter(data[x], data[y], color='#2f6f9f', marker='.', s=18)
+        ax.scatter(data[x], data[y], color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
 def render_histogram(ax, header_group):
     if _HAS_SEABORN:
-        sns.histplot(data=header_group, x='MEAS', bins='auto', stat='density', alpha=0.7, color='#90b7d4', edgecolor='white', ax=ax)
+        sns.histplot(data=header_group, x='MEAS', bins='auto', stat='density', alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white', ax=ax)
     else:
-        ax.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color='#90b7d4', edgecolor='white')
+        ax.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white')
 
 
 def render_iqr_boxplot(ax, values, labels):
@@ -509,11 +515,11 @@ def render_iqr_boxplot(ax, values, labels):
     boxplot_kwargs = {
         'whis': 1.5,
         'patch_artist': True,
-        'boxprops': {'facecolor': '#d9e9f5', 'edgecolor': '#4f6f8f', 'linewidth': 0.9},
-        'medianprops': {'color': '#1f1f1f', 'linewidth': 1.0},
-        'whiskerprops': {'color': '#4f6f8f', 'linewidth': 0.9},
-        'capprops': {'color': '#4f6f8f', 'linewidth': 0.9},
-        'flierprops': {'marker': 'o', 'markersize': 3, 'markerfacecolor': '#b23a48', 'markeredgecolor': '#b23a48', 'alpha': 0.8},
+        'boxprops': {'facecolor': SUMMARY_PLOT_PALETTE['distribution_base'], 'edgecolor': SUMMARY_PLOT_PALETTE['distribution_foreground'], 'linewidth': 0.9, 'alpha': 0.45},
+        'medianprops': {'color': SUMMARY_PLOT_PALETTE['central_tendency'], 'linewidth': 1.1},
+        'whiskerprops': {'color': SUMMARY_PLOT_PALETTE['distribution_foreground'], 'linewidth': 0.9},
+        'capprops': {'color': SUMMARY_PLOT_PALETTE['distribution_foreground'], 'linewidth': 0.9},
+        'flierprops': {'marker': 'o', 'markersize': 3, 'markerfacecolor': SUMMARY_PLOT_PALETTE['outlier'], 'markeredgecolor': SUMMARY_PLOT_PALETTE['outlier'], 'alpha': 0.9},
     }
     label_values = [str(label) for label in labels]
     try:
@@ -526,9 +532,33 @@ def render_iqr_boxplot(ax, values, labels):
 
 def render_density_line(ax, x, p):
     if _HAS_SEABORN:
-        sns.lineplot(x=x, y=p, color='#1f1f1f', linewidth=1.4, ax=ax)
+        sns.lineplot(x=x, y=p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4, ax=ax)
     else:
-        ax.plot(x, p, color='#1f1f1f', linewidth=1.4)
+        ax.plot(x, p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4)
+
+
+def style_histogram_stats_table(ax_table, table_data):
+    """Apply semantic emphasis colors to the histogram summary table."""
+    if ax_table is None:
+        return
+
+    header_cells = [(0, 0), (0, 1)]
+    for cell_key in header_cells:
+        cell = ax_table.get_celld().get(cell_key)
+        if cell is None:
+            continue
+        cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_header_bg'])
+        cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_header_text'])
+
+    for row_index, (label, _value) in enumerate(table_data, start=1):
+        if label not in EMPHASIS_TABLE_ROWS:
+            continue
+        for col_index in (0, 1):
+            cell = ax_table.get_celld().get((row_index, col_index))
+            if cell is None:
+                continue
+            cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_emphasis_bg'])
+            cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_emphasis_text'])
 
 
 class ExportDataThread(QThread):
@@ -1262,15 +1292,16 @@ class ExportDataThread(QThread):
             # Format the table
             ax_table.auto_set_font_size(False)
             ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
+            style_histogram_stats_table(ax_table, table_data)
 
             density_curve = build_histogram_density_curve_payload(header_group['MEAS'])
             if density_curve is not None:
                 render_density_line(ax, density_curve['x'], density_curve['y'])
             
             # Add vertical lines for mean, LSL and USL
-            ax.axvline(average, color='#9b1c1c', linestyle='dashed', linewidth=1.0)
-            ax.axvline(USL, color='#1f7a4d', linestyle='dashed', linewidth=1.0)
-            ax.axvline(LSL, color='#1f7a4d', linestyle='dashed', linewidth=1.0)
+            ax.axvline(average, color=SUMMARY_PLOT_PALETTE['central_tendency'], linestyle='dashed', linewidth=1.0)
+            ax.axvline(USL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
+            ax.axvline(LSL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
 
             # Set labels and title
             ax.set_xlabel('Measurement')
@@ -1279,7 +1310,7 @@ class ExportDataThread(QThread):
             apply_minimal_axis_style(ax, grid_axis='y')
 
             _, y_max = ax.get_ylim()
-            annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#d0d0d0', 'alpha': 0.9}
+            annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
             for annotation in build_histogram_annotation_specs(average, USL, LSL, y_max):
                 ax.text(
                     annotation['x'],
@@ -1319,7 +1350,7 @@ class ExportDataThread(QThread):
             if _HAS_SEABORN:
                 sns.scatterplot(x=data_x, y=data_y, ax=ax, s=20, legend=False)
             else:
-                ax.scatter(data_x, data_y, color='blue', marker='.')
+                ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.')
 
             for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                 ax.axhline(**line_spec)

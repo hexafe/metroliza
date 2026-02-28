@@ -1,5 +1,7 @@
 from xlsxwriter.utility import xl_range
 
+from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
+
 
 def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
     """Build an absolute worksheet range string for xlsxwriter series definitions."""
@@ -48,7 +50,7 @@ def _build_limit_trendline_spec(*, point_count):
     """Return a linear trendline config that spans the full measurement domain."""
     return {
         'type': 'linear',
-        'line': {'color': 'red', 'width': 1},
+        'line': {'color': SUMMARY_PLOT_PALETTE['spec_limit'], 'width': 1},
         # USL/LSL series are anchored with two helper points. Extend the linear
         # trendline to cover the remaining measurement x-domain.
         'forward': max(point_count - 2, 0),
@@ -131,16 +133,17 @@ def build_measurement_chart_format_policy(header):
 
 
 
-def build_horizontal_limit_line_specs(usl, lsl, *, color='#9b1c1c', linestyle='--', linewidth=1.0):
+def build_horizontal_limit_line_specs(usl, lsl, *, color=None, linestyle='--', linewidth=1.0):
     """Return deterministic axis-line specs for upper/lower specification limits.
 
     Input contract:
     - ``usl`` and ``lsl`` are numeric y-values for the two horizontal limits.
     - style kwargs are scalar values applied to both lines.
     """
+    line_color = color or SUMMARY_PLOT_PALETTE['spec_limit']
     return [
-        {'y': usl, 'color': color, 'linestyle': linestyle, 'linewidth': linewidth},
-        {'y': lsl, 'color': color, 'linestyle': linestyle, 'linewidth': linewidth},
+        {'y': usl, 'color': line_color, 'linestyle': linestyle, 'linewidth': linewidth},
+        {'y': lsl, 'color': line_color, 'linestyle': linestyle, 'linewidth': linewidth},
     ]
 
 def insert_measurement_chart(
