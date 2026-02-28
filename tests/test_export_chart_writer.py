@@ -76,15 +76,22 @@ class TestExportChartWriter(unittest.TestCase):
         )
         self.assertEqual(len(specs), 3)
         self.assertEqual(specs[1]['name'], 'USL')
-        self.assertEqual(specs[1]['categories'], '=Ref!$B22:B31')
-        self.assertEqual(specs[1]['line'], {'none': True})
+        self.assertEqual(specs[1]['categories'], '=Ref!$B1:B2')
+        self.assertNotIn('line', specs[1])
         self.assertEqual(specs[1]['trendline']['type'], 'linear')
+        self.assertEqual(specs[1]['trendline']['line']['color'], '#9b1c1c')
+        self.assertEqual(specs[1]['trendline']['line']['width'], 1)
+        self.assertEqual(specs[1]['trendline']['line']['transparency'], 40)
         self.assertEqual(specs[1]['trendline']['forward'], 8)
         self.assertEqual(specs[2]['name'], 'LSL')
-        self.assertEqual(specs[2]['categories'], '=Ref!$B22:B31')
-        self.assertEqual(specs[2]['line'], {'none': True})
+        self.assertEqual(specs[2]['categories'], '=Ref!$B3:B4')
+        self.assertNotIn('line', specs[2])
         self.assertEqual(specs[2]['trendline']['type'], 'linear')
+        self.assertEqual(specs[2]['trendline']['line']['color'], '#9b1c1c')
+        self.assertEqual(specs[2]['trendline']['line']['width'], 1)
+        self.assertEqual(specs[2]['trendline']['line']['transparency'], 40)
         self.assertEqual(specs[2]['trendline']['forward'], 8)
+        self.assertEqual(specs[1]['trendline'], specs[2]['trendline'])
 
     def test_insert_measurement_chart_wires_series_and_anchor(self):
         workbook = DummyWorkbook()
@@ -130,8 +137,8 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(from_plan, direct)
         self.assertEqual(from_plan[0]['categories'], '=Ref!$B22:B31')
         self.assertEqual(from_plan[0]['values'], '=Ref!$C22:C31')
-        self.assertEqual(from_plan[1]['categories'], '=Ref!$B22:B31')
-        self.assertEqual(from_plan[2]['categories'], '=Ref!$B22:B31')
+        self.assertEqual(from_plan[1]['categories'], '=Ref!$B1:B2')
+        self.assertEqual(from_plan[2]['categories'], '=Ref!$B3:B4')
 
     def test_cached_series_specs_match_uncached_output(self):
         args = {
@@ -160,6 +167,21 @@ class TestExportChartWriter(unittest.TestCase):
             cache=cache,
         )
         self.assertEqual(range_specs['data_x'], '=Ref!$B22:B31')
+
+    def test_range_specs_use_two_point_limit_anchors(self):
+        range_specs = build_measurement_chart_range_specs(
+            sheet_name='Ref',
+            first_data_row=21,
+            last_data_row=30,
+            x_column=1,
+            y_column=2,
+        )
+
+        self.assertEqual(range_specs['usl_x'], '=Ref!$B1:B2')
+        self.assertEqual(range_specs['usl_y'], '=Ref!$C1:C2')
+        self.assertEqual(range_specs['lsl_x'], '=Ref!$B3:B4')
+        self.assertEqual(range_specs['lsl_y'], '=Ref!$C3:C4')
+        self.assertNotIn('limit_x', range_specs)
 
     def test_debug_timing_cached_range_builder_path_runs(self):
         iterations = 1500

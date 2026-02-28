@@ -24,12 +24,12 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
     range_specs = {
         'data_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
         'data_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column),
+        # Limit helper points are stored in fixed two-row blocks (USL: 0-1, LSL: 2-3),
+        # each containing the first/last sample domain anchors in x and matching y.
+        'usl_x': build_sheet_series_range(sheet_name, 0, 1, x_column),
         'usl_y': build_sheet_series_range(sheet_name, 0, 1, y_column),
+        'lsl_x': build_sheet_series_range(sheet_name, 2, 3, x_column),
         'lsl_y': build_sheet_series_range(sheet_name, 2, 3, y_column),
-        # Anchor the horizontal USL/LSL lines to the first and last x-value so the
-        # rendered segment spans the full trend domain in both native Excel and
-        # Google Sheets Drive-converted workbooks.
-        'limit_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
     }
     if cache is not None:
         range_cache[cache_key] = range_specs
@@ -39,7 +39,6 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
 def _build_limit_series_template(*, limit_name):
     return {
         'name': limit_name,
-        'line': {'none': True},
         'marker': {'type': 'none'},
         'data_labels': {'value': False},
         'show_legend_key': False,
@@ -50,7 +49,12 @@ def _build_limit_trendline_spec(*, point_count):
     """Return a linear trendline config that spans the full measurement domain."""
     return {
         'type': 'linear',
-        'line': {'color': SUMMARY_PLOT_PALETTE['spec_limit'], 'width': 1},
+        'line': {
+            'color': SUMMARY_PLOT_PALETTE['spec_limit'],
+            'width': 1,
+            # xlsxwriter expresses alpha as transparency; 60% opacity == 40% transparency.
+            'transparency': 40,
+        },
         # USL/LSL series are anchored with two helper points. Extend the linear
         # trendline to cover the remaining measurement x-domain.
         'forward': max(point_count - 2, 0),
@@ -96,13 +100,13 @@ def build_measurement_chart_series_specs(
         },
         {
             **usl_template,
-            'categories': range_specs['limit_x'],
+            'categories': range_specs['usl_x'],
             'values': range_specs['usl_y'],
             'trendline': trendline_spec,
         },
         {
             **lsl_template,
-            'categories': range_specs['limit_x'],
+            'categories': range_specs['lsl_x'],
             'values': range_specs['lsl_y'],
             'trendline': trendline_spec,
         },
