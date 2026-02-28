@@ -214,6 +214,59 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
     return _build_histogram_annotation_specs(average, usl, lsl, y_max)
 
 
+def compute_histogram_font_sizes(
+    figure_size=(6, 4),
+    *,
+    has_table=True,
+    readability_scale=None,
+):
+    """Compute histogram annotation/table font sizes for summary-sheet embedding."""
+    fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 6
+    fig_width = max(float(fig_width), 1.0)
+    width_scale = min(1.25, max(0.8, fig_width / 6.0))
+
+    optional_readability = 0.0 if readability_scale is None else float(readability_scale)
+    readability_bonus = optional_readability * 0.18
+
+    annotation_fontsize = 8.2 * width_scale
+    table_fontsize = 9.2 * width_scale
+    if has_table:
+        annotation_fontsize -= 0.2
+    annotation_fontsize += readability_bonus
+    table_fontsize += readability_bonus
+
+    return {
+        'annotation_fontsize': min(10.5, max(7.0, annotation_fontsize)),
+        'table_fontsize': min(11.5, max(8.0, table_fontsize)),
+    }
+
+
+def compute_histogram_table_layout(
+    figure_size=(6, 4),
+    *,
+    table_fontsize=8.0,
+    has_table=True,
+):
+    """Compute table bbox width and subplot right margin for histogram layouts."""
+    fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 6
+    fig_width = max(float(fig_width), 1.0)
+    width_scale = min(1.25, max(0.8, fig_width / 6.0))
+    oversized_font = max(0.0, float(table_fontsize) - 8.0)
+
+    table_bbox_width = 0.30 + (0.015 * oversized_font) - (0.01 * (width_scale - 1.0))
+    table_bbox_width = min(0.36, max(0.28, table_bbox_width))
+
+    right_margin = 0.75 + (0.02 * (width_scale - 1.0)) - (0.015 * oversized_font)
+    if has_table:
+        right_margin -= 0.005
+    right_margin = min(0.78, max(0.68, right_margin))
+
+    return {
+        'table_bbox_width': table_bbox_width,
+        'subplot_right': right_margin,
+    }
+
+
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
     if _HAS_SEABORN:
@@ -1180,21 +1233,35 @@ class ExportDataThread(QThread):
             
             imgplot = BytesIO()
             # Plot the histogram with auto-defined bins
-            fig, ax = plt.subplots(figsize=(6, 4))
+            histogram_figsize = (6, 4)
+            fig, ax = plt.subplots(figsize=histogram_figsize)
             render_histogram(ax, header_group)
+
+            histogram_font_sizes = compute_histogram_font_sizes(
+                histogram_figsize,
+                has_table=True,
+                readability_scale=self.summary_plot_scale,
+            )
+            histogram_table_layout = compute_histogram_table_layout(
+                histogram_figsize,
+                table_fontsize=histogram_font_sizes['table_fontsize'],
+                has_table=True,
+            )
             
             # Add a table with statistics
             table_data = build_histogram_table_data(summary_stats)
 
-            ax_table = plt.table(cellText=table_data,
-                            colLabels=['Statistic', 'Value'],
-                            cellLoc='center',
-                            loc='right',
-                            bbox=[1, 0, 0.3, 1])
+            ax_table = plt.table(
+                cellText=table_data,
+                colLabels=['Statistic', 'Value'],
+                cellLoc='center',
+                loc='right',
+                bbox=[1, 0, histogram_table_layout['table_bbox_width'], 1],
+            )
 
             # Format the table
             ax_table.auto_set_font_size(False)
-            ax_table.set_fontsize(8)
+            ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
 
             density_curve = build_histogram_density_curve_payload(header_group['MEAS'])
             if density_curve is not None:
@@ -1221,11 +1288,11 @@ class ExportDataThread(QThread):
                     color=annotation['color'],
                     ha=annotation['ha'],
                     va='top',
-                    fontsize=7,
+                    fontsize=histogram_font_sizes['annotation_fontsize'],
                     bbox=annotation_box,
                 )
 
-            plt.subplots_adjust(right=0.75)
+            plt.subplots_adjust(right=histogram_table_layout['subplot_right'])
             
             fig.savefig(imgplot, format="png")
             imgplot.seek(0)
