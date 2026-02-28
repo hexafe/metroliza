@@ -18,7 +18,6 @@ from PyQt6.QtGui import QMovie
 from PyQt6.QtWidgets import(
     QDialog,
     QFileDialog,
-    QGroupBox,
     QGridLayout,
     QLabel,
     QLineEdit,
@@ -461,8 +460,23 @@ class ExportDialog(QDialog):
             self.layout = QVBoxLayout()
             self.layout.setSpacing(10)
 
-            source_target_group = QGroupBox("Source / target files")
-            source_target_layout = QGridLayout(source_target_group)
+            def build_section_widget(title, content_layout):
+                section_widget = QWidget()
+                section_layout = QVBoxLayout(section_widget)
+                section_layout.setContentsMargins(0, 0, 0, 0)
+                section_layout.setSpacing(4)
+
+                section_title = QLabel(title)
+                section_title.setStyleSheet("font-weight: bold;")
+                section_layout.addWidget(section_title)
+
+                content_widget = QWidget()
+                content_widget.setLayout(content_layout)
+                section_layout.addWidget(content_widget)
+                return section_widget
+
+            source_target_layout = QGridLayout()
+            source_target_layout.setContentsMargins(0, 0, 0, 0)
             source_target_layout.addWidget(self.select_db_label, 0, 0)
             source_target_layout.addWidget(self.database_text_label, 1, 0)
             source_target_layout.addWidget(self.select_db_button, 2, 0)
@@ -470,15 +484,15 @@ class ExportDialog(QDialog):
             source_target_layout.addWidget(self.excel_file_text_label, 4, 0)
             source_target_layout.addWidget(self.select_excel_button, 5, 0)
 
-            data_scope_group = QGroupBox("Data scope")
-            data_scope_layout = QGridLayout(data_scope_group)
+            data_scope_layout = QGridLayout()
+            data_scope_layout.setContentsMargins(0, 0, 0, 0)
             data_scope_layout.addWidget(self.select_filter_label, 0, 0)
             data_scope_layout.addWidget(self.filter_button, 1, 0)
             data_scope_layout.addWidget(self.select_group_label, 2, 0)
             data_scope_layout.addWidget(self.group_button, 3, 0)
 
-            report_profile_group = QGroupBox("Report profile")
-            report_profile_layout = QGridLayout(report_profile_group)
+            report_profile_layout = QGridLayout()
+            report_profile_layout.setContentsMargins(0, 0, 0, 0)
             report_profile_layout.addWidget(self.preset_label, 0, 0)
             preset_selector_layout = QHBoxLayout()
             preset_selector_layout.setContentsMargins(0, 0, 0, 0)
@@ -504,21 +518,21 @@ class ExportDialog(QDialog):
             report_profile_layout.addWidget(self.summary_plot_scale, 6, 1)
             report_profile_layout.addWidget(self.summary_plot_scale_helper_label, 6, 2)
 
-            advanced_options_group = QGroupBox("Advanced options")
-            advanced_options_layout = QVBoxLayout(advanced_options_group)
+            advanced_options_layout = QVBoxLayout()
+            advanced_options_layout.setContentsMargins(0, 0, 0, 0)
             advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
             advanced_options_layout.addWidget(self.advanced_options_toggle)
             advanced_options_layout.addWidget(self.advanced_options_container)
 
-            action_group = QGroupBox("Primary action")
-            action_layout = QVBoxLayout(action_group)
+            action_layout = QVBoxLayout()
+            action_layout.setContentsMargins(0, 0, 0, 0)
             action_layout.addWidget(self.export_button)
 
-            self.layout.addWidget(source_target_group)
-            self.layout.addWidget(data_scope_group)
-            self.layout.addWidget(report_profile_group)
-            self.layout.addWidget(advanced_options_group)
-            self.layout.addWidget(action_group)
+            self.layout.addWidget(build_section_widget("Source / target files", source_target_layout))
+            self.layout.addWidget(build_section_widget("Data scope", data_scope_layout))
+            self.layout.addWidget(build_section_widget("Report profile", report_profile_layout))
+            self.layout.addWidget(build_section_widget("Advanced options", advanced_options_layout))
+            self.layout.addWidget(build_section_widget("Primary action", action_layout))
 
             self.setLayout(self.layout)
 
@@ -537,7 +551,7 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.generate_summary_sheet_checkbox, self.export_button)
         except Exception as e:
             self.log_and_exit(e)
-        
+
     def validate_violin_plot_min_samplesize_input(self):
         try:
             # Get user input
