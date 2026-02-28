@@ -144,11 +144,11 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'info')
         self.assertEqual(title, 'Export successful')
-        expected_directory_uri = Path('out.xlsx').resolve().parent.as_uri()
+        expected_file_uri = Path('out.xlsx').resolve().as_uri()
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
-            f'Export directory: {expected_directory_uri}\n'
+            f'Export file: {expected_file_uri}\n'
             '\n'
             'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
         )
@@ -170,11 +170,11 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'warning')
         self.assertEqual(title, 'Export completed with Google fallback')
-        expected_directory_uri = Path('out.xlsx').resolve().parent.as_uri()
+        expected_file_uri = Path('out.xlsx').resolve().as_uri()
         self.assertEqual(
             message,
             'Data exported locally to out.xlsx.\n'
-            f'Export directory: {expected_directory_uri}\n'
+            f'Export file: {expected_file_uri}\n'
             '\n'
             'Google Sheets conversion was not fully completed.\n'
             'Google export failed; using local .xlsx fallback: out.xlsx\n'
@@ -199,11 +199,11 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'warning')
         self.assertEqual(title, 'Export completed with Google fallback')
-        expected_directory_uri = Path('out.xlsx').resolve().parent.as_uri()
+        expected_file_uri = Path('out.xlsx').resolve().as_uri()
         self.assertEqual(
             message,
             'Data exported locally to out.xlsx.\n'
-            f'Export directory: {expected_directory_uri}\n'
+            f'Export file: {expected_file_uri}\n'
             '\n'
             'Google Sheets conversion was not fully completed.\n'
             'Google export failed; using local .xlsx fallback: out.xlsx',
@@ -244,9 +244,15 @@ class TestExportCompletionMessaging(unittest.TestCase):
     def test_link_formatting_also_converts_file_urls_to_anchors(self):
         from modules.ExportDialog import format_message_with_clickable_links
 
-        formatted = format_message_with_clickable_links('Export directory: file:///tmp')
+        formatted = format_message_with_clickable_links('Export file: file:///tmp/out.xlsx')
 
-        self.assertIn('<a href="file:///tmp">file:///tmp</a>', formatted)
+        self.assertIn('<a href="file:///tmp/out.xlsx">file:///tmp/out.xlsx</a>', formatted)
+
+    def test_build_export_directory_link_line_points_to_file(self):
+        from modules.ExportDialog import build_export_directory_link_line
+
+        expected_file_uri = Path('out.xlsx').resolve().as_uri()
+        self.assertEqual(build_export_directory_link_line('out.xlsx'), f'Export file: {expected_file_uri}')
 
     def test_excel_target_message_is_unchanged_even_with_google_metadata(self):
         from modules.ExportDialog import build_export_completion_message
@@ -313,6 +319,108 @@ class TestRevealFileInExplorer(unittest.TestCase):
                 run_mock.return_value.returncode = 1
                 reveal_file_in_explorer(file_path)
             run_mock.assert_called_once_with(['explorer', '/select,', str(file_path)], check=False)
+
+
+class TestShowExportResultMessage(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_show_in_folder_action_reveals_file(self):
+        from modules.ExportDialog import show_export_result_message
+
+        class FakeMessageBox:
+            class Icon:
+                Warning = 'warning'
+                Information = 'info'
+
+            class ButtonRole:
+                ActionRole = 'action'
+
+            class StandardButton:
+                Ok = 'ok'
+
+            def __init__(self, parent):
+                self._action_button = object()
+
+            def setIcon(self, _):
+                pass
+
+            def setWindowTitle(self, _):
+                pass
+
+            def setText(self, _):
+                pass
+
+            def addButton(self, *_):
+                return self._action_button
+
+            def setStandardButtons(self, _):
+                pass
+
+            def exec(self):
+                pass
+
+            def clickedButton(self):
+                return self._action_button
+
+        with patch('modules.ExportDialog.QMessageBox', FakeMessageBox), patch('modules.ExportDialog.reveal_file_in_explorer') as reveal_mock:
+            show_export_result_message(parent=None, level='info', title='Done', message='ok', excel_file='out.xlsx')
+
+        reveal_mock.assert_called_once_with('out.xlsx')
+
+    def test_show_in_folder_failure_is_non_fatal_and_visible(self):
+        from modules.ExportDialog import show_export_result_message
+
+        class FakeMessageBox:
+            class Icon:
+                Warning = 'warning'
+                Information = 'info'
+
+            class ButtonRole:
+                ActionRole = 'action'
+
+            class StandardButton:
+                Ok = 'ok'
+
+            warning_calls = []
+
+            def __init__(self, parent):
+                self._action_button = object()
+
+            def setIcon(self, _):
+                pass
+
+            def setWindowTitle(self, _):
+                pass
+
+            def setText(self, _):
+                pass
+
+            def addButton(self, *_):
+                return self._action_button
+
+            def setStandardButtons(self, _):
+                pass
+
+            def exec(self):
+                pass
+
+            def clickedButton(self):
+                return self._action_button
+
+            @staticmethod
+            def warning(parent, title, text):
+                FakeMessageBox.warning_calls.append((parent, title, text))
+
+        with patch('modules.ExportDialog.QMessageBox', FakeMessageBox), patch('modules.ExportDialog.reveal_file_in_explorer', side_effect=RuntimeError('boom')):
+            show_export_result_message(parent=None, level='warning', title='Done', message='ok', excel_file='out.xlsx')
+
+        self.assertEqual(len(FakeMessageBox.warning_calls), 1)
+        _, warning_title, warning_text = FakeMessageBox.warning_calls[0]
+        self.assertEqual(warning_title, 'Unable to open file location')
+        self.assertIn('Could not open the export location for out.xlsx.', warning_text)
+        self.assertIn('boom', warning_text)
 
 
 if __name__ == '__main__':
