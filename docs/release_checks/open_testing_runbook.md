@@ -30,7 +30,7 @@ Use this runbook to coordinate release-candidate (RC) open testing with internal
 
 - Canonical RC branch and naming policy: [`branching_strategy.md`](./branching_strategy.md).
 - RC readiness and artifact expectations: [`release_candidate_checklist.md`](./release_candidate_checklist.md).
-- Build artifacts are distributed by release engineering from the active `release/<version>-rcN` branch through the standard internal distribution channel (shared drive/release tracker entry).
+- Build artifacts are distributed by release engineering from the active `release/YYYY.MM-rcN` branch through the standard internal distribution channel (shared drive/release tracker entry).
 
 ### Version verification before testing
 
@@ -50,7 +50,7 @@ Use the template below for every issue found during open testing.
 
 ```markdown
 ### Title
-[RC <version>-rcN] Short defect summary
+[RC YYYY.MM-rcN] Short defect summary
 
 ### Environment
 - OS/version:

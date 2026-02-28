@@ -2,9 +2,9 @@
 
 Last audited: 2026-02-27.
 
-> **Source of truth note:** Release readiness is finalized in `IMPLEMENTATION_PLAN.md` under **Current implementation status (repo audit)**. This file is the single source of truth for **open implementation items**.
+> **Historical context note:** This TODO file is archived context. For active freeze/open-testing/release status, use [`docs/release_checks/release_status.md`](../../release_checks/release_status.md) first.
 
-## Canonical workstream status
+## Archived workstream status
 - **Core roadmap phases (0-4): Completed**.
 - **Google Sheets migration (GS0-GS5): Partial** (implementation complete; release-gated operational smoke-check practice remains open).
 - **CSV Summary roadmap: Completed**.
@@ -26,7 +26,7 @@ Last audited: 2026-02-27.
   - [x] Expanded mocked failure/edge-case coverage for conversion warnings and fallback messaging/content assertions.
   - [x] Documented optional/manual sandbox Drive smoke-check runbook and expected-result checklist.
 
-## Open implementation items (canonical list)
+## Open implementation items (archived list)
 - [ ] Maintain optional/manual sandbox Drive smoke checks as an ongoing release practice, and record outcomes in release notes using the standard evidence format (command run, date/time, environment/sandbox account, pass/fail, fallback `.xlsx` behavior observed, link/log location) whenever Google auth/conversion behavior changes.
 - [ ] Execute an architectural cleanup pass for export flows with behavior parity as a strict requirement.
   - [ ] Split `modules/ExportDataThread.py` responsibilities into smaller modules that separate orchestration, pure payload/data-prep logic, and backend I/O/post-processing concerns (for example: `export_orchestrator`, `export_payload_builders`, `export_postprocess`).

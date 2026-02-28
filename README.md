@@ -44,14 +44,16 @@ Current release highlight (`2026.02`, build `260228`): Google Sheets export mess
 Canonical release metadata lives in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 Use `python scripts/sync_release_metadata.py` to propagate updates into docs and `python scripts/sync_release_metadata.py --check` to validate consistency in CI.
 
-Release-candidate readiness is tracked in the canonical checklist:
+Active freeze/open-testing/release status is tracked first in:
+[`docs/release_checks/release_status.md`](docs/release_checks/release_status.md).
+Release-candidate readiness checklist:
 [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md).
-Open-testing execution/triage cadence and RC handoff evidence are documented in:
+Open-testing execution/triage cadence and RC handoff evidence:
 [`docs/release_checks/open_testing_runbook.md`](docs/release_checks/open_testing_runbook.md).
-Branching/RC workflow guidance for solo maintenance is documented in:
+Branching/RC workflow guidance for solo maintenance:
 [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md).
-Repository cleanup/documentation organization notes were archived in:
-[`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md).
+Archived planning/history (secondary reference):
+[`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md), [`docs/archive/2026/IMPLEMENTATION_PLAN.md`](docs/archive/2026/IMPLEMENTATION_PLAN.md), [`docs/archive/2026/TODO.md`](docs/archive/2026/TODO.md), [`docs/archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md`](docs/archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md).
 Active documentation lifecycle rules are defined in:
 [`docs/documentation_policy.md`](docs/documentation_policy.md).
 Authoritative branch naming rules plus branch role/merge/tag policy:

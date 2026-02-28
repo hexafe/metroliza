@@ -13,8 +13,8 @@ Authoritative source for branch naming rules: `docs/release_checks/branching_str
 
 ## 2) Naming conventions
 
-- Release candidate branches use: `release/<version>-rcN`
-  - Example: `release/1.8.0-rc1`
+- Release candidate branches use: `release/YYYY.MM-rcN`
+  - Example: `release/2026.03-rc1`
 - Hotfix branches use: `hotfix/x.y.z+1`
   - Example: `hotfix/2026.02.0+1`
 
@@ -23,8 +23,8 @@ Canonical RC branch creation commands:
 ```bash
 git checkout main
 git pull --ff-only origin main
-git checkout -b release/1.8.0-rc1
-git push -u origin release/1.8.0-rc1
+git checkout -b release/2026.03-rc1
+git push -u origin release/2026.03-rc1
 ```
 
 ## 3) Merge directions
@@ -51,7 +51,7 @@ git push -u origin release/1.8.0-rc1
 
 ## 5) Tagging rules (RC and final)
 
-- Tag each release candidate on the matching `release/*` branch using annotated tags: `vX.Y.Z-rcN`.
-- After promoting to production, tag the merge commit on `main` as `vX.Y.Z`.
+- Tag each release candidate on the matching `release/*` branch using annotated tags: `vYYYY.MM-rcN` (example: `v2026.03-rc1`).
+- After promoting to production, tag the merge commit on `main` as `vYYYY.MM` (example: `v2026.03`).
 - Do not retag moved commits; create a new `-rcN` tag for any additional RC iteration.
-- Hotfix releases follow semantic patch progression from the production tag (for example from `vX.Y.Z` to `vX.Y.(Z+1)`).
+- Hotfix releases should follow your monthly release policy while preserving monotonic version progression.

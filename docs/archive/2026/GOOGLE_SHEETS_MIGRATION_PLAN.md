@@ -1,7 +1,7 @@
 # Google Sheets Migration Plan (Drive conversion from generated `.xlsx`)
 
-> **Canonical source note:** This file is the canonical source for Google Sheets migration phase names, acceptance criteria wording, and status updates. `IMPLEMENTATION_PLAN.md` contains only a companion summary with a reference back here.
-> **Release-readiness note:** Final release-readiness sign-off is finalized in `IMPLEMENTATION_PLAN.md` under **Current implementation status (repo audit)**.
+> **Historical context note:** This migration plan is archived context. For active freeze/open-testing/release status, use [`docs/release_checks/release_status.md`](../../release_checks/release_status.md) first.
+> **Release-readiness note (historical):** At the time of this snapshot, sign-off tracking referenced `IMPLEMENTATION_PLAN.md` and `TODO.md`. Use active release operations docs for current status.
 > **Open-items note:** Open implementation work is tracked only in `TODO.md`; this file references that list rather than duplicating it.
 
 ## Goal
@@ -38,7 +38,7 @@ Key constraints and implications:
 
 ## Proposed target architecture
 Adopt a **conversion pipeline** instead of a full backend rewrite:
-- Continue generating `.xlsx` exactly as today (single source of truth).
+- Continue generating `.xlsx` exactly as today (primary export baseline).
 - If export target is Google Sheets, upload the generated file with Google Drive API and request conversion (`application/vnd.google-apps.spreadsheet`).
 - Return the converted file ID/URL to the user and optionally keep local `.xlsx` for backup/audit.
 
@@ -94,7 +94,7 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 2. **Optional live smoke check (non-default)**
    - manual/CI-gated sandbox Drive smoke checks are documented for release-gated workflows using local-only credentials files (`credentials.json`, `token.json`).
 
-### Unified acceptance criteria (single-source wording)
+### Unified acceptance criteria (historical wording)
 - Google Sheets export target is selectable and functional.
 - Selecting Google Sheets generates the same `.xlsx` content and uploads it through Drive conversion.
 - User receives converted Google Sheet link/identifier after successful upload.
@@ -105,7 +105,7 @@ This minimizes implementation risk and keeps Excel + Google outputs aligned by c
 
 ## Remaining execution order (GS follow-through)
 1. Keep GS0-GS5 behavior stable and treat GS5 automated coverage as the merge gate for regressions.
-2. Execute open operational follow-through items from `TODO.md` (single canonical list) and reflect outcomes back here without duplicating task state.
+2. Execute open operational follow-through items from `TODO.md` (archived list) and reflect outcomes back here without duplicating task state.
 
 ---
 

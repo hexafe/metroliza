@@ -4,7 +4,7 @@ This guide explains how to combine multiple `feature/*` branches into one releas
 
 ## TL;DR flow
 
-1. Create `release/<version>-rc1` from `main` to start the release cycle.
+1. Create `release/YYYY.MM-rc1` from `main` to start the release cycle.
 2. Build each planned change on its own `feature/*` branch.
 3. Merge only release-approved features into the active release branch.
 4. Freeze feature scope, then build EXE from the release branch and deploy internally.
@@ -17,7 +17,7 @@ This guide explains how to combine multiple `feature/*` branches into one releas
 
 - `feature/<name>`: one isolated feature/fix.
 - `main`: stable line; updated only by completed releases/hotfixes.
-- `release/<version>-rcN`: active release integration + stabilization branch used for packaging and internal testing.
+- `release/YYYY.MM-rcN`: active release integration + stabilization branch used for packaging and internal testing.
 - `hotfix/<name>`: urgent production patch after a release.
 
 ## Important rule
@@ -117,7 +117,7 @@ This protects stability by treating any late feature as a new release-scope deci
 - RC tag: `vYYYY.MM-rcN` (example: `v2026.03-rc2`)
 - Final tag: `vYYYY.MM` (example: `v2026.03`)
 
-You can use semantic versioning instead (`1.8.0-rc1`) if preferred.
+Use the monthly release format consistently for RC branches and tags.
 
 ---
 
