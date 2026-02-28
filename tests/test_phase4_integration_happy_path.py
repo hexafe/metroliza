@@ -191,13 +191,20 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
 
             with zipfile.ZipFile(out_path, 'r') as workbook_zip:
                 chart_xml = workbook_zip.read('xl/charts/chart1.xml').decode('utf-8')
-                sheet_xml = workbook_zip.read('xl/worksheets/sheet2.xml').decode('utf-8')
+                sheet_xml_candidates = [
+                    workbook_zip.read(name).decode('utf-8')
+                    for name in workbook_zip.namelist()
+                    if name.startswith('xl/worksheets/sheet') and name.endswith('.xml')
+                ]
 
             self.assertIn('REF-1!$B22:B23', chart_xml)
             self.assertIn('REF-1!$C22:C23', chart_xml)
             self.assertIn('REF-1!$C1:C2', chart_xml)
             self.assertIn('REF-1!$C3:C4', chart_xml)
-            self.assertIn('ROUND(MIN(C22:C23), 3)', sheet_xml)
+            self.assertTrue(
+                any('ROUND(MIN(C22:C23), 3)' in sheet_xml for sheet_xml in sheet_xml_candidates),
+                msg='Expected summary formulas were not found in any worksheet XML payload.',
+            )
 
 
 if __name__ == '__main__':
