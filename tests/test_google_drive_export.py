@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from modules.google_drive_export import (
+    GOOGLE_DRIVE_REPORTS_FOLDER_NAME,
     GOOGLE_DRIVE_UPLOAD_URL,
     GoogleDriveAuthError,
     GoogleDriveQuotaError,
@@ -147,9 +148,12 @@ class TestGoogleDriveExport(unittest.TestCase):
             excel_path = Path(tmpdir) / "report.xlsx"
             excel_path.write_bytes(b"excel-content")
 
-            captured = {"upload_data": None}
+            captured = {"upload_data": None, "folder_lookup": 0}
 
             def fake_urlopen(request, timeout=0):
+                if request.method == "GET":
+                    captured["folder_lookup"] += 1
+                    return _FakeResponse({"files": [{"id": "folder-123", "name": GOOGLE_DRIVE_REPORTS_FOLDER_NAME}]})
                 captured["upload_data"] = request.data
                 return _FakeResponse(
                     {
@@ -173,6 +177,8 @@ class TestGoogleDriveExport(unittest.TestCase):
             self.assertEqual((), result.converted_tab_titles)
             self.assertEqual("", result.fallback_message)
             self.assertIn(b"application/vnd.google-apps.spreadsheet", captured["upload_data"])
+            self.assertIn(b"\"parents\": [\"folder-123\"]", captured["upload_data"])
+            self.assertEqual(1, captured["folder_lookup"])
 
     def test_upload_and_convert_workbook_retries_retryable_failures(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -182,6 +188,8 @@ class TestGoogleDriveExport(unittest.TestCase):
             attempts = {"count": 0}
 
             def fake_urlopen(request, timeout=0):
+                if request.method == "GET":
+                    return _FakeResponse({"files": [{"id": "folder-123", "name": GOOGLE_DRIVE_REPORTS_FOLDER_NAME}]})
                 attempts["count"] += 1
                 if attempts["count"] == 1:
                     raise urllib.error.URLError("temporary down")
@@ -217,7 +225,9 @@ class TestGoogleDriveExport(unittest.TestCase):
                     fp=BytesIO(json.dumps(payload).encode("utf-8")),
                 )
 
-            def fake_urlopen(_request, timeout=0):
+            def fake_urlopen(request, timeout=0):
+                if request.method == "GET":
+                    return _FakeResponse({"files": [{"id": "folder-123", "name": GOOGLE_DRIVE_REPORTS_FOLDER_NAME}]})
                 attempts["count"] += 1
                 if attempts["count"] == 1:
                     raise _http_error(503, {"error": {"message": "Backend Error", "errors": [{"reason": "backendError"}]}})
@@ -239,6 +249,32 @@ class TestGoogleDriveExport(unittest.TestCase):
             self.assertEqual(attempts["count"], 3)
             self.assertEqual(sleep_mock.call_count, 2)
             sleep_mock.assert_any_call(0.25)
+
+
+    def test_upload_and_convert_workbook_creates_reports_folder_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            calls = {"create_folder": 0, "upload": 0}
+
+            def fake_urlopen(request, timeout=0):
+                if request.method == "GET":
+                    return _FakeResponse({"files": []})
+                if request.method == "POST" and request.full_url.endswith("?fields=id"):
+                    calls["create_folder"] += 1
+                    return _FakeResponse({"id": "new-folder-789"})
+                calls["upload"] += 1
+                return _FakeResponse({"id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"})
+
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            ):
+                result = upload_and_convert_workbook(str(excel_path), max_retries=1)
+
+            self.assertEqual("sheet123", result.file_id)
+            self.assertEqual(1, calls["create_folder"])
+            self.assertEqual(1, calls["upload"])
 
     def test_parse_drive_conversion_response_accepts_web_content_link_fallback(self):
         payload = {"id": "abc123", "webContentLink": "https://drive.google.com/file/d/abc123/view"}

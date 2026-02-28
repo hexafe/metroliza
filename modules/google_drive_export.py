@@ -17,7 +17,9 @@ GOOGLE_DRIVE_UPLOAD_URL = (
     "https://www.googleapis.com/upload/drive/v3/files"
     "?uploadType=multipart&fields=id,webViewLink,webContentLink"
 )
+GOOGLE_DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
 
 logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
 
@@ -271,6 +273,62 @@ def _build_upload_request_body(*, boundary: str, metadata: dict[str, Any], file_
     return metadata_part + file_part_header + file_bytes + closing
 
 
+def _request_json(request: urllib.request.Request, *, context: str) -> dict[str, Any]:
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        raise map_google_http_error(exc.code, body_text) from exc
+    except urllib.error.URLError as exc:
+        raise map_google_network_error(context, exc) from exc
+
+
+def _ensure_reports_folder(access_token: str) -> str:
+    folder_query = (
+        f"name='{GOOGLE_DRIVE_REPORTS_FOLDER_NAME}' and "
+        "mimeType='application/vnd.google-apps.folder' and trashed=false"
+    )
+    list_url = (
+        f"{GOOGLE_DRIVE_FILES_URL}?"
+        f"q={urllib.parse.quote(folder_query)}&"
+        "fields=files(id,name)&"
+        "pageSize=1&"
+        "spaces=drive"
+    )
+    list_request = urllib.request.Request(
+        list_url,
+        headers={"Authorization": f"Bearer {access_token}"},
+        method="GET",
+    )
+    payload = _request_json(list_request, context="Google Drive folder lookup failed")
+    files = payload.get("files")
+    if isinstance(files, list) and files:
+        folder_id = files[0].get("id")
+        if folder_id:
+            return str(folder_id)
+
+    create_request = urllib.request.Request(
+        f"{GOOGLE_DRIVE_FILES_URL}?fields=id",
+        data=json.dumps(
+            {
+                "name": GOOGLE_DRIVE_REPORTS_FOLDER_NAME,
+                "mimeType": "application/vnd.google-apps.folder",
+            }
+        ).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json; charset=UTF-8",
+        },
+        method="POST",
+    )
+    created = _request_json(create_request, context="Google Drive folder creation failed")
+    folder_id = created.get("id")
+    if not folder_id:
+        raise GoogleDriveResponseError("Google Drive folder creation response missing id.")
+    return str(folder_id)
+
+
 def upload_and_convert_workbook(
     excel_path: str,
     credentials_path: str = "credentials.json",
@@ -285,11 +343,13 @@ def upload_and_convert_workbook(
         raise GoogleDriveResponseError(f"Excel export file not found: {excel_path}")
 
     access_token = _ensure_access_token(Path(credentials_path), Path(token_path))
+    reports_folder_id = _ensure_reports_folder(access_token)
 
     excel_mime = mimetypes.guess_type(excel_file.name)[0] or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     metadata = {
         "name": excel_file.stem,
         "mimeType": "application/vnd.google-apps.spreadsheet",
+        "parents": [reports_folder_id],
     }
 
     boundary = f"metroliza-{int(time.time() * 1000)}"
