@@ -61,11 +61,21 @@ Request/option contracts live in `modules/contracts.py`.
 
 ## Coding guidance
 
-- Keep changes incremental and phase-aligned with `IMPLEMENTATION_PLAN.md`.
+- Keep changes incremental and aligned with active operational docs under `docs/` (especially release-check workflows in `docs/release_checks/`).
 - Prefer shared helpers in `modules/db.py` over direct `sqlite3.connect` in feature modules.
 - **Transaction granularity:** each logical write unit (e.g., inserting one parsed report and all related measurements, or applying all edits from one Modify DB submission) must execute inside a single `run_transaction_with_retry` call so retries are atomic and rollback-safe.
 - Use `run_transaction_with_retry` for multi-statement write workflows; keep retries centralized in `modules/db.py` rather than implementing ad-hoc retry loops in feature modules.
 - Add or update tests in `tests/` for each behavior change.
+
+
+## Documentation source-of-truth hierarchy
+
+Follow this canonical hierarchy (aligned with `docs/documentation_policy.md`):
+
+1. **Active operational docs in `docs/` are the source of truth.**
+   - Key entry points: [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md), [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md), and [`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md).
+2. **Historical plans live under `docs/archive/YYYY/` and are not active source-of-truth documents.**
+   - Use archived plans only for historical context.
 
 
 ## Documentation sync policy
@@ -73,7 +83,7 @@ Request/option contracts live in `modules/contracts.py`.
 For repository cleanup and docs organization sequencing, follow [`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md) (status: archived historical context).
 
 - Keep documentation-only sync PRs separate from implementation PRs when updating roadmap/project-state docs.
-- Update `IMPLEMENTATION_PLAN.md` and `GOOGLE_SHEETS_MIGRATION_PLAN.md` **after** implementation/testing PRs merge so status text reflects shipped behavior.
+- Treat [`docs/archive/2026/IMPLEMENTATION_PLAN.md`](docs/archive/2026/IMPLEMENTATION_PLAN.md) and [`docs/archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md`](docs/archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md) as archived historical context only (not active source of truth).
 - For release-candidate documentation PRs, use [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md) as the single RC source of truth and update all files referenced there in the same PR.
 - For Google export docs, explicitly describe both:
   - required local secret files (`credentials.json`, `token.json`) and
