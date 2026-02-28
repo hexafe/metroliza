@@ -15,6 +15,7 @@ Complete before announcing code freeze or cutting an RC branch.
 - [ ] `README.md` **Release highlights** reflects the current RC/release line.
 - [ ] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
 - [ ] Open blockers are triaged against the defect criteria in section 4.
+- [ ] Open implementation-item gate triage in [`docs/archive/2026/TODO.md`](../archive/2026/TODO.md#open-item-rc-triage-decision-table) is completed (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
 
 ## 2) RC branch creation
 

@@ -34,5 +34,16 @@ Last audited: 2026-02-27.
   - [ ] Add or update focused unit tests for extracted pure functions before changing behavior, then keep those tests green throughout the decomposition.
   - [ ] Add a non-blocking CI size/complexity guard that reports modules over an agreed threshold for visibility (informational reporting only; no merge block).
 
+### Open-item RC triage decision table
+
+| Open item | Gate | Owner | Target RC | Rationale |
+| --- | --- | --- | --- | --- |
+| Maintain optional/manual sandbox Drive smoke checks as an ongoing release practice and evidence capture for Google auth/conversion changes. | pre-open-testing | QA lead + Release manager | Current RC before freeze sign-off | This check directly validates release-gated Google conversion behavior and must be executed before freeze can proceed.
+| Execute architectural cleanup pass for export flows with strict behavior parity. | defer | App architecture owner | 1.9.0-rc1 | This is risk-reduction/refactor scope, not a release integrity blocker for the current RC.
+| Split `modules/ExportDataThread.py` into orchestration, payload/data-prep, and post-processing modules. | defer | Export pipeline maintainer | 1.9.0-rc1 | Dependency: complete decomposition design doc and baseline parity tests before moving production logic.
+| Refactor `modules/CSVSummaryDialog.py` and `modules/ExportDialog.py` to isolate UI state from validation/request-building logic. | defer | UI/workflow maintainer | 1.9.0-rc2 | Dependency: land `ExportDataThread` split first so dialog extraction targets stable service boundaries.
+| Add/update focused unit tests for extracted pure functions before behavior-preserving decomposition. | defer | QA automation + module owners | 1.9.0-rc1 | Dependency: identify extraction seams from architecture plan, then add parity tests as a prerequisite for refactor PRs.
+| Add non-blocking CI size/complexity visibility guard for oversized modules. | defer | Dev productivity owner | 1.9.0-rc2 | Dependency: finalize threshold policy and reporting mechanism (informational only, no merge block).
+
 ## Carry-forward maintenance items only
 - [ ] Keep `README.md`, `CHANGELOG.md`, `IMPLEMENTATION_PLAN.md`, `TODO.md`, and `GOOGLE_SHEETS_MIGRATION_PLAN.md` synchronized after each release-candidate documentation PR.
