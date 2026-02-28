@@ -467,7 +467,9 @@ class DataProcessingThread(QThread):
                     transform_start = time.perf_counter()
                     selected_data = self.data_frame[self.selected_indexes + [data_column]].copy()
 
-                    selected_data.loc[:, data_column] = pd.to_numeric(selected_data[data_column], errors='coerce')
+                    selected_data = selected_data.assign(
+                        **{data_column: pd.to_numeric(selected_data[data_column], errors='coerce')}
+                    )
                     selected_data = selected_data.dropna(subset=[data_column])
                     self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
                     if selected_data.empty:
