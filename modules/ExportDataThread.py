@@ -753,6 +753,7 @@ class ExportDataThread(QThread):
         self._optimization_toggles = {
             'chart_density_mode': 'full',
             'defer_non_essential_charts': False,
+            'summary_sheet_minimum_charts': {'distribution', 'iqr', 'histogram', 'trend'},
             'enable_chart_multiprocessing': os.getenv('METROLIZA_EXPORT_CHART_MP', '').lower() in {'1', 'true', 'yes', 'on'} and os.name != 'nt',
         }
 
@@ -774,6 +775,24 @@ class ExportDataThread(QThread):
 
     def _chart_sample_limit(self):
         return 900 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 3000
+
+    def _summary_chart_required(self, chart_name):
+        required_charts = self._optimization_toggles.get('summary_sheet_minimum_charts', set())
+        return chart_name in required_charts
+
+    def _build_iqr_plot_payload(self, labels, values, sampled_group):
+        boxplot_labels = labels if labels else ['All']
+        boxplot_values = values if values else [list(sampled_group['MEAS'])]
+
+        if self._optimization_toggles['chart_density_mode'] != 'reduced':
+            return boxplot_labels, boxplot_values
+
+        max_groups = 24
+        if len(boxplot_labels) <= max_groups:
+            return boxplot_labels, boxplot_values
+
+        stride = max(1, int(np.ceil(len(boxplot_labels) / max_groups)))
+        return boxplot_labels[::stride], boxplot_values[::stride]
 
     @staticmethod
     def _downsample_frame(df, sample_limit):
@@ -1453,12 +1472,11 @@ class ExportDataThread(QThread):
             if self._check_canceled():
                 return
 
-            if not self._optimization_toggles['defer_non_essential_charts']:
+            if self._summary_chart_required('iqr'):
                 imgplot = BytesIO()
                 chart_start = time.perf_counter()
                 fig, ax = plt.subplots(figsize=(6, 4))
-                boxplot_labels = labels if labels else ['All']
-                boxplot_values = values if values else [list(sampled_group['MEAS'])]
+                boxplot_labels, boxplot_values = self._build_iqr_plot_payload(labels, values, sampled_group)
                 render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
                 apply_minimal_axis_style(ax, grid_axis='y')
                 apply_shared_x_axis_label_strategy(ax, boxplot_labels, positions=list(range(1, len(boxplot_labels) + 1)))

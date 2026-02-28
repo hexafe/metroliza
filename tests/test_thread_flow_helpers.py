@@ -58,6 +58,7 @@ cmm_parser_stub.CMMReportParser = _DummyCmmReportParser
 sys.modules['modules.CMMReportParser'] = cmm_parser_stub
 from modules.ExportDataThread import (  # noqa: E402
     ExportDataThread,
+    build_summary_image_anchor_plan,
     build_export_dataframe,
     execute_export_query,
     run_export_steps,
@@ -450,6 +451,64 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertTrue(any('Ref 2/2' in text for text in detailed_labels))
         self.assertTrue(all('Headers remaining ' in text for text in detailed_labels))
         self.assertTrue(all(text.count('\n') >= 2 for text in detailed_labels))
+
+    def test_summary_sheet_fill_populates_iqr_slot_for_each_header_when_deferred_charts_enabled(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['defer_non_essential_charts'] = True
+
+        worksheet = _FakeSummaryWorksheet()
+        headers = {
+            'H1': pd.DataFrame(
+                {
+                    'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                    'NOM': [10.0] * 6,
+                    '+TOL': [0.2] * 6,
+                    '-TOL': [-0.2] * 6,
+                    'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                    'DATE': ['2024-01-01'] * 6,
+                }
+            ),
+            'H2': pd.DataFrame(
+                {
+                    'MEAS': [5.1, 5.2, 5.0, 5.15, 5.25, 5.18],
+                    'NOM': [5.1] * 6,
+                    '+TOL': [0.3] * 6,
+                    '-TOL': [-0.3] * 6,
+                    'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                    'DATE': ['2024-01-02'] * 6,
+                }
+            ),
+        }
+
+        for index, (header, header_group) in enumerate(headers.items(), start=1):
+            thread.summary_sheet_fill(worksheet, header, header_group, col=index * 3)
+
+        inserted_positions = set(worksheet.inserted_images)
+        expected_iqr_positions = {
+            build_summary_image_anchor_plan(index * 3)['iqr']
+            for index in range(1, len(headers) + 1)
+        }
+
+        self.assertTrue(expected_iqr_positions.issubset(inserted_positions))
+        self.assertEqual(len(expected_iqr_positions), 2)
 
     def test_default_export_target_uses_excel_backend(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
