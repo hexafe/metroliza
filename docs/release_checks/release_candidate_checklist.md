@@ -2,6 +2,8 @@
 
 Use this checklist as the **primary release gate** for RC readiness, sign-off, promotion, and rollback preparedness.
 
+Authoritative source for branch naming rules: `docs/release_checks/branching_strategy.md`.
+
 ## 1) Pre-freeze checks
 
 Complete before announcing code freeze or cutting an RC branch.
@@ -14,25 +16,25 @@ Complete before announcing code freeze or cutting an RC branch.
 - [ ] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
 - [ ] Open blockers are triaged against the defect criteria in section 4.
 
-## 2) RC branch creation (with command examples)
+## 2) RC branch creation
 
 Create the RC branch from the approved base commit (typically `main`):
 
 ```bash
 git checkout main
 git pull --ff-only origin main
-git checkout -b rc/<version>
-git push -u origin rc/<version>
+git checkout -b release/1.8.0-rc1
+git push -u origin release/1.8.0-rc1
 ```
 
 Alternative (single command if local main is already up to date):
 
 ```bash
-git checkout -b rc/<version> origin/main
-git push -u origin rc/<version>
+git checkout -b release/1.8.0-rc1 origin/main
+git push -u origin release/1.8.0-rc1
 ```
 
-- [ ] RC branch follows naming convention (for example `rc/1.8.0-rc1`).
+- [ ] RC branch follows naming convention (for example `release/1.8.0-rc1`).
 - [ ] Branch creation commit SHA and timestamp are recorded in release notes/tracker.
 
 ## 3) Required test suites and sign-off owners
