@@ -134,6 +134,20 @@ PYTHONPATH=. python tests/google_conversion_smoke.py
 - **Required cadence:** run for each release candidate and for any PR that changes Google-auth or Google-conversion logic.
 - Current smoke expectations are release-gated conversion success + valid Google Sheet URL/ID metadata + `warnings=()`; keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated. Tab-title validation is covered by mocked tests, not by the live smoke script.
 
+
+## Native module build/distribution
+
+Metroliza includes an optional native parser extension (`_metroliza_cmm_native`) with a
+pure-Python fallback. Full policy (supported platforms/architectures, wheel pipeline,
+PyInstaller/Nuitka inclusion, and smoke checks) is documented in
+[`docs/native_build_distribution.md`](docs/native_build_distribution.md).
+
+Runtime backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
+
+- `auto` (default): use native parser when available, otherwise fallback to Python parser.
+- `native`: require native parser and raise if unavailable.
+- `python`: force pure-Python parser.
+
 ## Packaging (one-file executable)
 
 Build with PyInstaller:
