@@ -53,6 +53,9 @@ jobs:
       - name: Ruff lint (full repository)
         run: ruff check .
 
+      - name: Release metadata consistency
+        run: python scripts/sync_release_metadata.py --check
+
       - name: Secret scan (diff + repository)
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}

@@ -1,7 +1,12 @@
+RELEASE_VERSION = "2026.02"
 VERSION_DATE = "260228"
+CURRENT_RELEASE_HIGHLIGHT = (
+    "Google Sheets export messaging is clearer, `.xlsx` fallback is explicit, "
+    "and chart-heavy exports remain faster for daily use."
+)
 
-release_notes = """
-    <br><b>Current version 2026.02 (build 260228):</b><br>
+release_notes = f"""
+    <br><b>Current version {RELEASE_VERSION} (build {VERSION_DATE}):</b><br>
     - Google Sheets export (`google_sheets_drive_convert`) now has clearer sign-in and completion messaging<br>
     - Safe fallback remains guaranteed: if conversion fails, the generated Excel file stays available<br>
     - Large report and CSV Summary exports remain faster for day-to-day use<br>
