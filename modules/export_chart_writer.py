@@ -39,6 +39,9 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
 def _build_limit_series_template(*, limit_name):
     return {
         'name': limit_name,
+        # Keep helper anchor series fully hidden so only the rendered spec limit
+        # trendline is visible in Excel.
+        'line': {'none': True},
         'marker': {'type': 'none'},
         'data_labels': {'value': False},
         'show_legend_key': False,
