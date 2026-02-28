@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -18,6 +19,41 @@ from modules.csv_summary_utils import (
     resolve_default_data_columns,
     save_csv_summary_presets,
 )
+
+
+
+def _legacy_load_csv_with_fallbacks(file_path):
+    delimiter_candidates = [';', ',', '	', '|']
+    decimal_candidates = [',', '.']
+
+    best_df = None
+    best_score = -1
+    best_config = None
+
+    for delimiter in delimiter_candidates:
+        for decimal in decimal_candidates:
+            try:
+                df = pd.read_csv(file_path, delimiter=delimiter, decimal=decimal, low_memory=False)
+            except Exception:
+                continue
+
+            if df.empty:
+                score = 0
+            else:
+                numeric_cells = 0
+                for col in df.columns:
+                    numeric_cells += pd.to_numeric(df[col], errors='coerce').notna().sum()
+                score = (len(df.columns) * 10) + numeric_cells
+
+            if score > best_score:
+                best_df = df
+                best_score = score
+                best_config = {'delimiter': delimiter, 'decimal': decimal}
+
+    if best_df is None:
+        raise ValueError(f"Unable to read CSV file: {file_path}")
+
+    return best_df, best_config
 
 
 class CsvSummaryUtilsTests(unittest.TestCase):
@@ -126,6 +162,41 @@ class CsvSummaryUtilsTests(unittest.TestCase):
         )
         self.assertEqual(3, count)
 
+
+
+    def test_load_csv_with_fallbacks_wide_csv_timing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / 'wide.csv'
+            row_count = 1200
+            numeric_columns = 160
+            text_columns = 20
+            headers = [f'N{i}' for i in range(numeric_columns)] + [f'T{i}' for i in range(text_columns)]
+
+            with csv_path.open('w', encoding='utf-8', newline='') as handle:
+                handle.write(';'.join(headers) + '\n')
+                for row in range(row_count):
+                    numeric_values = [f"{(row + idx) / 10:.1f}".replace('.', ',') for idx in range(numeric_columns)]
+                    text_values = [f'TXT{(row + idx) % 97}' for idx in range(text_columns)]
+                    handle.write(';'.join(numeric_values + text_values) + '\n')
+
+            optimized_durations = []
+            legacy_durations = []
+            for _ in range(2):
+                start = time.perf_counter()
+                optimized_df, optimized_config = load_csv_with_fallbacks(csv_path)
+                optimized_durations.append(time.perf_counter() - start)
+
+                start = time.perf_counter()
+                legacy_df, legacy_config = _legacy_load_csv_with_fallbacks(csv_path)
+                legacy_durations.append(time.perf_counter() - start)
+
+            optimized_time = min(optimized_durations)
+            legacy_time = min(legacy_durations)
+
+            self.assertEqual(optimized_df.shape, legacy_df.shape)
+            self.assertEqual({'delimiter': ';', 'decimal': ','}, optimized_config)
+            self.assertEqual(optimized_config, legacy_config)
+            self.assertLess(optimized_time, legacy_time)
 
     def test_load_csv_with_preferred_config_is_applied(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -7,6 +7,39 @@ import pandas as pd
 from modules.stats_utils import safe_process_capability
 
 
+_SAMPLE_ROWS = 200
+_TOP_FULL_READ_CANDIDATES = 2
+
+
+def _score_dataframe(df, numeric_columns_hint=None):
+    if df.empty:
+        return 0, []
+
+    base_score = len(df.columns) * 10
+    row_count = len(df)
+
+    numeric_dtype_columns = list(df.select_dtypes(include='number').columns)
+    numeric_cells = row_count * len(numeric_dtype_columns)
+
+    hinted_columns = numeric_columns_hint or [
+        column for column in df.columns if column not in numeric_dtype_columns
+    ]
+    parse_candidates = [
+        column
+        for column in hinted_columns
+        if column in df.columns and column not in numeric_dtype_columns
+    ]
+
+    detected_numeric_columns = []
+    if parse_candidates:
+        coerced = df[parse_candidates].apply(pd.to_numeric, errors='coerce')
+        non_na_counts = coerced.notna().sum()
+        numeric_cells += int(non_na_counts.sum())
+        detected_numeric_columns = [column for column, count in non_na_counts.items() if count > 0]
+
+    return base_score + numeric_cells, detected_numeric_columns
+
+
 def load_csv_with_fallbacks(file_path, preferred_config=None):
     """Load CSV with delimiter/decimal fallbacks for common manufacturing exports."""
     path = Path(file_path)
@@ -29,23 +62,50 @@ def load_csv_with_fallbacks(file_path, preferred_config=None):
             if pair not in ordered_candidates:
                 ordered_candidates.append(pair)
 
+    sampled_results = []
+    for delimiter, decimal in ordered_candidates:
+        try:
+            sample_df = pd.read_csv(
+                path,
+                delimiter=delimiter,
+                decimal=decimal,
+                low_memory=False,
+                nrows=_SAMPLE_ROWS,
+            )
+        except Exception:
+            continue
+
+        sample_score, sample_numeric_columns = _score_dataframe(sample_df)
+        sampled_results.append(
+            {
+                'delimiter': delimiter,
+                'decimal': decimal,
+                'sample_score': sample_score,
+                'sample_numeric_columns': sample_numeric_columns,
+            }
+        )
+
+    if not sampled_results:
+        raise ValueError(f"Unable to read CSV file: {file_path}")
+
+    sampled_results.sort(key=lambda item: item['sample_score'], reverse=True)
+    narrowed_candidates = sampled_results[:_TOP_FULL_READ_CANDIDATES]
+
     best_df = None
     best_score = -1
     best_config = None
 
-    for delimiter, decimal in ordered_candidates:
+    for candidate in narrowed_candidates:
+        delimiter = candidate['delimiter']
+        decimal = candidate['decimal']
+        sample_numeric_columns = candidate['sample_numeric_columns']
+
         try:
             df = pd.read_csv(path, delimiter=delimiter, decimal=decimal, low_memory=False)
         except Exception:
             continue
 
-        if df.empty:
-            score = 0
-        else:
-            numeric_cells = 0
-            for col in df.columns:
-                numeric_cells += pd.to_numeric(df[col], errors='coerce').notna().sum()
-            score = (len(df.columns) * 10) + numeric_cells
+        score, _ = _score_dataframe(df, numeric_columns_hint=sample_numeric_columns)
 
         if score > best_score:
             best_df = df
