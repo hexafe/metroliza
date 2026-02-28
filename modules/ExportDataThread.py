@@ -467,25 +467,30 @@ class ExportDataThread(QThread):
         return f"{remaining_minutes:d}:{remaining_seconds:02d}"
 
     def _build_measurement_label(self, *, ref_index, total_references, completed_header_units, total_header_units, start_time):
-        label = f"Building measurement sheets... Ref {ref_index}/{total_references}"
+        stage_line = "Building measurement sheets..."
         if total_header_units <= 0:
-            return label
+            detail_line = f"Ref {ref_index}/{total_references}, Headers remaining 0"
+            return f"{stage_line}\n{detail_line}\nETA --"
 
-        label += f", Header {completed_header_units}/{total_header_units}"
+        remaining_headers = max(0, total_header_units - completed_header_units)
+        detail_line = (
+            f"Ref {ref_index}/{total_references}, "
+            f"Headers remaining {remaining_headers}/{total_header_units}"
+        )
 
         elapsed_seconds = max(0.0, time.perf_counter() - start_time)
         if completed_header_units < 5 or elapsed_seconds < 2.0:
-            return label
+            return f"{stage_line}\n{detail_line}\nETA --"
 
         headers_per_second = completed_header_units / elapsed_seconds if elapsed_seconds > 0 else 0.0
         if headers_per_second <= 0:
-            return label
+            return f"{stage_line}\n{detail_line}\nETA --"
 
-        remaining_headers = max(0, total_header_units - completed_header_units)
         eta_seconds = remaining_headers / headers_per_second
         elapsed_display = self._format_elapsed_or_eta(elapsed_seconds)
         eta_display = self._format_elapsed_or_eta(eta_seconds)
-        return f"{label} ({elapsed_display} elapsed, ETA {eta_display})"
+        eta_line = f"{elapsed_display} elapsed, ETA {eta_display}"
+        return f"{stage_line}\n{detail_line}\n{eta_line}"
 
     @property
     def prepared_grouping_df(self):
