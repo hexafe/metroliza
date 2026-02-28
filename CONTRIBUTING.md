@@ -15,22 +15,7 @@ Before opening a PR, run:
 
 ```bash
 python -m compileall .
-ruff check \
-  VersionDate.py \
-  modules/AboutWindow.py \
-  modules/CSVSummaryDialog.py \
-  modules/contracts.py \
-  modules/csv_summary_utils.py \
-  modules/db.py \
-  modules/excel_sheet_utils.py \
-  modules/ParseReportsThread.py \
-  modules/stats_utils.py \
-  tests/test_contracts.py \
-  tests/test_csv_summary_integration.py \
-  tests/test_csv_summary_utils.py \
-  tests/test_db_utils.py \
-  tests/test_phase0_hotfixes.py \
-  tests/test_requirements_hygiene.py
+ruff check .
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 

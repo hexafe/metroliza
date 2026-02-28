@@ -1,0 +1,16 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+exclude = [
+  ".git",
+  ".venv",
+  "__pycache__",
+  "build",
+  "dist",
+]
+
+[tool.pytest.ini_options]
+# Optional test runner normalization for contributors/tools that use pytest.
+testpaths = ["tests"]
+pythonpath = ["."]
