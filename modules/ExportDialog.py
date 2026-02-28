@@ -51,6 +51,13 @@ def is_generate_summary_sheet_overridden(selected_preset, generate_summary_sheet
     return bool(generate_summary_sheet) != bool(preset_options['generate_summary_sheet'])
 
 
+def is_summary_sheet_effectively_enabled(selected_preset, generate_summary_sheet, generate_summary_sheet_overridden=False):
+    preset_options = build_export_options_for_preset(selected_preset)
+    if generate_summary_sheet_overridden:
+        return bool(generate_summary_sheet)
+    return bool(preset_options['generate_summary_sheet'])
+
+
 def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, generate_summary_sheet, generate_summary_sheet_overridden=False):
     preset_options = build_export_options_for_preset(selected_preset)
     return ExportOptions(
@@ -220,6 +227,7 @@ class ExportDialog(QDialog):
 
         self.init_widgets()
         self.init_layout()
+        self._sync_summary_dependent_controls()
 
     def _load_dialog_config(self):
         try:
@@ -252,9 +260,32 @@ class ExportDialog(QDialog):
             self.generate_summary_sheet_checkbox.setChecked(bool(preset_options['generate_summary_sheet']))
             self.preset_summary_label.setText(build_preset_summary_text(selected_preset))
             self._update_override_state()
+            self._sync_summary_dependent_controls()
             self._save_dialog_config()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _sync_summary_dependent_controls(self):
+        selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
+        generate_summary_sheet_overridden = is_generate_summary_sheet_overridden(
+            selected_preset,
+            self.generate_summary_sheet_checkbox.isChecked(),
+        )
+        is_enabled = is_summary_sheet_effectively_enabled(
+            selected_preset,
+            self.generate_summary_sheet_checkbox.isChecked(),
+            generate_summary_sheet_overridden,
+        )
+        self.violin_plot_min_samplesize_label.setEnabled(is_enabled)
+        self.violin_plot_min_samplesize.setEnabled(is_enabled)
+        self.summary_plot_scale_label.setEnabled(is_enabled)
+        self.summary_plot_scale.setEnabled(is_enabled)
+        self.violin_plot_min_samplesize_helper_label.setVisible(not is_enabled)
+        self.summary_plot_scale_helper_label.setVisible(not is_enabled)
+
+    def _on_generate_summary_sheet_state_changed(self):
+        self._update_override_state()
+        self._sync_summary_dependent_controls()
 
     def init_widgets(self):
         try:
@@ -371,6 +402,8 @@ class ExportDialog(QDialog):
                 "Use this menu to select how many measurements are required "
                 "to generate violin chart instead of scatter"
             )
+            self.violin_plot_min_samplesize_helper_label = QLabel("Available when summary sheet is enabled.")
+            self.violin_plot_min_samplesize_helper_label.setStyleSheet("color: #666;")
             
             # Add textbox to set scale for y-axis
             self.summary_plot_scale_label = QLabel("Increase the limits on the y-axis by as many times: ")
@@ -386,6 +419,8 @@ class ExportDialog(QDialog):
                 "For instance, if you choose 0 (default), limits will be based on the minimum, maximum, and tolerance limits.\n"
                 "If you choose 1, it will also add a 'buffer' to the minimum and maximum y-axis limits, resulting in a range that is three times larger."
             )
+            self.summary_plot_scale_helper_label = QLabel("Available when summary sheet is enabled.")
+            self.summary_plot_scale_helper_label.setStyleSheet("color: #666;")
             
             # Connect textChanged signal to validate_input function
             self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
@@ -402,7 +437,7 @@ class ExportDialog(QDialog):
             self.generate_summary_sheet_checkbox.setToolTip(
                 "When enabled, additional sheets will be created for each reference with additional graphs (grouped scatter/violin, histograms with basic statistics)"
             )
-            self.generate_summary_sheet_checkbox.stateChanged.connect(lambda _: self._update_override_state())
+            self.generate_summary_sheet_checkbox.stateChanged.connect(lambda _: self._on_generate_summary_sheet_state_changed())
 
             self.advanced_options_toggle = QPushButton("Advanced options")
             self.advanced_options_toggle.setCheckable(True)
@@ -463,9 +498,11 @@ class ExportDialog(QDialog):
 
             self.layout.addWidget(self.violin_plot_min_samplesize_label, 20, 0)
             self.layout.addWidget(self.violin_plot_min_samplesize, 20, 1)
+            self.layout.addWidget(self.violin_plot_min_samplesize_helper_label, 20, 2)
 
             self.layout.addWidget(self.summary_plot_scale_label, 21, 0)
             self.layout.addWidget(self.summary_plot_scale, 21, 1)
+            self.layout.addWidget(self.summary_plot_scale_helper_label, 21, 2)
 
             self.layout.addWidget(self.hide_ok_results_checkbox, 22, 0)
 
