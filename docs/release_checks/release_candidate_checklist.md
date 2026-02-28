@@ -81,6 +81,7 @@ python -m nuitka metroliza.py `
 
 - [ ] Google conversion smoke procedure executed per runbook: [`docs/google_conversion_smoke_runbook.md`](../google_conversion_smoke_runbook.md). *(Owner: QA)*
 - [ ] Smoke evidence and outcomes recorded in: [`docs/release_checks/google_conversion_smoke.md`](google_conversion_smoke.md). *(Owner: QA/Release manager)*
+- [ ] Open-testing promotion is blocked unless smoke evidence exists for the **current build identity** (branch + commit SHA + artifact/build ID) in: [`docs/release_checks/google_conversion_smoke.md`](google_conversion_smoke.md). *(Owner: Release manager)*
 
 > Do not duplicate smoke steps in this checklist. Follow the linked runbook and evidence template as the source of procedure detail.
 
