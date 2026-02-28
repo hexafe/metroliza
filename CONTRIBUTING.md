@@ -15,6 +15,23 @@ Dependency files are split by purpose:
 - `requirements-dev.txt` for local development/tests.
 - `requirements-build.txt` for packaging executables.
 
+
+## Pre-commit hooks
+
+Install and activate local hooks once per clone:
+
+```bash
+pre-commit install
+```
+
+Run all hooks on demand before opening a PR:
+
+```bash
+pre-commit run --all-files
+```
+
+The hook set includes whitespace/end-of-file normalization, Ruff linting, and secret-pattern checks. The committed allowlist keeps `config/google/credentials.example.json` as a permitted example template while still blocking real secret files such as `credentials.json`, `token.json`, `*.credentials.json`, and `*.token.json`.
+
 ## Baseline checks
 
 Before opening a PR, run:
