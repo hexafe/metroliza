@@ -3,6 +3,7 @@ import warnings
 import inspect
 import os
 import time
+from concurrent.futures import ProcessPoolExecutor
 import matplotlib
 import pandas as pd
 import numpy as np
@@ -750,6 +751,42 @@ class ExportDataThread(QThread):
         self.completion_metadata = {"local_xlsx_path": self.excel_file}
         self._exported_sheet_names = set()
         self._last_emitted_progress = -1
+        self._stage_timings = {
+            'transform_grouping': 0.0,
+            'chart_rendering': 0.0,
+            'worksheet_writes': 0.0,
+        }
+        self._optimization_toggles = {
+            'chart_density_mode': 'full',
+            'defer_non_essential_charts': False,
+            'enable_chart_multiprocessing': os.getenv('METROLIZA_EXPORT_CHART_MP', '').lower() in {'1', 'true', 'yes', 'on'} and os.name != 'nt',
+        }
+
+    def _record_stage_timing(self, stage_name, elapsed):
+        if stage_name in self._stage_timings:
+            self._stage_timings[stage_name] += max(0.0, float(elapsed))
+
+    def _apply_bottleneck_optimizations(self):
+        total = sum(self._stage_timings.values())
+        if total <= 0.0:
+            return
+
+        chart_share = self._stage_timings['chart_rendering'] / total
+        if chart_share >= 0.65:
+            self._optimization_toggles['chart_density_mode'] = 'reduced'
+            self._optimization_toggles['defer_non_essential_charts'] = True
+        elif chart_share >= 0.45:
+            self._optimization_toggles['chart_density_mode'] = 'reduced'
+
+    def _chart_sample_limit(self):
+        return 900 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 3000
+
+    @staticmethod
+    def _downsample_frame(df, sample_limit):
+        if len(df) <= sample_limit:
+            return df
+        stride = max(1, int(np.ceil(len(df) / sample_limit)))
+        return df.iloc[::stride].copy()
 
     @staticmethod
     def _clamp_progress(value):
@@ -1164,22 +1201,25 @@ class ExportDataThread(QThread):
                     if self._check_canceled():
                         return
 
+                    transform_start = time.perf_counter()
                     header_group = self._sort_header_group(header_group)
                     base_col = col
                     if timing_enabled:
                         build_bundle_start = time.perf_counter()
                     write_bundle = _build_measurement_write_bundle_cached(header, header_group, base_col, cache=optimization_cache)
+                    self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
                     if timing_enabled:
                         build_bundle_elapsed += time.perf_counter() - build_bundle_start
                     header_plan = write_bundle['header_plan']
+                    write_start = time.perf_counter()
                     measurement_plan = write_measurement_block(worksheet, write_bundle, formats, base_col=base_col)
 
                     col += 3
                     header_col_end = col - 1
                     worksheet.set_column(header_col_end, header_col_end, None, cell_format=formats['border'])
+                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
-                    if timing_enabled:
-                        chart_insert_start = time.perf_counter()
+                    chart_insert_start = time.perf_counter()
                     insert_measurement_chart(
                         workbook,
                         worksheet,
@@ -1191,8 +1231,10 @@ class ExportDataThread(QThread):
                         cache=optimization_cache,
                     )
 
+                    chart_insert_time = time.perf_counter() - chart_insert_start
                     if timing_enabled:
-                        chart_insert_elapsed += time.perf_counter() - chart_insert_start
+                        chart_insert_elapsed += chart_insert_time
+                    self._record_stage_timing('chart_rendering', chart_insert_time)
 
                     if self._check_canceled():
                         return
@@ -1201,6 +1243,8 @@ class ExportDataThread(QThread):
                         self.summary_sheet_fill(summary_worksheet, header, header_group, col)
                         if self._check_canceled():
                             return
+
+                    self._apply_bottleneck_optimizations()
 
                     if self.hide_ok_results:
                         hide_columns = all_measurements_within_limits(header_group['MEAS'], header_plan['lsl'], header_plan['usl'])
@@ -1241,6 +1285,19 @@ class ExportDataThread(QThread):
                         chart_insert_elapsed,
                         header_count,
                     )
+                    logger.debug(
+                        "Export stage totals [ref=%s]: transform=%.3fs chart=%.3fs worksheet=%.3fs toggles=%s",
+                        ref,
+                        self._stage_timings['transform_grouping'],
+                        self._stage_timings['chart_rendering'],
+                        self._stage_timings['worksheet_writes'],
+                        self._optimization_toggles,
+                    )
+                    if self._stage_timings['chart_rendering'] > (self._stage_timings['transform_grouping'] * 2) and self._stage_timings['chart_rendering'] > self._stage_timings['worksheet_writes']:
+                        logger.info(
+                            "Export bottleneck analysis [ref=%s]: chart rendering dominates; remaining pure-math kernels are not currently dominant, so native code is not recommended yet.",
+                            ref,
+                        )
 
                 worksheet.freeze_panes(12, 0)
 
@@ -1302,6 +1359,7 @@ class ExportDataThread(QThread):
         try:
             if self._check_canceled():
                 return
+            transform_start = time.perf_counter()
             header_group = self._ensure_sample_number_column(header_group)
             imgplot = BytesIO()
             limits = resolve_nominal_and_limits(header_group)
@@ -1320,26 +1378,44 @@ class ExportDataThread(QThread):
             
             grouping_df = self.prepared_grouping_df
             header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
+            sampled_group = self._downsample_frame(header_group, self._chart_sample_limit())
+            self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
+
+            chart_mp_enabled = self._optimization_toggles['enable_chart_multiprocessing'] and len(sampled_group) >= 2500
+            precomputed_density_curve = None
+            precomputed_trend_payload = None
+            if chart_mp_enabled:
+                try:
+                    with ProcessPoolExecutor(max_workers=2) as pool:
+                        density_future = pool.submit(build_histogram_density_curve_payload, sampled_group['MEAS'])
+                        trend_future = pool.submit(build_trend_plot_payload, sampled_group)
+                        precomputed_density_curve = density_future.result()
+                        precomputed_trend_payload = trend_future.result()
+                except Exception:
+                    precomputed_density_curve = None
+                    precomputed_trend_payload = None
+
+            chart_start = time.perf_counter()
             if grouping_applied:
                 labels, values, can_render_violin = self._build_violin_payload(
-                    header_group,
+                    sampled_group,
                     'GROUP',
                     self.violin_plot_min_samplesize,
                 )
                 if can_render_violin:
                     render_violin(ax, values, labels)
                 else:
-                    render_scatter(ax, data=header_group, x='GROUP', y='MEAS')
+                    render_scatter(ax, data=sampled_group, x='GROUP', y='MEAS')
             else:
                 labels, values, can_render_violin = self._build_violin_payload(
-                    header_group,
+                    sampled_group,
                     'SAMPLE_NUMBER',
                     self.violin_plot_min_samplesize,
                 )
                 if can_render_violin:
                     render_violin(ax, values, labels)
                 else:
-                    render_scatter(ax, data=header_group, x='SAMPLE_NUMBER', y='MEAS')
+                    render_scatter(ax, data=sampled_group, x='SAMPLE_NUMBER', y='MEAS')
 
             apply_minimal_axis_style(ax, grid_axis='y')
             apply_shared_x_axis_label_strategy(ax, labels)
@@ -1356,12 +1432,14 @@ class ExportDataThread(QThread):
             ax.set_ylabel('Measurement')
             ax.set_title(f'{header}')
             fig.savefig(imgplot, format="png")
+            self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
             
             imgplot.seek(0)
             
             summary_anchors = build_summary_image_anchor_plan(col)
             panel_plan = build_summary_panel_write_plan(summary_anchors, header)
             header_cell = panel_plan['header_cell']
+            write_start = time.perf_counter()
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
             summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, panel_subtitle)
             distribution_slot = panel_plan['image_slots']['distribution']
@@ -1371,6 +1449,7 @@ class ExportDataThread(QThread):
                 "",
                 {'image_data': imgplot},
             )
+            self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
             if self._check_canceled():
                 plt.close(fig)
@@ -1381,39 +1460,45 @@ class ExportDataThread(QThread):
             if self._check_canceled():
                 return
 
-            imgplot = BytesIO()
-            fig, ax = plt.subplots(figsize=(6, 4))
-            boxplot_labels = labels if labels else ['All']
-            boxplot_values = values if values else [list(header_group['MEAS'])]
-            render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
-            apply_minimal_axis_style(ax, grid_axis='y')
-            apply_shared_x_axis_label_strategy(ax, boxplot_labels, positions=list(range(1, len(boxplot_labels) + 1)))
-            for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                ax.axhline(**line_spec)
-            ax.set_xlabel('Group')
-            ax.set_ylabel('Measurement')
-            ax.set_title(f'{header} - IQR Outlier Detection')
+            if not self._optimization_toggles['defer_non_essential_charts']:
+                imgplot = BytesIO()
+                chart_start = time.perf_counter()
+                fig, ax = plt.subplots(figsize=(6, 4))
+                boxplot_labels = labels if labels else ['All']
+                boxplot_values = values if values else [list(sampled_group['MEAS'])]
+                render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
+                apply_minimal_axis_style(ax, grid_axis='y')
+                apply_shared_x_axis_label_strategy(ax, boxplot_labels, positions=list(range(1, len(boxplot_labels) + 1)))
+                for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                    ax.axhline(**line_spec)
+                ax.set_xlabel('Group')
+                ax.set_ylabel('Measurement')
+                ax.set_title(f'{header} - IQR Outlier Detection')
 
-            current_y_limits = ax.get_ylim()
-            y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-            ax.set_ylim(y_min, y_max)
+                current_y_limits = ax.get_ylim()
+                y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                ax.set_ylim(y_min, y_max)
 
-            fig.savefig(imgplot, format="png", bbox_inches='tight')
-            imgplot.seek(0)
-            iqr_slot = panel_plan['image_slots']['iqr']
-            summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], "", {'image_data': imgplot})
+                fig.savefig(imgplot, format="png", bbox_inches='tight')
+                self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                imgplot.seek(0)
+                iqr_slot = panel_plan['image_slots']['iqr']
+                write_start = time.perf_counter()
+                summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], "", {'image_data': imgplot})
+                self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
-            if self._check_canceled():
+                if self._check_canceled():
+                    plt.close(fig)
+                    return
+
                 plt.close(fig)
-                return
-
-            plt.close(fig)
             
             imgplot = BytesIO()
             # Plot the histogram with auto-defined bins
             histogram_figsize = (6, 4)
+            chart_start = time.perf_counter()
             fig, ax = plt.subplots(figsize=histogram_figsize)
-            render_histogram(ax, header_group)
+            render_histogram(ax, sampled_group)
 
             histogram_font_sizes = compute_histogram_font_sizes(
                 histogram_figsize,
@@ -1442,7 +1527,9 @@ class ExportDataThread(QThread):
             ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
             style_histogram_stats_table(ax_table, table_data, capability_badge=capability_badge)
 
-            density_curve = build_histogram_density_curve_payload(header_group['MEAS'])
+            density_curve = precomputed_density_curve
+            if density_curve is None:
+                density_curve = build_histogram_density_curve_payload(sampled_group['MEAS'], point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100)
             if density_curve is not None:
                 render_density_line(ax, density_curve['x'], density_curve['y'])
             
@@ -1475,9 +1562,12 @@ class ExportDataThread(QThread):
             plt.subplots_adjust(right=histogram_table_layout['subplot_right'])
             
             fig.savefig(imgplot, format="png")
+            self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
             imgplot.seek(0)
             histogram_slot = panel_plan['image_slots']['histogram']
+            write_start = time.perf_counter()
             summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], "", {'image_data': imgplot})
+            self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
             if self._check_canceled():
                 plt.close(fig)
@@ -1488,7 +1578,8 @@ class ExportDataThread(QThread):
             imgplot = BytesIO()
             apply_summary_plot_theme()
             
-            trend_payload = build_trend_plot_payload(header_group)
+            chart_start = time.perf_counter()
+            trend_payload = precomputed_trend_payload or build_trend_plot_payload(sampled_group)
             data_x = trend_payload['x']
             data_y = trend_payload['y']
             unique_labels = trend_payload['labels']
@@ -1520,9 +1611,12 @@ class ExportDataThread(QThread):
             # Saving the plot to BytesIO
             imgplot = BytesIO()
             fig.savefig(imgplot, format="png", bbox_inches='tight')
+            self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
             imgplot.seek(0)
             trend_slot = panel_plan['image_slots']['trend']
+            write_start = time.perf_counter()
             summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], "", {'image_data': imgplot})
+            self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
             plt.close(fig)
             
         except Exception as e:

@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
 )
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
 import logging
 import re
 import time
@@ -41,6 +42,24 @@ from modules import Base64EncodedFiles
 
 
 logger = logging.getLogger(__name__)
+
+
+def _compute_histogram_payload(series_values, bin_count):
+    series = pd.Series(series_values)
+    bins = pd.cut(series, bins=bin_count)
+    counts = bins.value_counts().sort_index()
+    return [(str(interval), int(count)) for interval, count in counts.items()]
+
+
+def _compute_boxplot_summary(series_values):
+    series = pd.Series(series_values)
+    return [
+        ('Min', float(series.min())),
+        ('Q1', float(series.quantile(0.25))),
+        ('Median', float(series.median())),
+        ('Q3', float(series.quantile(0.75))),
+        ('Max', float(series.max())),
+    ]
 
 
 class FilterDialog(QDialog):
@@ -192,6 +211,39 @@ class DataProcessingThread(QThread):
         self.column_spec_limits = column_spec_limits or {}
         self.plot_toggles = normalize_plot_toggles(selected_data_columns, plot_toggles)
         self.summary_only = bool(summary_only)
+        self.stage_timings = {
+            'transform_grouping': 0.0,
+            'chart_rendering': 0.0,
+            'worksheet_writes': 0.0,
+        }
+        self.optimization_toggles = {
+            'chart_density_mode': 'full',
+            'defer_non_essential_charts': False,
+            'enable_chart_multiprocessing': self.csv_config.get('enable_chart_multiprocessing', False),
+        }
+
+    def _record_stage_timing(self, stage_name, elapsed):
+        if stage_name in self.stage_timings:
+            self.stage_timings[stage_name] += max(0.0, float(elapsed))
+
+    def _apply_bottleneck_optimizations(self):
+        total = sum(self.stage_timings.values())
+        if total <= 0.0:
+            return
+        chart_share = self.stage_timings['chart_rendering'] / total
+        if chart_share >= 0.65:
+            self.optimization_toggles['chart_density_mode'] = 'reduced'
+            self.optimization_toggles['defer_non_essential_charts'] = True
+        elif chart_share >= 0.45:
+            self.optimization_toggles['chart_density_mode'] = 'reduced'
+
+    def _downsample_for_chart(self, selected_data, data_column):
+        sample_limit = 1200 if self.optimization_toggles['chart_density_mode'] == 'reduced' else 4000
+        row_count = len(selected_data)
+        if row_count <= sample_limit:
+            return selected_data
+        stride = max(1, int(row_count / sample_limit))
+        return selected_data.iloc[::stride].copy()
 
     def write_summary_data(self, worksheet, data_column, selected_data, spec_limits):
         col = selected_data.shape[1]
@@ -304,19 +356,30 @@ class DataProcessingThread(QThread):
         worksheet.write(0, histogram_col_start, 'Histogram Bin')
         worksheet.write(0, histogram_col_start + 1, 'Count')
 
-        bin_count = min(12, max(5, int(len(numeric_series) ** 0.5)))
-        bins = pd.cut(numeric_series, bins=bin_count)
-        counts = bins.value_counts().sort_index()
+        max_bins = 8 if self.optimization_toggles['chart_density_mode'] == 'reduced' else 12
+        bin_count = min(max_bins, max(5, int(len(numeric_series) ** 0.5)))
 
-        for row_index, (bin_interval, count) in enumerate(counts.items(), start=1):
-            worksheet.write(row_index, histogram_col_start, str(bin_interval))
-            worksheet.write(row_index, histogram_col_start + 1, int(count))
+        histogram_rows = None
+        mp_enabled = self.optimization_toggles['enable_chart_multiprocessing'] and len(numeric_series) >= 2500
+        if mp_enabled:
+            try:
+                with ProcessPoolExecutor(max_workers=1) as pool:
+                    histogram_rows = pool.submit(_compute_histogram_payload, numeric_series.tolist(), bin_count).result()
+            except Exception:
+                histogram_rows = None
+
+        if histogram_rows is None:
+            histogram_rows = _compute_histogram_payload(numeric_series.tolist(), bin_count)
+
+        for row_index, (bin_interval, count) in enumerate(histogram_rows, start=1):
+            worksheet.write(row_index, histogram_col_start, bin_interval)
+            worksheet.write(row_index, histogram_col_start + 1, count)
 
         chart = writer.book.add_chart({'type': 'column'})
         chart.add_series({
             'name': f'{data_column} histogram',
-            'categories': [sheet_name, 1, histogram_col_start, len(counts), histogram_col_start],
-            'values': [sheet_name, 1, histogram_col_start + 1, len(counts), histogram_col_start + 1],
+            'categories': [sheet_name, 1, histogram_col_start, len(histogram_rows), histogram_col_start],
+            'values': [sheet_name, 1, histogram_col_start + 1, len(histogram_rows), histogram_col_start + 1],
             'gap': 2,
         })
         chart.set_title({'name': f'{sheet_name} histogram'})
@@ -334,13 +397,18 @@ class DataProcessingThread(QThread):
         worksheet.write(0, stats_col_start, 'Five-number summary')
         worksheet.write(0, stats_col_start + 1, data_column)
 
-        summary_rows = [
-            ('Min', float(numeric_series.min())),
-            ('Q1', float(numeric_series.quantile(0.25))),
-            ('Median', float(numeric_series.median())),
-            ('Q3', float(numeric_series.quantile(0.75))),
-            ('Max', float(numeric_series.max())),
-        ]
+        summary_rows = None
+        mp_enabled = self.optimization_toggles['enable_chart_multiprocessing'] and len(numeric_series) >= 2500
+        if mp_enabled:
+            try:
+                with ProcessPoolExecutor(max_workers=1) as pool:
+                    summary_rows = pool.submit(_compute_boxplot_summary, numeric_series.tolist()).result()
+            except Exception:
+                summary_rows = None
+
+        if summary_rows is None:
+            summary_rows = _compute_boxplot_summary(numeric_series.tolist())
+
         for row_index, (label, value) in enumerate(summary_rows, start=1):
             worksheet.write(row_index, stats_col_start, label)
             worksheet.write(row_index, stats_col_start + 1, round(value, 3))
@@ -350,7 +418,7 @@ class DataProcessingThread(QThread):
             'name': f'{data_column} boxplot profile',
             'categories': [sheet_name, 1, stats_col_start, len(summary_rows), stats_col_start],
             'values': [sheet_name, 1, stats_col_start + 1, len(summary_rows), stats_col_start + 1],
-            'marker': {'type': 'circle', 'size': 6},
+            'marker': {'type': 'circle', 'size': 5 if self.optimization_toggles['chart_density_mode'] == 'reduced' else 6},
         })
         chart.set_title({'name': f'{sheet_name} boxplot profile'})
         chart.set_x_axis({'name': 'Summary point'})
@@ -396,10 +464,12 @@ class DataProcessingThread(QThread):
                         break
 
                     # Create a new DataFrame with the selected data column and indexes
+                    transform_start = time.perf_counter()
                     selected_data = self.data_frame[self.selected_indexes + [data_column]].copy()
 
                     selected_data.loc[:, data_column] = pd.to_numeric(selected_data[data_column], errors='coerce')
                     selected_data = selected_data.dropna(subset=[data_column])
+                    self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
                     if selected_data.empty:
                         progress_percentage = int((i + 1) * 100 / total_filtered_columns)
                         self.progress_signal.emit(progress_percentage)
@@ -424,24 +494,29 @@ class DataProcessingThread(QThread):
 
                         write_elapsed = time.perf_counter() - write_start
                         total_write_seconds += write_elapsed
+                        self._record_stage_timing('worksheet_writes', write_elapsed)
 
                         chart_start = time.perf_counter()
-                        self.add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+                        chart_data = self._downsample_for_chart(selected_data, data_column)
+                        self.add_xy_chart(worksheet, data_column, col, chart_data, writer, sheet_name)
 
                         plot_options = self.plot_toggles.get(data_column, {'histogram': True, 'boxplot': True})
                         if plot_options.get('histogram', True):
-                            self.add_histogram_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
-                        if plot_options.get('boxplot', True):
-                            self.add_boxplot_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+                            self.add_histogram_chart(worksheet, data_column, col, chart_data, writer, sheet_name)
+                        if plot_options.get('boxplot', True) and not self.optimization_toggles['defer_non_essential_charts']:
+                            self.add_boxplot_chart(worksheet, data_column, col, chart_data, writer, sheet_name)
 
                         chart_elapsed = time.perf_counter() - chart_start
                         total_chart_seconds += chart_elapsed
+                        self._record_stage_timing('chart_rendering', chart_elapsed)
+                        self._apply_bottleneck_optimizations()
                         logger.debug(
-                            "CSV Summary column '%s' timings: write=%.3fs, chart=%.3fs, rows=%d",
+                            "CSV Summary column '%s' timings: write=%.3fs, chart=%.3fs, rows=%d, toggles=%s",
                             data_column,
                             write_elapsed,
                             chart_elapsed,
                             len(selected_data),
+                            self.optimization_toggles,
                         )
                     else:
                         sheet_name = ''
@@ -489,11 +564,17 @@ class DataProcessingThread(QThread):
 
                 if not self.summary_only and total_filtered_columns > 0:
                     logger.debug(
-                        "CSV Summary timing totals: write=%.3fs, chart=%.3fs, columns=%d",
+                        "CSV Summary timing totals: write=%.3fs, chart=%.3fs, columns=%d, stage_timings=%s, toggles=%s",
                         total_write_seconds,
                         total_chart_seconds,
                         total_filtered_columns,
+                        self.stage_timings,
+                        self.optimization_toggles,
                     )
+                    if self.stage_timings['chart_rendering'] > self.stage_timings['transform_grouping'] * 2 and self.stage_timings['chart_rendering'] > self.stage_timings['worksheet_writes']:
+                        logger.info(
+                            "CSV Summary bottleneck analysis: chart rendering dominates; remaining workloads are IO/chart-bound so native code for pure-math kernels is not currently justified."
+                        )
                 logger.info("CSV summary processing completed successfully: output='%s'.", self.output_file)
 
             except Exception:
