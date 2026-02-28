@@ -153,7 +153,7 @@ class ParsingDialog(QDialog):
             self.loading_dialog = QDialog(self, Qt.WindowType.WindowTitleHint)
             self.loading_dialog.setWindowTitle("Parsing reports...")
             self.loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-            self.loading_dialog.setFixedSize(400, 300)
+            self.loading_dialog.setFixedSize(400, 330)
 
             # Create a QLabel to display the loading GIF
             loading_gif_label = QLabel(self.loading_dialog)
