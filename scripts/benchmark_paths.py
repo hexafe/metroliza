@@ -4,14 +4,17 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import importlib.machinery
+import sys
 import tempfile
 import time
 import types
-import importlib.machinery
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
-import sys
+
+import numpy as np
+import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -95,22 +98,6 @@ def _install_headless_stubs() -> None:
     sys.modules.setdefault('PyQt6.QtWidgets', qtwidgets_stub)
     sys.modules.setdefault('PyQt6.QtGui', qtgui_stub)
 
-
-_install_headless_stubs()
-
-import numpy as np
-import pandas as pd
-
-from modules.CMMReportParser import CMMReportParser
-from modules.CSVSummaryDialog import DataProcessingThread, compute_column_summary_stats, load_csv_with_fallbacks
-from modules.ExportDataThread import ExportDataThread
-from modules.ParseReportsThread import ParseReportsThread, parse_new_reports
-from modules.contracts import AppPaths, ExportOptions, ExportRequest, ParseRequest
-from modules.db import execute_with_retry, read_sql_dataframe
-from modules.export_query_service import build_measurement_export_dataframe
-from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
-
-
 @dataclass
 class ScenarioResult:
     scenario: str
@@ -129,6 +116,8 @@ def _create_pdf_fixture_dir(base_dir: Path, count: int) -> Path:
 
 
 def _create_export_db_fixture(db_path: Path, *, report_count: int, headers_per_report: int) -> dict[str, int]:
+    from modules.db import execute_with_retry
+
     execute_with_retry(
         str(db_path),
         'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
@@ -189,6 +178,10 @@ def _create_csv_fixture(csv_path: Path, *, row_count: int, data_columns: int) ->
 
 
 def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
+    from modules.CMMReportParser import CMMReportParser
+    from modules.ParseReportsThread import ParseReportsThread, parse_new_reports
+    from modules.contracts import ParseRequest
+
     db_path = temp_dir / 'parse_benchmark.sqlite'
     pdf_dir = _create_pdf_fixture_dir(temp_dir, pdf_count)
     thread = ParseReportsThread(ParseRequest(source_directory=str(pdf_dir), db_file=str(db_path)))
@@ -229,6 +222,12 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
 
 
 def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
+    from modules.ExportDataThread import ExportDataThread
+    from modules.contracts import AppPaths, ExportOptions, ExportRequest
+    from modules.db import read_sql_dataframe
+    from modules.export_query_service import build_measurement_export_dataframe
+    from modules.export_summary_utils import compute_measurement_summary, resolve_nominal_and_limits
+
     db_path = temp_dir / 'export_benchmark.sqlite'
     fixture_metrics = _create_export_db_fixture(db_path, report_count=report_count, headers_per_report=headers_per_report)
 
@@ -298,34 +297,35 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
     )
 
 
-class BenchmarkCSVThread(DataProcessingThread):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.chart_seconds = 0.0
-
-    def add_xy_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
-        start = time.perf_counter()
-        try:
-            return super().add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
-        finally:
-            self.chart_seconds += time.perf_counter() - start
-
-    def add_histogram_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
-        start = time.perf_counter()
-        try:
-            return super().add_histogram_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
-        finally:
-            self.chart_seconds += time.perf_counter() - start
-
-    def add_boxplot_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
-        start = time.perf_counter()
-        try:
-            return super().add_boxplot_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
-        finally:
-            self.chart_seconds += time.perf_counter() - start
-
-
 def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int) -> ScenarioResult:
+    from modules.CSVSummaryDialog import DataProcessingThread, load_csv_with_fallbacks
+
+    class BenchmarkCSVThread(DataProcessingThread):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.chart_seconds = 0.0
+
+        def add_xy_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
+            start = time.perf_counter()
+            try:
+                return super().add_xy_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+            finally:
+                self.chart_seconds += time.perf_counter() - start
+
+        def add_histogram_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
+            start = time.perf_counter()
+            try:
+                return super().add_histogram_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+            finally:
+                self.chart_seconds += time.perf_counter() - start
+
+        def add_boxplot_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
+            start = time.perf_counter()
+            try:
+                return super().add_boxplot_chart(worksheet, data_column, col, selected_data, writer, sheet_name)
+            finally:
+                self.chart_seconds += time.perf_counter() - start
+
     csv_path = temp_dir / 'summary_fixture.csv'
     output_xlsx = temp_dir / 'summary_output.xlsx'
     fixture_metrics = _create_csv_fixture(csv_path, row_count=row_count, data_columns=data_columns)
@@ -430,6 +430,8 @@ def _write_outputs(output_dir: Path, payload: dict[str, Any]) -> tuple[Path, Pat
 
 
 def main() -> int:
+    _install_headless_stubs()
+
     parser = argparse.ArgumentParser(description='Run lightweight pipeline benchmarks for parse/export flows.')
     parser.add_argument('--output-dir', default='benchmark_results', help='Directory for machine-readable benchmark outputs.')
     parser.add_argument('--pdf-count', type=int, default=80)
