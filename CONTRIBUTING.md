@@ -70,12 +70,15 @@ Request/option contracts live in `modules/contracts.py`.
 
 ## Documentation sync policy
 
+For repository cleanup and docs organization sequencing, follow [`docs/repo_cleanup_and_docs_plan.md`](docs/repo_cleanup_and_docs_plan.md).
+
 - Keep documentation-only sync PRs separate from implementation PRs when updating roadmap/project-state docs.
 - Update `IMPLEMENTATION_PLAN.md` and `GOOGLE_SHEETS_MIGRATION_PLAN.md` **after** implementation/testing PRs merge so status text reflects shipped behavior.
 - For release-candidate documentation PRs, use [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md) as the single RC source of truth and update all files referenced there in the same PR.
 - For Google export docs, explicitly describe both:
   - required local secret files (`credentials.json`, `token.json`) and
   - fallback expectations (`.xlsx` remains the guaranteed artifact when conversion warns/fails).
+- For branch/release flow guidance, follow [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md) and keep the current RC scope frozen once `release/<version>-rcN` is cut.
 
 ## Google export contributor checklist
 

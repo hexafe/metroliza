@@ -46,6 +46,10 @@ Use `python scripts/sync_release_metadata.py` to propagate updates into docs and
 
 Release-candidate readiness is tracked in the canonical checklist:
 [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md).
+Branching/RC workflow guidance for solo maintenance is documented in:
+[`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md).
+Repository cleanup/documentation organization plan is tracked in:
+[`docs/repo_cleanup_and_docs_plan.md`](docs/repo_cleanup_and_docs_plan.md).
 
 Metroliza supports an end-to-end flow:
 
