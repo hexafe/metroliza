@@ -452,6 +452,73 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertTrue(all('Headers remaining ' in text for text in detailed_labels))
         self.assertTrue(all(text.count('\n') >= 2 for text in detailed_labels))
 
+    def test_add_measurements_creates_summary_tab_immediately_after_each_reference_tab(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        previous_reader = module.read_sql_dataframe
+        previous_builder = module.build_measurement_export_dataframe
+        previous_formats = module.create_measurement_formats
+        previous_write_block = module.write_measurement_block
+        previous_insert_chart = module.insert_measurement_chart
+
+        class _FakeWorksheet:
+            def set_column(self, *_args, **_kwargs):
+                return None
+
+            def freeze_panes(self, *_args, **_kwargs):
+                return None
+
+        class _RecordingWorkbook:
+            def __init__(self):
+                self.added_sheet_names = []
+
+            def add_worksheet(self, name):
+                self.added_sheet_names.append(name)
+                return _FakeWorksheet()
+
+        class _Backend:
+            def __init__(self, workbook):
+                self._workbook = workbook
+
+            def get_workbook(self, _excel_writer):
+                return self._workbook
+
+            def list_sheet_names(self, _excel_writer):
+                return set(self._workbook.added_sheet_names)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(generate_summary_sheet=True),
+            )
+            thread = ExportDataThread(request)
+            workbook = _RecordingWorkbook()
+            thread._active_backend = _Backend(workbook)
+            thread.update_progress.emit = lambda *_: None
+            thread.update_label.emit = lambda *_: None
+
+            module.read_sql_dataframe = lambda *_args, **_kwargs: object()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
+            module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
+            module.insert_measurement_chart = lambda *_args, **_kwargs: None
+            thread.summary_sheet_fill = lambda *_args, **_kwargs: None
+            try:
+                thread.add_measurements_horizontal_sheet(excel_writer=object())
+            finally:
+                module.read_sql_dataframe = previous_reader
+                module.build_measurement_export_dataframe = previous_builder
+                module.create_measurement_formats = previous_formats
+                module.write_measurement_block = previous_write_block
+                module.insert_measurement_chart = previous_insert_chart
+
+        self.assertEqual(
+            workbook.added_sheet_names,
+            ['REF_A', 'REF_A_summary', 'REF_B', 'REF_B_summary'],
+        )
+
     def test_summary_sheet_fill_populates_iqr_slot_for_each_header_when_deferred_charts_enabled(self):
         import pandas as pd
 
@@ -612,7 +679,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             completed = thread.get_export_backend().run(thread)
 
             self.assertTrue(completed)
-            self.assertEqual(calls, ['filtered', 'measurements'])
+            self.assertEqual(calls, ['measurements', 'filtered'])
             self.assertTrue(os.path.exists(out_file))
 
     def test_google_target_emits_canonical_stage_sequence_on_success(self):
@@ -625,7 +692,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 options=ExportOptions(export_target='google_sheets_drive_convert'),
             )
             thread = ExportDataThread(request)
-            thread._exported_sheet_names = {'MEASUREMENTS'}
+            thread._exported_sheet_names = ['MEASUREMENTS']
 
             class _Backend:
                 def run(self, _thread):
@@ -641,7 +708,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
+            captured = {}
+
             def _fake_upload(*_args, **kwargs):
+                captured['expected_sheet_names'] = kwargs.get('expected_sheet_names')
                 kwargs['status_callback']('uploading')
                 kwargs['status_callback']('converting')
                 kwargs['status_callback']('validating')
@@ -670,6 +740,55 @@ class TestExportBackendSmoke(unittest.TestCase):
                     'Google export stage: validating',
                     'Google export stage: completed (https://docs.google.com/spreadsheets/d/sheet-id/edit)',
                 ],
+            )
+            self.assertEqual(captured['expected_sheet_names'], ['MEASUREMENTS'])
+
+    def test_google_target_passes_expected_sheet_names_in_export_order(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+            thread._exported_sheet_names = ['REF_A', 'REF_A_summary', 'REF_B', 'REF_B_summary', 'MEASUREMENTS']
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+
+            captured = {}
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _fake_upload(*_args, **kwargs):
+                captured['expected_sheet_names'] = kwargs.get('expected_sheet_names')
+                return GoogleDriveConversionResult(
+                    file_id='sheet-id',
+                    web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                    local_xlsx_path=out_file,
+                    fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
+                    warnings=(),
+                    converted_tab_titles=('REF_A', 'REF_A_summary', 'REF_B', 'REF_B_summary', 'MEASUREMENTS'),
+                )
+
+            module.upload_and_convert_workbook = _fake_upload
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+
+            self.assertEqual(
+                captured['expected_sheet_names'],
+                ['REF_A', 'REF_A_summary', 'REF_B', 'REF_B_summary', 'MEASUREMENTS'],
             )
 
     def test_google_target_emits_retry_stage_message_before_completion(self):
@@ -821,7 +940,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 options=ExportOptions(export_target='google_sheets_drive_convert'),
             )
             thread = ExportDataThread(request)
-            thread._exported_sheet_names = {'MEASUREMENTS', 'REF_A'}
+            thread._exported_sheet_names = ['REF_A', 'MEASUREMENTS']
 
             class _Backend:
                 def run(self, _thread):
@@ -870,7 +989,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 options=ExportOptions(export_target='google_sheets_drive_convert'),
             )
             thread = ExportDataThread(request)
-            thread._exported_sheet_names = {'MEASUREMENTS', 'REF_A'}
+            thread._exported_sheet_names = ['REF_A', 'MEASUREMENTS']
 
             class _Backend:
                 def run(self, _thread):
@@ -925,7 +1044,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 options=ExportOptions(export_target='google_sheets_drive_convert'),
             )
             thread = ExportDataThread(request)
-            thread._exported_sheet_names = {'MEASUREMENTS'}
+            thread._exported_sheet_names = ['MEASUREMENTS']
 
             class _Backend:
                 def run(self, _thread):

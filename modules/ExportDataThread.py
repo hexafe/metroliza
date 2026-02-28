@@ -773,7 +773,8 @@ class ExportDataThread(QThread):
         self.export_canceled = False
         self._prepared_grouping_df = None
         self.completion_metadata = {"local_xlsx_path": self.excel_file}
-        self._exported_sheet_names = set()
+        self._exported_sheet_names = []
+        self._exported_sheet_name_set = set()
         self._last_emitted_progress = -1
         self._stage_timings = {
             'transform_grouping': 0.0,
@@ -851,7 +852,16 @@ class ExportDataThread(QThread):
 
     def _record_exported_sheet_name(self, sheet_name):
         if isinstance(sheet_name, str) and sheet_name.strip():
-            self._exported_sheet_names.add(sheet_name)
+            if sheet_name in self._exported_sheet_name_set:
+                return
+            self._exported_sheet_name_set.add(sheet_name)
+            self._exported_sheet_names.append(sheet_name)
+
+    def _build_expected_sheet_names(self):
+        if isinstance(self._exported_sheet_names, list):
+            return list(self._exported_sheet_names)
+        # Backward-compatible fallback for tests that patch internals directly.
+        return sorted(self._exported_sheet_names)
 
     @staticmethod
     def _format_elapsed_or_eta(seconds):
@@ -995,17 +1005,17 @@ class ExportDataThread(QThread):
         return run_export_steps(
             [
                 lambda: (
+                    self.update_label.emit("Building measurement sheets..."),
+                    self._emit_stage_progress('measurement_sheets_charts', 0.0),
+                    self.add_measurements_horizontal_sheet(excel_writer),
+                    self._emit_stage_progress('measurement_sheets_charts', 1.0),
+                ),
+                lambda: (
                     self.update_label.emit("Exporting filtered data..."),
                     self._emit_stage_progress('preparing_query', 1.0),
                     self._emit_stage_progress('filtered_sheet_write', 0.0),
                     self.export_filtered_data(excel_writer),
                     self._emit_stage_progress('filtered_sheet_write', 1.0),
-                ),
-                lambda: (
-                    self.update_label.emit("Building measurement sheets..."),
-                    self._emit_stage_progress('measurement_sheets_charts', 0.0),
-                    self.add_measurements_horizontal_sheet(excel_writer),
-                    self._emit_stage_progress('measurement_sheets_charts', 1.0),
                 ),
             ],
             should_cancel=self._check_canceled,
@@ -1111,7 +1121,7 @@ class ExportDataThread(QThread):
 
                 conversion = upload_and_convert_workbook(
                     self.excel_file,
-                    expected_sheet_names=sorted(self._exported_sheet_names),
+                    expected_sheet_names=self._build_expected_sheet_names(),
                     status_callback=_stage_callback,
                 )
                 self.completion_metadata.update(
