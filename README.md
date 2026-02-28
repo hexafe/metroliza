@@ -37,7 +37,7 @@ Dependency files are split by purpose:
 
 A short, non-technical changelog for end users is available in [`CHANGELOG.md`](CHANGELOG.md).
 
-Current release highlight (`2026.02`, build `260228`): Google Sheets export target `google_sheets_drive_convert` now has aligned user-facing wording across docs, keeps `.xlsx` fallback behavior explicit, and documents expected large-export performance gains from chart-heavy optimizations.
+Current release highlight (`2026.02`, build `260228`): Google Sheets export messaging is clearer, `.xlsx` fallback is explicit, and chart-heavy exports remain faster for daily use.
 
 Metroliza supports an end-to-end flow:
 
