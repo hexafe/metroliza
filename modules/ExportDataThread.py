@@ -220,6 +220,10 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
     return _build_histogram_annotation_specs(average, usl, lsl, y_max)
 
 
+def build_summary_panel_subtitle_text(summary_stats):
+    return build_summary_panel_subtitle(summary_stats)
+
+
 def compute_histogram_font_sizes(
     figure_size=(6, 4),
     *,
@@ -553,7 +557,7 @@ def render_density_line(ax, x, p):
         ax.plot(x, p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4)
 
 
-def style_histogram_stats_table(ax_table, table_data):
+def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None):
     """Apply semantic emphasis colors to the histogram summary table."""
     if ax_table is None:
         return
@@ -566,7 +570,17 @@ def style_histogram_stats_table(ax_table, table_data):
         cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_header_bg'])
         cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_header_text'])
 
+    cp_cpk_rows = {'Cp', 'Cpk'}
     for row_index, (label, _value) in enumerate(table_data, start=1):
+        if capability_badge and label in cp_cpk_rows:
+            _apply_table_row_badge(
+                ax_table,
+                row_index,
+                capability_badge['label'],
+                capability_badge['palette_key'],
+            )
+            continue
+
         if label not in EMPHASIS_TABLE_ROWS:
             continue
         for col_index in (0, 1):
@@ -575,6 +589,118 @@ def style_histogram_stats_table(ax_table, table_data):
                 continue
             cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_emphasis_bg'])
             cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_emphasis_text'])
+
+def classify_capability_status(cp, cpk):
+    """Classify capability readiness into scan-friendly quality tiers."""
+
+    def _as_float(value):
+        if isinstance(value, str):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    cp_value = _as_float(cp)
+    cpk_value = _as_float(cpk)
+    if cp_value is None or cpk_value is None:
+        return {
+            'label': 'Cp/Cpk N/A',
+            'palette_key': 'quality_unknown',
+        }
+
+    if cpk_value >= 1.67 and cp_value >= 1.67:
+        return {
+            'label': 'Cp/Cpk capable',
+            'palette_key': 'quality_capable',
+        }
+
+    if cpk_value >= 1.33 and cp_value >= 1.33:
+        return {
+            'label': 'Cp/Cpk good',
+            'palette_key': 'quality_good',
+        }
+
+    if cpk_value >= 1.0 and cp_value >= 1.0:
+        return {
+            'label': 'Cp/Cpk marginal',
+            'palette_key': 'quality_marginal',
+        }
+
+    return {
+        'label': 'Cp/Cpk risk',
+        'palette_key': 'quality_risk',
+    }
+
+
+def classify_nok_severity(nok_pct):
+    """Classify NOK ratio severity for chart title cueing."""
+    ratio = 0.0
+    try:
+        ratio = float(nok_pct)
+    except (TypeError, ValueError):
+        ratio = 0.0
+
+    if ratio <= 0:
+        return {
+            'label': 'NOK 0%',
+            'palette_key': 'quality_capable',
+        }
+
+    if ratio < 0.02:
+        return {
+            'label': f'NOK {ratio * 100:.1f}% low',
+            'palette_key': 'quality_good',
+        }
+
+    if ratio < 0.05:
+        return {
+            'label': f'NOK {ratio * 100:.1f}% watch',
+            'palette_key': 'quality_marginal',
+        }
+
+    return {
+        'label': f'NOK {ratio * 100:.1f}% high',
+        'palette_key': 'quality_risk',
+    }
+
+
+def build_summary_panel_subtitle(summary_stats):
+    """Return compact panel subtitle text showing sample size and NOK share."""
+    return f"n={int(summary_stats['sample_size'])} • NOK={summary_stats['nok_pct'] * 100:.1f}%"
+
+
+def _apply_table_row_badge(ax_table, row_index, label, palette_key):
+    cell = ax_table.get_celld().get((row_index, 1))
+    if cell is None:
+        return
+
+    cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+    text = cell.get_text()
+    text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+    text.set_weight('bold')
+    text.set_text(label)
+
+
+def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
+    """Render a subtle colored quality badge near the chart title area."""
+    ax.text(
+        x,
+        y,
+        label,
+        transform=ax.transAxes,
+        ha='left',
+        va='bottom',
+        fontsize=7.4,
+        color=SUMMARY_PLOT_PALETTE[f'{palette_key}_text'],
+        bbox={
+            'boxstyle': 'round,pad=0.16',
+            'fc': SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'],
+            'ec': SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'],
+            'alpha': 0.95,
+        },
+        zorder=6,
+    )
 
 
 class ExportDataThread(QThread):
@@ -1185,6 +1311,9 @@ class ExportDataThread(QThread):
 
             summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
             average = summary_stats['average']
+            capability_badge = classify_capability_status(summary_stats['cp'], summary_stats['cpk'])
+            nok_severity_badge = classify_nok_severity(summary_stats['nok_pct'])
+            panel_subtitle = build_summary_panel_subtitle(summary_stats)
             
             apply_summary_plot_theme()
             fig, ax = plt.subplots(figsize=(6, 4))
@@ -1234,6 +1363,7 @@ class ExportDataThread(QThread):
             panel_plan = build_summary_panel_write_plan(summary_anchors, header)
             header_cell = panel_plan['header_cell']
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
+            summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, panel_subtitle)
             distribution_slot = panel_plan['image_slots']['distribution']
             summary_worksheet.insert_image(
                 distribution_slot['row'],
@@ -1310,7 +1440,7 @@ class ExportDataThread(QThread):
             # Format the table
             ax_table.auto_set_font_size(False)
             ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
-            style_histogram_stats_table(ax_table, table_data)
+            style_histogram_stats_table(ax_table, table_data, capability_badge=capability_badge)
 
             density_curve = build_histogram_density_curve_payload(header_group['MEAS'])
             if density_curve is not None:
@@ -1325,6 +1455,7 @@ class ExportDataThread(QThread):
             ax.set_xlabel('Measurement')
             ax.set_ylabel('Density')
             ax.set_title(f'{header}')
+            add_quality_title_badge(ax, nok_severity_badge['label'], nok_severity_badge['palette_key'])
             apply_minimal_axis_style(ax, grid_axis='y')
 
             _, y_max = ax.get_ylim()
@@ -1375,6 +1506,7 @@ class ExportDataThread(QThread):
             ax.set_xlabel('Sample #')
             ax.set_ylabel('Measurement')
             ax.set_title(f'{header}')
+            add_quality_title_badge(ax, nok_severity_badge['label'], nok_severity_badge['palette_key'])
             apply_minimal_axis_style(ax, grid_axis='y')
 
             apply_shared_x_axis_label_strategy(ax, unique_labels, positions=data_x)

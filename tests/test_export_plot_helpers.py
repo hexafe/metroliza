@@ -63,6 +63,10 @@ from modules.ExportDataThread import (  # noqa: E402
     compute_scaled_y_limits,
     render_iqr_boxplot,
     apply_shared_x_axis_label_strategy,
+    classify_capability_status,
+    classify_nok_severity,
+    build_summary_panel_subtitle_text,
+    style_histogram_stats_table,
 )
 
 
@@ -166,6 +170,41 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertTrue(all(style is None for _, _, style in rows[:7]))
         self.assertIsNone(rows[8][2])
 
+
+
+
+    def test_classify_capability_status_maps_threshold_tiers(self):
+        self.assertEqual(classify_capability_status(1.7, 1.7)['palette_key'], 'quality_capable')
+        self.assertEqual(classify_capability_status(1.4, 1.35)['palette_key'], 'quality_good')
+        self.assertEqual(classify_capability_status(1.1, 1.0)['palette_key'], 'quality_marginal')
+        self.assertEqual(classify_capability_status(0.9, 0.8)['palette_key'], 'quality_risk')
+        self.assertEqual(classify_capability_status('N/A', 'N/A')['palette_key'], 'quality_unknown')
+
+    def test_classify_nok_severity_maps_scan_friendly_levels(self):
+        self.assertEqual(classify_nok_severity(0.0)['palette_key'], 'quality_capable')
+        self.assertEqual(classify_nok_severity(0.01)['palette_key'], 'quality_good')
+        self.assertEqual(classify_nok_severity(0.03)['palette_key'], 'quality_marginal')
+        self.assertEqual(classify_nok_severity(0.08)['palette_key'], 'quality_risk')
+
+    def test_build_summary_panel_subtitle_text_formats_samples_and_nok_percent(self):
+        subtitle = build_summary_panel_subtitle_text({'sample_size': 12, 'nok_pct': 0.083333})
+
+        self.assertEqual(subtitle, 'n=12 • NOK=8.3%')
+
+    def test_style_histogram_stats_table_applies_capability_badge_to_cp_rows(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        table_data = [('Cp', 1.45), ('Cpk', 1.4), ('NOK %', 2.5)]
+        ax_table = ax.table(cellText=table_data, colLabels=['Statistic', 'Value'], cellLoc='center')
+
+        style_histogram_stats_table(
+            ax_table,
+            table_data,
+            capability_badge={'label': 'Cp/Cpk good', 'palette_key': 'quality_good'},
+        )
+
+        self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_text(), 'Cp/Cpk good')
+        self.assertEqual(ax_table.get_celld()[(2, 1)].get_text().get_text(), 'Cp/Cpk good')
+        plt.close(fig)
 
     def test_build_measurement_block_plan_returns_expected_coordinates(self):
         plan = build_measurement_block_plan(base_col=6, sample_size=10)
