@@ -197,7 +197,7 @@ def build_histogram_table_data(summary_stats):
         ('Cpk', _rounded_or_text(summary_stats['cpk'], 2)),
         ('Samples', round(summary_stats['sample_size'], 1)),
         ('NOK nb', round(summary_stats['nok_count'], 1)),
-        ('NOK %', round(summary_stats['nok_pct'], 2)),
+        ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
     ]
 
 
@@ -574,12 +574,7 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None):
     cp_cpk_rows = {'Cp', 'Cpk'}
     for row_index, (label, _value) in enumerate(table_data, start=1):
         if capability_badge and label in cp_cpk_rows:
-            _apply_table_row_badge(
-                ax_table,
-                row_index,
-                capability_badge['label'],
-                capability_badge['palette_key'],
-            )
+            _apply_table_row_badge(ax_table, row_index, capability_badge['palette_key'])
             continue
 
         if label not in EMPHASIS_TABLE_ROWS:
@@ -671,16 +666,15 @@ def build_summary_panel_subtitle(summary_stats):
     return f"n={int(summary_stats['sample_size'])} • NOK={summary_stats['nok_pct'] * 100:.1f}%"
 
 
-def _apply_table_row_badge(ax_table, row_index, label, palette_key):
-    cell = ax_table.get_celld().get((row_index, 1))
-    if cell is None:
-        return
-
-    cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
-    text = cell.get_text()
-    text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-    text.set_weight('bold')
-    text.set_text(label)
+def _apply_table_row_badge(ax_table, row_index, palette_key):
+    for col_index in (0, 1):
+        cell = ax_table.get_celld().get((row_index, col_index))
+        if cell is None:
+            continue
+        cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+        text = cell.get_text()
+        text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+        text.set_weight('bold')
 
 
 def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
@@ -1370,7 +1364,6 @@ class ExportDataThread(QThread):
             summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
             average = summary_stats['average']
             capability_badge = classify_capability_status(summary_stats['cp'], summary_stats['cpk'])
-            nok_severity_badge = classify_nok_severity(summary_stats['nok_pct'])
             panel_subtitle = build_summary_panel_subtitle(summary_stats)
             
             apply_summary_plot_theme()
@@ -1534,7 +1527,14 @@ class ExportDataThread(QThread):
                 render_density_line(ax, density_curve['x'], density_curve['y'])
             
             # Add vertical lines for mean, LSL and USL
-            ax.axvline(average, color=SUMMARY_PLOT_PALETTE['central_tendency'], linestyle='dashed', linewidth=1.0)
+            ax.axvline(
+                average,
+                color=SUMMARY_PLOT_PALETTE['annotation_emphasis'],
+                linestyle='-',
+                linewidth=1.8,
+                alpha=0.95,
+                zorder=5,
+            )
             ax.axvline(USL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
             ax.axvline(LSL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
 
@@ -1542,12 +1542,14 @@ class ExportDataThread(QThread):
             ax.set_xlabel('Measurement')
             ax.set_ylabel('Density')
             ax.set_title(f'{header}')
-            add_quality_title_badge(ax, nok_severity_badge['label'], nok_severity_badge['palette_key'])
             apply_minimal_axis_style(ax, grid_axis='y')
 
             _, y_max = ax.get_ylim()
             annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
-            for annotation in build_histogram_annotation_specs(average, USL, LSL, y_max):
+            annotation_specs = build_histogram_annotation_specs(average, USL, LSL, y_max)
+            if histogram_font_sizes['annotation_fontsize'] < 8.2:
+                annotation_specs = [annotation_specs[0]]
+            for annotation in annotation_specs:
                 ax.text(
                     annotation['x'],
                     annotation['y'],
@@ -1597,7 +1599,6 @@ class ExportDataThread(QThread):
             ax.set_xlabel('Sample #')
             ax.set_ylabel('Measurement')
             ax.set_title(f'{header}')
-            add_quality_title_badge(ax, nok_severity_badge['label'], nok_severity_badge['palette_key'])
             apply_minimal_axis_style(ax, grid_axis='y')
 
             apply_shared_x_axis_label_strategy(ax, unique_labels, positions=data_x)

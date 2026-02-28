@@ -66,6 +66,7 @@ from modules.ExportDataThread import (  # noqa: E402
     classify_capability_status,
     classify_nok_severity,
     build_summary_panel_subtitle_text,
+    build_histogram_table_data,
     style_histogram_stats_table,
 )
 
@@ -191,6 +192,24 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual(subtitle, 'n=12 • NOK=8.3%')
 
+    def test_build_histogram_table_data_formats_nok_as_percent_string(self):
+        table = build_histogram_table_data(
+            {
+                'minimum': 1.0,
+                'maximum': 2.0,
+                'average': 1.5,
+                'median': 1.5,
+                'sigma': 0.1,
+                'cp': 1.2,
+                'cpk': 1.1,
+                'sample_size': 10,
+                'nok_count': 2,
+                'nok_pct': 0.083333,
+            }
+        )
+
+        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+
     def test_style_histogram_stats_table_applies_capability_badge_to_cp_rows(self):
         fig, ax = plt.subplots(figsize=(4, 3))
         table_data = [('Cp', 1.45), ('Cpk', 1.4), ('NOK %', 2.5)]
@@ -202,8 +221,10 @@ class TestExportPlotHelpers(unittest.TestCase):
             capability_badge={'label': 'Cp/Cpk good', 'palette_key': 'quality_good'},
         )
 
-        self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_text(), 'Cp/Cpk good')
-        self.assertEqual(ax_table.get_celld()[(2, 1)].get_text().get_text(), 'Cp/Cpk good')
+        self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_text(), '1.45')
+        self.assertEqual(ax_table.get_celld()[(2, 1)].get_text().get_text(), '1.4')
+        self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), 'Cp')
+        self.assertEqual(ax_table.get_celld()[(2, 0)].get_text().get_text(), 'Cpk')
         plt.close(fig)
 
     def test_build_measurement_block_plan_returns_expected_coordinates(self):
