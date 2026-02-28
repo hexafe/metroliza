@@ -147,8 +147,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
-            'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit\n'
-            'Drive file: https://drive.google.com/file/d/abc/view',
+            'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
         )
 
     def test_google_fallback_promotes_warning_dialog(self):
@@ -219,12 +218,11 @@ class TestExportCompletionMessaging(unittest.TestCase):
         from modules.ExportDialog import format_message_with_clickable_links
 
         formatted = format_message_with_clickable_links(
-            'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit\nDrive file: https://drive.google.com/file/d/abc/view'
+            'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit'
         )
 
         self.assertIn('<a href="https://docs.google.com/spreadsheets/d/abc/edit">https://docs.google.com/spreadsheets/d/abc/edit</a>', formatted)
-        self.assertIn('<a href="https://drive.google.com/file/d/abc/view">https://drive.google.com/file/d/abc/view</a>', formatted)
-        self.assertIn('<br>', formatted)
+        self.assertNotIn('drive.google.com/file/d/abc/view', formatted)
 
     def test_link_formatting_escapes_html_before_linking(self):
         from modules.ExportDialog import format_message_with_clickable_links
