@@ -48,14 +48,14 @@ This ensures packaged apps keep working even when the native binary is not bundl
 
 ## PyInstaller inclusion rules and smoke checks
 
-`metroliza_onefile.spec` includes:
+`packaging/metroliza_onefile.spec` includes:
 
 - `hiddenimports=['_metroliza_cmm_native']`
 
 Smoke checks after build:
 
 ```bash
-pyinstaller metroliza_onefile.spec
+pyinstaller packaging/metroliza_onefile.spec
 # smoke import from generated app environment
 python -c "import modules.cmm_native_parser as p; print(p.native_backend_available())"
 ```
@@ -64,14 +64,14 @@ If hidden import resolution fails on a platform, release may proceed only if pur
 
 ## Nuitka inclusion rules and smoke checks
 
-`build_nuitka.ps1` includes:
+`packaging/build_nuitka.ps1` includes:
 
 - `--include-module=_metroliza_cmm_native`
 
 Smoke checks after build:
 
 ```powershell
-./build_nuitka.ps1 -FastDev
+./packaging/build_nuitka.ps1 -FastDev
 # run the built executable in a sandbox and verify startup
 ```
 
