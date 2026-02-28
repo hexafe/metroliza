@@ -9,6 +9,8 @@ EXPORT_PRESET_DEFAULT = EXPORT_PRESET_FAST_DIAGNOSTICS
 _EXPORT_PRESET_DEFINITIONS = {
     EXPORT_PRESET_FAST_DIAGNOSTICS: {
         'label': 'Fast diagnostics',
+        'description': 'Quick pass for daily checks; prioritizes speed over complete reporting.',
+        'intended_use': 'Best when you need rapid feedback during troubleshooting or iterative runs.',
         'options': {
             'export_type': 'line',
             'sorting_parameter': 'date',
@@ -20,6 +22,8 @@ _EXPORT_PRESET_DEFINITIONS = {
     },
     EXPORT_PRESET_FULL_REPORT: {
         'label': 'Full report',
+        'description': 'More complete package for sharing and archiving; includes extra summary outputs.',
+        'intended_use': 'Best for final deliverables, handoff reports, or management-ready documentation.',
         'options': {
             'export_type': 'line',
             'sorting_parameter': 'date',
@@ -49,6 +53,14 @@ def get_export_preset_id_for_label(label):
         if payload.get('label') == label:
             return preset_id
     return EXPORT_PRESET_DEFAULT
+
+
+def get_export_preset_description(preset_id):
+    return _EXPORT_PRESET_DEFINITIONS[resolve_export_preset_id(preset_id)].get('description', '')
+
+
+def get_export_preset_intended_use(preset_id):
+    return _EXPORT_PRESET_DEFINITIONS[resolve_export_preset_id(preset_id)].get('intended_use', '')
 
 
 def resolve_export_preset_id(preset_id):

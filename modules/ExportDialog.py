@@ -6,8 +6,10 @@ from modules.CustomLogger import CustomLogger
 from modules.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_options, validate_paths
 from modules.export_preset_utils import (
     build_export_options_for_preset,
+    get_export_preset_description,
     get_export_preset_id_for_label,
     get_export_preset_ids,
+    get_export_preset_intended_use,
     get_export_preset_label,
     load_export_dialog_config,
     migrate_export_dialog_config,
@@ -42,8 +44,21 @@ from pathlib import Path
 
 def build_preset_summary_text(selected_preset):
     preset_options = build_export_options_for_preset(selected_preset)
-    includes_summary_sheet = "Yes" if bool(preset_options['generate_summary_sheet']) else "No"
-    return f"Includes summary sheet: {includes_summary_sheet}"
+    includes_summary_sheet = bool(preset_options['generate_summary_sheet'])
+    speed_vs_completeness = "Speed-focused" if not includes_summary_sheet else "Completeness-focused"
+    summary_sheet_line = "Summary sheet: On" if includes_summary_sheet else "Summary sheet: Off"
+    description = get_export_preset_description(selected_preset)
+    intended_use = get_export_preset_intended_use(selected_preset)
+
+    lines = [
+        speed_vs_completeness,
+        summary_sheet_line,
+    ]
+    if description:
+        lines.append(description)
+    if intended_use:
+        lines.append(f"Typical use: {intended_use}")
+    return "\n".join(lines)
 
 
 def is_generate_summary_sheet_overridden(selected_preset, generate_summary_sheet):
@@ -346,6 +361,7 @@ class ExportDialog(QDialog):
             self.preset_combobox.setCurrentText(get_export_preset_label(selected_preset))
             self.preset_combobox.currentTextChanged.connect(lambda _: self.apply_selected_preset())
             self.preset_summary_label = QLabel("")
+            self.preset_summary_label.setWordWrap(True)
             self.preset_customized_badge = QLabel("Customized")
             self.preset_customized_badge.setStyleSheet("color: #b00020; font-weight: bold;")
             self.preset_customized_badge.hide()
