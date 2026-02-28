@@ -1,0 +1,46 @@
+# Branching strategy
+
+This document defines the lightweight branching model used for Metroliza release work.
+
+## 1) Branch purposes
+
+- `main`: production-ready branch; only reviewed, releasable code is merged here.
+- `develop` (optional): integration branch for active feature work before release cut.
+- `release/*`: stabilization branches created for a specific release candidate cycle.
+- `hotfix/*`: urgent production fix branches cut from `main` for post-release defects.
+
+## 2) Naming conventions
+
+- Release candidate branches use: `release/x.y.z-rcN`
+  - Example: `release/2026.03.0-rc1`
+- Hotfix branches use: `hotfix/x.y.z+1`
+  - Example: `hotfix/2026.02.0+1`
+
+## 3) Merge directions
+
+- Feature work merges into `develop` when it exists; otherwise directly into `main` for small repositories.
+- Release candidate branches are cut from `develop` (or `main` if no `develop`) and merge into `main` once approved.
+- After a release merge, sync `main` back into `develop` to avoid drift.
+- Hotfix branches merge into `main` first, then are back-merged into `develop` (if used).
+
+## 4) Allowed change types per branch
+
+- `main`:
+  - Allowed: release-ready features, approved fixes, documentation updates tied to shipped behavior.
+  - Not allowed: incomplete features, experimental spikes.
+- `develop`:
+  - Allowed: feature development, refactors, non-breaking docs/test updates.
+  - Not allowed: unreviewed emergency changes intended only for production hotfixing.
+- `release/*`:
+  - Allowed: bug fixes, regression fixes, release notes/version metadata, docs needed for release readiness.
+  - Not allowed: new features, large refactors, scope-expanding changes.
+- `hotfix/*`:
+  - Allowed: minimal-risk production fixes and required tests/docs for that fix.
+  - Not allowed: unrelated cleanup, feature development, broad dependency upgrades.
+
+## 5) Tagging rules (RC and final)
+
+- Tag each release candidate on the matching `release/*` branch using annotated tags: `vX.Y.Z-rcN`.
+- After promoting to production, tag the merge commit on `main` as `vX.Y.Z`.
+- Do not retag moved commits; create a new `-rcN` tag for any additional RC iteration.
+- Hotfix releases follow semantic patch progression from the production tag (for example from `vX.Y.Z` to `vX.Y.(Z+1)`).
