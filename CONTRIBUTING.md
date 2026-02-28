@@ -70,7 +70,7 @@ Request/option contracts live in `modules/contracts.py`.
 
 ## Documentation sync policy
 
-For repository cleanup and docs organization sequencing, follow [`docs/repo_cleanup_and_docs_plan.md`](docs/repo_cleanup_and_docs_plan.md).
+For repository cleanup and docs organization sequencing, follow [`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md) (status: archived historical context).
 
 - Keep documentation-only sync PRs separate from implementation PRs when updating roadmap/project-state docs.
 - Update `IMPLEMENTATION_PLAN.md` and `GOOGLE_SHEETS_MIGRATION_PLAN.md` **after** implementation/testing PRs merge so status text reflects shipped behavior.
