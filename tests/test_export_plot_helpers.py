@@ -68,10 +68,62 @@ from modules.ExportDataThread import (  # noqa: E402
     build_summary_panel_subtitle_text,
     build_histogram_table_data,
     style_histogram_stats_table,
+    resolve_violin_annotation_style,
 )
 
 
 class TestExportPlotHelpers(unittest.TestCase):
+
+    def test_resolve_violin_annotation_style_auto_full_keeps_minmax_and_sigma(self):
+        style = resolve_violin_annotation_style(
+            group_count=3,
+            x_limits=(-0.5, 2.5),
+            figure_size=(6, 4),
+            mode='auto',
+            readability_scale=0.2,
+        )
+
+        self.assertEqual(style['mode'], 'full')
+        self.assertTrue(style['show_minmax'])
+        self.assertTrue(style['show_sigma'])
+        self.assertGreaterEqual(style['font_size'], 6.8)
+
+    def test_resolve_violin_annotation_style_auto_compact_can_hide_sigma_for_dense_groups(self):
+        style = resolve_violin_annotation_style(
+            group_count=13,
+            x_limits=(-0.5, 12.5),
+            figure_size=(6, 4),
+            mode='auto',
+            readability_scale=0.0,
+        )
+
+        self.assertEqual(style['mode'], 'compact')
+        self.assertFalse(style['show_minmax'])
+        self.assertFalse(style['show_sigma'])
+        self.assertGreaterEqual(style['font_size'], 6.8)
+
+    def test_resolve_violin_annotation_style_compact_respects_readability_scaling(self):
+        base = resolve_violin_annotation_style(
+            group_count=8,
+            x_limits=(-0.5, 7.5),
+            figure_size=(6, 4),
+            mode='compact',
+            readability_scale=0.0,
+        )
+        scaled = resolve_violin_annotation_style(
+            group_count=8,
+            x_limits=(-0.5, 7.5),
+            figure_size=(8, 4),
+            mode='compact',
+            readability_scale=0.6,
+        )
+
+        self.assertEqual(base['mode'], 'compact')
+        self.assertEqual(scaled['mode'], 'compact')
+        self.assertGreaterEqual(base['font_size'], 6.8)
+        self.assertGreater(scaled['font_size'], base['font_size'])
+        self.assertGreater(scaled['mean_marker_size'], base['mean_marker_size'])
+
     def test_build_summary_sheet_position_plan_matches_legacy_three_column_block_math(self):
         first = build_summary_sheet_position_plan(3)
         second = build_summary_sheet_position_plan(6)

@@ -360,22 +360,20 @@ def build_violin_group_stats_rows(labels, values):
     return rows
 
 
-def annotate_violin_group_stats(ax, labels, values):
-    """Annotate group summary statistics on violin plots.
-
-    Modes:
-    - full: min/mean/max + ±3σ
-    - compact: mean + optional ±3σ
-    - auto: chooses full/compact based on group count and x-spacing
-    """
-
-    annotation_mode = 'auto'
-
+def resolve_violin_annotation_style(
+    *,
+    group_count,
+    x_limits,
+    figure_size=(6, 4),
+    mode='auto',
+    readability_scale=None,
+):
+    """Resolve violin annotation style based on density and readability scaling."""
     mode_styles = {
         'full': {
-            'font_size': 6,
-            'minmax_marker_size': 12,
-            'mean_marker_size': 18,
+            'font_size': 7.4,
+            'minmax_marker_size': 16,
+            'mean_marker_size': 22,
             'offsets': {
                 'min': (4, -10),
                 'mean': (4, 2),
@@ -388,9 +386,9 @@ def annotate_violin_group_stats(ax, labels, values):
             'sigma_line_width': 0.9,
         },
         'compact': {
-            'font_size': 5,
+            'font_size': 6.8,
             'minmax_marker_size': 0,
-            'mean_marker_size': 12,
+            'mean_marker_size': 16,
             'offsets': {
                 'mean': (2, 1),
                 'sigma_low': (2, -8),
@@ -402,29 +400,62 @@ def annotate_violin_group_stats(ax, labels, values):
         },
     }
 
-    def _resolve_violin_annotation_style(group_count, mode='auto'):
-        safe_group_count = max(0, int(group_count))
-        if safe_group_count <= 0:
-            return mode_styles['compact']
-
-        x_min, x_max = ax.get_xlim()
-        x_range = max(float(x_max - x_min), 1e-9)
-        x_spacing = x_range / safe_group_count
-
-        resolved_mode = mode
-        if mode == 'auto':
-            if safe_group_count <= 4 and x_spacing >= 0.75:
-                resolved_mode = 'full'
-            else:
-                resolved_mode = 'compact'
-
-        style = dict(mode_styles.get(resolved_mode, mode_styles['compact']))
-        if resolved_mode == 'compact' and (safe_group_count > 12 or x_spacing < 0.55):
-            style['show_sigma'] = False
+    safe_group_count = max(0, int(group_count))
+    if safe_group_count <= 0:
+        style = dict(mode_styles['compact'])
+        style['offsets'] = dict(style['offsets'])
+        style['mode'] = 'compact'
         return style
 
+    x_min, x_max = x_limits
+    x_range = max(float(x_max - x_min), 1e-9)
+    x_spacing = x_range / safe_group_count
+
+    resolved_mode = mode
+    if mode == 'auto':
+        resolved_mode = 'full' if (safe_group_count <= 4 and x_spacing >= 0.75) else 'compact'
+
+    style = dict(mode_styles.get(resolved_mode, mode_styles['compact']))
+    style['offsets'] = dict(style.get('offsets', {}))
+
+    fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 6
+    fig_width = max(float(fig_width), 1.0)
+    width_scale = min(1.25, max(0.9, fig_width / 6.0))
+
+    optional_readability = 0.0 if readability_scale is None else float(readability_scale)
+    readability_bonus = optional_readability * 0.22
+
+    scaled_font_size = (style.get('font_size', 6.8) * width_scale) + readability_bonus
+    style['font_size'] = min(10.8, max(6.8, scaled_font_size))
+
+    marker_scale = min(1.35, max(0.85, width_scale + (optional_readability * 0.1)))
+    style['minmax_marker_size'] = max(0, int(round(style.get('minmax_marker_size', 0) * marker_scale)))
+    style['mean_marker_size'] = max(8, int(round(style.get('mean_marker_size', 12) * marker_scale)))
+
+    if resolved_mode == 'compact' and (safe_group_count > 12 or x_spacing < 0.55):
+        style['show_sigma'] = False
+
+    style['mode'] = resolved_mode
+    return style
+
+
+def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, annotation_mode='auto'):
+    """Annotate group summary statistics on violin plots.
+
+    Modes:
+    - full: min/mean/max + ±3σ
+    - compact: mean + optional ±3σ
+    - auto: chooses full/compact based on group count and x-spacing
+    """
+
     group_count = max(len(values), len(labels))
-    style = _resolve_violin_annotation_style(group_count, mode=annotation_mode)
+    style = resolve_violin_annotation_style(
+        group_count=group_count,
+        x_limits=ax.get_xlim(),
+        figure_size=ax.figure.get_size_inches(),
+        mode=annotation_mode,
+        readability_scale=readability_scale,
+    )
     for idx, group_values in enumerate(values):
         arr = np.asarray(group_values, dtype=float)
         if arr.size == 0:
@@ -435,7 +466,7 @@ def annotate_violin_group_stats(ax, labels, values):
         min_val = float(np.min(arr))
         max_val = float(np.max(arr))
 
-        text_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
+        text_box = {'boxstyle': 'round,pad=0.2', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.9}
 
         if style['show_minmax']:
             ax.scatter([xpos], [min_val], color=SUMMARY_PLOT_PALETTE['annotation_text'], s=style['minmax_marker_size'], marker='v', zorder=4)
@@ -501,8 +532,7 @@ def annotate_violin_group_stats(ax, labels, values):
                 bbox=text_box,
             )
 
-
-def render_violin(ax, values, labels):
+def render_violin(ax, values, labels, *, readability_scale=None):
     if _HAS_SEABORN:
         sns.violinplot(data=values, inner=None, cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
         ax.set_xticks(range(len(labels)))
@@ -510,7 +540,7 @@ def render_violin(ax, values, labels):
         ax.violinplot(values, showmeans=False, showmedians=False, showextrema=False)
         ax.set_xticks(range(1, len(labels) + 1))
     ax.set_xticklabels(labels)
-    annotate_violin_group_stats(ax, labels, values)
+    annotate_violin_group_stats(ax, labels, values, readability_scale=readability_scale)
 
 
 def render_scatter(ax, data=None, x=None, y=None):
@@ -1415,7 +1445,7 @@ class ExportDataThread(QThread):
                     self.violin_plot_min_samplesize,
                 )
                 if can_render_violin:
-                    render_violin(ax, values, labels)
+                    render_violin(ax, values, labels, readability_scale=self.summary_plot_scale)
                 else:
                     render_scatter(ax, data=sampled_group, x='GROUP', y='MEAS')
             else:
@@ -1425,7 +1455,7 @@ class ExportDataThread(QThread):
                     self.violin_plot_min_samplesize,
                 )
                 if can_render_violin:
-                    render_violin(ax, values, labels)
+                    render_violin(ax, values, labels, readability_scale=self.summary_plot_scale)
                 else:
                     render_scatter(ax, data=sampled_group, x='SAMPLE_NUMBER', y='MEAS')
 
