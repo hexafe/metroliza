@@ -340,8 +340,11 @@ class TestShowExportResultMessage(unittest.TestCase):
             class StandardButton:
                 Ok = 'ok'
 
+            _first_click = True
+
             def __init__(self, parent):
                 self._action_button = object()
+                self._ok_button = object()
 
             def setIcon(self, _):
                 pass
@@ -362,7 +365,10 @@ class TestShowExportResultMessage(unittest.TestCase):
                 pass
 
             def clickedButton(self):
-                return self._action_button
+                if FakeMessageBox._first_click:
+                    FakeMessageBox._first_click = False
+                    return self._action_button
+                return self._ok_button
 
         with patch('modules.ExportDialog.QMessageBox', FakeMessageBox), patch('modules.ExportDialog.reveal_file_in_explorer') as reveal_mock:
             show_export_result_message(parent=None, level='info', title='Done', message='ok', excel_file='out.xlsx')
@@ -385,8 +391,11 @@ class TestShowExportResultMessage(unittest.TestCase):
 
             warning_calls = []
 
+            _first_click = True
+
             def __init__(self, parent):
                 self._action_button = object()
+                self._ok_button = object()
 
             def setIcon(self, _):
                 pass
@@ -407,7 +416,10 @@ class TestShowExportResultMessage(unittest.TestCase):
                 pass
 
             def clickedButton(self):
-                return self._action_button
+                if FakeMessageBox._first_click:
+                    FakeMessageBox._first_click = False
+                    return self._action_button
+                return self._ok_button
 
             @staticmethod
             def warning(parent, title, text):
