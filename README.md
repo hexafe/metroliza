@@ -76,14 +76,14 @@ Metroliza supports an end-to-end flow:
 
 ## Google Sheets export prerequisites and secret handling
 
-Before using the Google Sheets export target (`google_sheets_drive_convert`), ensure:
+Before enabling **Also create Google Sheets version (Excel file is always kept locally)** (internal target: `google_sheets_drive_convert`), ensure:
 
 - You have a Google Cloud OAuth client secret file available locally as `credentials.json` (or a local path you explicitly point the smoke harness to).
 - A local OAuth token cache (`token.json`) is generated after first consent (Metroliza now opens an interactive Google authorization flow automatically when the token is missing or no longer refreshable); keep it local-only and rotate/revoke if shared machine access changes.
 - `credentials.json` and `token.json` are ignored by git (including wildcard/path variants) and never committed to the repository.
 - Only redacted examples/templates (for example `config/google/credentials.example.json`) are allowed in-repo.
 
-If conversion fails or warnings indicate degraded chart/format fidelity, Metroliza keeps and reports the generated `.xlsx` path as the guaranteed fallback artifact.
+A local `.xlsx` is always produced and kept. Google Sheets conversion is optional and may have minor fidelity differences in some charts/styles. If conversion fails or warnings indicate degraded chart/format fidelity, Metroliza keeps and reports the generated `.xlsx` path as the guaranteed fallback artifact.
 
 Detailed smoke execution and troubleshooting guidance lives in the dedicated runbook:
 [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md).
