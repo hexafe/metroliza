@@ -8,6 +8,7 @@ Use this together with:
 
 - [`release_candidate_checklist.md`](./release_candidate_checklist.md)
 - [`release_branching_playbook.md`](./release_branching_playbook.md)
+- [`open_testing_runbook.md`](./open_testing_runbook.md)
 - [`branching_strategy.md`](./branching_strategy.md)
 
 ---

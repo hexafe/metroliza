@@ -46,6 +46,8 @@ Use `python scripts/sync_release_metadata.py` to propagate updates into docs and
 
 Release-candidate readiness is tracked in the canonical checklist:
 [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md).
+Open-testing execution/triage cadence and RC handoff evidence are documented in:
+[`docs/release_checks/open_testing_runbook.md`](docs/release_checks/open_testing_runbook.md).
 Branching/RC workflow guidance for solo maintenance is documented in:
 [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md).
 Repository cleanup/documentation organization notes were archived in:
