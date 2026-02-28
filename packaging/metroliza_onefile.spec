@@ -1,15 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
 #import version_date
 #VERSION_DATE = version_date.VERSION_DATE
 
 VERSION_DATE = "260228"
 
 block_cipher = None
+ROOT_DIR = Path(__file__).resolve().parents[1]
+ICON_PATH = Path(__file__).resolve().with_name('metroliza_icon2.ico')
 
 
 a = Analysis(
-    ['metroliza.py'],
+    [str(ROOT_DIR / 'metroliza.py')],
     pathex=[],
     binaries=[],
     datas=[],
@@ -45,5 +49,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['metroliza_icon2.ico'],
+    icon=[str(ICON_PATH)],
 )

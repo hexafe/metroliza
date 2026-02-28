@@ -56,7 +56,7 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 Build commands:
 
 ```bash
-pyinstaller metroliza_onefile.spec
+pyinstaller packaging/metroliza_onefile.spec
 python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release
 ```
 
@@ -65,7 +65,7 @@ python -m nuitka metroliza.py `
   --onefile `
   --windows-console-mode=disable `
   --enable-plugin=pyqt6 `
-  --windows-icon-from-ico=metroliza_icon2.ico `
+  --windows-icon-from-ico=packaging/metroliza_icon2.ico `
   --output-filename=metroliza.exe `
   --assume-yes-for-downloads `
   --remove-output `

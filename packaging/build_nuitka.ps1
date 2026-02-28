@@ -1,7 +1,7 @@
 param(
     [string]$EntryPoint = "metroliza.py",
     [string]$OutputName = "metroliza_N_260223.exe",
-    [string]$IconPath = "metroliza_icon2.ico",
+    [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
     [switch]$FastDev
 )
 

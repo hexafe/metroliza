@@ -96,7 +96,7 @@ Record release-gated smoke outcomes in:
 - `modules/` — core app modules (parsing, grouping, export, dialogs, contracts, DB helpers, export summary utilities).
 - `tests/` — regression/unit tests.
 - `docs/` — runbooks, release checks, policy docs, and archived planning notes.
-- `metroliza_onefile.spec` — PyInstaller one-file build spec.
+- `packaging/` — release/build assets (PyInstaller spec, Nuitka helper script, app icon).
 
 ## Development checks
 
@@ -153,10 +153,20 @@ Runtime backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
 Build with PyInstaller:
 
 ```bash
-pyinstaller metroliza_onefile.spec
+pyinstaller packaging/metroliza_onefile.spec
 ```
 
 The generated executable is placed under `dist/`.
+
+
+### Maintainer migration note
+
+Packaging assets moved from the repository root into `packaging/` for a cleaner top-level layout.
+If you use local release scripts, update paths as follows:
+
+- `metroliza_onefile.spec` → `packaging/metroliza_onefile.spec`
+- `build_nuitka.ps1` → `packaging/build_nuitka.ps1`
+- `metroliza_icon2.ico` → `packaging/metroliza_icon2.ico`
 
 ### Nuitka build notes (Windows + PyQt6)
 
@@ -167,7 +177,7 @@ python -m nuitka metroliza.py `
   --onefile `
   --windows-console-mode=disable `
   --enable-plugin=pyqt6 `
-  --windows-icon-from-ico=metroliza_icon2.ico `
+  --windows-icon-from-ico=packaging/metroliza_icon2.ico `
   --output-filename=metroliza.exe `
   --assume-yes-for-downloads `
   --remove-output `
