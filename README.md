@@ -48,6 +48,8 @@ Release-candidate readiness is tracked in the canonical checklist:
 [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md).
 Branching/RC workflow guidance for solo maintenance is documented in:
 [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md).
+Concise branch role/naming/merge/tag reference:
+[`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md).
 Repository cleanup/documentation organization plan is tracked in:
 [`docs/repo_cleanup_and_docs_plan.md`](docs/repo_cleanup_and_docs_plan.md).
 
