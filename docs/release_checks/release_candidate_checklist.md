@@ -48,6 +48,32 @@ PYTHONPATH=. python -m unittest discover -s tests -v
 - [ ] Compile check passed. *(Owner: Dev)*
 - [ ] Lint check passed. *(Owner: Dev)*
 - [ ] Unit test suite passed. *(Owner: QA/Dev)*
+
+### Required packaging validation (release-blocking)
+
+Build commands:
+
+```bash
+pyinstaller metroliza_onefile.spec
+```
+
+```powershell
+python -m nuitka metroliza.py `
+  --onefile `
+  --windows-console-mode=disable `
+  --enable-plugin=pyqt6 `
+  --windows-icon-from-ico=metroliza_icon2.ico `
+  --output-filename=metroliza.exe `
+  --assume-yes-for-downloads `
+  --remove-output `
+  --jobs=%NUMBER_OF_PROCESSORS%
+```
+
+- [ ] PyInstaller output exists under `dist/` and launches. *(Owner: Release engineer/QA)*
+- [ ] Nuitka output executable exists and launches on a clean/sandbox target environment. *(Owner: Release engineer/QA)*
+- [ ] Basic startup flow works (open app, load a representative input, generate an export). *(Owner: QA)*
+- [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
+
 - [ ] Google conversion smoke procedure executed per runbook: [`docs/google_conversion_smoke_runbook.md`](../google_conversion_smoke_runbook.md). *(Owner: QA)*
 - [ ] Smoke evidence and outcomes recorded in: [`docs/release_checks/google_conversion_smoke.md`](google_conversion_smoke.md). *(Owner: QA/Release manager)*
 
@@ -89,7 +115,7 @@ Suggested commands:
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag -a v<version> -m "Release v<version>"
+git tag -a v<version> <merge-commit-sha> -m "Release v<version>"
 git push origin v<version>
 ```
 
