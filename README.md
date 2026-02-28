@@ -52,7 +52,7 @@ Repository cleanup/documentation organization notes were archived in:
 [`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md).
 Active documentation lifecycle rules are defined in:
 [`docs/documentation_policy.md`](docs/documentation_policy.md).
-Concise branch role/naming/merge/tag reference:
+Authoritative branch naming rules plus branch role/merge/tag policy:
 [`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md).
 Repository cleanup/documentation organization plan is tracked in (status: archived historical context):
 [`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md).

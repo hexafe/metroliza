@@ -2,6 +2,8 @@
 
 This document defines the lightweight branching model used for Metroliza release work.
 
+Authoritative source for branch naming rules: `docs/release_checks/branching_strategy.md`.
+
 ## 1) Branch purposes
 
 - `main`: production-ready branch; only reviewed, releasable code is merged here.
@@ -11,10 +13,19 @@ This document defines the lightweight branching model used for Metroliza release
 
 ## 2) Naming conventions
 
-- Release candidate branches use: `release/x.y.z-rcN`
-  - Example: `release/2026.03.0-rc1`
+- Release candidate branches use: `release/<version>-rcN`
+  - Example: `release/1.8.0-rc1`
 - Hotfix branches use: `hotfix/x.y.z+1`
   - Example: `hotfix/2026.02.0+1`
+
+Canonical RC branch creation commands:
+
+```bash
+git checkout main
+git pull --ff-only origin main
+git checkout -b release/1.8.0-rc1
+git push -u origin release/1.8.0-rc1
+```
 
 ## 3) Merge directions
 
