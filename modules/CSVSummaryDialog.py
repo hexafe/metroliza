@@ -394,8 +394,14 @@ class DataProcessingThread(QThread):
             return
 
         stats_col_start = col + 9
-        worksheet.write(0, stats_col_start, 'Five-number summary')
-        worksheet.write(0, stats_col_start + 1, data_column)
+        worksheet.write(0, stats_col_start, 'Boxplot metric')
+        worksheet.write(0, stats_col_start + 1, 'Value')
+        worksheet.write(0, stats_col_start + 2, 'Category')
+        worksheet.write(0, stats_col_start + 3, 'Q1 anchor')
+        worksheet.write(0, stats_col_start + 4, 'IQR')
+        worksheet.write(0, stats_col_start + 5, 'Median')
+        worksheet.write(0, stats_col_start + 6, 'Whisker +')
+        worksheet.write(0, stats_col_start + 7, 'Whisker -')
 
         summary_rows = None
         mp_enabled = self.optimization_toggles['enable_chart_multiprocessing'] and len(numeric_series) >= 2500
@@ -409,19 +415,68 @@ class DataProcessingThread(QThread):
         if summary_rows is None:
             summary_rows = _compute_boxplot_summary(numeric_series.tolist())
 
+        summary_map = {label: float(value) for label, value in summary_rows}
+        min_value = summary_map['Min']
+        q1_value = summary_map['Q1']
+        median_value = summary_map['Median']
+        q3_value = summary_map['Q3']
+        max_value = summary_map['Max']
+        iqr_value = q3_value - q1_value
+        whisker_plus = max_value - median_value
+        whisker_minus = median_value - min_value
+
         for row_index, (label, value) in enumerate(summary_rows, start=1):
             worksheet.write(row_index, stats_col_start, label)
             worksheet.write(row_index, stats_col_start + 1, round(value, 3))
 
-        chart = writer.book.add_chart({'type': 'line'})
+        boxplot_row = len(summary_rows) + 2
+        worksheet.write(boxplot_row, stats_col_start + 2, data_column)
+        worksheet.write(boxplot_row, stats_col_start + 3, round(q1_value, 3))
+        worksheet.write(boxplot_row, stats_col_start + 4, round(iqr_value, 3))
+        worksheet.write(boxplot_row, stats_col_start + 5, round(median_value, 3))
+        worksheet.write(boxplot_row, stats_col_start + 6, round(whisker_plus, 3))
+        worksheet.write(boxplot_row, stats_col_start + 7, round(whisker_minus, 3))
+
+        chart = writer.book.add_chart({'type': 'column', 'subtype': 'stacked'})
         chart.add_series({
-            'name': f'{data_column} boxplot profile',
-            'categories': [sheet_name, 1, stats_col_start, len(summary_rows), stats_col_start],
-            'values': [sheet_name, 1, stats_col_start + 1, len(summary_rows), stats_col_start + 1],
-            'marker': {'type': 'circle', 'size': 5 if self.optimization_toggles['chart_density_mode'] == 'reduced' else 6},
+            'name': f'{data_column} lower quartile anchor',
+            'categories': [sheet_name, boxplot_row, stats_col_start + 2, boxplot_row, stats_col_start + 2],
+            'values': [sheet_name, boxplot_row, stats_col_start + 3, boxplot_row, stats_col_start + 3],
+            'fill': {'none': True},
+            'border': {'none': True},
         })
-        chart.set_title({'name': f'{sheet_name} boxplot profile'})
-        chart.set_x_axis({'name': 'Summary point'})
+        chart.add_series({
+            'name': f'{data_column} interquartile range',
+            'categories': [sheet_name, boxplot_row, stats_col_start + 2, boxplot_row, stats_col_start + 2],
+            'values': [sheet_name, boxplot_row, stats_col_start + 4, boxplot_row, stats_col_start + 4],
+            'fill': {'color': '#4F81BD'},
+            'border': {'color': '#1F497D'},
+        })
+
+        whisker_chart = writer.book.add_chart({'type': 'line'})
+        whisker_chart.add_series({
+            'name': f'{data_column} median',
+            'categories': [sheet_name, boxplot_row, stats_col_start + 2, boxplot_row, stats_col_start + 2],
+            'values': [sheet_name, boxplot_row, stats_col_start + 5, boxplot_row, stats_col_start + 5],
+            'line': {'none': True},
+            'marker': {
+                'type': 'dash',
+                'size': 9 if self.optimization_toggles['chart_density_mode'] == 'reduced' else 11,
+                'border': {'color': '#C0504D'},
+                'fill': {'color': '#C0504D'},
+            },
+            'y_error_bars': {
+                'type': 'custom',
+                'plus_values': [sheet_name, boxplot_row, stats_col_start + 6, boxplot_row, stats_col_start + 6],
+                'minus_values': [sheet_name, boxplot_row, stats_col_start + 7, boxplot_row, stats_col_start + 7],
+                'end_style': 1,
+                'line': {'color': '#404040', 'width': 1.25},
+            },
+        })
+
+        chart.combine(whisker_chart)
+        chart.set_title({'name': f'{sheet_name} boxplot'})
+        chart.set_x_axis({'name': 'Measurement'})
         chart.set_y_axis({'name': 'Value'})
         chart.set_legend({'position': 'none'})
         worksheet.insert_chart(48, col + 5, chart)

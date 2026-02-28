@@ -88,6 +88,33 @@ class CsvSummaryIntegrationTests(unittest.TestCase):
 
 
 
+
+    def test_csv_summary_boxplot_chart_uses_box_whisker_emulation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / 'boxplot.xlsx'
+            df = pd.DataFrame({'PART': ['A', 'B', 'C', 'D', 'E'], 'LENGTH': [9.8, 10.0, 10.1, 10.2, 10.4]})
+
+            worker = DataProcessingThread(
+                selected_indexes=['PART'],
+                selected_data_columns=['LENGTH'],
+                input_file='input.csv',
+                output_file=str(output_file),
+                data_frame=df,
+                plot_toggles={'LENGTH': {'histogram': False, 'boxplot': True}},
+            )
+            worker.run()
+
+            self.assertTrue(output_file.exists())
+            with zipfile.ZipFile(output_file, 'r') as workbook_zip:
+                chart_files = sorted(name for name in workbook_zip.namelist() if name.startswith('xl/charts/chart'))
+                chart_payloads = [workbook_zip.read(name).decode('utf-8') for name in chart_files]
+
+            self.assertTrue(any('<c:barChart>' in payload for payload in chart_payloads))
+            self.assertTrue(any('<c:errBars>' in payload for payload in chart_payloads))
+            self.assertTrue(any('interquartile range' in payload for payload in chart_payloads))
+            self.assertTrue(any('boxplot</a:t>' in payload for payload in chart_payloads))
+            self.assertTrue(all('boxplot profile' not in payload for payload in chart_payloads))
+
     def test_csv_summary_canceled_run_removes_partial_output(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_file = Path(tmpdir) / 'canceled.xlsx'
