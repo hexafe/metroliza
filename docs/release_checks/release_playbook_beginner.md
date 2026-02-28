@@ -25,28 +25,33 @@ Example target release: `v1.8.0`.
    - Branch name: `release/1.8.0-rc1`.
    - This branch now holds only stabilization work (bug fixes, release blockers, docs/tests updates tied to release readiness).
 
-3. **Stabilize and test RC1**
-   - QA executes release checklist, regression, and smoke testing.
+3. **Open testing entry criteria (before broad RC testing)**
+   - Confirm open testing entry checklist items in [`release_candidate_checklist.md`](./release_candidate_checklist.md#2-open-testing-entry-criteria): freeze timestamp, RC branch, build identifier, smoke baseline, known-issues link, and bug reporting channel.
+
+4. **Stabilize and test RC1**
+   - QA executes release checklist, open testing, regression, and smoke testing.
    - Bugs found during RC testing are fixed **on the RC branch** first.
    - Product/Release Manager tracks blocker status and go/no-go criteria.
 
-4. **If issues are found, continue on RC1 or cut RC2**
+5. **If issues are found, continue on RC1 or cut RC2**
    - Minor/isolated fixes: keep patching `release/1.8.0-rc1`.
    - Significant churn or reset of test confidence: cut `release/1.8.0-rc2` from the current stabilized RC tip and retest.
 
-5. **Go decision**
+6. **Open testing exit criteria + Go decision**
+   - Confirm open testing exit checklist items in [`release_candidate_checklist.md`](./release_candidate_checklist.md#6-open-testing-exit-criteria): blocker count `0`, deferred list approved, smoke re-run pass, and sign-off owners complete.
+
    - QA signs off that required tests/checklists passed.
    - Engineering confirms no open release blockers.
    - Product/Release Manager gives final release approval.
 
-6. **Tag the approved RC commit as final version**
+7. **Tag the approved RC commit as final version**
    - Create annotated tag `v1.8.0` at the exact approved commit.
 
-7. **Merge release branch back to `main`**
+8. **Merge release branch back to `main`**
    - Merge the final RC branch to keep `main` aligned with release-hotfix commits.
    - Verify release notes/changelog updates are present.
 
-8. **Post-release communication**
+9. **Post-release communication**
    - Product/Release Manager announces release completion.
    - Engineering monitors hotfix channels.
 

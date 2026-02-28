@@ -14,9 +14,20 @@ Complete before announcing code freeze or cutting an RC branch.
 - [ ] `CHANGELOG.md` includes user-facing notes for this RC.
 - [ ] `README.md` **Release highlights** reflects the current RC/release line.
 - [ ] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
-- [ ] Open blockers are triaged against the defect criteria in section 4.
+- [ ] Open blockers are triaged against the defect criteria in section 5.
 
-## 2) RC branch creation
+## 2) Open testing entry criteria
+
+Complete before beginning open testing on an RC build.
+
+- [ ] Feature freeze timestamp is recorded in release tracker and announcement thread. *(Owner: Release manager)*
+- [ ] Active RC branch name is confirmed and documented (for example `release/1.8.0-rc1`). *(Owner: Release engineer)*
+- [ ] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
+- [ ] Mandatory smoke baseline is completed and linked to evidence before open testing starts. *(Owner: QA)*
+- [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
+- [ ] Bug reporting channel is announced (for example issue board + chat channel) and monitored. *(Owner: Release manager/QA)*
+
+## 3) RC branch creation
 
 Create the RC branch from the approved base commit (typically `main`):
 
@@ -37,7 +48,7 @@ git push -u origin release/1.8.0-rc1
 - [ ] RC branch follows naming convention (for example `release/1.8.0-rc1`).
 - [ ] Branch creation commit SHA and timestamp are recorded in release notes/tracker.
 
-## 3) Required test suites and sign-off owners
+## 4) Required test suites and sign-off owners
 
 Run and record all required checks from the RC branch:
 
@@ -84,7 +95,7 @@ python -m nuitka metroliza.py `
 
 > Do not duplicate smoke steps in this checklist. Follow the linked runbook and evidence template as the source of procedure detail.
 
-## 4) Defect triage criteria (must-fix vs defer)
+## 5) Defect triage criteria (must-fix vs defer)
 
 Use the following policy for RC exit triage:
 
@@ -104,11 +115,20 @@ Use the following policy for RC exit triage:
 - [ ] Every open RC defect is labeled `must-fix` or `defer` with rationale and owner.
 - [ ] Deferred defects are captured in the next-release backlog/milestone.
 
-## 5) Merge-to-main and tagging criteria
+## 6) Open testing exit criteria
+
+Complete before declaring open testing closed and moving to final Go/No-Go decision.
+
+- [ ] Blocker count is `0` for current RC candidate. *(Owner: Release manager/QA)*
+- [ ] Deferred defect list is approved and captured with owner + milestone. *(Owner: Product/Release manager)*
+- [ ] Mandatory smoke baseline is re-run on the release candidate and passes. *(Owner: QA)*
+- [ ] Required sign-off owners have all recorded completion in the release tracker. *(Owner: Release manager)*
+
+## 7) Merge-to-main and tagging criteria
 
 Only promote RC when all gates are green and approvals are complete.
 
-- [ ] All required checks and smoke evidence (section 3) are complete and linked.
+- [ ] All required checks and smoke evidence (section 4) are complete and linked.
 - [ ] No unresolved `must-fix` defects remain.
 - [ ] Release owner + QA sign-off recorded.
 - [ ] RC branch merged to `main` with approved strategy.
@@ -124,7 +144,7 @@ git tag -a v<version> <merge-commit-sha> -m "Release v<version>"
 git push origin v<version>
 ```
 
-## 6) Rollback plan and communication checklist
+## 8) Rollback plan and communication checklist
 
 Prepare before release announcement; execute if post-release issues require rollback.
 
