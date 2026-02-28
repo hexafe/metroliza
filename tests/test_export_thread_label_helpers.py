@@ -44,6 +44,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 
 from modules.ExportDataThread import (  # noqa: E402
+    ExportDataThread,
     all_measurements_within_limits,
     build_spec_limit_anchor_rows,
     build_sheet_series_range,
@@ -162,6 +163,54 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(second_block['row'], 20)
         self.assertEqual(second_block['header_row'], 20)
         self.assertEqual(second_block['image_row'], 21)
+
+
+class TestExportThreadProgressLabelFormatting(unittest.TestCase):
+    def test_measurement_label_uses_three_rows_with_eta_placeholder_early(self):
+        thread = ExportDataThread.__new__(ExportDataThread)
+
+        import modules.ExportDataThread as export_module
+        previous_perf_counter = export_module.time.perf_counter
+        export_module.time.perf_counter = lambda: 1.0
+        try:
+            label = thread._build_measurement_label(
+                ref_index=1,
+                total_references=2,
+                completed_header_units=1,
+                total_header_units=10,
+                start_time=0.0,
+            )
+        finally:
+            export_module.time.perf_counter = previous_perf_counter
+
+        lines = label.split('\n')
+        self.assertEqual(lines[0], 'Building measurement sheets...')
+        self.assertIn('Ref 1/2', lines[1])
+        self.assertIn('Headers remaining 9/10', lines[1])
+        self.assertEqual(lines[2], 'ETA --')
+
+    def test_measurement_label_uses_three_rows_with_eta_and_elapsed(self):
+        thread = ExportDataThread.__new__(ExportDataThread)
+
+        import modules.ExportDataThread as export_module
+        previous_perf_counter = export_module.time.perf_counter
+        export_module.time.perf_counter = lambda: 10.0
+        try:
+            label = thread._build_measurement_label(
+                ref_index=2,
+                total_references=2,
+                completed_header_units=5,
+                total_header_units=10,
+                start_time=0.0,
+            )
+        finally:
+            export_module.time.perf_counter = previous_perf_counter
+
+        lines = label.split('\n')
+        self.assertEqual(lines[0], 'Building measurement sheets...')
+        self.assertIn('Ref 2/2', lines[1])
+        self.assertIn('Headers remaining 5/10', lines[1])
+        self.assertIn('elapsed, ETA', lines[2])
 
 if __name__ == '__main__':
     unittest.main()

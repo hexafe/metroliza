@@ -413,11 +413,12 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.insert_measurement_chart = previous_insert_chart
                 module.time.perf_counter = previous_perf_counter
 
-        detailed_labels = [text for text in labels if text.startswith('Building measurement sheets... Ref')]
+        detailed_labels = [text for text in labels if text.startswith('Building measurement sheets...')]
         self.assertTrue(detailed_labels)
         self.assertTrue(any('Ref 1/2' in text for text in detailed_labels))
         self.assertTrue(any('Ref 2/2' in text for text in detailed_labels))
-        self.assertTrue(all('Header ' in text for text in detailed_labels))
+        self.assertTrue(all('Headers remaining ' in text for text in detailed_labels))
+        self.assertTrue(all(text.count('\n') >= 2 for text in detailed_labels))
 
     def test_default_export_target_uses_excel_backend(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
