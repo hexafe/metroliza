@@ -80,6 +80,7 @@ For repository cleanup and docs organization sequencing, follow [`docs/repo_clea
   - fallback expectations (`.xlsx` remains the guaranteed artifact when conversion warns/fails).
 - For branch/release flow guidance, follow [`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md) and keep the current RC scope frozen once `release/<version>-rcN` is cut.
 - For a beginner-friendly end-to-end walkthrough, see [`docs/release_checks/release_playbook_beginner.md`](docs/release_checks/release_playbook_beginner.md).
+- Quick branch role/naming/merge/tag reference: [`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md).
 
 ## Google export contributor checklist
 
