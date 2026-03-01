@@ -1243,9 +1243,9 @@ class ExportDataThread(QThread):
         try:
             df = build_measurement_export_dataframe(self._ensure_export_df_cache())
 
-            reference_groups = list(df.groupby('REFERENCE', as_index=False))
-            total_references = len(reference_groups)
-            total_header_units = sum(ref_group['HEADER - AX'].nunique(dropna=False) for _, ref_group in reference_groups)
+            reference_groups = df.groupby('REFERENCE', sort=False)
+            total_references = reference_groups.ngroups
+            total_header_units = int(reference_groups['HEADER - AX'].nunique(dropna=False).sum())
             completed_header_units = 0
             measurement_stage_start = time.perf_counter()
             label_emit_every_headers = 10
