@@ -533,24 +533,10 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual("chart title", update_request["spec"]["title"])
         self.assertEqual(3, len(update_request["spec"]["basicChart"]["series"]))
         self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"])
-        self.assertEqual("USL", update_request["spec"]["basicChart"]["series"][1]["series"]["seriesName"]["value"])
-        self.assertEqual("LSL", update_request["spec"]["basicChart"]["series"][2]["series"]["seriesName"]["value"])
-        self.assertEqual("LINEAR", update_request["spec"]["basicChart"]["series"][1]["trendline"]["type"])
-        self.assertEqual("LINEAR", update_request["spec"]["basicChart"]["series"][2]["trendline"]["type"])
-        self.assertEqual(0.6, update_request["spec"]["basicChart"]["series"][1]["trendline"]["opacity"])
-        self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["trendline"]["lineStyle"]["width"])
-        self.assertEqual("SOLID", update_request["spec"]["basicChart"]["series"][1]["trendline"]["lineStyle"]["type"])
-        self.assertEqual(0.6, update_request["spec"]["basicChart"]["series"][2]["trendline"]["opacity"])
-        self.assertEqual(2, update_request["spec"]["basicChart"]["series"][2]["trendline"]["lineStyle"]["width"])
-        self.assertEqual("SOLID", update_request["spec"]["basicChart"]["series"][2]["trendline"]["lineStyle"]["type"])
-        self.assertEqual(
-            update_request["spec"]["basicChart"]["series"][1]["colorStyle"],
-            update_request["spec"]["basicChart"]["series"][1]["trendline"]["colorStyle"],
-        )
-        self.assertEqual(
-            update_request["spec"]["basicChart"]["series"][2]["colorStyle"],
-            update_request["spec"]["basicChart"]["series"][2]["trendline"]["colorStyle"],
-        )
+        self.assertNotIn("seriesName", update_request["spec"]["basicChart"]["series"][1].get("series", {}))
+        self.assertNotIn("seriesName", update_request["spec"]["basicChart"]["series"][2].get("series", {}))
+        self.assertNotIn("trendline", update_request["spec"]["basicChart"]["series"][1])
+        self.assertNotIn("trendline", update_request["spec"]["basicChart"]["series"][2])
         self.assertEqual(
             0.6,
             update_request["spec"]["basicChart"]["series"][2]["colorStyle"]["rgbColor"]["alpha"],
@@ -598,6 +584,62 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual(2, width_two)
         self.assertNotIsInstance(width_one, dict)
         self.assertNotIsInstance(width_two, dict)
+
+    def test_fix_usl_lsl_trendlines_sanitizes_series_payload_for_patch_schema(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 171,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "LINE",
+                                    "series": [
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 1}]}}},
+                                        {
+                                            "series": {
+                                                "sourceRange": {"sources": [{"sheetId": 2}]},
+                                                "seriesName": {"value": "USL"},
+                                                "unexpectedNested": True,
+                                            },
+                                            "trendline": {"type": "LINEAR"},
+                                            "unexpectedTopLevel": "drop me",
+                                        },
+                                        {
+                                            "series": {
+                                                "sourceRange": {"sources": [{"sheetId": 3}]},
+                                                "seriesName": {"value": "LSL"},
+                                            },
+                                            "trendline": {"type": "LINEAR"},
+                                        },
+                                    ],
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
+        patched_series = update_request["spec"]["basicChart"]["series"]
+        self.assertEqual(3, len(patched_series))
+        self.assertNotIn("trendline", patched_series[1])
+        self.assertNotIn("trendline", patched_series[2])
+        self.assertNotIn("unexpectedTopLevel", patched_series[1])
+        self.assertNotIn("seriesName", patched_series[1]["series"])
+        self.assertNotIn("seriesName", patched_series[2]["series"])
+        self.assertNotIn("unexpectedNested", patched_series[1]["series"])
+        self.assertIn("sourceRange", patched_series[1]["series"])
+        self.assertIn("lineStyle", patched_series[1])
+        self.assertIn("colorStyle", patched_series[1])
 
     def test_fix_usl_lsl_trendlines_filters_chart_types_and_logs_discovery_counters(self):
         discovery_payload = {
@@ -781,8 +823,8 @@ class TestGoogleDriveExport(unittest.TestCase):
         update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
         updated_series = update_request["spec"]["basicChart"]["series"]
         self.assertEqual(3, len(updated_series))
-        self.assertEqual("USL", updated_series[1]["series"]["seriesName"]["value"])
-        self.assertEqual("LSL", updated_series[2]["series"]["seriesName"]["value"])
+        self.assertNotIn("seriesName", updated_series[1].get("series", {}))
+        self.assertNotIn("seriesName", updated_series[2].get("series", {}))
         helper_sources = [
             source
             for series in updated_series
@@ -882,8 +924,8 @@ class TestGoogleDriveExport(unittest.TestCase):
 
         update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
         updated_series = update_request["spec"]["basicChart"]["series"]
-        self.assertEqual("USL", updated_series[1]["series"]["seriesName"]["value"])
-        self.assertEqual("LSL", updated_series[2]["series"]["seriesName"]["value"])
+        self.assertNotIn("seriesName", updated_series[1].get("series", {}))
+        self.assertNotIn("seriesName", updated_series[2].get("series", {}))
         self.assertEqual(7, updated_series[1]["series"]["sourceRange"]["sources"][0]["startColumnIndex"])
         self.assertEqual(8, updated_series[2]["series"]["sourceRange"]["sources"][0]["startColumnIndex"])
 
