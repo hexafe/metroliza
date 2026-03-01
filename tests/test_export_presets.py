@@ -245,8 +245,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
             f'Export file: {expected_file_uri}\n'
             '\n'
             'Google Sheets conversion was not fully completed.\n'
-            'Google export failed; using local .xlsx fallback: out.xlsx\n'
-            'Warnings:\n'
+            'Warnings/Errors:\n'
             '- Missing token.json for Google Drive export. Please complete OAuth authorization first.',
         )
 
@@ -273,8 +272,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
             'Data exported locally to out.xlsx.\n'
             f'Export file: {expected_file_uri}\n'
             '\n'
-            'Google Sheets conversion was not fully completed.\n'
-            'Google export failed; using local .xlsx fallback: out.xlsx',
+            'Google Sheets conversion was not fully completed.',
         )
 
     def test_google_empty_metadata_defaults_to_standard_success_message(self):
