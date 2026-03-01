@@ -33,6 +33,6 @@ This package is intentionally documentation-only and is designed to be executed 
 - Operational rollout controls and rollback procedures.
 
 ## Definition of done for this planning package
-- All passes are reviewed and approved in our working session before implementation starts.
-- Actionable task breakdown is maintained from pass checklists (no Jira required).
+- All passes are reviewed and approved.
+- Actionable task breakdown is maintained from pass checklists.
 - Workstream sequencing and acceptance gates are agreed before each phase kickoff.
