@@ -60,7 +60,7 @@ else:
 class CMMReportParser:
     """Class to parse and convert PDF CMM report."""
 
-    def __init__(self, pdf_file_path: str, database: str):
+    def __init__(self, pdf_file_path: str, database: str, connection=None):
         """
         Initializes an instance of the CMMReport class.
         Args:
@@ -76,6 +76,7 @@ class CMMReportParser:
         self.pdf_blocks_text = []
         self.df = pandas.DataFrame()
         self.database = database
+        self.connection = connection
 
         # self.open_database_and_check_filename()
 
@@ -169,7 +170,8 @@ class CMMReportParser:
             # Check if 'REPORTS' table exists
             table_exists = execute_with_retry(
                 self.database,
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='REPORTS'"
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='REPORTS'",
+                connection=self.connection,
             )
 
             if not table_exists:
@@ -182,6 +184,7 @@ class CMMReportParser:
                 self.database,
                 'SELECT COUNT(*) FROM REPORTS WHERE FILENAME = ?',
                 (self.pdf_file_name,),
+                connection=self.connection,
             )
             count = count_rows[0][0] if count_rows else 0
 
@@ -411,6 +414,7 @@ class CMMReportParser:
             was_inserted = run_transaction_with_retry(
                 self.database,
                 create_tables_and_insert_report,
+                connection=self.connection,
                 retries=4,
                 retry_delay_s=1,
             )

@@ -21,7 +21,7 @@ from scipy.stats import ttest_ind
 
 from modules.contracts import ExportRequest, validate_export_request
 import modules.CustomLogger as custom_logger
-from modules.db import execute_select_with_columns, read_sql_dataframe
+from modules.db import execute_select_with_columns, read_sql_dataframe, sqlite_connection_scope
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
 from modules.google_drive_export import GoogleDriveAuthError, GoogleDriveExportError, upload_and_convert_workbook
@@ -1088,6 +1088,7 @@ class ExportDataThread(QThread):
         self._active_chart_images = []
         self._summary_sheet_failed = False
         self._summary_sheet_skip_warning_emitted = False
+        self._db_connection = None
         self._reset_export_df_cache()
 
     def _register_chart_image(self, payload: bytes):
@@ -1133,7 +1134,7 @@ class ExportDataThread(QThread):
 
     def _ensure_export_df_cache(self):
         if self._export_df_cache is None:
-            export_df = read_sql_dataframe(self.db_file, self.filter_query)
+            export_df = read_sql_dataframe(self.db_file, self.filter_query, connection=self._db_connection)
             self._export_df_cache = export_df
             self._export_df_column_order = tuple(export_df.columns)
         return self._export_df_cache
@@ -1504,17 +1505,20 @@ class ExportDataThread(QThread):
             self._ensure_chart_executor()
             self._ensure_summary_prep_executor()
 
-            self._emit_stage_progress('preparing_query', 0.0)
-            self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
-            self._log_export_stage("Export started", stage="started")
-            if self.export_target == "google_sheets_drive_convert":
-                self._emit_google_stage("generating")
+            with sqlite_connection_scope(self.db_file) as connection:
+                self._db_connection = connection
 
-            backend = self.get_export_backend()
-            self._active_backend = backend
-            completed = backend.run(self)
-            if not completed:
-                return
+                self._emit_stage_progress('preparing_query', 0.0)
+                self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
+                self._log_export_stage("Export started", stage="started")
+                if self.export_target == "google_sheets_drive_convert":
+                    self._emit_google_stage("generating")
+
+                backend = self.get_export_backend()
+                self._active_backend = backend
+                completed = backend.run(self)
+                if not completed:
+                    return
 
             if self.export_target == "google_sheets_drive_convert":
                 def _stage_callback(stage_message):
@@ -1624,6 +1628,7 @@ class ExportDataThread(QThread):
             self._shutdown_chart_executor()
             self._shutdown_summary_prep_executor()
             self._cleanup_chart_images()
+            self._db_connection = None
             self._reset_export_df_cache()
 
     def add_measurements_horizontal_sheet(self, excel_writer):
