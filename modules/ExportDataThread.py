@@ -4,7 +4,7 @@ import inspect
 from io import BytesIO
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 import matplotlib
 import pandas as pd
 import numpy as np
@@ -82,6 +82,13 @@ from modules.export_sheet_writer import (
     build_summary_panel_write_plan,
 )
 from modules.stats_utils import safe_process_capability
+from modules.chart_render_service import (
+    BoundedWorkerPool,
+    build_violin_payload_vectorized,
+    resolve_chart_sampling_policy,
+    sample_frame_for_chart,
+    deterministic_downsample_frame,
+)
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
 if _HAS_SEABORN:
@@ -1074,6 +1081,8 @@ class ExportDataThread(QThread):
         self.summary_plot_scale = validated_request.options.summary_plot_scale
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
+        self.chart_worker_count = validated_request.options.chart_worker_count
+        self.chart_worker_queue_size = validated_request.options.chart_worker_queue_size
         self.export_canceled = False
         self._cancel_signal_emitted = False
         self._prepared_grouping_df = None
@@ -1114,7 +1123,7 @@ class ExportDataThread(QThread):
         if not self._optimization_toggles.get('enable_chart_multiprocessing'):
             return None
         if self._chart_executor is None:
-            self._chart_executor = ProcessPoolExecutor(max_workers=2)
+            self._chart_executor = ProcessPoolExecutor(max_workers=self.chart_worker_count)
         return self._chart_executor
 
     def _shutdown_chart_executor(self):
@@ -1127,7 +1136,10 @@ class ExportDataThread(QThread):
 
     def _ensure_summary_prep_executor(self):
         if self._summary_prep_executor is None:
-            self._summary_prep_executor = ThreadPoolExecutor(max_workers=2)
+            self._summary_prep_executor = BoundedWorkerPool(
+                max_workers=self.chart_worker_count,
+                max_queue_size=self.chart_worker_queue_size,
+            )
         return self._summary_prep_executor
 
     def _shutdown_summary_prep_executor(self):
@@ -1215,7 +1227,8 @@ class ExportDataThread(QThread):
             self._optimization_toggles['chart_density_mode'] = 'reduced'
 
     def _chart_sample_limit(self):
-        return 900 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 1500
+        policy = resolve_chart_sampling_policy(density_mode=self._optimization_toggles['chart_density_mode'])
+        return policy.distribution_limit
 
     def _summary_chart_required(self, chart_name):
         required_charts = self._optimization_toggles.get('summary_sheet_minimum_charts', set())
@@ -1269,10 +1282,7 @@ class ExportDataThread(QThread):
 
     @staticmethod
     def _downsample_frame(df, sample_limit):
-        if len(df) <= sample_limit:
-            return df
-        stride = max(1, int(np.ceil(len(df) / sample_limit)))
-        return df.iloc[::stride].copy()
+        return deterministic_downsample_frame(df, sample_limit)
 
     @staticmethod
     def _clamp_progress(value):
@@ -1983,7 +1993,11 @@ class ExportDataThread(QThread):
 
             grouping_df = self.prepared_grouping_df
             header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
-            sampled_group = self._downsample_frame(header_group, self._chart_sample_limit())
+            sampling_policy = resolve_chart_sampling_policy(density_mode=self._optimization_toggles['chart_density_mode'])
+            sampled_distribution_group = sample_frame_for_chart(header_group, 'distribution', sampling_policy)
+            sampled_iqr_group = sample_frame_for_chart(header_group, 'iqr', sampling_policy)
+            sampled_histogram_group = sample_frame_for_chart(header_group, 'histogram', sampling_policy)
+            sampled_trend_group = sample_frame_for_chart(header_group, 'trend', sampling_policy)
             self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
 
             chart_mp_enabled = self._chart_executor is not None and len(header_group) >= 2500
@@ -1991,8 +2005,8 @@ class ExportDataThread(QThread):
             precomputed_trend_payload = None
             if chart_mp_enabled:
                 try:
-                    density_future = self._chart_executor.submit(build_histogram_density_curve_payload, sampled_group['MEAS'])
-                    trend_future = self._chart_executor.submit(build_trend_plot_payload, sampled_group)
+                    density_future = self._chart_executor.submit(build_histogram_density_curve_payload, sampled_histogram_group['MEAS'])
+                    trend_future = self._chart_executor.submit(build_trend_plot_payload, sampled_trend_group)
                     precomputed_density_curve = density_future.result()
                     precomputed_trend_payload = trend_future.result()
                 except Exception:
@@ -2004,14 +2018,14 @@ class ExportDataThread(QThread):
             if prep_executor is not None:
                 try:
                     distribution_future = prep_executor.submit(
-                        self._build_violin_payload,
-                        sampled_group,
+                        build_violin_payload_vectorized,
+                        sampled_distribution_group,
                         distribution_key,
                         self.violin_plot_min_samplesize,
                     )
                     iqr_future = prep_executor.submit(
-                        self._build_violin_payload,
-                        sampled_group,
+                        build_violin_payload_vectorized,
+                        sampled_iqr_group,
                         distribution_key,
                         self.violin_plot_min_samplesize,
                     )
@@ -2022,24 +2036,24 @@ class ExportDataThread(QThread):
                         "Summary prep executor failed; falling back to in-process payload generation.",
                         exc_info=True,
                     )
-                    distribution_labels, distribution_values, can_render_violin = self._build_violin_payload(
-                        sampled_group,
+                    distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
+                        sampled_distribution_group,
                         distribution_key,
                         self.violin_plot_min_samplesize,
                     )
-                    iqr_labels, iqr_values, _ = self._build_violin_payload(
-                        sampled_group,
+                    iqr_labels, iqr_values, _ = build_violin_payload_vectorized(
+                        sampled_iqr_group,
                         distribution_key,
                         self.violin_plot_min_samplesize,
                     )
             else:
-                distribution_labels, distribution_values, can_render_violin = self._build_violin_payload(
-                    sampled_group,
+                distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
+                    sampled_distribution_group,
                     distribution_key,
                     self.violin_plot_min_samplesize,
                 )
-                iqr_labels, iqr_values, _ = self._build_violin_payload(
-                    sampled_group,
+                iqr_labels, iqr_values, _ = build_violin_payload_vectorized(
+                    sampled_iqr_group,
                     distribution_key,
                     self.violin_plot_min_samplesize,
                 )
@@ -2048,7 +2062,7 @@ class ExportDataThread(QThread):
             x_values = None
             y_values = None
             if not can_render_violin:
-                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_group, distribution_key)
+                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_distribution_group, distribution_key)
                 label_positions = list(x_values)
 
             summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
@@ -2120,7 +2134,7 @@ class ExportDataThread(QThread):
                 try:
                     chart_start = time.perf_counter()
                     fig, ax = plt.subplots(figsize=(6, 4))
-                    boxplot_labels, boxplot_values = self._build_iqr_plot_payload(iqr_labels, iqr_values, sampled_group)
+                    boxplot_labels, boxplot_values = self._build_iqr_plot_payload(iqr_labels, iqr_values, sampled_iqr_group)
                     render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
                     add_iqr_boxplot_legend(ax)
                     apply_minimal_axis_style(ax, grid_axis='y')
@@ -2159,7 +2173,7 @@ class ExportDataThread(QThread):
                     histogram_figsize = (6, 4)
                     chart_start = time.perf_counter()
                     fig, ax = plt.subplots(figsize=histogram_figsize)
-                    render_histogram(ax, sampled_group)
+                    render_histogram(ax, sampled_histogram_group)
 
                     histogram_font_sizes = compute_histogram_font_sizes(
                         histogram_figsize,
@@ -2192,7 +2206,7 @@ class ExportDataThread(QThread):
                     density_curve = precomputed_density_curve
                     if density_curve is None:
                         density_curve = build_histogram_density_curve_payload(
-                            sampled_group['MEAS'],
+                            sampled_histogram_group['MEAS'],
                             point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
                         )
                     if density_curve is not None:
@@ -2237,7 +2251,7 @@ class ExportDataThread(QThread):
                     apply_summary_plot_theme()
 
                     chart_start = time.perf_counter()
-                    trend_payload = precomputed_trend_payload or build_trend_plot_payload(sampled_group)
+                    trend_payload = precomputed_trend_payload or build_trend_plot_payload(sampled_trend_group)
                     data_x = trend_payload['x']
                     data_y = trend_payload['y']
                     unique_labels = trend_payload['labels']
