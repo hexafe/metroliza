@@ -327,6 +327,29 @@ class TestExportHelpers(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             execute_export_query(':memory:', 'SELECT 1', select_reader=failing_reader)
 
+    def test_check_canceled_emits_cancel_signal_once(self):
+        request = __import__('modules.contracts', fromlist=['ExportRequest', 'AppPaths', 'ExportOptions'])
+        thread = ExportDataThread(
+            request.ExportRequest(
+                paths=request.AppPaths(db_file=':memory:', excel_file='dummy.xlsx'),
+                options=request.ExportOptions(),
+            )
+        )
+
+        calls = {'count': 0}
+
+        class _Signal:
+            def emit(self, *_args, **_kwargs):
+                calls['count'] += 1
+
+        thread.canceled = _Signal()
+        thread.update_label = _Signal()
+        thread.export_canceled = True
+
+        self.assertTrue(thread._check_canceled())
+        self.assertTrue(thread._check_canceled())
+        self.assertEqual(calls['count'], 2)
+
 
 class TestExportBackendSmoke(unittest.TestCase):
     @staticmethod
