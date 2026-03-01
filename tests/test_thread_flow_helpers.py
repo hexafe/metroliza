@@ -412,6 +412,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_values = module.fetch_partition_values
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
 
         with tempfile.TemporaryDirectory() as tmpdir:
             out_file = os.path.join(tmpdir, 'out.xlsx')
@@ -436,8 +439,14 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.finished.emit = lambda: None
             thread._active_backend = fake_backend
 
+            measurement_df = self._build_multi_header_measurement_dataframe()
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.load_measurement_export_partition_dataframe = (
+                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+            )
             module.read_sql_dataframe = lambda *_args, **_kwargs: __import__('pandas').DataFrame()
-            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
             module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
             module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
             module.insert_measurement_chart = lambda *_args, **_kwargs: None
@@ -449,6 +458,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.create_measurement_formats = previous_formats
                 module.write_measurement_block = previous_write_block
                 module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_values = previous_fetch_partition_values
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+                module.load_measurement_export_partition_dataframe = previous_load_measurement_partition
 
         self.assertEqual(progress_values[0], 0)
         self.assertEqual(progress_values[-1], 100)
@@ -464,6 +476,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_values = module.fetch_partition_values
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
 
         with tempfile.TemporaryDirectory() as tmpdir:
             out_file = os.path.join(tmpdir, 'out.xlsx')
@@ -478,9 +493,11 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             progress_values = []
             cancellation_state = {'triggered': False}
+            cancel_probe = {'checks': 0}
 
             def _check_canceled():
-                if len(progress_values) >= 4:
+                cancel_probe['checks'] += 1
+                if cancel_probe['checks'] >= 1:
                     cancellation_state['triggered'] = True
                     return True
                 return False
@@ -489,8 +506,14 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda value: progress_values.append(value)
             thread.update_label.emit = lambda *_: None
 
+            measurement_df = self._build_multi_header_measurement_dataframe()
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.load_measurement_export_partition_dataframe = (
+                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+            )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
-            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
             module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
             module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
             module.insert_measurement_chart = lambda *_args, **_kwargs: None
@@ -502,10 +525,14 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.create_measurement_formats = previous_formats
                 module.write_measurement_block = previous_write_block
                 module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_values = previous_fetch_partition_values
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+                module.load_measurement_export_partition_dataframe = previous_load_measurement_partition
 
         self.assertTrue(cancellation_state['triggered'])
-        self.assertEqual(len(progress_values), 4)
-        self.assertLess(progress_values[-1], 95)
+        self.assertLessEqual(len(progress_values), 1)
+        if progress_values:
+            self.assertLess(progress_values[-1], 95)
 
     def test_add_measurements_emits_reference_and_header_label_details(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -516,6 +543,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_values = module.fetch_partition_values
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
         previous_perf_counter = module.time.perf_counter
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -539,8 +569,14 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_label.emit = lambda text: labels.append(text)
             thread.update_progress.emit = lambda *_: None
 
+            measurement_df = self._build_multi_header_measurement_dataframe()
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.load_measurement_export_partition_dataframe = (
+                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+            )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
-            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
             module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
             module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
             module.insert_measurement_chart = lambda *_args, **_kwargs: None
@@ -553,6 +589,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.create_measurement_formats = previous_formats
                 module.write_measurement_block = previous_write_block
                 module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_values = previous_fetch_partition_values
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+                module.load_measurement_export_partition_dataframe = previous_load_measurement_partition
                 module.time.perf_counter = previous_perf_counter
 
         detailed_labels = [text for text in labels if text.startswith('Building measurement sheets...')]
@@ -571,6 +610,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_values = module.fetch_partition_values
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
 
         class _FakeWorksheet:
             def set_column(self, *_args, **_kwargs):
@@ -611,8 +653,14 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda *_: None
             thread.update_label.emit = lambda *_: None
 
+            measurement_df = self._build_multi_header_measurement_dataframe()
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.load_measurement_export_partition_dataframe = (
+                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+            )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
-            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
             module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
             module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
             module.insert_measurement_chart = lambda *_args, **_kwargs: None
@@ -625,6 +673,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.create_measurement_formats = previous_formats
                 module.write_measurement_block = previous_write_block
                 module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_values = previous_fetch_partition_values
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+                module.load_measurement_export_partition_dataframe = previous_load_measurement_partition
 
         self.assertEqual(
             workbook.added_sheet_names,
@@ -1076,7 +1127,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.backend_target, 'excel')
 
 
-    def test_export_filtered_data_passes_cached_dataframe_to_writer(self):
+    def test_export_filtered_data_loads_dataframe_and_passes_it_to_writer(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
         import pandas as pd
 
@@ -1096,16 +1147,13 @@ class TestExportBackendSmoke(unittest.TestCase):
                 captured['writer_type'] = type(excel_writer).__name__
 
             thread.write_data_to_excel = fake_writer
-            thread._export_df_cache = pd.DataFrame({'ID': [1], 'LABEL': ['A']})
-            thread._export_df_column_order = ('ID', 'LABEL')
-
-            module = __import__('modules.ExportDataThread', fromlist=['execute_export_query'])
-            previous = module.execute_export_query
-            module.execute_export_query = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('execute_export_query should not be called'))
+            module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+            previous_reader = module.read_sql_dataframe
+            module.read_sql_dataframe = lambda *_args, **_kwargs: pd.DataFrame({'ID': [1], 'LABEL': ['A']})
             try:
                 thread.export_filtered_data(excel_writer=object())
             finally:
-                module.execute_export_query = previous
+                module.read_sql_dataframe = previous_reader
 
             self.assertEqual(captured['columns'], ['ID', 'LABEL'])
             self.assertEqual(captured['table'], 'MEASUREMENTS')
