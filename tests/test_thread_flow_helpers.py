@@ -627,6 +627,94 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
 
+
+    def test_run_initializes_and_shuts_down_shared_chart_executor_once_when_enabled(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['enable_chart_multiprocessing'] = True
+
+        class _Backend:
+            def run(self, _thread):
+                return True
+
+        thread.get_export_backend = lambda: _Backend()
+        thread.update_label.emit = lambda *_: None
+        thread.update_progress.emit = lambda *_: None
+        thread.finished.emit = lambda: None
+
+        module = __import__('modules.ExportDataThread', fromlist=['ProcessPoolExecutor'])
+        previous_executor = module.ProcessPoolExecutor
+
+        calls = {'init': 0, 'shutdown': 0}
+
+        class _FakeExecutor:
+            def __init__(self, *args, **kwargs):
+                calls['init'] += 1
+
+            def shutdown(self, wait=True):
+                calls['shutdown'] += 1
+
+        module.ProcessPoolExecutor = _FakeExecutor
+        try:
+            thread.run()
+        finally:
+            module.ProcessPoolExecutor = previous_executor
+
+        self.assertEqual(calls['init'], 1)
+        self.assertEqual(calls['shutdown'], 1)
+        self.assertIsNone(thread._chart_executor)
+
+    def test_summary_sheet_fill_falls_back_to_in_process_when_executor_submit_fails(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        class _BrokenExecutor:
+            def submit(self, *_args, **_kwargs):
+                raise RuntimeError('executor unavailable')
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._chart_executor = _BrokenExecutor()
+
+        worksheet = _FakeSummaryWorksheet()
+        row_count = 2600
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [10.0 + (idx % 9) * 0.01 for idx in range(row_count)],
+                'NOM': [10.0] * row_count,
+                '+TOL': [0.2] * row_count,
+                '-TOL': [-0.2] * row_count,
+                'SAMPLE_NUMBER': [str(idx + 1) for idx in range(row_count)],
+                'DATE': ['2024-01-01'] * row_count,
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+
+        panel_slots = build_summary_image_anchor_plan(3)
+        inserted_positions = set(worksheet.inserted_images)
+        self.assertIn(panel_slots['histogram'], inserted_positions)
+        self.assertIn(panel_slots['trend'], inserted_positions)
+
     def test_default_export_target_uses_excel_backend(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 

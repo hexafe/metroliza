@@ -787,7 +787,23 @@ class ExportDataThread(QThread):
             'summary_sheet_minimum_charts': {'distribution', 'iqr', 'histogram', 'trend'},
             'enable_chart_multiprocessing': os.getenv('METROLIZA_EXPORT_CHART_MP', '').lower() in {'1', 'true', 'yes', 'on'} and os.name != 'nt',
         }
+        self._chart_executor = None
         self._reset_export_df_cache()
+
+    def _ensure_chart_executor(self):
+        if not self._optimization_toggles.get('enable_chart_multiprocessing'):
+            return None
+        if self._chart_executor is None:
+            self._chart_executor = ProcessPoolExecutor(max_workers=2)
+        return self._chart_executor
+
+    def _shutdown_chart_executor(self):
+        if self._chart_executor is None:
+            return
+        try:
+            self._chart_executor.shutdown(wait=True)
+        finally:
+            self._chart_executor = None
 
     def _reset_export_df_cache(self):
         self._export_df_cache = None
@@ -1110,6 +1126,7 @@ class ExportDataThread(QThread):
                 return
 
             self._reset_export_df_cache()
+            self._ensure_chart_executor()
 
             self._emit_stage_progress('preparing_query', 0.0)
             self.update_label.emit("Preparing export...")
@@ -1219,6 +1236,7 @@ class ExportDataThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
         finally:
+            self._shutdown_chart_executor()
             self._reset_export_df_cache()
 
     def add_measurements_horizontal_sheet(self, excel_writer):
@@ -1456,16 +1474,15 @@ class ExportDataThread(QThread):
             sampled_group = self._downsample_frame(header_group, self._chart_sample_limit())
             self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
 
-            chart_mp_enabled = self._optimization_toggles['enable_chart_multiprocessing'] and len(sampled_group) >= 2500
+            chart_mp_enabled = self._chart_executor is not None and len(sampled_group) >= 2500
             precomputed_density_curve = None
             precomputed_trend_payload = None
             if chart_mp_enabled:
                 try:
-                    with ProcessPoolExecutor(max_workers=2) as pool:
-                        density_future = pool.submit(build_histogram_density_curve_payload, sampled_group['MEAS'])
-                        trend_future = pool.submit(build_trend_plot_payload, sampled_group)
-                        precomputed_density_curve = density_future.result()
-                        precomputed_trend_payload = trend_future.result()
+                    density_future = self._chart_executor.submit(build_histogram_density_curve_payload, sampled_group['MEAS'])
+                    trend_future = self._chart_executor.submit(build_trend_plot_payload, sampled_group)
+                    precomputed_density_curve = density_future.result()
+                    precomputed_trend_payload = trend_future.result()
                 except Exception:
                     precomputed_density_curve = None
                     precomputed_trend_payload = None
