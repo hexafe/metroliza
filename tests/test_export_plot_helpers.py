@@ -69,6 +69,7 @@ from modules.ExportDataThread import (  # noqa: E402
     render_iqr_boxplot,
     build_iqr_legend_handles,
     add_iqr_boxplot_legend,
+    add_violin_annotation_legend,
     apply_shared_x_axis_label_strategy,
     classify_capability_status,
     classify_nok_severity,
@@ -347,8 +348,21 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIsNotNone(legend)
         self.assertEqual(1, legend._loc)
         bbox = legend.get_bbox_to_anchor()._bbox
-        self.assertAlmostEqual(0.98, bbox.x0, places=2)
-        self.assertAlmostEqual(0.98, bbox.y0, places=2)
+        self.assertAlmostEqual(1.0, bbox.x0, places=2)
+        self.assertAlmostEqual(1.0, bbox.y0, places=2)
+        plt.close(fig)
+
+    def test_add_violin_annotation_legend_uses_plot_edge_anchor(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+
+        add_violin_annotation_legend(ax, {'font_size': 7.0, 'show_minmax': True, 'show_sigma': True, 'sigma_line_width': 0.8})
+
+        legend = ax.get_legend()
+        self.assertIsNotNone(legend)
+        self.assertEqual(1, legend._loc)
+        bbox = legend.get_bbox_to_anchor()._bbox
+        self.assertAlmostEqual(1.0, bbox.x0, places=2)
+        self.assertAlmostEqual(1.0, bbox.y0, places=2)
         plt.close(fig)
 
     def test_style_histogram_stats_table_applies_capability_badge_to_cp_rows(self):
