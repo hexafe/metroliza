@@ -1776,7 +1776,7 @@ class ExportDataThread(QThread):
             sampled_group = self._downsample_frame(header_group, self._chart_sample_limit())
             self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
 
-            chart_mp_enabled = self._chart_executor is not None and len(sampled_group) >= 2500
+            chart_mp_enabled = self._chart_executor is not None and len(header_group) >= 2500
             precomputed_density_curve = None
             precomputed_trend_payload = None
             if chart_mp_enabled:
