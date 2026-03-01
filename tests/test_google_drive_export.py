@@ -436,9 +436,15 @@ class TestGoogleDriveExport(unittest.TestCase):
         fake_service = _FakeSheetsService(discovery_payload)
         fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
 
-        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}), patch(
+            "modules.google_drive_export.logger.info"
+        ) as info_logger:
             fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
 
+        self.assertEqual(2, info_logger.call_count)
+        self.assertEqual("USL/LSL trendline discovery summary", info_logger.call_args_list[0].args[0])
+        self.assertEqual("USL/LSL trendline update summary", info_logger.call_args_list[1].args[0])
+        self.assertEqual([17], info_logger.call_args_list[1].kwargs["extra"]["chartIds"])
         self.assertEqual(1, len(fake_service._spreadsheets.batch_update_calls))
         batch_body = fake_service._spreadsheets.batch_update_calls[0]["body"]
         self.assertEqual(1, len(batch_body["requests"]))
@@ -500,9 +506,15 @@ class TestGoogleDriveExport(unittest.TestCase):
         fake_service = _FakeSheetsService(discovery_payload)
         fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
 
-        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}), patch(
+            "modules.google_drive_export.logger.info"
+        ) as info_logger:
             fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
 
+        self.assertEqual(2, info_logger.call_count)
+        self.assertEqual("USL/LSL trendline discovery summary", info_logger.call_args_list[0].args[0])
+        self.assertEqual("USL/LSL trendline update summary (no-op)", info_logger.call_args_list[1].args[0])
+        self.assertEqual([], info_logger.call_args_list[1].kwargs["extra"]["chartIds"])
         self.assertEqual([], fake_service._spreadsheets.batch_update_calls)
 
     def test_fix_usl_lsl_trendlines_skips_when_chart_has_fewer_than_three_series(self):
