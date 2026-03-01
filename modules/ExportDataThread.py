@@ -11,7 +11,6 @@ import numpy as np
 matplotlib.use('Agg')
 
 import importlib.util
-from io import BytesIO
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -85,6 +84,16 @@ if _HAS_SEABORN:
 
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 logging.getLogger('matplotlib.category').setLevel(logging.WARNING)
+
+
+class _WorkbookImageData:
+    """Minimal image_data wrapper for xlsxwriter packager (getvalue-only)."""
+
+    def __init__(self, payload: bytes):
+        self._payload = payload
+
+    def getvalue(self) -> bytes:
+        return self._payload
 
 
 def build_export_dataframe(data, column_names):
@@ -1085,7 +1094,16 @@ class ExportDataThread(QThread):
         }
         self._chart_executor = None
         self._summary_prep_executor = None
+        self._active_chart_images = []
         self._reset_export_df_cache()
+
+    def _register_chart_image(self, payload: bytes):
+        image_data = _WorkbookImageData(payload)
+        self._active_chart_images.append(image_data)
+        return image_data
+
+    def _cleanup_chart_images(self):
+        self._active_chart_images.clear()
 
     def _ensure_chart_executor(self):
         if not self._optimization_toggles.get('enable_chart_multiprocessing'):
@@ -1157,7 +1175,7 @@ class ExportDataThread(QThread):
         return chart_name in required_charts
 
     @staticmethod
-    def _save_summary_chart(fig, buffer, mode='workbook'):
+    def _save_summary_chart(fig, mode='workbook'):
         """Persist summary-sheet charts with a workbook-friendly rendering policy."""
         save_kwargs = {
             'format': 'png',
@@ -1167,9 +1185,10 @@ class ExportDataThread(QThread):
             # Keep a fallback for charts that may require clipping fixes.
             save_kwargs['bbox_inches'] = 'tight'
 
-        buffer.seek(0)
-        buffer.truncate(0)
-        fig.savefig(buffer, **save_kwargs)
+        from io import BytesIO
+        image_buffer = BytesIO()
+        fig.savefig(image_buffer, **save_kwargs)
+        return image_buffer.getvalue()
 
     def _build_iqr_plot_payload(self, labels, values, sampled_group):
         boxplot_labels = labels if labels else ['All']
@@ -1611,6 +1630,7 @@ class ExportDataThread(QThread):
         finally:
             self._shutdown_chart_executor()
             self._shutdown_summary_prep_executor()
+            self._cleanup_chart_images()
             self._reset_export_df_cache()
 
     def add_measurements_horizontal_sheet(self, excel_writer):
@@ -1928,7 +1948,6 @@ class ExportDataThread(QThread):
             self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
             if self._summary_chart_required('distribution'):
-                imgplot = BytesIO()
                 try:
                     apply_summary_plot_theme()
                     chart_start = time.perf_counter()
@@ -1961,13 +1980,12 @@ class ExportDataThread(QThread):
                     ax.set_xlabel('Sample #')
                     ax.set_ylabel('Measurement')
                     ax.set_title(f'{header}')
-                    self._save_summary_chart(fig, imgplot)
+                    image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
 
-                    imgplot.seek(0)
                     distribution_slot = panel_plan['image_slots']['distribution']
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(distribution_slot['row'], distribution_slot['col'], '', {'image_data': imgplot})
+                    summary_worksheet.insert_image(distribution_slot['row'], distribution_slot['col'], '', {'image_data': image_data})
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     if self._check_canceled():
@@ -1975,13 +1993,12 @@ class ExportDataThread(QThread):
                         return
                     plt.close(fig)
                 finally:
-                    imgplot.close()
+                    pass
 
             if self._check_canceled():
                 return
 
             if self._summary_chart_required('iqr'):
-                imgplot = BytesIO()
                 try:
                     chart_start = time.perf_counter()
                     fig, ax = plt.subplots(figsize=(6, 4))
@@ -2005,12 +2022,11 @@ class ExportDataThread(QThread):
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
 
-                    self._save_summary_chart(fig, imgplot)
+                    image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    imgplot.seek(0)
                     iqr_slot = panel_plan['image_slots']['iqr']
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], '', {'image_data': imgplot})
+                    summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], '', {'image_data': image_data})
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     if self._check_canceled():
@@ -2018,10 +2034,9 @@ class ExportDataThread(QThread):
                         return
                     plt.close(fig)
                 finally:
-                    imgplot.close()
+                    pass
 
             if self._summary_chart_required('histogram'):
-                imgplot = BytesIO()
                 try:
                     histogram_figsize = (6, 4)
                     chart_start = time.perf_counter()
@@ -2085,12 +2100,11 @@ class ExportDataThread(QThread):
                     )
 
                     plt.subplots_adjust(right=histogram_table_layout['subplot_right'])
-                    self._save_summary_chart(fig, imgplot)
+                    image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    imgplot.seek(0)
                     histogram_slot = panel_plan['image_slots']['histogram']
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], '', {'image_data': imgplot})
+                    summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], '', {'image_data': image_data})
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     if self._check_canceled():
@@ -2098,10 +2112,9 @@ class ExportDataThread(QThread):
                         return
                     plt.close(fig)
                 finally:
-                    imgplot.close()
+                    pass
 
             if self._summary_chart_required('trend'):
-                imgplot = BytesIO()
                 try:
                     apply_summary_plot_theme()
 
@@ -2131,19 +2144,18 @@ class ExportDataThread(QThread):
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
 
-                    self._save_summary_chart(fig, imgplot)
+                    image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    imgplot.seek(0)
                     trend_slot = panel_plan['image_slots']['trend']
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], '', {'image_data': imgplot})
+                    summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], '', {'image_data': image_data})
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
                     if self._check_canceled():
                         plt.close(fig)
                         return
                     plt.close(fig)
                 finally:
-                    imgplot.close()
+                    pass
 
         except Exception as e:
             self.log_and_exit(e)
