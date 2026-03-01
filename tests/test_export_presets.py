@@ -4,7 +4,6 @@ import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
 from modules.contracts import validate_export_options
 from modules.export_preset_utils import (
     EXPORT_PRESET_DEFAULT,
@@ -45,6 +44,13 @@ class TestExportPresetOptionMapping(unittest.TestCase):
         self.assertFalse(fast['generate_summary_sheet'])
         self.assertTrue(full['generate_summary_sheet'])
         self.assertGreaterEqual(fast['violin_plot_min_samplesize'], full['violin_plot_min_samplesize'])
+
+
+    def test_preset_labels_match_export_dialog_copy(self):
+        from modules.export_preset_utils import get_export_preset_label
+
+        self.assertEqual(get_export_preset_label(EXPORT_PRESET_FAST_DIAGNOSTICS), 'Main plots')
+        self.assertEqual(get_export_preset_label(EXPORT_PRESET_FULL_REPORT), 'Extended plots')
 
     def test_validate_export_options_keeps_preset(self):
         full = build_export_options_for_preset(EXPORT_PRESET_FULL_REPORT)
@@ -126,8 +132,6 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
                 violin_input='8',
                 summary_scale_input='0',
                 hide_ok_results=False,
-                generate_summary_sheet=False,
-                generate_summary_sheet_overridden=False,
             )
         )
         full_payload = validate_export_options(
@@ -139,8 +143,6 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
                 violin_input='6',
                 summary_scale_input='0',
                 hide_ok_results=False,
-                generate_summary_sheet=True,
-                generate_summary_sheet_overridden=False,
             )
         )
 
@@ -148,72 +150,6 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         self.assertEqual(full_payload.preset, EXPORT_PRESET_FULL_REPORT)
         self.assertFalse(fast_payload.generate_summary_sheet)
         self.assertTrue(full_payload.generate_summary_sheet)
-
-    def test_override_state_is_explicit(self):
-        from modules.ExportDialog import is_generate_summary_sheet_overridden
-
-        self.assertFalse(is_generate_summary_sheet_overridden(EXPORT_PRESET_FAST_DIAGNOSTICS, False))
-        self.assertTrue(is_generate_summary_sheet_overridden(EXPORT_PRESET_FAST_DIAGNOSTICS, True))
-        self.assertFalse(is_generate_summary_sheet_overridden(EXPORT_PRESET_FULL_REPORT, True))
-        self.assertTrue(is_generate_summary_sheet_overridden(EXPORT_PRESET_FULL_REPORT, False))
-
-
-    def test_effective_summary_sheet_state_helper(self):
-        from modules.ExportDialog import is_summary_sheet_effectively_enabled
-
-        self.assertFalse(is_summary_sheet_effectively_enabled(
-            EXPORT_PRESET_FAST_DIAGNOSTICS,
-            generate_summary_sheet=True,
-            generate_summary_sheet_overridden=False,
-        ))
-        self.assertTrue(is_summary_sheet_effectively_enabled(
-            EXPORT_PRESET_FAST_DIAGNOSTICS,
-            generate_summary_sheet=True,
-            generate_summary_sheet_overridden=True,
-        ))
-        self.assertTrue(is_summary_sheet_effectively_enabled(
-            EXPORT_PRESET_FULL_REPORT,
-            generate_summary_sheet=False,
-            generate_summary_sheet_overridden=False,
-        ))
-        self.assertFalse(is_summary_sheet_effectively_enabled(
-            EXPORT_PRESET_FULL_REPORT,
-            generate_summary_sheet=False,
-            generate_summary_sheet_overridden=True,
-        ))
-
-    def test_payload_uses_advanced_override_only_when_explicitly_changed(self):
-        from modules.ExportDialog import build_export_options_payload
-
-        no_override = validate_export_options(
-            build_export_options_payload(
-                selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
-                export_type='Line',
-                export_target='excel_xlsx',
-                sorting_parameter='Date',
-                violin_input='8',
-                summary_scale_input='0',
-                hide_ok_results=False,
-                generate_summary_sheet=True,
-                generate_summary_sheet_overridden=False,
-            )
-        )
-        explicit_override = validate_export_options(
-            build_export_options_payload(
-                selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
-                export_type='Line',
-                export_target='excel_xlsx',
-                sorting_parameter='Date',
-                violin_input='8',
-                summary_scale_input='0',
-                hide_ok_results=False,
-                generate_summary_sheet=True,
-                generate_summary_sheet_overridden=True,
-            )
-        )
-
-        self.assertFalse(no_override.generate_summary_sheet)
-        self.assertTrue(explicit_override.generate_summary_sheet)
 
 
 class TestExportCompletionMessaging(unittest.TestCase):
