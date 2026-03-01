@@ -771,6 +771,9 @@ class ExportDataThread(QThread):
         self.summary_plot_scale = validated_request.options.summary_plot_scale
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
+        self.patch_google_chart_series_post_convert = (
+            validated_request.options.patch_google_chart_series_post_convert
+        )
         self.export_canceled = False
         self._cancel_signal_emitted = False
         self._prepared_grouping_df = None
@@ -1166,6 +1169,7 @@ class ExportDataThread(QThread):
                     self.excel_file,
                     expected_sheet_names=self._build_expected_sheet_names(),
                     status_callback=_stage_callback,
+                    enable_sheets_chart_series_patching=self.patch_google_chart_series_post_convert,
                 )
                 self.completion_metadata.update(
                     {
