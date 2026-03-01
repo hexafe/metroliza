@@ -533,8 +533,24 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual("chart title", update_request["spec"]["title"])
         self.assertEqual(3, len(update_request["spec"]["basicChart"]["series"]))
         self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"])
-        self.assertNotIn("trendline", update_request["spec"]["basicChart"]["series"][1])
-        self.assertNotIn("trendline", update_request["spec"]["basicChart"]["series"][2])
+        self.assertEqual("USL", update_request["spec"]["basicChart"]["series"][1]["series"]["seriesName"]["value"])
+        self.assertEqual("LSL", update_request["spec"]["basicChart"]["series"][2]["series"]["seriesName"]["value"])
+        self.assertEqual("LINEAR", update_request["spec"]["basicChart"]["series"][1]["trendline"]["type"])
+        self.assertEqual("LINEAR", update_request["spec"]["basicChart"]["series"][2]["trendline"]["type"])
+        self.assertEqual(0.6, update_request["spec"]["basicChart"]["series"][1]["trendline"]["opacity"])
+        self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["trendline"]["lineStyle"]["width"])
+        self.assertEqual("SOLID", update_request["spec"]["basicChart"]["series"][1]["trendline"]["lineStyle"]["type"])
+        self.assertEqual(0.6, update_request["spec"]["basicChart"]["series"][2]["trendline"]["opacity"])
+        self.assertEqual(2, update_request["spec"]["basicChart"]["series"][2]["trendline"]["lineStyle"]["width"])
+        self.assertEqual("SOLID", update_request["spec"]["basicChart"]["series"][2]["trendline"]["lineStyle"]["type"])
+        self.assertEqual(
+            update_request["spec"]["basicChart"]["series"][1]["colorStyle"],
+            update_request["spec"]["basicChart"]["series"][1]["trendline"]["colorStyle"],
+        )
+        self.assertEqual(
+            update_request["spec"]["basicChart"]["series"][2]["colorStyle"],
+            update_request["spec"]["basicChart"]["series"][2]["trendline"]["colorStyle"],
+        )
         self.assertEqual(
             0.6,
             update_request["spec"]["basicChart"]["series"][2]["colorStyle"]["rgbColor"]["alpha"],

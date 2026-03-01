@@ -455,6 +455,33 @@ def _normalize_measurement_chart_series(series: list[Any]) -> list[Any] | None:
     return [copy.deepcopy(measured_series), copy.deepcopy(usl_series), copy.deepcopy(lsl_series)]
 
 
+def _ensure_series_name(series_item: Any, name: str) -> None:
+    if not isinstance(series_item, dict):
+        return
+    series_payload = series_item.get("series")
+    if not isinstance(series_payload, dict):
+        series_payload = {}
+        series_item["series"] = series_payload
+    series_name = series_payload.get("seriesName")
+    if isinstance(series_name, dict) and str(series_name.get("value") or "").strip():
+        return
+    series_payload["seriesName"] = {"value": name}
+
+
+def _ensure_preserved_measured_series_name(series_item: Any, fallback_name: str) -> None:
+    if not isinstance(fallback_name, str) or not fallback_name.strip():
+        return
+    if not isinstance(series_item, dict):
+        return
+    series_payload = series_item.get("series")
+    if not isinstance(series_payload, dict):
+        return
+    series_name = series_payload.get("seriesName")
+    if isinstance(series_name, dict) and str(series_name.get("value") or "").strip():
+        return
+    series_payload["seriesName"] = {"value": fallback_name.strip()}
+
+
 def fix_usl_lsl_trendlines(
     *,
     creds,
@@ -544,11 +571,23 @@ def fix_usl_lsl_trendlines(
             if any(series_index >= len(updated_series) for series_index in target_series_indices):
                 continue
 
+            measured_name = ""
+            measured_item = updated_series[0]
+            if isinstance(measured_item, dict):
+                measured_payload = measured_item.get("series")
+                if isinstance(measured_payload, dict):
+                    measured_name_obj = measured_payload.get("seriesName")
+                    if isinstance(measured_name_obj, dict):
+                        measured_name = str(measured_name_obj.get("value") or "").strip()
+            _ensure_preserved_measured_series_name(updated_series[0], measured_name)
+
             updated_indexes: list[int] = []
-            for series_index in target_series_indices:
+            for series_index, expected_name in ((usl_series_index, "USL"), (lsl_series_index, "LSL")):
                 series_item = updated_series[series_index]
                 if not isinstance(series_item, dict):
                     continue
+
+                _ensure_series_name(series_item, expected_name)
 
                 line_style = series_item.get("lineStyle")
                 if not isinstance(line_style, dict):
@@ -557,6 +596,15 @@ def fix_usl_lsl_trendlines(
                 line_style["width"] = line_width
                 series_item["lineStyle"] = line_style
                 series_item["colorStyle"] = copy.deepcopy(rgb_color_style)
+                series_item["trendline"] = {
+                    "type": "LINEAR",
+                    "opacity": line_opacity,
+                    "lineStyle": {
+                        "type": "SOLID",
+                        "width": line_width,
+                    },
+                    "colorStyle": copy.deepcopy(rgb_color_style),
+                }
 
                 updated_indexes.append(series_index)
 
