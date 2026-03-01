@@ -49,6 +49,9 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (  # noqa: E402
     build_histogram_annotation_specs,
+    build_histogram_mean_line_style,
+    compute_histogram_font_sizes,
+    render_histogram_annotations,
     build_measurement_chart_format_policy,
     build_measurement_block_plan,
     build_measurement_chart_range_specs,
@@ -237,17 +240,77 @@ class TestExportPlotHelpers(unittest.TestCase):
 
 
     def test_classify_capability_status_maps_threshold_tiers(self):
-        self.assertEqual(classify_capability_status(1.7, 1.7)['palette_key'], 'quality_capable')
-        self.assertEqual(classify_capability_status(1.4, 1.35)['palette_key'], 'quality_good')
-        self.assertEqual(classify_capability_status(1.1, 1.0)['palette_key'], 'quality_marginal')
-        self.assertEqual(classify_capability_status(0.9, 0.8)['palette_key'], 'quality_risk')
+        self.assertEqual(classify_capability_status(0.99, 0.8)['palette_key'], 'quality_risk')
+        self.assertEqual(classify_capability_status(1.0, 1.0)['palette_key'], 'quality_marginal')
+        self.assertEqual(classify_capability_status(1.33, 1.33)['palette_key'], 'quality_marginal')
+        self.assertEqual(classify_capability_status(1.34, 1.34)['palette_key'], 'quality_good')
+        self.assertEqual(classify_capability_status(1.66, 1.5)['palette_key'], 'quality_good')
+        self.assertEqual(classify_capability_status(1.67, 1.67)['palette_key'], 'quality_capable')
         self.assertEqual(classify_capability_status('N/A', 'N/A')['palette_key'], 'quality_unknown')
 
     def test_classify_nok_severity_maps_scan_friendly_levels(self):
-        self.assertEqual(classify_nok_severity(0.0)['palette_key'], 'quality_capable')
-        self.assertEqual(classify_nok_severity(0.01)['palette_key'], 'quality_good')
-        self.assertEqual(classify_nok_severity(0.03)['palette_key'], 'quality_marginal')
-        self.assertEqual(classify_nok_severity(0.08)['palette_key'], 'quality_risk')
+        self.assertEqual(classify_nok_severity(0.003)['palette_key'], 'quality_capable')
+        self.assertEqual(classify_nok_severity(0.0031)['palette_key'], 'quality_marginal')
+        self.assertEqual(classify_nok_severity(0.0499)['palette_key'], 'quality_marginal')
+        self.assertEqual(classify_nok_severity(0.05)['palette_key'], 'quality_risk')
+
+
+    def test_build_histogram_mean_line_style_uses_dashed_lower_alpha_policy(self):
+        style = build_histogram_mean_line_style()
+
+        self.assertEqual(style['linestyle'], '--')
+        self.assertLess(style['alpha'], 0.8)
+
+    def test_render_histogram_annotations_renders_mean_usl_lsl_and_offsets_mean_right(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(0.0, 10.0)
+        annotation_specs = build_histogram_annotation_specs(average=4.0, usl=8.0, lsl=2.0, y_max=1.0)
+
+        rendered = render_histogram_annotations(
+            ax,
+            annotation_specs,
+            annotation_fontsize=8.5,
+            annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#cccccc', 'alpha': 0.94},
+        )
+
+        self.assertEqual(len(rendered), 3)
+        self.assertEqual([text.get_text() for text in rendered], ['μ=4.000', 'USL=8.000', 'LSL=2.000'])
+        self.assertGreater(rendered[0].get_position()[0], 4.0)
+        self.assertEqual(rendered[1].get_position()[0], 8.0)
+        self.assertEqual(rendered[2].get_position()[0], 2.0)
+        plt.close(fig)
+
+    def test_histogram_annotations_include_usl_lsl_even_when_fontsize_is_compact(self):
+        font_sizes = compute_histogram_font_sizes((6, 4), has_table=True)
+        self.assertLess(font_sizes['annotation_fontsize'], 8.2)
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+        annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.5, lsl=9.5, y_max=1.0)
+        rendered = render_histogram_annotations(
+            ax,
+            annotation_specs,
+            annotation_fontsize=font_sizes['annotation_fontsize'],
+            annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#cccccc', 'alpha': 0.94},
+        )
+
+        texts = {text.get_text() for text in rendered}
+        self.assertIn('USL=10.500', texts)
+        self.assertIn('LSL=9.500', texts)
+        plt.close(fig)
+
+    def test_histogram_annotation_fontsize_contract_is_shared_for_mean_usl_lsl(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        annotation_specs = build_histogram_annotation_specs(average=1.0, usl=1.2, lsl=0.8, y_max=1.0)
+
+        rendered = render_histogram_annotations(
+            ax,
+            annotation_specs,
+            annotation_fontsize=9.1,
+            annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#cccccc', 'alpha': 0.94},
+        )
+
+        self.assertEqual({text.get_fontsize() for text in rendered}, {9.1})
+        plt.close(fig)
 
     def test_build_summary_panel_subtitle_text_formats_samples_and_nok_percent(self):
         subtitle = build_summary_panel_subtitle_text({'sample_size': 12, 'nok_pct': 0.083333})
