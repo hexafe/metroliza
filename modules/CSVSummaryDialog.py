@@ -247,6 +247,25 @@ class DataProcessingThread(QThread):
         stride = max(1, int(row_count / sample_limit))
         return selected_data.iloc[::stride].copy()
 
+    @staticmethod
+    def _format_eta(eta_seconds):
+        if eta_seconds is None:
+            return "ETA --"
+        rounded_seconds = max(0, int(round(float(eta_seconds))))
+        minutes, seconds = divmod(rounded_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours > 0:
+            return f"ETA {hours}:{minutes:02d}:{seconds:02d}"
+        return f"ETA {minutes}:{seconds:02d}"
+
+    def _estimate_eta_seconds(self, start_time, processed_columns, total_columns):
+        if processed_columns <= 0 or total_columns <= 0:
+            return None
+        elapsed = max(0.0, time.perf_counter() - start_time)
+        average_per_column = elapsed / processed_columns
+        remaining_columns = max(0, total_columns - processed_columns)
+        return average_per_column * remaining_columns
+
     def write_summary_data(self, worksheet, data_column, selected_data, spec_limits):
         col = selected_data.shape[1]
         nom = spec_limits.get('nom', 0.0)
@@ -513,6 +532,7 @@ class DataProcessingThread(QThread):
                 overview_rows = []
                 total_write_seconds = 0.0
                 total_chart_seconds = 0.0
+                processing_started_at = time.perf_counter()
 
                 # Update the progress bar for each selected data column
                 for i, data_column in enumerate(self.selected_data_columns):
@@ -531,12 +551,19 @@ class DataProcessingThread(QThread):
                     self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
                     if selected_data.empty:
                         progress_percentage = int((i + 1) * 100 / total_filtered_columns)
+                        eta_label = self._format_eta(
+                            self._estimate_eta_seconds(
+                                processing_started_at,
+                                i + 1,
+                                total_filtered_columns,
+                            )
+                        )
                         self.progress_signal.emit(progress_percentage)
                         self.status_signal.emit(
                             build_three_line_status(
                                 "Processing data...",
                                 f"Column {i + 1}/{total_filtered_columns}: {data_column}",
-                                "ETA --",
+                                eta_label,
                             )
                         )
                         continue
@@ -612,12 +639,19 @@ class DataProcessingThread(QThread):
 
                     # Calculate the progress percentage and emit the progress signal
                     progress_percentage = int((i + 1) * 100 / total_filtered_columns)
+                    eta_label = self._format_eta(
+                        self._estimate_eta_seconds(
+                            processing_started_at,
+                            i + 1,
+                            total_filtered_columns,
+                        )
+                    )
                     self.progress_signal.emit(progress_percentage)
                     self.status_signal.emit(
                         build_three_line_status(
                             "Processing data...",
                             f"Column {i + 1}/{total_filtered_columns}: {data_column}",
-                            "ETA --",
+                            eta_label,
                         )
                     )
 
