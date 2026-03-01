@@ -67,6 +67,8 @@ from modules.ExportDataThread import (  # noqa: E402
     build_violin_group_stats_rows,
     compute_scaled_y_limits,
     render_iqr_boxplot,
+    build_iqr_legend_handles,
+    add_iqr_boxplot_legend,
     apply_shared_x_axis_label_strategy,
     classify_capability_status,
     classify_nok_severity,
@@ -545,6 +547,34 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertTrue(all(tick.get_ha() == 'right' for tick in rendered))
         self.assertEqual(ax.xaxis.majorTicks[0].get_pad(), 11)
         self.assertEqual(ax.get_xticks()[-1], 29)
+        plt.close(fig)
+
+
+    def test_build_iqr_legend_handles_uses_stable_labels(self):
+        handles = build_iqr_legend_handles()
+
+        self.assertEqual(len(handles), 4)
+        self.assertEqual([handle.get_label() for handle in handles], [
+            'IQR range (Q1-Q3)',
+            'Median',
+            'Whiskers (1.5 IQR rule)',
+            'Outliers',
+        ])
+
+    def test_add_iqr_boxplot_legend_attaches_expected_legend(self):
+        fig, ax = plt.subplots()
+
+        render_iqr_boxplot(ax, [[1.0, 1.1, 1.2], [2.0, 2.1, 3.5]], ['G1', 'G2'])
+        add_iqr_boxplot_legend(ax)
+
+        legend = ax.get_legend()
+        self.assertIsNotNone(legend)
+        self.assertEqual([text.get_text() for text in legend.get_texts()], [
+            'IQR range (Q1-Q3)',
+            'Median',
+            'Whiskers (1.5 IQR rule)',
+            'Outliers',
+        ])
         plt.close(fig)
 
     def test_render_iqr_boxplot_sets_labels(self):
