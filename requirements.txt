@@ -9,5 +9,4 @@ PyMuPDF>=1.22.2
 PyQt6>=6.6.1
 scipy>=1.10.1
 seaborn>=0.13.0
-tabula-py>=2.7.0
 XlsxWriter>=3.1.0
