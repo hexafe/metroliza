@@ -254,7 +254,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(classify_nok_severity(0.003)['palette_key'], 'quality_capable')
         self.assertEqual(classify_nok_severity(0.0031)['palette_key'], 'quality_marginal')
         self.assertEqual(classify_nok_severity(0.0499)['palette_key'], 'quality_marginal')
-        self.assertEqual(classify_nok_severity(0.05)['palette_key'], 'quality_risk')
+        self.assertEqual(classify_nok_severity(0.05)['palette_key'], 'quality_marginal')
+        self.assertEqual(classify_nok_severity(0.0501)['palette_key'], 'quality_risk')
 
 
     def test_build_histogram_mean_line_style_uses_dashed_lower_alpha_policy(self):
