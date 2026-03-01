@@ -54,6 +54,7 @@ from modules.export_chart_writer import (
 )
 from modules.export_query_service import (
     build_export_dataframe as _build_export_dataframe,
+    build_measurement_export_dataframe as _build_measurement_export_dataframe,
     execute_export_query as _execute_export_query,
     fetch_partition_header_counts,
     fetch_partition_values,
@@ -97,6 +98,10 @@ def build_export_dataframe(data, column_names):
 
 def execute_export_query(db_file, export_query, select_reader=execute_select_with_columns):
     return _execute_export_query(db_file, export_query, select_reader=select_reader)
+
+
+def build_measurement_export_dataframe(df):
+    return _build_measurement_export_dataframe(df)
 
 
 def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
@@ -1093,6 +1098,8 @@ class ExportDataThread(QThread):
         self._summary_sheet_failed = False
         self._summary_sheet_skip_warning_emitted = False
         self._db_connection = None
+        self._snapshot_table_name = None
+        self._active_export_query = self.filter_query
 
     def _register_chart_image(self, payload: bytes):
         image_data = BytesIO(payload)
@@ -1131,17 +1138,56 @@ class ExportDataThread(QThread):
         finally:
             self._summary_prep_executor = None
 
+
+    def _prepare_export_snapshot(self):
+        if self._db_connection is None:
+            self._active_export_query = self.filter_query
+            return
+
+        snapshot_table_name = f'_export_snapshot_{int(time.time() * 1000)}_{id(self)}'
+        create_snapshot_query = (
+            f'CREATE TEMP TABLE "{snapshot_table_name}" AS '
+            f'SELECT * FROM ({self.filter_query}) AS export_scope'
+        )
+        try:
+            with self._db_connection:
+                self._db_connection.execute(create_snapshot_query)
+        except Exception:
+            logger.warning(
+                'Export snapshot materialization failed; falling back to live query scope.',
+                exc_info=True,
+            )
+            self._snapshot_table_name = None
+            self._active_export_query = self.filter_query
+            return
+
+        self._snapshot_table_name = snapshot_table_name
+        self._active_export_query = f'SELECT * FROM "{snapshot_table_name}"'
+
+    def _cleanup_export_snapshot(self):
+        if self._db_connection is None or not self._snapshot_table_name:
+            self._active_export_query = self.filter_query
+            self._snapshot_table_name = None
+            return
+
+        try:
+            with self._db_connection:
+                self._db_connection.execute(f'DROP TABLE IF EXISTS "{self._snapshot_table_name}"')
+        finally:
+            self._snapshot_table_name = None
+            self._active_export_query = self.filter_query
+
     def _iter_reference_partitions(self):
         partition_values = fetch_partition_values(
             self.db_file,
-            self.filter_query,
+            self._active_export_query,
             partition_column='REFERENCE',
             connection=self._db_connection,
         )
         for partition_value in partition_values:
             partition_df = load_measurement_export_partition_dataframe(
                 self.db_file,
-                self.filter_query,
+                self._active_export_query,
                 partition_value,
                 partition_column='REFERENCE',
                 connection=self._db_connection,
@@ -1149,7 +1195,7 @@ class ExportDataThread(QThread):
             yield partition_value, partition_df
 
     def _build_export_filtered_dataframe(self):
-        return read_sql_dataframe(self.db_file, self.filter_query, connection=self._db_connection)
+        return read_sql_dataframe(self.db_file, self._active_export_query, connection=self._db_connection)
 
     def _record_stage_timing(self, stage_name, elapsed):
         if stage_name in self._stage_timings:
@@ -1510,6 +1556,7 @@ class ExportDataThread(QThread):
 
             with sqlite_connection_scope(self.db_file) as connection:
                 self._db_connection = connection
+                self._prepare_export_snapshot()
 
                 self._emit_stage_progress('preparing_query', 0.0)
                 self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
@@ -1628,6 +1675,7 @@ class ExportDataThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
         finally:
+            self._cleanup_export_snapshot()
             self._shutdown_chart_executor()
             self._shutdown_summary_prep_executor()
             self._cleanup_chart_images()
@@ -1637,7 +1685,7 @@ class ExportDataThread(QThread):
         try:
             partition_header_counts = fetch_partition_header_counts(
                 self.db_file,
-                self.filter_query,
+                self._active_export_query,
                 partition_column='REFERENCE',
                 connection=self._db_connection,
             )
@@ -1877,7 +1925,7 @@ class ExportDataThread(QThread):
             if reference_value is not None and header_value is not None and axis_value is not None:
                 sql_summary = fetch_sql_measurement_summary(
                     self.db_file,
-                    self.filter_query,
+                    self._active_export_query,
                     reference=reference_value,
                     header=header_value,
                     ax=axis_value,
@@ -1887,22 +1935,34 @@ class ExportDataThread(QThread):
                 )
                 if sql_summary is not None:
                     sample_size = int(sql_summary.get('sample_size') or 0)
-                    average = float(sql_summary.get('average') or 0.0)
-                    sigma = float(sql_summary.get('sigma') or 0.0)
+                    average_raw = sql_summary.get('average')
+                    minimum_raw = sql_summary.get('minimum')
+                    maximum_raw = sql_summary.get('maximum')
+                    sigma_raw = sql_summary.get('sigma')
                     nok_count = int(sql_summary.get('nok_count') or 0)
-                    cp, cpk = safe_process_capability(nom, USL, LSL, sigma, average)
-                    summary_stats = {
-                        'minimum': float(sql_summary.get('minimum') or 0.0),
-                        'maximum': float(sql_summary.get('maximum') or 0.0),
-                        'sigma': sigma,
-                        'average': average,
-                        'median': float(header_group['MEAS'].median()) if sample_size else 0.0,
-                        'cp': cp,
-                        'cpk': cpk,
-                        'sample_size': sample_size,
-                        'nok_count': nok_count,
-                        'nok_pct': (nok_count / sample_size) if sample_size else 0,
-                    }
+
+                    has_complete_sql_summary = (
+                        sample_size > 0
+                        and average_raw is not None
+                        and minimum_raw is not None
+                        and maximum_raw is not None
+                    )
+                    if has_complete_sql_summary:
+                        average = float(average_raw)
+                        sigma = float(sigma_raw or 0.0)
+                        cp, cpk = safe_process_capability(nom, USL, LSL, sigma, average)
+                        summary_stats = {
+                            'minimum': float(minimum_raw),
+                            'maximum': float(maximum_raw),
+                            'sigma': sigma,
+                            'average': average,
+                            'median': float(header_group['MEAS'].median()),
+                            'cp': cp,
+                            'cpk': cpk,
+                            'sample_size': sample_size,
+                            'nok_count': nok_count,
+                            'nok_pct': (nok_count / sample_size),
+                        }
 
             if summary_stats is None:
                 summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)

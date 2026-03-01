@@ -1,7 +1,8 @@
-import pandas as pd
 import sqlite3
 
-from modules.db import execute_select_with_columns, read_sql_dataframe
+import pandas as pd
+
+from modules.db import execute_select_with_columns, read_sql_dataframe, sqlite_connection_scope
 
 
 def build_export_dataframe(data, column_names):
@@ -40,7 +41,7 @@ def _build_scoped_export_query(filter_query):
 def _read_sql_query(db_file, query, *, params=(), connection: sqlite3.Connection | None = None):
     if connection is not None:
         return pd.read_sql_query(query, connection, params=params)
-    with sqlite3.connect(db_file) as conn:
+    with sqlite_connection_scope(db_file) as conn:
         return pd.read_sql_query(query, conn, params=params)
 
 
