@@ -482,6 +482,58 @@ def _ensure_preserved_measured_series_name(series_item: Any, fallback_name: str)
     series_payload["seriesName"] = {"value": fallback_name.strip()}
 
 
+_ALLOWED_SERIES_KEYS = {
+    "series",
+    "targetAxis",
+    "type",
+    "lineStyle",
+    "colorStyle",
+    "pointStyle",
+    "styleOverrides",
+    "dataLabel",
+}
+_ALLOWED_SERIES_OBJECT_KEYS = {"sourceRange"}
+
+
+def _sanitize_series_item_for_patch(series_item: Any) -> dict[str, Any]:
+    """Return a schema-safe subset for updateChartSpec.basicChart.series entries."""
+    if not isinstance(series_item, dict):
+        return {}
+
+    sanitized: dict[str, Any] = {}
+    for key in _ALLOWED_SERIES_KEYS:
+        value = series_item.get(key)
+        if value is None:
+            continue
+        if key == "series":
+            if not isinstance(value, dict):
+                continue
+            sanitized_series_obj = {
+                nested_key: copy.deepcopy(value[nested_key])
+                for nested_key in _ALLOWED_SERIES_OBJECT_KEYS
+                if nested_key in value
+            }
+            if sanitized_series_obj:
+                sanitized[key] = sanitized_series_obj
+            continue
+        sanitized[key] = copy.deepcopy(value)
+    return sanitized
+
+
+def _sanitize_chart_spec_for_patch(spec: dict[str, Any]) -> dict[str, Any]:
+    """Strip unsupported fields from basicChart.series before sending patch payload."""
+    sanitized_spec = copy.deepcopy(spec)
+    basic_chart = sanitized_spec.get("basicChart")
+    if not isinstance(basic_chart, dict):
+        return sanitized_spec
+
+    series = basic_chart.get("series")
+    if not isinstance(series, list):
+        return sanitized_spec
+    basic_chart["series"] = [_sanitize_series_item_for_patch(item) for item in series]
+    return sanitized_spec
+
+
 def fix_usl_lsl_trendlines(
     *,
     creds,
@@ -571,23 +623,11 @@ def fix_usl_lsl_trendlines(
             if any(series_index >= len(updated_series) for series_index in target_series_indices):
                 continue
 
-            measured_name = ""
-            measured_item = updated_series[0]
-            if isinstance(measured_item, dict):
-                measured_payload = measured_item.get("series")
-                if isinstance(measured_payload, dict):
-                    measured_name_obj = measured_payload.get("seriesName")
-                    if isinstance(measured_name_obj, dict):
-                        measured_name = str(measured_name_obj.get("value") or "").strip()
-            _ensure_preserved_measured_series_name(updated_series[0], measured_name)
-
             updated_indexes: list[int] = []
-            for series_index, expected_name in ((usl_series_index, "USL"), (lsl_series_index, "LSL")):
+            for series_index, _expected_name in ((usl_series_index, "USL"), (lsl_series_index, "LSL")):
                 series_item = updated_series[series_index]
                 if not isinstance(series_item, dict):
                     continue
-
-                _ensure_series_name(series_item, expected_name)
 
                 line_style = series_item.get("lineStyle")
                 if not isinstance(line_style, dict):
@@ -596,15 +636,6 @@ def fix_usl_lsl_trendlines(
                 line_style["width"] = line_width
                 series_item["lineStyle"] = line_style
                 series_item["colorStyle"] = copy.deepcopy(rgb_color_style)
-                series_item["trendline"] = {
-                    "type": "LINEAR",
-                    "opacity": line_opacity,
-                    "lineStyle": {
-                        "type": "SOLID",
-                        "width": line_width,
-                    },
-                    "colorStyle": copy.deepcopy(rgb_color_style),
-                }
 
                 updated_indexes.append(series_index)
 
@@ -615,7 +646,7 @@ def fix_usl_lsl_trendlines(
                 {
                     "updateChartSpec": {
                         "chartId": chart_id,
-                        "spec": updated_spec,
+                        "spec": _sanitize_chart_spec_for_patch(updated_spec),
                     }
                 }
             )
