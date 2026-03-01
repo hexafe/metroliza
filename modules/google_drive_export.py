@@ -341,74 +341,38 @@ def _build_series_format_patch_requests(*, chart_id: int, series_index: int, inc
         "lineColorStyle": {"rgbColor": {"red": 0.7529411765, "green": 0.3137254902, "blue": 0.3019607843}},
         "lineOpacity": 0.6,
     }
-    requests: list[dict[str, Any]] = [
-        {
-            "updateChartSpec": {
-                "chartId": chart_id,
-                "spec": {
-                    "basicChart": {
-                        "series": [
-                            {
-                                "series": {"sourceRange": {"sources": []}},
-                                "targetAxis": "LEFT_AXIS",
-                                "lineStyle": series_format["lineStyle"],
-                                "colorStyle": series_format["lineColorStyle"],
-                            }
-                        ]
-                    }
-                },
-                "fields": (
-                    f"basicChart.series[{series_index}].lineStyle,"
-                    f"basicChart.series[{series_index}].colorStyle"
-                ),
-            }
-        },
-        {
-            "updateChartSpec": {
-                "chartId": chart_id,
-                "spec": {
-                    "basicChart": {
-                        "series": [
-                            {
-                                "series": {"sourceRange": {"sources": []}},
-                                "targetAxis": "LEFT_AXIS",
-                                "styleOverrides": {"lineOpacity": series_format["lineOpacity"]},
-                            }
-                        ]
-                    }
-                },
-                "fields": f"basicChart.series[{series_index}].styleOverrides.lineOpacity",
-            }
-        },
+    series_patch = {
+        "series": {"sourceRange": {"sources": []}},
+        "targetAxis": "LEFT_AXIS",
+        "lineStyle": series_format["lineStyle"],
+        "colorStyle": series_format["lineColorStyle"],
+    }
+    fields = [
+        f"basicChart.series[{series_index}].lineStyle",
+        f"basicChart.series[{series_index}].colorStyle",
     ]
     if include_trendline:
-        requests.append(
-            {
-                "updateChartSpec": {
-                    "chartId": chart_id,
-                    "spec": {
-                        "basicChart": {
-                            "series": [
-                                {
-                                    "series": {"sourceRange": {"sources": []}},
-                                    "targetAxis": "LEFT_AXIS",
-                                    "trendline": {"type": "LINEAR"},
-                                }
-                            ]
-                        }
-                    },
-                    "fields": f"basicChart.series[{series_index}].trendline.type",
-                }
+        series_patch["trendline"] = {"type": "LINEAR"}
+        fields.append(f"basicChart.series[{series_index}].trendline.type")
+
+    return [
+        {
+            "updateChartSpec": {
+                "chartId": chart_id,
+                "spec": {
+                    "basicChart": {
+                        "series": [series_patch]
+                    }
+                },
+                "fields": ",".join(fields),
             }
-        )
-    return requests
+        }
+    ]
 
 
 def _build_limit_series_patch_requests(charts_payload: dict[str, Any]) -> list[dict[str, Any]]:
     requests: list[dict[str, Any]] = []
     for chart in charts_payload.get("sheets", []):
-        if chart.get("properties", {}).get("title") != "Main Measurements":
-            continue
         for embedded in chart.get("charts", []):
             chart_id = embedded.get("chartId")
             series = (((embedded.get("spec") or {}).get("basicChart") or {}).get("series") or [])

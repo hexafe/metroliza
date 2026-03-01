@@ -318,17 +318,40 @@ class TestGoogleDriveExport(unittest.TestCase):
 
         requests = _build_limit_series_patch_requests(discovery_payload)
 
-        self.assertEqual(6, len(requests))
+        self.assertEqual(2, len(requests))
         first = requests[0]["updateChartSpec"]
         self.assertEqual(7, first["chartId"])
         self.assertIn("basicChart.series[1].lineStyle", first["fields"])
         self.assertIn("basicChart.series[1].colorStyle", first["fields"])
         self.assertEqual(2, first["spec"]["basicChart"]["series"][0]["lineStyle"]["width"]["magnitude"])
-        self.assertEqual(
-            0.6,
-            requests[1]["updateChartSpec"]["spec"]["basicChart"]["series"][0]["styleOverrides"]["lineOpacity"],
-        )
-        self.assertEqual("LINEAR", requests[2]["updateChartSpec"]["spec"]["basicChart"]["series"][0]["trendline"]["type"])
+        self.assertEqual("LINEAR", requests[0]["updateChartSpec"]["spec"]["basicChart"]["series"][0]["trendline"]["type"])
+
+    def test_build_limit_series_patch_requests_includes_ref_sheets(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "properties": {"title": "REF_123"},
+                    "charts": [
+                        {
+                            "chartId": 9,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "LINE",
+                                    "series": [
+                                        {"series": {"seriesName": {"value": "USL"}}},
+                                    ],
+                                }
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+
+        requests = _build_limit_series_patch_requests(discovery_payload)
+
+        self.assertEqual(1, len(requests))
+        self.assertEqual(9, requests[0]["updateChartSpec"]["chartId"])
 
     def test_upload_and_convert_workbook_applies_optional_chart_series_patching(self):
         with tempfile.TemporaryDirectory() as tmpdir:
