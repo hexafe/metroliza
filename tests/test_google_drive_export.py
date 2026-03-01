@@ -210,6 +210,8 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
                 "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
+            ), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
+                "modules.google_drive_export.fix_usl_lsl_trendlines"
             ):
                 result = upload_and_convert_workbook(
                     str(excel_path),
@@ -435,11 +437,58 @@ class TestGoogleDriveExport(unittest.TestCase):
                 result = upload_and_convert_workbook(str(excel_path))
 
             self.assertEqual("sheet123", result.file_id)
+            self.assertEqual(1, len(result.warnings))
+            self.assertEqual(1, len(result.warning_details))
+            self.assertIn("Trendline patch skipped", result.warnings[0])
+            self.assertEqual("credentials_build_failure", result.warning_details[0]["reason"])
+            self.assertEqual("ValueError", result.warning_details[0]["exception_class"])
+            self.assertEqual("boom", result.warning_details[0]["exception_message"])
             warning_logger.assert_called_once()
-            self.assertEqual("Google Sheets chart patch skipped after error", warning_logger.call_args.args[0])
+            self.assertEqual("Google Sheets chart patch skipped: credentials build failure", warning_logger.call_args.args[0])
             self.assertEqual("sheet123", warning_logger.call_args.kwargs["extra"]["file_ref"])
             self.assertEqual("warning", warning_logger.call_args.kwargs["extra"]["outcome"])
+            self.assertEqual("credentials_build_failure", warning_logger.call_args.kwargs["extra"]["reason"])
 
+
+
+    def test_upload_and_convert_workbook_uses_specific_reason_for_missing_googleapiclient_import(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export._ensure_reports_folder", return_value="folder"
+            ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
+                "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
+            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
+                "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=ImportError("No module named googleapiclient")
+            ):
+                result = upload_and_convert_workbook(str(excel_path))
+
+        self.assertEqual("missing_googleapiclient", result.warning_details[0]["reason"])
+        self.assertEqual("ImportError", result.warning_details[0]["exception_class"])
+        self.assertIn("googleapiclient", result.warning_details[0]["exception_message"])
+
+    def test_upload_and_convert_workbook_uses_specific_reason_for_sheets_patch_request_errors(self):
+        class FakeSheetPatchRequestError(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export._ensure_reports_folder", return_value="folder"
+            ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
+                "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
+            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
+                "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=FakeSheetPatchRequestError("batchUpdate failed 400 invalid chartId"),
+            ):
+                result = upload_and_convert_workbook(str(excel_path))
+
+        self.assertEqual("sheets_patch_request_error", result.warning_details[0]["reason"])
+        self.assertEqual("FakeSheetPatchRequestError", result.warning_details[0]["exception_class"])
+        self.assertIn("invalid chartId", result.warning_details[0]["exception_message"])
 
     def test_fix_usl_lsl_trendlines_updates_target_series_with_full_spec_and_field_masks(self):
         original_spec = {
