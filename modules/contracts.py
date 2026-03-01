@@ -90,6 +90,9 @@ def validate_paths(paths: AppPaths) -> AppPaths:
 
 
 def validate_parse_request(request: ParseRequest) -> ParseRequest:
+    if not isinstance(request, ParseRequest):
+        raise ValueError("Parse request must be provided as a ParseRequest instance.")
+
     if not isinstance(request.source_directory, str) or not request.source_directory.strip():
         raise ValueError("A source directory is required.")
 
@@ -98,16 +101,27 @@ def validate_parse_request(request: ParseRequest) -> ParseRequest:
 
 
 def validate_export_options(options: ExportOptions) -> ExportOptions:
+    def _normalize_required_str(value: object, field_name: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} must be provided as a string.")
+        return value.strip().lower()
+
     preset_value = getattr(options, "preset", ExportOptions.preset)
     preset = preset_value.strip().lower() if isinstance(preset_value, str) else ""
     if preset not in _ALLOWED_EXPORT_PRESETS:
         preset = "fast_diagnostics"
 
-    export_type = getattr(options, "export_type", ExportOptions.export_type).strip().lower()
+    export_type = _normalize_required_str(
+        getattr(options, "export_type", ExportOptions.export_type),
+        "export_type",
+    )
     if export_type not in _ALLOWED_EXPORT_TYPES:
         raise ValueError(f"Unsupported export type '{getattr(options, 'export_type', None)}'.")
 
-    export_target = getattr(options, "export_target", ExportOptions.export_target).strip().lower()
+    export_target = _normalize_required_str(
+        getattr(options, "export_target", ExportOptions.export_target),
+        "export_target",
+    )
     if export_target not in _ALLOWED_EXPORT_TARGETS:
         raise ValueError(f"Unsupported export target '{getattr(options, 'export_target', None)}'.")
 
@@ -119,7 +133,10 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
     if export_target == "google_sheets_drive_convert" and backend_target == ExportOptions.backend_target:
         backend_target = "google"
 
-    sorting_parameter = getattr(options, "sorting_parameter", ExportOptions.sorting_parameter).strip().lower()
+    sorting_parameter = _normalize_required_str(
+        getattr(options, "sorting_parameter", ExportOptions.sorting_parameter),
+        "sorting_parameter",
+    )
     allowed_sorting = {"date"}.union(_SAMPLE_SORT_ALIASES)
     if sorting_parameter not in allowed_sorting:
         raise ValueError(f"Unsupported sorting parameter '{getattr(options, 'sorting_parameter', None)}'.")
