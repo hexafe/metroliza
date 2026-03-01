@@ -107,10 +107,8 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
             ])
             if converted_url:
                 message_lines.append(f"Google Sheet: {converted_url}")
-            if fallback_message:
-                message_lines.append(fallback_message)
             if warnings:
-                message_lines.append("Warnings:")
+                message_lines.append("Warnings/Errors:")
                 message_lines.extend(f"- {warning}" for warning in warnings)
             return 'warning', 'Export completed with Google fallback', "\n".join(message_lines)
 
