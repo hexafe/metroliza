@@ -57,7 +57,7 @@ class AboutWindow(QDialog):
         self.layout.addWidget(gif_label)
 
         # Add the title label
-        title_label = QLabel(f"Metroliza V version <b>{VersionDate.VERSION_DATE}</b>")
+        title_label = QLabel(f"Metroliza version <b>{VersionDate.VERSION_DATE}</b>")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(title_label)
         
