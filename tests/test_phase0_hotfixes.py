@@ -31,6 +31,11 @@ class TestStatsUtilities(unittest.TestCase):
         self.assertEqual(cp, "N/A")
         self.assertEqual(cpk, "N/A")
 
+    def test_safe_process_capability_one_sided_gdt_sets_cp_na_and_upper_cpk(self):
+        cp, cpk = safe_process_capability(0, 1, 0, 0.2, 0.4)
+        self.assertEqual(cp, "N/A")
+        self.assertEqual(cpk, 1.0)
+
     def test_safe_process_capability_nan(self):
         cp, cpk = safe_process_capability(0, 1, 0, math.nan, 0.2)
         self.assertEqual(cp, "N/A")

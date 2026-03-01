@@ -14,13 +14,18 @@ def safe_process_capability(nom, usl, lsl, sigma, average):
     if sigma == 0:
         return "N/A", "N/A"
 
-    cp = (usl - lsl) / (6 * sigma)
-    if nom == 0 and lsl == 0:
+    is_one_sided_gdt = nom == 0 and lsl == 0
+
+    cp = "N/A" if is_one_sided_gdt else (usl - lsl) / (6 * sigma)
+    if is_one_sided_gdt:
         cpk = (usl - average) / (3 * sigma)
     else:
         cpk = min((usl - average) / (3 * sigma), (average - lsl) / (3 * sigma))
 
-    if math.isnan(cp) or math.isnan(cpk):
+    if isinstance(cp, (int, float)) and math.isnan(cp):
+        cp = "N/A"
+    if math.isnan(cpk):
         return "N/A", "N/A"
 
-    return round(cp, 2), round(cpk, 2)
+    cp_value = cp if isinstance(cp, str) else round(cp, 2)
+    return cp_value, round(cpk, 2)

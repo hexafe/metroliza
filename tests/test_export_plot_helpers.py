@@ -337,6 +337,19 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual(table[-1], ('NOK %', '8.33%'))
 
+    def test_add_iqr_boxplot_legend_uses_top_right_anchor(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+
+        add_iqr_boxplot_legend(ax)
+
+        legend = ax.get_legend()
+        self.assertIsNotNone(legend)
+        self.assertEqual(1, legend._loc)
+        bbox = legend.get_bbox_to_anchor()._bbox
+        self.assertAlmostEqual(0.98, bbox.x0, places=2)
+        self.assertAlmostEqual(0.98, bbox.y0, places=2)
+        plt.close(fig)
+
     def test_style_histogram_stats_table_applies_capability_badge_to_cp_rows(self):
         fig, ax = plt.subplots(figsize=(4, 3))
         table_data = [('Cp', 1.45), ('Cpk', 1.4), ('NOK %', 2.5)]
@@ -619,7 +632,6 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('Min marker', legend_labels)
         self.assertIn('Max marker', legend_labels)
         self.assertIn('±3σ span (visual)', legend_labels)
-        self.assertIn('Text box: value annotation', legend_labels)
         plt.close(fig)
 
     def test_annotation_collision_resolution_is_deterministic_for_dense_groups(self):

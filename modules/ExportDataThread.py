@@ -648,9 +648,6 @@ def add_violin_annotation_legend(ax, style):
             Line2D([0], [0], linestyle=':', linewidth=max(style.get('sigma_line_width', 0.7), 0.7), color=SUMMARY_PLOT_PALETTE['sigma_band'], label='±3σ span (visual)'),
         )
 
-    handles.append(
-        Line2D([0], [0], linestyle='None', marker='s', markersize=4.5, markerfacecolor='white', markeredgecolor=SUMMARY_PLOT_PALETTE['annotation_box_edge'], label='Text box: value annotation'),
-    )
     ax.legend(handles=handles, loc='upper right', frameon=True, fontsize=max(style.get('font_size', 6.8) - 0.2, 6.6))
 
 def render_violin(ax, values, labels, *, readability_scale=None):
@@ -746,8 +743,8 @@ def add_iqr_boxplot_legend(ax):
     handles = build_iqr_legend_handles()
     ax.legend(
         handles=handles,
-        loc='upper left',
-        bbox_to_anchor=(0.02, 0.98),
+        loc='upper right',
+        bbox_to_anchor=(0.98, 0.98),
         fontsize=7,
         framealpha=0.9,
         facecolor='white',
@@ -765,7 +762,7 @@ def render_density_line(ax, x, p):
         ax.plot(x, p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4)
 
 
-def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None):
+def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
     """Apply semantic emphasis colors to the histogram summary table."""
     if ax_table is None:
         return
@@ -780,6 +777,9 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None):
 
     cp_cpk_rows = {'Cp', 'Cpk'}
     for row_index, (label, _value) in enumerate(table_data, start=1):
+        if capability_row_badges and label in capability_row_badges:
+            _apply_table_row_badge(ax_table, row_index, capability_row_badges[label]['palette_key'])
+            continue
         if capability_badge and label in cp_cpk_rows:
             _apply_table_row_badge(ax_table, row_index, capability_badge['palette_key'])
             continue
@@ -836,6 +836,29 @@ def classify_capability_status(cp, cpk):
     }
 
 
+def classify_capability_value(value, *, label_prefix='Capability'):
+    """Classify a single Cp/Cpk value for independent row highlighting."""
+
+    def _as_float(raw):
+        if isinstance(raw, str):
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    numeric = _as_float(value)
+    if numeric is None:
+        return {'label': f'{label_prefix} N/A', 'palette_key': 'quality_unknown'}
+    if numeric >= 1.67:
+        return {'label': f'{label_prefix} capable', 'palette_key': 'quality_capable'}
+    if numeric > 1.33:
+        return {'label': f'{label_prefix} good', 'palette_key': 'quality_good'}
+    if numeric >= 1.0:
+        return {'label': f'{label_prefix} marginal', 'palette_key': 'quality_marginal'}
+    return {'label': f'{label_prefix} risk', 'palette_key': 'quality_risk'}
+
+
 def classify_nok_severity(nok_pct):
     """Classify NOK ratio severity for chart title cueing."""
     ratio = 0.0
@@ -850,7 +873,7 @@ def classify_nok_severity(nok_pct):
             'palette_key': 'quality_capable',
         }
 
-    if ratio < 0.05:
+    if ratio <= 0.05:
         return {
             'label': f'NOK {ratio * 100:.1f}% watch',
             'palette_key': 'quality_marginal',
@@ -1642,6 +1665,10 @@ class ExportDataThread(QThread):
             summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
             average = summary_stats['average']
             capability_badge = classify_capability_status(summary_stats['cp'], summary_stats['cpk'])
+            capability_row_badges = {
+                'Cp': classify_capability_value(summary_stats['cp'], label_prefix='Cp'),
+                'Cpk': classify_capability_value(summary_stats['cpk'], label_prefix='Cpk'),
+            }
             panel_subtitle = build_summary_panel_subtitle(summary_stats)
             
             apply_summary_plot_theme()
@@ -1795,7 +1822,12 @@ class ExportDataThread(QThread):
             # Format the table
             ax_table.auto_set_font_size(False)
             ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
-            style_histogram_stats_table(ax_table, table_data, capability_badge=capability_badge)
+            style_histogram_stats_table(
+                ax_table,
+                table_data,
+                capability_badge=capability_badge,
+                capability_row_badges=capability_row_badges,
+            )
 
             density_curve = precomputed_density_curve
             if density_curve is None:
