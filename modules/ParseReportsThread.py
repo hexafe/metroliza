@@ -221,7 +221,13 @@ class ParseReportsThread(QThread):
                     cancel_flag=self.parsing_canceled,
                 ),
             )
-            self.update_label.emit("Discovering reports...")
+            self.update_label.emit(
+                build_three_line_status(
+                    "Parsing reports...",
+                    "Discovering report files in source directory",
+                    "ETA --",
+                )
+            )
             self._emit_stage_progress('discover_reports', 0.0)
             for path in report_root.glob("**/*.[Pp][Dd][Ff]"):
                 if self.parsing_canceled:
@@ -252,7 +258,13 @@ class ParseReportsThread(QThread):
             if self.parsing_canceled:
                 return report_fingerprints
 
-            self.update_label.emit("Loading existing reports from database...")
+            self.update_label.emit(
+                build_three_line_status(
+                    "Parsing reports...",
+                    "Loading existing report fingerprints from database",
+                    "ETA --",
+                )
+            )
             self._emit_stage_progress('load_existing_reports', 0.0)
 
             table_exists = execute_with_retry(
@@ -414,7 +426,13 @@ class ParseReportsThread(QThread):
 
             if result.total_files == 0:
                 self._emit_stage_progress('parse_reports', 1.0)
-                self.update_label.emit("No reports found to parse.")
+                self.update_label.emit(
+                    build_three_line_status(
+                        "Parsing reports...",
+                        "No reports found to parse",
+                        "ETA 0:00",
+                    )
+                )
 
             logger.info(
                 "Parse processing finished",
