@@ -407,11 +407,6 @@ class ExportDialog(QDialog):
             self.hide_ok_results_checkbox.setChecked(False)
             self.hide_ok_results_checkbox.setToolTip("When enabled, only OK results will be visible (columns with OK results will be hidden, not deleted)")
             
-            self.advanced_options_toggle = QPushButton("Advanced options")
-            self.advanced_options_toggle.setCheckable(True)
-            self.advanced_options_toggle.setChecked(False)
-            self.advanced_options_toggle.toggled.connect(self._toggle_advanced_options)
-
             self.advanced_options_container = QWidget()
             advanced_options_layout = QVBoxLayout(self.advanced_options_container)
             advanced_options_layout.setContentsMargins(0, 0, 0, 0)
@@ -420,7 +415,6 @@ class ExportDialog(QDialog):
             advanced_options_layout.addWidget(self.summary_plot_scale_label)
             advanced_options_layout.addWidget(self.summary_plot_scale)
             advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
-            self.advanced_options_container.hide()
 
             self.apply_selected_preset()
         except Exception as e:
@@ -481,11 +475,6 @@ class ExportDialog(QDialog):
             report_profile_layout.addWidget(self.sort_measurements_label, 5, 0)
             report_profile_layout.addWidget(self.sort_measurements_combobox, 5, 1)
 
-            advanced_options_layout = QVBoxLayout()
-            advanced_options_layout.setContentsMargins(0, 0, 0, 0)
-            advanced_options_layout.addWidget(self.advanced_options_toggle)
-            advanced_options_layout.addWidget(self.advanced_options_container)
-
             action_layout = QVBoxLayout()
             action_layout.setContentsMargins(0, 0, 0, 0)
             action_layout.addWidget(self.export_button)
@@ -493,7 +482,7 @@ class ExportDialog(QDialog):
             self.layout.addWidget(build_section_widget("Source / target files", source_target_layout))
             self.layout.addWidget(build_section_widget("Data scope", data_scope_layout))
             self.layout.addWidget(build_section_widget("Report profile", report_profile_layout))
-            self.layout.addWidget(build_section_widget("Advanced options", advanced_options_layout))
+            self.layout.addWidget(build_section_widget("Advanced options", self.advanced_options_container.layout()))
             self.layout.addWidget(build_section_widget("Primary action", action_layout))
 
             self.setLayout(self.layout)
@@ -505,8 +494,7 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.preset_combobox, self.include_google_sheets_checkbox)
             self.setTabOrder(self.include_google_sheets_checkbox, self.export_type_combobox)
             self.setTabOrder(self.export_type_combobox, self.sort_measurements_combobox)
-            self.setTabOrder(self.sort_measurements_combobox, self.advanced_options_toggle)
-            self.setTabOrder(self.advanced_options_toggle, self.violin_plot_min_samplesize)
+            self.setTabOrder(self.sort_measurements_combobox, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
             self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
             self.setTabOrder(self.hide_ok_results_checkbox, self.export_button)
@@ -531,9 +519,6 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setText(str(input_value))
         except Exception as e:
             self.log_and_exit(e)
-
-    def _toggle_advanced_options(self, is_visible):
-        self.advanced_options_container.setVisible(bool(is_visible))
 
     def validate_plot_scale_input(self):
         try:
