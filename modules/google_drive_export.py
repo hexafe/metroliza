@@ -722,7 +722,16 @@ def upload_and_convert_workbook(
     if callable(status_callback):
         status_callback("validating")
     try:
-        _patch_converted_sheet_chart_series(spreadsheet_id=parsed.file_id, access_token=access_token)
+        creds = _build_google_user_credentials(credentials_path=Path(credentials_path), token_path=Path(token_path))
+        fix_usl_lsl_trendlines(
+            creds=creds,
+            spreadsheet_id=parsed.file_id,
+            usl_series_index=1,
+            lsl_series_index=2,
+            color_hex="#c0504d",
+            width_px=2,
+            opacity=0.6,
+        )
     except (GoogleDriveExportError, ImportError, ValueError, TypeError) as exc:
         logger.warning(
             "Google Sheets chart patch skipped after error",
