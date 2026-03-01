@@ -152,19 +152,27 @@ class TestGoogleDriveExport(unittest.TestCase):
             excel_path = Path(tmpdir) / "report.xlsx"
             excel_path.write_bytes(b"excel-content")
 
-            captured = {"upload_data": None, "folder_lookup": 0}
+            captured = {"upload_data": None, "folder_lookup": 0, "sheet_discovery": 0, "batch_update": 0}
 
             def fake_urlopen(request, timeout=0):
-                if request.method == "GET":
+                if request.method == "GET" and "www.googleapis.com/drive/v3/files" in request.full_url:
                     captured["folder_lookup"] += 1
                     return _FakeResponse({"files": [{"id": "folder-123", "name": GOOGLE_DRIVE_REPORTS_FOLDER_NAME}]})
-                captured["upload_data"] = request.data
-                return _FakeResponse(
-                    {
-                        "id": "sheet123",
-                        "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit",
-                    }
-                )
+                if request.method == "POST" and "upload/drive/v3/files" in request.full_url:
+                    captured["upload_data"] = request.data
+                    return _FakeResponse(
+                        {
+                            "id": "sheet123",
+                            "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit",
+                        }
+                    )
+                if request.method == "GET" and "sheets.googleapis.com/v4/spreadsheets/" in request.full_url:
+                    captured["sheet_discovery"] += 1
+                    return _FakeResponse({"sheets": []})
+                if request.method == "POST" and request.full_url.endswith(":batchUpdate"):
+                    captured["batch_update"] += 1
+                    return _FakeResponse({"replies": []})
+                raise AssertionError(f"Unexpected request: {request.method} {request.full_url}")
 
             with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
                 "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
@@ -353,7 +361,7 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual(1, len(requests))
         self.assertEqual(9, requests[0]["updateChartSpec"]["chartId"])
 
-    def test_upload_and_convert_workbook_applies_optional_chart_series_patching(self):
+    def test_upload_and_convert_workbook_always_applies_chart_series_patching(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_path = Path(tmpdir) / "report.xlsx"
             excel_path.write_bytes(b"excel-content")
@@ -363,10 +371,7 @@ class TestGoogleDriveExport(unittest.TestCase):
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
             })), patch("modules.google_drive_export._patch_converted_sheet_chart_series") as patcher:
-                upload_and_convert_workbook(
-                    str(excel_path),
-                    enable_sheets_chart_series_patching=True,
-                )
+                upload_and_convert_workbook(str(excel_path))
 
             patcher.assert_called_once_with(spreadsheet_id="sheet123", access_token="token")
 
