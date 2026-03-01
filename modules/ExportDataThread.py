@@ -1827,184 +1827,199 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('distribution'):
                 imgplot = BytesIO()
-                apply_summary_plot_theme()
-                chart_start = time.perf_counter()
-                fig, ax = plt.subplots(figsize=(6, 4))
-                if can_render_violin:
-                    render_violin(ax, distribution_values, distribution_labels, readability_scale=self.summary_plot_scale)
-                else:
-                    render_scatter_numeric(ax, x_values, y_values)
+                try:
+                    apply_summary_plot_theme()
+                    chart_start = time.perf_counter()
+                    fig, ax = plt.subplots(figsize=(6, 4))
+                    if can_render_violin:
+                        render_violin(ax, distribution_values, distribution_labels, readability_scale=self.summary_plot_scale)
+                    else:
+                        render_scatter_numeric(ax, x_values, y_values)
 
-                apply_minimal_axis_style(ax, grid_axis='y')
-                apply_shared_x_axis_label_strategy(ax, distribution_labels, positions=label_positions)
-                for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                    ax.axhline(**line_spec)
+                    apply_minimal_axis_style(ax, grid_axis='y')
+                    apply_shared_x_axis_label_strategy(ax, distribution_labels, positions=label_positions)
+                    for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                        ax.axhline(**line_spec)
 
-                current_y_limits = ax.get_ylim()
-                y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                ax.set_ylim(y_min, y_max)
-                ax.set_xlabel('Sample #')
-                ax.set_ylabel('Measurement')
-                ax.set_title(f'{header}')
-                fig.savefig(imgplot, format='png')
-                self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    current_y_limits = ax.get_ylim()
+                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_ylim(y_min, y_max)
+                    ax.set_xlabel('Sample #')
+                    ax.set_ylabel('Measurement')
+                    ax.set_title(f'{header}')
+                    fig.savefig(imgplot, format='png')
+                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
 
-                imgplot.seek(0)
-                distribution_slot = panel_plan['image_slots']['distribution']
-                write_start = time.perf_counter()
-                summary_worksheet.insert_image(distribution_slot['row'], distribution_slot['col'], '', {'image_data': imgplot})
-                self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    imgplot.seek(0)
+                    distribution_slot = panel_plan['image_slots']['distribution']
+                    write_start = time.perf_counter()
+                    summary_worksheet.insert_image(distribution_slot['row'], distribution_slot['col'], '', {'image_data': imgplot})
+                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
-                if self._check_canceled():
+                    if self._check_canceled():
+                        plt.close(fig)
+                        return
                     plt.close(fig)
-                    return
-                plt.close(fig)
+                finally:
+                    imgplot.close()
 
             if self._check_canceled():
                 return
 
             if self._summary_chart_required('iqr'):
                 imgplot = BytesIO()
-                chart_start = time.perf_counter()
-                fig, ax = plt.subplots(figsize=(6, 4))
-                boxplot_labels, boxplot_values = self._build_iqr_plot_payload(iqr_labels, iqr_values, sampled_group)
-                render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
-                add_iqr_boxplot_legend(ax)
-                apply_minimal_axis_style(ax, grid_axis='y')
-                apply_shared_x_axis_label_strategy(ax, boxplot_labels, positions=list(range(1, len(boxplot_labels) + 1)))
-                for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                    ax.axhline(**line_spec)
-                ax.set_xlabel('Group')
-                ax.set_ylabel('Measurement')
-                ax.set_title(f'{header} - IQR Outlier Detection')
+                try:
+                    chart_start = time.perf_counter()
+                    fig, ax = plt.subplots(figsize=(6, 4))
+                    boxplot_labels, boxplot_values = self._build_iqr_plot_payload(iqr_labels, iqr_values, sampled_group)
+                    render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
+                    add_iqr_boxplot_legend(ax)
+                    apply_minimal_axis_style(ax, grid_axis='y')
+                    apply_shared_x_axis_label_strategy(ax, boxplot_labels, positions=list(range(1, len(boxplot_labels) + 1)))
+                    for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                        ax.axhline(**line_spec)
+                    ax.set_xlabel('Group')
+                    ax.set_ylabel('Measurement')
+                    ax.set_title(f'{header} - IQR Outlier Detection')
 
-                current_y_limits = ax.get_ylim()
-                y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                ax.set_ylim(y_min, y_max)
+                    current_y_limits = ax.get_ylim()
+                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_ylim(y_min, y_max)
 
-                fig.savefig(imgplot, format='png', bbox_inches='tight')
-                self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                imgplot.seek(0)
-                iqr_slot = panel_plan['image_slots']['iqr']
-                write_start = time.perf_counter()
-                summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], '', {'image_data': imgplot})
-                self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    fig.savefig(imgplot, format='png', bbox_inches='tight')
+                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    imgplot.seek(0)
+                    iqr_slot = panel_plan['image_slots']['iqr']
+                    write_start = time.perf_counter()
+                    summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], '', {'image_data': imgplot})
+                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
-                if self._check_canceled():
+                    if self._check_canceled():
+                        plt.close(fig)
+                        return
                     plt.close(fig)
-                    return
-                plt.close(fig)
+                finally:
+                    imgplot.close()
 
             if self._summary_chart_required('histogram'):
                 imgplot = BytesIO()
-                histogram_figsize = (6, 4)
-                chart_start = time.perf_counter()
-                fig, ax = plt.subplots(figsize=histogram_figsize)
-                render_histogram(ax, sampled_group)
+                try:
+                    histogram_figsize = (6, 4)
+                    chart_start = time.perf_counter()
+                    fig, ax = plt.subplots(figsize=histogram_figsize)
+                    render_histogram(ax, sampled_group)
 
-                histogram_font_sizes = compute_histogram_font_sizes(
-                    histogram_figsize,
-                    has_table=True,
-                    readability_scale=self.summary_plot_scale,
-                )
-                histogram_table_layout = compute_histogram_table_layout(
-                    histogram_figsize,
-                    table_fontsize=histogram_font_sizes['table_fontsize'],
-                    has_table=True,
-                )
-
-                table_data = build_histogram_table_data(summary_stats)
-                ax_table = plt.table(
-                    cellText=table_data,
-                    colLabels=['Statistic', 'Value'],
-                    cellLoc='center',
-                    loc='right',
-                    bbox=[1, 0, histogram_table_layout['table_bbox_width'], 1],
-                )
-                ax_table.auto_set_font_size(False)
-                ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
-                style_histogram_stats_table(
-                    ax_table,
-                    table_data,
-                    capability_badge=capability_badge,
-                    capability_row_badges=capability_row_badges,
-                )
-
-                density_curve = precomputed_density_curve
-                if density_curve is None:
-                    density_curve = build_histogram_density_curve_payload(
-                        sampled_group['MEAS'],
-                        point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                    histogram_font_sizes = compute_histogram_font_sizes(
+                        histogram_figsize,
+                        has_table=True,
+                        readability_scale=self.summary_plot_scale,
                     )
-                if density_curve is not None:
-                    render_density_line(ax, density_curve['x'], density_curve['y'])
+                    histogram_table_layout = compute_histogram_table_layout(
+                        histogram_figsize,
+                        table_fontsize=histogram_font_sizes['table_fontsize'],
+                        has_table=True,
+                    )
 
-                mean_line_style = build_histogram_mean_line_style()
-                ax.axvline(average, **mean_line_style)
-                ax.axvline(USL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
-                ax.axvline(LSL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
-                ax.set_xlabel('Measurement')
-                ax.set_ylabel('Density')
-                ax.set_title(f'{header}')
-                apply_minimal_axis_style(ax, grid_axis='y')
+                    table_data = build_histogram_table_data(summary_stats)
+                    ax_table = plt.table(
+                        cellText=table_data,
+                        colLabels=['Statistic', 'Value'],
+                        cellLoc='center',
+                        loc='right',
+                        bbox=[1, 0, histogram_table_layout['table_bbox_width'], 1],
+                    )
+                    ax_table.auto_set_font_size(False)
+                    ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
+                    style_histogram_stats_table(
+                        ax_table,
+                        table_data,
+                        capability_badge=capability_badge,
+                        capability_row_badges=capability_row_badges,
+                    )
 
-                _, y_max = ax.get_ylim()
-                annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
-                annotation_specs = build_histogram_annotation_specs(average, USL, LSL, y_max)
-                render_histogram_annotations(
-                    ax,
-                    annotation_specs,
-                    annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
-                    annotation_box=annotation_box,
-                )
+                    density_curve = precomputed_density_curve
+                    if density_curve is None:
+                        density_curve = build_histogram_density_curve_payload(
+                            sampled_group['MEAS'],
+                            point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                        )
+                    if density_curve is not None:
+                        render_density_line(ax, density_curve['x'], density_curve['y'])
 
-                plt.subplots_adjust(right=histogram_table_layout['subplot_right'])
-                fig.savefig(imgplot, format='png')
-                self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                imgplot.seek(0)
-                histogram_slot = panel_plan['image_slots']['histogram']
-                write_start = time.perf_counter()
-                summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], '', {'image_data': imgplot})
-                self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    mean_line_style = build_histogram_mean_line_style()
+                    ax.axvline(average, **mean_line_style)
+                    ax.axvline(USL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
+                    ax.axvline(LSL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
+                    ax.set_xlabel('Measurement')
+                    ax.set_ylabel('Density')
+                    ax.set_title(f'{header}')
+                    apply_minimal_axis_style(ax, grid_axis='y')
 
-                if self._check_canceled():
+                    _, y_max = ax.get_ylim()
+                    annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
+                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, y_max)
+                    render_histogram_annotations(
+                        ax,
+                        annotation_specs,
+                        annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
+                        annotation_box=annotation_box,
+                    )
+
+                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'])
+                    fig.savefig(imgplot, format='png')
+                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    imgplot.seek(0)
+                    histogram_slot = panel_plan['image_slots']['histogram']
+                    write_start = time.perf_counter()
+                    summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], '', {'image_data': imgplot})
+                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+
+                    if self._check_canceled():
+                        plt.close(fig)
+                        return
                     plt.close(fig)
-                    return
-                plt.close(fig)
+                finally:
+                    imgplot.close()
 
             if self._summary_chart_required('trend'):
                 imgplot = BytesIO()
-                apply_summary_plot_theme()
+                try:
+                    apply_summary_plot_theme()
 
-                chart_start = time.perf_counter()
-                trend_payload = precomputed_trend_payload or build_trend_plot_payload(sampled_group)
-                data_x = trend_payload['x']
-                data_y = trend_payload['y']
-                unique_labels = trend_payload['labels']
+                    chart_start = time.perf_counter()
+                    trend_payload = precomputed_trend_payload or build_trend_plot_payload(sampled_group)
+                    data_x = trend_payload['x']
+                    data_y = trend_payload['y']
+                    unique_labels = trend_payload['labels']
 
-                fig, ax = plt.subplots(figsize=(6, 4))
-                ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
+                    fig, ax = plt.subplots(figsize=(6, 4))
+                    ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
 
-                for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                    ax.axhline(**line_spec)
-                ax.set_xlabel('Sample #')
-                ax.set_ylabel('Measurement')
-                ax.set_title(f'{header}')
-                apply_minimal_axis_style(ax, grid_axis='y')
-                apply_shared_x_axis_label_strategy(ax, unique_labels, positions=data_x)
+                    for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                        ax.axhline(**line_spec)
+                    ax.set_xlabel('Sample #')
+                    ax.set_ylabel('Measurement')
+                    ax.set_title(f'{header}')
+                    apply_minimal_axis_style(ax, grid_axis='y')
+                    apply_shared_x_axis_label_strategy(ax, unique_labels, positions=data_x)
 
-                current_y_limits = ax.get_ylim()
-                y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                ax.set_ylim(y_min, y_max)
+                    current_y_limits = ax.get_ylim()
+                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_ylim(y_min, y_max)
 
-                fig.savefig(imgplot, format='png', bbox_inches='tight')
-                self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                imgplot.seek(0)
-                trend_slot = panel_plan['image_slots']['trend']
-                write_start = time.perf_counter()
-                summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], '', {'image_data': imgplot})
-                self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
-                plt.close(fig)
+                    fig.savefig(imgplot, format='png', bbox_inches='tight')
+                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    imgplot.seek(0)
+                    trend_slot = panel_plan['image_slots']['trend']
+                    write_start = time.perf_counter()
+                    summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], '', {'image_data': imgplot})
+                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    if self._check_canceled():
+                        plt.close(fig)
+                        return
+                    plt.close(fig)
+                finally:
+                    imgplot.close()
 
         except Exception as e:
             self.log_and_exit(e)
