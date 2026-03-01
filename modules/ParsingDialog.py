@@ -1,8 +1,8 @@
 from modules.progress_status import build_three_line_status
 from modules.ParseReportsThread import ParseReportsThread
 from modules.CustomLogger import CustomLogger
-from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
+from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QPushButton
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.worker_progress_dialog import create_worker_progress_dialog

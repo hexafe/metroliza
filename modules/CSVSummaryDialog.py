@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt, pyqtSlot, QThread, pyqtSignal
+from PyQt6.QtCore import pyqtSlot, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -7,8 +7,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QHBoxLayout,
-    QProgressBar,
-    QLabel,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,

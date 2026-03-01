@@ -23,7 +23,6 @@ from PyQt6.QtWidgets import(
     QLabel,
     QLineEdit,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QComboBox,
