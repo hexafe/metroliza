@@ -91,6 +91,7 @@ def apply_shared_x_axis_label_strategy(
     thinning_threshold=24,
     target_tick_count=16,
     tick_padding=6,
+    force_sparse=False,
 ):
     """Apply a consistent x-axis label strategy for dense categorical charts."""
     if ax is None:
@@ -128,7 +129,7 @@ def apply_shared_x_axis_label_strategy(
     display_labels = [_truncate(label) for label in safe_labels]
 
     indices = list(range(label_count))
-    if label_count > thinning_threshold:
+    if force_sparse or label_count > thinning_threshold:
         step = max(1, int(math.ceil(label_count / max(target_tick_count, 1))))
         indices = [idx for idx in indices if idx % step == 0]
         if (label_count - 1) not in indices:
