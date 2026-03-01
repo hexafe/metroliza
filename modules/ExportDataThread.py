@@ -1972,6 +1972,13 @@ class ExportDataThread(QThread):
                 'Cp': classify_capability_value(summary_stats['cp'], label_prefix='Cp'),
                 'Cpk': classify_capability_value(summary_stats['cpk'], label_prefix='Cpk'),
             }
+            nok_row_badge = {
+                'NOK %': classify_nok_severity(summary_stats['nok_pct']),
+            }
+            histogram_row_badges = {
+                **capability_row_badges,
+                **nok_row_badge,
+            }
             panel_subtitle = build_summary_panel_subtitle(summary_stats)
 
             grouping_df = self.prepared_grouping_df
@@ -2179,7 +2186,7 @@ class ExportDataThread(QThread):
                         ax_table,
                         table_data,
                         capability_badge=capability_badge,
-                        capability_row_badges=capability_row_badges,
+                        capability_row_badges=histogram_row_badges,
                     )
 
                     density_curve = precomputed_density_curve

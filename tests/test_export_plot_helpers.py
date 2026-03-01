@@ -401,6 +401,91 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(ax_table.get_celld()[(2, 0)].get_text().get_text(), 'Cpk')
         plt.close(fig)
 
+    def test_style_histogram_stats_table_applies_nok_badge_for_low_severity(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        table_data = [('Cp', 1.45), ('Cpk', 1.4), ('NOK %', '0.20%')]
+        ax_table = ax.table(cellText=table_data, colLabels=['Statistic', 'Value'], cellLoc='center')
+
+        capability_row_badges = {
+            'Cp': {'label': 'Cp good', 'palette_key': 'quality_good'},
+            'Cpk': {'label': 'Cpk good', 'palette_key': 'quality_good'},
+            'NOK %': classify_nok_severity(0.002),
+        }
+
+        style_histogram_stats_table(
+            ax_table,
+            table_data,
+            capability_badge={'label': 'Cp/Cpk good', 'palette_key': 'quality_good'},
+            capability_row_badges=capability_row_badges,
+        )
+
+        self.assertEqual(
+            ax_table.get_celld()[(3, 0)].get_facecolor(),
+            matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['quality_capable_bg']),
+        )
+        self.assertEqual(
+            ax_table.get_celld()[(3, 1)].get_facecolor(),
+            matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['quality_capable_bg']),
+        )
+        plt.close(fig)
+
+    def test_style_histogram_stats_table_applies_nok_badge_for_watch_severity(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        table_data = [('Cp', 1.45), ('Cpk', 1.4), ('NOK %', '3.00%')]
+        ax_table = ax.table(cellText=table_data, colLabels=['Statistic', 'Value'], cellLoc='center')
+
+        capability_row_badges = {
+            'Cp': {'label': 'Cp good', 'palette_key': 'quality_good'},
+            'Cpk': {'label': 'Cpk good', 'palette_key': 'quality_good'},
+            'NOK %': classify_nok_severity(0.03),
+        }
+
+        style_histogram_stats_table(
+            ax_table,
+            table_data,
+            capability_badge={'label': 'Cp/Cpk good', 'palette_key': 'quality_good'},
+            capability_row_badges=capability_row_badges,
+        )
+
+        self.assertEqual(
+            ax_table.get_celld()[(3, 0)].get_facecolor(),
+            matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['quality_marginal_bg']),
+        )
+        self.assertEqual(
+            ax_table.get_celld()[(3, 1)].get_facecolor(),
+            matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['quality_marginal_bg']),
+        )
+        plt.close(fig)
+
+    def test_style_histogram_stats_table_applies_nok_badge_for_high_severity(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        table_data = [('Cp', 1.45), ('Cpk', 1.4), ('NOK %', '8.00%')]
+        ax_table = ax.table(cellText=table_data, colLabels=['Statistic', 'Value'], cellLoc='center')
+
+        capability_row_badges = {
+            'Cp': {'label': 'Cp good', 'palette_key': 'quality_good'},
+            'Cpk': {'label': 'Cpk good', 'palette_key': 'quality_good'},
+            'NOK %': classify_nok_severity(0.08),
+        }
+
+        style_histogram_stats_table(
+            ax_table,
+            table_data,
+            capability_badge={'label': 'Cp/Cpk good', 'palette_key': 'quality_good'},
+            capability_row_badges=capability_row_badges,
+        )
+
+        self.assertEqual(
+            ax_table.get_celld()[(3, 0)].get_facecolor(),
+            matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['quality_risk_bg']),
+        )
+        self.assertEqual(
+            ax_table.get_celld()[(3, 1)].get_facecolor(),
+            matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['quality_risk_bg']),
+        )
+        plt.close(fig)
+
+
     def test_build_measurement_block_plan_returns_expected_coordinates(self):
         plan = build_measurement_block_plan(base_col=6, sample_size=10)
 
