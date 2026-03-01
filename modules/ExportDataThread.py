@@ -1402,6 +1402,7 @@ class ExportDataThread(QThread):
                         "local_xlsx_path": conversion.local_xlsx_path,
                         "fallback_message": conversion.fallback_message,
                         "conversion_warnings": list(conversion.warnings),
+                        "conversion_warning_details": [dict(item) for item in conversion.warning_details],
                         "converted_tab_titles": list(conversion.converted_tab_titles),
                     }
                 )
@@ -1414,6 +1415,13 @@ class ExportDataThread(QThread):
                         outcome="warnings" if conversion.warnings else "success",
                     ),
                 )
+                for detail in conversion.warning_details:
+                    reason = str(detail.get("reason") or "unknown")
+                    exc_class = str(detail.get("exception_class") or "Exception")
+                    exc_message = str(detail.get("exception_message") or "")
+                    primary_line = f"Warning: trendline patch failed ({reason})"
+                    secondary_line = f"{exc_class}: {exc_message}" if exc_message else exc_class
+                    self.update_label.emit(build_three_line_status(primary_line, secondary_line, "ETA --"))
                 for warning in conversion.warnings:
                     self.update_label.emit(build_three_line_status(f"Warning: {warning}", "Exporting data...", "ETA --"))
 
@@ -1446,6 +1454,7 @@ class ExportDataThread(QThread):
                     {
                         "fallback_message": f"Google export failed; using local .xlsx fallback: {self.excel_file}",
                         "conversion_warnings": [str(e)],
+                        "conversion_warning_details": [],
                     }
                 )
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])

@@ -63,7 +63,24 @@ class GoogleDriveConversionResult:
     local_xlsx_path: str
     fallback_message: str
     warnings: tuple[str, ...] = ()
+    warning_details: tuple[dict[str, str], ...] = ()
     converted_tab_titles: tuple[str, ...] = ()
+
+
+def _build_patch_warning_payload(*, reason: str, exc: BaseException) -> dict[str, str]:
+    exc_class = type(exc).__name__
+    exc_message = str(exc) or "no error message provided"
+    warning_message = (
+        f"Trendline patch skipped ({reason}): {exc_class}: {exc_message}. "
+        "Google Sheet is available, and local .xlsx remains the fidelity fallback."
+    )
+    return {
+        "category": "trendline_patch",
+        "reason": reason,
+        "exception_class": exc_class,
+        "exception_message": exc_message,
+        "warning": warning_message,
+    }
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
@@ -721,6 +738,10 @@ def upload_and_convert_workbook(
 
     if callable(status_callback):
         status_callback("validating")
+
+    warnings: list[str] = []
+    warning_details: list[dict[str, str]] = []
+
     try:
         creds = _build_google_user_credentials(credentials_path=Path(credentials_path), token_path=Path(token_path))
         fix_usl_lsl_trendlines(
@@ -732,14 +753,32 @@ def upload_and_convert_workbook(
             width_px=2,
             opacity=0.6,
         )
-    except (GoogleDriveExportError, ImportError, ValueError, TypeError) as exc:
+    except ImportError as exc:
+        warning_payload = _build_patch_warning_payload(reason="missing_googleapiclient", exc=exc)
+        warnings.append(warning_payload["warning"])
+        warning_details.append(warning_payload)
         logger.warning(
-            "Google Sheets chart patch skipped after error",
-            extra=_build_google_log_extra(file_ref=parsed.file_id, error=exc, outcome="warning"),
+            "Google Sheets chart patch skipped: missing googleapiclient dependency",
+            extra=_build_google_log_extra(file_ref=parsed.file_id, error=exc, outcome="warning") | warning_payload,
+        )
+    except (GoogleDriveExportError, ValueError, TypeError) as exc:
+        warning_payload = _build_patch_warning_payload(reason="credentials_build_failure", exc=exc)
+        warnings.append(warning_payload["warning"])
+        warning_details.append(warning_payload)
+        logger.warning(
+            "Google Sheets chart patch skipped: credentials build failure",
+            extra=_build_google_log_extra(file_ref=parsed.file_id, error=exc, outcome="warning") | warning_payload,
+        )
+    except Exception as exc:
+        warning_payload = _build_patch_warning_payload(reason="sheets_patch_request_error", exc=exc)
+        warnings.append(warning_payload["warning"])
+        warning_details.append(warning_payload)
+        logger.warning(
+            "Google Sheets chart patch skipped: Sheets API patch request failed",
+            extra=_build_google_log_extra(file_ref=parsed.file_id, error=exc, outcome="warning") | warning_payload,
         )
 
     _ = expected_sheet_names
-    warnings: list[str] = []
     converted_tab_titles: list[str] = []
 
     fallback_message = ""
@@ -752,6 +791,7 @@ def upload_and_convert_workbook(
         local_xlsx_path=str(excel_file),
         fallback_message=fallback_message,
         warnings=tuple(warnings),
+        warning_details=tuple(warning_details),
         converted_tab_titles=tuple(converted_tab_titles),
     )
     logger.info(
