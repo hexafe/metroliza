@@ -772,6 +772,7 @@ class ExportDataThread(QThread):
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
         self.export_canceled = False
+        self._cancel_signal_emitted = False
         self._prepared_grouping_df = None
         self.completion_metadata = {"local_xlsx_path": self.excel_file}
         self._exported_sheet_names = []
@@ -1030,9 +1031,11 @@ class ExportDataThread(QThread):
 
     def _check_canceled(self):
         if self.export_canceled:
-            self.update_label.emit(build_three_line_status("Export canceled.", "No further work will be processed.", "ETA --"))
-            self._log_export_stage("Export cancellation observed", stage="canceled", cancel_flag=True)
-            self.canceled.emit()
+            if not self._cancel_signal_emitted:
+                self.update_label.emit(build_three_line_status("Export canceled.", "No further work will be processed.", "ETA --"))
+                self._log_export_stage("Export cancellation observed", stage="canceled", cancel_flag=True)
+                self.canceled.emit()
+                self._cancel_signal_emitted = True
             return True
         return False
 
