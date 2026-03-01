@@ -80,10 +80,27 @@ from modules.ExportDataThread import (  # noqa: E402
     annotate_violin_group_stats,
     render_violin,
     render_scatter_numeric,
+    resolve_summary_annotation_strategy,
 )
 
 
 class TestExportPlotHelpers(unittest.TestCase):
+
+
+    def test_resolve_summary_annotation_strategy_prefers_static_for_dense_axes(self):
+        sparse = resolve_summary_annotation_strategy(x_point_count=80)
+        medium = resolve_summary_annotation_strategy(x_point_count=30)
+        dynamic = resolve_summary_annotation_strategy(x_point_count=10)
+
+        self.assertEqual(sparse['label_mode'], 'sparse')
+        self.assertEqual(sparse['annotation_mode'], 'static_compact')
+        self.assertFalse(sparse['show_violin_legend'])
+
+        self.assertEqual(medium['label_mode'], 'adaptive')
+        self.assertEqual(medium['annotation_mode'], 'static_compact')
+        self.assertTrue(medium['show_violin_legend'])
+
+        self.assertEqual(dynamic['annotation_mode'], 'dynamic')
 
     def test_resolve_violin_annotation_style_auto_full_keeps_minmax_and_sigma(self):
         style = resolve_violin_annotation_style(
@@ -589,6 +606,24 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertTrue(all(tick.get_ha() == 'right' for tick in rendered))
         self.assertEqual(ax.xaxis.majorTicks[0].get_pad(), 11)
         self.assertEqual(ax.get_xticks()[-1], 29)
+        plt.close(fig)
+
+    def test_shared_x_axis_label_strategy_force_sparse_thins_even_small_sets(self):
+        fig, ax = plt.subplots()
+        positions = list(range(12))
+        labels = [f'L{idx}' for idx in positions]
+
+        apply_shared_x_axis_label_strategy(
+            ax,
+            labels,
+            positions=positions,
+            force_sparse=True,
+            target_tick_count=4,
+        )
+
+        rendered_labels = ax.get_xticklabels()
+        self.assertLess(len(rendered_labels), len(labels))
+        self.assertEqual(ax.get_xticks()[-1], 11)
         plt.close(fig)
 
 
