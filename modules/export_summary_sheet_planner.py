@@ -33,13 +33,15 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
     """Return stable annotation payloads for histogram mean/limit labels."""
     return [
         {
+            'kind': 'mean',
             'x': average,
             'y': y_max * 0.95,
             'text': f'μ={average:.3f}',
-            'color': SUMMARY_PLOT_PALETTE['central_tendency'],
+            'color': SUMMARY_PLOT_PALETTE['annotation_text'],
             'ha': 'left',
         },
         {
+            'kind': 'usl',
             'x': usl,
             'y': y_max * 0.9,
             'text': f'USL={usl:.3f}',
@@ -47,6 +49,7 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
             'ha': 'right',
         },
         {
+            'kind': 'lsl',
             'x': lsl,
             'y': y_max * 0.85,
             'text': f'LSL={lsl:.3f}',

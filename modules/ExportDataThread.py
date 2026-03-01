@@ -222,6 +222,40 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
     return _build_histogram_annotation_specs(average, usl, lsl, y_max)
 
 
+def build_histogram_mean_line_style():
+    """Return style contract for histogram mean reference line."""
+    return {
+        'color': SUMMARY_PLOT_PALETTE['central_tendency'],
+        'linestyle': '--',
+        'linewidth': 1.6,
+        'alpha': 0.55,
+        'zorder': 5,
+    }
+
+
+def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, annotation_box):
+    """Render histogram annotations with consistent font sizing policy."""
+    rendered = []
+    x_min, x_max = ax.get_xlim()
+    x_span = max(x_max - x_min, 1e-9)
+    mean_text_offset = x_span * 0.015
+    for annotation in annotation_specs:
+        x_position = annotation['x'] + mean_text_offset if annotation['text'].startswith('μ=') else annotation['x']
+        rendered.append(
+            ax.text(
+                x_position,
+                annotation['y'],
+                annotation['text'],
+                color=annotation['color'],
+                ha=annotation['ha'],
+                va='top',
+                fontsize=annotation_fontsize,
+                bbox=annotation_box,
+            )
+        )
+    return rendered
+
+
 def build_summary_panel_subtitle_text(summary_stats):
     return build_summary_panel_subtitle(summary_stats)
 
@@ -642,7 +676,7 @@ def classify_capability_status(cp, cpk):
             'palette_key': 'quality_capable',
         }
 
-    if cpk_value >= 1.33 and cp_value >= 1.33:
+    if cpk_value > 1.33 and cp_value > 1.33:
         return {
             'label': 'Cp/Cpk good',
             'palette_key': 'quality_good',
@@ -668,16 +702,10 @@ def classify_nok_severity(nok_pct):
     except (TypeError, ValueError):
         ratio = 0.0
 
-    if ratio <= 0:
+    if ratio <= 0.003:
         return {
             'label': 'NOK 0%',
             'palette_key': 'quality_capable',
-        }
-
-    if ratio < 0.02:
-        return {
-            'label': f'NOK {ratio * 100:.1f}% low',
-            'palette_key': 'quality_good',
         }
 
     if ratio < 0.05:
@@ -1633,14 +1661,8 @@ class ExportDataThread(QThread):
                 render_density_line(ax, density_curve['x'], density_curve['y'])
             
             # Add vertical lines for mean, LSL and USL
-            ax.axvline(
-                average,
-                color=SUMMARY_PLOT_PALETTE['central_tendency'],
-                linestyle='-',
-                linewidth=1.8,
-                alpha=0.95,
-                zorder=5,
-            )
+            mean_line_style = build_histogram_mean_line_style()
+            ax.axvline(average, **mean_line_style)
             ax.axvline(USL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
             ax.axvline(LSL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
 
@@ -1653,19 +1675,13 @@ class ExportDataThread(QThread):
             _, y_max = ax.get_ylim()
             annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
             annotation_specs = build_histogram_annotation_specs(average, USL, LSL, y_max)
-            if histogram_font_sizes['annotation_fontsize'] < 8.2:
-                annotation_specs = [annotation_specs[0]]
-            for annotation in annotation_specs:
-                ax.text(
-                    annotation['x'],
-                    annotation['y'],
-                    annotation['text'],
-                    color=annotation['color'],
-                    ha=annotation['ha'],
-                    va='top',
-                    fontsize=histogram_font_sizes['annotation_fontsize'],
-                    bbox=annotation_box,
-                )
+            annotation_fontsize = histogram_font_sizes['annotation_fontsize']
+            render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=annotation_fontsize,
+                annotation_box=annotation_box,
+            )
 
             plt.subplots_adjust(right=histogram_table_layout['subplot_right'])
             
