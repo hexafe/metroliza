@@ -107,7 +107,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(style['mode'], 'compact')
-        self.assertFalse(style['show_minmax'])
+        self.assertTrue(style['show_minmax'])
         self.assertFalse(style['show_sigma'])
         self.assertGreaterEqual(style['font_size'], 6.8)
 
