@@ -71,3 +71,32 @@ def test_measurement_tokens_can_span_lines_with_interruptions_without_block_dupl
     assert [line[0] for line in parsed[0][1]] == ["X", "Y"]
     assert parsed[0][1][0] == ["X", 10.0, 0.2, -0.2, 0, 10.1, 0.1, 0.0]
     assert parsed[0][1][1] == ["Y", 5.0, 0.1, -0.1, 0, 5.05, 0.05, 0.0]
+
+
+@pytest.fixture
+def first_line_comment_regression_inputs():
+    base_lines = [
+        "#FIRST HEADER",
+        "DIM",
+        "X",
+        "1",
+        "0.1",
+        "-0.1",
+        "1.0",
+        "0.0",
+        "0",
+    ]
+    return (
+        base_lines + ["#TRAILING COMMENT"],
+        base_lines + ["123 456 789"],
+    )
+
+
+def test_first_line_comment_parsing_is_independent_of_last_line(first_line_comment_regression_inputs):
+    trailing_comment_lines, trailing_numeric_triplet_lines = first_line_comment_regression_inputs
+
+    parsed_with_trailing_comment = parse_raw_lines_to_blocks(trailing_comment_lines)
+    parsed_with_trailing_numeric_triplet = parse_raw_lines_to_blocks(trailing_numeric_triplet_lines)
+
+    assert parsed_with_trailing_comment[0][0] == [["FIRST HEADER"]]
+    assert parsed_with_trailing_numeric_triplet[0][0] == [["FIRST HEADER"]]

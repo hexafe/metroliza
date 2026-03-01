@@ -248,6 +248,8 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             raw_lines_to_skip -= 1
             continue
 
+        prev_line = raw_lines[index - 1] if index > 0 else None
+
         if is_comment_or_header(line):
             line, raw_lines_to_skip = extract_header_comment(raw_lines[index : index + 10])
 
@@ -262,17 +264,17 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
 
         if text_block:
             if is_comment_or_header(line) or is_dim_line(line):
-                if is_comment_or_header(line) and raw_lines[index - 1] and is_comment_or_header(raw_lines[index - 1]):
+                if is_comment_or_header(line) and prev_line is not None and is_comment_or_header(prev_line):
                     formatted_line = re.sub(r"^[#*/]+", "", line).strip()
                     header_comment.append([formatted_line])
 
-                if is_dim_line(line) and raw_lines[index - 1] and not is_comment_or_header(raw_lines[index - 1]):
+                if is_dim_line(line) and prev_line is not None and not is_comment_or_header(prev_line):
                     text_block = [header_comment] + [dim_block]
                     pdf_blocks_text.append(text_block)
                     text_block, dim_block = [], []
                     text_block.append(header_comment)
 
-                if is_comment_or_header(line) and raw_lines[index - 1] and not is_comment_or_header(raw_lines[index - 1]):
+                if is_comment_or_header(line) and prev_line is not None and not is_comment_or_header(prev_line):
                     text_block = [header_comment] + [dim_block]
                     pdf_blocks_text.append(text_block)
                     text_block, header_comment, dim_block = [], [], []
