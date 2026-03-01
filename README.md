@@ -38,11 +38,11 @@ Dependency files:
 
 ## Release metadata
 
-Current release highlight (`2026.02`, build `260228`): Google Sheets export messaging is clearer, `.xlsx` fallback is explicit, and chart-heavy exports remain faster for daily use.
+Current release highlight (`2026.03`, build `260301`): Google Sheets export is now available with a safe `.xlsx` fallback and performance optimizations.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.02`, build `260228`)
+### Changelog highlights (release `2026.03`, build `260301`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

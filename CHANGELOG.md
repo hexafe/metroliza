@@ -1,15 +1,9 @@
 # Changelog (for end users)
 
-## 2026.02 (build 260228) — current version
-- **Google Sheets export feels smoother**: sign-in and completion messaging are clearer for end users.
-- **Conversion is safer by default**: when Sheets conversion is unavailable, the generated `.xlsx` file is always kept as the delivery fallback.
-- **Everyday reporting stays faster**: large, chart-heavy exports and CSV Summary flows remain optimized for quicker turnaround.
-
-## 2026.02 (build 260227)
-- **Google Sheets export is more reliable**: the app now guides Google sign-in and reports export results more clearly.
-- **Safe fallback path**: if Google Sheets conversion fails, you still receive a ready-to-use Excel file.
-- **Faster work on large reports**: workbook and chart export is more efficient for wide datasets.
-- **Better CSV summaries**: production-data analysis is easier with improved summaries and clearer limit validation.
+## 2026.03 (build 260301) — current version
+- **Google Sheets export implementation**: Google Sheets export is now available with a safe `.xlsx` fallback.
+- **Performance optimizations**: large report exports and CSV Summary workflows run faster in everyday use.
+- **Release candidate tag**: this build corresponds to `2026.03-rc1` for validation.
 
 ## 2026.02 (build 260223)
 - Performance improvements during report generation.
