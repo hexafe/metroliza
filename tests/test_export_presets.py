@@ -249,7 +249,12 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'info')
         self.assertEqual(title, 'Export successful')
-        self.assertEqual(message, 'Data exported successfully to out.xlsx!')
+        expected_file_uri = Path('out.xlsx').resolve().as_uri()
+        self.assertEqual(
+            message,
+            'Data exported successfully to out.xlsx.\n'
+            f'Export file: {expected_file_uri}',
+        )
 
 
     def test_link_formatting_converts_google_urls_to_anchors(self):
@@ -300,7 +305,12 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'info')
         self.assertEqual(title, 'Export successful')
-        self.assertEqual(message, 'Data exported successfully to out.xlsx!')
+        expected_file_uri = Path('out.xlsx').resolve().as_uri()
+        self.assertEqual(
+            message,
+            'Data exported successfully to out.xlsx.\n'
+            f'Export file: {expected_file_uri}',
+        )
 
 
 class TestExportTargetSelection(unittest.TestCase):
