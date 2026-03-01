@@ -297,6 +297,63 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
     )
 
 
+def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
+    from modules.ExportDataThread import ExportDataThread
+    from modules.chart_render_service import build_violin_payload_vectorized, resolve_chart_sampling_policy, sample_frame_for_chart
+    from modules.contracts import AppPaths, ExportOptions, ExportRequest
+    from modules.db import read_sql_dataframe
+    from modules.export_query_service import build_measurement_export_dataframe
+    from modules.export_summary_utils import build_histogram_density_curve_payload, build_trend_plot_payload
+
+    db_path = temp_dir / 'export_benchmark_high_cardinality.sqlite'
+    fixture_metrics = _create_export_db_fixture(db_path, report_count=report_count, headers_per_report=headers_per_report)
+
+    request = ExportRequest(
+        paths=AppPaths(db_file=str(db_path), excel_file=str(temp_dir / 'noop.xlsx')),
+        options=ExportOptions(generate_summary_sheet=True, preset='full_report', chart_worker_count=2, chart_worker_queue_size=2),
+    )
+    thread = ExportDataThread(request)
+
+    loaded_df = build_measurement_export_dataframe(read_sql_dataframe(str(db_path), thread.filter_query))
+    grouped = list(loaded_df.groupby(['REFERENCE', 'HEADER - AX'], sort=False))
+
+    legacy_start = time.perf_counter()
+    for (_reference, _header), group in grouped:
+        sampled = thread._downsample_frame(group, thread._chart_sample_limit())
+        distribution_key = 'SAMPLE_NUMBER'
+        thread._build_violin_payload(sampled, distribution_key, thread.violin_plot_min_samplesize)
+        build_histogram_density_curve_payload(sampled['MEAS'], point_count=100)
+        build_trend_plot_payload(sampled)
+    before_s = time.perf_counter() - legacy_start
+
+    policy = resolve_chart_sampling_policy(density_mode='full')
+    new_start = time.perf_counter()
+    for (_reference, _header), group in grouped:
+        sampled_distribution = sample_frame_for_chart(group, 'distribution', policy)
+        sampled_histogram = sample_frame_for_chart(group, 'histogram', policy)
+        sampled_trend = sample_frame_for_chart(group, 'trend', policy)
+        distribution_key = 'SAMPLE_NUMBER'
+        build_violin_payload_vectorized(sampled_distribution, distribution_key, thread.violin_plot_min_samplesize)
+        build_histogram_density_curve_payload(sampled_histogram['MEAS'], point_count=100)
+        build_trend_plot_payload(sampled_trend)
+    after_s = time.perf_counter() - new_start
+
+    return ScenarioResult(
+        scenario='excel_export_high_header_cardinality_compare',
+        wall_time_s=before_s + after_s,
+        stage_timings_s={
+            'before_refactor': before_s,
+            'after_refactor': after_s,
+            'speedup_ratio': (before_s / after_s) if after_s > 0 else 0.0,
+        },
+        input_metrics={
+            'rows': fixture_metrics['measurement_rows'],
+            'headers': fixture_metrics['headers'],
+            'chart_count': fixture_metrics['headers'] * 4,
+        },
+    )
+
+
 def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int) -> ScenarioResult:
     from modules.CSVSummaryDialog import DataProcessingThread, load_csv_with_fallbacks
 
@@ -446,6 +503,11 @@ def main() -> int:
         results = [
             benchmark_parse_path(temp_path, pdf_count=args.pdf_count),
             benchmark_excel_export_path(temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report),
+            benchmark_export_high_header_cardinality_path(
+                temp_path,
+                report_count=max(args.report_count, 100),
+                headers_per_report=max(args.headers_per_report, 64),
+            ),
             benchmark_csv_summary_path(temp_path, row_count=args.csv_rows, data_columns=args.csv_columns),
         ]
 

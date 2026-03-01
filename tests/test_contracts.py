@@ -53,6 +53,14 @@ class TestValidateExportOptions(unittest.TestCase):
         self.assertEqual(options.summary_plot_scale, 0)
         self.assertTrue(options.hide_ok_results)
         self.assertFalse(options.generate_summary_sheet)
+        self.assertEqual(options.chart_worker_count, 2)
+        self.assertEqual(options.chart_worker_queue_size, 4)
+
+
+    def test_clamps_chart_worker_settings(self):
+        options = validate_export_options(ExportOptions(chart_worker_count=0, chart_worker_queue_size=0))
+        self.assertEqual(options.chart_worker_count, 1)
+        self.assertEqual(options.chart_worker_queue_size, 1)
 
     def test_rejects_unknown_export_type(self):
         with self.assertRaises(ValueError):

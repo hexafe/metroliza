@@ -27,6 +27,8 @@ class ExportOptions:
     hide_ok_results: bool = False
     generate_summary_sheet: bool = False
     patch_google_chart_series_post_convert: bool = False
+    chart_worker_count: int = 2
+    chart_worker_queue_size: int = 4
 
 
 @dataclass(frozen=True)
@@ -144,6 +146,8 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
 
     violin_min = max(2, int(getattr(options, "violin_plot_min_samplesize", ExportOptions.violin_plot_min_samplesize)))
     summary_scale = max(0, int(getattr(options, "summary_plot_scale", ExportOptions.summary_plot_scale)))
+    worker_count = max(1, int(getattr(options, "chart_worker_count", ExportOptions.chart_worker_count)))
+    worker_queue_size = max(1, int(getattr(options, "chart_worker_queue_size", ExportOptions.chart_worker_queue_size)))
 
     return ExportOptions(
         preset=preset,
@@ -158,6 +162,8 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
         patch_google_chart_series_post_convert=bool(
             getattr(options, "patch_google_chart_series_post_convert", ExportOptions.patch_google_chart_series_post_convert)
         ),
+        chart_worker_count=worker_count,
+        chart_worker_queue_size=worker_queue_size,
     )
 
 
