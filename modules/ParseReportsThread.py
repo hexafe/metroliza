@@ -23,6 +23,9 @@ class ParseBatchResult:
     total_files: int
 
 
+PARSE_TELEMETRY_BATCH_SIZE = 25
+
+
 def build_report_fingerprints_from_rows(rows, should_cancel=lambda: False):
     report_fingerprints = set()
     add_fingerprint = report_fingerprints.add
@@ -58,6 +61,7 @@ def parse_new_reports(
     persist_report,
     should_cancel=lambda: False,
     on_progress=None,
+    on_file_parsed=None,
 ):
     parsed_files = 0
     total_files = len(report_paths)
@@ -66,12 +70,17 @@ def parse_new_reports(
         if should_cancel():
             break
 
+        report_parse_start = time.perf_counter()
         parser = parser_factory(report)
         fingerprint = build_parser_fingerprint(parser)
         if fingerprint not in report_fingerprints:
             persist_report(parser)
             report_fingerprints.add(fingerprint)
         parsed_files += 1
+        parse_duration_s = time.perf_counter() - report_parse_start
+
+        if on_file_parsed:
+            on_file_parsed(parser, parsed_files, total_files, parse_duration_s)
 
         if on_progress:
             on_progress(parsed_files, total_files)
@@ -382,7 +391,7 @@ class ParseReportsThread(QThread):
                         total_files=len(list_of_reports),
                         parsed_count=0,
                         cancel_flag=True,
-                    ),
+                    )
                 )
                 self.parsing_finished.emit()
                 return
@@ -401,6 +410,49 @@ class ParseReportsThread(QThread):
                 )
 
                 start_time = time.perf_counter()
+                telemetry_batch_start = time.perf_counter()
+                telemetry_batch_first_index = 1
+                telemetry_batch_elapsed_s = 0.0
+                telemetry_batch_backend_counts = {}
+
+                def _record_file_telemetry(parser, parsed_files, total_files, parse_duration_s):
+                    nonlocal telemetry_batch_start, telemetry_batch_first_index
+                    nonlocal telemetry_batch_elapsed_s, telemetry_batch_backend_counts
+
+                    backend = getattr(parser, "parse_backend_used", "unknown")
+                    telemetry_batch_elapsed_s += parse_duration_s
+                    telemetry_batch_backend_counts[backend] = telemetry_batch_backend_counts.get(backend, 0) + 1
+
+                    completed_batch_size = parsed_files - telemetry_batch_first_index + 1
+                    is_batch_boundary = (completed_batch_size >= PARSE_TELEMETRY_BATCH_SIZE) or (parsed_files == total_files)
+                    if not is_batch_boundary:
+                        return
+
+                    wall_clock_elapsed_s = time.perf_counter() - telemetry_batch_start
+                    logger.info(
+                        "Parse batch completed",
+                        extra=build_parse_log_extra(
+                            source_path=self.directory,
+                            total_files=total_files,
+                            parsed_count=parsed_files,
+                            cancel_flag=self.parsing_canceled,
+                        )
+                        | {
+                            "batch_start_index": telemetry_batch_first_index,
+                            "batch_end_index": parsed_files,
+                            "batch_file_count": completed_batch_size,
+                            "batch_parse_elapsed_s": round(telemetry_batch_elapsed_s, 4),
+                            "batch_wall_elapsed_s": round(wall_clock_elapsed_s, 4),
+                            "batch_avg_parse_s": round(telemetry_batch_elapsed_s / completed_batch_size, 4),
+                            "batch_backend_counts": dict(telemetry_batch_backend_counts),
+                        },
+                    )
+
+                    telemetry_batch_start = time.perf_counter()
+                    telemetry_batch_first_index = parsed_files + 1
+                    telemetry_batch_elapsed_s = 0.0
+                    telemetry_batch_backend_counts = {}
+
                 result = parse_new_reports(
                     list_of_reports,
                     report_fingerprints,
@@ -426,6 +478,7 @@ class ParseReportsThread(QThread):
                             ),
                         ),
                     ),
+                    on_file_parsed=_record_file_telemetry,
                 )
 
             if result.total_files == 0:

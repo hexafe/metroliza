@@ -23,7 +23,7 @@ def test_parser_interface_matches_fixture_snapshot(fixture):
 
 def test_cmm_report_parser_wired_to_interface_layer():
     parser_source = Path("modules/CMMReportParser.py").read_text()
-    assert "parse_blocks_with_backend(self.pdf_raw_text, use_native=False)" in parser_source
+    assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)" in parser_source
 
 
 @pytest.mark.parametrize("fixture", _load_fixtures(), ids=lambda f: f["name"])

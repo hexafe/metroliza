@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas
 
 from modules.CustomLogger import CustomLogger
-from modules.cmm_native_parser import parse_blocks_with_backend
+from modules.cmm_native_parser import parse_blocks_with_backend_and_telemetry
 from modules.cmm_parsing import add_tolerances_to_blocks
 from modules.db import execute_with_retry, run_transaction_with_retry
 
@@ -75,6 +75,7 @@ class CMMReportParser:
         self.pdf_raw_text = []
         self.pdf_blocks_text = []
         self.df = pandas.DataFrame()
+        self.parse_backend_used = "unknown"
         self.database = database
         self.connection = connection
 
@@ -264,7 +265,9 @@ class CMMReportParser:
     def split_text_to_blocks(self):
         try:
             """Method to split raw text from pdf to blocks - split by measurements"""
-            self.pdf_blocks_text = parse_blocks_with_backend(self.pdf_raw_text, use_native=False)
+            parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)
+            self.pdf_blocks_text = parse_result.blocks
+            self.parse_backend_used = parse_result.backend
         except Exception as e:
             self.log_and_exit(e)
 
