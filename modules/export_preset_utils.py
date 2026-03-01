@@ -8,9 +8,9 @@ EXPORT_PRESET_DEFAULT = EXPORT_PRESET_FAST_DIAGNOSTICS
 
 _EXPORT_PRESET_DEFINITIONS = {
     EXPORT_PRESET_FAST_DIAGNOSTICS: {
-        'label': 'Fast diagnostics',
-        'description': 'Quick pass for daily checks; prioritizes speed over complete reporting.',
-        'intended_use': 'Best when you need rapid feedback during troubleshooting or iterative runs.',
+        'label': 'Main plots',
+        'description': 'Exports core charts for fast day-to-day review.',
+        'intended_use': 'Use when you need the standard report quickly.',
         'options': {
             'export_type': 'line',
             'sorting_parameter': 'date',
@@ -21,9 +21,9 @@ _EXPORT_PRESET_DEFINITIONS = {
         },
     },
     EXPORT_PRESET_FULL_REPORT: {
-        'label': 'Full report',
-        'description': 'More complete package for sharing and archiving; includes extra summary outputs.',
-        'intended_use': 'Best for final deliverables, handoff reports, or management-ready documentation.',
+        'label': 'Extended plots',
+        'description': 'Includes the core charts plus extended summary outputs.',
+        'intended_use': 'Use for deeper analysis and handoff-ready reporting.',
         'options': {
             'export_type': 'line',
             'sorting_parameter': 'date',
