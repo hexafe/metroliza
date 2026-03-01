@@ -79,6 +79,7 @@ from modules.ExportDataThread import (  # noqa: E402
     resolve_violin_annotation_style,
     annotate_violin_group_stats,
     render_violin,
+    render_scatter_numeric,
 )
 
 
@@ -541,6 +542,19 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(rows[0][-1], 'Ref')
         self.assertEqual(rows[1][-1], 'N/A')
 
+
+
+
+    def test_render_scatter_numeric_plots_points_without_categorical_dependency(self):
+        fig, ax = plt.subplots()
+
+        render_scatter_numeric(ax, [0, 2, 4], [1.0, 1.2, 0.9])
+
+        self.assertEqual(len(ax.collections), 1)
+        offsets = ax.collections[0].get_offsets()
+        self.assertEqual(offsets[:, 0].tolist(), [0.0, 2.0, 4.0])
+        self.assertEqual(offsets[:, 1].tolist(), [1.0, 1.2, 0.9])
+        plt.close(fig)
 
     def test_shared_x_axis_label_strategy_uses_zero_rotation_for_short_labels(self):
         fig, ax = plt.subplots()

@@ -245,6 +245,36 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(values, [[1.0, 1.1], [0.9]])
         self.assertFalse(can_render)
 
+    def test_build_summary_scatter_payload_uses_positional_x_for_string_groups(self):
+        header_group = pd.DataFrame(
+            {
+                'GROUP': ['A', 'A', 'B'],
+                'MEAS': [1.0, 1.1, 0.9],
+            }
+        )
+
+        x_values, y_values, labels = ExportDataThread._build_summary_scatter_payload(header_group, 'GROUP')
+
+        self.assertTrue(np.issubdtype(x_values.dtype, np.number))
+        self.assertEqual(x_values.tolist(), [0.0, 1.0, 2.0])
+        self.assertEqual(y_values.tolist(), [1.0, 1.1, 0.9])
+        self.assertEqual(labels, ['A', '', 'B'])
+
+    def test_build_summary_scatter_payload_preserves_numeric_sample_positions(self):
+        header_group = pd.DataFrame(
+            {
+                'SAMPLE_NUMBER': ['10', '11', '12'],
+                'MEAS': [1.0, 1.1, 0.9],
+            }
+        )
+
+        x_values, y_values, labels = ExportDataThread._build_summary_scatter_payload(header_group, 'SAMPLE_NUMBER')
+
+        self.assertTrue(np.issubdtype(x_values.dtype, np.number))
+        self.assertEqual(x_values.tolist(), [10.0, 11.0, 12.0])
+        self.assertEqual(y_values.tolist(), [1.0, 1.1, 0.9])
+        self.assertEqual(labels, ['10', '11', '12'])
+
     def test_prepared_grouping_df_is_cached_per_export_thread_instance(self):
         thread = ExportDataThread(
             export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions())
