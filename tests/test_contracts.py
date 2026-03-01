@@ -25,6 +25,10 @@ class TestValidateParseRequest(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_parse_request(ParseRequest(source_directory='   ', db_file='test.db'))
 
+    def test_rejects_non_parse_request_input(self):
+        with self.assertRaises(ValueError):
+            validate_parse_request('reports')
+
 
 class TestValidateExportOptions(unittest.TestCase):
     def test_coerces_bounds_and_normalizes_case(self):
@@ -53,6 +57,19 @@ class TestValidateExportOptions(unittest.TestCase):
     def test_rejects_unknown_export_type(self):
         with self.assertRaises(ValueError):
             validate_export_options(ExportOptions(export_type='bar'))
+
+
+    def test_rejects_non_string_export_type(self):
+        with self.assertRaises(ValueError):
+            validate_export_options(ExportOptions(export_type=123))
+
+    def test_rejects_non_string_export_target(self):
+        with self.assertRaises(ValueError):
+            validate_export_options(ExportOptions(export_target=123))
+
+    def test_rejects_non_string_sorting_parameter(self):
+        with self.assertRaises(ValueError):
+            validate_export_options(ExportOptions(sorting_parameter=123))
 
 
     def test_normalizes_backend_target_aliases(self):
