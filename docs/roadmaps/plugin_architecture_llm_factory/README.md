@@ -19,6 +19,7 @@ This package is intentionally documentation-only and is designed to be executed 
 - Legacy parser behavior remains supported during migration.
 
 ## Pass index
+- [Data structure decision record](./data_structure_decision_record.md)
 - [Pass 1 — Foundations and interfaces](./pass_01_foundations_and_interfaces.md)
 - [Pass 2 — V2 schema and compatibility adapters](./pass_02_v2_schema_and_adapters.md)
 - [Pass 3 — Plugin registry, detection, and orchestration](./pass_03_registry_and_detection.md)

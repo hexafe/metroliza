@@ -15,6 +15,13 @@ Without a strict contract, generated plugins and manual plugins will diverge. Th
 
 ## Interface blueprint (spec-level)
 
+## Data model decision (performance + maintainability + scalability)
+- Adopt **dataclass domain models + TypedDict boundary contracts** as the default V2 structure strategy.
+- Keep parser runtime stdlib-first for lower overhead and simpler deployment.
+- Revisit stricter runtime validation later (targeted, risk-based) after schema stabilizes.
+- Reference: [Data structure decision record](./data_structure_decision_record.md).
+
+
 ### 1) Plugin manifest (metadata)
 Each plugin must declare:
 - `plugin_id`: unique, immutable id (e.g., `pcdimsv1`, `supplier_xyz_cn_v1`)

@@ -11,6 +11,13 @@ Define canonical V2 parsing schema and adapter rules that ensure backward compat
 
 ## Canonical schema draft (spec-level)
 
+
+## Model representation decision
+- Canonical in-memory schema uses dataclasses.
+- Serialized test/API boundaries use TypedDict representations.
+- This hybrid model is selected for strong performance with explicit contracts.
+- Reference: [Data structure decision record](./data_structure_decision_record.md).
+
 ### ParseResultV2
 - `meta`
   - `source_file`
