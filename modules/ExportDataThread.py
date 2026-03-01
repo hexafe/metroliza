@@ -424,14 +424,16 @@ def resolve_violin_annotation_style(
         },
         'compact': {
             'font_size': 6.8,
-            'minmax_marker_size': 0,
+            'minmax_marker_size': 12,
             'mean_marker_size': 16,
             'offsets': {
+                'min': (2, -8),
                 'mean': (2, 1),
+                'max': (2, 1),
                 'sigma_low': (2, -8),
                 'sigma_high': (2, 1),
             },
-            'show_minmax': False,
+            'show_minmax': True,
             'show_sigma': True,
             'sigma_line_width': 0.7,
         },
