@@ -14,6 +14,8 @@ import importlib.util
 from io import BytesIO
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from scipy.stats import ttest_ind
 
@@ -580,6 +582,61 @@ def render_iqr_boxplot(ax, values, labels):
         ax.boxplot(values, labels=label_values, **boxplot_kwargs)
     ax.set_xticks(positions)
     ax.set_xticklabels([str(label) for label in labels])
+
+
+def build_iqr_legend_handles():
+    """Build stable legend handles for the summary-sheet IQR boxplot."""
+    return [
+        Patch(
+            facecolor=SUMMARY_PLOT_PALETTE['distribution_base'],
+            edgecolor=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+            linewidth=0.9,
+            alpha=0.45,
+            label='IQR range (Q1-Q3)',
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=SUMMARY_PLOT_PALETTE['central_tendency'],
+            linewidth=1.1,
+            label='Median',
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+            linewidth=0.9,
+            label='Whiskers (1.5 IQR rule)',
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker='o',
+            linestyle='None',
+            markersize=4,
+            markerfacecolor=SUMMARY_PLOT_PALETTE['outlier'],
+            markeredgecolor=SUMMARY_PLOT_PALETTE['outlier'],
+            alpha=0.9,
+            label='Outliers',
+        ),
+    ]
+
+
+def add_iqr_boxplot_legend(ax):
+    """Attach a compact, non-overlapping legend for summary-sheet sized images."""
+    handles = build_iqr_legend_handles()
+    ax.legend(
+        handles=handles,
+        loc='upper left',
+        bbox_to_anchor=(0.02, 0.98),
+        fontsize=7,
+        framealpha=0.9,
+        facecolor='white',
+        edgecolor=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+        borderaxespad=0.2,
+        handlelength=1.5,
+        labelspacing=0.25,
+    )
 
 
 def render_density_line(ax, x, p):
@@ -1566,6 +1623,7 @@ class ExportDataThread(QThread):
                 fig, ax = plt.subplots(figsize=(6, 4))
                 boxplot_labels, boxplot_values = self._build_iqr_plot_payload(labels, values, sampled_group)
                 render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
+                add_iqr_boxplot_legend(ax)
                 apply_minimal_axis_style(ax, grid_axis='y')
                 apply_shared_x_axis_label_strategy(ax, boxplot_labels, positions=list(range(1, len(boxplot_labels) + 1)))
                 for line_spec in build_horizontal_limit_line_specs(USL, LSL):
