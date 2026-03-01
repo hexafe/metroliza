@@ -1095,6 +1095,8 @@ class ExportDataThread(QThread):
         self._chart_executor = None
         self._summary_prep_executor = None
         self._active_chart_images = []
+        self._summary_sheet_failed = False
+        self._summary_sheet_skip_warning_emitted = False
         self._reset_export_df_cache()
 
     def _register_chart_image(self, payload: bytes):
@@ -1729,7 +1731,18 @@ class ExportDataThread(QThread):
                         return
 
                     if self.generate_summary_sheet:
-                        self.summary_sheet_fill(summary_worksheet, header, header_group, col)
+                        if self._summary_sheet_failed:
+                            if not self._summary_sheet_skip_warning_emitted:
+                                self.update_label.emit(
+                                    build_three_line_status(
+                                        "Warning: summary charts skipped after earlier error.",
+                                        "Continuing export without summary panel rendering",
+                                        "ETA --",
+                                    )
+                                )
+                                self._summary_sheet_skip_warning_emitted = True
+                        else:
+                            self.summary_sheet_fill(summary_worksheet, header, header_group, col)
                         if self._check_canceled():
                             return
 
@@ -2159,6 +2172,7 @@ class ExportDataThread(QThread):
 
         except Exception as e:
             self.log_and_exit(e)
+            self._summary_sheet_failed = True
 
     def log_and_exit(self, exception):
         caller = inspect.stack()[1].function
