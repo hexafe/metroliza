@@ -219,6 +219,23 @@ class DataProcessingThread(QThread):
             'defer_non_essential_charts': False,
             'enable_chart_multiprocessing': self.csv_config.get('enable_chart_multiprocessing', False),
         }
+        self._chart_executor = None
+
+    def _ensure_chart_executor(self):
+        if not self.optimization_toggles.get('enable_chart_multiprocessing', False):
+            return None
+        if self._chart_executor is None:
+            self._chart_executor = ProcessPoolExecutor(max_workers=1)
+        return self._chart_executor
+
+    def _shutdown_chart_executor(self):
+        if self._chart_executor is not None:
+            try:
+                self._chart_executor.shutdown(wait=True, cancel_futures=True)
+            except Exception:
+                logger.debug("Failed to cleanly shutdown chart executor.", exc_info=True)
+            finally:
+                self._chart_executor = None
 
     def _record_stage_timing(self, stage_name, elapsed):
         if stage_name in self.stage_timings:
@@ -380,7 +397,8 @@ class DataProcessingThread(QThread):
         mp_enabled = self.optimization_toggles['enable_chart_multiprocessing'] and len(numeric_series) >= 2500
         if mp_enabled:
             try:
-                with ProcessPoolExecutor(max_workers=1) as pool:
+                pool = self._ensure_chart_executor()
+                if pool is not None:
                     histogram_rows = pool.submit(_compute_histogram_payload, numeric_series.tolist(), bin_count).result()
             except Exception:
                 histogram_rows = None
@@ -424,7 +442,8 @@ class DataProcessingThread(QThread):
         mp_enabled = self.optimization_toggles['enable_chart_multiprocessing'] and len(numeric_series) >= 2500
         if mp_enabled:
             try:
-                with ProcessPoolExecutor(max_workers=1) as pool:
+                pool = self._ensure_chart_executor()
+                if pool is not None:
                     summary_rows = pool.submit(_compute_boxplot_summary, numeric_series.tolist()).result()
             except Exception:
                 summary_rows = None
@@ -690,13 +709,17 @@ class DataProcessingThread(QThread):
                 )
                 self.canceled = True
                 self.status_signal.emit(build_three_line_status("Processing failed", "An unexpected error occurred", "ETA --"))
+            finally:
+                self._shutdown_chart_executor()
 
         else:
             logger.warning("CSV summary processing skipped because no data columns were selected.")
             self.status_signal.emit(build_three_line_status("Processing skipped", "No data columns were selected", "ETA --"))
+            self._shutdown_chart_executor()
 
     def cancel(self):
         self.canceled = True
+        self._shutdown_chart_executor()
 
 
 class CSVSummaryDialog(QDialog):

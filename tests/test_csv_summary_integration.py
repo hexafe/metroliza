@@ -61,6 +61,57 @@ from modules.csv_summary_utils import build_default_plot_toggles  # noqa: E402
 
 
 class CsvSummaryIntegrationTests(unittest.TestCase):
+    def test_chart_executor_is_reused_within_run(self):
+        worker = DataProcessingThread(
+            selected_indexes=['PART'],
+            selected_data_columns=['LENGTH'],
+            input_file='input.csv',
+            output_file='output.xlsx',
+            data_frame=pd.DataFrame({'PART': [], 'LENGTH': []}),
+            csv_config={'enable_chart_multiprocessing': True},
+        )
+
+        created_executors = []
+        original_executor_cls = DataProcessingThread._ensure_chart_executor.__globals__['ProcessPoolExecutor']
+
+        class _FakeFuture:
+            def __init__(self, value):
+                self._value = value
+
+            def result(self):
+                return self._value
+
+        class _FakeExecutor:
+            def __init__(self, max_workers):
+                self.max_workers = max_workers
+                self.submit_calls = 0
+                self.shutdown_calls = 0
+                created_executors.append(self)
+
+            def submit(self, fn, *args, **kwargs):
+                self.submit_calls += 1
+                return _FakeFuture(fn(*args, **kwargs))
+
+            def shutdown(self, wait=True, cancel_futures=True):
+                self.shutdown_calls += 1
+
+        DataProcessingThread._ensure_chart_executor.__globals__['ProcessPoolExecutor'] = _FakeExecutor
+        try:
+            data = pd.DataFrame({'PART': [f'P{i}' for i in range(3000)], 'LENGTH': [float(i) for i in range(3000)]})
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                worker.output_file = str(Path(tmpdir) / 'reuse.xlsx')
+                worker.data_frame = data
+                worker.selected_data_columns = ['LENGTH']
+                worker.plot_toggles = {'LENGTH': {'histogram': True, 'boxplot': True}}
+                worker.run()
+        finally:
+            DataProcessingThread._ensure_chart_executor.__globals__['ProcessPoolExecutor'] = original_executor_cls
+
+        self.assertEqual(len(created_executors), 1)
+        self.assertEqual(created_executors[0].submit_calls, 2)
+        self.assertEqual(created_executors[0].shutdown_calls, 1)
+
     def test_eta_format_includes_minutes_seconds_and_hours(self):
         self.assertEqual(DataProcessingThread._format_eta(None), 'ETA --')
         self.assertEqual(DataProcessingThread._format_eta(59.4), 'ETA 0:59')
