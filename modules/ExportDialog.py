@@ -1,3 +1,4 @@
+from modules.progress_status import build_three_line_status
 from modules import Base64EncodedFiles
 from modules.ExportDataThread import ExportDataThread
 from modules.FilterDialog import FilterDialog
@@ -777,7 +778,7 @@ class ExportDialog(QDialog):
             self.loading_gif.start()
 
             # Create the loading label and progress bar
-            self.loading_label = QLabel("Exporting data...", self.loading_dialog)
+            self.loading_label = QLabel(build_three_line_status("Exporting data...", "Preparing export thread", "ETA --"), self.loading_dialog)
             self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             self.loading_bar = QProgressBar(self.loading_dialog)
@@ -849,7 +850,7 @@ class ExportDialog(QDialog):
             # Request cooperative cancellation and return immediately to avoid blocking the UI thread
             if self.export_thread is not None and self.export_thread.isRunning():
                 self.export_thread.stop_exporting()
-                self.loading_label.setText("Canceling export...")
+                self.loading_label.setText(build_three_line_status("Canceling export...", "Waiting for export thread to stop", "ETA --"))
                 return
 
             QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
@@ -861,7 +862,7 @@ class ExportDialog(QDialog):
 
     def on_export_error(self, message):
         self.export_error_message = message
-        self.loading_label.setText("Export failed.")
+        self.loading_label.setText(build_three_line_status("Export failed.", "See error details for context", "ETA --"))
 
     def on_export_canceled(self):
         try:

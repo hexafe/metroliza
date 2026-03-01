@@ -23,6 +23,7 @@ import time
 import pandas as pd
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 from modules.excel_sheet_utils import unique_sheet_name
+from modules.progress_status import build_three_line_status
 from modules.csv_summary_utils import (
     build_default_plot_toggles,
     compute_column_summary_stats,
@@ -198,6 +199,7 @@ class SpecLimitsDialog(QDialog):
 
 class DataProcessingThread(QThread):
     progress_signal = pyqtSignal(int)
+    status_signal = pyqtSignal(str)
 
     def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None, column_spec_limits=None, plot_toggles=None, summary_only=False):
         super().__init__()
@@ -530,6 +532,13 @@ class DataProcessingThread(QThread):
                     if selected_data.empty:
                         progress_percentage = int((i + 1) * 100 / total_filtered_columns)
                         self.progress_signal.emit(progress_percentage)
+                        self.status_signal.emit(
+                            build_three_line_status(
+                                "Processing data...",
+                                f"Column {i + 1}/{total_filtered_columns}: {data_column}",
+                                "ETA --",
+                            )
+                        )
                         continue
 
                     spec_limits = self.column_spec_limits.get(data_column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
@@ -604,6 +613,13 @@ class DataProcessingThread(QThread):
                     # Calculate the progress percentage and emit the progress signal
                     progress_percentage = int((i + 1) * 100 / total_filtered_columns)
                     self.progress_signal.emit(progress_percentage)
+                    self.status_signal.emit(
+                        build_three_line_status(
+                            "Processing data...",
+                            f"Column {i + 1}/{total_filtered_columns}: {data_column}",
+                            "ETA --",
+                        )
+                    )
 
                 if self.canceled:
                     writer.close()
@@ -612,6 +628,7 @@ class DataProcessingThread(QThread):
                     except Exception:
                         logger.warning("Failed to remove canceled CSV summary output '%s'.", self.output_file)
                     logger.info("CSV summary processing canceled for output '%s'.", self.output_file)
+                    self.status_signal.emit(build_three_line_status("Processing canceled", "No further work will be processed.", "ETA --"))
                     return
 
                 self.write_overview_sheet(writer, overview_rows)
@@ -633,6 +650,7 @@ class DataProcessingThread(QThread):
                             "CSV Summary bottleneck analysis: chart rendering dominates; remaining workloads are IO/chart-bound so native code for pure-math kernels is not currently justified."
                         )
                 logger.info("CSV summary processing completed successfully: output='%s'.", self.output_file)
+                self.status_signal.emit(build_three_line_status("Processing complete", "Workbook generated successfully", "ETA 0:00"))
 
             except Exception:
                 logger.exception(
@@ -641,9 +659,11 @@ class DataProcessingThread(QThread):
                     self.output_file,
                 )
                 self.canceled = True
+                self.status_signal.emit(build_three_line_status("Processing failed", "An unexpected error occurred", "ETA --"))
 
         else:
             logger.warning("CSV summary processing skipped because no data columns were selected.")
+            self.status_signal.emit(build_three_line_status("Processing skipped", "No data columns were selected", "ETA --"))
 
     def cancel(self):
         self.canceled = True
@@ -905,7 +925,7 @@ class CSVSummaryDialog(QDialog):
         loading_gif.start()
 
         # Create the loading label and progress bar as instance variables
-        self.loading_label = QLabel("Processing data...", self.loading_dialog)
+        self.loading_label = QLabel(build_three_line_status("Processing data...", "Preparing CSV summary export", "ETA --"), self.loading_dialog)
         self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.loading_bar = QProgressBar(self.loading_dialog)
@@ -938,6 +958,7 @@ class CSVSummaryDialog(QDialog):
         )
         # Connect the progress signal to the update_progress_bar slot
         self.worker_thread.progress_signal.connect(self.update_progress_bar)
+        self.worker_thread.status_signal.connect(self.loading_label.setText)
         self.worker_thread.finished.connect(self.on_data_processing_finished)
         self.worker_thread.start()
 

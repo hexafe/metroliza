@@ -23,6 +23,7 @@ from modules.db import execute_select_with_columns, read_sql_dataframe
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
 from modules.google_drive_export import GoogleDriveAuthError, GoogleDriveExportError, upload_and_convert_workbook
+from modules.progress_status import build_three_line_status
 from modules.log_context import (
     build_export_log_extra,
     build_google_conversion_log_extra,
@@ -910,7 +911,7 @@ class ExportDataThread(QThread):
         stage_line = "Building measurement sheets..."
         if total_header_units <= 0:
             detail_line = f"Ref {ref_index}/{total_references}, Headers remaining 0"
-            return f"{stage_line}\n{detail_line}\nETA --"
+            return build_three_line_status(stage_line, detail_line, "ETA --")
 
         remaining_headers = max(0, total_header_units - completed_header_units)
         detail_line = (
@@ -920,17 +921,17 @@ class ExportDataThread(QThread):
 
         elapsed_seconds = max(0.0, time.perf_counter() - start_time)
         if completed_header_units < 5 or elapsed_seconds < 2.0:
-            return f"{stage_line}\n{detail_line}\nETA --"
+            return build_three_line_status(stage_line, detail_line, "ETA --")
 
         headers_per_second = completed_header_units / elapsed_seconds if elapsed_seconds > 0 else 0.0
         if headers_per_second <= 0:
-            return f"{stage_line}\n{detail_line}\nETA --"
+            return build_three_line_status(stage_line, detail_line, "ETA --")
 
         eta_seconds = remaining_headers / headers_per_second
         elapsed_display = self._format_elapsed_or_eta(elapsed_seconds)
         eta_display = self._format_elapsed_or_eta(eta_seconds)
         eta_line = f"{elapsed_display} elapsed, ETA {eta_display}"
-        return f"{stage_line}\n{detail_line}\n{eta_line}"
+        return build_three_line_status(stage_line, detail_line, eta_line)
 
     @property
     def prepared_grouping_df(self):
@@ -1029,7 +1030,7 @@ class ExportDataThread(QThread):
 
     def _check_canceled(self):
         if self.export_canceled:
-            self.update_label.emit("Export canceled.")
+            self.update_label.emit(build_three_line_status("Export canceled.", "No further work will be processed.", "ETA --"))
             self._log_export_stage("Export cancellation observed", stage="canceled", cancel_flag=True)
             self.canceled.emit()
             return True
@@ -1041,13 +1042,13 @@ class ExportDataThread(QThread):
         return run_export_steps(
             [
                 lambda: (
-                    self.update_label.emit("Building measurement sheets..."),
+                    self.update_label.emit(build_three_line_status("Building measurement sheets...", "Preparing measurement worksheets", "ETA --")),
                     self._emit_stage_progress('measurement_sheets_charts', 0.0),
                     self.add_measurements_horizontal_sheet(excel_writer),
                     self._emit_stage_progress('measurement_sheets_charts', 1.0),
                 ),
                 lambda: (
-                    self.update_label.emit("Exporting filtered data..."),
+                    self.update_label.emit(build_three_line_status("Exporting filtered data...", "Writing MEASUREMENTS worksheet", "ETA --")),
                     self._emit_stage_progress('preparing_query', 1.0),
                     self._emit_stage_progress('filtered_sheet_write', 0.0),
                     self.export_filtered_data(excel_writer),
@@ -1129,7 +1130,7 @@ class ExportDataThread(QThread):
             self._ensure_chart_executor()
 
             self._emit_stage_progress('preparing_query', 0.0)
-            self.update_label.emit("Preparing export...")
+            self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
             self._log_export_stage("Export started", stage="started")
             if self.export_target == "google_sheets_drive_convert":
                 self._emit_google_stage("generating")
@@ -1204,7 +1205,7 @@ class ExportDataThread(QThread):
                     )
 
             self._emit_stage_progress('finalize', 1.0)
-            self.update_label.emit("Export completed successfully.")
+            self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
             self._log_export_stage("Export completed successfully", stage="completed")
             self.finished.emit()
             QCoreApplication.processEvents()
@@ -1218,7 +1219,7 @@ class ExportDataThread(QThread):
                 )
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
                 self.update_label.emit(f"Warning: {e}")
-                self.update_label.emit("Export completed successfully.")
+                self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
                 self._log_export_stage("Export completed with local fallback after Google conversion failure", stage="fallback", level="warning", fallback_reason=self.completion_metadata["fallback_message"])
                 self.finished.emit()
                 QCoreApplication.processEvents()

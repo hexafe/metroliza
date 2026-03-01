@@ -1,3 +1,4 @@
+from modules.progress_status import build_three_line_status
 from modules import Base64EncodedFiles
 from modules.ParseReportsThread import ParseReportsThread
 from modules.CustomLogger import CustomLogger
@@ -179,7 +180,7 @@ class ParsingDialog(QDialog):
             self.loading_gif.start()
 
             # Create the loading label and progress bar
-            self.loading_label = QLabel("Parsing files...", self.loading_dialog)
+            self.loading_label = QLabel(build_three_line_status("Parsing files...", "Preparing parser thread", "ETA --"), self.loading_dialog)
             self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
             self.loading_bar = QProgressBar(self.loading_dialog)
@@ -221,7 +222,7 @@ class ParsingDialog(QDialog):
             self.parsing_canceled = True
             if self.parse_thread is not None and self.parse_thread.isRunning():
                 self.parse_thread.stop_parsing()
-                self.loading_label.setText("Canceling parsing...")
+                self.loading_label.setText(build_three_line_status("Canceling parsing...", "Waiting for parser thread to stop", "ETA --"))
         except Exception as e:
             self.log_and_exit(e)
 
@@ -229,7 +230,7 @@ class ParsingDialog(QDialog):
     @pyqtSlot(str)
     def on_parse_error(self, message):
         self.parse_error_message = message
-        self.loading_label.setText("Parsing failed.")
+        self.loading_label.setText(build_three_line_status("Parsing failed.", "See error details for context", "ETA --"))
 
     @pyqtSlot()
     def on_parse_finished(self):
