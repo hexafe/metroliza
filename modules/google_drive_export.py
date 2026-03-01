@@ -22,6 +22,7 @@ GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE, GOOGLE_SHEETS_SCOPE)
 GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
+GOOGLE_LIMIT_SERIES_NAMES = {"USL", "LSL"}
 
 logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
 
@@ -379,8 +380,8 @@ def _build_limit_series_patch_requests(charts_payload: dict[str, Any]) -> list[d
             if not isinstance(chart_id, int):
                 continue
             for series_index, spec in enumerate(series):
-                name = str((((spec.get("series") or {}).get("seriesName") or {}).get("value") or "")).upper()
-                if name not in {"USL", "LSL"}:
+                name = str((((spec.get("series") or {}).get("seriesName") or {}).get("value") or "")).upper().strip()
+                if name not in GOOGLE_LIMIT_SERIES_NAMES:
                     continue
                 include_trendline = str((embedded.get("spec") or {}).get("basicChart", {}).get("chartType", "")).upper() in {"SCATTER", "LINE"}
                 requests.extend(
@@ -425,7 +426,6 @@ def upload_and_convert_workbook(
     max_retries: int = 3,
     retry_delay_seconds: float = 1.0,
     status_callback=None,
-    enable_sheets_chart_series_patching: bool = False,
 ) -> GoogleDriveConversionResult:
     excel_file = Path(excel_path)
     if not excel_file.exists():
@@ -515,13 +515,12 @@ def upload_and_convert_workbook(
     if callable(status_callback):
         status_callback("converting")
 
-    if enable_sheets_chart_series_patching:
-        if callable(status_callback):
-            status_callback("validating")
-        try:
-            _patch_converted_sheet_chart_series(spreadsheet_id=parsed.file_id, access_token=access_token)
-        except GoogleDriveExportError as exc:
-            logger.warning("Google Sheets chart patch skipped after error", extra=_build_google_log_extra(file_ref=parsed.file_id, error=exc, outcome="warning"))
+    if callable(status_callback):
+        status_callback("validating")
+    try:
+        _patch_converted_sheet_chart_series(spreadsheet_id=parsed.file_id, access_token=access_token)
+    except GoogleDriveExportError as exc:
+        logger.warning("Google Sheets chart patch skipped after error", extra=_build_google_log_extra(file_ref=parsed.file_id, error=exc, outcome="warning"))
 
     _ = expected_sheet_names
     warnings: list[str] = []
