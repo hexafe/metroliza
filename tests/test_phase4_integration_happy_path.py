@@ -143,6 +143,56 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             self.assertEqual(export_df['SAMPLE_NUMBER'].tolist(), ['1', '2'])
             self.assertEqual(export_df['MEAS'].tolist(), [10.1, 10.1])
 
+    def test_export_pipeline_reads_filtered_dataframe_once_per_run(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+            out_path = str(Path(temp_dir) / 'export.xlsx')
+
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
+            )
+
+            request = ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file=out_path),
+                options=ExportOptions(generate_summary_sheet=False),
+            )
+            thread = ExportDataThread(request)
+
+            module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe', 'execute_export_query'])
+            previous_reader = module.read_sql_dataframe
+            previous_execute = module.execute_export_query
+            calls = {'read_sql_dataframe': 0}
+
+            def _counting_reader(*args, **kwargs):
+                calls['read_sql_dataframe'] += 1
+                return previous_reader(*args, **kwargs)
+
+            module.read_sql_dataframe = _counting_reader
+            module.execute_export_query = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('execute_export_query should not be used by export pipeline'))
+            try:
+                completed = thread.get_export_backend().run(thread)
+            finally:
+                module.read_sql_dataframe = previous_reader
+                module.execute_export_query = previous_execute
+
+            self.assertTrue(completed)
+            self.assertEqual(calls['read_sql_dataframe'], 1)
+
     def test_export_workbook_chart_ranges_match_expected_parity(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')

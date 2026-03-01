@@ -787,6 +787,24 @@ class ExportDataThread(QThread):
             'summary_sheet_minimum_charts': {'distribution', 'iqr', 'histogram', 'trend'},
             'enable_chart_multiprocessing': os.getenv('METROLIZA_EXPORT_CHART_MP', '').lower() in {'1', 'true', 'yes', 'on'} and os.name != 'nt',
         }
+        self._reset_export_df_cache()
+
+    def _reset_export_df_cache(self):
+        self._export_df_cache = None
+        self._export_df_column_order = None
+
+    def _ensure_export_df_cache(self):
+        if self._export_df_cache is None:
+            export_df = read_sql_dataframe(self.db_file, self.filter_query)
+            self._export_df_cache = export_df
+            self._export_df_column_order = tuple(export_df.columns)
+        return self._export_df_cache
+
+    def _build_export_filtered_dataframe(self):
+        export_df = self._ensure_export_df_cache()
+        if not self._export_df_column_order:
+            return export_df.copy()
+        return export_df.loc[:, list(self._export_df_column_order)].copy()
 
     def _record_stage_timing(self, stage_name, elapsed):
         if stage_name in self._stage_timings:
@@ -1002,6 +1020,8 @@ class ExportDataThread(QThread):
         return False
 
     def run_export_pipeline(self, excel_writer):
+        self._reset_export_df_cache()
+        self._ensure_export_df_cache()
         return run_export_steps(
             [
                 lambda: (
@@ -1088,6 +1108,8 @@ class ExportDataThread(QThread):
         try:
             if self._check_canceled():
                 return
+
+            self._reset_export_df_cache()
 
             self._emit_stage_progress('preparing_query', 0.0)
             self.update_label.emit("Preparing export...")
@@ -1196,10 +1218,12 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
         except Exception as e:
             self.log_and_exit(e)
+        finally:
+            self._reset_export_df_cache()
 
     def add_measurements_horizontal_sheet(self, excel_writer):
         try:
-            df = build_measurement_export_dataframe(read_sql_dataframe(self.db_file, self.filter_query))
+            df = build_measurement_export_dataframe(self._ensure_export_df_cache())
 
             reference_groups = list(df.groupby('REFERENCE', as_index=False))
             total_references = len(reference_groups)
@@ -1363,8 +1387,7 @@ class ExportDataThread(QThread):
         try:
             if self._check_canceled():
                 return
-            data, column_names = execute_export_query(self.db_file, self.filter_query)
-            export_df = build_export_dataframe(data, column_names)
+            export_df = self._build_export_filtered_dataframe()
             self.write_data_to_excel(export_df, "MEASUREMENTS", excel_writer)
         except Exception as e:
             self.log_and_exit(e)
