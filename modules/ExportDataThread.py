@@ -713,10 +713,35 @@ def render_histogram(ax, header_group):
 
 def render_iqr_boxplot(ax, values, labels):
     """Render a standard 1.5*IQR box plot used for outlier detection."""
-    if not values:
+    safe_values = values if isinstance(values, list) else []
+    safe_labels = labels if isinstance(labels, list) else []
+
+    normalized_values = []
+    for group_values in safe_values:
+        if isinstance(group_values, (list, tuple, np.ndarray, pd.Series)):
+            group_list = list(group_values)
+            if group_list:
+                normalized_values.append(group_list)
+
+    if not normalized_values:
         return
 
-    positions = list(range(1, len(values) + 1))
+    if not safe_labels:
+        safe_labels = [f'Group {index + 1}' for index in range(len(normalized_values))]
+
+    if len(safe_labels) != len(normalized_values):
+        min_length = min(len(safe_labels), len(normalized_values))
+        if min_length == 0:
+            safe_labels = [f'Group {index + 1}' for index in range(len(normalized_values))]
+        else:
+            logger.warning(
+                "IQR boxplot label/value length mismatch; applying deterministic truncation.",
+                extra={'label_count': len(safe_labels), 'value_count': len(normalized_values)},
+            )
+            safe_labels = safe_labels[:min_length]
+            normalized_values = normalized_values[:min_length]
+
+    positions = list(range(1, len(normalized_values) + 1))
     boxplot_kwargs = {
         'whis': 1.5,
         'patch_artist': True,
@@ -726,13 +751,13 @@ def render_iqr_boxplot(ax, values, labels):
         'capprops': {'color': SUMMARY_PLOT_PALETTE['distribution_foreground'], 'linewidth': 0.9},
         'flierprops': {'marker': 'o', 'markersize': 3, 'markerfacecolor': SUMMARY_PLOT_PALETTE['outlier'], 'markeredgecolor': SUMMARY_PLOT_PALETTE['outlier'], 'alpha': 0.9},
     }
-    label_values = [str(label) for label in labels]
+    label_values = [str(label) for label in safe_labels]
     try:
-        ax.boxplot(values, tick_labels=label_values, **boxplot_kwargs)
+        ax.boxplot(normalized_values, tick_labels=label_values, **boxplot_kwargs)
     except TypeError:
-        ax.boxplot(values, labels=label_values, **boxplot_kwargs)
+        ax.boxplot(normalized_values, labels=label_values, **boxplot_kwargs)
     ax.set_xticks(positions)
-    ax.set_xticklabels([str(label) for label in labels])
+    ax.set_xticklabels([str(label) for label in safe_labels])
 
 
 def build_iqr_legend_handles():
@@ -1079,6 +1104,23 @@ class ExportDataThread(QThread):
     def _build_iqr_plot_payload(self, labels, values, sampled_group):
         boxplot_labels = labels if labels else ['All']
         boxplot_values = values if values else [list(sampled_group['MEAS'])]
+
+        if len(boxplot_labels) != len(boxplot_values):
+            if sampled_group is not None and 'MEAS' in sampled_group:
+                logger.warning(
+                    "IQR payload labels/values mismatch detected; rebuilding fallback payload.",
+                    extra={'label_count': len(boxplot_labels), 'value_count': len(boxplot_values)},
+                )
+                boxplot_labels = ['All']
+                boxplot_values = [list(sampled_group['MEAS'])]
+            else:
+                min_length = min(len(boxplot_labels), len(boxplot_values))
+                logger.warning(
+                    "IQR payload labels/values mismatch detected; applying deterministic truncation.",
+                    extra={'label_count': len(boxplot_labels), 'value_count': len(boxplot_values), 'selected_length': min_length},
+                )
+                boxplot_labels = boxplot_labels[:min_length]
+                boxplot_values = boxplot_values[:min_length]
 
         if self._optimization_toggles['chart_density_mode'] != 'reduced':
             return boxplot_labels, boxplot_values
@@ -1751,23 +1793,29 @@ class ExportDataThread(QThread):
             x_values = None
             y_values = None
             if grouping_applied:
-                labels, values, can_render_violin = self._build_violin_payload(
+                distribution_labels, distribution_values, can_render_violin = self._build_violin_payload(
                     sampled_group,
                     'GROUP',
                     self.violin_plot_min_samplesize,
                 )
                 if not can_render_violin:
-                    x_values, y_values, labels = self._build_summary_scatter_payload(sampled_group, 'GROUP')
+                    x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_group, 'GROUP')
                     label_positions = list(x_values)
             else:
-                labels, values, can_render_violin = self._build_violin_payload(
+                distribution_labels, distribution_values, can_render_violin = self._build_violin_payload(
                     sampled_group,
                     'SAMPLE_NUMBER',
                     self.violin_plot_min_samplesize,
                 )
                 if not can_render_violin:
-                    x_values, y_values, labels = self._build_summary_scatter_payload(sampled_group, 'SAMPLE_NUMBER')
+                    x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_group, 'SAMPLE_NUMBER')
                     label_positions = list(x_values)
+
+            iqr_labels, iqr_values, _ = self._build_violin_payload(
+                sampled_group,
+                'GROUP' if grouping_applied else 'SAMPLE_NUMBER',
+                self.violin_plot_min_samplesize,
+            )
 
             summary_anchors = build_summary_image_anchor_plan(col)
             panel_plan = build_summary_panel_write_plan(summary_anchors, header)
@@ -1783,12 +1831,12 @@ class ExportDataThread(QThread):
                 chart_start = time.perf_counter()
                 fig, ax = plt.subplots(figsize=(6, 4))
                 if can_render_violin:
-                    render_violin(ax, values, labels, readability_scale=self.summary_plot_scale)
+                    render_violin(ax, distribution_values, distribution_labels, readability_scale=self.summary_plot_scale)
                 else:
                     render_scatter_numeric(ax, x_values, y_values)
 
                 apply_minimal_axis_style(ax, grid_axis='y')
-                apply_shared_x_axis_label_strategy(ax, labels, positions=label_positions)
+                apply_shared_x_axis_label_strategy(ax, distribution_labels, positions=label_positions)
                 for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                     ax.axhline(**line_spec)
 
@@ -1819,7 +1867,7 @@ class ExportDataThread(QThread):
                 imgplot = BytesIO()
                 chart_start = time.perf_counter()
                 fig, ax = plt.subplots(figsize=(6, 4))
-                boxplot_labels, boxplot_values = self._build_iqr_plot_payload(labels, values, sampled_group)
+                boxplot_labels, boxplot_values = self._build_iqr_plot_payload(iqr_labels, iqr_values, sampled_group)
                 render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
                 add_iqr_boxplot_legend(ax)
                 apply_minimal_axis_style(ax, grid_axis='y')
