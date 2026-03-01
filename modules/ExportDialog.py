@@ -15,8 +15,8 @@ from modules.export_preset_utils import (
     migrate_export_dialog_config,
     save_export_dialog_config,
 )
-from PyQt6.QtCore import QSize, QTemporaryFile, Qt
-from PyQt6.QtGui import QMovie
+from PyQt6.QtCore import QSize, QTemporaryFile, Qt, QUrl
+from PyQt6.QtGui import QDesktopServices, QMovie
 from PyQt6.QtWidgets import(
     QDialog,
     QFileDialog,
@@ -146,37 +146,61 @@ def format_message_with_clickable_links(message):
     return linked_message.replace("\n", "<br>")
 
 
+def handle_export_result_link(parent, url, excel_file=None):
+    """Handle message-box link activation, revealing exported file when selected."""
+    try:
+        parsed = QUrl(str(url or ""))
+    except Exception:
+        parsed = QUrl()
+
+    if parsed.isValid() and parsed.scheme() == 'file' and excel_file:
+        try:
+            clicked_path = Path(parsed.toLocalFile()).resolve(strict=False)
+            exported_path = Path(str(excel_file)).resolve(strict=False)
+            if clicked_path == exported_path:
+                reveal_file_in_explorer(excel_file)
+                return
+        except Exception:
+            pass
+
+    QDesktopServices.openUrl(parsed if parsed.isValid() else QUrl(str(url or "")))
+
+
 def show_export_result_message(parent, level, title, message, excel_file=None):
     """Display export result message with external links enabled when supported."""
-    while True:
-        dialog = QMessageBox(parent)
-        icon = QMessageBox.Icon.Warning if level == 'warning' else QMessageBox.Icon.Information
-        dialog.setIcon(icon)
-        dialog.setWindowTitle(title)
-        dialog.setText(format_message_with_clickable_links(message))
-        if hasattr(dialog, 'setTextFormat') and hasattr(Qt, 'TextFormat'):
-            dialog.setTextFormat(Qt.TextFormat.RichText)
-        if hasattr(dialog, 'setTextInteractionFlags') and hasattr(Qt, 'TextInteractionFlag'):
-            dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        show_in_folder_button = None
-        if excel_file and hasattr(dialog, 'addButton'):
-            show_in_folder_button = dialog.addButton('Show in folder', QMessageBox.ButtonRole.ActionRole)
-        if hasattr(dialog, 'setStandardButtons'):
-            dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
-        dialog.exec()
+    dialog = QMessageBox(parent)
+    icon = QMessageBox.Icon.Warning if level == 'warning' else QMessageBox.Icon.Information
+    dialog.setIcon(icon)
+    dialog.setWindowTitle(title)
+    dialog.setText(format_message_with_clickable_links(message))
+    if hasattr(dialog, 'setTextFormat') and hasattr(Qt, 'TextFormat'):
+        dialog.setTextFormat(Qt.TextFormat.RichText)
+    if hasattr(dialog, 'setTextInteractionFlags') and hasattr(Qt, 'TextInteractionFlag'):
+        dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+    if hasattr(dialog, 'setStandardButtons'):
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
 
-        clicked_button = dialog.clickedButton() if hasattr(dialog, 'clickedButton') else None
-        if show_in_folder_button is None or clicked_button is not show_in_folder_button:
-            return
+    message_label = dialog.findChild(QLabel, 'qt_msgbox_label') if hasattr(dialog, 'findChild') else None
+    if message_label and hasattr(message_label, 'setOpenExternalLinks'):
+        message_label.setOpenExternalLinks(False)
+        if hasattr(message_label, 'linkActivated'):
+            message_label.linkActivated.connect(lambda link: _open_export_result_link(parent, link, excel_file))
 
+    dialog.exec()
+
+
+def _open_export_result_link(parent, link, excel_file):
+    try:
+        handle_export_result_link(parent, link, excel_file=excel_file)
+    except Exception as exc:
         try:
-            reveal_file_in_explorer(excel_file)
-        except Exception as exc:
             QMessageBox.warning(
                 parent,
                 "Unable to open file location",
                 f"Could not open the export location for {excel_file}.\n{exc}",
             )
+        except Exception:
+            logger.exception("Failed to show warning for export link activation failure.")
 
 
 def reveal_file_in_explorer(file_path):
