@@ -365,10 +365,9 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual(2, len(requests))
         first = requests[0]["updateChartSpec"]
         self.assertEqual(7, first["chartId"])
-        self.assertIn("basicChart.series[1].lineStyle", first["fields"])
-        self.assertIn("basicChart.series[1].colorStyle", first["fields"])
-        self.assertEqual(2, first["spec"]["basicChart"]["series"][0]["lineStyle"]["width"]["magnitude"])
-        self.assertEqual("LINEAR", requests[0]["updateChartSpec"]["spec"]["basicChart"]["series"][0]["trendline"]["type"])
+        self.assertNotIn("fields", first)
+        self.assertEqual(2, first["spec"]["basicChart"]["series"][0]["lineStyle"]["width"])
+        self.assertNotIn("trendline", requests[0]["updateChartSpec"]["spec"]["basicChart"]["series"][0])
 
     def test_build_limit_series_patch_requests_includes_ref_sheets(self):
         discovery_payload = {
@@ -490,7 +489,7 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual("FakeSheetPatchRequestError", result.warning_details[0]["exception_class"])
         self.assertIn("invalid chartId", result.warning_details[0]["exception_message"])
 
-    def test_fix_usl_lsl_trendlines_updates_target_series_with_full_spec_and_field_masks(self):
+    def test_fix_usl_lsl_trendlines_updates_target_series_with_schema_valid_update_chart_spec(self):
         original_spec = {
             "title": "chart title",
             "basicChart": {
@@ -533,32 +532,56 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual(17, update_request["chartId"])
         self.assertEqual("chart title", update_request["spec"]["title"])
         self.assertEqual(3, len(update_request["spec"]["basicChart"]["series"]))
-        self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"]["magnitude"])
-        self.assertEqual("LINEAR", update_request["spec"]["basicChart"]["series"][2]["trendline"]["type"])
-        self.assertEqual(
-            0.6,
-            update_request["spec"]["basicChart"]["series"][1]["trendline"]["lineStyle"]["colorStyle"]["rgbColor"]["alpha"],
-        )
+        self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"])
+        self.assertNotIn("trendline", update_request["spec"]["basicChart"]["series"][1])
+        self.assertNotIn("trendline", update_request["spec"]["basicChart"]["series"][2])
         self.assertEqual(
             0.6,
             update_request["spec"]["basicChart"]["series"][2]["colorStyle"]["rgbColor"]["alpha"],
         )
 
-        fields = set(update_request["fields"].split(","))
-        self.assertEqual(12, len(fields))
-        self.assertIn("basicChart.series[1].trendline.type", fields)
-        self.assertIn("basicChart.series[1].trendline.lineStyle.width", fields)
-        self.assertIn("basicChart.series[1].trendline.lineStyle.colorStyle", fields)
-        self.assertIn("basicChart.series[1].lineStyle.type", fields)
-        self.assertIn("basicChart.series[1].lineStyle.width", fields)
-        self.assertIn("basicChart.series[1].colorStyle", fields)
-        self.assertIn("basicChart.series[2].trendline.type", fields)
-        self.assertIn("basicChart.series[2].trendline.lineStyle.width", fields)
-        self.assertIn("basicChart.series[2].trendline.lineStyle.colorStyle", fields)
-        self.assertIn("basicChart.series[2].lineStyle.type", fields)
-        self.assertIn("basicChart.series[2].lineStyle.width", fields)
-        self.assertIn("basicChart.series[2].colorStyle", fields)
+        self.assertNotIn("fields", update_request)
+        self.assertNotIsInstance(update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"], dict)
+        self.assertNotIsInstance(update_request["spec"]["basicChart"]["series"][2]["lineStyle"]["width"], dict)
 
+
+    def test_fix_usl_lsl_trendlines_payload_omits_fields_and_dimension_width_shapes(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 71,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "SCATTER",
+                                    "series": [
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 1}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 2}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 3}]}}},
+                                    ],
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
+        self.assertNotIn("fields", update_request)
+        width_one = update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"]
+        width_two = update_request["spec"]["basicChart"]["series"][2]["lineStyle"]["width"]
+        self.assertEqual(2, width_one)
+        self.assertEqual(2, width_two)
+        self.assertNotIsInstance(width_one, dict)
+        self.assertNotIsInstance(width_two, dict)
 
     def test_fix_usl_lsl_trendlines_filters_chart_types_and_logs_discovery_counters(self):
         discovery_payload = {

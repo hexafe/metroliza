@@ -459,24 +459,11 @@ def fix_usl_lsl_trendlines(
                 if not isinstance(series_item, dict):
                     continue
 
-                trendline = series_item.get("trendline")
-                if not isinstance(trendline, dict):
-                    trendline = {}
-                trendline["type"] = "LINEAR"
-                trendline_line_style = trendline.get("lineStyle")
-                if not isinstance(trendline_line_style, dict):
-                    trendline_line_style = {}
-                trendline_line_style["width"] = {"magnitude": line_width, "unit": "PIXEL"}
-                trendline_line_style["colorStyle"] = copy.deepcopy(rgb_color_style)
-                trendline["lineStyle"] = trendline_line_style
-                trendline["opacity"] = line_opacity
-                series_item["trendline"] = trendline
-
                 line_style = series_item.get("lineStyle")
                 if not isinstance(line_style, dict):
                     line_style = {}
                 line_style["type"] = "SOLID"
-                line_style["width"] = {"magnitude": line_width, "unit": "PIXEL"}
+                line_style["width"] = line_width
                 series_item["lineStyle"] = line_style
                 series_item["colorStyle"] = copy.deepcopy(rgb_color_style)
 
@@ -485,25 +472,11 @@ def fix_usl_lsl_trendlines(
             if not updated_indexes:
                 continue
 
-            field_masks: list[str] = []
-            for series_index in updated_indexes:
-                field_masks.extend(
-                    [
-                        f"basicChart.series[{series_index}].trendline.type",
-                        f"basicChart.series[{series_index}].trendline.lineStyle.width",
-                        f"basicChart.series[{series_index}].trendline.lineStyle.colorStyle",
-                        f"basicChart.series[{series_index}].lineStyle.type",
-                        f"basicChart.series[{series_index}].lineStyle.width",
-                        f"basicChart.series[{series_index}].colorStyle",
-                    ]
-                )
-
             requests.append(
                 {
                     "updateChartSpec": {
                         "chartId": chart_id,
                         "spec": updated_spec,
-                        "fields": ",".join(field_masks),
                     }
                 }
             )
@@ -572,7 +545,6 @@ def _build_limit_series_patch_requests(charts_payload: dict[str, Any]) -> list[d
                 continue
             spec = embedded.get("spec")
             basic_chart = spec.get("basicChart") if isinstance(spec, dict) else None
-            chart_type = str((basic_chart or {}).get("chartType") or "").upper()
             series = (basic_chart or {}).get("series") if isinstance(basic_chart, dict) else None
             if not isinstance(series, list):
                 continue
@@ -595,22 +567,15 @@ def _build_limit_series_patch_requests(charts_payload: dict[str, Any]) -> list[d
                                     {
                                         "lineStyle": {
                                             "type": "SOLID",
-                                            "width": {"magnitude": 2, "unit": "PT"},
+                                            "width": 2,
                                         },
                                         "colorStyle": {"rgbColor": _hex_to_rgb_color("#c0504d")},
                                     }
                                 ]
                             }
                         },
-                        "fields": (
-                            f"basicChart.series[{series_index}].lineStyle,"
-                            f"basicChart.series[{series_index}].colorStyle"
-                        ),
                     }
                 }
-                if chart_type in {"SCATTER", "LINE"}:
-                    request["updateChartSpec"]["spec"]["basicChart"]["series"][0]["trendline"] = {"type": "LINEAR"}
-                    request["updateChartSpec"]["fields"] += f",basicChart.series[{series_index}].trendline.type"
                 requests.append(request)
     return requests
 
