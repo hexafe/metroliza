@@ -1,5 +1,6 @@
 import inspect
 import logging
+import re
 import time
 
 from modules.CMMReportParser import CMMReportParser
@@ -81,6 +82,7 @@ logger = get_operation_logger(logging.getLogger(__name__), "parse_reports")
 
 
 class ParseReportsThread(QThread):
+    LOOKUP_BATCH_SIZE = 250
     PROGRESS_STAGE_RANGES = {
         'discover_reports': (0, 15),
         'load_existing_reports': (15, 30),
@@ -103,6 +105,43 @@ class ParseReportsThread(QThread):
         self.parsing_canceled = False
         self._extracted_archive_dir = None
         self._last_emitted_progress = -1
+        self._report_lookup_candidates = {
+            'filenames': set(),
+            'reference_dates': set(),
+        }
+
+    @staticmethod
+    def _build_filename_lookup_candidates(report_paths):
+        filenames = set()
+        reference_dates = set()
+        date_pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}"
+        reference_pattern = r"([A-Z][A-Za-z0-9]{4}\d{1,5}(_\d{3})?)|(\d{2}[A-Za-z][._-]?\d{3}[._-]?\d{3})|(216\d{5})"
+
+        for report_path in report_paths:
+            filename = Path(report_path).name
+            filenames.add(filename)
+
+            date_match = re.findall(date_pattern, filename)
+            date_value = date_match[-1] if date_match else None
+            if date_value is not None:
+                date_value = date_value.replace('.', '-').replace('_', '-').replace('/', '-')
+
+            reference_match = re.match(reference_pattern, filename)
+            reference_value = reference_match.group(0) if reference_match else None
+
+            if reference_value and date_value:
+                reference_dates.add((reference_value, date_value))
+
+        return {
+            'filenames': filenames,
+            'reference_dates': reference_dates,
+        }
+
+    @staticmethod
+    def _batched_values(values, batch_size):
+        values_list = list(values)
+        for idx in range(0, len(values_list), batch_size):
+            yield values_list[idx:idx + batch_size]
 
     @staticmethod
     def _clamp_progress(value):
@@ -188,6 +227,8 @@ class ParseReportsThread(QThread):
                     break
                 if path.is_file() and path.stat().st_size:
                     pdf_files.append(path)
+
+            self._report_lookup_candidates = self._build_filename_lookup_candidates(pdf_files)
             self._emit_stage_progress('discover_reports', 1.0)
             logger.info(
                 "Parse discovery finished",
@@ -224,15 +265,74 @@ class ParseReportsThread(QThread):
                 self._emit_stage_progress('load_existing_reports', 1.0)
                 return report_fingerprints
 
-            rows = execute_with_retry(
-                self.db_file,
-                "SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS",
-                retries=5,
-                retry_delay_s=1,
+            matched_rows_by_id = {}
+            filename_batches = list(
+                self._batched_values(
+                    self._report_lookup_candidates.get('filenames', set()),
+                    self.LOOKUP_BATCH_SIZE,
+                )
             )
+            reference_date_batches = list(
+                self._batched_values(
+                    self._report_lookup_candidates.get('reference_dates', set()),
+                    self.LOOKUP_BATCH_SIZE,
+                )
+            )
+            total_batches = max(1, len(filename_batches) + len(reference_date_batches))
+            completed_batches = 0
+
+            for filename_batch in filename_batches:
+                if self.parsing_canceled:
+                    break
+
+                placeholders = ",".join("?" for _ in filename_batch)
+                rows = execute_with_retry(
+                    self.db_file,
+                    (
+                        "SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER "
+                        f"FROM REPORTS WHERE FILENAME IN ({placeholders})"
+                    ),
+                    tuple(filename_batch),
+                    retries=5,
+                    retry_delay_s=1,
+                )
+                for row in rows:
+                    matched_rows_by_id[row[0] if row[0] is not None else row] = row
+
+                completed_batches += 1
+                self._emit_stage_progress('load_existing_reports', completed_batches / total_batches)
+
+            for reference_date_batch in reference_date_batches:
+                if self.parsing_canceled:
+                    break
+
+                conditions = " OR ".join("(REFERENCE = ? AND DATE = ?)" for _ in reference_date_batch)
+                params = tuple(
+                    value
+                    for reference_value, date_value in reference_date_batch
+                    for value in (reference_value, date_value)
+                )
+                rows = execute_with_retry(
+                    self.db_file,
+                    (
+                        "SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER "
+                        f"FROM REPORTS WHERE {conditions}"
+                    ),
+                    params,
+                    retries=5,
+                    retry_delay_s=1,
+                )
+                for row in rows:
+                    matched_rows_by_id[row[0] if row[0] is not None else row] = row
+
+                completed_batches += 1
+                self._emit_stage_progress('load_existing_reports', completed_batches / total_batches)
 
             report_fingerprints.update(
-                build_report_fingerprints_from_rows(rows, should_cancel=lambda: self.parsing_canceled)
+                build_report_fingerprints_from_rows(
+                    matched_rows_by_id.values(),
+                    should_cancel=lambda: self.parsing_canceled,
+                )
             )
             self._emit_stage_progress('load_existing_reports', 1.0)
 

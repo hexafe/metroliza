@@ -147,6 +147,87 @@ class TestParseHelpers(unittest.TestCase):
             thread._extracted_archive_dir.cleanup()
             thread._extracted_archive_dir = None
 
+
+
+    def test_get_report_fingerprints_uses_selective_batches_and_preserves_semantics(self):
+        from modules.ParseReportsThread import ParseReportsThread
+        from modules.contracts import ParseRequest
+        import modules.ParseReportsThread as parse_thread_module
+
+        thread = ParseReportsThread(ParseRequest(source_directory='.', db_file='test.db'))
+        thread._report_lookup_candidates = {
+            'filenames': {'one.pdf', 'other.pdf'},
+            'reference_dates': {('REF-A', '2024-01-01')},
+        }
+
+        original_execute = parse_thread_module.execute_with_retry
+        calls = []
+
+        def _fake_execute(_db, query, params=None, **_kwargs):
+            params = params or ()
+            calls.append((query, params))
+            if "sqlite_master" in query:
+                return [(1,)]
+            if "FROM REPORTS WHERE FILENAME IN" in query:
+                return [
+                    (7, 'REF-A', '/tmp', 'one.pdf', '2024-01-01', '1'),
+                    (None, 'REF-B', '/tmp', 'other.pdf', '2024-01-03', '2'),
+                ]
+            if "FROM REPORTS WHERE (REFERENCE = ? AND DATE = ?)" in query:
+                return [
+                    (None, 'REF-A', '/tmp', 'one.pdf', '2024-01-01', '1'),
+                ]
+            raise AssertionError(f"Unexpected query: {query}")
+
+        parse_thread_module.execute_with_retry = _fake_execute
+        try:
+            fingerprints = thread.get_report_fingerprints_in_database()
+        finally:
+            parse_thread_module.execute_with_retry = original_execute
+
+        self.assertIn('id:7', fingerprints)
+        self.assertIn('REF-B|/tmp|other.pdf|2024-01-03|2', fingerprints)
+        self.assertIn('REF-A|/tmp|one.pdf|2024-01-01|1', fingerprints)
+
+        self.assertTrue(any('sqlite_master' in query for query, _ in calls))
+        self.assertTrue(any('FROM REPORTS WHERE FILENAME IN' in query for query, _ in calls))
+        self.assertTrue(any('FROM REPORTS WHERE (REFERENCE = ? AND DATE = ?)' in query for query, _ in calls))
+        self.assertFalse(any(query.strip() == 'SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS' for query, _ in calls))
+
+
+    def test_get_report_fingerprints_stops_loading_batches_on_cancel(self):
+        from modules.ParseReportsThread import ParseReportsThread
+        from modules.contracts import ParseRequest
+        import modules.ParseReportsThread as parse_thread_module
+
+        thread = ParseReportsThread(ParseRequest(source_directory='.', db_file='test.db'))
+        thread._report_lookup_candidates = {
+            'filenames': {'one.pdf', 'two.pdf', 'three.pdf'},
+            'reference_dates': set(),
+        }
+        thread.LOOKUP_BATCH_SIZE = 1
+
+        original_execute = parse_thread_module.execute_with_retry
+        query_calls = {'batch_queries': 0}
+
+        def _fake_execute(_db, query, params=None, **_kwargs):
+            if 'sqlite_master' in query:
+                return [(1,)]
+            if 'FROM REPORTS WHERE FILENAME IN' in query:
+                query_calls['batch_queries'] += 1
+                thread.parsing_canceled = True
+                return [(None, 'REF-X', '/tmp', params[0], '2024-01-01', '1')]
+            return []
+
+        parse_thread_module.execute_with_retry = _fake_execute
+        try:
+            fingerprints = thread.get_report_fingerprints_in_database()
+        finally:
+            parse_thread_module.execute_with_retry = original_execute
+
+        self.assertEqual(query_calls['batch_queries'], 1)
+        self.assertEqual(len(fingerprints), 0)
+
     def test_parse_new_reports_skips_existing_and_honors_cancel(self):
         class DummyParser:
             def __init__(self, report):
