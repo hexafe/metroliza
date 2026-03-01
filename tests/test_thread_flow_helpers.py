@@ -801,9 +801,10 @@ class TestExportBackendSmoke(unittest.TestCase):
         thread._apply_bottleneck_optimizations()
 
         self.assertTrue(thread._optimization_toggles['defer_non_essential_charts'])
-        self.assertEqual(thread._optimization_toggles['summary_sheet_minimum_charts'], {'distribution', 'histogram'})
+        self.assertEqual(thread._optimization_toggles['summary_sheet_minimum_charts'], {'distribution', 'iqr', 'histogram'})
+        self.assertTrue(thread._summary_chart_required('iqr'))
 
-    def test_summary_sheet_fill_deferred_mode_skips_optional_chart_sections(self):
+    def test_summary_sheet_fill_deferred_mode_skips_only_trend_chart_section(self):
         import pandas as pd
 
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -824,7 +825,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         )
         thread = ExportDataThread(request)
         thread._optimization_toggles['defer_non_essential_charts'] = True
-        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'histogram'}
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram'}
 
         worksheet = _FakeSummaryWorksheet()
         header_group = pd.DataFrame(
@@ -838,22 +839,16 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
 
-        module = __import__('modules.ExportDataThread', fromlist=['render_iqr_boxplot', 'build_trend_plot_payload'])
-        previous_iqr_render = module.render_iqr_boxplot
+        module = __import__('modules.ExportDataThread', fromlist=['build_trend_plot_payload'])
         previous_trend_builder = module.build_trend_plot_payload
-
-        def _unexpected_iqr(*_args, **_kwargs):
-            raise AssertionError('iqr section should not render in deferred chart mode')
 
         def _unexpected_trend(*_args, **_kwargs):
             raise AssertionError('trend section should not render in deferred chart mode')
 
-        module.render_iqr_boxplot = _unexpected_iqr
         module.build_trend_plot_payload = _unexpected_trend
         try:
             thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
         finally:
-            module.render_iqr_boxplot = previous_iqr_render
             module.build_trend_plot_payload = previous_trend_builder
 
         inserted_positions = set(worksheet.inserted_images)
@@ -862,6 +857,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             inserted_positions,
             {
                 panel_slots['distribution'],
+                panel_slots['iqr'],
                 panel_slots['histogram'],
             },
         )

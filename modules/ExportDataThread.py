@@ -1210,7 +1210,7 @@ class ExportDataThread(QThread):
         if chart_share >= 0.65:
             self._optimization_toggles['chart_density_mode'] = 'reduced'
             self._optimization_toggles['defer_non_essential_charts'] = True
-            self._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'histogram'}
+            self._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram'}
         elif chart_share >= 0.45:
             self._optimization_toggles['chart_density_mode'] = 'reduced'
 
