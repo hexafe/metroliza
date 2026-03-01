@@ -394,6 +394,10 @@ def fix_usl_lsl_trendlines(
     rgb_color_style = _build_rgb_color_style(color_hex, line_opacity)
 
     requests: list[dict[str, Any]] = []
+    total_embedded_charts_scanned = 0
+    basic_charts_considered = 0
+    updated_chart_ids: list[int] = []
+
     for sheet in sheets:
         if not isinstance(sheet, dict):
             continue
@@ -403,6 +407,7 @@ def fix_usl_lsl_trendlines(
         for embedded_chart in charts:
             if not isinstance(embedded_chart, dict):
                 continue
+            total_embedded_charts_scanned += 1
             chart_id = embedded_chart.get("chartId")
             if not isinstance(chart_id, int):
                 continue
@@ -412,6 +417,7 @@ def fix_usl_lsl_trendlines(
             basic_chart = spec.get("basicChart")
             if not isinstance(basic_chart, dict):
                 continue
+            basic_charts_considered += 1
             chart_type = str(basic_chart.get("chartType") or "").upper()
             if chart_type not in {"SCATTER", "LINE", "COMBO"}:
                 continue
@@ -484,14 +490,46 @@ def fix_usl_lsl_trendlines(
                     }
                 }
             )
+            updated_chart_ids.append(chart_id)
+
+    logger.info(
+        "USL/LSL trendline discovery summary",
+        extra=_build_google_log_extra(file_ref=spreadsheet_id, outcome="found_charts")
+        | {
+            "embedded_charts_scanned": total_embedded_charts_scanned,
+            "basic_charts_considered": basic_charts_considered,
+            "found_charts": total_embedded_charts_scanned,
+        },
+    )
 
     if not requests:
+        logger.info(
+            "USL/LSL trendline update summary (no-op)",
+            extra=_build_google_log_extra(file_ref=spreadsheet_id, outcome="no_op")
+            | {
+                "embedded_charts_scanned": total_embedded_charts_scanned,
+                "basic_charts_considered": basic_charts_considered,
+                "updated_charts": 0,
+                "chartIds": [],
+            },
+        )
         return
 
     sheets_service.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"requests": requests},
     ).execute()
+
+    logger.info(
+        "USL/LSL trendline update summary",
+        extra=_build_google_log_extra(file_ref=spreadsheet_id, outcome="updated")
+        | {
+            "embedded_charts_scanned": total_embedded_charts_scanned,
+            "basic_charts_considered": basic_charts_considered,
+            "updated_charts": len(updated_chart_ids),
+            "chartIds": updated_chart_ids,
+        },
+    )
 
 
 
