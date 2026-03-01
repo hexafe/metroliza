@@ -316,6 +316,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                 options=ExportOptions(generate_summary_sheet=False),
             )
             thread = ExportDataThread(request)
+            thread._export_df_cache = object()
+            thread._export_df_column_order = ()
             fake_backend = self._build_fake_measurement_backend()
 
             class _BackendRunner:
@@ -330,7 +332,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.finished.emit = lambda: None
             thread._active_backend = fake_backend
 
-            module.read_sql_dataframe = lambda *_args, **_kwargs: object()
+            module.read_sql_dataframe = lambda *_args, **_kwargs: __import__('pandas').DataFrame()
             module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
             module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
             module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
@@ -366,6 +368,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                 options=ExportOptions(generate_summary_sheet=False),
             )
             thread = ExportDataThread(request)
+            thread._export_df_cache = object()
+            thread._export_df_column_order = ()
             thread._active_backend = self._build_fake_measurement_backend()
 
             progress_values = []
@@ -417,6 +421,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                 options=ExportOptions(generate_summary_sheet=False),
             )
             thread = ExportDataThread(request)
+            thread._export_df_cache = object()
+            thread._export_df_column_order = ()
             thread._active_backend = self._build_fake_measurement_backend()
 
             labels = []
@@ -494,6 +500,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                 options=ExportOptions(generate_summary_sheet=True),
             )
             thread = ExportDataThread(request)
+            thread._export_df_cache = object()
+            thread._export_df_column_order = ()
             workbook = _RecordingWorkbook()
             thread._active_backend = _Backend(workbook)
             thread.update_progress.emit = lambda *_: None
@@ -663,8 +671,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.backend_target, 'excel')
 
 
-    def test_export_filtered_data_passes_dataframe_to_writer(self):
+    def test_export_filtered_data_passes_cached_dataframe_to_writer(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
+        import pandas as pd
 
         with tempfile.TemporaryDirectory() as tmpdir:
             out_file = os.path.join(tmpdir, 'out.xlsx')
@@ -682,14 +691,16 @@ class TestExportBackendSmoke(unittest.TestCase):
                 captured['writer_type'] = type(excel_writer).__name__
 
             thread.write_data_to_excel = fake_writer
+            thread._export_df_cache = pd.DataFrame({'ID': [1], 'LABEL': ['A']})
+            thread._export_df_column_order = ('ID', 'LABEL')
 
-            original_query = __import__('modules.ExportDataThread', fromlist=['execute_export_query'])
-            previous = original_query.execute_export_query
-            original_query.execute_export_query = lambda *_args, **_kwargs: ([(1, 'A')], ['ID', 'LABEL'])
+            module = __import__('modules.ExportDataThread', fromlist=['execute_export_query'])
+            previous = module.execute_export_query
+            module.execute_export_query = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('execute_export_query should not be called'))
             try:
                 thread.export_filtered_data(excel_writer=object())
             finally:
-                original_query.execute_export_query = previous
+                module.execute_export_query = previous
 
             self.assertEqual(captured['columns'], ['ID', 'LABEL'])
             self.assertEqual(captured['table'], 'MEASUREMENTS')
@@ -706,6 +717,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                 options=ExportOptions(),
             )
             thread = ExportDataThread(request)
+            thread._export_df_cache = object()
+            thread._export_df_column_order = ()
 
             def fake_export_filtered_data(excel_writer):
                 self.assertIsNotNone(excel_writer)
@@ -718,7 +731,13 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.export_filtered_data = fake_export_filtered_data
             thread.add_measurements_horizontal_sheet = fake_add_measurements
 
-            completed = thread.get_export_backend().run(thread)
+            module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+            previous_reader = module.read_sql_dataframe
+            module.read_sql_dataframe = lambda *_args, **_kwargs: __import__('pandas').DataFrame()
+            try:
+                completed = thread.get_export_backend().run(thread)
+            finally:
+                module.read_sql_dataframe = previous_reader
 
             self.assertTrue(completed)
             self.assertEqual(calls, ['measurements', 'filtered'])
