@@ -1101,6 +1101,21 @@ class ExportDataThread(QThread):
         required_charts = self._optimization_toggles.get('summary_sheet_minimum_charts', set())
         return chart_name in required_charts
 
+    @staticmethod
+    def _save_summary_chart(fig, buffer, mode='workbook'):
+        """Persist summary-sheet charts with a workbook-friendly rendering policy."""
+        save_kwargs = {
+            'format': 'png',
+            'dpi': 150,
+        }
+        if mode == 'clipped':
+            # Keep a fallback for charts that may require clipping fixes.
+            save_kwargs['bbox_inches'] = 'tight'
+
+        buffer.seek(0)
+        buffer.truncate(0)
+        fig.savefig(buffer, **save_kwargs)
+
     def _build_iqr_plot_payload(self, labels, values, sampled_group):
         boxplot_labels = labels if labels else ['All']
         boxplot_values = values if values else [list(sampled_group['MEAS'])]
@@ -1847,7 +1862,7 @@ class ExportDataThread(QThread):
                     ax.set_xlabel('Sample #')
                     ax.set_ylabel('Measurement')
                     ax.set_title(f'{header}')
-                    fig.savefig(imgplot, format='png')
+                    self._save_summary_chart(fig, imgplot)
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
 
                     imgplot.seek(0)
@@ -1886,7 +1901,7 @@ class ExportDataThread(QThread):
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
 
-                    fig.savefig(imgplot, format='png', bbox_inches='tight')
+                    self._save_summary_chart(fig, imgplot)
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     imgplot.seek(0)
                     iqr_slot = panel_plan['image_slots']['iqr']
@@ -1966,7 +1981,7 @@ class ExportDataThread(QThread):
                     )
 
                     plt.subplots_adjust(right=histogram_table_layout['subplot_right'])
-                    fig.savefig(imgplot, format='png')
+                    self._save_summary_chart(fig, imgplot)
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     imgplot.seek(0)
                     histogram_slot = panel_plan['image_slots']['histogram']
@@ -2007,7 +2022,7 @@ class ExportDataThread(QThread):
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
 
-                    fig.savefig(imgplot, format='png', bbox_inches='tight')
+                    self._save_summary_chart(fig, imgplot)
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     imgplot.seek(0)
                     trend_slot = panel_plan['image_slots']['trend']
