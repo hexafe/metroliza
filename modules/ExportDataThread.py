@@ -14,6 +14,7 @@ import importlib.util
 from io import BytesIO
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from scipy.stats import ttest_ind
 
@@ -457,6 +458,67 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
         mode=annotation_mode,
         readability_scale=readability_scale,
     )
+    annotation_boxes = []
+
+    def _resolve_annotation_offset(point_xy, text, base_offset, *, fontsize, color=None, bbox=None):
+        """Return a collision-free text offset while preserving deterministic behavior."""
+        candidate_offsets = [
+            tuple(base_offset),
+            (base_offset[0], base_offset[1] + 8),
+            (base_offset[0], base_offset[1] - 8),
+            (base_offset[0] + 8, base_offset[1]),
+            (base_offset[0] - 8, base_offset[1]),
+            (base_offset[0] + 12, base_offset[1] + 8),
+            (base_offset[0] - 12, base_offset[1] - 8),
+            (base_offset[0], base_offset[1] + 16),
+            (base_offset[0], base_offset[1] - 16),
+            (base_offset[0] + 16, base_offset[1]),
+            (base_offset[0] - 16, base_offset[1]),
+        ]
+
+        renderer = ax.figure.canvas.get_renderer()
+        selected_bbox = None
+        selected_offset = candidate_offsets[0]
+        for candidate_offset in candidate_offsets:
+            preview = ax.annotate(
+                text,
+                point_xy,
+                textcoords='offset points',
+                xytext=candidate_offset,
+                fontsize=fontsize,
+                color=color,
+                bbox=bbox,
+                alpha=0,
+            )
+            ax.figure.canvas.draw()
+            bbox_display = preview.get_window_extent(renderer=renderer).expanded(1.03, 1.08)
+            preview.remove()
+
+            if not any(bbox_display.overlaps(existing_box['display']) for existing_box in annotation_boxes):
+                selected_bbox = bbox_display
+                selected_offset = candidate_offset
+                break
+
+            if selected_bbox is None:
+                selected_bbox = bbox_display
+
+        if selected_bbox is not None:
+            bbox_corners = selected_bbox.get_points()
+            data_points = ax.transData.inverted().transform(bbox_corners)
+            annotation_boxes.append(
+                {
+                    'display': selected_bbox,
+                    'data_bounds': (
+                        float(data_points[0][0]),
+                        float(data_points[0][1]),
+                        float(data_points[1][0]),
+                        float(data_points[1][1]),
+                    ),
+                }
+            )
+        return selected_offset
+
+    ax.figure.canvas.draw()
     for idx, group_values in enumerate(values):
         arr = np.asarray(group_values, dtype=float)
         if arr.size == 0:
@@ -475,7 +537,13 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
                 f"min={min_val:.3f}",
                 (xpos, min_val),
                 textcoords='offset points',
-                xytext=style['offsets']['min'],
+                xytext=_resolve_annotation_offset(
+                    (xpos, min_val),
+                    f"min={min_val:.3f}",
+                    style['offsets']['min'],
+                    fontsize=style['font_size'],
+                    bbox=text_box,
+                ),
                 fontsize=style['font_size'],
                 bbox=text_box,
             )
@@ -485,7 +553,13 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
             f"μ={mean_val:.3f}",
             (xpos, mean_val),
             textcoords='offset points',
-            xytext=style['offsets']['mean'],
+            xytext=_resolve_annotation_offset(
+                (xpos, mean_val),
+                f"μ={mean_val:.3f}",
+                style['offsets']['mean'],
+                fontsize=style['font_size'],
+                bbox=text_box,
+            ),
             fontsize=style['font_size'],
             bbox=text_box,
         )
@@ -496,7 +570,13 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
                 f"max={max_val:.3f}",
                 (xpos, max_val),
                 textcoords='offset points',
-                xytext=style['offsets']['max'],
+                xytext=_resolve_annotation_offset(
+                    (xpos, max_val),
+                    f"max={max_val:.3f}",
+                    style['offsets']['max'],
+                    fontsize=style['font_size'],
+                    bbox=text_box,
+                ),
                 fontsize=style['font_size'],
                 bbox=text_box,
             )
@@ -514,24 +594,29 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
                 alpha=0.8,
                 zorder=3,
             )
-            ax.annotate(
-                f"-3σ={sigma_low:.3f}",
-                (xpos, sigma_low),
-                textcoords='offset points',
-                xytext=style['offsets']['sigma_low'],
-                fontsize=style['font_size'],
-                color=SUMMARY_PLOT_PALETTE['annotation_text'],
-                bbox=text_box,
-            )
-            ax.annotate(
-                f"+3σ={sigma_high:.3f}",
-                (xpos, sigma_high),
-                textcoords='offset points',
-                xytext=style['offsets']['sigma_high'],
-                fontsize=style['font_size'],
-                color=SUMMARY_PLOT_PALETTE['annotation_text'],
-                bbox=text_box,
-            )
+
+    return style
+
+
+def add_violin_annotation_legend(ax, style):
+    """Render a legend that explains violin annotation markers and symbols."""
+    handles = [
+        Line2D([0], [0], marker='o', linestyle='None', markersize=5.5, color=SUMMARY_PLOT_PALETTE['central_tendency'], label='Mean marker (μ)'),
+    ]
+    if style.get('show_minmax'):
+        handles.extend([
+            Line2D([0], [0], marker='v', linestyle='None', markersize=5.0, color=SUMMARY_PLOT_PALETTE['annotation_text'], label='Min marker'),
+            Line2D([0], [0], marker='^', linestyle='None', markersize=5.0, color=SUMMARY_PLOT_PALETTE['annotation_text'], label='Max marker'),
+        ])
+    if style.get('show_sigma'):
+        handles.append(
+            Line2D([0], [0], linestyle=':', linewidth=max(style.get('sigma_line_width', 0.7), 0.7), color=SUMMARY_PLOT_PALETTE['sigma_band'], label='±3σ span (visual)'),
+        )
+
+    handles.append(
+        Line2D([0], [0], linestyle='None', marker='s', markersize=4.5, markerfacecolor='white', markeredgecolor=SUMMARY_PLOT_PALETTE['annotation_box_edge'], label='Text box: value annotation'),
+    )
+    ax.legend(handles=handles, loc='upper right', frameon=True, fontsize=max(style.get('font_size', 6.8) - 0.2, 6.6))
 
 def render_violin(ax, values, labels, *, readability_scale=None):
     if _HAS_SEABORN:
@@ -541,7 +626,8 @@ def render_violin(ax, values, labels, *, readability_scale=None):
         ax.violinplot(values, showmeans=False, showmedians=False, showextrema=False)
         ax.set_xticks(range(1, len(labels) + 1))
     ax.set_xticklabels(labels)
-    annotate_violin_group_stats(ax, labels, values, readability_scale=readability_scale)
+    style = annotate_violin_group_stats(ax, labels, values, readability_scale=readability_scale)
+    add_violin_annotation_legend(ax, style)
 
 
 def render_scatter(ax, data=None, x=None, y=None):
