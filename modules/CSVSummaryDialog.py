@@ -1,5 +1,4 @@
-from PyQt6.QtCore import Qt, pyqtSlot, QThread, pyqtSignal, QTemporaryFile, QSize
-from PyQt6.QtGui import QMovie
+from PyQt6.QtCore import pyqtSlot, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -8,8 +7,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QHBoxLayout,
-    QProgressBar,
-    QLabel,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
@@ -23,6 +20,7 @@ import time
 import pandas as pd
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 from modules.excel_sheet_utils import unique_sheet_name
+from modules.progress_status import build_three_line_status
 from modules.csv_summary_utils import (
     build_default_plot_toggles,
     compute_column_summary_stats,
@@ -37,8 +35,7 @@ from modules.csv_summary_utils import (
     migrate_csv_summary_presets,
     save_csv_summary_presets,
 )
-import base64
-from modules import Base64EncodedFiles
+from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
 logger = logging.getLogger(__name__)
@@ -198,6 +195,7 @@ class SpecLimitsDialog(QDialog):
 
 class DataProcessingThread(QThread):
     progress_signal = pyqtSignal(int)
+    status_signal = pyqtSignal(str)
 
     def __init__(self, selected_indexes, selected_data_columns, input_file, output_file, data_frame, csv_config=None, column_spec_limits=None, plot_toggles=None, summary_only=False):
         super().__init__()
@@ -244,6 +242,25 @@ class DataProcessingThread(QThread):
             return selected_data
         stride = max(1, int(row_count / sample_limit))
         return selected_data.iloc[::stride].copy()
+
+    @staticmethod
+    def _format_eta(eta_seconds):
+        if eta_seconds is None:
+            return "ETA --"
+        rounded_seconds = max(0, int(round(float(eta_seconds))))
+        minutes, seconds = divmod(rounded_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours > 0:
+            return f"ETA {hours}:{minutes:02d}:{seconds:02d}"
+        return f"ETA {minutes}:{seconds:02d}"
+
+    def _estimate_eta_seconds(self, start_time, processed_columns, total_columns):
+        if processed_columns <= 0 or total_columns <= 0:
+            return None
+        elapsed = max(0.0, time.perf_counter() - start_time)
+        average_per_column = elapsed / processed_columns
+        remaining_columns = max(0, total_columns - processed_columns)
+        return average_per_column * remaining_columns
 
     def write_summary_data(self, worksheet, data_column, selected_data, spec_limits):
         col = selected_data.shape[1]
@@ -511,6 +528,7 @@ class DataProcessingThread(QThread):
                 overview_rows = []
                 total_write_seconds = 0.0
                 total_chart_seconds = 0.0
+                processing_started_at = time.perf_counter()
 
                 # Update the progress bar for each selected data column
                 for i, data_column in enumerate(self.selected_data_columns):
@@ -529,7 +547,21 @@ class DataProcessingThread(QThread):
                     self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
                     if selected_data.empty:
                         progress_percentage = int((i + 1) * 100 / total_filtered_columns)
+                        eta_label = self._format_eta(
+                            self._estimate_eta_seconds(
+                                processing_started_at,
+                                i + 1,
+                                total_filtered_columns,
+                            )
+                        )
                         self.progress_signal.emit(progress_percentage)
+                        self.status_signal.emit(
+                            build_three_line_status(
+                                "Processing data...",
+                                f"Column {i + 1}/{total_filtered_columns}: {data_column}",
+                                eta_label,
+                            )
+                        )
                         continue
 
                     spec_limits = self.column_spec_limits.get(data_column, {'nom': 0.0, 'usl': 0.0, 'lsl': 0.0})
@@ -603,7 +635,21 @@ class DataProcessingThread(QThread):
 
                     # Calculate the progress percentage and emit the progress signal
                     progress_percentage = int((i + 1) * 100 / total_filtered_columns)
+                    eta_label = self._format_eta(
+                        self._estimate_eta_seconds(
+                            processing_started_at,
+                            i + 1,
+                            total_filtered_columns,
+                        )
+                    )
                     self.progress_signal.emit(progress_percentage)
+                    self.status_signal.emit(
+                        build_three_line_status(
+                            "Processing data...",
+                            f"Column {i + 1}/{total_filtered_columns}: {data_column}",
+                            eta_label,
+                        )
+                    )
 
                 if self.canceled:
                     writer.close()
@@ -612,6 +658,7 @@ class DataProcessingThread(QThread):
                     except Exception:
                         logger.warning("Failed to remove canceled CSV summary output '%s'.", self.output_file)
                     logger.info("CSV summary processing canceled for output '%s'.", self.output_file)
+                    self.status_signal.emit(build_three_line_status("Processing canceled", "No further work will be processed.", "ETA --"))
                     return
 
                 self.write_overview_sheet(writer, overview_rows)
@@ -633,6 +680,7 @@ class DataProcessingThread(QThread):
                             "CSV Summary bottleneck analysis: chart rendering dominates; remaining workloads are IO/chart-bound so native code for pure-math kernels is not currently justified."
                         )
                 logger.info("CSV summary processing completed successfully: output='%s'.", self.output_file)
+                self.status_signal.emit(build_three_line_status("Processing complete", "Workbook generated successfully", "ETA 0:00"))
 
             except Exception:
                 logger.exception(
@@ -641,9 +689,11 @@ class DataProcessingThread(QThread):
                     self.output_file,
                 )
                 self.canceled = True
+                self.status_signal.emit(build_three_line_status("Processing failed", "An unexpected error occurred", "ETA --"))
 
         else:
             logger.warning("CSV summary processing skipped because no data columns were selected.")
+            self.status_signal.emit(build_three_line_status("Processing skipped", "No data columns were selected", "ETA --"))
 
     def cancel(self):
         self.canceled = True
@@ -875,54 +925,12 @@ class CSVSummaryDialog(QDialog):
 
     @pyqtSlot()
     def show_loading_screen(self):
-        # Create a custom QDialog for the loading screen
-        self.loading_dialog = QDialog(self, Qt.WindowType.WindowTitleHint)
-        self.loading_dialog.setWindowTitle("Processing...")
-        self.loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self.loading_dialog.setFixedSize(400, 300)
-
-        # Create a QLabel to display the loading GIF
-        loading_gif_label = QLabel(self.loading_dialog)
-        loading_gif_label.setFixedSize(200, 200)
-        loading_gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Load the loading.gif from a file, create a QMovie from it, and set it to the label
-        loading_gif_decoded = base64.b64decode(Base64EncodedFiles.encoded_loading_gif)
-
-        # Create temporary file and save encoded loading gif to it
-        temp_file = QTemporaryFile()
-        temp_file.setAutoRemove(False)
-        temp_file_name = ""
-        if temp_file.open():
-            temp_file.write(loading_gif_decoded)
-            temp_file.close()
-            temp_file_name = temp_file.fileName()
-
-        # Create the QMovie using the temporary file name
-        loading_gif = QMovie(temp_file_name)
-        loading_gif.setScaledSize(QSize(200, 200))
-        loading_gif_label.setMovie(loading_gif)
-        loading_gif.start()
-
-        # Create the loading label and progress bar as instance variables
-        self.loading_label = QLabel("Processing data...", self.loading_dialog)
-        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.loading_bar = QProgressBar(self.loading_dialog)
-        self.loading_bar.setValue(0)
-        self.loading_bar.setFixedSize(380, 20)
-        self.loading_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Create a layout for the dialog and add the loading GIF, loading label, and progress bar to it
-        layout = QVBoxLayout(self.loading_dialog)
-        layout.addWidget(loading_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(self.loading_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(self.loading_bar, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        # Create and add the Cancel button to the layout
-        cancel_button = QPushButton("Cancel", self.loading_dialog)
-        cancel_button.clicked.connect(self.stop_data_processing_and_close_loading)
-        layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
+            self,
+            window_title="Processing...",
+            initial_status_text=build_three_line_status("Processing data...", "Preparing CSV summary export", "ETA --"),
+            on_cancel=self.stop_data_processing_and_close_loading,
+        )
 
         # Start the data processing in a separate thread
         self.worker_thread = DataProcessingThread(
@@ -938,6 +946,7 @@ class CSVSummaryDialog(QDialog):
         )
         # Connect the progress signal to the update_progress_bar slot
         self.worker_thread.progress_signal.connect(self.update_progress_bar)
+        self.worker_thread.status_signal.connect(self.loading_label.setText)
         self.worker_thread.finished.connect(self.on_data_processing_finished)
         self.worker_thread.start()
 
