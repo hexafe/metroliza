@@ -56,6 +56,10 @@ from modules.export_query_service import (
     build_export_dataframe as _build_export_dataframe,
     build_measurement_export_dataframe,
     execute_export_query as _execute_export_query,
+    fetch_partition_header_counts,
+    fetch_partition_values,
+    fetch_sql_measurement_summary,
+    load_measurement_export_partition_dataframe,
 )
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
@@ -77,6 +81,7 @@ from modules.export_sheet_writer import (
     write_measurement_block,
     build_summary_panel_write_plan,
 )
+from modules.stats_utils import safe_process_capability
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
 if _HAS_SEABORN:
@@ -1089,7 +1094,6 @@ class ExportDataThread(QThread):
         self._summary_sheet_failed = False
         self._summary_sheet_skip_warning_emitted = False
         self._db_connection = None
-        self._reset_export_df_cache()
 
     def _register_chart_image(self, payload: bytes):
         image_data = BytesIO(payload)
@@ -1128,22 +1132,25 @@ class ExportDataThread(QThread):
         finally:
             self._summary_prep_executor = None
 
-    def _reset_export_df_cache(self):
-        self._export_df_cache = None
-        self._export_df_column_order = None
-
-    def _ensure_export_df_cache(self):
-        if self._export_df_cache is None:
-            export_df = read_sql_dataframe(self.db_file, self.filter_query, connection=self._db_connection)
-            self._export_df_cache = export_df
-            self._export_df_column_order = tuple(export_df.columns)
-        return self._export_df_cache
+    def _iter_reference_partitions(self):
+        partition_values = fetch_partition_values(
+            self.db_file,
+            self.filter_query,
+            partition_column='REFERENCE',
+            connection=self._db_connection,
+        )
+        for partition_value in partition_values:
+            partition_df = load_measurement_export_partition_dataframe(
+                self.db_file,
+                self.filter_query,
+                partition_value,
+                partition_column='REFERENCE',
+                connection=self._db_connection,
+            )
+            yield partition_value, partition_df
 
     def _build_export_filtered_dataframe(self):
-        export_df = self._ensure_export_df_cache()
-        if not self._export_df_column_order:
-            return export_df.copy()
-        return export_df.loc[:, list(self._export_df_column_order)].copy()
+        return read_sql_dataframe(self.db_file, self.filter_query, connection=self._db_connection)
 
     def _record_stage_timing(self, stage_name, elapsed):
         if stage_name in self._stage_timings:
@@ -1412,8 +1419,6 @@ class ExportDataThread(QThread):
         return False
 
     def run_export_pipeline(self, excel_writer):
-        self._reset_export_df_cache()
-        self._ensure_export_df_cache()
         return run_export_steps(
             [
                 lambda: (
@@ -1501,7 +1506,6 @@ class ExportDataThread(QThread):
             if self._check_canceled():
                 return
 
-            self._reset_export_df_cache()
             self._ensure_chart_executor()
             self._ensure_summary_prep_executor()
 
@@ -1629,15 +1633,17 @@ class ExportDataThread(QThread):
             self._shutdown_summary_prep_executor()
             self._cleanup_chart_images()
             self._db_connection = None
-            self._reset_export_df_cache()
 
     def add_measurements_horizontal_sheet(self, excel_writer):
         try:
-            df = build_measurement_export_dataframe(self._ensure_export_df_cache())
-
-            reference_groups = df.groupby('REFERENCE', sort=False)
-            total_references = reference_groups.ngroups
-            total_header_units = int(reference_groups['HEADER - AX'].nunique(dropna=False).sum())
+            partition_header_counts = fetch_partition_header_counts(
+                self.db_file,
+                self.filter_query,
+                partition_column='REFERENCE',
+                connection=self._db_connection,
+            )
+            total_references = len(partition_header_counts)
+            total_header_units = sum(partition_header_counts.values())
             completed_header_units = 0
             measurement_stage_start = time.perf_counter()
             label_emit_every_headers = 10
@@ -1650,11 +1656,12 @@ class ExportDataThread(QThread):
 
             formats = create_measurement_formats(workbook)
             column_width = 12
-            max_col = len(df['HEADER - AX'].unique()) * 3
 
-            for ref_index, (ref, ref_group) in enumerate(reference_groups, start=1):
+            for ref_index, (ref, ref_group) in enumerate(self._iter_reference_partitions(), start=1):
                 if self._check_canceled():
                     return
+
+                max_col = len(ref_group['HEADER - AX'].unique()) * 3
 
                 self.update_label.emit(
                     self._build_measurement_label(
@@ -1863,7 +1870,43 @@ class ExportDataThread(QThread):
             USL = limits['usl']
             LSL = limits['lsl']
 
-            summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
+            reference_value = header_group['REFERENCE'].iloc[0] if 'REFERENCE' in header_group.columns and not header_group.empty else None
+            header_value = header_group['HEADER'].iloc[0] if 'HEADER' in header_group.columns and not header_group.empty else None
+            axis_value = header_group['AX'].iloc[0] if 'AX' in header_group.columns and not header_group.empty else None
+
+            summary_stats = None
+            if reference_value is not None and header_value is not None and axis_value is not None:
+                sql_summary = fetch_sql_measurement_summary(
+                    self.db_file,
+                    self.filter_query,
+                    reference=reference_value,
+                    header=header_value,
+                    ax=axis_value,
+                    usl=USL,
+                    lsl=LSL,
+                    connection=self._db_connection,
+                )
+                if sql_summary is not None:
+                    sample_size = int(sql_summary.get('sample_size') or 0)
+                    average = float(sql_summary.get('average') or 0.0)
+                    sigma = float(sql_summary.get('sigma') or 0.0)
+                    nok_count = int(sql_summary.get('nok_count') or 0)
+                    cp, cpk = safe_process_capability(nom, USL, LSL, sigma, average)
+                    summary_stats = {
+                        'minimum': float(sql_summary.get('minimum') or 0.0),
+                        'maximum': float(sql_summary.get('maximum') or 0.0),
+                        'sigma': sigma,
+                        'average': average,
+                        'median': float(header_group['MEAS'].median()) if sample_size else 0.0,
+                        'cp': cp,
+                        'cpk': cpk,
+                        'sample_size': sample_size,
+                        'nok_count': nok_count,
+                        'nok_pct': (nok_count / sample_size) if sample_size else 0,
+                    }
+
+            if summary_stats is None:
+                summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
             average = summary_stats['average']
             capability_badge = classify_capability_status(summary_stats['cp'], summary_stats['cpk'])
             capability_row_badges = {
