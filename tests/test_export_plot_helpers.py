@@ -217,6 +217,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual(formulas['min'], '=ROUND(MIN(C22:C30), 3)')
         self.assertEqual(formulas['sample_size'], '=COUNT(C22:C30)')
+        self.assertEqual(formulas['cp'], '="N/A"')
         self.assertIn('(B1 + B2)', formulas['cpk'])
         self.assertNotIn('MIN(', formulas['cpk'])
 

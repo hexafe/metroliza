@@ -21,8 +21,10 @@ def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cel
     average_formula = f"({summary_col}5)"
 
     if nom_value == 0 and lsl_value == 0:
+        cp_formula = '="N/A"'
         cpk_formula = f"=ROUND(({usl_formula} - {average_formula})/(3 * {sigma_formula}), 3)"
     else:
+        cp_formula = f"=ROUND(({usl_formula} - {lsl_formula})/(6 * {sigma_formula}), 3)"
         cpk_formula = (
             "=ROUND(MIN( "
             f"({usl_formula} - {average_formula})/(3 * {sigma_formula}), "
@@ -40,7 +42,7 @@ def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cel
         'avg': f"=ROUND(AVERAGE({data_range_y}), 3)",
         'max': f"=ROUND(MAX({data_range_y}), 3)",
         'std': f"=ROUND(STDEV({data_range_y}), 3)",
-        'cp': f"=ROUND(({usl_formula} - {lsl_formula})/(6 * {sigma_formula}), 3)",
+        'cp': cp_formula,
         'cpk': cpk_formula,
         'nok_total': f'={nok_high}+{nok_low}',
         'nok_percent': f"=ROUND(({nok_cell}/{sample_size_cell})*100%, 3)",
