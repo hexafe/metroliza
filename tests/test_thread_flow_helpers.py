@@ -903,6 +903,77 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
 
+    def test_build_iqr_plot_payload_rebuilds_safe_fallback_on_length_mismatch(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+
+        sampled_group = pd.DataFrame({'MEAS': [1.0, 2.0, 3.0]})
+        labels = ['A', 'B']
+        values = [[1.0, 2.0]]
+
+        iqr_labels, iqr_values = thread._build_iqr_plot_payload(labels, values, sampled_group)
+
+        self.assertEqual(iqr_labels, ['All'])
+        self.assertEqual(iqr_values, [[1.0, 2.0, 3.0]])
+
+    def test_render_iqr_boxplot_normalizes_mismatched_inputs_without_raising(self):
+        import matplotlib.pyplot as plt
+
+        module = __import__('modules.ExportDataThread', fromlist=['render_iqr_boxplot'])
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            module.render_iqr_boxplot(ax, values=[[1, 2, 3], [4, 5, 6]], labels=['One'])
+        finally:
+            plt.close(fig)
+
+    def test_summary_sheet_fill_can_render_violin_false_completes_without_raising(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread.violin_plot_min_samplesize = 10
+
+        worksheet = _FakeSummaryWorksheet()
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '1', '2', '2', '3', '3'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+
+        panel_slots = build_summary_image_anchor_plan(3)
+        inserted_positions = set(worksheet.inserted_images)
+        self.assertIn(panel_slots['distribution'], inserted_positions)
+        self.assertIn(panel_slots['iqr'], inserted_positions)
+
     def test_default_export_target_uses_excel_backend(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
