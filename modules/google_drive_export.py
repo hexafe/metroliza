@@ -4,6 +4,7 @@ import json
 import logging
 import mimetypes
 import time
+import copy
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -373,12 +374,12 @@ def fix_usl_lsl_trendlines(
     if not isinstance(sheets, list):
         return
 
-    valid_indices = [
+    target_series_indices = [
         index
         for index in (usl_series_index, lsl_series_index)
         if isinstance(index, int) and index >= 0
     ]
-    if not valid_indices:
+    if not target_series_indices:
         return
 
     line_width = width_px if isinstance(width_px, int) and width_px > 0 else 2
@@ -400,41 +401,77 @@ def fix_usl_lsl_trendlines(
             if not isinstance(chart_id, int):
                 continue
             spec = embedded_chart.get("spec")
-            basic_chart = spec.get("basicChart") if isinstance(spec, dict) else None
-            series = basic_chart.get("series") if isinstance(basic_chart, dict) else None
+            if not isinstance(spec, dict):
+                continue
+            basic_chart = spec.get("basicChart")
+            if not isinstance(basic_chart, dict):
+                continue
+            series = basic_chart.get("series")
             if not isinstance(series, list):
                 continue
 
-            for series_index in valid_indices:
-                if series_index >= len(series):
+            updated_spec = copy.deepcopy(spec)
+            updated_basic_chart = updated_spec.get("basicChart")
+            updated_series = updated_basic_chart.get("series") if isinstance(updated_basic_chart, dict) else None
+            if not isinstance(updated_series, list):
+                continue
+
+            updated_indexes: list[int] = []
+            for series_index in target_series_indices:
+                if series_index >= len(updated_series):
                     continue
-                requests.append(
-                    {
-                        "updateChartSpec": {
-                            "chartId": chart_id,
-                            "spec": {
-                                "basicChart": {
-                                    "series": [
-                                        {
-                                            "lineStyle": {
-                                                "type": "SOLID",
-                                                "width": {"magnitude": line_width, "unit": "PIXEL"},
-                                            },
-                                            "colorStyle": {"rgbColor": rgb_color},
-                                            "trendline": {"type": "LINEAR", "opacity": line_opacity},
-                                        }
-                                    ]
-                                }
-                            },
-                            "fields": (
-                                f"basicChart.series[{series_index}].lineStyle,"
-                                f"basicChart.series[{series_index}].colorStyle,"
-                                f"basicChart.series[{series_index}].trendline.type,"
-                                f"basicChart.series[{series_index}].trendline.opacity"
-                            ),
-                        }
-                    }
+                series_item = updated_series[series_index]
+                if not isinstance(series_item, dict):
+                    continue
+
+                trendline = series_item.get("trendline")
+                if not isinstance(trendline, dict):
+                    trendline = {}
+                trendline["type"] = "LINEAR"
+                trendline_line_style = trendline.get("lineStyle")
+                if not isinstance(trendline_line_style, dict):
+                    trendline_line_style = {}
+                trendline_line_style["width"] = {"magnitude": line_width, "unit": "PIXEL"}
+                trendline_line_style["colorStyle"] = {"rgbColor": rgb_color}
+                trendline["lineStyle"] = trendline_line_style
+                trendline["opacity"] = line_opacity
+                series_item["trendline"] = trendline
+
+                line_style = series_item.get("lineStyle")
+                if not isinstance(line_style, dict):
+                    line_style = {}
+                line_style["type"] = "SOLID"
+                line_style["width"] = {"magnitude": line_width, "unit": "PIXEL"}
+                series_item["lineStyle"] = line_style
+                series_item["colorStyle"] = {"rgbColor": rgb_color}
+
+                updated_indexes.append(series_index)
+
+            if not updated_indexes:
+                continue
+
+            field_masks: list[str] = []
+            for series_index in updated_indexes:
+                field_masks.extend(
+                    [
+                        f"basicChart.series[{series_index}].trendline.type",
+                        f"basicChart.series[{series_index}].trendline.lineStyle.width",
+                        f"basicChart.series[{series_index}].trendline.lineStyle.colorStyle",
+                        f"basicChart.series[{series_index}].lineStyle.type",
+                        f"basicChart.series[{series_index}].lineStyle.width",
+                        f"basicChart.series[{series_index}].colorStyle",
+                    ]
                 )
+
+            requests.append(
+                {
+                    "updateChartSpec": {
+                        "chartId": chart_id,
+                        "spec": updated_spec,
+                        "fields": ",".join(field_masks),
+                    }
+                }
+            )
 
     if not requests:
         return

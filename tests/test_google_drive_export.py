@@ -1,5 +1,7 @@
 import json
+import sys
 import tempfile
+import types
 import unittest
 import urllib.error
 from io import BytesIO
@@ -19,6 +21,7 @@ from modules.google_drive_export import (
     _build_limit_series_patch_requests,
     _build_upload_request_body,
     _load_token_payload,
+    fix_usl_lsl_trendlines,
     _refresh_access_token,
     map_google_http_error,
     map_google_network_error,
@@ -39,6 +42,37 @@ class _FakeResponse:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+class _FakeExecute:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def execute(self):
+        return self._payload
+
+
+class _FakeSpreadsheetsService:
+    def __init__(self, charts_payload):
+        self._charts_payload = charts_payload
+        self.batch_update_calls = []
+
+    def get(self, **kwargs):
+        return _FakeExecute(self._charts_payload)
+
+    def batchUpdate(self, **kwargs):
+        self.batch_update_calls.append(kwargs)
+        return _FakeExecute({})
+
+
+class _FakeSheetsService:
+    def __init__(self, charts_payload):
+        self._spreadsheets = _FakeSpreadsheetsService(charts_payload)
+
+    def spreadsheets(self):
+        return self._spreadsheets
+
+
 
 
 class TestGoogleDriveExport(unittest.TestCase):
@@ -374,6 +408,90 @@ class TestGoogleDriveExport(unittest.TestCase):
                 upload_and_convert_workbook(str(excel_path))
 
             patcher.assert_called_once_with(spreadsheet_id="sheet123", access_token="token")
+
+
+    def test_fix_usl_lsl_trendlines_updates_target_series_with_full_spec_and_field_masks(self):
+        original_spec = {
+            "title": "chart title",
+            "basicChart": {
+                "chartType": "LINE",
+                "series": [
+                    {"series": {"sourceRange": {"sources": [{"sheetId": 1}]}}},
+                    {"series": {"sourceRange": {"sources": [{"sheetId": 2}]}}},
+                    {"series": {"sourceRange": {"sources": [{"sheetId": 3}]}}},
+                ],
+            },
+        }
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {"chartId": 17, "spec": original_spec},
+                        {"chartId": 18, "spec": {"pieChart": {"legendPosition": "RIGHT_LEGEND"}}},
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        self.assertEqual(1, len(fake_service._spreadsheets.batch_update_calls))
+        batch_body = fake_service._spreadsheets.batch_update_calls[0]["body"]
+        self.assertEqual(1, len(batch_body["requests"]))
+
+        update_request = batch_body["requests"][0]["updateChartSpec"]
+        self.assertEqual(17, update_request["chartId"])
+        self.assertEqual("chart title", update_request["spec"]["title"])
+        self.assertEqual(3, len(update_request["spec"]["basicChart"]["series"]))
+        self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"]["magnitude"])
+        self.assertEqual("LINEAR", update_request["spec"]["basicChart"]["series"][2]["trendline"]["type"])
+
+        fields = set(update_request["fields"].split(","))
+        self.assertEqual(12, len(fields))
+        self.assertIn("basicChart.series[1].trendline.type", fields)
+        self.assertIn("basicChart.series[1].trendline.lineStyle.width", fields)
+        self.assertIn("basicChart.series[1].trendline.lineStyle.colorStyle", fields)
+        self.assertIn("basicChart.series[1].lineStyle.type", fields)
+        self.assertIn("basicChart.series[1].lineStyle.width", fields)
+        self.assertIn("basicChart.series[1].colorStyle", fields)
+        self.assertIn("basicChart.series[2].trendline.type", fields)
+        self.assertIn("basicChart.series[2].trendline.lineStyle.width", fields)
+        self.assertIn("basicChart.series[2].trendline.lineStyle.colorStyle", fields)
+        self.assertIn("basicChart.series[2].lineStyle.type", fields)
+        self.assertIn("basicChart.series[2].lineStyle.width", fields)
+        self.assertIn("basicChart.series[2].colorStyle", fields)
+
+    def test_fix_usl_lsl_trendlines_skips_when_target_series_indexes_missing(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 51,
+                            "spec": {
+                                "basicChart": {
+                                    "series": [
+                                        {"series": {"seriesName": {"value": "Measured"}}},
+                                    ]
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        self.assertEqual([], fake_service._spreadsheets.batch_update_calls)
 
 
 
