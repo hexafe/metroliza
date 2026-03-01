@@ -73,6 +73,8 @@ from modules.ExportDataThread import (  # noqa: E402
     build_histogram_table_data,
     style_histogram_stats_table,
     resolve_violin_annotation_style,
+    annotate_violin_group_stats,
+    render_violin,
 )
 
 
@@ -520,6 +522,62 @@ class TestExportPlotHelpers(unittest.TestCase):
         rendered_labels = [tick.get_text() for tick in ax.get_xticklabels()]
         self.assertEqual(rendered_labels, ['G1', 'G2'])
         plt.close(fig)
+
+    def test_annotate_violin_group_stats_does_not_emit_plus_minus_three_sigma_text(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(-0.5, 1.5)
+
+        annotate_violin_group_stats(
+            ax,
+            ['A', 'B'],
+            [[1.0, 1.2, 0.8], [1.5, 1.7, 1.4]],
+            annotation_mode='full',
+        )
+
+        texts = [text.get_text() for text in ax.texts]
+        self.assertFalse(any(label.startswith('-3σ=') or label.startswith('+3σ=') for label in texts))
+        self.assertTrue(any('μ=' in label for label in texts))
+        plt.close(fig)
+
+    def test_render_violin_adds_legend_entries_for_annotation_symbols(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        render_violin(
+            ax,
+            [[1.0, 1.2, 0.8], [1.5, 1.7, 1.4]],
+            ['A', 'B'],
+            readability_scale=0.3,
+        )
+
+        legend = ax.get_legend()
+        self.assertIsNotNone(legend)
+        legend_labels = [text.get_text() for text in legend.get_texts()]
+        self.assertIn('Mean marker (μ)', legend_labels)
+        self.assertIn('Min marker', legend_labels)
+        self.assertIn('Max marker', legend_labels)
+        self.assertIn('±3σ span (visual)', legend_labels)
+        self.assertIn('Text box: value annotation', legend_labels)
+        plt.close(fig)
+
+    def test_annotation_collision_resolution_is_deterministic_for_dense_groups(self):
+        values = [[1.0, 1.0, 1.0], [1.01, 1.01, 1.01], [1.02, 1.02, 1.02], [1.03, 1.03, 1.03]]
+        labels = ['G1', 'G2', 'G3', 'G4']
+
+        fig_one, ax_one = plt.subplots(figsize=(6, 4))
+        ax_one.set_xlim(-0.5, len(labels) - 0.5)
+        annotate_violin_group_stats(ax_one, labels, values, annotation_mode='full')
+        positions_one = [(round(text.xyann[0], 2), round(text.xyann[1], 2), text.get_text()) for text in ax_one.texts]
+
+        fig_two, ax_two = plt.subplots(figsize=(6, 4))
+        ax_two.set_xlim(-0.5, len(labels) - 0.5)
+        annotate_violin_group_stats(ax_two, labels, values, annotation_mode='full')
+        positions_two = [(round(text.xyann[0], 2), round(text.xyann[1], 2), text.get_text()) for text in ax_two.texts]
+
+        self.assertEqual(positions_one, positions_two)
+        base_offsets = {(4.0, -10.0), (4.0, 2.0)}
+        self.assertTrue(any((x, y) not in base_offsets for x, y, _ in positions_one))
+        plt.close(fig_one)
+        plt.close(fig_two)
 
 
 if __name__ == '__main__':
