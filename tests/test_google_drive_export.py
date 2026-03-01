@@ -465,6 +465,98 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertIn("basicChart.series[2].lineStyle.width", fields)
         self.assertIn("basicChart.series[2].colorStyle", fields)
 
+
+    def test_fix_usl_lsl_trendlines_skips_unsupported_basic_chart_types(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 61,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "BAR",
+                                    "series": [
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 1}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 2}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 3}]}}},
+                                    ],
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        self.assertEqual([], fake_service._spreadsheets.batch_update_calls)
+
+    def test_fix_usl_lsl_trendlines_skips_when_chart_has_fewer_than_three_series(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 62,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "LINE",
+                                    "series": [
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 1}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 2}]}}},
+                                    ]
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        self.assertEqual([], fake_service._spreadsheets.batch_update_calls)
+
+    def test_fix_usl_lsl_trendlines_skips_when_target_indexes_are_out_of_range(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 63,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "COMBO",
+                                    "series": [
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 1}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 2}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 3}]}}},
+                                    ]
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=5)
+
+        self.assertEqual([], fake_service._spreadsheets.batch_update_calls)
     def test_fix_usl_lsl_trendlines_skips_when_target_series_indexes_missing(self):
         discovery_payload = {
             "sheets": [

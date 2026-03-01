@@ -374,13 +374,12 @@ def fix_usl_lsl_trendlines(
     if not isinstance(sheets, list):
         return
 
-    target_series_indices = [
-        index
-        for index in (usl_series_index, lsl_series_index)
-        if isinstance(index, int) and index >= 0
-    ]
-    if not target_series_indices:
+    if not (isinstance(usl_series_index, int) and usl_series_index >= 0):
         return
+    if not (isinstance(lsl_series_index, int) and lsl_series_index >= 0):
+        return
+
+    target_series_indices = [usl_series_index, lsl_series_index]
 
     line_width = width_px if isinstance(width_px, int) and width_px > 0 else 2
     line_opacity = opacity if isinstance(opacity, (float, int)) else 0.6
@@ -406,8 +405,16 @@ def fix_usl_lsl_trendlines(
             basic_chart = spec.get("basicChart")
             if not isinstance(basic_chart, dict):
                 continue
+            chart_type = str(basic_chart.get("chartType") or "").upper()
+            if chart_type not in {"SCATTER", "LINE", "COMBO"}:
+                continue
+
             series = basic_chart.get("series")
             if not isinstance(series, list):
+                continue
+            if len(series) < 3:
+                continue
+            if any(series_index >= len(series) for series_index in target_series_indices):
                 continue
 
             updated_spec = copy.deepcopy(spec)
@@ -418,8 +425,6 @@ def fix_usl_lsl_trendlines(
 
             updated_indexes: list[int] = []
             for series_index in target_series_indices:
-                if series_index >= len(updated_series):
-                    continue
                 series_item = updated_series[series_index]
                 if not isinstance(series_item, dict):
                     continue
