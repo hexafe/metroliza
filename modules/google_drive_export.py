@@ -19,6 +19,8 @@ GOOGLE_DRIVE_UPLOAD_URL = (
 )
 GOOGLE_DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE, GOOGLE_SHEETS_SCOPE)
 GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
 
 logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
@@ -86,7 +88,7 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any]:
 def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -> dict[str, Any]:
     from google_auth_oauthlib.flow import InstalledAppFlow
 
-    flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), scopes=[GOOGLE_DRIVE_SCOPE])
+    flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), scopes=list(GOOGLE_OAUTH_SCOPES))
     try:
         credentials = flow.run_local_server(
             host="127.0.0.1",
@@ -121,8 +123,8 @@ def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -
         "token_uri": credentials.token_uri,
         "client_id": credentials.client_id,
         "client_secret": credentials.client_secret,
-        "scopes": list(credentials.scopes or [GOOGLE_DRIVE_SCOPE]),
-        "scope": GOOGLE_DRIVE_SCOPE,
+        "scopes": list(credentials.scopes or list(GOOGLE_OAUTH_SCOPES)),
+        "scope": " ".join(GOOGLE_OAUTH_SCOPES),
         "token_type": "Bearer",
         "expires_at": expires_at,
     }
@@ -186,7 +188,7 @@ def _refresh_access_token(token_payload: dict[str, Any], credentials: dict[str, 
     token_payload["expires_at"] = time.time() + expires_in
     if payload.get("refresh_token"):
         token_payload["refresh_token"] = payload["refresh_token"]
-    token_payload.setdefault("scope", GOOGLE_DRIVE_SCOPE)
+    token_payload.setdefault("scope", " ".join(GOOGLE_OAUTH_SCOPES))
     token_payload.setdefault("token_type", payload.get("token_type", "Bearer"))
     return token_payload
 
@@ -329,6 +331,128 @@ def _ensure_reports_folder(access_token: str) -> str:
     return str(folder_id)
 
 
+
+def _build_series_format_patch_requests(*, chart_id: int, series_index: int, include_trendline: bool) -> list[dict[str, Any]]:
+    series_format = {
+        "lineStyle": {
+            "type": "SOLID",
+            "width": {"magnitude": 2, "unit": "PT"},
+        },
+        "lineColorStyle": {"rgbColor": {"red": 0.7529411765, "green": 0.3137254902, "blue": 0.3019607843}},
+        "lineOpacity": 0.6,
+    }
+    requests: list[dict[str, Any]] = [
+        {
+            "updateChartSpec": {
+                "chartId": chart_id,
+                "spec": {
+                    "basicChart": {
+                        "series": [
+                            {
+                                "series": {"sourceRange": {"sources": []}},
+                                "targetAxis": "LEFT_AXIS",
+                                "lineStyle": series_format["lineStyle"],
+                                "colorStyle": series_format["lineColorStyle"],
+                            }
+                        ]
+                    }
+                },
+                "fields": (
+                    f"basicChart.series[{series_index}].lineStyle,"
+                    f"basicChart.series[{series_index}].colorStyle"
+                ),
+            }
+        },
+        {
+            "updateChartSpec": {
+                "chartId": chart_id,
+                "spec": {
+                    "basicChart": {
+                        "series": [
+                            {
+                                "series": {"sourceRange": {"sources": []}},
+                                "targetAxis": "LEFT_AXIS",
+                                "styleOverrides": {"lineOpacity": series_format["lineOpacity"]},
+                            }
+                        ]
+                    }
+                },
+                "fields": f"basicChart.series[{series_index}].styleOverrides.lineOpacity",
+            }
+        },
+    ]
+    if include_trendline:
+        requests.append(
+            {
+                "updateChartSpec": {
+                    "chartId": chart_id,
+                    "spec": {
+                        "basicChart": {
+                            "series": [
+                                {
+                                    "series": {"sourceRange": {"sources": []}},
+                                    "targetAxis": "LEFT_AXIS",
+                                    "trendline": {"type": "LINEAR"},
+                                }
+                            ]
+                        }
+                    },
+                    "fields": f"basicChart.series[{series_index}].trendline.type",
+                }
+            }
+        )
+    return requests
+
+
+def _build_limit_series_patch_requests(charts_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for chart in charts_payload.get("sheets", []):
+        if chart.get("properties", {}).get("title") != "Main Measurements":
+            continue
+        for embedded in chart.get("charts", []):
+            chart_id = embedded.get("chartId")
+            series = (((embedded.get("spec") or {}).get("basicChart") or {}).get("series") or [])
+            if not isinstance(chart_id, int):
+                continue
+            for series_index, spec in enumerate(series):
+                name = str((((spec.get("series") or {}).get("seriesName") or {}).get("value") or "")).upper()
+                if name not in {"USL", "LSL"}:
+                    continue
+                include_trendline = str((embedded.get("spec") or {}).get("basicChart", {}).get("chartType", "")).upper() in {"SCATTER", "LINE"}
+                requests.extend(
+                    _build_series_format_patch_requests(
+                        chart_id=chart_id,
+                        series_index=series_index,
+                        include_trendline=include_trendline,
+                    )
+                )
+    return requests
+
+
+def _patch_converted_sheet_chart_series(*, spreadsheet_id: str, access_token: str) -> int:
+    get_request = urllib.request.Request(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets(properties(title),charts(chartId,spec(basicChart(chartType,series(series(seriesName))))))",
+        headers={"Authorization": f"Bearer {access_token}"},
+        method="GET",
+    )
+    payload = _request_json(get_request, context="Google Sheets chart discovery failed")
+    requests = _build_limit_series_patch_requests(payload)
+    if not requests:
+        return 0
+
+    batch_request = urllib.request.Request(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate",
+        data=json.dumps({"requests": requests}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json; charset=UTF-8",
+        },
+        method="POST",
+    )
+    _request_json(batch_request, context="Google Sheets chart style patch failed")
+    return len(requests)
+
+
 def upload_and_convert_workbook(
     excel_path: str,
     credentials_path: str = "credentials.json",
@@ -337,6 +461,7 @@ def upload_and_convert_workbook(
     max_retries: int = 3,
     retry_delay_seconds: float = 1.0,
     status_callback=None,
+    enable_sheets_chart_series_patching: bool = False,
 ) -> GoogleDriveConversionResult:
     excel_file = Path(excel_path)
     if not excel_file.exists():
@@ -425,6 +550,14 @@ def upload_and_convert_workbook(
     parsed = parse_drive_conversion_response(payload)
     if callable(status_callback):
         status_callback("converting")
+
+    if enable_sheets_chart_series_patching:
+        if callable(status_callback):
+            status_callback("validating")
+        try:
+            _patch_converted_sheet_chart_series(spreadsheet_id=parsed.file_id, access_token=access_token)
+        except GoogleDriveExportError as exc:
+            logger.warning("Google Sheets chart patch skipped after error", extra=_build_google_log_extra(file_ref=parsed.file_id, error=exc, outcome="warning"))
 
     _ = expected_sheet_names
     warnings: list[str] = []

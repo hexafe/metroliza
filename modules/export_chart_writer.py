@@ -53,8 +53,8 @@ def _build_limit_trendline_spec(*, point_count):
     return {
         'type': 'linear',
         'line': {
-            'color': SUMMARY_PLOT_PALETTE['spec_limit'],
-            'width': 1,
+            'color': '#c0504d',
+            'width': 2,
             # xlsxwriter expresses alpha as transparency; 60% opacity == 40% transparency.
             'transparency': 40,
         },

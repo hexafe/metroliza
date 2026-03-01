@@ -50,6 +50,7 @@ def build_export_options_payload(selected_preset, export_type, export_target, so
         summary_plot_scale=int(summary_scale_input if summary_scale_input not in (None, "") else preset_options['summary_plot_scale']),
         hide_ok_results=bool(hide_ok_results),
         generate_summary_sheet=bool(preset_options['generate_summary_sheet']),
+        patch_google_chart_series_post_convert=False,
     )
 
 

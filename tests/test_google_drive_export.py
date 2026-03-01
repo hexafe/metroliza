@@ -8,11 +8,15 @@ from unittest.mock import patch
 
 from modules.google_drive_export import (
     GOOGLE_DRIVE_REPORTS_FOLDER_NAME,
+    GOOGLE_DRIVE_SCOPE,
     GOOGLE_DRIVE_UPLOAD_URL,
+    GOOGLE_OAUTH_SCOPES,
+    GOOGLE_SHEETS_SCOPE,
     GoogleDriveAuthError,
     GoogleDriveQuotaError,
     GoogleDriveResponseError,
     GoogleDriveTransientError,
+    _build_limit_series_patch_requests,
     _build_upload_request_body,
     _load_token_payload,
     _refresh_access_token,
@@ -283,6 +287,66 @@ class TestGoogleDriveExport(unittest.TestCase):
 
         self.assertEqual("abc123", result.file_id)
         self.assertEqual("https://drive.google.com/file/d/abc123/view", result.web_url)
+
+
+    def test_oauth_scopes_include_drive_and_sheets(self):
+        self.assertEqual((GOOGLE_DRIVE_SCOPE, GOOGLE_SHEETS_SCOPE), GOOGLE_OAUTH_SCOPES)
+
+    def test_build_limit_series_patch_requests_targets_usl_and_lsl(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "properties": {"title": "Main Measurements"},
+                    "charts": [
+                        {
+                            "chartId": 7,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "SCATTER",
+                                    "series": [
+                                        {"series": {"seriesName": {"value": "Measured"}}},
+                                        {"series": {"seriesName": {"value": "USL"}}},
+                                        {"series": {"seriesName": {"value": "LSL"}}},
+                                    ],
+                                }
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+
+        requests = _build_limit_series_patch_requests(discovery_payload)
+
+        self.assertEqual(6, len(requests))
+        first = requests[0]["updateChartSpec"]
+        self.assertEqual(7, first["chartId"])
+        self.assertIn("basicChart.series[1].lineStyle", first["fields"])
+        self.assertIn("basicChart.series[1].colorStyle", first["fields"])
+        self.assertEqual(2, first["spec"]["basicChart"]["series"][0]["lineStyle"]["width"]["magnitude"])
+        self.assertEqual(
+            0.6,
+            requests[1]["updateChartSpec"]["spec"]["basicChart"]["series"][0]["styleOverrides"]["lineOpacity"],
+        )
+        self.assertEqual("LINEAR", requests[2]["updateChartSpec"]["spec"]["basicChart"]["series"][0]["trendline"]["type"])
+
+    def test_upload_and_convert_workbook_applies_optional_chart_series_patching(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export._ensure_reports_folder", return_value="folder"
+            ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
+                "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
+            })), patch("modules.google_drive_export._patch_converted_sheet_chart_series") as patcher:
+                upload_and_convert_workbook(
+                    str(excel_path),
+                    enable_sheets_chart_series_patching=True,
+                )
+
+            patcher.assert_called_once_with(spreadsheet_id="sheet123", access_token="token")
+
 
 
 class TestGoogleDriveOAuthBootstrap(unittest.TestCase):
