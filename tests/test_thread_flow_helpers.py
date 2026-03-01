@@ -857,6 +857,64 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(calls['shutdown'], 1)
         self.assertIsNone(thread._chart_executor)
 
+    def test_summary_sheet_fill_uses_executor_precompute_for_large_original_groups(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        class _ImmediateFuture:
+            def __init__(self, value):
+                self._value = value
+
+            def result(self):
+                return self._value
+
+        class _RecordingExecutor:
+            def __init__(self):
+                self.calls = []
+
+            def submit(self, fn, *args, **kwargs):
+                self.calls.append((fn.__name__, args, kwargs))
+                return _ImmediateFuture(fn(*args, **kwargs))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        executor = _RecordingExecutor()
+        thread._chart_executor = executor
+
+        worksheet = _FakeSummaryWorksheet()
+        row_count = 2600
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [10.0 + (idx % 9) * 0.01 for idx in range(row_count)],
+                'NOM': [10.0] * row_count,
+                '+TOL': [0.2] * row_count,
+                '-TOL': [-0.2] * row_count,
+                'SAMPLE_NUMBER': [str(idx + 1) for idx in range(row_count)],
+                'DATE': ['2024-01-01'] * row_count,
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+
+        self.assertEqual(len(executor.calls), 2)
+        sampled_limit = thread._chart_sample_limit()
+        self.assertLessEqual(len(executor.calls[0][1][0]), sampled_limit)
+        self.assertEqual(len(executor.calls[0][1][0]), len(executor.calls[1][1][0]))
+
     def test_summary_sheet_fill_falls_back_to_in_process_when_executor_submit_fails(self):
         import pandas as pd
 
