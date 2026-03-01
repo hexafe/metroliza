@@ -61,6 +61,27 @@ from modules.csv_summary_utils import build_default_plot_toggles  # noqa: E402
 
 
 class CsvSummaryIntegrationTests(unittest.TestCase):
+    def test_eta_format_includes_minutes_seconds_and_hours(self):
+        self.assertEqual(DataProcessingThread._format_eta(None), 'ETA --')
+        self.assertEqual(DataProcessingThread._format_eta(59.4), 'ETA 0:59')
+        self.assertEqual(DataProcessingThread._format_eta(61.2), 'ETA 1:01')
+        self.assertEqual(DataProcessingThread._format_eta(3661.0), 'ETA 1:01:01')
+
+    def test_eta_estimation_uses_processed_columns(self):
+        original_perf_counter = DataProcessingThread._estimate_eta_seconds.__globals__['time'].perf_counter
+        try:
+            DataProcessingThread._estimate_eta_seconds.__globals__['time'].perf_counter = lambda: 25.0
+            estimate = DataProcessingThread._estimate_eta_seconds(
+                DataProcessingThread,
+                start_time=5.0,
+                processed_columns=2,
+                total_columns=5,
+            )
+        finally:
+            DataProcessingThread._estimate_eta_seconds.__globals__['time'].perf_counter = original_perf_counter
+
+        self.assertEqual(estimate, 30.0)
+
     def test_csv_summary_export_contains_overview_and_detail_sheet(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_file = Path(tmpdir) / 'summary.xlsx'

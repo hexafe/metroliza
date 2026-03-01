@@ -1,4 +1,4 @@
-from modules import Base64EncodedFiles
+from modules.progress_status import build_three_line_status
 from modules.ExportDataThread import ExportDataThread
 from modules.FilterDialog import FilterDialog
 from modules.DataGrouping import DataGrouping
@@ -22,7 +22,6 @@ from PyQt6.QtWidgets import(
     QLabel,
     QLineEdit,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QComboBox,
@@ -30,7 +29,6 @@ from PyQt6.QtWidgets import(
     QHBoxLayout,
     QWidget,
 )
-import base64
 import html
 import logging
 import re
@@ -38,6 +36,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
 def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results):
@@ -671,56 +670,12 @@ class ExportDialog(QDialog):
 
     def show_loading_screen(self):
         try:
-            # Create the progress dialog
-            self.loading_dialog = QDialog(self, Qt.WindowType.WindowTitleHint)
-            self.loading_dialog.setWindowTitle("Exporting data...")
-            self.loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-            # Keep enough vertical space for multi-line progress text (including ETA updates)
-            # so all lines remain visible during long-running exports.
-            self.loading_dialog.setFixedSize(400, 330)
-
-            # Create a QLabel to display the loading GIF
-            loading_gif_label = QLabel(self.loading_dialog)
-            loading_gif_label.setFixedSize(200, 200)
-            loading_gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            # Load the loading.gif from a file, create a QMovie from it, and set it to the label
-            loading_gif_decoded = base64.b64decode(Base64EncodedFiles.encoded_loading_gif)
-
-            # Create temporary file and save encoded loading gif to it
-            temp_file = QTemporaryFile()
-            temp_file.setAutoRemove(False)
-            temp_file_name = ""
-            if temp_file.open():
-                temp_file.write(loading_gif_decoded)
-                temp_file.close()
-                temp_file_name = temp_file.fileName()
-
-            # Create the QMovie using the temporary file name
-            self.loading_gif = QMovie(temp_file_name)
-            self.loading_gif.setScaledSize(QSize(200, 200))
-            loading_gif_label.setMovie(self.loading_gif)
-            self.loading_gif.start()
-
-            # Create the loading label and progress bar
-            self.loading_label = QLabel("Exporting data...", self.loading_dialog)
-            self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            self.loading_bar = QProgressBar(self.loading_dialog)
-            self.loading_bar.setValue(0)
-            self.loading_bar.setFixedSize(380, 20)
-            self.loading_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            # Create a layout for the progress dialog and add the loading GIF, loading label, and progress bar to it
-            layout = QVBoxLayout(self.loading_dialog)
-            layout.addWidget(loading_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-            layout.addWidget(self.loading_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-            layout.addWidget(self.loading_bar, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-            # Create and add the Cancel button to the layout
-            cancel_button = QPushButton("Cancel", self.loading_dialog)
-            cancel_button.clicked.connect(self.stop_exporting)
-            layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+            self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
+                self,
+                window_title="Exporting data...",
+                initial_status_text=build_three_line_status("Exporting data...", "Preparing export thread", "ETA --"),
+                on_cancel=self.stop_exporting,
+            )
 
             # Disable the export button and show the progress dialog
             self.export_button.setDisabled(True)
@@ -773,7 +728,7 @@ class ExportDialog(QDialog):
             # Request cooperative cancellation and return immediately to avoid blocking the UI thread
             if self.export_thread is not None and self.export_thread.isRunning():
                 self.export_thread.stop_exporting()
-                self.loading_label.setText("Canceling export...")
+                self.loading_label.setText(build_three_line_status("Canceling export...", "Waiting for export thread to stop", "ETA --"))
                 return
 
             QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
@@ -785,7 +740,7 @@ class ExportDialog(QDialog):
 
     def on_export_error(self, message):
         self.export_error_message = message
-        self.loading_label.setText("Export failed.")
+        self.loading_label.setText(build_three_line_status("Export failed.", "See error details for context", "ETA --"))
 
     def on_export_canceled(self):
         try:

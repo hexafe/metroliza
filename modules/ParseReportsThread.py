@@ -14,6 +14,7 @@ from modules.report_fingerprint import build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.db import execute_with_retry
 from modules.log_context import build_parse_log_extra, get_operation_logger
+from modules.progress_status import build_three_line_status
 
 
 @dataclass(frozen=True)
@@ -173,23 +174,23 @@ class ParseReportsThread(QThread):
     def _build_parse_label(self, *, parsed_files, total_files, start_time):
         stage_line = "Parsing reports..."
         if total_files <= 0:
-            return f"{stage_line}\nFiles remaining 0\nETA --"
+            return build_three_line_status(stage_line, "Files remaining 0", "ETA --")
 
         remaining_files = max(0, total_files - parsed_files)
         detail_line = f"File {parsed_files}/{total_files}, remaining {remaining_files}"
 
         elapsed_seconds = max(0.0, time.perf_counter() - start_time)
         if parsed_files < 2 or elapsed_seconds < 1.0:
-            return f"{stage_line}\n{detail_line}\nETA --"
+            return build_three_line_status(stage_line, detail_line, "ETA --")
 
         files_per_second = parsed_files / elapsed_seconds if elapsed_seconds > 0 else 0.0
         if files_per_second <= 0:
-            return f"{stage_line}\n{detail_line}\nETA --"
+            return build_three_line_status(stage_line, detail_line, "ETA --")
 
         eta_seconds = remaining_files / files_per_second
         elapsed_display = self._format_elapsed_or_eta(elapsed_seconds)
         eta_display = self._format_elapsed_or_eta(eta_seconds)
-        return f"{stage_line}\n{detail_line}\n{elapsed_display} elapsed, ETA {eta_display}"
+        return build_three_line_status(stage_line, detail_line, f"{elapsed_display} elapsed, ETA {eta_display}")
 
     @staticmethod
     def _build_archive_extension_set():
@@ -220,7 +221,13 @@ class ParseReportsThread(QThread):
                     cancel_flag=self.parsing_canceled,
                 ),
             )
-            self.update_label.emit("Discovering reports...")
+            self.update_label.emit(
+                build_three_line_status(
+                    "Parsing reports...",
+                    "Discovering report files in source directory",
+                    "ETA --",
+                )
+            )
             self._emit_stage_progress('discover_reports', 0.0)
             for path in report_root.glob("**/*.[Pp][Dd][Ff]"):
                 if self.parsing_canceled:
@@ -251,7 +258,13 @@ class ParseReportsThread(QThread):
             if self.parsing_canceled:
                 return report_fingerprints
 
-            self.update_label.emit("Loading existing reports from database...")
+            self.update_label.emit(
+                build_three_line_status(
+                    "Parsing reports...",
+                    "Loading existing report fingerprints from database",
+                    "ETA --",
+                )
+            )
             self._emit_stage_progress('load_existing_reports', 0.0)
 
             table_exists = execute_with_retry(
@@ -413,7 +426,13 @@ class ParseReportsThread(QThread):
 
             if result.total_files == 0:
                 self._emit_stage_progress('parse_reports', 1.0)
-                self.update_label.emit("No reports found to parse.")
+                self.update_label.emit(
+                    build_three_line_status(
+                        "Parsing reports...",
+                        "No reports found to parse",
+                        "ETA 0:00",
+                    )
+                )
 
             logger.info(
                 "Parse processing finished",

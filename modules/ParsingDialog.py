@@ -1,12 +1,11 @@
-from modules import Base64EncodedFiles
+from modules.progress_status import build_three_line_status
 from modules.ParseReportsThread import ParseReportsThread
 from modules.CustomLogger import CustomLogger
-from PyQt6.QtCore import QSize, QTemporaryFile, Qt, pyqtSlot
-from PyQt6.QtGui import QMovie
-from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout
-import base64
+from PyQt6.QtCore import pyqtSlot
+from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QPushButton
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
+from modules.worker_progress_dialog import create_worker_progress_dialog
 import shutil
 
 
@@ -149,54 +148,12 @@ class ParsingDialog(QDialog):
     @pyqtSlot()
     def show_loading_screen(self):
         try:
-            # Create the progress dialog
-            self.loading_dialog = QDialog(self, Qt.WindowType.WindowTitleHint)
-            self.loading_dialog.setWindowTitle("Parsing reports...")
-            self.loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-            self.loading_dialog.setFixedSize(400, 330)
-
-            # Create a QLabel to display the loading GIF
-            loading_gif_label = QLabel(self.loading_dialog)
-            loading_gif_label.setFixedSize(200, 200)
-            loading_gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            # Load the loading.gif from a file, create a QMovie from it, and set it to the label
-            loading_gif_decoded = base64.b64decode(Base64EncodedFiles.encoded_loading_gif)
-
-            # Create temporary file and save encoded loading gif to it
-            temp_file = QTemporaryFile()
-            temp_file.setAutoRemove(False)
-            temp_file_name = ""
-            if temp_file.open():
-                temp_file.write(loading_gif_decoded)
-                temp_file.close()
-                temp_file_name = temp_file.fileName()
-
-            # Create the QMovie using the temporary file name
-            self.loading_gif = QMovie(temp_file_name)  # Save as an instance variable
-            self.loading_gif.setScaledSize(QSize(200, 200))
-            loading_gif_label.setMovie(self.loading_gif)
-            self.loading_gif.start()
-
-            # Create the loading label and progress bar
-            self.loading_label = QLabel("Parsing files...", self.loading_dialog)
-            self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            self.loading_bar = QProgressBar(self.loading_dialog)
-            self.loading_bar.setValue(0)
-            self.loading_bar.setFixedSize(380, 20)
-            self.loading_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            # Create a layout for the progress dialog and add the loading GIF, loading label, and progress bar to it
-            layout = QVBoxLayout(self.loading_dialog)
-            layout.addWidget(loading_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-            layout.addWidget(self.loading_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-            layout.addWidget(self.loading_bar, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-            # Create and add the Cancel button to the layout
-            cancel_button = QPushButton("Cancel", self.loading_dialog)
-            cancel_button.clicked.connect(self.stop_parsing)
-            layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+            self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
+                self,
+                window_title="Parsing reports...",
+                initial_status_text=build_three_line_status("Parsing files...", "Preparing parser thread", "ETA --"),
+                on_cancel=self.stop_parsing,
+            )
 
             # Disable the parse button and show the progress dialog
             self.parse_button.setEnabled(False)
@@ -221,7 +178,7 @@ class ParsingDialog(QDialog):
             self.parsing_canceled = True
             if self.parse_thread is not None and self.parse_thread.isRunning():
                 self.parse_thread.stop_parsing()
-                self.loading_label.setText("Canceling parsing...")
+                self.loading_label.setText(build_three_line_status("Canceling parsing...", "Waiting for parser thread to stop", "ETA --"))
         except Exception as e:
             self.log_and_exit(e)
 
@@ -229,7 +186,7 @@ class ParsingDialog(QDialog):
     @pyqtSlot(str)
     def on_parse_error(self, message):
         self.parse_error_message = message
-        self.loading_label.setText("Parsing failed.")
+        self.loading_label.setText(build_three_line_status("Parsing failed.", "See error details for context", "ETA --"))
 
     @pyqtSlot()
     def on_parse_finished(self):

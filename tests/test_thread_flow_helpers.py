@@ -327,6 +327,29 @@ class TestExportHelpers(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             execute_export_query(':memory:', 'SELECT 1', select_reader=failing_reader)
 
+    def test_check_canceled_emits_cancel_signal_once(self):
+        request = __import__('modules.contracts', fromlist=['ExportRequest', 'AppPaths', 'ExportOptions'])
+        thread = ExportDataThread(
+            request.ExportRequest(
+                paths=request.AppPaths(db_file=':memory:', excel_file='dummy.xlsx'),
+                options=request.ExportOptions(),
+            )
+        )
+
+        calls = {'count': 0}
+
+        class _Signal:
+            def emit(self, *_args, **_kwargs):
+                calls['count'] += 1
+
+        thread.canceled = _Signal()
+        thread.update_label = _Signal()
+        thread.export_canceled = True
+
+        self.assertTrue(thread._check_canceled())
+        self.assertTrue(thread._check_canceled())
+        self.assertEqual(calls['count'], 2)
+
 
 class TestExportBackendSmoke(unittest.TestCase):
     @staticmethod
@@ -960,7 +983,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             finally:
                 module.upload_and_convert_workbook = previous_upload
 
-            stages = [text for text in emitted if text.startswith('Google export stage:')]
+            stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
             self.assertEqual(
                 stages,
                 [
@@ -1069,7 +1092,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             retry_messages = [text for text in emitted if 'uploading retry' in text]
             self.assertEqual(len(retry_messages), 1)
             self.assertIn('Google export stage: uploading (uploading retry 1/2: temporary network issue)', retry_messages[0])
-            stages = [text for text in emitted if text.startswith('Google export stage:')]
+            stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
             self.assertEqual(stages[-1], 'Google export stage: completed (https://docs.google.com/spreadsheets/d/sheet-id/edit)')
 
     def test_google_target_auth_fallback_skips_error_logging(self):
@@ -1113,7 +1136,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(logger_calls, [])
             self.assertIn('fallback_message', thread.completion_metadata)
             self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
-            stages = [text for text in emitted if text.startswith('Google export stage:')]
+            stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
             self.assertEqual(stages[-1], f'Google export stage: fallback (Google export failed; using local .xlsx fallback: {out_file})')
 
     def test_google_target_final_fallback_is_non_crashing_and_emits_fallback_stage(self):
@@ -1157,7 +1180,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(logger_calls, ['temporary outage'])
             self.assertIn('fallback_message', thread.completion_metadata)
             self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
-            stages = [text for text in emitted if text.startswith('Google export stage:')]
+            stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
             self.assertEqual(stages[-1], f'Google export stage: fallback (Google export failed; using local .xlsx fallback: {out_file})')
 
     def test_google_target_run_keeps_xlsx_fallback_and_conversion_warnings(self):
@@ -1203,8 +1226,8 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.completion_metadata['local_xlsx_path'], out_file)
             self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.')
             self.assertEqual(thread.completion_metadata['converted_tab_titles'], ['MEASUREMENTS'])
-            self.assertTrue(any(text.startswith('Warning:') for text in emitted))
-            fallback_stage_messages = [text for text in emitted if text.startswith('Google export stage: fallback')]
+            self.assertTrue(any(text.split('\n')[0].startswith('Warning:') for text in emitted))
+            fallback_stage_messages = [text for text in emitted if text.split('\n')[0].startswith('Google export stage: fallback')]
             self.assertTrue(fallback_stage_messages)
             self.assertIn(out_file, fallback_stage_messages[0])
 
