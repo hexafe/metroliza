@@ -395,7 +395,7 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual(1, len(requests))
         self.assertEqual(9, requests[0]["updateChartSpec"]["chartId"])
 
-    def test_upload_and_convert_workbook_always_applies_chart_series_patching(self):
+    def test_upload_and_convert_workbook_applies_usl_lsl_trendline_fix_with_explicit_series_indexes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_path = Path(tmpdir) / "report.xlsx"
             excel_path.write_bytes(b"excel-content")
@@ -404,10 +404,41 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "modules.google_drive_export._ensure_reports_folder", return_value="folder"
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
-            })), patch("modules.google_drive_export._patch_converted_sheet_chart_series") as patcher:
-                upload_and_convert_workbook(str(excel_path))
+            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds") as build_creds, patch(
+                "modules.google_drive_export.fix_usl_lsl_trendlines"
+            ) as trendline_fix:
+                upload_and_convert_workbook(str(excel_path), credentials_path="creds.json", token_path="token.json")
 
-            patcher.assert_called_once_with(spreadsheet_id="sheet123", access_token="token")
+            build_creds.assert_called_once_with(credentials_path=Path("creds.json"), token_path=Path("token.json"))
+            trendline_fix.assert_called_once_with(
+                creds="creds",
+                spreadsheet_id="sheet123",
+                usl_series_index=1,
+                lsl_series_index=2,
+                color_hex="#c0504d",
+                width_px=2,
+                opacity=0.6,
+            )
+
+    def test_upload_and_convert_workbook_continues_when_usl_lsl_trendline_fix_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export._ensure_reports_folder", return_value="folder"
+            ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
+                "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
+            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
+                "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=ValueError("boom")
+            ), patch("modules.google_drive_export.logger.warning") as warning_logger:
+                result = upload_and_convert_workbook(str(excel_path))
+
+            self.assertEqual("sheet123", result.file_id)
+            warning_logger.assert_called_once()
+            self.assertEqual("Google Sheets chart patch skipped after error", warning_logger.call_args.args[0])
+            self.assertEqual("sheet123", warning_logger.call_args.kwargs["extra"]["file_ref"])
+            self.assertEqual("warning", warning_logger.call_args.kwargs["extra"]["outcome"])
 
 
     def test_fix_usl_lsl_trendlines_updates_target_series_with_full_spec_and_field_masks(self):
@@ -479,6 +510,59 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertIn("basicChart.series[2].lineStyle.width", fields)
         self.assertIn("basicChart.series[2].colorStyle", fields)
 
+
+    def test_fix_usl_lsl_trendlines_filters_chart_types_and_logs_discovery_counters(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 70,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "LINE",
+                                    "series": [
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 1}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 2}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 3}]}}},
+                                    ],
+                                }
+                            },
+                        },
+                        {
+                            "chartId": 71,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "BAR",
+                                    "series": [
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 1}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 2}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 3}]}}},
+                                    ],
+                                }
+                            },
+                        },
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}), patch(
+            "modules.google_drive_export.logger.info"
+        ) as info_logger:
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        self.assertEqual(2, info_logger.call_count)
+        discovery_extra = info_logger.call_args_list[0].kwargs["extra"]
+        update_extra = info_logger.call_args_list[1].kwargs["extra"]
+        self.assertEqual(2, discovery_extra["embedded_charts_scanned"])
+        self.assertEqual(2, discovery_extra["basic_charts_considered"])
+        self.assertEqual(1, update_extra["updated_charts"])
+        self.assertEqual([70], update_extra["chartIds"])
+        self.assertEqual(1, len(fake_service._spreadsheets.batch_update_calls))
 
     def test_fix_usl_lsl_trendlines_skips_unsupported_basic_chart_types(self):
         discovery_payload = {
