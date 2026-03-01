@@ -1,5 +1,4 @@
-from PyQt6.QtCore import Qt, pyqtSlot, QThread, pyqtSignal, QTemporaryFile, QSize
-from PyQt6.QtGui import QMovie
+from PyQt6.QtCore import Qt, pyqtSlot, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -38,8 +37,7 @@ from modules.csv_summary_utils import (
     migrate_csv_summary_presets,
     save_csv_summary_presets,
 )
-import base64
-from modules import Base64EncodedFiles
+from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
 logger = logging.getLogger(__name__)
@@ -929,54 +927,12 @@ class CSVSummaryDialog(QDialog):
 
     @pyqtSlot()
     def show_loading_screen(self):
-        # Create a custom QDialog for the loading screen
-        self.loading_dialog = QDialog(self, Qt.WindowType.WindowTitleHint)
-        self.loading_dialog.setWindowTitle("Processing...")
-        self.loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        self.loading_dialog.setFixedSize(400, 300)
-
-        # Create a QLabel to display the loading GIF
-        loading_gif_label = QLabel(self.loading_dialog)
-        loading_gif_label.setFixedSize(200, 200)
-        loading_gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Load the loading.gif from a file, create a QMovie from it, and set it to the label
-        loading_gif_decoded = base64.b64decode(Base64EncodedFiles.encoded_loading_gif)
-
-        # Create temporary file and save encoded loading gif to it
-        temp_file = QTemporaryFile()
-        temp_file.setAutoRemove(False)
-        temp_file_name = ""
-        if temp_file.open():
-            temp_file.write(loading_gif_decoded)
-            temp_file.close()
-            temp_file_name = temp_file.fileName()
-
-        # Create the QMovie using the temporary file name
-        loading_gif = QMovie(temp_file_name)
-        loading_gif.setScaledSize(QSize(200, 200))
-        loading_gif_label.setMovie(loading_gif)
-        loading_gif.start()
-
-        # Create the loading label and progress bar as instance variables
-        self.loading_label = QLabel(build_three_line_status("Processing data...", "Preparing CSV summary export", "ETA --"), self.loading_dialog)
-        self.loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.loading_bar = QProgressBar(self.loading_dialog)
-        self.loading_bar.setValue(0)
-        self.loading_bar.setFixedSize(380, 20)
-        self.loading_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Create a layout for the dialog and add the loading GIF, loading label, and progress bar to it
-        layout = QVBoxLayout(self.loading_dialog)
-        layout.addWidget(loading_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(self.loading_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(self.loading_bar, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        # Create and add the Cancel button to the layout
-        cancel_button = QPushButton("Cancel", self.loading_dialog)
-        cancel_button.clicked.connect(self.stop_data_processing_and_close_loading)
-        layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
+            self,
+            window_title="Processing...",
+            initial_status_text=build_three_line_status("Processing data...", "Preparing CSV summary export", "ETA --"),
+            on_cancel=self.stop_data_processing_and_close_loading,
+        )
 
         # Start the data processing in a separate thread
         self.worker_thread = DataProcessingThread(
