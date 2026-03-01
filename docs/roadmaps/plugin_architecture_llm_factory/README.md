@@ -11,7 +11,7 @@ This package is intentionally documentation-only and is designed to be executed 
 ## Status
 - **Current status:** Planning package prepared.
 - **Execution status:** Waiting for plugin architecture implementation kickoff.
-- **Owner handoff point:** Architecture team can convert each pass into Jira epics/stories.
+- **Owner handoff point:** Use each pass checklist as the execution backlog for iterative implementation.
 
 ## Scope assumptions
 - Suppliers can use diverse regional conventions (decimal separators, date formats, locale-specific labels, multilingual content).
@@ -33,6 +33,6 @@ This package is intentionally documentation-only and is designed to be executed 
 - Operational rollout controls and rollback procedures.
 
 ## Definition of done for this planning package
-- All passes are approved by architecture, QA, and operations.
-- Jira-ready breakdown is created from the pass checklists.
-- Workstream sequencing and acceptance gates are signed off.
+- All passes are reviewed and approved in our working session before implementation starts.
+- Actionable task breakdown is maintained from pass checklists (no Jira required).
+- Workstream sequencing and acceptance gates are agreed before each phase kickoff.
