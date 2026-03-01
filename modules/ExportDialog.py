@@ -407,8 +407,8 @@ class ExportDialog(QDialog):
             self.hide_ok_results_checkbox.setChecked(False)
             self.hide_ok_results_checkbox.setToolTip("When enabled, only OK results will be visible (columns with OK results will be hidden, not deleted)")
             
-            advanced_options_container = QWidget()
-            advanced_options_layout = QVBoxLayout(advanced_options_container)
+            self.advanced_options_container = QWidget()
+            advanced_options_layout = QVBoxLayout(self.advanced_options_container)
             advanced_options_layout.setContentsMargins(0, 0, 0, 0)
             advanced_options_layout.addWidget(self.violin_plot_min_samplesize_label)
             advanced_options_layout.addWidget(self.violin_plot_min_samplesize)
@@ -482,7 +482,7 @@ class ExportDialog(QDialog):
             self.layout.addWidget(build_section_widget("Source / target files", source_target_layout))
             self.layout.addWidget(build_section_widget("Data scope", data_scope_layout))
             self.layout.addWidget(build_section_widget("Report profile", report_profile_layout))
-            self.layout.addWidget(build_section_widget("Advanced options", advanced_options_container.layout()))
+            self.layout.addWidget(build_section_widget("Advanced options", self.advanced_options_container.layout()))
             self.layout.addWidget(build_section_widget("Primary action", action_layout))
 
             self.setLayout(self.layout)
