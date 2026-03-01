@@ -731,6 +731,90 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
 
+    def test_apply_bottleneck_optimizations_limits_summary_charts_for_deferred_mode(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._stage_timings.update(
+            {
+                'chart_rendering': 70.0,
+                'transform_grouping': 20.0,
+                'worksheet_writes': 10.0,
+            }
+        )
+
+        thread._apply_bottleneck_optimizations()
+
+        self.assertTrue(thread._optimization_toggles['defer_non_essential_charts'])
+        self.assertEqual(thread._optimization_toggles['summary_sheet_minimum_charts'], {'distribution', 'histogram'})
+
+    def test_summary_sheet_fill_deferred_mode_skips_optional_chart_sections(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['defer_non_essential_charts'] = True
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'histogram'}
+
+        worksheet = _FakeSummaryWorksheet()
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        module = __import__('modules.ExportDataThread', fromlist=['render_iqr_boxplot', 'build_trend_plot_payload'])
+        previous_iqr_render = module.render_iqr_boxplot
+        previous_trend_builder = module.build_trend_plot_payload
+
+        def _unexpected_iqr(*_args, **_kwargs):
+            raise AssertionError('iqr section should not render in deferred chart mode')
+
+        def _unexpected_trend(*_args, **_kwargs):
+            raise AssertionError('trend section should not render in deferred chart mode')
+
+        module.render_iqr_boxplot = _unexpected_iqr
+        module.build_trend_plot_payload = _unexpected_trend
+        try:
+            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+        finally:
+            module.render_iqr_boxplot = previous_iqr_render
+            module.build_trend_plot_payload = previous_trend_builder
+
+        inserted_positions = set(worksheet.inserted_images)
+        panel_slots = build_summary_image_anchor_plan(3)
+        self.assertEqual(
+            inserted_positions,
+            {
+                panel_slots['distribution'],
+                panel_slots['histogram'],
+            },
+        )
+
 
     def test_run_initializes_and_shuts_down_shared_chart_executor_once_when_enabled(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
