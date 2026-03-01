@@ -1,6 +1,7 @@
 import logging
 import warnings
 import inspect
+from io import BytesIO
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -84,16 +85,6 @@ if _HAS_SEABORN:
 
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 logging.getLogger('matplotlib.category').setLevel(logging.WARNING)
-
-
-class _WorkbookImageData:
-    """Minimal image_data wrapper for xlsxwriter packager (getvalue-only)."""
-
-    def __init__(self, payload: bytes):
-        self._payload = payload
-
-    def getvalue(self) -> bytes:
-        return self._payload
 
 
 def build_export_dataframe(data, column_names):
@@ -1098,7 +1089,8 @@ class ExportDataThread(QThread):
         self._reset_export_df_cache()
 
     def _register_chart_image(self, payload: bytes):
-        image_data = _WorkbookImageData(payload)
+        image_data = BytesIO(payload)
+        image_data.seek(0)
         self._active_chart_images.append(image_data)
         return image_data
 
@@ -1185,7 +1177,6 @@ class ExportDataThread(QThread):
             # Keep a fallback for charts that may require clipping fixes.
             save_kwargs['bbox_inches'] = 'tight'
 
-        from io import BytesIO
         image_buffer = BytesIO()
         fig.savefig(image_buffer, **save_kwargs)
         return image_buffer.getvalue()
