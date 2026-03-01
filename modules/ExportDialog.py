@@ -13,8 +13,8 @@ from modules.export_preset_utils import (
     migrate_export_dialog_config,
     save_export_dialog_config,
 )
-from PyQt6.QtCore import QSize, QTemporaryFile, Qt, QUrl
-from PyQt6.QtGui import QDesktopServices, QMovie
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import(
     QDialog,
     QFileDialog,
