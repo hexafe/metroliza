@@ -721,8 +721,8 @@ def add_violin_annotation_legend(ax, style):
     ax.legend(
         handles=handles,
         loc='upper right',
-        bbox_to_anchor=(1.0, 1.0),
-        borderaxespad=0.0,
+        bbox_to_anchor=(1.02, 1.02),
+        borderaxespad=0.08,
         frameon=True,
         fontsize=max(style.get('font_size', 6.8) - 0.2, 6.6),
     )
