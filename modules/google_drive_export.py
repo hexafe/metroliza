@@ -22,6 +22,7 @@ GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE, GOOGLE_SHEETS_SCOPE)
 GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
+GOOGLE_LIMIT_SERIES_NAMES = {"USL", "LSL"}
 
 logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
 
@@ -445,6 +446,70 @@ def fix_usl_lsl_trendlines(
 
 
 
+
+def _build_limit_series_patch_requests(charts_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Deprecated helper retained for compatibility with existing tests/call paths."""
+    requests: list[dict[str, Any]] = []
+    sheets = charts_payload.get("sheets") if isinstance(charts_payload, dict) else None
+    if not isinstance(sheets, list):
+        return requests
+
+    for sheet in sheets:
+        if not isinstance(sheet, dict):
+            continue
+        charts = sheet.get("charts")
+        if not isinstance(charts, list):
+            continue
+        for embedded in charts:
+            if not isinstance(embedded, dict):
+                continue
+            chart_id = embedded.get("chartId")
+            if not isinstance(chart_id, int):
+                continue
+            spec = embedded.get("spec")
+            basic_chart = spec.get("basicChart") if isinstance(spec, dict) else None
+            chart_type = str((basic_chart or {}).get("chartType") or "").upper()
+            series = (basic_chart or {}).get("series") if isinstance(basic_chart, dict) else None
+            if not isinstance(series, list):
+                continue
+
+            for series_index, series_spec in enumerate(series):
+                if not isinstance(series_spec, dict):
+                    continue
+                series_obj = series_spec.get("series")
+                series_name_obj = series_obj.get("seriesName") if isinstance(series_obj, dict) else None
+                name = str(series_name_obj.get("value") if isinstance(series_name_obj, dict) else "").upper().strip()
+                if name not in GOOGLE_LIMIT_SERIES_NAMES:
+                    continue
+
+                request = {
+                    "updateChartSpec": {
+                        "chartId": chart_id,
+                        "spec": {
+                            "basicChart": {
+                                "series": [
+                                    {
+                                        "lineStyle": {
+                                            "type": "SOLID",
+                                            "width": {"magnitude": 2, "unit": "PT"},
+                                        },
+                                        "colorStyle": {"rgbColor": _hex_to_rgb_color("#c0504d")},
+                                    }
+                                ]
+                            }
+                        },
+                        "fields": (
+                            f"basicChart.series[{series_index}].lineStyle,"
+                            f"basicChart.series[{series_index}].colorStyle"
+                        ),
+                    }
+                }
+                if chart_type in {"SCATTER", "LINE"}:
+                    request["updateChartSpec"]["spec"]["basicChart"]["series"][0]["trendline"] = {"type": "LINEAR"}
+                    request["updateChartSpec"]["fields"] += f",basicChart.series[{series_index}].trendline.type"
+                requests.append(request)
+    return requests
+
 def _build_google_user_credentials(*, credentials_path: Path, token_path: Path):
     """Build google-auth user credentials for the canonical Sheets patch workflow."""
     from google.oauth2.credentials import Credentials
@@ -570,13 +635,7 @@ def upload_and_convert_workbook(
     if callable(status_callback):
         status_callback("validating")
     try:
-        fix_usl_lsl_trendlines(
-            creds=_build_google_user_credentials(
-                credentials_path=Path(credentials_path),
-                token_path=Path(token_path),
-            ),
-            spreadsheet_id=parsed.file_id,
-        )
+        _patch_converted_sheet_chart_series(spreadsheet_id=parsed.file_id, access_token=access_token)
     except (GoogleDriveExportError, ImportError, ValueError, TypeError) as exc:
         logger.warning(
             "Google Sheets chart patch skipped after error",
