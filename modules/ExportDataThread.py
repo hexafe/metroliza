@@ -678,6 +678,13 @@ def render_scatter(ax, data=None, x=None, y=None):
         ax.scatter(data[x], data[y], color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
+def render_scatter_numeric(ax, x_values, y_values):
+    if _HAS_SEABORN:
+        sns.scatterplot(x=x_values, y=y_values, ax=ax, s=18, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], legend=False)
+    else:
+        ax.scatter(x_values, y_values, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
+
+
 def render_histogram(ax, header_group):
     if _HAS_SEABORN:
         sns.histplot(data=header_group, x='MEAS', bins='auto', stat='density', alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white', ax=ax)
@@ -1170,6 +1177,24 @@ class ExportDataThread(QThread):
         values = list(grouped_meas.values)
         can_render_violin = all(len(group_values) >= min_samplesize for group_values in values)
         return labels, values, can_render_violin
+
+    @staticmethod
+    def _build_summary_scatter_payload(header_group, x_column):
+        scatter_frame = header_group.dropna(subset=['MEAS']).copy()
+        if scatter_frame.empty:
+            return np.array([]), np.array([]), []
+
+        raw_labels = scatter_frame[x_column].tolist()
+        sparse_labels = build_sparse_unique_labels(raw_labels)
+        y_values = scatter_frame['MEAS'].to_numpy()
+
+        x_numeric = pd.to_numeric(scatter_frame[x_column], errors='coerce').to_numpy()
+        if np.isnan(x_numeric).any():
+            x_values = np.arange(len(scatter_frame), dtype=float)
+        else:
+            x_values = x_numeric.astype(float)
+
+        return x_values, y_values, sparse_labels
 
     def _sort_header_group(self, header_group):
         sort_mode = self.selected_sorting_parameter.strip().lower()
@@ -1698,6 +1723,7 @@ class ExportDataThread(QThread):
                     precomputed_trend_payload = None
 
             chart_start = time.perf_counter()
+            label_positions = None
             if grouping_applied:
                 labels, values, can_render_violin = self._build_violin_payload(
                     sampled_group,
@@ -1707,7 +1733,9 @@ class ExportDataThread(QThread):
                 if can_render_violin:
                     render_violin(ax, values, labels, readability_scale=self.summary_plot_scale)
                 else:
-                    render_scatter(ax, data=sampled_group, x='GROUP', y='MEAS')
+                    x_values, y_values, labels = self._build_summary_scatter_payload(sampled_group, 'GROUP')
+                    render_scatter_numeric(ax, x_values, y_values)
+                    label_positions = list(x_values)
             else:
                 labels, values, can_render_violin = self._build_violin_payload(
                     sampled_group,
@@ -1717,10 +1745,12 @@ class ExportDataThread(QThread):
                 if can_render_violin:
                     render_violin(ax, values, labels, readability_scale=self.summary_plot_scale)
                 else:
-                    render_scatter(ax, data=sampled_group, x='SAMPLE_NUMBER', y='MEAS')
+                    x_values, y_values, labels = self._build_summary_scatter_payload(sampled_group, 'SAMPLE_NUMBER')
+                    render_scatter_numeric(ax, x_values, y_values)
+                    label_positions = list(x_values)
 
             apply_minimal_axis_style(ax, grid_axis='y')
-            apply_shared_x_axis_label_strategy(ax, labels)
+            apply_shared_x_axis_label_strategy(ax, labels, positions=label_positions)
             for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                 ax.axhline(**line_spec)
 
