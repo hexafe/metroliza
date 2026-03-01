@@ -449,6 +449,14 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual(3, len(update_request["spec"]["basicChart"]["series"]))
         self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"]["magnitude"])
         self.assertEqual("LINEAR", update_request["spec"]["basicChart"]["series"][2]["trendline"]["type"])
+        self.assertEqual(
+            0.6,
+            update_request["spec"]["basicChart"]["series"][1]["trendline"]["lineStyle"]["colorStyle"]["rgbColor"]["alpha"],
+        )
+        self.assertEqual(
+            0.6,
+            update_request["spec"]["basicChart"]["series"][2]["colorStyle"]["rgbColor"]["alpha"],
+        )
 
         fields = set(update_request["fields"].split(","))
         self.assertEqual(12, len(fields))

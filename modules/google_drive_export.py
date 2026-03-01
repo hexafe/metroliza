@@ -346,6 +346,13 @@ def _hex_to_rgb_color(color_hex: str) -> dict[str, float]:
     return {"red": red, "green": green, "blue": blue}
 
 
+def _build_rgb_color_style(color_hex: str, opacity: float) -> dict[str, dict[str, float]]:
+    rgb_color = _hex_to_rgb_color(color_hex)
+    alpha = opacity if isinstance(opacity, (float, int)) else 0.6
+    rgb_color["alpha"] = max(0.0, min(1.0, float(alpha)))
+    return {"rgbColor": rgb_color}
+
+
 def fix_usl_lsl_trendlines(
     *,
     creds,
@@ -384,7 +391,7 @@ def fix_usl_lsl_trendlines(
     line_width = width_px if isinstance(width_px, int) and width_px > 0 else 2
     line_opacity = opacity if isinstance(opacity, (float, int)) else 0.6
     line_opacity = max(0.0, min(1.0, float(line_opacity)))
-    rgb_color = _hex_to_rgb_color(color_hex)
+    rgb_color_style = _build_rgb_color_style(color_hex, line_opacity)
 
     requests: list[dict[str, Any]] = []
     for sheet in sheets:
@@ -437,7 +444,7 @@ def fix_usl_lsl_trendlines(
                 if not isinstance(trendline_line_style, dict):
                     trendline_line_style = {}
                 trendline_line_style["width"] = {"magnitude": line_width, "unit": "PIXEL"}
-                trendline_line_style["colorStyle"] = {"rgbColor": rgb_color}
+                trendline_line_style["colorStyle"] = copy.deepcopy(rgb_color_style)
                 trendline["lineStyle"] = trendline_line_style
                 trendline["opacity"] = line_opacity
                 series_item["trendline"] = trendline
@@ -448,7 +455,7 @@ def fix_usl_lsl_trendlines(
                 line_style["type"] = "SOLID"
                 line_style["width"] = {"magnitude": line_width, "unit": "PIXEL"}
                 series_item["lineStyle"] = line_style
-                series_item["colorStyle"] = {"rgbColor": rgb_color}
+                series_item["colorStyle"] = copy.deepcopy(rgb_color_style)
 
                 updated_indexes.append(series_index)
 
