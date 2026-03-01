@@ -27,6 +27,16 @@ Dependency files:
 4. Export Excel reports with summaries and plots.
 5. Optionally generate a Google Sheets version while always keeping a local `.xlsx` fallback.
 
+
+## CMM parser backend policy
+
+- Default (`METROLIZA_CMM_PARSER_BACKEND=auto`): native parser when extension is available.
+- Automatic fallback to pure Python only when extension is missing.
+- Controlled rollback: set `METROLIZA_CMM_PARSER_BACKEND=python`.
+- Strict native mode: set `METROLIZA_CMM_PARSER_BACKEND=native` to fail fast if native extension is unavailable.
+
+Parity between native and Python backends is enforced through fixture-based tests in `tests/test_cmm_parser_parity.py`.
+
 ## Documentation map
 
 - Release highlights: [`CHANGELOG.md`](CHANGELOG.md)

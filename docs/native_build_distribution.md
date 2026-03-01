@@ -1,7 +1,7 @@
 # Native module build and distribution requirements
 
 This project ships an optional native extension module: `_metroliza_cmm_native`.
-The application must continue to run in pure-Python mode when the extension is not present.
+The application defaults to native parsing when the extension is present and continues to run in pure-Python mode when it is not.
 
 ## Supported platforms and architectures
 
@@ -40,11 +40,11 @@ CI uses `cibuildwheel` and `maturin` to:
 
 Parser backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
 
-- `auto` (default): use native backend when available, fallback to pure Python on import/runtime failure.
-- `native`: require native backend, raise errors if unavailable/failing.
-- `python`: force pure-Python backend.
+- `auto` (default): use native backend when available; if extension import is unavailable, use pure Python.
+- `native`: require native backend and raise if unavailable.
+- `python`: force pure-Python backend (controlled operational rollback).
 
-This ensures packaged apps keep working even when the native binary is not bundled on a target machine.
+Runtime fallback from native execution errors is intentionally disabled so backend behavior is explicit and observable. This ensures packaged apps keep working when the native binary is not bundled, while preserving deterministic rollback controls.
 
 ## PyInstaller inclusion rules and smoke checks
 
