@@ -648,7 +648,14 @@ def add_violin_annotation_legend(ax, style):
             Line2D([0], [0], linestyle=':', linewidth=max(style.get('sigma_line_width', 0.7), 0.7), color=SUMMARY_PLOT_PALETTE['sigma_band'], label='±3σ span (visual)'),
         )
 
-    ax.legend(handles=handles, loc='upper right', frameon=True, fontsize=max(style.get('font_size', 6.8) - 0.2, 6.6))
+    ax.legend(
+        handles=handles,
+        loc='upper right',
+        bbox_to_anchor=(1.0, 1.0),
+        borderaxespad=0.0,
+        frameon=True,
+        fontsize=max(style.get('font_size', 6.8) - 0.2, 6.6),
+    )
 
 def render_violin(ax, values, labels, *, readability_scale=None):
     if _HAS_SEABORN:
@@ -744,12 +751,12 @@ def add_iqr_boxplot_legend(ax):
     ax.legend(
         handles=handles,
         loc='upper right',
-        bbox_to_anchor=(0.98, 0.98),
+        bbox_to_anchor=(1.0, 1.0),
         fontsize=7,
         framealpha=0.9,
         facecolor='white',
         edgecolor=SUMMARY_PLOT_PALETTE['distribution_foreground'],
-        borderaxespad=0.2,
+        borderaxespad=0.0,
         handlelength=1.5,
         labelspacing=0.25,
     )
