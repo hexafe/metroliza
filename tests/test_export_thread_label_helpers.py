@@ -43,6 +43,8 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 
+from modules.export_summary_utils import normalize_plot_axis_values  # noqa: E402
+
 from modules.ExportDataThread import (  # noqa: E402
     ExportDataThread,
     all_measurements_within_limits,
@@ -70,6 +72,17 @@ class TestExportThreadLabelHelpers(unittest.TestCase):
 
         self.assertEqual(result, ['A', 'B', '', 'C', ''])
 
+
+
+    def test_normalize_plot_axis_values_converts_numeric_and_datetime_strings(self):
+        values = ['1', '2.5', '2024-01-01', 'ABC']
+
+        normalized = normalize_plot_axis_values(values)
+
+        self.assertEqual(normalized[0], 1)
+        self.assertEqual(normalized[1], 2.5)
+        self.assertEqual(normalized[2].year, 2024)
+        self.assertEqual(normalized[3], 'ABC')
 
 class TestExportThreadToleranceHelpers(unittest.TestCase):
     def test_all_measurements_within_limits_true_when_all_values_in_range(self):
@@ -143,7 +156,7 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         import pandas as pd
 
         header_group = pd.DataFrame({
-            'MEAS': [1.0, 1.1, 1.2, 1.3],
+            'MEAS': ['1.0', '1.1', '1.2', '1.3'],
             'SAMPLE_NUMBER': ['1', '1', '2', '2'],
         })
 
@@ -152,6 +165,21 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(payload['x'], [0, 1, 2, 3])
         self.assertEqual(payload['y'], [1.0, 1.1, 1.2, 1.3])
         self.assertEqual(payload['labels'], ['1', '', '2', ''])
+
+
+    def test_build_summary_scatter_payload_uses_datetime_axis_for_parseable_dates(self):
+        import pandas as pd
+
+        header_group = pd.DataFrame({
+            'DATE': ['2024-01-01', '2024-01-02', '2024-01-03'],
+            'MEAS': ['1.0', '1.2', '1.3'],
+        })
+
+        x_values, y_values, labels = ExportDataThread._build_summary_scatter_payload(header_group, 'DATE')
+
+        self.assertEqual([value.year for value in x_values], [2024, 2024, 2024])
+        self.assertEqual(list(y_values), [1.0, 1.2, 1.3])
+        self.assertEqual(labels, ['2024-01-01', '2024-01-02', '2024-01-03'])
 
     def test_build_summary_sheet_position_plan_matches_existing_column_block_math(self):
         first_block = build_summary_sheet_position_plan(3)

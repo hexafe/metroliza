@@ -80,6 +80,7 @@ from modules.ExportDataThread import (  # noqa: E402
     annotate_violin_group_stats,
     render_violin,
     render_scatter_numeric,
+    render_histogram,
     resolve_summary_annotation_strategy,
 )
 
@@ -203,6 +204,32 @@ class TestExportPlotHelpers(unittest.TestCase):
         payload = build_histogram_density_curve_payload([3.0, 3.0, 3.0])
 
         self.assertIsNone(payload)
+
+
+    def test_build_histogram_density_curve_payload_accepts_numeric_string_measurements(self):
+        payload = build_histogram_density_curve_payload(['1.0', '1.5', '2.0', '2.5'])
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(len(payload['x']), 100)
+        self.assertEqual(len(payload['y']), 100)
+
+    def test_render_histogram_handles_numeric_strings_without_matplotlib_warnings(self):
+        import pandas as pd
+        import warnings
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                render_histogram(ax, pd.DataFrame({'MEAS': ['1.0', '2.5', '2.0', '3.2']}))
+
+            matplotlib_warnings = [
+                item for item in caught
+                if 'matplotlib' in str(item.category).lower() or 'converter' in str(item.message).lower()
+            ]
+            self.assertEqual(matplotlib_warnings, [])
+        finally:
+            plt.close(fig)
 
     def test_build_measurement_stat_formulas_uses_single_sided_cpk_when_nominal_and_lsl_are_zero(self):
         formulas = build_measurement_stat_formulas(

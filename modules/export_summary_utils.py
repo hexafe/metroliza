@@ -2,8 +2,48 @@ import pandas as pd
 import numpy as np
 from scipy.stats import norm
 import math
+import re
 
 from modules.stats_utils import safe_process_capability
+
+
+_INTEGER_PATTERN = re.compile(r'^[+-]?\d+$')
+
+
+def normalize_plot_axis_values(values):
+    """Normalize string-based axis values into numeric or datetime types when parseable."""
+    normalized = []
+    for value in values:
+        if not isinstance(value, str):
+            normalized.append(value)
+            continue
+
+        text = value.strip()
+        if text == '':
+            normalized.append(value)
+            continue
+
+        if _INTEGER_PATTERN.match(text):
+            try:
+                normalized.append(int(text))
+                continue
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            normalized.append(float(text))
+            continue
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            parsed_datetime = pd.to_datetime(text, errors='raise')
+            normalized.append(parsed_datetime.to_pydatetime())
+            continue
+        except (TypeError, ValueError):
+            normalized.append(value)
+
+    return normalized
 
 
 def resolve_nominal_and_limits(header_group: pd.DataFrame):
@@ -56,7 +96,7 @@ def build_sparse_unique_labels(labels):
 
 def build_trend_plot_payload(header_group: pd.DataFrame):
     """Return x/y points and sparse labels for the summary trend plot."""
-    measurements = list(header_group['MEAS'])
+    measurements = normalize_plot_axis_values(list(header_group['MEAS']))
     sample_labels = list(header_group['SAMPLE_NUMBER'])
     return {
         'x': list(range(len(measurements))),
@@ -67,12 +107,17 @@ def build_trend_plot_payload(header_group: pd.DataFrame):
 
 def build_histogram_density_curve_payload(measurements, point_count=100):
     """Return x/y density curve data for histogram overlays, if available."""
-    mu, std = norm.fit(measurements)
+    normalized_measurements = normalize_plot_axis_values(list(measurements))
+    numeric_measurements = pd.to_numeric(pd.Series(normalized_measurements), errors='coerce').dropna().to_numpy(dtype=float)
+    if numeric_measurements.size == 0:
+        return None
+
+    mu, std = norm.fit(numeric_measurements)
     if std <= 0:
         return None
 
-    x_min = float(np.min(measurements))
-    x_max = float(np.max(measurements))
+    x_min = float(np.min(numeric_measurements))
+    x_max = float(np.max(numeric_measurements))
     x_values = np.linspace(x_min, x_max, point_count)
     y_values = norm.pdf(x_values, mu, std)
     return {

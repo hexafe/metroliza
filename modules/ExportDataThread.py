@@ -37,6 +37,7 @@ from modules.export_summary_utils import (
     build_sparse_unique_labels as _build_sparse_unique_labels,
     build_trend_plot_payload as _build_trend_plot_payload,
     compute_measurement_summary,
+    normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
 )
 from modules.export_summary_sheet_planner import (
@@ -96,7 +97,8 @@ if _HAS_SEABORN:
 
 
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
-logging.getLogger('matplotlib.category').setLevel(logging.WARNING)
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 
 def build_export_dataframe(data, column_names):
@@ -758,14 +760,21 @@ def render_scatter(ax, data=None, x=None, y=None):
 
 
 def render_scatter_numeric(ax, x_values, y_values):
-    ax.scatter(x_values, y_values, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
+    normalized_x = _normalize_plot_axis_values(list(x_values))
+    normalized_y = _normalize_plot_axis_values(list(y_values))
+    ax.scatter(normalized_x, normalized_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
 def render_histogram(ax, header_group):
+    normalized_meas = _normalize_plot_axis_values(list(header_group['MEAS']))
+    histogram_values = pd.to_numeric(pd.Series(normalized_meas), errors='coerce').dropna().to_numpy(dtype=float)
+    if histogram_values.size == 0:
+        return
+
     if _HAS_SEABORN:
-        sns.histplot(data=header_group, x='MEAS', bins='auto', stat='density', alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white', ax=ax)
+        sns.histplot(x=histogram_values, bins='auto', stat='density', alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white', ax=ax)
     else:
-        ax.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white')
+        ax.hist(histogram_values, bins='auto', density=True, alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white')
 
 
 def render_iqr_boxplot(ax, values, labels):
@@ -776,9 +785,10 @@ def render_iqr_boxplot(ax, values, labels):
     normalized_values = []
     for group_values in safe_values:
         if isinstance(group_values, (list, tuple, np.ndarray, pd.Series)):
-            group_list = list(group_values)
-            if group_list:
-                normalized_values.append(group_list)
+            group_list = _normalize_plot_axis_values(list(group_values))
+            numeric_group = pd.to_numeric(pd.Series(group_list), errors='coerce').dropna().to_list()
+            if numeric_group:
+                normalized_values.append(numeric_group)
 
     if not normalized_values:
         return
@@ -1393,15 +1403,26 @@ class ExportDataThread(QThread):
 
         raw_labels = scatter_frame[x_column].tolist()
         sparse_labels = build_sparse_unique_labels(raw_labels)
-        y_values = scatter_frame['MEAS'].to_numpy()
 
-        x_numeric = pd.to_numeric(scatter_frame[x_column], errors='coerce').to_numpy()
-        if np.isnan(x_numeric).any():
-            x_values = np.arange(len(scatter_frame), dtype=float)
+        normalized_y = _normalize_plot_axis_values(list(scatter_frame['MEAS']))
+        y_numeric = pd.to_numeric(pd.Series(normalized_y), errors='coerce').to_numpy(dtype=float)
+
+        normalized_x = _normalize_plot_axis_values(raw_labels)
+        has_datetime_values = any(isinstance(value, (pd.Timestamp, np.datetime64)) or hasattr(value, 'year') for value in normalized_x)
+        if has_datetime_values and all(not isinstance(value, str) for value in normalized_x):
+            datetime_series = pd.to_datetime(pd.Series(normalized_x), errors='coerce')
+            if datetime_series.notna().all():
+                x_values = datetime_series.dt.to_pydatetime()
+            else:
+                x_values = np.arange(len(scatter_frame), dtype=float)
         else:
-            x_values = x_numeric.astype(float)
+            x_numeric = pd.to_numeric(pd.Series(normalized_x), errors='coerce').to_numpy(dtype=float)
+            if np.isnan(x_numeric).any():
+                x_values = np.arange(len(scatter_frame), dtype=float)
+            else:
+                x_values = x_numeric
 
-        return x_values, y_values, sparse_labels
+        return x_values, y_numeric, sparse_labels
 
     def _sort_header_group(self, header_group):
         sort_mode = self.selected_sorting_parameter.strip().lower()
