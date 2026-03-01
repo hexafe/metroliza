@@ -3,7 +3,7 @@ import warnings
 import inspect
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import matplotlib
 import pandas as pd
 import numpy as np
@@ -11,7 +11,6 @@ import numpy as np
 matplotlib.use('Agg')
 
 import importlib.util
-from io import BytesIO
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -269,6 +268,28 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
     return rendered
 
 
+def resolve_summary_annotation_strategy(*, x_point_count):
+    """Resolve a low-overhead annotation strategy based on x-axis point density."""
+    safe_points = max(0, int(x_point_count))
+    if safe_points >= 60:
+        return {
+            'label_mode': 'sparse',
+            'annotation_mode': 'static_compact',
+            'show_violin_legend': False,
+        }
+    if safe_points >= 24:
+        return {
+            'label_mode': 'adaptive',
+            'annotation_mode': 'static_compact',
+            'show_violin_legend': True,
+        }
+    return {
+        'label_mode': 'adaptive',
+        'annotation_mode': 'dynamic',
+        'show_violin_legend': True,
+    }
+
+
 def build_summary_panel_subtitle_text(summary_stats):
     return build_summary_panel_subtitle(summary_stats)
 
@@ -489,7 +510,15 @@ def resolve_violin_annotation_style(
     return style
 
 
-def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, annotation_mode='auto'):
+def annotate_violin_group_stats(
+    ax,
+    labels,
+    values,
+    *,
+    readability_scale=None,
+    annotation_mode='auto',
+    use_dynamic_offsets=True,
+):
     """Annotate group summary statistics on violin plots.
 
     Modes:
@@ -548,6 +577,9 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
             (base_offset[0] - 16, base_offset[1]),
         ]
 
+        if not use_dynamic_offsets:
+            return tuple(base_offset)
+
         renderer = ax.figure.canvas.get_renderer()
         selected_bbox = None
         selected_offset = candidate_offsets[0]
@@ -590,7 +622,8 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
             )
         return selected_offset
 
-    ax.figure.canvas.draw()
+    if use_dynamic_offsets:
+        ax.figure.canvas.draw()
     for idx, group_values in enumerate(values):
         arr = np.asarray(group_values, dtype=float)
         if arr.size == 0:
@@ -694,7 +727,7 @@ def add_violin_annotation_legend(ax, style):
         fontsize=max(style.get('font_size', 6.8) - 0.2, 6.6),
     )
 
-def render_violin(ax, values, labels, *, readability_scale=None):
+def render_violin(ax, values, labels, *, readability_scale=None, use_dynamic_offsets=True, show_annotation_legend=True):
     if _HAS_SEABORN:
         sns.violinplot(data=values, inner=None, cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
         ax.set_xticks(range(len(labels)))
@@ -702,8 +735,15 @@ def render_violin(ax, values, labels, *, readability_scale=None):
         ax.violinplot(values, showmeans=False, showmedians=False, showextrema=False)
         ax.set_xticks(range(1, len(labels) + 1))
     ax.set_xticklabels(labels)
-    style = annotate_violin_group_stats(ax, labels, values, readability_scale=readability_scale)
-    add_violin_annotation_legend(ax, style)
+    style = annotate_violin_group_stats(
+        ax,
+        labels,
+        values,
+        readability_scale=readability_scale,
+        use_dynamic_offsets=use_dynamic_offsets,
+    )
+    if show_annotation_legend:
+        add_violin_annotation_legend(ax, style)
 
 
 def render_scatter(ax, data=None, x=None, y=None):
@@ -1053,6 +1093,7 @@ class ExportDataThread(QThread):
             'enable_chart_multiprocessing': os.getenv('METROLIZA_EXPORT_CHART_MP', '').lower() in {'1', 'true', 'yes', 'on'} and os.name != 'nt',
         }
         self._chart_executor = None
+        self._summary_prep_executor = None
         self._active_chart_images = []
         self._reset_export_df_cache()
 
@@ -1078,6 +1119,19 @@ class ExportDataThread(QThread):
             self._chart_executor.shutdown(wait=True)
         finally:
             self._chart_executor = None
+
+    def _ensure_summary_prep_executor(self):
+        if self._summary_prep_executor is None:
+            self._summary_prep_executor = ThreadPoolExecutor(max_workers=2)
+        return self._summary_prep_executor
+
+    def _shutdown_summary_prep_executor(self):
+        if self._summary_prep_executor is None:
+            return
+        try:
+            self._summary_prep_executor.shutdown(wait=True)
+        finally:
+            self._summary_prep_executor = None
 
     def _reset_export_df_cache(self):
         self._export_df_cache = None
@@ -1131,6 +1185,7 @@ class ExportDataThread(QThread):
             # Keep a fallback for charts that may require clipping fixes.
             save_kwargs['bbox_inches'] = 'tight'
 
+        from io import BytesIO
         image_buffer = BytesIO()
         fig.savefig(image_buffer, **save_kwargs)
         return image_buffer.getvalue()
@@ -1454,6 +1509,7 @@ class ExportDataThread(QThread):
 
             self._reset_export_df_cache()
             self._ensure_chart_executor()
+            self._ensure_summary_prep_executor()
 
             self._emit_stage_progress('preparing_query', 0.0)
             self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
@@ -1573,6 +1629,7 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
         finally:
             self._shutdown_chart_executor()
+            self._shutdown_summary_prep_executor()
             self._cleanup_chart_images()
             self._reset_export_df_cache()
 
@@ -1824,33 +1881,63 @@ class ExportDataThread(QThread):
                     precomputed_density_curve = None
                     precomputed_trend_payload = None
 
-            label_positions = None
-            x_values = None
-            y_values = None
-            if grouping_applied:
-                distribution_labels, distribution_values, can_render_violin = self._build_violin_payload(
-                    sampled_group,
-                    'GROUP',
-                    self.violin_plot_min_samplesize,
-                )
-                if not can_render_violin:
-                    x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_group, 'GROUP')
-                    label_positions = list(x_values)
+            distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
+            prep_executor = self._summary_prep_executor
+            if prep_executor is not None:
+                try:
+                    distribution_future = prep_executor.submit(
+                        self._build_violin_payload,
+                        sampled_group,
+                        distribution_key,
+                        self.violin_plot_min_samplesize,
+                    )
+                    iqr_future = prep_executor.submit(
+                        self._build_violin_payload,
+                        sampled_group,
+                        distribution_key,
+                        self.violin_plot_min_samplesize,
+                    )
+                    distribution_labels, distribution_values, can_render_violin = distribution_future.result()
+                    iqr_labels, iqr_values, _ = iqr_future.result()
+                except Exception:
+                    logger.debug(
+                        "Summary prep executor failed; falling back to in-process payload generation.",
+                        exc_info=True,
+                    )
+                    distribution_labels, distribution_values, can_render_violin = self._build_violin_payload(
+                        sampled_group,
+                        distribution_key,
+                        self.violin_plot_min_samplesize,
+                    )
+                    iqr_labels, iqr_values, _ = self._build_violin_payload(
+                        sampled_group,
+                        distribution_key,
+                        self.violin_plot_min_samplesize,
+                    )
             else:
                 distribution_labels, distribution_values, can_render_violin = self._build_violin_payload(
                     sampled_group,
-                    'SAMPLE_NUMBER',
+                    distribution_key,
                     self.violin_plot_min_samplesize,
                 )
-                if not can_render_violin:
-                    x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_group, 'SAMPLE_NUMBER')
-                    label_positions = list(x_values)
+                iqr_labels, iqr_values, _ = self._build_violin_payload(
+                    sampled_group,
+                    distribution_key,
+                    self.violin_plot_min_samplesize,
+                )
 
-            iqr_labels, iqr_values, _ = self._build_violin_payload(
-                sampled_group,
-                'GROUP' if grouping_applied else 'SAMPLE_NUMBER',
-                self.violin_plot_min_samplesize,
-            )
+            label_positions = None
+            x_values = None
+            y_values = None
+            if not can_render_violin:
+                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_group, distribution_key)
+                label_positions = list(x_values)
+
+            summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
+            annotation_strategy = resolve_summary_annotation_strategy(x_point_count=summary_point_count)
+            force_sparse_x_labels = annotation_strategy['label_mode'] == 'sparse'
+            use_dynamic_annotation_offsets = annotation_strategy['annotation_mode'] == 'dynamic'
+            show_violin_annotation_legend = annotation_strategy['show_violin_legend']
 
             summary_anchors = build_summary_image_anchor_plan(col)
             panel_plan = build_summary_panel_write_plan(summary_anchors, header)
@@ -1866,12 +1953,24 @@ class ExportDataThread(QThread):
                     chart_start = time.perf_counter()
                     fig, ax = plt.subplots(figsize=(6, 4))
                     if can_render_violin:
-                        render_violin(ax, distribution_values, distribution_labels, readability_scale=self.summary_plot_scale)
+                        render_violin(
+                            ax,
+                            distribution_values,
+                            distribution_labels,
+                            readability_scale=self.summary_plot_scale,
+                            use_dynamic_offsets=use_dynamic_annotation_offsets,
+                            show_annotation_legend=show_violin_annotation_legend,
+                        )
                     else:
                         render_scatter_numeric(ax, x_values, y_values)
 
                     apply_minimal_axis_style(ax, grid_axis='y')
-                    apply_shared_x_axis_label_strategy(ax, distribution_labels, positions=label_positions)
+                    apply_shared_x_axis_label_strategy(
+                        ax,
+                        distribution_labels,
+                        positions=label_positions,
+                        force_sparse=force_sparse_x_labels,
+                    )
                     for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                         ax.axhline(**line_spec)
 
@@ -1907,7 +2006,12 @@ class ExportDataThread(QThread):
                     render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
                     add_iqr_boxplot_legend(ax)
                     apply_minimal_axis_style(ax, grid_axis='y')
-                    apply_shared_x_axis_label_strategy(ax, boxplot_labels, positions=list(range(1, len(boxplot_labels) + 1)))
+                    apply_shared_x_axis_label_strategy(
+                        ax,
+                        boxplot_labels,
+                        positions=list(range(1, len(boxplot_labels) + 1)),
+                        force_sparse=force_sparse_x_labels,
+                    )
                     for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                         ax.axhline(**line_spec)
                     ax.set_xlabel('Group')
@@ -2029,7 +2133,12 @@ class ExportDataThread(QThread):
                     ax.set_ylabel('Measurement')
                     ax.set_title(f'{header}')
                     apply_minimal_axis_style(ax, grid_axis='y')
-                    apply_shared_x_axis_label_strategy(ax, unique_labels, positions=data_x)
+                    apply_shared_x_axis_label_strategy(
+                        ax,
+                        unique_labels,
+                        positions=data_x,
+                        force_sparse=force_sparse_x_labels,
+                    )
 
                     current_y_limits = ax.get_ylim()
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
