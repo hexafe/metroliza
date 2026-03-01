@@ -84,6 +84,7 @@ if _HAS_SEABORN:
 
 
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
+logging.getLogger('matplotlib.category').setLevel(logging.WARNING)
 
 
 def build_export_dataframe(data, column_names):
@@ -497,6 +498,30 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
     )
     annotation_boxes = []
 
+    dense_group_threshold = 16
+    if group_count > dense_group_threshold:
+        stride = max(1, int(np.ceil(group_count / 12)))
+        for idx, group_values in enumerate(values):
+            arr = np.asarray(group_values, dtype=float)
+            if arr.size == 0:
+                continue
+            xpos = idx
+            mean_val = float(np.mean(arr))
+            ax.scatter([xpos], [mean_val], color=SUMMARY_PLOT_PALETTE['central_tendency'], s=style['mean_marker_size'], marker='o', zorder=4)
+            if idx % stride == 0:
+                ax.annotate(
+                    f"μ={mean_val:.3f}",
+                    (xpos, mean_val),
+                    textcoords='offset points',
+                    xytext=style['offsets']['mean'],
+                    fontsize=style['font_size'],
+                    bbox={'boxstyle': 'round,pad=0.2', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.9},
+                )
+        style['show_minmax'] = False
+        style['show_sigma'] = False
+        style['mode'] = 'dense'
+        return style
+
     def _resolve_annotation_offset(point_xy, text, base_offset, *, fontsize, color=None, bbox=None):
         """Return a collision-free text offset while preserving deterministic behavior."""
         candidate_offsets = [
@@ -672,17 +697,11 @@ def render_violin(ax, values, labels, *, readability_scale=None):
 
 
 def render_scatter(ax, data=None, x=None, y=None):
-    if _HAS_SEABORN:
-        sns.scatterplot(data=data, x=x, y=y, ax=ax, s=18, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], legend=False)
-    else:
-        ax.scatter(data[x], data[y], color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
+    ax.scatter(data[x], data[y], color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
 def render_scatter_numeric(ax, x_values, y_values):
-    if _HAS_SEABORN:
-        sns.scatterplot(x=x_values, y=y_values, ax=ax, s=18, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], legend=False)
-    else:
-        ax.scatter(x_values, y_values, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
+    ax.scatter(x_values, y_values, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
 def render_histogram(ax, header_group):
@@ -1051,7 +1070,7 @@ class ExportDataThread(QThread):
             self._optimization_toggles['chart_density_mode'] = 'reduced'
 
     def _chart_sample_limit(self):
-        return 900 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 3000
+        return 900 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 1500
 
     def _summary_chart_required(self, chart_name):
         required_charts = self._optimization_toggles.get('summary_sheet_minimum_charts', set())
@@ -1916,10 +1935,7 @@ class ExportDataThread(QThread):
                 unique_labels = trend_payload['labels']
 
                 fig, ax = plt.subplots(figsize=(6, 4))
-                if _HAS_SEABORN:
-                    sns.scatterplot(x=data_x, y=data_y, ax=ax, s=20, legend=False)
-                else:
-                    ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.')
+                ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
 
                 for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                     ax.axhline(**line_spec)
