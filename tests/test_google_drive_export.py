@@ -673,6 +673,204 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual([], info_logger.call_args_list[1].kwargs["extra"]["chartIds"])
         self.assertEqual([], fake_service._spreadsheets.batch_update_calls)
 
+    def test_fix_usl_lsl_trendlines_rewrites_measurement_series_to_canonical_three_series(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 72,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "LINE",
+                                    "series": [
+                                        {
+                                            "series": {
+                                                "seriesName": {"value": "Measured"},
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 1,
+                                                            "endRowIndex": 10,
+                                                            "startColumnIndex": 2,
+                                                            "endColumnIndex": 3,
+                                                        }
+                                                    ]
+                                                },
+                                            }
+                                        },
+                                        {
+                                            "series": {
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 99,
+                                                            "startRowIndex": 0,
+                                                            "endRowIndex": 4,
+                                                            "startColumnIndex": 14,
+                                                            "endColumnIndex": 15,
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        },
+                                        {
+                                            "series": {
+                                                "seriesName": {"value": "USL"},
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 1,
+                                                            "endRowIndex": 10,
+                                                            "startColumnIndex": 7,
+                                                            "endColumnIndex": 8,
+                                                        }
+                                                    ]
+                                                },
+                                            }
+                                        },
+                                        {
+                                            "series": {
+                                                "seriesName": {"value": "LSL"},
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 1,
+                                                            "endRowIndex": 10,
+                                                            "startColumnIndex": 8,
+                                                            "endColumnIndex": 9,
+                                                        }
+                                                    ]
+                                                },
+                                            }
+                                        },
+                                    ],
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
+        updated_series = update_request["spec"]["basicChart"]["series"]
+        self.assertEqual(3, len(updated_series))
+        self.assertEqual("USL", updated_series[1]["series"]["seriesName"]["value"])
+        self.assertEqual("LSL", updated_series[2]["series"]["seriesName"]["value"])
+        helper_sources = [
+            source
+            for series in updated_series
+            for source in series["series"]["sourceRange"]["sources"]
+            if source.get("sheetId") == 99
+        ]
+        self.assertEqual([], helper_sources)
+
+    def test_fix_usl_lsl_trendlines_avoids_helper_merged_range_for_limit_indexes(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 73,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "LINE",
+                                    "series": [
+                                        {
+                                            "series": {
+                                                "seriesName": {"value": "Measured"},
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 1,
+                                                            "endRowIndex": 10,
+                                                            "startColumnIndex": 2,
+                                                            "endColumnIndex": 3,
+                                                        }
+                                                    ]
+                                                },
+                                            }
+                                        },
+                                        {
+                                            "series": {
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 0,
+                                                            "endRowIndex": 4,
+                                                            "startColumnIndex": 14,
+                                                            "endColumnIndex": 15,
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        },
+                                        {
+                                            "series": {
+                                                "seriesName": {"value": "LSL"},
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 1,
+                                                            "endRowIndex": 10,
+                                                            "startColumnIndex": 8,
+                                                            "endColumnIndex": 9,
+                                                        }
+                                                    ]
+                                                },
+                                            }
+                                        },
+                                        {
+                                            "series": {
+                                                "seriesName": {"value": "USL"},
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 1,
+                                                            "endRowIndex": 10,
+                                                            "startColumnIndex": 7,
+                                                            "endColumnIndex": 8,
+                                                        }
+                                                    ]
+                                                },
+                                            }
+                                        },
+                                    ],
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
+        updated_series = update_request["spec"]["basicChart"]["series"]
+        self.assertEqual("USL", updated_series[1]["series"]["seriesName"]["value"])
+        self.assertEqual("LSL", updated_series[2]["series"]["seriesName"]["value"])
+        self.assertEqual(7, updated_series[1]["series"]["sourceRange"]["sources"][0]["startColumnIndex"])
+        self.assertEqual(8, updated_series[2]["series"]["sourceRange"]["sources"][0]["startColumnIndex"])
+
     def test_fix_usl_lsl_trendlines_skips_when_chart_has_fewer_than_three_series(self):
         discovery_payload = {
             "sheets": [

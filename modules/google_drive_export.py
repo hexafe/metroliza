@@ -25,6 +25,7 @@ GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE, GOOGLE_SHEETS_SCOPE)
 GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
 GOOGLE_LIMIT_SERIES_NAMES = {"USL", "LSL"}
 
+
 logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
 
 
@@ -370,6 +371,90 @@ def _build_rgb_color_style(color_hex: str, opacity: float) -> dict[str, dict[str
     return {"rgbColor": rgb_color}
 
 
+def _series_name(series_item: Any) -> str:
+    if not isinstance(series_item, dict):
+        return ""
+    series_payload = series_item.get("series")
+    if not isinstance(series_payload, dict):
+        return ""
+    name_obj = series_payload.get("seriesName")
+    if not isinstance(name_obj, dict):
+        return ""
+    return str(name_obj.get("value") or "").strip().upper()
+
+
+def _series_sources(series_item: Any) -> list[dict[str, Any]]:
+    if not isinstance(series_item, dict):
+        return []
+    series_payload = series_item.get("series")
+    if not isinstance(series_payload, dict):
+        return []
+    source_range = series_payload.get("sourceRange")
+    if not isinstance(source_range, dict):
+        return []
+    sources = source_range.get("sources")
+    if not isinstance(sources, list):
+        return []
+    return [source for source in sources if isinstance(source, dict)]
+
+
+def _is_helper_merged_source(source: dict[str, Any]) -> bool:
+    start_col = source.get("startColumnIndex")
+    end_col = source.get("endColumnIndex")
+    start_row = source.get("startRowIndex")
+    end_row = source.get("endRowIndex")
+    if not all(isinstance(value, int) for value in (start_col, end_col, start_row, end_row)):
+        return False
+    return (end_col - start_col) == 1 and (end_row - start_row) > 1
+
+
+def _normalize_measurement_chart_series(series: list[Any]) -> list[Any] | None:
+    if not isinstance(series, list) or len(series) < 3:
+        return None
+
+    measured_idx = 0 if isinstance(series[0], dict) else None
+    if measured_idx is None:
+        return None
+
+    measured_series = series[measured_idx]
+    measured_sources = _series_sources(measured_series)
+    if not measured_sources:
+        return None
+
+    limit_candidates = [item for item in series[1:] if isinstance(item, dict)]
+    if not limit_candidates:
+        return None
+
+    named_limit_candidates = [
+        candidate for candidate in limit_candidates if _series_name(candidate) in GOOGLE_LIMIT_SERIES_NAMES
+    ]
+    helper_candidates = [
+        candidate
+        for candidate in limit_candidates
+        if any(_is_helper_merged_source(source) for source in _series_sources(candidate))
+    ]
+    if not named_limit_candidates and len(helper_candidates) < 2:
+        return None
+
+    usl_series = next((candidate for candidate in limit_candidates if _series_name(candidate) == "USL"), None)
+    lsl_series = next((candidate for candidate in limit_candidates if _series_name(candidate) == "LSL"), None)
+
+    if usl_series is None and helper_candidates:
+        usl_series = helper_candidates[0]
+    if lsl_series is None and len(helper_candidates) > 1:
+        lsl_series = helper_candidates[1]
+    if usl_series is None and limit_candidates:
+        usl_series = limit_candidates[0]
+    if lsl_series is None:
+        remaining = [candidate for candidate in limit_candidates if candidate is not usl_series]
+        lsl_series = remaining[0] if remaining else usl_series
+
+    if usl_series is None or lsl_series is None:
+        return None
+
+    return [copy.deepcopy(measured_series), copy.deepcopy(usl_series), copy.deepcopy(lsl_series)]
+
+
 def fix_usl_lsl_trendlines(
     *,
     creds,
@@ -442,15 +527,21 @@ def fix_usl_lsl_trendlines(
             series = basic_chart.get("series")
             if not isinstance(series, list):
                 continue
-            if len(series) < 3:
-                continue
-            if any(series_index >= len(series) for series_index in target_series_indices):
-                continue
-
             updated_spec = copy.deepcopy(spec)
             updated_basic_chart = updated_spec.get("basicChart")
-            updated_series = updated_basic_chart.get("series") if isinstance(updated_basic_chart, dict) else None
+            if not isinstance(updated_basic_chart, dict):
+                continue
+
+            normalized_series = _normalize_measurement_chart_series(series)
+            if normalized_series is not None:
+                updated_basic_chart["series"] = normalized_series
+
+            updated_series = updated_basic_chart.get("series")
             if not isinstance(updated_series, list):
+                continue
+            if len(updated_series) < 3:
+                continue
+            if any(series_index >= len(updated_series) for series_index in target_series_indices):
                 continue
 
             updated_indexes: list[int] = []
