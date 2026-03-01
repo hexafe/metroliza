@@ -332,90 +332,207 @@ def _ensure_reports_folder(access_token: str) -> str:
     return str(folder_id)
 
 
+def _hex_to_rgb_color(color_hex: str) -> dict[str, float]:
+    normalized = str(color_hex or "").strip().lstrip("#")
+    if len(normalized) != 6:
+        normalized = "c0504d"
+    try:
+        red = int(normalized[0:2], 16) / 255.0
+        green = int(normalized[2:4], 16) / 255.0
+        blue = int(normalized[4:6], 16) / 255.0
+    except ValueError:
+        red, green, blue = (0.7529411765, 0.3137254902, 0.3019607843)
+    return {"red": red, "green": green, "blue": blue}
 
-def _build_series_format_patch_requests(*, chart_id: int, series_index: int, include_trendline: bool) -> list[dict[str, Any]]:
-    series_format = {
-        "lineStyle": {
-            "type": "SOLID",
-            "width": {"magnitude": 2, "unit": "PT"},
-        },
-        "lineColorStyle": {"rgbColor": {"red": 0.7529411765, "green": 0.3137254902, "blue": 0.3019607843}},
-        "lineOpacity": 0.6,
-    }
-    series_patch = {
-        "series": {"sourceRange": {"sources": []}},
-        "targetAxis": "LEFT_AXIS",
-        "lineStyle": series_format["lineStyle"],
-        "colorStyle": series_format["lineColorStyle"],
-    }
-    fields = [
-        f"basicChart.series[{series_index}].lineStyle",
-        f"basicChart.series[{series_index}].colorStyle",
+
+def fix_usl_lsl_trendlines(
+    *,
+    creds,
+    spreadsheet_id: str,
+    usl_series_index: int = 1,
+    lsl_series_index: int = 2,
+    color_hex: str = "#c0504d",
+    width_px: int = 2,
+    opacity: float = 0.6,
+) -> None:
+    """Apply canonical USL/LSL trendline + style patches across embedded charts."""
+    from googleapiclient.discovery import build
+
+    if not isinstance(spreadsheet_id, str) or not spreadsheet_id.strip() or creds is None:
+        return
+
+    sheets_service = build("sheets", "v4", credentials=creds)
+    charts_payload = (
+        sheets_service
+        .spreadsheets()
+        .get(spreadsheetId=spreadsheet_id, fields="sheets(charts(chartId,spec))")
+        .execute()
+    )
+
+    sheets = charts_payload.get("sheets") if isinstance(charts_payload, dict) else None
+    if not isinstance(sheets, list):
+        return
+
+    valid_indices = [
+        index
+        for index in (usl_series_index, lsl_series_index)
+        if isinstance(index, int) and index >= 0
     ]
-    if include_trendline:
-        series_patch["trendline"] = {"type": "LINEAR"}
-        fields.append(f"basicChart.series[{series_index}].trendline.type")
+    if not valid_indices:
+        return
 
-    return [
-        {
-            "updateChartSpec": {
-                "chartId": chart_id,
-                "spec": {
-                    "basicChart": {
-                        "series": [series_patch]
+    line_width = width_px if isinstance(width_px, int) and width_px > 0 else 2
+    line_opacity = opacity if isinstance(opacity, (float, int)) else 0.6
+    line_opacity = max(0.0, min(1.0, float(line_opacity)))
+    rgb_color = _hex_to_rgb_color(color_hex)
+
+    requests: list[dict[str, Any]] = []
+    for sheet in sheets:
+        if not isinstance(sheet, dict):
+            continue
+        charts = sheet.get("charts")
+        if not isinstance(charts, list):
+            continue
+        for embedded_chart in charts:
+            if not isinstance(embedded_chart, dict):
+                continue
+            chart_id = embedded_chart.get("chartId")
+            if not isinstance(chart_id, int):
+                continue
+            spec = embedded_chart.get("spec")
+            basic_chart = spec.get("basicChart") if isinstance(spec, dict) else None
+            series = basic_chart.get("series") if isinstance(basic_chart, dict) else None
+            if not isinstance(series, list):
+                continue
+
+            for series_index in valid_indices:
+                if series_index >= len(series):
+                    continue
+                requests.append(
+                    {
+                        "updateChartSpec": {
+                            "chartId": chart_id,
+                            "spec": {
+                                "basicChart": {
+                                    "series": [
+                                        {
+                                            "lineStyle": {
+                                                "type": "SOLID",
+                                                "width": {"magnitude": line_width, "unit": "PIXEL"},
+                                            },
+                                            "colorStyle": {"rgbColor": rgb_color},
+                                            "trendline": {"type": "LINEAR", "opacity": line_opacity},
+                                        }
+                                    ]
+                                }
+                            },
+                            "fields": (
+                                f"basicChart.series[{series_index}].lineStyle,"
+                                f"basicChart.series[{series_index}].colorStyle,"
+                                f"basicChart.series[{series_index}].trendline.type,"
+                                f"basicChart.series[{series_index}].trendline.opacity"
+                            ),
+                        }
                     }
-                },
-                "fields": ",".join(fields),
-            }
-        }
-    ]
+                )
+
+    if not requests:
+        return
+
+    sheets_service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": requests},
+    ).execute()
+
+
 
 
 def _build_limit_series_patch_requests(charts_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Deprecated helper retained for compatibility with existing tests/call paths."""
     requests: list[dict[str, Any]] = []
-    for chart in charts_payload.get("sheets", []):
-        for embedded in chart.get("charts", []):
+    sheets = charts_payload.get("sheets") if isinstance(charts_payload, dict) else None
+    if not isinstance(sheets, list):
+        return requests
+
+    for sheet in sheets:
+        if not isinstance(sheet, dict):
+            continue
+        charts = sheet.get("charts")
+        if not isinstance(charts, list):
+            continue
+        for embedded in charts:
+            if not isinstance(embedded, dict):
+                continue
             chart_id = embedded.get("chartId")
-            series = (((embedded.get("spec") or {}).get("basicChart") or {}).get("series") or [])
             if not isinstance(chart_id, int):
                 continue
-            for series_index, spec in enumerate(series):
-                name = str((((spec.get("series") or {}).get("seriesName") or {}).get("value") or "")).upper().strip()
+            spec = embedded.get("spec")
+            basic_chart = spec.get("basicChart") if isinstance(spec, dict) else None
+            chart_type = str((basic_chart or {}).get("chartType") or "").upper()
+            series = (basic_chart or {}).get("series") if isinstance(basic_chart, dict) else None
+            if not isinstance(series, list):
+                continue
+
+            for series_index, series_spec in enumerate(series):
+                if not isinstance(series_spec, dict):
+                    continue
+                series_obj = series_spec.get("series")
+                series_name_obj = series_obj.get("seriesName") if isinstance(series_obj, dict) else None
+                name = str(series_name_obj.get("value") if isinstance(series_name_obj, dict) else "").upper().strip()
                 if name not in GOOGLE_LIMIT_SERIES_NAMES:
                     continue
-                include_trendline = str((embedded.get("spec") or {}).get("basicChart", {}).get("chartType", "")).upper() in {"SCATTER", "LINE"}
-                requests.extend(
-                    _build_series_format_patch_requests(
-                        chart_id=chart_id,
-                        series_index=series_index,
-                        include_trendline=include_trendline,
-                    )
-                )
+
+                request = {
+                    "updateChartSpec": {
+                        "chartId": chart_id,
+                        "spec": {
+                            "basicChart": {
+                                "series": [
+                                    {
+                                        "lineStyle": {
+                                            "type": "SOLID",
+                                            "width": {"magnitude": 2, "unit": "PT"},
+                                        },
+                                        "colorStyle": {"rgbColor": _hex_to_rgb_color("#c0504d")},
+                                    }
+                                ]
+                            }
+                        },
+                        "fields": (
+                            f"basicChart.series[{series_index}].lineStyle,"
+                            f"basicChart.series[{series_index}].colorStyle"
+                        ),
+                    }
+                }
+                if chart_type in {"SCATTER", "LINE"}:
+                    request["updateChartSpec"]["spec"]["basicChart"]["series"][0]["trendline"] = {"type": "LINEAR"}
+                    request["updateChartSpec"]["fields"] += f",basicChart.series[{series_index}].trendline.type"
+                requests.append(request)
     return requests
+
+def _build_google_user_credentials(*, credentials_path: Path, token_path: Path):
+    """Build google-auth user credentials for the canonical Sheets patch workflow."""
+    from google.oauth2.credentials import Credentials
+
+    token_payload = _load_token_payload(token_path)
+    installed = _read_credentials(credentials_path)
+    return Credentials(
+        token=str(token_payload.get("access_token") or ""),
+        refresh_token=token_payload.get("refresh_token"),
+        token_uri=str(token_payload.get("token_uri") or installed.get("token_uri") or ""),
+        client_id=str(token_payload.get("client_id") or installed.get("client_id") or ""),
+        client_secret=str(token_payload.get("client_secret") or installed.get("client_secret") or ""),
+        scopes=list(token_payload.get("scopes") or GOOGLE_OAUTH_SCOPES),
+    )
 
 
 def _patch_converted_sheet_chart_series(*, spreadsheet_id: str, access_token: str) -> int:
-    get_request = urllib.request.Request(
-        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets(properties(title),charts(chartId,spec(basicChart(chartType,series(series(seriesName))))))",
-        headers={"Authorization": f"Bearer {access_token}"},
-        method="GET",
-    )
-    payload = _request_json(get_request, context="Google Sheets chart discovery failed")
-    requests = _build_limit_series_patch_requests(payload)
-    if not requests:
-        return 0
+    """Deprecated shim for old call paths; use fix_usl_lsl_trendlines instead."""
+    from google.oauth2.credentials import Credentials
 
-    batch_request = urllib.request.Request(
-        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate",
-        data=json.dumps({"requests": requests}).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json; charset=UTF-8",
-        },
-        method="POST",
-    )
-    _request_json(batch_request, context="Google Sheets chart style patch failed")
-    return len(requests)
+    creds = Credentials(token=access_token, scopes=list(GOOGLE_OAUTH_SCOPES))
+    fix_usl_lsl_trendlines(creds=creds, spreadsheet_id=spreadsheet_id)
+    return 1
 
 
 def upload_and_convert_workbook(
@@ -519,8 +636,11 @@ def upload_and_convert_workbook(
         status_callback("validating")
     try:
         _patch_converted_sheet_chart_series(spreadsheet_id=parsed.file_id, access_token=access_token)
-    except GoogleDriveExportError as exc:
-        logger.warning("Google Sheets chart patch skipped after error", extra=_build_google_log_extra(file_ref=parsed.file_id, error=exc, outcome="warning"))
+    except (GoogleDriveExportError, ImportError, ValueError, TypeError) as exc:
+        logger.warning(
+            "Google Sheets chart patch skipped after error",
+            extra=_build_google_log_extra(file_ref=parsed.file_id, error=exc, outcome="warning"),
+        )
 
     _ = expected_sheet_names
     warnings: list[str] = []
