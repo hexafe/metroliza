@@ -1,6 +1,7 @@
 import logging
 import warnings
 import inspect
+import re
 from io import BytesIO
 import os
 import time
@@ -1581,20 +1582,42 @@ class ExportDataThread(QThread):
                     return
 
             if self.export_target == "google_sheets_drive_convert":
+                stage_attempts = {
+                    "uploading": 0,
+                    "converting": 0,
+                    "validating": 0,
+                }
+                stage_attempt_totals = {}
+
+                def _log_google_conversion_stage(stage_name):
+                    stage_attempts[stage_name] += 1
+                    attempt_index = stage_attempts[stage_name]
+                    attempt_total = stage_attempt_totals.get(stage_name)
+                    stage_message = "Google conversion stage"
+                    if attempt_total and attempt_total > 1:
+                        stage_message = f"Google conversion stage (attempt {attempt_index}/{attempt_total})"
+                    self._log_export_stage(stage_message, stage=stage_name)
+
                 def _stage_callback(stage_message):
                     if stage_message == "uploading":
                         self._emit_google_stage("uploading")
-                        self._log_export_stage("Google conversion stage", stage="uploading")
+                        _log_google_conversion_stage("uploading")
                         return
                     if stage_message == "converting":
                         self._emit_google_stage("converting")
-                        self._log_export_stage("Google conversion stage", stage="converting")
+                        _log_google_conversion_stage("converting")
                         return
                     if stage_message == "validating":
                         self._emit_google_stage("validating")
-                        self._log_export_stage("Google conversion stage", stage="validating")
+                        _log_google_conversion_stage("validating")
                         return
                     if stage_message.startswith("uploading retry"):
+                        retry_match = re.match(r"^uploading retry\s+(\d+)/(\d+)", stage_message)
+                        if retry_match:
+                            try:
+                                stage_attempt_totals["uploading"] = int(retry_match.group(2))
+                            except ValueError:
+                                pass
                         self._emit_google_stage("uploading", detail=stage_message)
                         self._log_export_stage("Google conversion upload retry", stage="uploading_retry", level="warning")
 

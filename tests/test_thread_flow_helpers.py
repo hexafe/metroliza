@@ -1501,6 +1501,155 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertIn(out_file, fallback_stage_messages[0])
 
 
+    def test_google_conversion_stage_logging_is_deterministic_on_success(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _fake_upload(*_args, **kwargs):
+                kwargs['status_callback']('uploading')
+                kwargs['status_callback']('converting')
+                kwargs['status_callback']('validating')
+                return GoogleDriveConversionResult(
+                    file_id='sheet-id',
+                    web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                    local_xlsx_path=out_file,
+                    fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
+                    warnings=(),
+                    converted_tab_titles=('MEASUREMENTS',),
+                )
+
+            module.upload_and_convert_workbook = _fake_upload
+            logger = logging.getLogger()
+            previous_handlers = list(logger.handlers)
+            previous_level = logger.level
+            records = []
+
+            class _ListHandler(logging.Handler):
+                def emit(self, record):
+                    records.append(record)
+
+            handler = _ListHandler()
+            logger.handlers = [handler]
+            logger.setLevel(logging.INFO)
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+                logger.handlers = previous_handlers
+                logger.setLevel(previous_level)
+
+            stage_messages = [
+                record.getMessage()
+                for record in records
+                if record.getMessage().startswith('Google conversion stage')
+            ]
+            self.assertEqual(
+                stage_messages,
+                [
+                    'Google conversion stage',
+                    'Google conversion stage',
+                    'Google conversion stage',
+                ],
+            )
+
+    def test_google_conversion_stage_logging_includes_retry_attempt_context(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _fake_upload(*_args, **kwargs):
+                kwargs['status_callback']('uploading')
+                kwargs['status_callback']('uploading retry 1/2: temporary network issue')
+                kwargs['status_callback']('uploading')
+                kwargs['status_callback']('converting')
+                kwargs['status_callback']('validating')
+                return GoogleDriveConversionResult(
+                    file_id='sheet-id',
+                    web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                    local_xlsx_path=out_file,
+                    fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
+                    warnings=(),
+                    converted_tab_titles=('MEASUREMENTS',),
+                )
+
+            module.upload_and_convert_workbook = _fake_upload
+            logger = logging.getLogger()
+            previous_handlers = list(logger.handlers)
+            previous_level = logger.level
+            records = []
+
+            class _ListHandler(logging.Handler):
+                def emit(self, record):
+                    records.append(record)
+
+            handler = _ListHandler()
+            logger.handlers = [handler]
+            logger.setLevel(logging.INFO)
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+                logger.handlers = previous_handlers
+                logger.setLevel(previous_level)
+
+            stage_messages = [
+                record.getMessage()
+                for record in records
+                if record.getMessage().startswith('Google conversion stage')
+            ]
+            self.assertEqual(
+                stage_messages,
+                [
+                    'Google conversion stage',
+                    'Google conversion stage (attempt 2/2)',
+                    'Google conversion stage',
+                    'Google conversion stage',
+                ],
+            )
+            retry_warning_messages = [
+                record.getMessage()
+                for record in records
+                if record.getMessage().startswith('Google conversion upload retry')
+            ]
+            self.assertEqual(retry_warning_messages, ['Google conversion upload retry'])
+
     def test_google_target_warning_logs_issue_details(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
