@@ -1006,7 +1006,7 @@ class ExportDataThread(QThread):
             f"{merge_keys}. Keeping the latest assignment per key."
         )
         logger.warning(message)
-        self.update_label.emit("Grouping data contains duplicate keys; using latest assignment.")
+        self.update_label.emit(build_three_line_status("Building measurement sheets...", "Grouping data contains duplicate keys; using latest assignment.", "ETA --"))
 
     def _apply_group_assignments(self, header_group, grouping_df):
         merged_group, grouping_applied, merge_keys, duplicate_count = _apply_group_assignments(header_group, grouping_df)
@@ -1081,9 +1081,9 @@ class ExportDataThread(QThread):
         if not base:
             return
         if detail:
-            self.update_label.emit(f"{base} ({detail})")
+            self.update_label.emit(build_three_line_status(f"{base} ({detail})", "Exporting data...", "ETA --"))
             return
-        self.update_label.emit(base)
+        self.update_label.emit(build_three_line_status(base, "Exporting data...", "ETA --"))
 
     def _build_export_context(self, *, stage, fallback_reason=""):
         return build_export_log_extra(
@@ -1187,7 +1187,7 @@ class ExportDataThread(QThread):
                     ),
                 )
                 for warning in conversion.warnings:
-                    self.update_label.emit(f"Warning: {warning}")
+                    self.update_label.emit(build_three_line_status(f"Warning: {warning}", "Exporting data...", "ETA --"))
 
                 if conversion.warnings:
                     self._log_google_issue(
@@ -1221,7 +1221,7 @@ class ExportDataThread(QThread):
                     }
                 )
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
-                self.update_label.emit(f"Warning: {e}")
+                self.update_label.emit(build_three_line_status(f"Warning: {e}", "Exporting data...", "ETA --"))
                 self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
                 self._log_export_stage("Export completed with local fallback after Google conversion failure", stage="fallback", level="warning", fallback_reason=self.completion_metadata["fallback_message"])
                 self.finished.emit()
