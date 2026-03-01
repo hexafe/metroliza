@@ -15,9 +15,9 @@ python metroliza.py
 ```
 
 Dependency files:
-- `requirements.txt` — runtime
-- `requirements-dev.txt` — development/testing
-- `requirements-build.txt` — packaging
+- `requirements.txt` - runtime
+- `requirements-dev.txt` - development/testing
+- `requirements-build.txt` - packaging
 
 ## Core workflow
 

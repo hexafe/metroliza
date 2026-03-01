@@ -6,16 +6,15 @@ from modules.CustomLogger import CustomLogger
 from modules.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_options, validate_paths
 from modules.export_preset_utils import (
     build_export_options_for_preset,
-    get_export_preset_description,
     get_export_preset_id_for_label,
     get_export_preset_ids,
-    get_export_preset_intended_use,
     get_export_preset_label,
     load_export_dialog_config,
     migrate_export_dialog_config,
     save_export_dialog_config,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import(
     QDialog,
     QFileDialog,
@@ -40,38 +39,7 @@ from pathlib import Path
 from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
-def build_preset_summary_text(selected_preset):
-    preset_options = build_export_options_for_preset(selected_preset)
-    includes_summary_sheet = bool(preset_options['generate_summary_sheet'])
-    speed_vs_completeness = "Speed-focused" if not includes_summary_sheet else "Completeness-focused"
-    summary_sheet_line = "Summary sheet: On" if includes_summary_sheet else "Summary sheet: Off"
-    description = get_export_preset_description(selected_preset)
-    intended_use = get_export_preset_intended_use(selected_preset)
-
-    lines = [
-        speed_vs_completeness,
-        summary_sheet_line,
-    ]
-    if description:
-        lines.append(description)
-    if intended_use:
-        lines.append(f"Typical use: {intended_use}")
-    return "\n".join(lines)
-
-
-def is_generate_summary_sheet_overridden(selected_preset, generate_summary_sheet):
-    preset_options = build_export_options_for_preset(selected_preset)
-    return bool(generate_summary_sheet) != bool(preset_options['generate_summary_sheet'])
-
-
-def is_summary_sheet_effectively_enabled(selected_preset, generate_summary_sheet, generate_summary_sheet_overridden=False):
-    preset_options = build_export_options_for_preset(selected_preset)
-    if generate_summary_sheet_overridden:
-        return bool(generate_summary_sheet)
-    return bool(preset_options['generate_summary_sheet'])
-
-
-def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, generate_summary_sheet, generate_summary_sheet_overridden=False):
+def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results):
     preset_options = build_export_options_for_preset(selected_preset)
     return ExportOptions(
         preset=selected_preset,
@@ -81,7 +49,7 @@ def build_export_options_payload(selected_preset, export_type, export_target, so
         violin_plot_min_samplesize=int(violin_input if violin_input not in (None, "") else preset_options['violin_plot_min_samplesize']),
         summary_plot_scale=int(summary_scale_input if summary_scale_input not in (None, "") else preset_options['summary_plot_scale']),
         hide_ok_results=bool(hide_ok_results),
-        generate_summary_sheet=bool(generate_summary_sheet) if generate_summary_sheet_overridden else bool(preset_options['generate_summary_sheet']),
+        generate_summary_sheet=bool(preset_options['generate_summary_sheet']),
     )
 
 
@@ -90,9 +58,13 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
     warnings = [str(w) for w in metadata.get('conversion_warnings', []) if str(w).strip()]
     fallback_message = str(metadata.get('fallback_message', '')).strip()
     converted_url = str(metadata.get('converted_url', '')).strip()
+    export_directory_line = build_export_directory_link_line(excel_file)
+
+    base_success_lines = [f"Data exported successfully to {excel_file}."]
+    if export_directory_line:
+        base_success_lines.append(export_directory_line)
 
     if export_target == 'google_sheets_drive_convert':
-        export_directory_line = build_export_directory_link_line(excel_file)
         if warnings or fallback_message:
             message_lines = [
                 f"Data exported locally to {excel_file}.",
@@ -105,26 +77,20 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
             ])
             if converted_url:
                 message_lines.append(f"Google Sheet: {converted_url}")
-            if fallback_message:
-                message_lines.append(fallback_message)
             if warnings:
-                message_lines.append("Warnings:")
+                message_lines.append("Warnings/Errors:")
                 message_lines.extend(f"- {warning}" for warning in warnings)
             return 'warning', 'Export completed with Google fallback', "\n".join(message_lines)
 
         if converted_url:
-            message_lines = [
-                f"Data exported successfully to {excel_file}.",
-            ]
-            if export_directory_line:
-                message_lines.append(export_directory_line)
+            message_lines = list(base_success_lines)
             message_lines.extend([
                 "",
                 f"Google Sheet: {converted_url}",
             ])
             return 'info', 'Export successful', "\n".join(message_lines)
 
-    return 'info', 'Export successful', f"Data exported successfully to {excel_file}!"
+    return 'info', 'Export successful', "\n".join(base_success_lines)
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
@@ -146,37 +112,61 @@ def format_message_with_clickable_links(message):
     return linked_message.replace("\n", "<br>")
 
 
+def handle_export_result_link(parent, url, excel_file=None):
+    """Handle message-box link activation, revealing exported file when selected."""
+    try:
+        parsed = QUrl(str(url or ""))
+    except Exception:
+        parsed = QUrl()
+
+    if parsed.isValid() and parsed.scheme() == 'file' and excel_file:
+        try:
+            clicked_path = Path(parsed.toLocalFile()).resolve(strict=False)
+            exported_path = Path(str(excel_file)).resolve(strict=False)
+            if clicked_path == exported_path:
+                reveal_file_in_explorer(excel_file)
+                return
+        except Exception:
+            pass
+
+    QDesktopServices.openUrl(parsed if parsed.isValid() else QUrl(str(url or "")))
+
+
 def show_export_result_message(parent, level, title, message, excel_file=None):
     """Display export result message with external links enabled when supported."""
-    while True:
-        dialog = QMessageBox(parent)
-        icon = QMessageBox.Icon.Warning if level == 'warning' else QMessageBox.Icon.Information
-        dialog.setIcon(icon)
-        dialog.setWindowTitle(title)
-        dialog.setText(format_message_with_clickable_links(message))
-        if hasattr(dialog, 'setTextFormat') and hasattr(Qt, 'TextFormat'):
-            dialog.setTextFormat(Qt.TextFormat.RichText)
-        if hasattr(dialog, 'setTextInteractionFlags') and hasattr(Qt, 'TextInteractionFlag'):
-            dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        show_in_folder_button = None
-        if excel_file and hasattr(dialog, 'addButton'):
-            show_in_folder_button = dialog.addButton('Show in folder', QMessageBox.ButtonRole.ActionRole)
-        if hasattr(dialog, 'setStandardButtons'):
-            dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
-        dialog.exec()
+    dialog = QMessageBox(parent)
+    icon = QMessageBox.Icon.Warning if level == 'warning' else QMessageBox.Icon.Information
+    dialog.setIcon(icon)
+    dialog.setWindowTitle(title)
+    dialog.setText(format_message_with_clickable_links(message))
+    if hasattr(dialog, 'setTextFormat') and hasattr(Qt, 'TextFormat'):
+        dialog.setTextFormat(Qt.TextFormat.RichText)
+    if hasattr(dialog, 'setTextInteractionFlags') and hasattr(Qt, 'TextInteractionFlag'):
+        dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+    if hasattr(dialog, 'setStandardButtons'):
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
 
-        clicked_button = dialog.clickedButton() if hasattr(dialog, 'clickedButton') else None
-        if show_in_folder_button is None or clicked_button is not show_in_folder_button:
-            return
+    message_label = dialog.findChild(QLabel, 'qt_msgbox_label') if hasattr(dialog, 'findChild') else None
+    if message_label and hasattr(message_label, 'setOpenExternalLinks'):
+        message_label.setOpenExternalLinks(False)
+        if hasattr(message_label, 'linkActivated'):
+            message_label.linkActivated.connect(lambda link: _open_export_result_link(parent, link, excel_file))
 
+    dialog.exec()
+
+
+def _open_export_result_link(parent, link, excel_file):
+    try:
+        handle_export_result_link(parent, link, excel_file=excel_file)
+    except Exception as exc:
         try:
-            reveal_file_in_explorer(excel_file)
-        except Exception as exc:
             QMessageBox.warning(
                 parent,
                 "Unable to open file location",
                 f"Could not open the export location for {excel_file}.\n{exc}",
             )
+        except Exception:
+            logger.exception("Failed to show warning for export link activation failure.")
 
 
 def reveal_file_in_explorer(file_path):
@@ -240,7 +230,6 @@ class ExportDialog(QDialog):
 
         self.init_widgets()
         self.init_layout()
-        self._sync_summary_dependent_controls()
 
     def _load_dialog_config(self):
         try:
@@ -270,35 +259,9 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setText(str(preset_options['violin_plot_min_samplesize']))
             self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
             self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))
-            self.generate_summary_sheet_checkbox.setChecked(bool(preset_options['generate_summary_sheet']))
-            self.preset_summary_label.setText(build_preset_summary_text(selected_preset))
-            self._update_override_state()
-            self._sync_summary_dependent_controls()
             self._save_dialog_config()
         except Exception as e:
             self.log_and_exit(e)
-
-    def _sync_summary_dependent_controls(self):
-        selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
-        generate_summary_sheet_overridden = is_generate_summary_sheet_overridden(
-            selected_preset,
-            self.generate_summary_sheet_checkbox.isChecked(),
-        )
-        is_enabled = is_summary_sheet_effectively_enabled(
-            selected_preset,
-            self.generate_summary_sheet_checkbox.isChecked(),
-            generate_summary_sheet_overridden,
-        )
-        self.violin_plot_min_samplesize_label.setEnabled(is_enabled)
-        self.violin_plot_min_samplesize.setEnabled(is_enabled)
-        self.summary_plot_scale_label.setEnabled(is_enabled)
-        self.summary_plot_scale.setEnabled(is_enabled)
-        self.violin_plot_min_samplesize_helper_label.setVisible(not is_enabled)
-        self.summary_plot_scale_helper_label.setVisible(not is_enabled)
-
-    def _on_generate_summary_sheet_state_changed(self):
-        self._update_override_state()
-        self._sync_summary_dependent_controls()
 
     def init_widgets(self):
         try:
@@ -358,11 +321,11 @@ class ExportDialog(QDialog):
             selected_preset = self.config.get('selected_preset', 'fast_diagnostics')
             self.preset_combobox.setCurrentText(get_export_preset_label(selected_preset))
             self.preset_combobox.currentTextChanged.connect(lambda _: self.apply_selected_preset())
-            self.preset_summary_label = QLabel("")
-            self.preset_summary_label.setWordWrap(True)
-            self.preset_customized_badge = QLabel("Customized")
-            self.preset_customized_badge.setStyleSheet("color: #b00020; font-weight: bold;")
-            self.preset_customized_badge.hide()
+            self.preset_label.setToolTip(
+                "Main plots: exports core charts only.\n"
+                "Extended plots: includes additional summary plots and statistics sheets."
+            )
+            self.preset_combobox.setToolTip(self.preset_label.toolTip())
 
             self.export_target_label = QLabel("Google Sheets export:")
             self.include_google_sheets_checkbox = QCheckBox(
@@ -418,34 +381,22 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize = QLineEdit()
             self.violin_plot_min_samplesize.setPlaceholderText('Min: 2, Default: 6')
             self.violin_plot_min_samplesize_label.setToolTip(
-                "Works only if you choose 'Generate summary sheet' option!\n"
-                "Use this menu to select how many measurements are required "
-                "to generate violin chart instead of scatter"
+                "Minimum sample count before violin plots are used in Extended plots."
             )
             self.violin_plot_min_samplesize.setToolTip(
-                "Works only if you choose 'Generate summary sheet' option!\n"
-                "Use this menu to select how many measurements are required "
-                "to generate violin chart instead of scatter"
+                "Minimum sample count before violin plots are used in Extended plots."
             )
-            self.violin_plot_min_samplesize_helper_label = QLabel("Available when summary sheet is enabled.")
-            self.violin_plot_min_samplesize_helper_label.setStyleSheet("color: #666;")
             
             # Add textbox to set scale for y-axis
             self.summary_plot_scale_label = QLabel("Increase the limits on the y-axis by as many times: ")
             self.summary_plot_scale = QLineEdit()
             self.summary_plot_scale.setPlaceholderText('Default: 0')
             self.summary_plot_scale_label.setToolTip(
-                "Works only if you choose 'Generate summary sheet' option!\n"
-                "For instance, if you choose 0 (default), limits will be based on the minimum, maximum, and tolerance limits.\n"
-                "If you choose 1, it will also add a 'buffer' to the minimum and maximum y-axis limits, resulting in a range that is three times larger."
+                "Scale factor for expanding summary-plot y-axis limits in Extended plots; 0 keeps automatic limits."
             )
             self.summary_plot_scale.setToolTip(
-                "Works only if you choose 'Generate summary sheet' option!\n"
-                "For instance, if you choose 0 (default), limits will be based on the minimum, maximum, and tolerance limits.\n"
-                "If you choose 1, it will also add a 'buffer' to the minimum and maximum y-axis limits, resulting in a range that is three times larger."
+                "Scale factor for expanding summary-plot y-axis limits in Extended plots; 0 keeps automatic limits."
             )
-            self.summary_plot_scale_helper_label = QLabel("Available when summary sheet is enabled.")
-            self.summary_plot_scale_helper_label.setStyleSheet("color: #666;")
             
             # Connect textChanged signal to validate_input function
             self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
@@ -456,14 +407,6 @@ class ExportDialog(QDialog):
             self.hide_ok_results_checkbox.setChecked(False)
             self.hide_ok_results_checkbox.setToolTip("When enabled, only OK results will be visible (columns with OK results will be hidden, not deleted)")
             
-            # Add a QCheckBox for "Generate summary sheet?"
-            self.generate_summary_sheet_checkbox = QCheckBox("Generate summary sheet?")
-            self.generate_summary_sheet_checkbox.setChecked(False)
-            self.generate_summary_sheet_checkbox.setToolTip(
-                "When enabled, additional sheets will be created for each reference with additional graphs (grouped scatter/violin, histograms with basic statistics)"
-            )
-            self.generate_summary_sheet_checkbox.stateChanged.connect(lambda _: self._on_generate_summary_sheet_state_changed())
-
             self.advanced_options_toggle = QPushButton("Advanced options")
             self.advanced_options_toggle.setCheckable(True)
             self.advanced_options_toggle.setChecked(False)
@@ -472,7 +415,11 @@ class ExportDialog(QDialog):
             self.advanced_options_container = QWidget()
             advanced_options_layout = QVBoxLayout(self.advanced_options_container)
             advanced_options_layout.setContentsMargins(0, 0, 0, 0)
-            advanced_options_layout.addWidget(self.generate_summary_sheet_checkbox)
+            advanced_options_layout.addWidget(self.violin_plot_min_samplesize_label)
+            advanced_options_layout.addWidget(self.violin_plot_min_samplesize)
+            advanced_options_layout.addWidget(self.summary_plot_scale_label)
+            advanced_options_layout.addWidget(self.summary_plot_scale)
+            advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
             self.advanced_options_container.hide()
 
             self.apply_selected_preset()
@@ -522,9 +469,7 @@ class ExportDialog(QDialog):
             preset_selector_layout = QHBoxLayout()
             preset_selector_layout.setContentsMargins(0, 0, 0, 0)
             preset_selector_layout.addWidget(self.preset_combobox)
-            preset_selector_layout.addWidget(self.preset_customized_badge)
             report_profile_layout.addLayout(preset_selector_layout, 0, 1)
-            report_profile_layout.addWidget(self.preset_summary_label, 1, 1)
 
             report_profile_layout.addWidget(self.export_target_label, 2, 0)
             report_profile_layout.addWidget(self.include_google_sheets_checkbox, 2, 1)
@@ -536,17 +481,8 @@ class ExportDialog(QDialog):
             report_profile_layout.addWidget(self.sort_measurements_label, 5, 0)
             report_profile_layout.addWidget(self.sort_measurements_combobox, 5, 1)
 
-            report_profile_layout.addWidget(self.violin_plot_min_samplesize_label, 6, 0)
-            report_profile_layout.addWidget(self.violin_plot_min_samplesize, 6, 1)
-            report_profile_layout.addWidget(self.violin_plot_min_samplesize_helper_label, 6, 2)
-
-            report_profile_layout.addWidget(self.summary_plot_scale_label, 7, 0)
-            report_profile_layout.addWidget(self.summary_plot_scale, 7, 1)
-            report_profile_layout.addWidget(self.summary_plot_scale_helper_label, 7, 2)
-
             advanced_options_layout = QVBoxLayout()
             advanced_options_layout.setContentsMargins(0, 0, 0, 0)
-            advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
             advanced_options_layout.addWidget(self.advanced_options_toggle)
             advanced_options_layout.addWidget(self.advanced_options_container)
 
@@ -569,12 +505,11 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.preset_combobox, self.include_google_sheets_checkbox)
             self.setTabOrder(self.include_google_sheets_checkbox, self.export_type_combobox)
             self.setTabOrder(self.export_type_combobox, self.sort_measurements_combobox)
-            self.setTabOrder(self.sort_measurements_combobox, self.violin_plot_min_samplesize)
+            self.setTabOrder(self.sort_measurements_combobox, self.advanced_options_toggle)
+            self.setTabOrder(self.advanced_options_toggle, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
             self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
-            self.setTabOrder(self.hide_ok_results_checkbox, self.advanced_options_toggle)
-            self.setTabOrder(self.advanced_options_toggle, self.generate_summary_sheet_checkbox)
-            self.setTabOrder(self.generate_summary_sheet_checkbox, self.export_button)
+            self.setTabOrder(self.hide_ok_results_checkbox, self.export_button)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -600,14 +535,6 @@ class ExportDialog(QDialog):
     def _toggle_advanced_options(self, is_visible):
         self.advanced_options_container.setVisible(bool(is_visible))
 
-    def _update_override_state(self):
-        selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
-        is_overridden = is_generate_summary_sheet_overridden(
-            selected_preset,
-            self.generate_summary_sheet_checkbox.isChecked(),
-        )
-        self.preset_customized_badge.setVisible(is_overridden)
-            
     def validate_plot_scale_input(self):
         try:
             # Get user input
@@ -770,8 +697,6 @@ class ExportDialog(QDialog):
                     violin_input=violin_input,
                     summary_scale_input=summary_scale_input,
                     hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
-                    generate_summary_sheet=self.generate_summary_sheet_checkbox.isChecked(),
-                    generate_summary_sheet_overridden=self.preset_customized_badge.isVisible(),
                 )
             )
             validate_paths(AppPaths(db_file=self.db_file, excel_file=str(self.excel_file)))

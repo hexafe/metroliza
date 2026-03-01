@@ -4,7 +4,6 @@ import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
 from modules.contracts import validate_export_options
 from modules.export_preset_utils import (
     EXPORT_PRESET_DEFAULT,
@@ -46,6 +45,13 @@ class TestExportPresetOptionMapping(unittest.TestCase):
         self.assertTrue(full['generate_summary_sheet'])
         self.assertGreaterEqual(fast['violin_plot_min_samplesize'], full['violin_plot_min_samplesize'])
 
+
+    def test_preset_labels_match_export_dialog_copy(self):
+        from modules.export_preset_utils import get_export_preset_label
+
+        self.assertEqual(get_export_preset_label(EXPORT_PRESET_FAST_DIAGNOSTICS), 'Main plots')
+        self.assertEqual(get_export_preset_label(EXPORT_PRESET_FULL_REPORT), 'Extended plots')
+
     def test_validate_export_options_keeps_preset(self):
         full = build_export_options_for_preset(EXPORT_PRESET_FULL_REPORT)
         options = validate_export_options(
@@ -63,10 +69,37 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         qtcore_stub.QSize = object
         qtcore_stub.QTemporaryFile = object
         qtcore_stub.Qt = object
+
+        class _FakeQUrl:
+            def __init__(self, value=''):
+                self._value = str(value or '')
+
+            def isValid(self):
+                return '://' in self._value
+
+            def scheme(self):
+                return self._value.split('://', 1)[0] if self.isValid() else ''
+
+            def toLocalFile(self):
+                if self._value.startswith('file://'):
+                    return self._value[len('file://'):]
+                return ''
+
+            def __str__(self):
+                return self._value
+
+        qtcore_stub.QUrl = _FakeQUrl
         sys.modules['PyQt6.QtCore'] = qtcore_stub
 
         qtgui_stub = types.ModuleType('PyQt6.QtGui')
         qtgui_stub.QMovie = object
+
+        class _FakeDesktopServices:
+            @staticmethod
+            def openUrl(_url):
+                return True
+
+        qtgui_stub.QDesktopServices = _FakeDesktopServices
         sys.modules['PyQt6.QtGui'] = qtgui_stub
 
         qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
@@ -99,8 +132,6 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
                 violin_input='8',
                 summary_scale_input='0',
                 hide_ok_results=False,
-                generate_summary_sheet=False,
-                generate_summary_sheet_overridden=False,
             )
         )
         full_payload = validate_export_options(
@@ -112,8 +143,6 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
                 violin_input='6',
                 summary_scale_input='0',
                 hide_ok_results=False,
-                generate_summary_sheet=True,
-                generate_summary_sheet_overridden=False,
             )
         )
 
@@ -121,72 +150,6 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         self.assertEqual(full_payload.preset, EXPORT_PRESET_FULL_REPORT)
         self.assertFalse(fast_payload.generate_summary_sheet)
         self.assertTrue(full_payload.generate_summary_sheet)
-
-    def test_override_state_is_explicit(self):
-        from modules.ExportDialog import is_generate_summary_sheet_overridden
-
-        self.assertFalse(is_generate_summary_sheet_overridden(EXPORT_PRESET_FAST_DIAGNOSTICS, False))
-        self.assertTrue(is_generate_summary_sheet_overridden(EXPORT_PRESET_FAST_DIAGNOSTICS, True))
-        self.assertFalse(is_generate_summary_sheet_overridden(EXPORT_PRESET_FULL_REPORT, True))
-        self.assertTrue(is_generate_summary_sheet_overridden(EXPORT_PRESET_FULL_REPORT, False))
-
-
-    def test_effective_summary_sheet_state_helper(self):
-        from modules.ExportDialog import is_summary_sheet_effectively_enabled
-
-        self.assertFalse(is_summary_sheet_effectively_enabled(
-            EXPORT_PRESET_FAST_DIAGNOSTICS,
-            generate_summary_sheet=True,
-            generate_summary_sheet_overridden=False,
-        ))
-        self.assertTrue(is_summary_sheet_effectively_enabled(
-            EXPORT_PRESET_FAST_DIAGNOSTICS,
-            generate_summary_sheet=True,
-            generate_summary_sheet_overridden=True,
-        ))
-        self.assertTrue(is_summary_sheet_effectively_enabled(
-            EXPORT_PRESET_FULL_REPORT,
-            generate_summary_sheet=False,
-            generate_summary_sheet_overridden=False,
-        ))
-        self.assertFalse(is_summary_sheet_effectively_enabled(
-            EXPORT_PRESET_FULL_REPORT,
-            generate_summary_sheet=False,
-            generate_summary_sheet_overridden=True,
-        ))
-
-    def test_payload_uses_advanced_override_only_when_explicitly_changed(self):
-        from modules.ExportDialog import build_export_options_payload
-
-        no_override = validate_export_options(
-            build_export_options_payload(
-                selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
-                export_type='Line',
-                export_target='excel_xlsx',
-                sorting_parameter='Date',
-                violin_input='8',
-                summary_scale_input='0',
-                hide_ok_results=False,
-                generate_summary_sheet=True,
-                generate_summary_sheet_overridden=False,
-            )
-        )
-        explicit_override = validate_export_options(
-            build_export_options_payload(
-                selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
-                export_type='Line',
-                export_target='excel_xlsx',
-                sorting_parameter='Date',
-                violin_input='8',
-                summary_scale_input='0',
-                hide_ok_results=False,
-                generate_summary_sheet=True,
-                generate_summary_sheet_overridden=True,
-            )
-        )
-
-        self.assertFalse(no_override.generate_summary_sheet)
-        self.assertTrue(explicit_override.generate_summary_sheet)
 
 
 class TestExportCompletionMessaging(unittest.TestCase):
@@ -245,8 +208,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
             f'Export file: {expected_file_uri}\n'
             '\n'
             'Google Sheets conversion was not fully completed.\n'
-            'Google export failed; using local .xlsx fallback: out.xlsx\n'
-            'Warnings:\n'
+            'Warnings/Errors:\n'
             '- Missing token.json for Google Drive export. Please complete OAuth authorization first.',
         )
 
@@ -273,8 +235,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
             'Data exported locally to out.xlsx.\n'
             f'Export file: {expected_file_uri}\n'
             '\n'
-            'Google Sheets conversion was not fully completed.\n'
-            'Google export failed; using local .xlsx fallback: out.xlsx',
+            'Google Sheets conversion was not fully completed.',
         )
 
     def test_google_empty_metadata_defaults_to_standard_success_message(self):
@@ -288,7 +249,12 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'info')
         self.assertEqual(title, 'Export successful')
-        self.assertEqual(message, 'Data exported successfully to out.xlsx!')
+        expected_file_uri = Path('out.xlsx').resolve().as_uri()
+        self.assertEqual(
+            message,
+            'Data exported successfully to out.xlsx.\n'
+            f'Export file: {expected_file_uri}',
+        )
 
 
     def test_link_formatting_converts_google_urls_to_anchors(self):
@@ -339,7 +305,12 @@ class TestExportCompletionMessaging(unittest.TestCase):
 
         self.assertEqual(level, 'info')
         self.assertEqual(title, 'Export successful')
-        self.assertEqual(message, 'Data exported successfully to out.xlsx!')
+        expected_file_uri = Path('out.xlsx').resolve().as_uri()
+        self.assertEqual(
+            message,
+            'Data exported successfully to out.xlsx.\n'
+            f'Export file: {expected_file_uri}',
+        )
 
 
 class TestExportTargetSelection(unittest.TestCase):
@@ -394,107 +365,39 @@ class TestShowExportResultMessage(unittest.TestCase):
     def setUpClass(cls):
         TestExportPresetFlowIntegration.setUpClass()
 
-    def test_show_in_folder_action_reveals_file(self):
-        from modules.ExportDialog import show_export_result_message
+    def test_handle_export_result_link_reveals_file_for_export_link(self):
+        from modules.ExportDialog import handle_export_result_link
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = Path(tmpdir) / 'out.xlsx'
+            file_path.write_text('content', encoding='utf-8')
+
+            with patch('modules.ExportDialog.reveal_file_in_explorer') as reveal_mock, patch('modules.ExportDialog.QDesktopServices.openUrl') as open_url_mock:
+                handle_export_result_link(parent=None, url=file_path.resolve().as_uri(), excel_file=str(file_path))
+
+        reveal_mock.assert_called_once_with(str(file_path))
+        open_url_mock.assert_not_called()
+
+    def test_handle_export_result_link_opens_non_matching_urls_normally(self):
+        from modules.ExportDialog import handle_export_result_link
+
+        with patch('modules.ExportDialog.QDesktopServices.openUrl') as open_url_mock:
+            handle_export_result_link(parent=None, url='https://example.com', excel_file='out.xlsx')
+
+        open_url_mock.assert_called_once()
+
+    def test_open_export_result_link_surfaces_failure_warning(self):
+        from modules.ExportDialog import _open_export_result_link
 
         class FakeMessageBox:
-            class Icon:
-                Warning = 'warning'
-                Information = 'info'
-
-            class ButtonRole:
-                ActionRole = 'action'
-
-            class StandardButton:
-                Ok = 'ok'
-
-            _first_click = True
-
-            def __init__(self, parent):
-                self._action_button = object()
-                self._ok_button = object()
-
-            def setIcon(self, _):
-                pass
-
-            def setWindowTitle(self, _):
-                pass
-
-            def setText(self, _):
-                pass
-
-            def addButton(self, *_):
-                return self._action_button
-
-            def setStandardButtons(self, _):
-                pass
-
-            def exec(self):
-                pass
-
-            def clickedButton(self):
-                if FakeMessageBox._first_click:
-                    FakeMessageBox._first_click = False
-                    return self._action_button
-                return self._ok_button
-
-        with patch('modules.ExportDialog.QMessageBox', FakeMessageBox), patch('modules.ExportDialog.reveal_file_in_explorer') as reveal_mock:
-            show_export_result_message(parent=None, level='info', title='Done', message='ok', excel_file='out.xlsx')
-
-        reveal_mock.assert_called_once_with('out.xlsx')
-
-    def test_show_in_folder_failure_is_non_fatal_and_visible(self):
-        from modules.ExportDialog import show_export_result_message
-
-        class FakeMessageBox:
-            class Icon:
-                Warning = 'warning'
-                Information = 'info'
-
-            class ButtonRole:
-                ActionRole = 'action'
-
-            class StandardButton:
-                Ok = 'ok'
-
             warning_calls = []
-
-            _first_click = True
-
-            def __init__(self, parent):
-                self._action_button = object()
-                self._ok_button = object()
-
-            def setIcon(self, _):
-                pass
-
-            def setWindowTitle(self, _):
-                pass
-
-            def setText(self, _):
-                pass
-
-            def addButton(self, *_):
-                return self._action_button
-
-            def setStandardButtons(self, _):
-                pass
-
-            def exec(self):
-                pass
-
-            def clickedButton(self):
-                if FakeMessageBox._first_click:
-                    FakeMessageBox._first_click = False
-                    return self._action_button
-                return self._ok_button
 
             @staticmethod
             def warning(parent, title, text):
                 FakeMessageBox.warning_calls.append((parent, title, text))
 
-        with patch('modules.ExportDialog.QMessageBox', FakeMessageBox), patch('modules.ExportDialog.reveal_file_in_explorer', side_effect=RuntimeError('boom')):
-            show_export_result_message(parent=None, level='warning', title='Done', message='ok', excel_file='out.xlsx')
+        with patch('modules.ExportDialog.QMessageBox', FakeMessageBox), patch('modules.ExportDialog.handle_export_result_link', side_effect=RuntimeError('boom')):
+            _open_export_result_link(parent=None, link='file:///tmp/out.xlsx', excel_file='out.xlsx')
 
         self.assertEqual(len(FakeMessageBox.warning_calls), 1)
         _, warning_title, warning_text = FakeMessageBox.warning_calls[0]
