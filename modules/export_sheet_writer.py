@@ -4,13 +4,8 @@ from modules.export_summary_utils import resolve_nominal_and_limits
 
 
 def build_spec_limit_anchor_rows(usl, lsl):
-    """Return worksheet helper rows for USL/LSL anchor points."""
-    return [
-        ('USL_MAX', usl),
-        ('USL_MIN', usl),
-        ('LSL_MAX', lsl),
-        ('LSL_MIN', lsl),
-    ]
+    """Deprecated: legacy helper rows are no longer used by chart writers."""
+    return []
 
 
 def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
@@ -75,6 +70,8 @@ def build_measurement_block_plan(*, base_col, sample_size):
     last_data_row = data_start_row + sample_size - 1
     y_column = base_col + 2
     summary_column = base_col + 1
+    usl_column = base_col + 3
+    lsl_column = base_col + 4
 
     return {
         'data_header_row': data_header_row,
@@ -82,6 +79,8 @@ def build_measurement_block_plan(*, base_col, sample_size):
         'last_data_row': last_data_row,
         'summary_column': summary_column,
         'y_column': y_column,
+        'usl_column': usl_column,
+        'lsl_column': lsl_column,
         'data_range_y': (
             f'{xl_col_to_name(y_column)}{data_start_row + 1}:'
             f'{xl_col_to_name(y_column)}{last_data_row + 1}'
@@ -165,7 +164,6 @@ def build_measurement_header_block_plan(header_group, base_col, cache=None):
         'usl_cell': usl_cell,
         'lsl_cell': lsl_cell,
         'stat_rows': build_measurement_stat_row_specs(stat_formulas),
-        'spec_limit_rows': build_spec_limit_anchor_rows(usl, lsl),
         'measurement_plan': measurement_plan,
     }
 
@@ -189,10 +187,21 @@ def build_measurement_write_bundle_cached(header, header_group, base_col, cache=
         )
     ]
 
+    row_count = len(header_group)
+    usl_vector = [None] * row_count
+    lsl_vector = [None] * row_count
+    if row_count:
+        usl_vector[0] = header_plan['usl']
+        lsl_vector[0] = header_plan['lsl']
+        usl_vector[-1] = header_plan['usl']
+        lsl_vector[-1] = header_plan['lsl']
+
     data_columns = [
         (measurement_plan['data_header_row'], base_col, 'Date', header_group['DATE'], None),
         (measurement_plan['data_header_row'], base_col + 1, 'Sample #', header_group['SAMPLE_NUMBER'], None),
         (measurement_plan['data_header_row'], base_col + 2, header, header_group['MEAS'].round(3), 'wrap'),
+        (measurement_plan['data_header_row'], base_col + 3, 'USL', usl_vector, None),
+        (measurement_plan['data_header_row'], base_col + 4, 'LSL', lsl_vector, None),
     ]
 
     return {
@@ -269,11 +278,6 @@ def write_measurement_block(worksheet, write_bundle, formats, *, base_col):
     for row_index, row_label, row_value in write_bundle['static_rows']:
         worksheet.write(row_index, base_col, row_label)
         worksheet.write(row_index, base_col + 1, row_value)
-
-    worksheet.write(0, base_col + 2, header_plan['usl'])
-    worksheet.write(1, base_col + 2, header_plan['usl'])
-    worksheet.write(2, base_col + 2, header_plan['lsl'])
-    worksheet.write(3, base_col + 2, header_plan['lsl'])
 
     summary_rows = build_measurement_summary_row_layout(base_col=base_col, stat_rows=header_plan['stat_rows'])
     write_measurement_summary_rows(worksheet, summary_rows, formats)
