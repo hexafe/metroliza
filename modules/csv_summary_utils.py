@@ -1,5 +1,6 @@
 import csv
 import json
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +10,9 @@ from modules.stats_utils import safe_process_capability
 
 _SAMPLE_ROWS = 200
 _TOP_FULL_READ_CANDIDATES = 2
+
+
+logger = logging.getLogger(__name__)
 
 
 def _score_dataframe(df, numeric_columns_hint=None):
@@ -126,7 +130,13 @@ def load_csv_summary_presets(preset_path):
     try:
         with path.open('r', encoding='utf-8') as handle:
             data = json.load(handle)
-    except Exception:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        logger.warning(
+            "Failed to load CSV summary presets from %s (%s): %s",
+            path,
+            exc.__class__.__name__,
+            exc,
+        )
         return {}
 
     return data if isinstance(data, dict) else {}

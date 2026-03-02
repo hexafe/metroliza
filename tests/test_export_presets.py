@@ -35,6 +35,37 @@ class TestExportPresetSerialization(unittest.TestCase):
         self.assertTrue(changed_invalid)
         self.assertEqual(migrated_invalid['selected_preset'], EXPORT_PRESET_DEFAULT)
 
+    def test_load_export_dialog_config_malformed_json_logs_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / '.metroliza' / '.export_dialog_config.json'
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text('{"selected_preset":', encoding='utf-8')
+
+            with patch('modules.export_preset_utils.logger.warning') as warning_mock:
+                loaded = load_export_dialog_config(config_path)
+
+            self.assertEqual({}, loaded)
+            warning_mock.assert_called_once()
+            args = warning_mock.call_args.args
+            self.assertEqual(config_path, args[1])
+            self.assertEqual('JSONDecodeError', args[2])
+
+    def test_load_export_dialog_config_unreadable_logs_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / '.metroliza' / '.export_dialog_config.json'
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text('{}', encoding='utf-8')
+
+            with patch('pathlib.Path.open', side_effect=OSError('permission denied')):
+                with patch('modules.export_preset_utils.logger.warning') as warning_mock:
+                    loaded = load_export_dialog_config(config_path)
+
+            self.assertEqual({}, loaded)
+            warning_mock.assert_called_once()
+            args = warning_mock.call_args.args
+            self.assertEqual(config_path, args[1])
+            self.assertEqual('OSError', args[2])
+
 
 class TestExportPresetOptionMapping(unittest.TestCase):
     def test_preset_option_baselines(self):

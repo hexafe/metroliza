@@ -1,6 +1,7 @@
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import pandas as pd
@@ -223,6 +224,36 @@ class CsvSummaryUtilsTests(unittest.TestCase):
             loaded = load_csv_summary_presets(preset_path)
 
             self.assertEqual(payload, loaded)
+
+
+    def test_load_csv_summary_presets_malformed_json_logs_warning(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_path = Path(tmpdir) / 'presets.json'
+            preset_path.write_text('{"line.csv":', encoding='utf-8')
+
+            with patch('modules.csv_summary_utils.logger.warning') as warning_mock:
+                loaded = load_csv_summary_presets(preset_path)
+
+            self.assertEqual({}, loaded)
+            warning_mock.assert_called_once()
+            args = warning_mock.call_args.args
+            self.assertEqual(preset_path, args[1])
+            self.assertEqual('JSONDecodeError', args[2])
+
+    def test_load_csv_summary_presets_unreadable_logs_warning(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_path = Path(tmpdir) / 'presets.json'
+            preset_path.write_text('{}', encoding='utf-8')
+
+            with patch('pathlib.Path.open', side_effect=OSError('permission denied')):
+                with patch('modules.csv_summary_utils.logger.warning') as warning_mock:
+                    loaded = load_csv_summary_presets(preset_path)
+
+            self.assertEqual({}, loaded)
+            warning_mock.assert_called_once()
+            args = warning_mock.call_args.args
+            self.assertEqual(preset_path, args[1])
+            self.assertEqual('OSError', args[2])
 
 
     def test_normalize_column_spec_limits_defaults_and_casts(self):

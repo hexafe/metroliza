@@ -1,5 +1,8 @@
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 EXPORT_PRESET_FAST_DIAGNOSTICS = "fast_diagnostics"
@@ -81,7 +84,13 @@ def load_export_dialog_config(config_path):
     try:
         with path.open('r', encoding='utf-8') as handle:
             payload = json.load(handle)
-    except Exception:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        logger.warning(
+            "Failed to load export dialog config from %s (%s): %s",
+            path,
+            exc.__class__.__name__,
+            exc,
+        )
         return {}
 
     return payload if isinstance(payload, dict) else {}
