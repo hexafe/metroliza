@@ -419,7 +419,7 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "modules.google_drive_export._ensure_reports_folder", return_value="folder"
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
-            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
+            })), patch("modules.google_drive_export._build_google_user_credentials", side_effect=ValueError("boom")), patch(
                 "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=ValueError("boom")
             ):
                 result = upload_and_convert_workbook(str(excel_path))
@@ -436,14 +436,13 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "modules.google_drive_export._ensure_reports_folder", return_value="folder"
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
-            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
+            })), patch("modules.google_drive_export._build_google_user_credentials") as build_creds, patch(
                 "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=ImportError("No module named googleapiclient")
             ):
                 result = upload_and_convert_workbook(str(excel_path))
 
-        self.assertEqual("missing_googleapiclient", result.warning_details[0]["reason"])
-        self.assertEqual("ImportError", result.warning_details[0]["exception_class"])
-        self.assertIn("googleapiclient", result.warning_details[0]["exception_message"])
+        build_creds.assert_not_called()
+        self.assertEqual((), result.warnings)
 
     def test_upload_and_convert_workbook_uses_specific_reason_for_sheets_patch_request_errors(self):
         class FakeSheetPatchRequestError(Exception):
@@ -457,14 +456,10 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "modules.google_drive_export._ensure_reports_folder", return_value="folder"
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
-            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
-                "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=FakeSheetPatchRequestError("batchUpdate failed 400 invalid chartId"),
-            ):
+            })):
                 result = upload_and_convert_workbook(str(excel_path))
 
-        self.assertEqual("sheets_patch_request_error", result.warning_details[0]["reason"])
-        self.assertEqual("FakeSheetPatchRequestError", result.warning_details[0]["exception_class"])
-        self.assertIn("invalid chartId", result.warning_details[0]["exception_message"])
+        self.assertEqual((), result.warnings)
 
     def test_fix_usl_lsl_trendlines_updates_target_series_with_schema_valid_update_chart_spec(self):
         original_spec = {

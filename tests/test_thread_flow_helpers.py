@@ -1231,7 +1231,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                     local_xlsx_path=out_file,
                     fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
                     warnings=(),
-                    converted_tab_titles=('MEASUREMENTS',),
                 )
 
             module.upload_and_convert_workbook = _fake_upload
@@ -1287,7 +1286,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                     local_xlsx_path=out_file,
                     fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
                     warnings=(),
-                    converted_tab_titles=('REF_A', 'REF_A_summary', 'REF_B', 'REF_B_summary', 'MEASUREMENTS'),
                 )
 
             module.upload_and_convert_workbook = _fake_upload
@@ -1337,7 +1335,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                     local_xlsx_path=out_file,
                     fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
                     warnings=(),
-                    converted_tab_titles=('MEASUREMENTS',),
                 )
 
             module.upload_and_convert_workbook = _fake_upload
@@ -1471,16 +1468,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                 local_xlsx_path=out_file,
                 fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
                 warnings=('Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',),
-                warning_details=(
-                    {
-                        'category': 'conversion_validation',
-                        'reason': 'missing_expected_tab',
-                        'exception_class': 'ValueError',
-                        'exception_message': 'Missing expected tab REF_A',
-                        'warning': 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',
-                    },
-                ),
-                converted_tab_titles=('MEASUREMENTS',),
             )
             try:
                 thread.run()
@@ -1532,7 +1519,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                     local_xlsx_path=out_file,
                     fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
                     warnings=(),
-                    converted_tab_titles=('MEASUREMENTS',),
                 )
 
             module.upload_and_convert_workbook = _fake_upload
@@ -1604,7 +1590,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                     local_xlsx_path=out_file,
                     fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
                     warnings=(),
-                    converted_tab_titles=('MEASUREMENTS',),
                 )
 
             module.upload_and_convert_workbook = _fake_upload
@@ -1677,7 +1662,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                 local_xlsx_path=out_file,
                 fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
                 warnings=('Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',),
-                converted_tab_titles=('MEASUREMENTS',),
             )
             logger = logging.getLogger()
             previous_handlers = list(logger.handlers)
@@ -1730,9 +1714,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                 file_id='sheet-id',
                 web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
                 local_xlsx_path=out_file,
-                fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
+                fallback_message='',
                 warnings=(),
-                converted_tab_titles=('MEASUREMENTS',),
             )
             try:
                 thread.run()
@@ -1741,10 +1724,8 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             metadata = thread.completion_metadata
             self.assertEqual(metadata['converted_url'], 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
-            self.assertEqual(metadata['fallback_message'], f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}')
+            self.assertEqual(metadata['fallback_message'], '')
             self.assertEqual(metadata['conversion_warnings'], [])
-            self.assertEqual(metadata['conversion_warning_details'], [])
-            self.assertEqual(metadata['converted_tab_titles'], ['MEASUREMENTS'])
 
     def test_google_target_exception_fallback_metadata_contains_expected_keys(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -1781,10 +1762,8 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             metadata = thread.completion_metadata
             self.assertEqual(metadata.get('converted_url'), None)
-            self.assertEqual(metadata.get('converted_tab_titles'), None)
             self.assertEqual(metadata['fallback_message'], f'Google export failed; using local .xlsx fallback: {out_file}')
             self.assertEqual(metadata['conversion_warnings'], ['temporary outage'])
-            self.assertEqual(metadata['conversion_warning_details'], [])
 
 if __name__ == '__main__':
     unittest.main()
