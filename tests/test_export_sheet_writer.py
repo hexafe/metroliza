@@ -55,6 +55,7 @@ class TestExportSheetWriter(unittest.TestCase):
         self.assertEqual(measurement_plan['data_start_row'], 21)
         self.assertEqual(len(worksheet.conditional_formats), 3)
         self.assertTrue(any(w[2] == 'NOK %' for w in worksheet.writes if isinstance(w[2], str)))
+        self.assertFalse(any((w[0], w[1]) in {(0, 2), (1, 2), (2, 2), (3, 2)} for w in worksheet.writes))
 
 
     def test_build_measurement_summary_row_layout_keeps_legacy_coordinates(self):
@@ -123,6 +124,8 @@ class TestExportSheetWriter(unittest.TestCase):
         self.assertEqual(cached['static_rows'], uncached['static_rows'])
         self.assertEqual(cached['header_plan']['stat_rows'], uncached['header_plan']['stat_rows'])
         self.assertEqual(cached['measurement_plan'], uncached['measurement_plan'])
+        self.assertIn('usl_column', cached['measurement_plan'])
+        self.assertIn('lsl_column', cached['measurement_plan'])
 
     def test_debug_timing_cached_header_plan_path_runs(self):
         header_group = pd.DataFrame(
