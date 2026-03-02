@@ -748,20 +748,24 @@ class ExportDialog(QDialog):
                     completion_metadata=getattr(self.export_thread, 'completion_metadata', {}),
                 )
 
-                show_export_result_message(self, level, title, message, excel_file=self.excel_file)
+                try:
+                    show_export_result_message(self, level, title, message, excel_file=self.excel_file)
+                except Exception:
+                    logger.exception("Failed to show rich export completion dialog; falling back to basic message box.")
+                    QMessageBox.information(
+                        self,
+                        "Export successful",
+                        f"Data exported successfully to {self.excel_file}.",
+                    )
 
             # Close the loading dialog
             self.loading_dialog.accept()
-
-            # Re-enable the export button
-            self.export_button.setEnabled(True)
-
-            self.export_error_message = None
-
-            # Close the exporting dialog
-            self.accept()
         except Exception as e:
             self.log_and_exit(e)
+        finally:
+            # Re-enable actions after completion flow and clear transient error state.
+            self.export_button.setEnabled(True)
+            self.export_error_message = None
             
     def log_and_exit(self, exception):
         CustomLogger(exception, reraise=False)
