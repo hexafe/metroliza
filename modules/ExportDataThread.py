@@ -731,9 +731,9 @@ def add_violin_annotation_legend(ax, style):
 
     ax.legend(
         handles=handles,
-        loc='upper right',
-        bbox_to_anchor=(1.02, 1.02),
-        borderaxespad=0.08,
+        loc='upper left',
+        bbox_to_anchor=(1.0, 1.0),
+        borderaxespad=0.0,
         frameon=True,
         fontsize=max(style.get('font_size', 6.8) - 0.2, 6.6),
     )
@@ -872,7 +872,7 @@ def add_iqr_boxplot_legend(ax):
     handles = build_iqr_legend_handles()
     ax.legend(
         handles=handles,
-        loc='upper right',
+        loc='upper left',
         bbox_to_anchor=(1.0, 1.0),
         fontsize=7,
         framealpha=0.9,
@@ -1835,7 +1835,7 @@ class ExportDataThread(QThread):
                     write_start = time.perf_counter()
                     measurement_plan = write_measurement_block(worksheet, write_bundle, formats, base_col=base_col)
 
-                    col += 3
+                    col += 5
                     header_col_end = col - 1
                     worksheet.set_column(header_col_end, header_col_end, None, cell_format=formats['border'])
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
@@ -1848,7 +1848,7 @@ class ExportDataThread(QThread):
                         header=header,
                         sheet_name=safe_ref_sheet_name,
                         measurement_plan=measurement_plan,
-                        chart_anchor_col=col - 3,
+                        chart_anchor_col=col - 5,
                         cache=optimization_cache,
                     )
 
@@ -2083,7 +2083,8 @@ class ExportDataThread(QThread):
                     precomputed_density_curve = None
                     precomputed_trend_payload = None
 
-            distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
+            distribution_key = 'GROUP' if grouping_applied else '__ALL__'
+            scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
             prep_executor = self._summary_prep_executor
             if prep_executor is not None:
                 try:
@@ -2132,7 +2133,7 @@ class ExportDataThread(QThread):
             x_values = None
             y_values = None
             if not can_render_violin:
-                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_distribution_group, distribution_key)
+                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_distribution_group, scatter_key)
                 label_positions = list(x_values)
 
             summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
@@ -2182,6 +2183,7 @@ class ExportDataThread(QThread):
                     ax.set_xlabel('Sample #')
                     ax.set_ylabel('Measurement')
                     ax.set_title(f'{header}')
+                    plt.subplots_adjust(right=0.8)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
 
@@ -2219,6 +2221,7 @@ class ExportDataThread(QThread):
                     ax.set_xlabel('Group')
                     ax.set_ylabel('Measurement')
                     ax.set_title(f'{header} - IQR Outlier Detection')
+                    plt.subplots_adjust(right=0.8)
 
                     current_y_limits = ax.get_ylim()
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)

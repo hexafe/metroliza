@@ -94,7 +94,7 @@ def _get_measurement_block_template(*, base_col, sample_size, cache=None):
     """Return cached per-column/per-size fragments for one measurement block.
 
     Tradeoff: the cache grows with unique ``(base_col, sample_size)`` combinations.
-    In normal exports base columns advance by 3 and stay bounded by the header count,
+    In normal exports base columns advance by 5 and stay bounded by the header count,
     so this remains small and predictable per export run.
     """
     cache_store = None
