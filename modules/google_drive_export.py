@@ -408,6 +408,29 @@ def _is_helper_merged_source(source: dict[str, Any]) -> bool:
     return (end_col - start_col) == 1 and (end_row - start_row) > 1
 
 
+def _source_row_block(source: dict[str, Any]) -> str | None:
+    start_row = source.get("startRowIndex")
+    end_row = source.get("endRowIndex")
+    if not isinstance(start_row, int) or not isinstance(end_row, int):
+        return None
+    if start_row == 0 and end_row == 2:
+        return "USL"
+    if start_row == 2 and end_row == 4:
+        return "LSL"
+    return None
+
+
+def _series_helper_anchor_role(series_item: Any) -> str | None:
+    roles = {_source_row_block(source) for source in _series_sources(series_item)}
+    roles.discard(None)
+    if len(roles) != 1:
+        return None
+    role = next(iter(roles))
+    if role not in {"USL", "LSL"}:
+        return None
+    return role
+
+
 def _normalize_measurement_chart_series(series: list[Any]) -> list[Any] | None:
     if not isinstance(series, list) or len(series) < 3:
         return None
@@ -425,24 +448,30 @@ def _normalize_measurement_chart_series(series: list[Any]) -> list[Any] | None:
     if not limit_candidates:
         return None
 
-    named_limit_candidates = [
-        candidate for candidate in limit_candidates if _series_name(candidate) in GOOGLE_LIMIT_SERIES_NAMES
-    ]
+    named_limit_candidates = [candidate for candidate in limit_candidates if _series_name(candidate) in GOOGLE_LIMIT_SERIES_NAMES]
+    helper_usl_candidates = [candidate for candidate in limit_candidates if _series_helper_anchor_role(candidate) == "USL"]
+    helper_lsl_candidates = [candidate for candidate in limit_candidates if _series_helper_anchor_role(candidate) == "LSL"]
     helper_candidates = [
-        candidate
-        for candidate in limit_candidates
-        if any(_is_helper_merged_source(source) for source in _series_sources(candidate))
+        candidate for candidate in limit_candidates if any(_is_helper_merged_source(source) for source in _series_sources(candidate))
     ]
-    if not named_limit_candidates and len(helper_candidates) < 2:
+
+    if not named_limit_candidates and not (helper_usl_candidates and helper_lsl_candidates):
         return None
 
-    usl_series = next((candidate for candidate in limit_candidates if _series_name(candidate) == "USL"), None)
-    lsl_series = next((candidate for candidate in limit_candidates if _series_name(candidate) == "LSL"), None)
+    usl_series = helper_usl_candidates[0] if helper_usl_candidates else None
+    lsl_series = helper_lsl_candidates[0] if helper_lsl_candidates else None
+
+    if usl_series is None:
+        usl_series = next((candidate for candidate in limit_candidates if _series_name(candidate) == "USL"), None)
+    if lsl_series is None:
+        lsl_series = next((candidate for candidate in limit_candidates if _series_name(candidate) == "LSL"), None)
 
     if usl_series is None and helper_candidates:
         usl_series = helper_candidates[0]
-    if lsl_series is None and len(helper_candidates) > 1:
-        lsl_series = helper_candidates[1]
+    if lsl_series is None:
+        remaining_helper = [candidate for candidate in helper_candidates if candidate is not usl_series]
+        if remaining_helper:
+            lsl_series = remaining_helper[0]
     if usl_series is None and limit_candidates:
         usl_series = limit_candidates[0]
     if lsl_series is None:

@@ -21,6 +21,7 @@ from modules.google_drive_export import (
     _build_limit_series_patch_requests,
     _build_upload_request_body,
     _load_token_payload,
+    _normalize_measurement_chart_series,
     fix_usl_lsl_trendlines,
     _refresh_access_token,
     map_google_http_error,
@@ -731,6 +732,99 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual([], info_logger.call_args_list[1].kwargs["extra"]["chartIds"])
         self.assertEqual([], fake_service._spreadsheets.batch_update_calls)
 
+
+    def test_normalize_measurement_chart_series_prefers_helper_anchor_row_blocks(self):
+        original_series = [
+            {
+                "series": {
+                    "seriesName": {"value": "Measured"},
+                    "sourceRange": {
+                        "sources": [
+                            {
+                                "sheetId": 1,
+                                "startRowIndex": 1,
+                                "endRowIndex": 10,
+                                "startColumnIndex": 2,
+                                "endColumnIndex": 3,
+                            }
+                        ]
+                    },
+                }
+            },
+            {
+                "series": {
+                    "seriesName": {"value": "USL"},
+                    "sourceRange": {
+                        "sources": [
+                            {
+                                "sheetId": 1,
+                                "startRowIndex": 1,
+                                "endRowIndex": 10,
+                                "startColumnIndex": 7,
+                                "endColumnIndex": 8,
+                            }
+                        ]
+                    },
+                }
+            },
+            {
+                "series": {
+                    "sourceRange": {
+                        "sources": [
+                            {
+                                "sheetId": 99,
+                                "startRowIndex": 2,
+                                "endRowIndex": 4,
+                                "startColumnIndex": 14,
+                                "endColumnIndex": 15,
+                            }
+                        ]
+                    }
+                }
+            },
+            {
+                "series": {
+                    "seriesName": {"value": "LSL"},
+                    "sourceRange": {
+                        "sources": [
+                            {
+                                "sheetId": 1,
+                                "startRowIndex": 1,
+                                "endRowIndex": 10,
+                                "startColumnIndex": 8,
+                                "endColumnIndex": 9,
+                            }
+                        ]
+                    },
+                }
+            },
+            {
+                "series": {
+                    "sourceRange": {
+                        "sources": [
+                            {
+                                "sheetId": 99,
+                                "startRowIndex": 0,
+                                "endRowIndex": 2,
+                                "startColumnIndex": 14,
+                                "endColumnIndex": 15,
+                            }
+                        ]
+                    }
+                }
+            },
+        ]
+
+        normalized = _normalize_measurement_chart_series(original_series)
+
+        self.assertIsNotNone(normalized)
+        self.assertEqual(3, len(normalized))
+        self.assertEqual("Measured", normalized[0]["series"]["seriesName"]["value"])
+        usl_source = normalized[1]["series"]["sourceRange"]["sources"][0]
+        lsl_source = normalized[2]["series"]["sourceRange"]["sources"][0]
+        self.assertEqual((0, 2), (usl_source["startRowIndex"], usl_source["endRowIndex"]))
+        self.assertEqual((2, 4), (lsl_source["startRowIndex"], lsl_source["endRowIndex"]))
+
     def test_fix_usl_lsl_trendlines_rewrites_measurement_series_to_canonical_three_series(self):
         discovery_payload = {
             "sheets": [
@@ -760,17 +854,18 @@ class TestGoogleDriveExport(unittest.TestCase):
                                         },
                                         {
                                             "series": {
+                                                "seriesName": {"value": "USL"},
                                                 "sourceRange": {
                                                     "sources": [
                                                         {
                                                             "sheetId": 99,
                                                             "startRowIndex": 0,
-                                                            "endRowIndex": 4,
+                                                            "endRowIndex": 2,
                                                             "startColumnIndex": 14,
                                                             "endColumnIndex": 15,
                                                         }
                                                     ]
-                                                }
+                                                },
                                             }
                                         },
                                         {
@@ -805,6 +900,22 @@ class TestGoogleDriveExport(unittest.TestCase):
                                                 },
                                             }
                                         },
+                                        {
+                                            "series": {
+                                                "seriesName": {"value": "LSL"},
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 99,
+                                                            "startRowIndex": 2,
+                                                            "endRowIndex": 4,
+                                                            "startColumnIndex": 14,
+                                                            "endColumnIndex": 15,
+                                                        }
+                                                    ]
+                                                },
+                                            }
+                                        },
                                     ],
                                 }
                             },
@@ -823,15 +934,12 @@ class TestGoogleDriveExport(unittest.TestCase):
         update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
         updated_series = update_request["spec"]["basicChart"]["series"]
         self.assertEqual(3, len(updated_series))
-        self.assertNotIn("seriesName", updated_series[1].get("series", {}))
-        self.assertNotIn("seriesName", updated_series[2].get("series", {}))
-        helper_sources = [
-            source
-            for series in updated_series
-            for source in series["series"]["sourceRange"]["sources"]
-            if source.get("sheetId") == 99
-        ]
-        self.assertEqual([], helper_sources)
+        usl_source = updated_series[1]["series"]["sourceRange"]["sources"][0]
+        lsl_source = updated_series[2]["series"]["sourceRange"]["sources"][0]
+        self.assertEqual(99, usl_source.get("sheetId"))
+        self.assertEqual((0, 2), (usl_source.get("startRowIndex"), usl_source.get("endRowIndex")))
+        self.assertEqual(99, lsl_source.get("sheetId"))
+        self.assertEqual((2, 4), (lsl_source.get("startRowIndex"), lsl_source.get("endRowIndex")))
 
     def test_fix_usl_lsl_trendlines_avoids_helper_merged_range_for_limit_indexes(self):
         discovery_payload = {
@@ -866,7 +974,7 @@ class TestGoogleDriveExport(unittest.TestCase):
                                                     "sources": [
                                                         {
                                                             "sheetId": 1,
-                                                            "startRowIndex": 0,
+                                                            "startRowIndex": 2,
                                                             "endRowIndex": 4,
                                                             "startColumnIndex": 14,
                                                             "endColumnIndex": 15,
@@ -907,6 +1015,21 @@ class TestGoogleDriveExport(unittest.TestCase):
                                                 },
                                             }
                                         },
+                                        {
+                                            "series": {
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 0,
+                                                            "endRowIndex": 2,
+                                                            "startColumnIndex": 14,
+                                                            "endColumnIndex": 15,
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        },
                                     ],
                                 }
                             },
@@ -924,10 +1047,10 @@ class TestGoogleDriveExport(unittest.TestCase):
 
         update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
         updated_series = update_request["spec"]["basicChart"]["series"]
-        self.assertNotIn("seriesName", updated_series[1].get("series", {}))
-        self.assertNotIn("seriesName", updated_series[2].get("series", {}))
-        self.assertEqual(7, updated_series[1]["series"]["sourceRange"]["sources"][0]["startColumnIndex"])
-        self.assertEqual(8, updated_series[2]["series"]["sourceRange"]["sources"][0]["startColumnIndex"])
+        usl_source = updated_series[1]["series"]["sourceRange"]["sources"][0]
+        lsl_source = updated_series[2]["series"]["sourceRange"]["sources"][0]
+        self.assertEqual((0, 2), (usl_source["startRowIndex"], usl_source["endRowIndex"]))
+        self.assertEqual((2, 4), (lsl_source["startRowIndex"], lsl_source["endRowIndex"]))
 
     def test_fix_usl_lsl_trendlines_skips_when_chart_has_fewer_than_three_series(self):
         discovery_payload = {
