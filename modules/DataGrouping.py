@@ -21,7 +21,8 @@ class DataGrouping(QDialog):
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         self.setWindowTitle("Data grouping")
-        self.setWindowIcon(parent.windowIcon())
+        if parent is not None and hasattr(parent, "windowIcon"):
+            self.setWindowIcon(parent.windowIcon())
         self.setModal(True)
         
         self.db_file = db_file

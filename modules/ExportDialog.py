@@ -220,7 +220,8 @@ class ExportDialog(QDialog):
         super().__init__(parent)
         
         self.setWindowTitle("Export")
-        self.setWindowIcon(parent.windowIcon())
+        if parent is not None and hasattr(parent, "windowIcon"):
+            self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 300, 150)
 
         self.db_file = db_file
