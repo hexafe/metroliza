@@ -1099,11 +1099,11 @@ class ExportDataThread(QThread):
         self._prepared_grouping_df = None
         self.completion_metadata = {
             "local_xlsx_path": self.excel_file,
-            "converted_url": "",
+            "converted_url": None,
             "fallback_message": "",
             "conversion_warnings": [],
             "conversion_warning_details": [],
-            "converted_tab_titles": [],
+            "converted_tab_titles": None,
         }
         self._exported_sheet_names = []
         self._exported_sheet_name_set = set()
