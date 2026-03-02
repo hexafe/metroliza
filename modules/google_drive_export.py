@@ -573,9 +573,19 @@ _ALLOWED_SERIES_KEYS = {
     "styleOverrides",
     "dataLabel",
 }
-_ALLOWED_SERIES_OBJECT_KEYS = {"sourceRange", "seriesName"}
+_ALLOWED_SERIES_OBJECT_KEYS = {"sourceRange"}
 _ALLOWED_TRENDLINE_KEYS = {"type", "lineStyle", "colorStyle", "label"}
 _ALLOWED_LINE_STYLE_KEYS = {"type", "width"}
+_ALLOWED_POINT_STYLE_SHAPES = {
+    "CIRCLE",
+    "DIAMOND",
+    "HEXAGON",
+    "PENTAGON",
+    "SQUARE",
+    "STAR",
+    "TRIANGLE",
+    "X_MARK",
+}
 
 
 def _sanitize_series_item_for_patch(series_item: Any, *, include_trendline: bool = False) -> dict[str, Any]:
@@ -621,6 +631,19 @@ def _sanitize_series_item_for_patch(series_item: Any, *, include_trendline: bool
                 sanitized_trendline[trendline_key] = copy.deepcopy(trendline_value)
             if sanitized_trendline:
                 sanitized[key] = sanitized_trendline
+            continue
+        if key == "pointStyle":
+            if not isinstance(value, dict):
+                continue
+            shape_value = value.get("shape")
+            if not isinstance(shape_value, str):
+                continue
+            normalized_shape = shape_value.upper()
+            if normalized_shape not in _ALLOWED_POINT_STYLE_SHAPES:
+                continue
+            sanitized[key] = {"shape": normalized_shape}
+            if isinstance(value.get("size"), (int, float)):
+                sanitized[key]["size"] = copy.deepcopy(value["size"])
             continue
         sanitized[key] = copy.deepcopy(value)
     return sanitized
