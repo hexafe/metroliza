@@ -354,7 +354,7 @@ def _ensure_reports_folder(access_token: str) -> str:
 def _hex_to_rgb_color(color_hex: str) -> dict[str, float]:
     normalized = str(color_hex or "").strip().lstrip("#")
     if len(normalized) != 6:
-        normalized = "c0504d"
+        normalized = "c0504b"
     try:
         red = int(normalized[0:2], 16) / 255.0
         green = int(normalized[2:4], 16) / 255.0
@@ -517,11 +517,14 @@ _ALLOWED_SERIES_KEYS = {
     "type",
     "lineStyle",
     "colorStyle",
+    "trendline",
     "pointStyle",
     "styleOverrides",
     "dataLabel",
 }
 _ALLOWED_SERIES_OBJECT_KEYS = {"sourceRange"}
+_ALLOWED_TRENDLINE_KEYS = {"type", "lineStyle", "colorStyle", "opacity", "label"}
+_ALLOWED_LINE_STYLE_KEYS = {"type", "width"}
 
 
 def _sanitize_series_item_for_patch(series_item: Any) -> dict[str, Any]:
@@ -544,6 +547,29 @@ def _sanitize_series_item_for_patch(series_item: Any) -> dict[str, Any]:
             }
             if sanitized_series_obj:
                 sanitized[key] = sanitized_series_obj
+            continue
+        if key == "trendline":
+            if not isinstance(value, dict):
+                continue
+            sanitized_trendline: dict[str, Any] = {}
+            for trendline_key in _ALLOWED_TRENDLINE_KEYS:
+                trendline_value = value.get(trendline_key)
+                if trendline_value is None:
+                    continue
+                if trendline_key == "lineStyle":
+                    if not isinstance(trendline_value, dict):
+                        continue
+                    sanitized_line_style = {
+                        line_style_key: copy.deepcopy(trendline_value[line_style_key])
+                        for line_style_key in _ALLOWED_LINE_STYLE_KEYS
+                        if line_style_key in trendline_value
+                    }
+                    if sanitized_line_style:
+                        sanitized_trendline[trendline_key] = sanitized_line_style
+                    continue
+                sanitized_trendline[trendline_key] = copy.deepcopy(trendline_value)
+            if sanitized_trendline:
+                sanitized[key] = sanitized_trendline
             continue
         sanitized[key] = copy.deepcopy(value)
     return sanitized
@@ -569,7 +595,7 @@ def fix_usl_lsl_trendlines(
     spreadsheet_id: str,
     usl_series_index: int = 1,
     lsl_series_index: int = 2,
-    color_hex: str = "#c0504d",
+    color_hex: str = "#c0504b",
     width_px: int = 2,
     opacity: float = 0.6,
 ) -> None:
@@ -665,6 +691,15 @@ def fix_usl_lsl_trendlines(
                 line_style["width"] = line_width
                 series_item["lineStyle"] = line_style
                 series_item["colorStyle"] = copy.deepcopy(rgb_color_style)
+                series_item["trendline"] = {
+                    "type": "LINEAR",
+                    "lineStyle": {
+                        "type": "SOLID",
+                        "width": line_width,
+                    },
+                    "colorStyle": copy.deepcopy(rgb_color_style),
+                    "opacity": line_opacity,
+                }
 
                 updated_indexes.append(series_index)
 
@@ -768,7 +803,7 @@ def _build_limit_series_patch_requests(charts_payload: dict[str, Any]) -> list[d
                                             "type": "SOLID",
                                             "width": 2,
                                         },
-                                        "colorStyle": {"rgbColor": _hex_to_rgb_color("#c0504d")},
+                                        "colorStyle": {"rgbColor": _hex_to_rgb_color("#c0504b")},
                                     }
                                 ]
                             }
@@ -913,7 +948,7 @@ def upload_and_convert_workbook(
             spreadsheet_id=parsed.file_id,
             usl_series_index=1,
             lsl_series_index=2,
-            color_hex="#c0504d",
+            color_hex="#c0504b",
             width_px=2,
             opacity=0.6,
         )
