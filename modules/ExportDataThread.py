@@ -1097,7 +1097,14 @@ class ExportDataThread(QThread):
         self.export_canceled = False
         self._cancel_signal_emitted = False
         self._prepared_grouping_df = None
-        self.completion_metadata = {"local_xlsx_path": self.excel_file}
+        self.completion_metadata = {
+            "local_xlsx_path": self.excel_file,
+            "converted_url": None,
+            "fallback_message": "",
+            "conversion_warnings": [],
+            "conversion_warning_details": [],
+            "converted_tab_titles": None,
+        }
         self._exported_sheet_names = []
         self._exported_sheet_name_set = set()
         self._last_emitted_progress = -1
