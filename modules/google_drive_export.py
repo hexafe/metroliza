@@ -527,7 +527,7 @@ _ALLOWED_TRENDLINE_KEYS = {"type", "lineStyle", "colorStyle", "opacity", "label"
 _ALLOWED_LINE_STYLE_KEYS = {"type", "width"}
 
 
-def _sanitize_series_item_for_patch(series_item: Any) -> dict[str, Any]:
+def _sanitize_series_item_for_patch(series_item: Any, *, include_trendline: bool = False) -> dict[str, Any]:
     """Return a schema-safe subset for updateChartSpec.basicChart.series entries."""
     if not isinstance(series_item, dict):
         return {}
@@ -549,7 +549,7 @@ def _sanitize_series_item_for_patch(series_item: Any) -> dict[str, Any]:
                 sanitized[key] = sanitized_series_obj
             continue
         if key == "trendline":
-            if not isinstance(value, dict):
+            if not include_trendline or not isinstance(value, dict):
                 continue
             sanitized_trendline: dict[str, Any] = {}
             for trendline_key in _ALLOWED_TRENDLINE_KEYS:
@@ -575,7 +575,7 @@ def _sanitize_series_item_for_patch(series_item: Any) -> dict[str, Any]:
     return sanitized
 
 
-def _sanitize_chart_spec_for_patch(spec: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_chart_spec_for_patch(spec: dict[str, Any], *, include_trendline: bool = False) -> dict[str, Any]:
     """Strip unsupported fields from basicChart.series before sending patch payload."""
     sanitized_spec = copy.deepcopy(spec)
     basic_chart = sanitized_spec.get("basicChart")
@@ -585,8 +585,31 @@ def _sanitize_chart_spec_for_patch(spec: dict[str, Any]) -> dict[str, Any]:
     series = basic_chart.get("series")
     if not isinstance(series, list):
         return sanitized_spec
-    basic_chart["series"] = [_sanitize_series_item_for_patch(item) for item in series]
+    basic_chart["series"] = [
+        _sanitize_series_item_for_patch(item, include_trendline=include_trendline) for item in series
+    ]
     return sanitized_spec
+
+
+def _build_chart_update_requests(
+    chart_updates: list[tuple[int, dict[str, Any]]], *, include_trendline: bool
+) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for chart_id, spec in chart_updates:
+        requests.append(
+            {
+                "updateChartSpec": {
+                    "chartId": chart_id,
+                    "spec": _sanitize_chart_spec_for_patch(spec, include_trendline=include_trendline),
+                }
+            }
+        )
+    return requests
+
+
+def _is_unknown_trendline_patch_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return 'unknown name "trendline"' in text or "unknown name 'trendline'" in text
 
 
 def fix_usl_lsl_trendlines(
@@ -629,7 +652,7 @@ def fix_usl_lsl_trendlines(
     line_opacity = max(0.0, min(1.0, float(line_opacity)))
     rgb_color_style = _build_rgb_color_style(color_hex, line_opacity)
 
-    requests: list[dict[str, Any]] = []
+    chart_updates: list[tuple[int, dict[str, Any]]] = []
     total_embedded_charts_scanned = 0
     basic_charts_considered = 0
     updated_chart_ids: list[int] = []
@@ -700,20 +723,12 @@ def fix_usl_lsl_trendlines(
                     "colorStyle": copy.deepcopy(rgb_color_style),
                     "opacity": line_opacity,
                 }
-
                 updated_indexes.append(series_index)
 
             if not updated_indexes:
                 continue
 
-            requests.append(
-                {
-                    "updateChartSpec": {
-                        "chartId": chart_id,
-                        "spec": _sanitize_chart_spec_for_patch(updated_spec),
-                    }
-                }
-            )
+            chart_updates.append((chart_id, updated_spec))
             updated_chart_ids.append(chart_id)
 
     logger.info(
@@ -726,7 +741,7 @@ def fix_usl_lsl_trendlines(
         },
     )
 
-    if not requests:
+    if not chart_updates:
         logger.info(
             "USL/LSL trendline update summary (no-op)",
             extra=_build_google_log_extra(file_ref=spreadsheet_id, outcome="no_op")
@@ -739,10 +754,25 @@ def fix_usl_lsl_trendlines(
         )
         return
 
-    sheets_service.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body={"requests": requests},
-    ).execute()
+    requests = _build_chart_update_requests(chart_updates, include_trendline=True)
+    try:
+        sheets_service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": requests},
+        ).execute()
+    except Exception as exc:
+        if not _is_unknown_trendline_patch_error(exc):
+            raise
+        logger.warning(
+            "USL/LSL trendline patch unsupported by Sheets API; retrying without trendline",
+            extra=_build_google_log_extra(file_ref=spreadsheet_id, outcome="retry_without_trendline")
+            | {"updated_charts": len(updated_chart_ids), "chartIds": updated_chart_ids, "exception_message": str(exc)},
+        )
+        fallback_requests = _build_chart_update_requests(chart_updates, include_trendline=False)
+        sheets_service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": fallback_requests},
+        ).execute()
 
     logger.info(
         "USL/LSL trendline update summary",
