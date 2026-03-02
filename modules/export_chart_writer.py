@@ -42,30 +42,16 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
 def _build_limit_series_template(*, limit_name):
     return {
         'name': limit_name,
-        # Keep helper anchor series fully hidden so only the rendered spec limit
-        # trendline is visible in Excel.
-        'line': {'none': True},
-        'marker': {'type': 'none'},
-        'data_labels': {'value': False},
-        'show_legend_key': False,
-    }
-
-
-def _build_limit_trendline_spec(*, point_count):
-    """Return a linear trendline config that spans the full measurement domain."""
-    return {
-        'type': 'linear',
         'line': {
             'color': '#c0504b',
             'width': 2,
             # xlsxwriter expresses alpha as transparency; 60% opacity == 40% transparency.
             'transparency': 40,
         },
-        # USL/LSL series contain sparse first/last anchors; extend the linear
-        # trendline across the remaining measurement x-domain.
-        'forward': max(point_count - 2, 0),
+        'marker': {'type': 'none'},
+        'data_labels': {'value': False},
+        'show_legend_key': False,
     }
-
 
 def build_measurement_chart_series_specs(
     *,
@@ -99,9 +85,6 @@ def build_measurement_chart_series_specs(
         usl_template = _build_limit_series_template(limit_name='USL')
         lsl_template = _build_limit_series_template(limit_name='LSL')
 
-    point_count = (last_data_row - first_data_row) + 1
-    trendline_spec = _build_limit_trendline_spec(point_count=point_count)
-
     return [
         {
             'name': header,
@@ -112,13 +95,11 @@ def build_measurement_chart_series_specs(
             **usl_template,
             'categories': range_specs['usl_x'],
             'values': range_specs['usl_y'],
-            'trendline': trendline_spec,
         },
         {
             **lsl_template,
             'categories': range_specs['lsl_x'],
             'values': range_specs['lsl_y'],
-            'trendline': trendline_spec,
         },
     ]
 
@@ -132,8 +113,8 @@ def build_measurement_chart_series_specs_from_plan(*, header, sheet_name, measur
         last_data_row=measurement_plan['last_data_row'],
         x_column=measurement_plan['summary_column'],
         y_column=measurement_plan['y_column'],
-        usl_column=measurement_plan.get('usl_column'),
-        lsl_column=measurement_plan.get('lsl_column'),
+        usl_column=measurement_plan['usl_column'],
+        lsl_column=measurement_plan['lsl_column'],
         cache=cache,
     )
 
