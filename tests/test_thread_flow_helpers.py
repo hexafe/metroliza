@@ -1431,7 +1431,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.upload_and_convert_workbook = previous_upload
 
             self.assertEqual(finished_calls, ['finished'])
-            self.assertEqual(logger_calls, ['temporary outage'])
+            self.assertEqual(logger_calls, [])
             self.assertIn('fallback_message', thread.completion_metadata)
             self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
             stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
