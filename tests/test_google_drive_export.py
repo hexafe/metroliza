@@ -542,8 +542,6 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual("LINEAR", lsl_trendline["type"])
         self.assertEqual(2, usl_trendline["lineStyle"]["width"])
         self.assertEqual(2, lsl_trendline["lineStyle"]["width"])
-        self.assertEqual(0.6, usl_trendline["opacity"])
-        self.assertEqual(0.6, lsl_trendline["opacity"])
         self.assertEqual(
             0.6,
             update_request["spec"]["basicChart"]["series"][2]["colorStyle"]["rgbColor"]["alpha"],
@@ -644,8 +642,6 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual("LINEAR", patched_series[2]["trendline"]["type"])
         self.assertEqual(2, patched_series[1]["trendline"]["lineStyle"]["width"])
         self.assertEqual(2, patched_series[2]["trendline"]["lineStyle"]["width"])
-        self.assertEqual(0.6, patched_series[1]["trendline"]["opacity"])
-        self.assertEqual(0.6, patched_series[2]["trendline"]["opacity"])
         self.assertNotIn("unexpectedTopLevel", patched_series[1])
         self.assertNotIn("seriesName", patched_series[1]["series"])
         self.assertNotIn("seriesName", patched_series[2]["series"])

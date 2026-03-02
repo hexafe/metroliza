@@ -523,7 +523,7 @@ _ALLOWED_SERIES_KEYS = {
     "dataLabel",
 }
 _ALLOWED_SERIES_OBJECT_KEYS = {"sourceRange"}
-_ALLOWED_TRENDLINE_KEYS = {"type", "lineStyle", "colorStyle", "opacity", "label"}
+_ALLOWED_TRENDLINE_KEYS = {"type", "lineStyle", "colorStyle", "label"}
 _ALLOWED_LINE_STYLE_KEYS = {"type", "width"}
 
 
@@ -698,7 +698,6 @@ def fix_usl_lsl_trendlines(
                         "width": line_width,
                     },
                     "colorStyle": copy.deepcopy(rgb_color_style),
-                    "opacity": line_opacity,
                 }
 
                 updated_indexes.append(series_index)
