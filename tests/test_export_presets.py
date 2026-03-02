@@ -180,6 +180,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
             message,
             'Data exported successfully to out.xlsx.\n'
             f'Export file: {expected_file_uri}\n'
+            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}\n"
             '\n'
             'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
         )
@@ -206,6 +207,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
             message,
             'Data exported locally to out.xlsx.\n'
             f'Export file: {expected_file_uri}\n'
+            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}\n"
             '\n'
             'Google Sheets conversion was not fully completed.\n'
             'Warnings/Errors:\n'
@@ -234,6 +236,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
             message,
             'Data exported locally to out.xlsx.\n'
             f'Export file: {expected_file_uri}\n'
+            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}\n"
             '\n'
             'Google Sheets conversion was not fully completed.',
         )
@@ -253,7 +256,8 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
-            f'Export file: {expected_file_uri}',
+            f'Export file: {expected_file_uri}\n'
+            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}",
         )
 
 
@@ -288,6 +292,33 @@ class TestExportCompletionMessaging(unittest.TestCase):
         expected_file_uri = Path('out.xlsx').resolve().as_uri()
         self.assertEqual(build_export_directory_link_line('out.xlsx'), f'Export file: {expected_file_uri}')
 
+
+    def test_build_export_folder_link_line_points_to_parent_directory(self):
+        from modules.ExportDialog import build_export_folder_link_line
+
+        expected_folder_uri = Path('out.xlsx').resolve().parent.as_uri()
+        self.assertEqual(build_export_folder_link_line('out.xlsx'), f'Export folder: {expected_folder_uri}')
+
+    def test_google_fallback_still_includes_google_url_when_available(self):
+        from modules.ExportDialog import build_export_completion_message
+
+        metadata = {
+            'fallback_message': 'Google conversion completed with warnings; local xlsx remains fallback.',
+            'conversion_warnings': ['Trendline patch skipped'],
+            'converted_url': 'https://docs.google.com/spreadsheets/d/abc/edit',
+            'converted_tab_titles': ['MEASUREMENTS'],
+        }
+
+        level, title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='google_sheets_drive_convert',
+            completion_metadata=metadata,
+        )
+
+        self.assertEqual(level, 'warning')
+        self.assertEqual(title, 'Export completed with Google fallback')
+        self.assertIn('Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit', message)
+
     def test_excel_target_message_is_unchanged_even_with_google_metadata(self):
         from modules.ExportDialog import build_export_completion_message
 
@@ -309,7 +340,8 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
-            f'Export file: {expected_file_uri}',
+            f'Export file: {expected_file_uri}\n'
+            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}",
         )
 
 
