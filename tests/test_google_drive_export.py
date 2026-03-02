@@ -417,7 +417,7 @@ class TestGoogleDriveExport(unittest.TestCase):
                 spreadsheet_id="sheet123",
                 usl_series_index=1,
                 lsl_series_index=2,
-                color_hex="#c0504d",
+                color_hex="#c0504b",
                 width_px=2,
                 opacity=0.6,
             )
@@ -536,8 +536,14 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"])
         self.assertNotIn("seriesName", update_request["spec"]["basicChart"]["series"][1].get("series", {}))
         self.assertNotIn("seriesName", update_request["spec"]["basicChart"]["series"][2].get("series", {}))
-        self.assertNotIn("trendline", update_request["spec"]["basicChart"]["series"][1])
-        self.assertNotIn("trendline", update_request["spec"]["basicChart"]["series"][2])
+        usl_trendline = update_request["spec"]["basicChart"]["series"][1]["trendline"]
+        lsl_trendline = update_request["spec"]["basicChart"]["series"][2]["trendline"]
+        self.assertEqual("LINEAR", usl_trendline["type"])
+        self.assertEqual("LINEAR", lsl_trendline["type"])
+        self.assertEqual(2, usl_trendline["lineStyle"]["width"])
+        self.assertEqual(2, lsl_trendline["lineStyle"]["width"])
+        self.assertEqual(0.6, usl_trendline["opacity"])
+        self.assertEqual(0.6, lsl_trendline["opacity"])
         self.assertEqual(
             0.6,
             update_request["spec"]["basicChart"]["series"][2]["colorStyle"]["rgbColor"]["alpha"],
@@ -632,8 +638,14 @@ class TestGoogleDriveExport(unittest.TestCase):
         update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
         patched_series = update_request["spec"]["basicChart"]["series"]
         self.assertEqual(3, len(patched_series))
-        self.assertNotIn("trendline", patched_series[1])
-        self.assertNotIn("trendline", patched_series[2])
+        self.assertIn("trendline", patched_series[1])
+        self.assertIn("trendline", patched_series[2])
+        self.assertEqual("LINEAR", patched_series[1]["trendline"]["type"])
+        self.assertEqual("LINEAR", patched_series[2]["trendline"]["type"])
+        self.assertEqual(2, patched_series[1]["trendline"]["lineStyle"]["width"])
+        self.assertEqual(2, patched_series[2]["trendline"]["lineStyle"]["width"])
+        self.assertEqual(0.6, patched_series[1]["trendline"]["opacity"])
+        self.assertEqual(0.6, patched_series[2]["trendline"]["opacity"])
         self.assertNotIn("unexpectedTopLevel", patched_series[1])
         self.assertNotIn("seriesName", patched_series[1]["series"])
         self.assertNotIn("seriesName", patched_series[2]["series"])
