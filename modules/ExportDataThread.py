@@ -2084,6 +2084,7 @@ class ExportDataThread(QThread):
                     precomputed_trend_payload = None
 
             distribution_key = 'GROUP' if grouping_applied else '__ALL__'
+            scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
             prep_executor = self._summary_prep_executor
             if prep_executor is not None:
                 try:
@@ -2132,7 +2133,7 @@ class ExportDataThread(QThread):
             x_values = None
             y_values = None
             if not can_render_violin:
-                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_distribution_group, distribution_key)
+                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_distribution_group, scatter_key)
                 label_positions = list(x_values)
 
             summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
