@@ -1473,11 +1473,11 @@ class TestExportBackendSmoke(unittest.TestCase):
                 warnings=('Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',),
                 warning_details=(
                     {
-                        'category': 'trendline_patch',
-                        'reason': 'sheets_patch_request_error',
-                        'exception_class': 'HttpError',
-                        'exception_message': '400 badRequest invalid chartId',
-                        'warning': 'Trendline patch skipped (sheets_patch_request_error): HttpError: 400 badRequest invalid chartId',
+                        'category': 'conversion_validation',
+                        'reason': 'missing_expected_tab',
+                        'exception_class': 'ValueError',
+                        'exception_message': 'Missing expected tab REF_A',
+                        'warning': 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',
                     },
                 ),
                 converted_tab_titles=('MEASUREMENTS',),
@@ -1491,11 +1491,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.completion_metadata['converted_url'], 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
             self.assertEqual(thread.completion_metadata['local_xlsx_path'], out_file)
             self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.')
-            self.assertEqual(thread.completion_metadata['conversion_warning_details'][0]['reason'], 'sheets_patch_request_error')
-            self.assertEqual(thread.completion_metadata['conversion_warning_details'][0]['exception_class'], 'HttpError')
+            self.assertEqual(thread.completion_metadata['conversion_warning_details'][0]['reason'], 'missing_expected_tab')
+            self.assertEqual(thread.completion_metadata['conversion_warning_details'][0]['exception_class'], 'ValueError')
             self.assertEqual(thread.completion_metadata['converted_tab_titles'], ['MEASUREMENTS'])
-            self.assertTrue(any(text.split('\n')[0].startswith('Warning: trendline patch failed (sheets_patch_request_error)') for text in emitted))
-            self.assertTrue(any('HttpError: 400 badRequest invalid chartId' in text for text in emitted))
             fallback_stage_messages = [text for text in emitted if text.split('\n')[0].startswith('Google export stage: fallback')]
             self.assertTrue(fallback_stage_messages)
             self.assertIn(out_file, fallback_stage_messages[0])

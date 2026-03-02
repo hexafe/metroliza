@@ -35,6 +35,32 @@ class DummyWorksheet:
 
 
 class TestExportSheetWriter(unittest.TestCase):
+    def test_build_measurement_write_bundle_includes_limit_columns_contract(self):
+        header_group = pd.DataFrame(
+            {
+                'DATE': ['2024-01-01', '2024-01-02', '2024-01-03'],
+                'SAMPLE_NUMBER': ['1', '2', '3'],
+                'MEAS': [10.1, 10.2, 10.3],
+                'NOM': [10.0, 10.0, 10.0],
+                '+TOL': [0.5, 0.5, 0.5],
+                '-TOL': [-0.5, -0.5, -0.5],
+            }
+        )
+
+        bundle = build_measurement_write_bundle('Diameter - X', header_group, 0)
+
+        labels = [column[2] for column in bundle['data_columns']]
+        self.assertEqual(labels, ['Date', 'Sample #', 'Diameter - X', 'USL', 'LSL'])
+
+        usl_values = bundle['data_columns'][3][3]
+        lsl_values = bundle['data_columns'][4][3]
+        self.assertEqual(usl_values, [10.5, None, 10.5])
+        self.assertEqual(lsl_values, [9.5, None, 9.5])
+
+        measurement_plan = bundle['measurement_plan']
+        self.assertIn('usl_column', measurement_plan)
+        self.assertIn('lsl_column', measurement_plan)
+
     def test_write_measurement_block_applies_three_conditional_rules(self):
         header_group = pd.DataFrame(
             {
