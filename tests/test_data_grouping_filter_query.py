@@ -2,6 +2,10 @@ import sys
 import types
 import unittest
 
+from collections import namedtuple
+
+import pandas as pd
+
 
 qtcore_stub = types.ModuleType('PyQt6.QtCore')
 qtcore_stub.Qt = type('Qt', (), {'ItemDataRole': type('ItemDataRole', (), {'UserRole': 0})})
@@ -41,6 +45,25 @@ class TestDataGroupingFilterQuery(unittest.TestCase):
         self.assertIn('FROM (', query)
         self.assertIn(filter_query, query)
         self.assertIn('SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER', query)
+
+
+class TestDataGroupingPartDisplayLabel(unittest.TestCase):
+    def test_part_display_label_accepts_namedtuple_row(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        Row = namedtuple('Row', ['SAMPLE_NUMBER', 'DATE', 'FILENAME'])
+        row = Row(SAMPLE_NUMBER=42, DATE='2024-01-15', FILENAME='part.csv')
+
+        label = dialog._part_display_label(row)
+
+        self.assertEqual(label, '42 | 2024-01-15 | part.csv')
+
+    def test_part_display_label_handles_missing_values(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        row = {'SAMPLE_NUMBER': 7, 'DATE': pd.NA, 'FILENAME': None}
+
+        label = dialog._part_display_label(row)
+
+        self.assertEqual(label, '7 |  | ')
 
 
 if __name__ == '__main__':

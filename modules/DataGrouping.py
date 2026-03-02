@@ -113,7 +113,7 @@ class DataGrouping(QDialog):
                     if item is not None:
                         widget = item.widget()
                         if widget is not None:
-                            widget.setFixedWidth(200) if column == 0 else widget.setFixedWidth(200)
+                            widget.setFixedWidth(200)
 
             self.layout.addWidget(self.create_group_button, 4, 0, 1, 4)
             self.layout.addWidget(self.rename_group_button, 5, 0, 1, 4)
@@ -201,9 +201,18 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def _part_display_label(self, row):
-        sample = str(row['SAMPLE_NUMBER'])
-        date = str(row['DATE']) if pd.notna(row['DATE']) else ''
-        filename = str(row['FILENAME']) if pd.notna(row['FILENAME']) else ''
+        def _field_value(field_name):
+            if hasattr(row, field_name):
+                return getattr(row, field_name)
+            return row[field_name]
+
+        sample_number = _field_value('SAMPLE_NUMBER')
+        date_value = _field_value('DATE')
+        filename_value = _field_value('FILENAME')
+
+        sample = str(sample_number)
+        date = str(date_value) if pd.notna(date_value) else ''
+        filename = str(filename_value) if pd.notna(filename_value) else ''
         return f"{sample} | {date} | {filename}"
 
     def _populate_part_list(self, selected_reference=None):
@@ -212,7 +221,7 @@ class DataGrouping(QDialog):
 
         self.part_list.clear()
         for row in rows_df.itertuples(index=False):
-            item = QListWidgetItem(f"{row.SAMPLE_NUMBER} | {row.DATE if pd.notna(row.DATE) else ''} | {row.FILENAME if pd.notna(row.FILENAME) else ''}")
+            item = QListWidgetItem(self._part_display_label(row))
             item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
             self.part_list.addItem(item)
 
@@ -222,7 +231,7 @@ class DataGrouping(QDialog):
 
         self.part_group_list.clear()
         for row in rows_df.itertuples(index=False):
-            item = QListWidgetItem(f"{row.SAMPLE_NUMBER} | {row.DATE if pd.notna(row.DATE) else ''} | {row.FILENAME if pd.notna(row.FILENAME) else ''}")
+            item = QListWidgetItem(self._part_display_label(row))
             item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
             self.part_group_list.addItem(item)
             
