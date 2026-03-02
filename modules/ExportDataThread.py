@@ -2,6 +2,7 @@ import logging
 import warnings
 import inspect
 import re
+import sqlite3
 from io import BytesIO
 import os
 import time
@@ -1203,6 +1204,11 @@ class ExportDataThread(QThread):
         try:
             with self._db_connection:
                 self._db_connection.execute(f'DROP TABLE IF EXISTS "{self._snapshot_table_name}"')
+        except sqlite3.ProgrammingError:
+            logger.debug(
+                'Skipping export snapshot cleanup because database connection is already closed.',
+                exc_info=True,
+            )
         finally:
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
