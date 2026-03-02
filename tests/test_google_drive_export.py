@@ -843,6 +843,79 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertNotIn("trendline", second_series[2])
         warning_logger.assert_called_once()
 
+    def test_fix_usl_lsl_trendlines_retries_with_strict_schema_on_unknown_series_name_field(self):
+        self._assert_schema_retry(
+            "Invalid JSON payload received. Unknown name \"seriesName\" at 'requests[0].updateChartSpec.spec.basicChart.series[1].series'"
+        )
+
+    def test_fix_usl_lsl_trendlines_retries_with_strict_schema_on_invalid_point_style_shape(self):
+        self._assert_schema_retry(
+            "Invalid value at 'requests[0].update_chart_spec.spec.basic_chart.series[1].point_style.shape' (TYPE_ENUM), \"NONE\""
+        )
+
+    def test_fix_usl_lsl_trendlines_retries_with_strict_schema_on_unknown_trendline_field(self):
+        self._assert_schema_retry(
+            'Invalid JSON payload received. Unknown name "trendline" at requests[0]'
+        )
+
+    def _assert_schema_retry(self, first_error_message: str):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 172,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "LINE",
+                                    "series": [
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 1}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 2}]}}},
+                                        {"series": {"sourceRange": {"sources": [{"sheetId": 3}]}}},
+                                    ],
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        class _FakeSpreadsheetsServiceRetry(_FakeSpreadsheetsService):
+            def __init__(self, charts_payload):
+                super().__init__(charts_payload)
+                self._attempt = 0
+
+            def batchUpdate(self, **kwargs):
+                self.batch_update_calls.append(kwargs)
+                self._attempt += 1
+                if self._attempt == 1:
+                    raise ValueError(first_error_message)
+                return _FakeExecute({})
+
+        class _FakeSheetsServiceRetry(_FakeSheetsService):
+            def __init__(self, charts_payload):
+                self._spreadsheets = _FakeSpreadsheetsServiceRetry(charts_payload)
+
+        fake_service = _FakeSheetsServiceRetry(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}), patch(
+            "modules.google_drive_export.logger.warning"
+        ) as warning_logger:
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        self.assertEqual(2, len(fake_service._spreadsheets.batch_update_calls))
+        first_series = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]["spec"]["basicChart"]["series"]
+        second_series = fake_service._spreadsheets.batch_update_calls[1]["body"]["requests"][0]["updateChartSpec"]["spec"]["basicChart"]["series"]
+        self.assertIn("trendline", first_series[1])
+        self.assertIn("trendline", first_series[2])
+        self.assertNotIn("trendline", second_series[1])
+        self.assertNotIn("trendline", second_series[2])
+        self.assertNotIn("pointStyle", second_series[1])
+        self.assertNotIn("pointStyle", second_series[2])
+        warning_logger.assert_called_once()
+
     def test_normalize_measurement_chart_series_prefers_helper_anchor_row_blocks(self):
         original_series = [
             {
