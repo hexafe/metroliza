@@ -573,7 +573,7 @@ _ALLOWED_SERIES_KEYS = {
     "styleOverrides",
     "dataLabel",
 }
-_ALLOWED_SERIES_OBJECT_KEYS = {"sourceRange"}
+_ALLOWED_SERIES_OBJECT_KEYS = {"sourceRange", "seriesName"}
 _ALLOWED_TRENDLINE_KEYS = {"type", "lineStyle", "colorStyle", "label"}
 _ALLOWED_LINE_STYLE_KEYS = {"type", "width"}
 
@@ -660,7 +660,11 @@ def _build_chart_update_requests(
 
 def _is_unknown_trendline_patch_error(exc: Exception) -> bool:
     text = str(exc or "").lower()
-    return 'unknown name "trendline"' in text or "unknown name 'trendline'" in text
+    return (
+        'unknown name "trendline"' in text
+        or "unknown name 'trendline'" in text
+        or "cannot find field" in text and "trendline" in text
+    )
 
 
 def fix_usl_lsl_trendlines(
@@ -752,11 +756,15 @@ def fix_usl_lsl_trendlines(
             if any(series_index >= len(updated_series) for series_index in target_series_indices):
                 continue
 
+            _ensure_preserved_measured_series_name(updated_series[0], "Measured")
+
             updated_indexes: list[int] = []
-            for series_index, _expected_name in ((usl_series_index, "USL"), (lsl_series_index, "LSL")):
+            for series_index, expected_name in ((usl_series_index, "USL"), (lsl_series_index, "LSL")):
                 series_item = updated_series[series_index]
                 if not isinstance(series_item, dict):
                     continue
+
+                _ensure_series_name(series_item, expected_name)
 
                 line_style = series_item.get("lineStyle")
                 if not isinstance(line_style, dict):
