@@ -406,5 +406,102 @@ class TestShowExportResultMessage(unittest.TestCase):
         self.assertIn('boom', warning_text)
 
 
+class TestExportDialogCompletionFlow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_on_export_finished_success_keeps_dialog_open_and_closes_progress(self):
+        from modules.ExportDialog import ExportDialog
+
+        class _LoadingDialog:
+            def __init__(self):
+                self.accept_calls = 0
+
+            def accept(self):
+                self.accept_calls += 1
+
+        class _Button:
+            def __init__(self):
+                self.enabled_states = []
+
+            def setEnabled(self, enabled):
+                self.enabled_states.append(enabled)
+
+        class _Thread:
+            export_target = 'excel_xlsx'
+            completion_metadata = {}
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.export_error_message = None
+        dialog.excel_file = 'out.xlsx'
+        dialog.export_thread = _Thread()
+        dialog.loading_dialog = _LoadingDialog()
+        dialog.export_button = _Button()
+        dialog.accept_called = False
+        dialog.accept = lambda: setattr(dialog, 'accept_called', True)
+
+        with patch('modules.ExportDialog.build_export_completion_message', return_value=('info', 'Export successful', 'ok')) as build_mock, \
+             patch('modules.ExportDialog.show_export_result_message') as show_mock:
+            dialog.on_export_finished()
+
+        build_mock.assert_called_once()
+        show_mock.assert_called_once_with(dialog, 'info', 'Export successful', 'ok', excel_file='out.xlsx')
+        self.assertEqual(dialog.loading_dialog.accept_calls, 1)
+        self.assertFalse(dialog.accept_called)
+        self.assertEqual(dialog.export_button.enabled_states, [True])
+        self.assertIsNone(dialog.export_error_message)
+
+    def test_on_export_finished_falls_back_to_plain_message_when_rich_message_fails(self):
+        from modules.ExportDialog import ExportDialog
+
+        class _LoadingDialog:
+            def __init__(self):
+                self.accept_calls = 0
+
+            def accept(self):
+                self.accept_calls += 1
+
+        class _Button:
+            def __init__(self):
+                self.enabled_states = []
+
+            def setEnabled(self, enabled):
+                self.enabled_states.append(enabled)
+
+        class _Thread:
+            export_target = 'excel_xlsx'
+            completion_metadata = {}
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.export_error_message = None
+        dialog.excel_file = 'out.xlsx'
+        dialog.export_thread = _Thread()
+        dialog.loading_dialog = _LoadingDialog()
+        dialog.export_button = _Button()
+        dialog.accept_called = False
+        dialog.accept = lambda: setattr(dialog, 'accept_called', True)
+
+        class _InfoMessageBox:
+            information_calls = []
+
+            @staticmethod
+            def information(parent, title, text):
+                _InfoMessageBox.information_calls.append((parent, title, text))
+
+        with patch('modules.ExportDialog.build_export_completion_message', return_value=('info', 'Export successful', 'ok')) as build_mock, \
+             patch('modules.ExportDialog.show_export_result_message', side_effect=RuntimeError('boom')) as show_mock, \
+             patch('modules.ExportDialog.QMessageBox', _InfoMessageBox):
+            dialog.on_export_finished()
+
+        build_mock.assert_called_once()
+        show_mock.assert_called_once()
+        self.assertEqual(_InfoMessageBox.information_calls, [(dialog, 'Export successful', 'Data exported successfully to out.xlsx.')])
+        self.assertEqual(dialog.loading_dialog.accept_calls, 1)
+        self.assertFalse(dialog.accept_called)
+        self.assertEqual(dialog.export_button.enabled_states, [True])
+        self.assertIsNone(dialog.export_error_message)
+
+
 if __name__ == '__main__':
     unittest.main()
