@@ -534,8 +534,8 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual("chart title", update_request["spec"]["title"])
         self.assertEqual(3, len(update_request["spec"]["basicChart"]["series"]))
         self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"])
-        self.assertNotIn("seriesName", update_request["spec"]["basicChart"]["series"][1].get("series", {}))
-        self.assertNotIn("seriesName", update_request["spec"]["basicChart"]["series"][2].get("series", {}))
+        self.assertEqual("USL", update_request["spec"]["basicChart"]["series"][1]["series"]["seriesName"]["value"])
+        self.assertEqual("LSL", update_request["spec"]["basicChart"]["series"][2]["series"]["seriesName"]["value"])
         usl_trendline = update_request["spec"]["basicChart"]["series"][1]["trendline"]
         lsl_trendline = update_request["spec"]["basicChart"]["series"][2]["trendline"]
         self.assertEqual("LINEAR", usl_trendline["type"])
@@ -643,8 +643,8 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual(2, patched_series[1]["trendline"]["lineStyle"]["width"])
         self.assertEqual(2, patched_series[2]["trendline"]["lineStyle"]["width"])
         self.assertNotIn("unexpectedTopLevel", patched_series[1])
-        self.assertNotIn("seriesName", patched_series[1]["series"])
-        self.assertNotIn("seriesName", patched_series[2]["series"])
+        self.assertEqual("USL", patched_series[1]["series"]["seriesName"]["value"])
+        self.assertEqual("LSL", patched_series[2]["series"]["seriesName"]["value"])
         self.assertNotIn("unexpectedNested", patched_series[1]["series"])
         self.assertIn("sourceRange", patched_series[1]["series"])
         self.assertIn("lineStyle", patched_series[1])
@@ -1115,6 +1115,84 @@ class TestGoogleDriveExport(unittest.TestCase):
         lsl_source = updated_series[2]["series"]["sourceRange"]["sources"][0]
         self.assertEqual((0, 2), (usl_source["startRowIndex"], usl_source["endRowIndex"]))
         self.assertEqual((2, 4), (lsl_source["startRowIndex"], lsl_source["endRowIndex"]))
+
+
+    def test_fix_usl_lsl_trendlines_sets_series_names_for_limit_lines(self):
+        discovery_payload = {
+            "sheets": [
+                {
+                    "charts": [
+                        {
+                            "chartId": 91,
+                            "spec": {
+                                "basicChart": {
+                                    "chartType": "LINE",
+                                    "series": [
+                                        {
+                                            "series": {
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 5,
+                                                            "endRowIndex": 25,
+                                                            "startColumnIndex": 4,
+                                                            "endColumnIndex": 5,
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        },
+                                        {
+                                            "series": {
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 0,
+                                                            "endRowIndex": 2,
+                                                            "startColumnIndex": 14,
+                                                            "endColumnIndex": 15,
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        },
+                                        {
+                                            "series": {
+                                                "sourceRange": {
+                                                    "sources": [
+                                                        {
+                                                            "sheetId": 1,
+                                                            "startRowIndex": 2,
+                                                            "endRowIndex": 4,
+                                                            "startColumnIndex": 14,
+                                                            "endColumnIndex": 15,
+                                                        }
+                                                    ]
+                                                }
+                                            }
+                                        },
+                                    ]
+                                }
+                            },
+                        }
+                    ]
+                }
+            ]
+        }
+
+        fake_service = _FakeSheetsService(discovery_payload)
+        fake_discovery = types.SimpleNamespace(build=lambda *_args, **_kwargs: fake_service)
+
+        with patch.dict(sys.modules, {"googleapiclient": types.SimpleNamespace(discovery=fake_discovery), "googleapiclient.discovery": fake_discovery}):
+            fix_usl_lsl_trendlines(creds=object(), spreadsheet_id="sheet-id", usl_series_index=1, lsl_series_index=2)
+
+        update_request = fake_service._spreadsheets.batch_update_calls[0]["body"]["requests"][0]["updateChartSpec"]
+        updated_series = update_request["spec"]["basicChart"]["series"]
+        self.assertEqual("Measured", updated_series[0]["series"]["seriesName"]["value"])
+        self.assertEqual("USL", updated_series[1]["series"]["seriesName"]["value"])
+        self.assertEqual("LSL", updated_series[2]["series"]["seriesName"]["value"])
 
     def test_fix_usl_lsl_trendlines_skips_when_chart_has_fewer_than_three_series(self):
         discovery_payload = {
