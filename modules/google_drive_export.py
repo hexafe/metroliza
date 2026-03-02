@@ -411,12 +411,14 @@ def _is_helper_merged_source(source: dict[str, Any]) -> bool:
 def _source_row_block(source: dict[str, Any]) -> str | None:
     start_row = source.get("startRowIndex")
     end_row = source.get("endRowIndex")
-    if not isinstance(start_row, int) or not isinstance(end_row, int):
+    if not all(isinstance(v, int) for v in (start_row, end_row)):
         return None
     if start_row == 0 and end_row == 2:
         return "USL"
     if start_row == 2 and end_row == 4:
         return "LSL"
+    if start_row == 0 and end_row == 4:
+        return "COMBINED_SPEC"
     return None
 
 
@@ -431,8 +433,37 @@ def _series_helper_anchor_role(series_item: Any) -> str | None:
     return role
 
 
+def _split_combined_spec_series(
+    combined: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split a single combined O1:O4 spec series into USL (rows 0-2) and LSL (rows 2-4)."""
+    sources = _series_sources(combined)
+    usl_sources: list[dict[str, Any]] = []
+    lsl_sources: list[dict[str, Any]] = []
+
+    for source in sources:
+        if _source_row_block(source) != "COMBINED_SPEC":
+            usl_sources.append(copy.deepcopy(source))
+            lsl_sources.append(copy.deepcopy(source))
+            continue
+        base = copy.deepcopy(source)
+        mid = (source["startRowIndex"] + source["endRowIndex"]) // 2
+        usl_sources.append({**base, "startRowIndex": source["startRowIndex"], "endRowIndex": mid})
+        lsl_sources.append({**base, "startRowIndex": mid, "endRowIndex": source["endRowIndex"]})
+
+    def _make(srcs: list, name: str) -> dict[str, Any]:
+        return {
+            "series": {
+                "sourceRange": {"sources": srcs},
+                "seriesName": {"value": name},
+            }
+        }
+
+    return _make(usl_sources, "USL"), _make(lsl_sources, "LSL")
+
+
 def _normalize_measurement_chart_series(series: list[Any]) -> list[Any] | None:
-    if not isinstance(series, list) or len(series) < 3:
+    if not isinstance(series, list) or len(series) < 2:
         return None
 
     measured_idx = 0 if isinstance(series[0], dict) else None
@@ -451,11 +482,19 @@ def _normalize_measurement_chart_series(series: list[Any]) -> list[Any] | None:
     named_limit_candidates = [candidate for candidate in limit_candidates if _series_name(candidate) in GOOGLE_LIMIT_SERIES_NAMES]
     helper_usl_candidates = [candidate for candidate in limit_candidates if _series_helper_anchor_role(candidate) == "USL"]
     helper_lsl_candidates = [candidate for candidate in limit_candidates if _series_helper_anchor_role(candidate) == "LSL"]
+    combined_spec_candidates = [
+        candidate
+        for candidate in limit_candidates
+        if any(_source_row_block(source) == "COMBINED_SPEC" for source in _series_sources(candidate))
+    ]
     helper_candidates = [
-        candidate for candidate in limit_candidates if any(_is_helper_merged_source(source) for source in _series_sources(candidate))
+        candidate
+        for candidate in limit_candidates
+        if any(_is_helper_merged_source(source) for source in _series_sources(candidate))
+        and not any(_source_row_block(source) == "COMBINED_SPEC" for source in _series_sources(candidate))
     ]
 
-    if not named_limit_candidates and not (helper_usl_candidates and helper_lsl_candidates):
+    if not named_limit_candidates and not (helper_usl_candidates and helper_lsl_candidates) and not combined_spec_candidates:
         return None
 
     usl_series = helper_usl_candidates[0] if helper_usl_candidates else None
@@ -472,11 +511,23 @@ def _normalize_measurement_chart_series(series: list[Any]) -> list[Any] | None:
         remaining_helper = [candidate for candidate in helper_candidates if candidate is not usl_series]
         if remaining_helper:
             lsl_series = remaining_helper[0]
-    if usl_series is None and limit_candidates:
+    if usl_series is None and limit_candidates and not combined_spec_candidates:
         usl_series = limit_candidates[0]
-    if lsl_series is None:
+    if lsl_series is None and not combined_spec_candidates:
         remaining = [candidate for candidate in limit_candidates if candidate is not usl_series]
         lsl_series = remaining[0] if remaining else usl_series
+
+    # Fallback: detect and split a combined USL+LSL spec series (e.g. O1:O4)
+    if usl_series is None or lsl_series is None:
+        combined = next(
+            (
+                c for c in limit_candidates
+                if any(_source_row_block(s) == "COMBINED_SPEC" for s in _series_sources(c))
+            ),
+            None,
+        )
+        if combined is not None:
+            usl_series, lsl_series = _split_combined_spec_series(combined)
 
     if usl_series is None or lsl_series is None:
         return None
@@ -713,6 +764,7 @@ def fix_usl_lsl_trendlines(
                 line_style["type"] = "SOLID"
                 line_style["width"] = line_width
                 series_item["lineStyle"] = line_style
+                series_item["pointStyle"] = {"shape": "NONE", "size": 0}
                 series_item["colorStyle"] = copy.deepcopy(rgb_color_style)
                 series_item["trendline"] = {
                     "type": "LINEAR",
@@ -720,7 +772,9 @@ def fix_usl_lsl_trendlines(
                         "type": "SOLID",
                         "width": line_width,
                     },
-                    "colorStyle": copy.deepcopy(rgb_color_style),
+                    "colorStyle": {
+                        "rgbColor": _hex_to_rgb_color(color_hex)
+                    },
                 }
                 updated_indexes.append(series_index)
 
