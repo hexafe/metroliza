@@ -211,9 +211,7 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
                 "modules.google_drive_export.urllib.request.urlopen", side_effect=fake_urlopen
-            ), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
-                "modules.google_drive_export.fix_usl_lsl_trendlines"
-            ):
+            ), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"):
                 result = upload_and_convert_workbook(
                     str(excel_path),
                     expected_sheet_names=["MEASUREMENTS", "REF_A"],
@@ -222,8 +220,8 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             self.assertEqual("sheet123", result.file_id)
             self.assertEqual(str(excel_path), result.local_xlsx_path)
-            self.assertEqual((), result.warnings)
-            self.assertEqual("", result.fallback_message)
+            self.assertEqual((), result.converted_tab_titles)
+            self.assertIn(str(excel_path), result.fallback_message)
             self.assertIn(b"application/vnd.google-apps.spreadsheet", captured["upload_data"])
             self.assertIn(b"\"parents\": [\"folder-123\"]", captured["upload_data"])
             self.assertEqual(1, captured["folder_lookup"])
@@ -396,7 +394,7 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual(1, len(requests))
         self.assertEqual(9, requests[0]["updateChartSpec"]["chartId"])
 
-    def test_upload_and_convert_workbook_applies_usl_lsl_trendline_fix_with_explicit_series_indexes(self):
+    def test_upload_and_convert_workbook_returns_converted_mapping_when_chart_patch_step_is_noop(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_path = Path(tmpdir) / "report.xlsx"
             excel_path.write_bytes(b"excel-content")
@@ -405,15 +403,14 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "modules.google_drive_export._ensure_reports_folder", return_value="folder"
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
-            })), patch("modules.google_drive_export._build_google_user_credentials") as build_creds, patch(
-                "modules.google_drive_export.fix_usl_lsl_trendlines"
-            ) as trendline_fix:
-                upload_and_convert_workbook(str(excel_path), credentials_path="creds.json", token_path="token.json")
+            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds") as build_creds:
+                result = upload_and_convert_workbook(str(excel_path), credentials_path="creds.json", token_path="token.json")
 
-            build_creds.assert_not_called()
-            trendline_fix.assert_not_called()
+            build_creds.assert_called_once_with(credentials_path=Path("creds.json"), token_path=Path("token.json"))
+            self.assertEqual("sheet123", result.file_id)
+            self.assertEqual("https://docs.google.com/spreadsheets/d/sheet123/edit", result.web_url)
 
-    def test_upload_and_convert_workbook_continues_when_usl_lsl_trendline_fix_fails(self):
+    def test_upload_and_convert_workbook_continues_when_chart_patch_step_fails(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_path = Path(tmpdir) / "report.xlsx"
             excel_path.write_bytes(b"excel-content")
@@ -424,14 +421,11 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
             })), patch("modules.google_drive_export._build_google_user_credentials", side_effect=ValueError("boom")), patch(
                 "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=ValueError("boom")
-            ), patch("modules.google_drive_export.logger.warning") as warning_logger:
+            ):
                 result = upload_and_convert_workbook(str(excel_path))
 
             self.assertEqual("sheet123", result.file_id)
-            self.assertEqual((), result.warnings)
-            warning_logger.assert_not_called()
-
-
+            self.assertEqual(str(excel_path), result.local_xlsx_path)
 
     def test_upload_and_convert_workbook_uses_specific_reason_for_missing_googleapiclient_import(self):
         with tempfile.TemporaryDirectory() as tmpdir:

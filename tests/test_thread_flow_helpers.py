@@ -1478,6 +1478,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.completion_metadata['converted_url'], 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
             self.assertEqual(thread.completion_metadata['local_xlsx_path'], out_file)
             self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.')
+            self.assertEqual(thread.completion_metadata['conversion_warning_details'][0]['reason'], 'missing_expected_tab')
+            self.assertEqual(thread.completion_metadata['conversion_warning_details'][0]['exception_class'], 'ValueError')
+            self.assertEqual(thread.completion_metadata['converted_tab_titles'], ['MEASUREMENTS'])
             fallback_stage_messages = [text for text in emitted if text.split('\n')[0].startswith('Google export stage: fallback')]
             self.assertTrue(fallback_stage_messages)
             self.assertIn(out_file, fallback_stage_messages[0])

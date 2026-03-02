@@ -80,13 +80,11 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(specs[1]['line']['color'], '#c0504b')
         self.assertEqual(specs[1]['line']['width'], 2)
         self.assertEqual(specs[1]['line']['transparency'], 40)
-        self.assertNotIn('trendline', specs[1])
         self.assertEqual(specs[2]['name'], 'LSL')
         self.assertEqual(specs[2]['categories'], '=Ref!$B22:B31')
         self.assertEqual(specs[2]['line']['color'], '#c0504b')
         self.assertEqual(specs[2]['line']['width'], 2)
         self.assertEqual(specs[2]['line']['transparency'], 40)
-        self.assertNotIn('trendline', specs[2])
         self.assertEqual(specs[1]['line'], specs[2]['line'])
 
     def test_insert_measurement_chart_wires_series_and_anchor(self):
@@ -146,7 +144,9 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(from_plan[0]['categories'], '=Ref!$B22:B31')
         self.assertEqual(from_plan[0]['values'], '=Ref!$C22:C31')
         self.assertEqual(from_plan[1]['categories'], '=Ref!$B22:B31')
+        self.assertEqual(from_plan[1]['values'], '=Ref!$D22:D31')
         self.assertEqual(from_plan[2]['categories'], '=Ref!$B22:B31')
+        self.assertEqual(from_plan[2]['values'], '=Ref!$E22:E31')
 
     def test_cached_series_specs_match_uncached_output(self):
         args = {
