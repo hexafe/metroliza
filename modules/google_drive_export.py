@@ -758,12 +758,14 @@ def fix_usl_lsl_trendlines(
                 if not isinstance(series_item, dict):
                     continue
 
-                # Hide the data line and points entirely — only the trendline should be visible
-                series_item["lineStyle"] = {"type": "INVISIBLE", "width": 0}
+                line_style = series_item.get("lineStyle")
+                if not isinstance(line_style, dict):
+                    line_style = {}
+                line_style["type"] = "SOLID"
+                line_style["width"] = line_width
+                series_item["lineStyle"] = line_style
                 series_item["pointStyle"] = {"shape": "NONE", "size": 0}
-                series_item["colorStyle"] = {
-                    "rgbColor": {"red": 0.0, "green": 0.0, "blue": 0.0, "alpha": 0.0}
-                }
+                series_item["colorStyle"] = copy.deepcopy(rgb_color_style)
                 series_item["trendline"] = {
                     "type": "LINEAR",
                     "lineStyle": {
