@@ -8,15 +8,18 @@ def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
     return f"={sheet_name}!${xl_range(first_row, column_index, last_row, column_index)}"
 
 
-def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column, cache=None):
+def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column, usl_column=None, lsl_column=None, cache=None):
     """Return worksheet range specs shared by chart backend helpers.
 
     The optional cache avoids rebuilding identical absolute range strings for repeated
     chart fragments in the same export run.
     """
+    resolved_usl_column = y_column if usl_column is None else usl_column
+    resolved_lsl_column = y_column if lsl_column is None else lsl_column
+
     if cache is not None:
         range_cache = cache.setdefault('range_specs', {})
-        cache_key = (sheet_name, first_data_row, last_data_row, x_column, y_column)
+        cache_key = (sheet_name, first_data_row, last_data_row, x_column, y_column, resolved_usl_column, resolved_lsl_column)
         cached = range_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -24,12 +27,12 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
     range_specs = {
         'data_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
         'data_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column),
-        # Limit helper points are stored in fixed two-row blocks (USL: 0-1, LSL: 2-3),
-        # each containing the first/last sample domain anchors in x and matching y.
-        'usl_x': build_sheet_series_range(sheet_name, 0, 1, x_column),
-        'usl_y': build_sheet_series_range(sheet_name, 0, 1, y_column),
-        'lsl_x': build_sheet_series_range(sheet_name, 2, 3, x_column),
-        'lsl_y': build_sheet_series_range(sheet_name, 2, 3, y_column),
+        # USL/LSL vectors are stored on data rows with values at first/last index
+        # and blanks in between, so charts can anchor to explicit columns.
+        'usl_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
+        'usl_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, resolved_usl_column),
+        'lsl_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
+        'lsl_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, resolved_lsl_column),
     }
     if cache is not None:
         range_cache[cache_key] = range_specs
@@ -58,8 +61,8 @@ def _build_limit_trendline_spec(*, point_count):
             # xlsxwriter expresses alpha as transparency; 60% opacity == 40% transparency.
             'transparency': 40,
         },
-        # USL/LSL series are anchored with two helper points. Extend the linear
-        # trendline to cover the remaining measurement x-domain.
+        # USL/LSL series contain sparse first/last anchors; extend the linear
+        # trendline across the remaining measurement x-domain.
         'forward': max(point_count - 2, 0),
     }
 
@@ -72,6 +75,8 @@ def build_measurement_chart_series_specs(
     last_data_row,
     x_column,
     y_column,
+    usl_column=None,
+    lsl_column=None,
     cache=None,
 ):
     """Build stable chart series definitions for measurement and spec-limit overlays."""
@@ -81,6 +86,8 @@ def build_measurement_chart_series_specs(
         last_data_row=last_data_row,
         x_column=x_column,
         y_column=y_column,
+        usl_column=usl_column,
+        lsl_column=lsl_column,
         cache=cache,
     )
 
@@ -125,6 +132,8 @@ def build_measurement_chart_series_specs_from_plan(*, header, sheet_name, measur
         last_data_row=measurement_plan['last_data_row'],
         x_column=measurement_plan['summary_column'],
         y_column=measurement_plan['y_column'],
+        usl_column=measurement_plan.get('usl_column'),
+        lsl_column=measurement_plan.get('lsl_column'),
         cache=cache,
     )
 

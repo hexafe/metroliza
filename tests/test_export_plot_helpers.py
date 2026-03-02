@@ -522,6 +522,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(plan['summary_column'], 7)
         self.assertEqual(plan['y_column'], 8)
         self.assertEqual(plan['data_range_y'], 'I22:I31')
+        self.assertEqual(plan['usl_column'], 9)
+        self.assertEqual(plan['lsl_column'], 10)
 
     def test_build_measurement_block_plan_rejects_empty_sample_size(self):
         with self.assertRaises(ValueError):
@@ -551,10 +553,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(series[0]['values'], '=REF_PART_A!$F22:F31')
 
         self.assertEqual(series[1]['name'], 'USL')
-        self.assertEqual(series[1]['values'], '=REF_PART_A!$F1:F2')
+        self.assertEqual(series[1]['values'], '=REF_PART_A!$F22:F31')
 
         self.assertEqual(series[2]['name'], 'LSL')
-        self.assertEqual(series[2]['values'], '=REF_PART_A!$F3:F4')
+        self.assertEqual(series[2]['values'], '=REF_PART_A!$F22:F31')
 
     def test_build_measurement_chart_range_specs_returns_backend_agnostic_ranges(self):
         ranges = build_measurement_chart_range_specs(
@@ -570,10 +572,10 @@ class TestExportPlotHelpers(unittest.TestCase):
             {
                 'data_x': '=REF_PART_A!$E22:E31',
                 'data_y': '=REF_PART_A!$F22:F31',
-                'usl_x': '=REF_PART_A!$E1:E2',
-                'usl_y': '=REF_PART_A!$F1:F2',
-                'lsl_x': '=REF_PART_A!$E3:E4',
-                'lsl_y': '=REF_PART_A!$F3:F4',
+                'usl_x': '=REF_PART_A!$E22:E31',
+                'usl_y': '=REF_PART_A!$F22:F31',
+                'lsl_x': '=REF_PART_A!$E22:E31',
+                'lsl_y': '=REF_PART_A!$F22:F31',
             },
         )
 
@@ -601,8 +603,6 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(plan['nom_cell'], '$E$1')
         self.assertEqual(plan['usl_cell'], '$E$2')
         self.assertEqual(plan['lsl_cell'], '$E$3')
-        self.assertEqual(plan['spec_limit_rows'][0], ('USL_MAX', 10.5))
-        self.assertEqual(plan['spec_limit_rows'][2], ('LSL_MAX', 9.8))
         self.assertEqual(plan['stat_rows'][0][1], '=ROUND(MIN(F22:F24), 3)')
 
     def test_build_measurement_write_bundle_keeps_per_header_layout_contract(self):
@@ -633,6 +633,11 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(bundle['data_columns'][2][0:3], (20, 8, 'DIA - X'))
         self.assertEqual(bundle['data_columns'][2][4], 'wrap')
         self.assertEqual(list(bundle['data_columns'][2][3]), [10.125, 9.995])
+
+        self.assertEqual(bundle['data_columns'][3][0:3], (20, 9, 'USL'))
+        self.assertEqual(list(bundle['data_columns'][3][3]), [10.5, 10.5])
+        self.assertEqual(bundle['data_columns'][4][0:3], (20, 10, 'LSL'))
+        self.assertEqual(list(bundle['data_columns'][4][3]), [9.8, 9.8])
 
     def test_build_measurement_chart_format_policy_returns_expected_defaults(self):
         policy = build_measurement_chart_format_policy('DIA - X')
