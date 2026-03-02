@@ -532,26 +532,36 @@ class TestGoogleDriveExport(unittest.TestCase):
         update_request = batch_body["requests"][0]["updateChartSpec"]
         self.assertEqual(17, update_request["chartId"])
         self.assertEqual("chart title", update_request["spec"]["title"])
-        self.assertEqual(3, len(update_request["spec"]["basicChart"]["series"]))
-        self.assertEqual(2, update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"])
-        self.assertNotIn("seriesName", update_request["spec"]["basicChart"]["series"][1]["series"])
-        self.assertNotIn("seriesName", update_request["spec"]["basicChart"]["series"][2]["series"])
-        self.assertNotIn("pointStyle", update_request["spec"]["basicChart"]["series"][1])
-        self.assertNotIn("pointStyle", update_request["spec"]["basicChart"]["series"][2])
-        usl_trendline = update_request["spec"]["basicChart"]["series"][1]["trendline"]
-        lsl_trendline = update_request["spec"]["basicChart"]["series"][2]["trendline"]
+        patched_series = update_request["spec"]["basicChart"]["series"]
+        self.assertEqual(3, len(patched_series))
+        self.assertNotIn("trendline", patched_series[0])
+        self.assertNotIn("lineStyle", patched_series[0])
+        self.assertNotIn("colorStyle", patched_series[0])
+        self.assertIn("sourceRange", patched_series[0]["series"])
+
+        for target_index in (1, 2):
+            self.assertEqual(2, patched_series[target_index]["lineStyle"]["width"])
+            self.assertIn("sourceRange", patched_series[target_index]["series"])
+            self.assertNotIn("seriesName", patched_series[target_index]["series"])
+            self.assertNotIn("pointStyle", patched_series[target_index])
+
+        usl_trendline = patched_series[1]["trendline"]
+        lsl_trendline = patched_series[2]["trendline"]
         self.assertEqual("LINEAR", usl_trendline["type"])
         self.assertEqual("LINEAR", lsl_trendline["type"])
         self.assertEqual(2, usl_trendline["lineStyle"]["width"])
         self.assertEqual(2, lsl_trendline["lineStyle"]["width"])
         self.assertEqual(
             0.6,
-            update_request["spec"]["basicChart"]["series"][2]["colorStyle"]["rgbColor"]["alpha"],
+            patched_series[2]["colorStyle"]["rgbColor"]["alpha"],
         )
+        request_json = json.dumps(update_request)
+        self.assertNotIn("seriesName", request_json)
+        self.assertNotIn("\"shape\": \"NONE\"", request_json)
 
         self.assertNotIn("fields", update_request)
-        self.assertNotIsInstance(update_request["spec"]["basicChart"]["series"][1]["lineStyle"]["width"], dict)
-        self.assertNotIsInstance(update_request["spec"]["basicChart"]["series"][2]["lineStyle"]["width"], dict)
+        self.assertNotIsInstance(patched_series[1]["lineStyle"]["width"], dict)
+        self.assertNotIsInstance(patched_series[2]["lineStyle"]["width"], dict)
 
 
     def test_fix_usl_lsl_trendlines_payload_omits_fields_and_dimension_width_shapes(self):
@@ -695,6 +705,10 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertNotIn("seriesName", patched_series[2]["series"])
         self.assertNotIn("pointStyle", patched_series[1])
         self.assertNotIn("pointStyle", patched_series[2])
+        request_json = json.dumps(update_request)
+        self.assertNotIn("seriesName", request_json)
+        self.assertNotIn("NOT_A_SHAPE", request_json)
+        self.assertNotIn("\"shape\": \"NONE\"", request_json)
 
     def test_fix_usl_lsl_trendlines_filters_chart_types_and_logs_discovery_counters(self):
         discovery_payload = {
@@ -912,8 +926,17 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertIn("trendline", first_series[2])
         self.assertNotIn("trendline", second_series[1])
         self.assertNotIn("trendline", second_series[2])
+        self.assertNotIn("seriesName", first_series[1]["series"])
+        self.assertNotIn("seriesName", first_series[2]["series"])
+        self.assertNotIn("seriesName", second_series[1]["series"])
+        self.assertNotIn("seriesName", second_series[2]["series"])
         self.assertNotIn("pointStyle", second_series[1])
         self.assertNotIn("pointStyle", second_series[2])
+        second_request_json = json.dumps(
+            fake_service._spreadsheets.batch_update_calls[1]["body"]["requests"][0]["updateChartSpec"]
+        )
+        self.assertNotIn("seriesName", second_request_json)
+        self.assertNotIn("\"shape\": \"NONE\"", second_request_json)
         warning_logger.assert_called_once()
 
     def test_normalize_measurement_chart_series_prefers_helper_anchor_row_blocks(self):
