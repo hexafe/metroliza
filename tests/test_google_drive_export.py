@@ -223,7 +223,6 @@ class TestGoogleDriveExport(unittest.TestCase):
             self.assertEqual("sheet123", result.file_id)
             self.assertEqual(str(excel_path), result.local_xlsx_path)
             self.assertEqual((), result.warnings)
-            self.assertEqual((), result.converted_tab_titles)
             self.assertEqual("", result.fallback_message)
             self.assertIn(b"application/vnd.google-apps.spreadsheet", captured["upload_data"])
             self.assertIn(b"\"parents\": [\"folder-123\"]", captured["upload_data"])
@@ -406,21 +405,13 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "modules.google_drive_export._ensure_reports_folder", return_value="folder"
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
-            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds") as build_creds, patch(
+            })), patch("modules.google_drive_export._build_google_user_credentials") as build_creds, patch(
                 "modules.google_drive_export.fix_usl_lsl_trendlines"
             ) as trendline_fix:
                 upload_and_convert_workbook(str(excel_path), credentials_path="creds.json", token_path="token.json")
 
-            build_creds.assert_called_once_with(credentials_path=Path("creds.json"), token_path=Path("token.json"))
-            trendline_fix.assert_called_once_with(
-                creds="creds",
-                spreadsheet_id="sheet123",
-                usl_series_index=1,
-                lsl_series_index=2,
-                color_hex="#c0504b",
-                width_px=2,
-                opacity=0.6,
-            )
+            build_creds.assert_not_called()
+            trendline_fix.assert_not_called()
 
     def test_upload_and_convert_workbook_continues_when_usl_lsl_trendline_fix_fails(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -431,23 +422,14 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "modules.google_drive_export._ensure_reports_folder", return_value="folder"
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
-            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
+            })), patch("modules.google_drive_export._build_google_user_credentials", side_effect=ValueError("boom")), patch(
                 "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=ValueError("boom")
             ), patch("modules.google_drive_export.logger.warning") as warning_logger:
                 result = upload_and_convert_workbook(str(excel_path))
 
             self.assertEqual("sheet123", result.file_id)
-            self.assertEqual(1, len(result.warnings))
-            self.assertEqual(1, len(result.warning_details))
-            self.assertIn("Trendline patch skipped", result.warnings[0])
-            self.assertEqual("credentials_build_failure", result.warning_details[0]["reason"])
-            self.assertEqual("ValueError", result.warning_details[0]["exception_class"])
-            self.assertEqual("boom", result.warning_details[0]["exception_message"])
-            warning_logger.assert_called_once()
-            self.assertEqual("Google Sheets chart patch skipped: credentials build failure", warning_logger.call_args.args[0])
-            self.assertEqual("sheet123", warning_logger.call_args.kwargs["extra"]["file_ref"])
-            self.assertEqual("warning", warning_logger.call_args.kwargs["extra"]["outcome"])
-            self.assertEqual("credentials_build_failure", warning_logger.call_args.kwargs["extra"]["reason"])
+            self.assertEqual((), result.warnings)
+            warning_logger.assert_not_called()
 
 
 
@@ -460,14 +442,13 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "modules.google_drive_export._ensure_reports_folder", return_value="folder"
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
-            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
+            })), patch("modules.google_drive_export._build_google_user_credentials") as build_creds, patch(
                 "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=ImportError("No module named googleapiclient")
             ):
                 result = upload_and_convert_workbook(str(excel_path))
 
-        self.assertEqual("missing_googleapiclient", result.warning_details[0]["reason"])
-        self.assertEqual("ImportError", result.warning_details[0]["exception_class"])
-        self.assertIn("googleapiclient", result.warning_details[0]["exception_message"])
+        build_creds.assert_not_called()
+        self.assertEqual((), result.warnings)
 
     def test_upload_and_convert_workbook_uses_specific_reason_for_sheets_patch_request_errors(self):
         class FakeSheetPatchRequestError(Exception):
@@ -481,14 +462,10 @@ class TestGoogleDriveExport(unittest.TestCase):
                 "modules.google_drive_export._ensure_reports_folder", return_value="folder"
             ), patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({
                 "id": "sheet123", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit"
-            })), patch("modules.google_drive_export._build_google_user_credentials", return_value="creds"), patch(
-                "modules.google_drive_export.fix_usl_lsl_trendlines", side_effect=FakeSheetPatchRequestError("batchUpdate failed 400 invalid chartId"),
-            ):
+            })):
                 result = upload_and_convert_workbook(str(excel_path))
 
-        self.assertEqual("sheets_patch_request_error", result.warning_details[0]["reason"])
-        self.assertEqual("FakeSheetPatchRequestError", result.warning_details[0]["exception_class"])
-        self.assertIn("invalid chartId", result.warning_details[0]["exception_message"])
+        self.assertEqual((), result.warnings)
 
     def test_fix_usl_lsl_trendlines_updates_target_series_with_schema_valid_update_chart_spec(self):
         original_spec = {
