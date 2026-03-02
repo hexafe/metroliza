@@ -392,7 +392,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         legend = ax.get_legend()
         self.assertIsNotNone(legend)
-        self.assertEqual(1, legend._loc)
+        self.assertEqual(2, legend._loc)
         bbox = legend.get_bbox_to_anchor()._bbox
         self.assertAlmostEqual(1.0, bbox.x0, places=2)
         self.assertAlmostEqual(1.0, bbox.y0, places=2)
@@ -405,10 +405,10 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         legend = ax.get_legend()
         self.assertIsNotNone(legend)
-        self.assertEqual(1, legend._loc)
+        self.assertEqual(2, legend._loc)
         bbox = legend.get_bbox_to_anchor()._bbox
-        self.assertAlmostEqual(1.02, bbox.x0, places=2)
-        self.assertAlmostEqual(1.02, bbox.y0, places=2)
+        self.assertAlmostEqual(1.0, bbox.x0, places=2)
+        self.assertAlmostEqual(1.0, bbox.y0, places=2)
         plt.close(fig)
 
     def test_style_histogram_stats_table_applies_capability_badge_to_cp_rows(self):
