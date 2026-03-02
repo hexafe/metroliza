@@ -1750,7 +1750,6 @@ class ExportDataThread(QThread):
                 )
                 if isinstance(e, GoogleDriveAuthError):
                     return
-                self.log_and_exit(e)
                 return
             self.log_and_exit(e)
         except Exception as e:
