@@ -1103,6 +1103,8 @@ class ExportDataThread(QThread):
             "converted_url": None,
             "fallback_message": "",
             "conversion_warnings": [],
+            "conversion_warning_details": [],
+            "converted_tab_titles": [],
         }
         self._exported_sheet_names = []
         self._exported_sheet_name_set = set()
@@ -1658,13 +1660,37 @@ class ExportDataThread(QThread):
                     expected_sheet_names=self._build_expected_sheet_names(),
                     status_callback=_stage_callback,
                 )
+                conversion_warnings = list(conversion.warnings)
+                conversion_warning_details = list(getattr(conversion, "warning_details", ()))
+                converted_tab_titles = list(getattr(conversion, "converted_tab_titles", ()))
+                if not conversion_warning_details and conversion_warnings:
+                    missing_tabs = []
+                    for warning in conversion_warnings:
+                        marker = "Missing expected tab(s):"
+                        if marker in warning:
+                            tail = warning.split(marker, 1)[1].strip().rstrip('.')
+                            missing_tabs.extend([tab.strip() for tab in tail.split(',') if tab.strip()])
+                    if missing_tabs:
+                        conversion_warning_details.append(
+                            {
+                                "reason": "missing_expected_tab",
+                                "exception_class": "ValueError",
+                                "missing_tabs": ",".join(missing_tabs),
+                            }
+                        )
+                        expected_tabs = self._build_expected_sheet_names()
+                        if not converted_tab_titles:
+                            converted_tab_titles = [tab for tab in expected_tabs if tab not in set(missing_tabs)]
+
                 self.completion_metadata.update(
                     {
                         "converted_file_id": conversion.file_id,
                         "converted_url": conversion.web_url,
                         "local_xlsx_path": conversion.local_xlsx_path,
                         "fallback_message": conversion.fallback_message,
-                        "conversion_warnings": list(conversion.warnings),
+                        "conversion_warnings": conversion_warnings,
+                        "conversion_warning_details": conversion_warning_details,
+                        "converted_tab_titles": converted_tab_titles,
                     }
                 )
                 self._log_export_stage(

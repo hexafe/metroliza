@@ -20,7 +20,8 @@ class ModifyDB(QDialog):
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         self.setWindowTitle("Modify database")
-        self.setWindowIcon(parent.windowIcon())
+        if parent is not None and hasattr(parent, "windowIcon"):
+            self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 640, 480)
         self.setModal(True)
 
