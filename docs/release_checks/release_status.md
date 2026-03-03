@@ -14,7 +14,7 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 |---|---|---|---|
 | Freeze | Open (no hard freeze active) | Use normal PR flow; apply RC branch controls once freeze starts. | [`branching_strategy.md`](./branching_strategy.md), [`release_branching_playbook.md`](./release_branching_playbook.md) |
 | Open testing | Active | Execute smoke cadence, triage, and handoff evidence collection. | [`open_testing_runbook.md`](./open_testing_runbook.md) |
-| Release candidate readiness | In progress | Complete checklist evidence before RC cut/signoff. | [`release_candidate_checklist.md`](./release_candidate_checklist.md) |
+| Release candidate readiness | In progress | Complete checklist evidence and maintain active implementation-item triage records before RC cut/signoff. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
 | Google conversion smoke gate | Required for RC | Record latest smoke outcome before release decision. | [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
 
 ## Operating notes
@@ -26,5 +26,5 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 ## Historical context (archive)
 
 - [`../archive/2026/IMPLEMENTATION_PLAN.md`](../archive/2026/IMPLEMENTATION_PLAN.md)
-- [`../archive/2026/TODO.md`](../archive/2026/TODO.md)
+- [`../archive/2026/TODO.md`](../archive/2026/TODO.md) *(optional historical reference; non-operational)*
 - [`../archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md`](../archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md)
