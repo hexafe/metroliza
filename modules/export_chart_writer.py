@@ -23,7 +23,7 @@ def _build_chart_size_policy():
     }
 
 
-def _write_limit_series_helper_range(worksheet, measurement_plan, chart_anchor_col):
+def _write_limit_series_helper_range(worksheet, sheet_name, measurement_plan, chart_anchor_col):
     """Write a 2-row helper range used to render horizontal USL/LSL lines."""
     chart_index = chart_anchor_col // 5
     helper_first_row = chart_index * 2
@@ -52,25 +52,25 @@ def _write_limit_series_helper_range(worksheet, measurement_plan, chart_anchor_c
 
     return {
         'usl_x': build_sheet_series_range(
-            worksheet.name,
+            sheet_name,
             helper_first_row,
             helper_last_row,
             HELPER_START_COLUMN,
         ),
         'usl_y': build_sheet_series_range(
-            worksheet.name,
+            sheet_name,
             helper_first_row,
             helper_last_row,
             HELPER_START_COLUMN + 1,
         ),
         'lsl_x': build_sheet_series_range(
-            worksheet.name,
+            sheet_name,
             helper_first_row,
             helper_last_row,
             HELPER_START_COLUMN,
         ),
         'lsl_y': build_sheet_series_range(
-            worksheet.name,
+            sheet_name,
             helper_first_row,
             helper_last_row,
             HELPER_START_COLUMN + 2,
@@ -236,7 +236,7 @@ def insert_measurement_chart(
         measurement_plan=measurement_plan,
         cache=cache,
     )
-    helper_range_specs = _write_limit_series_helper_range(worksheet, measurement_plan, chart_anchor_col)
+    helper_range_specs = _write_limit_series_helper_range(worksheet, sheet_name, measurement_plan, chart_anchor_col)
     series_specs[1]['categories'] = helper_range_specs['usl_x']
     series_specs[1]['values'] = helper_range_specs['usl_y']
     series_specs[2]['categories'] = helper_range_specs['lsl_x']
