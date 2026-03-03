@@ -249,6 +249,22 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('(B1 + B2)', formulas['cpk'])
         self.assertNotIn('MIN(', formulas['cpk'])
 
+    def test_build_measurement_stat_formulas_uses_single_sided_cpk_when_nominal_and_lsl_are_near_zero(self):
+        formulas = build_measurement_stat_formulas(
+            summary_col='B',
+            stats_col='D',
+            data_range_y='C22:C30',
+            nom_cell='$B$1',
+            usl_cell='$B$2',
+            lsl_cell='$B$3',
+            nom_value=1e-13,
+            lsl_value=-1e-13,
+        )
+
+        self.assertEqual(formulas['cp'], '="N/A"')
+        self.assertIn('(B1 + B2)', formulas['cpk'])
+        self.assertNotIn('MIN(', formulas['cpk'])
+
     def test_build_measurement_stat_formulas_uses_dual_sided_cpk_otherwise(self):
         formulas = build_measurement_stat_formulas(
             summary_col='D',

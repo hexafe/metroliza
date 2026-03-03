@@ -21,6 +21,7 @@ import pandas as pd
 from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.progress_status import build_three_line_status
+from modules.stats_utils import is_one_sided_geometric_tolerance
 from modules.csv_summary_utils import (
     build_default_plot_toggles,
     compute_column_summary_stats,
@@ -317,12 +318,18 @@ class DataProcessingThread(QThread):
         USL_formula = f"({summary_col}1 + {summary_col}2)"
         LSL_formula = f"({summary_col}1 + {summary_col}3)"
         sigma_formula = f"({summary_col}7)"
-        cp_formula = f"ROUND(({USL_formula} - {LSL_formula})/(6 * {sigma_formula}), 3)"
+        if is_one_sided_geometric_tolerance(nom, lsl_offset):
+            cp_formula = '="N/A"'
+        else:
+            cp_formula = f"=ROUND(({USL_formula} - {LSL_formula})/(6 * {sigma_formula}), 3)"
         worksheet.write_formula(7, col + 3, cp_formula)
 
         worksheet.write(8, col + 2, 'Cpk')
         average_formula = f"({summary_col}5)"
-        cpk_formula = f"ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
+        if is_one_sided_geometric_tolerance(nom, lsl_offset):
+            cpk_formula = f"=ROUND(({USL_formula} - {average_formula})/(3 * {sigma_formula}), 3)"
+        else:
+            cpk_formula = f"=ROUND(MIN( ({USL_formula} - {average_formula})/(3 * {sigma_formula}), ({average_formula} - {LSL_formula})/(3 * {sigma_formula}) ), 3)"
         worksheet.write_formula(8, col + 3, cpk_formula)
 
         worksheet.write(9, col + 2, "Sample size")

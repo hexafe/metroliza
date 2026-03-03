@@ -1,6 +1,7 @@
 from xlsxwriter.utility import xl_col_to_name
 
 from modules.export_summary_utils import resolve_nominal_and_limits
+from modules.stats_utils import is_one_sided_geometric_tolerance
 
 
 def build_spec_limit_anchor_rows(usl, lsl):
@@ -15,7 +16,7 @@ def build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_ce
     sigma_formula = f"({stats_col}4)"
     average_formula = f"({stats_col}2)"
 
-    if nom_value == 0 and lsl_value == 0:
+    if is_one_sided_geometric_tolerance(nom_value, lsl_value):
         cp_formula = '="N/A"'
         cpk_formula = f"=ROUND(({usl_formula} - {average_formula})/(3 * {sigma_formula}), 3)"
     else:
