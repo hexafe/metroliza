@@ -939,46 +939,6 @@ def _build_limit_series_patch_requests(charts_payload: dict[str, Any]) -> list[d
 
 
 
-def _discover_converted_tab_titles(*, spreadsheet_id: str, access_token: str) -> tuple[str, ...]:
-    if not spreadsheet_id:
-        return ()
-    request = urllib.request.Request(
-        f"https://sheets.googleapis.com/v4/spreadsheets/{urllib.parse.quote(spreadsheet_id)}?fields=sheets(properties(title))",
-        headers={"Authorization": f"Bearer {access_token}"},
-        method="GET",
-    )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    sheets = payload.get("sheets") if isinstance(payload, dict) else None
-    if not isinstance(sheets, list):
-        return ()
-    titles = []
-    for sheet in sheets:
-        if not isinstance(sheet, dict):
-            continue
-        properties = sheet.get("properties")
-        if not isinstance(properties, dict):
-            continue
-        title = properties.get("title")
-        if isinstance(title, str) and title.strip():
-            titles.append(title.strip())
-    return tuple(titles)
-
-
-def _build_missing_expected_tab_warnings(*, expected_sheet_names, converted_tab_titles):
-    if not expected_sheet_names:
-        return (), ()
-    expected = [str(name).strip() for name in expected_sheet_names if isinstance(name, str) and str(name).strip()]
-    if not expected:
-        return (), ()
-    converted_set = {name.strip() for name in converted_tab_titles if isinstance(name, str) and name.strip()}
-    missing = [name for name in expected if name not in converted_set]
-    if not missing:
-        return (), ()
-    warning = f"Google Sheets conversion appears partial. Missing expected tab(s): {', '.join(missing)}."
-    details = ({"reason": "missing_expected_tab", "exception_class": "ValueError", "missing_tabs": ','.join(missing)},)
-    return (warning,), details
-
 def _build_google_user_credentials(*, credentials_path: Path, token_path: Path):
     """Build google-auth user credentials for the canonical Sheets patch workflow."""
     from google.oauth2.credentials import Credentials
@@ -1104,16 +1064,6 @@ def upload_and_convert_workbook(
     converted_tab_titles: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     warning_details: tuple[dict[str, str], ...] = ()
-
-    try:
-        converted_tab_titles = _discover_converted_tab_titles(spreadsheet_id=parsed.file_id, access_token=access_token)
-    except Exception:
-        converted_tab_titles = ()
-
-    warnings, warning_details = _build_missing_expected_tab_warnings(
-        expected_sheet_names=expected_sheet_names,
-        converted_tab_titles=converted_tab_titles,
-    )
 
     if callable(status_callback):
         status_callback("validating")
