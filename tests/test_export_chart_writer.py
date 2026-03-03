@@ -2,7 +2,10 @@ import time
 import unittest
 
 from modules.export_chart_writer import (
+    CHART_HEIGHT_CM,
+    CHART_WIDTH_CM,
     build_horizontal_limit_line_specs,
+    build_measurement_chart_format_policy,
     build_measurement_chart_range_specs,
     build_measurement_chart_series_specs,
     build_measurement_chart_series_specs_from_plan,
@@ -14,6 +17,7 @@ class DummyChart:
     def __init__(self):
         self.series = []
         self.title = None
+        self.size = None
 
     def add_series(self, spec):
         self.series.append(spec)
@@ -27,8 +31,8 @@ class DummyChart:
     def set_legend(self, _):
         return None
 
-    def set_size(self, _):
-        return None
+    def set_size(self, size):
+        self.size = size
 
 
 class DummyWorkbook:
@@ -96,6 +100,14 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(specs[2]['line']['transparency'], 40)
         self.assertEqual(specs[1]['line'], specs[2]['line'])
 
+
+    def test_chart_size_policy_uses_updated_cm_dimensions(self):
+        policy = build_measurement_chart_format_policy('H')
+
+        self.assertEqual(CHART_WIDTH_CM, 11.09)
+        self.assertEqual(CHART_HEIGHT_CM, 6.35)
+        self.assertEqual(policy['size'], {'width': 419, 'height': 240})
+
     def test_insert_measurement_chart_wires_series_and_anchor(self):
         workbook = DummyWorkbook()
         worksheet = DummyWorksheet()
@@ -126,6 +138,7 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(workbook.chart.series[1]['values'], '=Ref!$XFC1:XFC2')
         self.assertEqual(workbook.chart.series[2]['categories'], '=Ref!$XFB1:XFB2')
         self.assertEqual(workbook.chart.series[2]['values'], '=Ref!$XFD1:XFD2')
+        self.assertEqual(workbook.chart.size, {'width': 419, 'height': 240})
 
     def test_series_specs_from_plan_matches_direct_builder(self):
         plan = {
