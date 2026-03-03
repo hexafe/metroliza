@@ -30,7 +30,9 @@ Before running smoke:
    - Both files must remain local-only and gitignored.
 4. **Google APIs are enabled for the sandbox project**
    - Google Drive API.
-5. **Network path to Google APIs is available**
+5. **OAuth consent grants Drive upload scope**
+   - Interactive consent should include only `https://www.googleapis.com/auth/drive.file`.
+6. **Network path to Google APIs is available**
    - Outbound HTTPS access to Google OAuth/Drive endpoints.
 
 ## Script usage contract (`tests/google_conversion_smoke.py`)
@@ -106,7 +108,8 @@ The smoke check is designed to fail with actionable messages when prerequisites 
 2. Delete stale `token.json` and re-run interactive auth flow to mint a fresh token.
 3. Verify OAuth consent screen and client type match desktop/local app usage.
 4. Confirm the account running smoke still has Drive access and has not revoked consent.
-5. Re-run smoke after token refresh/regeneration.
+5. Confirm the granted token scope includes `https://www.googleapis.com/auth/drive.file` (no Sheets scope required).
+6. Re-run smoke after token refresh/regeneration.
 
 ### Quota/rate-limit failures (HTTP 429 / quotaExceeded / rateLimitExceeded)
 

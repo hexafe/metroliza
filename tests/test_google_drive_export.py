@@ -13,7 +13,6 @@ from modules.google_drive_export import (
     GOOGLE_DRIVE_SCOPE,
     GOOGLE_DRIVE_UPLOAD_URL,
     GOOGLE_OAUTH_SCOPES,
-    GOOGLE_SHEETS_SCOPE,
     GoogleDriveAuthError,
     GoogleDriveQuotaError,
     GoogleDriveResponseError,
@@ -331,8 +330,8 @@ class TestGoogleDriveExport(unittest.TestCase):
         self.assertEqual("https://drive.google.com/file/d/abc123/view", result.web_url)
 
 
-    def test_oauth_scopes_include_drive_and_sheets(self):
-        self.assertEqual((GOOGLE_DRIVE_SCOPE, GOOGLE_SHEETS_SCOPE), GOOGLE_OAUTH_SCOPES)
+    def test_oauth_scopes_include_drive_only(self):
+        self.assertEqual((GOOGLE_DRIVE_SCOPE,), GOOGLE_OAUTH_SCOPES)
 
     def test_build_limit_series_patch_requests_targets_usl_and_lsl(self):
         discovery_payload = {
@@ -1409,6 +1408,67 @@ class TestGoogleDriveOAuthBootstrap(unittest.TestCase):
                 _load_token_payload(token_path)
 
         self.assertIn("Missing token.json", str(exc.exception))
+
+
+    def test_refresh_access_token_sets_drive_scope_when_missing(self):
+        token_payload = {"refresh_token": "refresh-token"}
+        credentials = {
+            "client_id": "id",
+            "client_secret": "secret",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+
+        with patch("modules.google_drive_export.urllib.request.urlopen", return_value=_FakeResponse({"access_token": "new-token", "expires_in": 3600})):
+            refreshed = _refresh_access_token(token_payload, credentials)
+
+        self.assertEqual(GOOGLE_DRIVE_SCOPE, refreshed["scope"])
+
+    def test_interactive_oauth_authorization_defaults_to_drive_only_scope(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            credentials_path = Path(tmpdir) / "credentials.json"
+            token_path = Path(tmpdir) / "token.json"
+            credentials_path.write_text(
+                json.dumps(
+                    {
+                        "installed": {
+                            "client_id": "client-id",
+                            "client_secret": "client-secret",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            class _FakeCredentials:
+                token = "access-token"
+                refresh_token = "refresh-token"
+                token_uri = "https://oauth2.googleapis.com/token"
+                client_id = "client-id"
+                client_secret = "client-secret"
+                scopes = None
+                scope = None
+                expiry = None
+
+            class _FakeInstalledAppFlow:
+                @classmethod
+                def from_client_secrets_file(cls, _path, scopes=None):
+                    _ = scopes
+                    return cls()
+
+                def run_local_server(self, **_kwargs):
+                    return _FakeCredentials()
+
+            with patch.dict(
+                "sys.modules",
+                {"google_auth_oauthlib.flow": type("M", (), {"InstalledAppFlow": _FakeInstalledAppFlow})()},
+            ):
+                from modules.google_drive_export import _interactive_oauth_authorization
+
+                payload = _interactive_oauth_authorization(credentials_path, token_path)
+
+            self.assertEqual([GOOGLE_DRIVE_SCOPE], payload["scopes"])
+            self.assertEqual(GOOGLE_DRIVE_SCOPE, payload["scope"])
 
     def test_refresh_access_token_without_refresh_token_requires_reauthentication(self):
         with self.assertRaises(GoogleDriveAuthError) as exc:
