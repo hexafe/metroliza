@@ -1028,6 +1028,31 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(iqr_labels, ['All'])
         self.assertEqual(iqr_values, [[1.0, 2.0, 3.0]])
 
+    def test_build_iqr_plot_payload_keeps_group_labels_dense_when_grouping_active(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+
+        sampled_group = pd.DataFrame({'MEAS': [1.0, 2.0, 3.0, 4.0]})
+        labels = ['G1', 'G1', 'G2', 'G2']
+        values = [[1.0, 2.0], [3.0, 4.0], [2.0, 2.5], [3.5, 3.8]]
+
+        iqr_labels, iqr_values = thread._build_iqr_plot_payload(
+            labels,
+            values,
+            sampled_group,
+            grouping_active=True,
+        )
+
+        self.assertEqual(iqr_labels, ['G1', 'G1', 'G2', 'G2'])
+        self.assertEqual(iqr_values, values)
+
     def test_render_iqr_boxplot_normalizes_mismatched_inputs_without_raising(self):
         import matplotlib.pyplot as plt
 

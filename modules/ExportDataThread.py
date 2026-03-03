@@ -37,6 +37,7 @@ from modules.export_summary_utils import (
     apply_shared_x_axis_label_strategy as _apply_shared_x_axis_label_strategy,
     build_histogram_density_curve_payload as _build_histogram_density_curve_payload,
     build_sparse_unique_labels as _build_sparse_unique_labels,
+    build_summary_panel_labels as _build_summary_panel_labels,
     build_trend_plot_payload as _build_trend_plot_payload,
     compute_measurement_summary,
     normalize_plot_axis_values as _normalize_plot_axis_values,
@@ -193,8 +194,16 @@ def build_sparse_unique_labels(labels):
     return _build_sparse_unique_labels(labels)
 
 
-def build_trend_plot_payload(header_group):
-    return _build_trend_plot_payload(header_group)
+def build_summary_panel_labels(labels, *, grouping_active=False):
+    return _build_summary_panel_labels(labels, grouping_active=grouping_active)
+
+
+def build_trend_plot_payload(header_group, *, grouping_active=False, label_column=None):
+    return _build_trend_plot_payload(
+        header_group,
+        grouping_active=grouping_active,
+        label_column=label_column,
+    )
 
 
 def build_histogram_density_curve_payload(measurements, point_count=100):
@@ -1273,8 +1282,9 @@ class ExportDataThread(QThread):
         fig.savefig(image_buffer, **save_kwargs)
         return image_buffer.getvalue()
 
-    def _build_iqr_plot_payload(self, labels, values, sampled_group):
-        boxplot_labels = labels if labels else ['All']
+    def _build_iqr_plot_payload(self, labels, values, sampled_group, *, grouping_active=False):
+        strategy_labels = build_summary_panel_labels(labels or ['All'], grouping_active=grouping_active)
+        boxplot_labels = strategy_labels
         boxplot_values = values if values else [list(sampled_group['MEAS'])]
 
         if len(boxplot_labels) != len(boxplot_values):
@@ -1410,13 +1420,13 @@ class ExportDataThread(QThread):
         return labels, values, can_render_violin
 
     @staticmethod
-    def _build_summary_scatter_payload(header_group, x_column):
+    def _build_summary_scatter_payload(header_group, x_column, *, grouping_active=False):
         scatter_frame = header_group.dropna(subset=['MEAS']).copy()
         if scatter_frame.empty:
             return np.array([]), np.array([]), []
 
         raw_labels = scatter_frame[x_column].tolist()
-        sparse_labels = build_sparse_unique_labels(raw_labels)
+        strategy_labels = build_summary_panel_labels(raw_labels, grouping_active=grouping_active)
 
         normalized_y = _normalize_plot_axis_values(list(scatter_frame['MEAS']))
         y_numeric = pd.to_numeric(pd.Series(normalized_y), errors='coerce').to_numpy(dtype=float)
@@ -1436,7 +1446,7 @@ class ExportDataThread(QThread):
             else:
                 x_values = x_numeric
 
-        return x_values, y_numeric, sparse_labels
+        return x_values, y_numeric, strategy_labels
 
     def _sort_header_group(self, header_group):
         sort_mode = self.selected_sorting_parameter.strip().lower()
@@ -2052,21 +2062,27 @@ class ExportDataThread(QThread):
             sampled_trend_group = sample_frame_for_chart(header_group, 'trend', sampling_policy)
             self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
 
+            distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
+            scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
+
             chart_mp_enabled = self._chart_executor is not None and len(header_group) >= 2500
             precomputed_density_curve = None
             precomputed_trend_payload = None
             if chart_mp_enabled:
                 try:
                     density_future = self._chart_executor.submit(build_histogram_density_curve_payload, sampled_histogram_group['MEAS'])
-                    trend_future = self._chart_executor.submit(build_trend_plot_payload, sampled_trend_group)
+                    trend_future = self._chart_executor.submit(
+                        build_trend_plot_payload,
+                        sampled_trend_group,
+                        grouping_active=grouping_applied,
+                        label_column=distribution_key,
+                    )
                     precomputed_density_curve = density_future.result()
                     precomputed_trend_payload = trend_future.result()
                 except Exception:
                     precomputed_density_curve = None
                     precomputed_trend_payload = None
 
-            distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
-            scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
             prep_executor = self._summary_prep_executor
             if prep_executor is not None:
                 try:
@@ -2111,11 +2127,24 @@ class ExportDataThread(QThread):
                     self.violin_plot_min_samplesize,
                 )
 
+            distribution_labels = build_summary_panel_labels(
+                distribution_labels,
+                grouping_active=grouping_applied,
+            )
+            iqr_labels = build_summary_panel_labels(
+                iqr_labels,
+                grouping_active=grouping_applied,
+            )
+
             label_positions = None
             x_values = None
             y_values = None
             if not can_render_violin:
-                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(sampled_distribution_group, scatter_key)
+                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(
+                    sampled_distribution_group,
+                    scatter_key,
+                    grouping_active=grouping_applied,
+                )
                 label_positions = list(x_values)
 
             summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
@@ -2188,7 +2217,12 @@ class ExportDataThread(QThread):
                 try:
                     chart_start = time.perf_counter()
                     fig, ax = plt.subplots(figsize=(6, 4))
-                    boxplot_labels, boxplot_values = self._build_iqr_plot_payload(iqr_labels, iqr_values, sampled_iqr_group)
+                    boxplot_labels, boxplot_values = self._build_iqr_plot_payload(
+                        iqr_labels,
+                        iqr_values,
+                        sampled_iqr_group,
+                        grouping_active=grouping_applied,
+                    )
                     render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
                     add_iqr_boxplot_legend(ax)
                     apply_minimal_axis_style(ax, grid_axis='y')
@@ -2306,7 +2340,11 @@ class ExportDataThread(QThread):
                     apply_summary_plot_theme()
 
                     chart_start = time.perf_counter()
-                    trend_payload = precomputed_trend_payload or build_trend_plot_payload(sampled_trend_group)
+                    trend_payload = precomputed_trend_payload or build_trend_plot_payload(
+                        sampled_trend_group,
+                        grouping_active=grouping_applied,
+                        label_column=distribution_key,
+                    )
                     data_x = trend_payload['x']
                     data_y = trend_payload['y']
                     unique_labels = trend_payload['labels']
