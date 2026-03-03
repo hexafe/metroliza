@@ -228,3 +228,41 @@ class CsvSummaryIntegrationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class _FormulaCaptureWorksheet:
+    def __init__(self):
+        self.formulas = {}
+
+    def write(self, row, col, value):
+        return None
+
+    def write_formula(self, row, col, formula):
+        self.formulas[(row, col)] = formula
+
+
+class CsvSummaryFormulaTests(unittest.TestCase):
+    def test_write_summary_data_uses_single_sided_capability_for_near_zero_nom_and_lsl(self):
+        worker = DataProcessingThread(
+            selected_indexes=['PART'],
+            selected_data_columns=['LENGTH'],
+            input_file='input.csv',
+            output_file='output.xlsx',
+            data_frame=pd.DataFrame({'PART': ['A', 'B'], 'LENGTH': [1.0, 1.1]}),
+        )
+        worksheet = _FormulaCaptureWorksheet()
+        selected_data = pd.DataFrame({'PART': ['A', 'B'], 'LENGTH': [1.0, 1.1]})
+
+        worker.write_summary_data(
+            worksheet,
+            data_column='LENGTH',
+            selected_data=selected_data,
+            spec_limits={'nom': 1e-13, 'usl': 1.0, 'lsl': -1e-13},
+        )
+
+        cp_formula = worksheet.formulas[(7, selected_data.shape[1] + 3)]
+        cpk_formula = worksheet.formulas[(8, selected_data.shape[1] + 3)]
+
+        self.assertEqual(cp_formula, '="N/A"')
+        self.assertIn('ROUND((', cpk_formula)
+        self.assertNotIn('MIN(', cpk_formula)
