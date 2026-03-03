@@ -81,7 +81,7 @@ class TestExportSheetWriter(unittest.TestCase):
         self.assertEqual(measurement_plan['data_start_row'], 21)
         self.assertEqual(len(worksheet.conditional_formats), 3)
         self.assertTrue(any(w[2] == 'NOK %' for w in worksheet.writes if isinstance(w[2], str)))
-        self.assertFalse(any((w[0], w[1]) in {(0, 2), (1, 2), (2, 2), (3, 2)} for w in worksheet.writes))
+        self.assertTrue(any((w[0], w[1], w[2]) == (0, 2, 'MIN') for w in worksheet.writes))
 
 
     def test_build_measurement_summary_row_layout_keeps_legacy_coordinates(self):

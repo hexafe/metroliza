@@ -123,8 +123,8 @@ def build_spec_limit_anchor_rows(usl, lsl):
     return _build_spec_limit_anchor_rows(usl, lsl)
 
 
-def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
-    return _build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value)
+def build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
+    return _build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value)
 
 
 def build_measurement_stat_row_specs(stat_formulas):
@@ -1931,7 +1931,7 @@ class ExportDataThread(QThread):
                             ref,
                         )
 
-                worksheet.freeze_panes(12, 0)
+                worksheet.freeze_panes(7, 0)
 
             if total_references == 0 or total_header_units == 0:
                 self._emit_stage_progress('measurement_sheets_charts', 1.0)
@@ -2083,7 +2083,7 @@ class ExportDataThread(QThread):
                     precomputed_density_curve = None
                     precomputed_trend_payload = None
 
-            distribution_key = 'GROUP' if grouping_applied else '__ALL__'
+            distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
             scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
             prep_executor = self._summary_prep_executor
             if prep_executor is not None:
