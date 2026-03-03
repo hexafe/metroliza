@@ -1,3 +1,10 @@
+"""Immutable request/config contracts plus validation and normalization entry points.
+
+This module defines frozen dataclasses used to pass parse and export configuration
+through the application. It also provides validator helpers that enforce required
+fields, normalize supported option values, and return validated request objects.
+"""
+
 from dataclasses import dataclass
 from pathlib import Path
 import pandas as pd
@@ -5,18 +12,64 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class ParseRequest:
+    """Request payload for parsing a source directory into a target database.
+
+    Attributes:
+        source_directory: Input folder containing source files to parse.
+        db_file: Output database path where parsed content is written.
+
+    Usage notes:
+        Pass to ``validate_parse_request`` before use so required string fields are
+        checked and path validation is applied consistently.
+    """
+
     source_directory: str
     db_file: str
 
 
 @dataclass(frozen=True)
 class AppPaths:
+    """Filesystem paths required by export and parse workflows.
+
+    Attributes:
+        db_file: Database path; required and must be a non-empty string.
+        excel_file: Optional Excel output path; when provided it must end in
+            ``.xlsx``.
+
+    Usage notes:
+        ``validate_paths`` enforces required/optional path constraints but does not
+        rewrite path values.
+    """
+
     db_file: str
     excel_file: str | None = None
 
 
 @dataclass(frozen=True)
 class ExportOptions:
+    """Configurable export behavior with normalized defaults.
+
+    Attributes:
+        preset: Export preset; unsupported values normalize to
+            ``"fast_diagnostics"``.
+        export_type: Export mode, currently ``"line"`` or ``"scatter"``.
+        export_target: Destination format/provider identifier.
+        backend_target: Backend implementation target; aliases may normalize to
+            canonical values.
+        sorting_parameter: Sort key; supports ``"date"`` and sample-style aliases.
+        violin_plot_min_samplesize: Lower-bounded numeric threshold for violin
+            plots.
+        summary_plot_scale: Non-negative scaling value for summary plots.
+        hide_ok_results: Toggles hiding passing results in exports.
+        generate_summary_sheet: Toggles summary sheet generation.
+        chart_worker_count: Worker process/thread count, minimum of ``1``.
+        chart_worker_queue_size: Queue size for chart workers, minimum of ``1``.
+
+    Usage notes:
+        ``validate_export_options`` returns a normalized copy with sanitized
+        casing/aliases and bounded numeric settings.
+    """
+
     preset: str = "fast_diagnostics"
     export_type: str = "line"
     export_target: str = "excel_xlsx"
@@ -32,6 +85,22 @@ class ExportOptions:
 
 @dataclass(frozen=True)
 class GroupingAssignment:
+    """Logical grouping assignment keyed by identity or composite optional fields.
+
+    Attributes:
+        group: Required target group label.
+        report_id: Optional primary identity key.
+        reference: Optional composite-key component.
+        fileloc: Optional composite-key component.
+        filename: Optional composite-key component.
+        date: Optional composite-key component.
+        sample_number: Optional composite-key component.
+
+    Usage notes:
+        ``report_id`` can be used as an alternate key. If omitted, the composite
+        optional fields are expected to be used together as a full alternate key.
+    """
+
     group: str
     report_id: int | None = None
     reference: str | None = None
@@ -43,6 +112,20 @@ class GroupingAssignment:
 
 @dataclass(frozen=True)
 class ExportRequest:
+    """Top-level immutable export request contract.
+
+    Attributes:
+        paths: Required filesystem path bundle.
+        options: Export behavior settings to validate and normalize.
+        filter_query: Optional query expression used to filter records.
+        grouping_df: Optional grouping overrides DataFrame keyed by ``REPORT_ID``
+            or by full composite alternate-key columns.
+
+    Usage notes:
+        Validate with ``validate_export_request`` to receive nested normalized
+        options and a copied validated grouping frame when non-empty.
+    """
+
     paths: AppPaths
     options: ExportOptions
     filter_query: str | None = None
@@ -50,6 +133,27 @@ class ExportRequest:
 
 
 def validate_export_request(request: ExportRequest) -> ExportRequest:
+    """Validate an export request and normalize nested contracts.
+
+    Args:
+        request: Export request object to validate. ``filter_query`` is optional,
+            but when present it must be a string.
+
+    Returns:
+        ExportRequest: New request instance containing validated paths, normalized
+        export options, and validated grouping DataFrame. Nested values may be
+        copied/normalized by their validators.
+
+    Raises:
+        ValueError: If ``request`` is not an ``ExportRequest`` instance or if any
+        nested validator rejects unsupported values, missing required fields, or
+        invalid file suffixes.
+
+    Invariants:
+        Delegates all path/options/grouping checks to dedicated validators so the
+        returned request has internally consistent contracts.
+    """
+
     if not isinstance(request, ExportRequest):
         raise ValueError("Export request must be provided as an ExportRequest instance.")
 
@@ -77,6 +181,24 @@ _SAMPLE_SORT_ALIASES = {"sample", "sample #", "sample number", "part #", "part n
 
 
 def validate_paths(paths: AppPaths) -> AppPaths:
+    """Validate required application paths and optional Excel target constraints.
+
+    Args:
+        paths: Path bundle where ``db_file`` must be a non-empty string and
+            ``excel_file`` is optional but, when provided, must be non-empty.
+
+    Returns:
+        AppPaths: The same ``paths`` instance; values are validated but not copied
+        or normalized.
+
+    Raises:
+        ValueError: If required fields are missing/empty or if ``excel_file`` has
+        an invalid suffix other than ``.xlsx``.
+
+    Invariants:
+        Performs shape/content checks only and does not mutate path text.
+    """
+
     if not isinstance(paths.db_file, str) or not paths.db_file.strip():
         raise ValueError("A database file path is required.")
 
@@ -92,6 +214,25 @@ def validate_paths(paths: AppPaths) -> AppPaths:
 
 
 def validate_parse_request(request: ParseRequest) -> ParseRequest:
+    """Validate parse request inputs.
+
+    Args:
+        request: Parse request where ``source_directory`` and ``db_file`` are both
+            required non-empty strings.
+
+    Returns:
+        ParseRequest: The same request instance after validation; no fields are
+        copied or normalized.
+
+    Raises:
+        ValueError: If ``request`` is not a ``ParseRequest`` instance or required
+        fields are missing/empty.
+
+    Invariants:
+        Reuses ``validate_paths`` for ``db_file`` validation to keep path rules
+        consistent between parse and export workflows.
+    """
+
     if not isinstance(request, ParseRequest):
         raise ValueError("Parse request must be provided as a ParseRequest instance.")
 
@@ -103,6 +244,27 @@ def validate_parse_request(request: ParseRequest) -> ParseRequest:
 
 
 def validate_export_options(options: ExportOptions) -> ExportOptions:
+    """Validate and normalize export option values.
+
+    Args:
+        options: Export settings object-like value. Required string fields must be
+            present as strings and supported by the allowed option sets.
+
+    Returns:
+        ExportOptions: A new normalized options instance. String settings are
+        lowercased/trimmed, aliases are canonicalized, unsupported presets fall
+        back to defaults, and numeric values are clamped to minimum bounds.
+
+    Raises:
+        ValueError: If required option fields are not strings or contain
+        unsupported values (for ``export_type``, ``export_target``, or
+        ``sorting_parameter``).
+
+    Invariants:
+        Always returns an ``ExportOptions`` instance with canonical backend target
+        behavior and bounded numeric settings.
+    """
+
     def _normalize_required_str(value: object, field_name: str) -> str:
         if not isinstance(value, str):
             raise ValueError(f"{field_name} must be provided as a string.")
@@ -164,6 +326,28 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
 
 
 def validate_grouping_df(df: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Validate optional grouping assignments DataFrame.
+
+    Args:
+        df: Optional DataFrame of grouping assignments. Non-empty frames must
+            include ``GROUP`` plus either ``REPORT_ID`` or the full composite key
+            columns ``REFERENCE``, ``FILELOC``, ``FILENAME``, ``DATE``, and
+            ``SAMPLE_NUMBER``.
+
+    Returns:
+        pd.DataFrame | None: ``None`` when input is ``None``; the original empty
+        DataFrame when input is empty; otherwise a copy of the validated
+        non-empty frame.
+
+    Raises:
+        ValueError: If ``df`` is not a DataFrame or if required grouping columns
+        are missing.
+
+    Invariants:
+        Non-empty valid inputs are returned as a copy to avoid downstream
+        side-effects from caller-owned DataFrame mutation.
+    """
+
     if df is None:
         return None
 
