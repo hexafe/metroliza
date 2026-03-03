@@ -134,10 +134,10 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(workbook.spec['type'], 'scatter')
         self.assertEqual(len(workbook.chart.series), 3)
         self.assertEqual(worksheet.insert_calls[0][0:2], (7, 3))
-        self.assertEqual(workbook.chart.series[1]['categories'], '=Ref!$XFB1:XFB2')
-        self.assertEqual(workbook.chart.series[1]['values'], '=Ref!$XFC1:XFC2')
-        self.assertEqual(workbook.chart.series[2]['categories'], '=Ref!$XFB1:XFB2')
-        self.assertEqual(workbook.chart.series[2]['values'], '=Ref!$XFD1:XFD2')
+        self.assertEqual(workbook.chart.series[1]['categories'], '=Ref!$B22:B26')
+        self.assertEqual(workbook.chart.series[1]['values'], '=Ref!$D22:D26')
+        self.assertEqual(workbook.chart.series[2]['categories'], '=Ref!$B22:B26')
+        self.assertEqual(workbook.chart.series[2]['values'], '=Ref!$E22:E26')
         self.assertEqual(workbook.chart.size, {'width': 419, 'height': 240})
 
     def test_series_specs_from_plan_matches_direct_builder(self):
