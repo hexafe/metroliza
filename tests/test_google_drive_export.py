@@ -178,7 +178,7 @@ class TestGoogleDriveExport(unittest.TestCase):
             self.assertEqual("sheet123", result.file_id)
             self.assertEqual(str(excel_path), result.local_xlsx_path)
             self.assertEqual((), result.converted_tab_titles)
-            self.assertIn(str(excel_path), result.fallback_message)
+            self.assertEqual("", result.fallback_message)
             self.assertIn(b"application/vnd.google-apps.spreadsheet", captured["upload_data"])
             self.assertIn(b"\"parents\": [\"folder-123\"]", captured["upload_data"])
             self.assertEqual(1, captured["folder_lookup"])

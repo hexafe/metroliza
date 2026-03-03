@@ -734,8 +734,6 @@ def upload_and_convert_workbook(
     fallback_message = ""
     if warnings:
         fallback_message = f"Conversion completed with warnings. Use local .xlsx fallback if needed: {excel_file}"
-    else:
-        fallback_message = f"Google conversion completed. Local .xlsx fallback available at: {excel_file}"
 
     result = GoogleDriveConversionResult(
         file_id=parsed.file_id,
