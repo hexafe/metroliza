@@ -153,21 +153,34 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(scaled['font_size'], base['font_size'])
         self.assertGreater(scaled['mean_marker_size'], base['mean_marker_size'])
 
-    def test_build_summary_sheet_position_plan_matches_legacy_three_column_block_math(self):
-        first = build_summary_sheet_position_plan(3)
-        second = build_summary_sheet_position_plan(6)
+    def test_build_summary_sheet_position_plan_matches_five_column_block_math(self):
+        first = build_summary_sheet_position_plan(5)
+        second = build_summary_sheet_position_plan(10)
 
         self.assertEqual(first, {'row': 0, 'column': 0, 'header_row': 0, 'image_row': 1})
         self.assertEqual(second, {'row': 20, 'column': 0, 'header_row': 20, 'image_row': 21})
 
     def test_build_summary_image_anchor_plan_returns_stable_panel_coordinates(self):
-        anchors = build_summary_image_anchor_plan(9)
+        anchors = build_summary_image_anchor_plan(15)
 
         self.assertEqual(anchors['header'], (40, 0))
         self.assertEqual(anchors['distribution'], (41, 0))
         self.assertEqual(anchors['iqr'], (41, 9))
         self.assertEqual(anchors['histogram'], (41, 19))
         self.assertEqual(anchors['trend'], (41, 29))
+
+    def test_build_summary_sheet_position_plan_stacks_sequential_headers_without_gaps(self):
+        rows = [build_summary_sheet_position_plan(base_col)['row'] for base_col in (5, 10, 15, 20)]
+
+        self.assertEqual(rows, [0, 20, 40, 60])
+
+    def test_build_summary_image_anchor_plan_stacks_header_rows_without_gaps(self):
+        header_rows = [
+            build_summary_image_anchor_plan(base_col)['header'][0]
+            for base_col in (5, 10, 15, 20)
+        ]
+
+        self.assertEqual(header_rows, [0, 20, 40, 60])
 
     def test_build_histogram_annotation_specs_returns_ordered_mean_usl_lsl_labels(self):
         annotations = build_histogram_annotation_specs(average=10.1234, usl=10.6, lsl=9.8, y_max=2.0)

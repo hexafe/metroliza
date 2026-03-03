@@ -4,8 +4,11 @@ from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
 def build_summary_sheet_position_plan(base_col):
-    """Return summary sheet anchors aligned with the 3-column measurement block layout."""
-    block_index = max((base_col - 3) // 3, 0)
+    """Return summary sheet anchors aligned with the 5-column measurement block layout."""
+    # Summary rendering currently receives the post-increment measurement column
+    # (5, 10, 15, ...). Normalize that to zero-based block indices (0, 1, 2, ...)
+    # so row panels stack contiguously without gaps.
+    block_index = max((base_col // 5) - 1, 0)
     row = block_index * 20
     return {
         'row': row,
