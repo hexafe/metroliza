@@ -17,6 +17,8 @@ Complete before announcing code freeze or cutting an RC branch.
 - [ ] Open blockers are triaged against the defect criteria in section 5.
 - [ ] Open implementation-item gate triage is completed in [`implementation_item_triage.md`](./implementation_item_triage.md) (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
 
+<a id="open-testing-entry-criteria"></a>
+
 ## 2) Open testing entry criteria
 
 Complete before beginning open testing on an RC build.
@@ -48,6 +50,8 @@ git push -u origin release/2026.03-rc1
 
 - [ ] RC branch follows naming convention (for example `release/2026.03-rc1`).
 - [ ] Branch creation commit SHA and timestamp are recorded in release notes/tracker.
+
+<a id="required-test-suites-and-sign-off-owners"></a>
 
 ## 4) Required test suites and sign-off owners
 
@@ -97,6 +101,8 @@ python -m nuitka metroliza.py `
 
 > Do not duplicate smoke steps in this checklist. Follow the linked runbook and evidence template as the source of procedure detail.
 
+<a id="defect-triage-criteria"></a>
+
 ## 5) Defect triage criteria (must-fix vs defer)
 
 Use the following policy for RC exit triage:
@@ -117,6 +123,8 @@ Use the following policy for RC exit triage:
 - [ ] Every open RC defect is labeled `must-fix` or `defer` with rationale and owner.
 - [ ] Deferred defects are captured in the next-release backlog/milestone.
 
+<a id="open-testing-exit-criteria"></a>
+
 ## 6) Open testing exit criteria
 
 Complete before declaring open testing closed and moving to final Go/No-Go decision.
@@ -130,7 +138,7 @@ Complete before declaring open testing closed and moving to final Go/No-Go decis
 
 Only promote RC when all gates are green and approvals are complete.
 
-- [ ] All required checks and smoke evidence (section 4) are complete and linked.
+- [ ] All required checks and smoke evidence in the [Required test suites and sign-off owners](#required-test-suites-and-sign-off-owners) section are complete and linked.
 - [ ] No unresolved `must-fix` defects remain.
 - [ ] Release owner + QA sign-off recorded.
 - [ ] RC branch merged to `main` with approved strategy.
