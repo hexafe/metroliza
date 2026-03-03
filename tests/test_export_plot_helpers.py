@@ -234,6 +234,7 @@ class TestExportPlotHelpers(unittest.TestCase):
     def test_build_measurement_stat_formulas_uses_single_sided_cpk_when_nominal_and_lsl_are_zero(self):
         formulas = build_measurement_stat_formulas(
             summary_col='B',
+            stats_col='D',
             data_range_y='C22:C30',
             nom_cell='$B$1',
             usl_cell='$B$2',
@@ -251,6 +252,7 @@ class TestExportPlotHelpers(unittest.TestCase):
     def test_build_measurement_stat_formulas_uses_dual_sided_cpk_otherwise(self):
         formulas = build_measurement_stat_formulas(
             summary_col='D',
+            stats_col='F',
             data_range_y='E22:E40',
             nom_cell='$D$1',
             usl_cell='$D$2',
@@ -646,7 +648,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(policy['title']['name_font']['size'], 10)
         self.assertEqual(policy['y_axis']['major_gridlines']['visible'], False)
         self.assertEqual(policy['legend']['position'], 'none')
-        self.assertEqual(policy['size'], {'width': 240, 'height': 160})
+        self.assertEqual(policy['size'], {'width': 419, 'height': 258})
 
     def test_build_violin_group_stats_rows_marks_reference_and_computes_pvalues(self):
         labels = ['A', 'B']

@@ -125,7 +125,7 @@ def build_measurement_chart_format_policy(header):
         'title': {'name': f'{header}', 'name_font': {'size': 10}},
         'y_axis': {'major_gridlines': {'visible': False}},
         'legend': {'position': 'none'},
-        'size': {'width': 240, 'height': 160},
+        'size': {'width': 419, 'height': 258},
     }
 
 

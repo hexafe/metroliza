@@ -8,12 +8,12 @@ def build_spec_limit_anchor_rows(usl, lsl):
     return []
 
 
-def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
+def build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
     """Build stable worksheet formulas for per-header measurement statistics."""
     usl_formula = f"({summary_col}1 + {summary_col}2)"
     lsl_formula = f"({summary_col}1 + {summary_col}3)"
-    sigma_formula = f"({summary_col}7)"
-    average_formula = f"({summary_col}5)"
+    sigma_formula = f"({stats_col}4)"
+    average_formula = f"({stats_col}2)"
 
     if nom_value == 0 and lsl_value == 0:
         cp_formula = '="N/A"'
@@ -29,8 +29,8 @@ def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cel
 
     nok_high = f'COUNTIF({data_range_y}, ">"&({nom_cell}+{usl_cell}))'
     nok_low = f'COUNTIF({data_range_y}, "<"&({nom_cell}+{lsl_cell}))'
-    nok_cell = f"${summary_col}$10"
-    sample_size_cell = f"${summary_col}$12"
+    nok_cell = f"${summary_col}$6"
+    sample_size_cell = f"${stats_col}$7"
 
     return {
         'min': f"=ROUND(MIN({data_range_y}), 3)",
@@ -70,6 +70,8 @@ def build_measurement_block_plan(*, base_col, sample_size):
     last_data_row = data_start_row + sample_size - 1
     y_column = base_col + 2
     summary_column = base_col + 1
+    stats_label_column = base_col + 2
+    stats_value_column = base_col + 3
     usl_column = base_col + 3
     lsl_column = base_col + 4
 
@@ -78,6 +80,8 @@ def build_measurement_block_plan(*, base_col, sample_size):
         'data_start_row': data_start_row,
         'last_data_row': last_data_row,
         'summary_column': summary_column,
+        'stats_label_column': stats_label_column,
+        'stats_value_column': stats_value_column,
         'y_column': y_column,
         'usl_column': usl_column,
         'lsl_column': lsl_column,
@@ -85,7 +89,7 @@ def build_measurement_block_plan(*, base_col, sample_size):
             f'{xl_col_to_name(y_column)}{data_start_row + 1}:'
             f'{xl_col_to_name(y_column)}{last_data_row + 1}'
         ),
-        'nok_percent_row': 10,
+        'nok_percent_row': 6,
         'chart_insert_row': 12,
     }
 
@@ -139,6 +143,7 @@ def build_measurement_header_block_plan(header_group, base_col, cache=None):
 
     stat_formulas = build_measurement_stat_formulas(
         summary_col=summary_col_name,
+        stats_col=xl_col_to_name(measurement_plan['stats_value_column']),
         data_range_y=measurement_plan['data_range_y'],
         nom_cell=nom_cell,
         usl_cell=usl_cell,
@@ -164,6 +169,7 @@ def build_measurement_header_block_plan(header_group, base_col, cache=None):
         'usl_cell': usl_cell,
         'lsl_cell': lsl_cell,
         'stat_rows': build_measurement_stat_row_specs(stat_formulas),
+        'stat_formulas': stat_formulas,
         'measurement_plan': measurement_plan,
     }
 
@@ -275,12 +281,39 @@ def write_measurement_block(worksheet, write_bundle, formats, *, base_col):
     header_plan = write_bundle['header_plan']
     measurement_plan = write_bundle['measurement_plan']
 
-    for row_index, row_label, row_value in write_bundle['static_rows']:
-        worksheet.write(row_index, base_col, row_label)
-        worksheet.write(row_index, base_col + 1, row_value)
+    stat_formulas = header_plan['stat_formulas']
+    stats_label_col = measurement_plan['stats_label_column']
+    stats_value_col = measurement_plan['stats_value_column']
 
-    summary_rows = build_measurement_summary_row_layout(base_col=base_col, stat_rows=header_plan['stat_rows'])
-    write_measurement_summary_rows(worksheet, summary_rows, formats)
+    worksheet.write(0, base_col, 'NOM')
+    worksheet.write(0, base_col + 1, header_plan['nom'])
+    worksheet.write(1, base_col, '+TOL')
+    worksheet.write(1, base_col + 1, header_plan['plus_tol'])
+    worksheet.write(2, base_col, '-TOL')
+    worksheet.write(2, base_col + 1, header_plan['minus_tol'])
+    worksheet.write(3, base_col, 'USL')
+    worksheet.write_formula(3, base_col + 1, f"=({xl_col_to_name(base_col + 1)}1+{xl_col_to_name(base_col + 1)}2)")
+    worksheet.write(4, base_col, 'LSL')
+    worksheet.write_formula(4, base_col + 1, f"=({xl_col_to_name(base_col + 1)}1+{xl_col_to_name(base_col + 1)}3)")
+    worksheet.write(5, base_col, 'NOK number')
+    worksheet.write_formula(5, base_col + 1, stat_formulas['nok_total'])
+    worksheet.write(6, base_col, 'NOK %')
+    worksheet.write_formula(6, base_col + 1, stat_formulas['nok_percent'], formats['percent'])
+
+    worksheet.write(0, stats_label_col, 'MIN')
+    worksheet.write_formula(0, stats_value_col, stat_formulas['min'])
+    worksheet.write(1, stats_label_col, 'AVG')
+    worksheet.write_formula(1, stats_value_col, stat_formulas['avg'])
+    worksheet.write(2, stats_label_col, 'MAX')
+    worksheet.write_formula(2, stats_value_col, stat_formulas['max'])
+    worksheet.write(3, stats_label_col, 'STD')
+    worksheet.write_formula(3, stats_value_col, stat_formulas['std'])
+    worksheet.write(4, stats_label_col, 'Cp')
+    worksheet.write_formula(4, stats_value_col, stat_formulas['cp'])
+    worksheet.write(5, stats_label_col, 'Cpk')
+    worksheet.write_formula(5, stats_value_col, stat_formulas['cpk'])
+    worksheet.write(6, stats_label_col, 'Sample size')
+    worksheet.write_formula(6, stats_value_col, stat_formulas['sample_size'])
 
     for data_header_row, data_col, data_label, data_values, data_style in write_bundle['data_columns']:
         if data_style == 'wrap':
