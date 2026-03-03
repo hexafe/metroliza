@@ -1,3 +1,10 @@
+"""Utilities for resolving and applying application-wide logging configuration.
+
+This module centralizes environment-driven log level resolution and handler setup
+for Metroliza's root logger, including rotating file sinks and optional console
+output.
+"""
+
 import logging
 import logging.handlers
 import os
@@ -16,6 +23,15 @@ _FILE_BACKUP_COUNT = 7
 
 @dataclass(frozen=True)
 class LoggingConfig:
+    """Resolved logging levels for global, file, and console handlers.
+
+    Attributes:
+        global_level: Root logger level that gates all log records.
+        file_level: Per-file-handler threshold for persisted logs.
+        console_level: Stream handler threshold, or ``None`` to disable
+            console logging.
+    """
+
     global_level: int
     file_level: int
     console_level: int | None
@@ -40,6 +56,19 @@ def _parse_level(raw_value: str | None, *, fallback: int) -> int:
 
 
 def _parse_optional_level(raw_value: str | None) -> int | None:
+    """Parse a potentially disabled log level for optional console logging.
+
+    Args:
+        raw_value: Raw environment value.
+
+    Returns:
+        An integer logging level, or ``None`` when logging should be disabled.
+
+    Notes:
+        Values ``off``, ``none``, ``disable``, ``disabled``, and ``null`` are
+        treated as explicit disablement signals.
+    """
+
     if raw_value is None:
         return None
 
@@ -54,6 +83,25 @@ def _parse_optional_level(raw_value: str | None) -> int | None:
 
 
 def resolve_logging_config() -> LoggingConfig:
+    """Resolve effective logging configuration from environment variables.
+
+    Returns:
+        A :class:`LoggingConfig` with resolved global, file, and console levels.
+
+    Notes:
+        Precedence is:
+
+        1. ``METROLIZA_LOG_LEVEL`` for the root logger level.
+        2. ``METROLIZA_FILE_LOG_LEVEL`` for file handlers, falling back to the
+           resolved global level.
+        3. ``METROLIZA_CONSOLE_LOG_LEVEL`` for console handlers, where
+           ``off/none/disable/disabled/null`` disables console output.
+
+        When ``METROLIZA_LOG_LEVEL`` is unset, support builds
+        (``METROLIZA_SUPPORT_BUILD`` truthy) default to ``DEBUG`` and other
+        builds default to ``INFO``.
+    """
+
     default_global = logging.DEBUG if _is_truthy(os.getenv(_SUPPORT_BUILD_ENV)) else logging.INFO
     global_level = _parse_level(os.getenv(_GLOBAL_LEVEL_ENV), fallback=default_global)
     file_level = _parse_level(os.getenv(_FILE_LEVEL_ENV), fallback=global_level)
@@ -62,6 +110,13 @@ def resolve_logging_config() -> LoggingConfig:
 
 
 def _configure_file_handlers(logger: logging.Logger, formatter: logging.Formatter, file_level: int) -> None:
+    """Ensure managed file handlers exist and use expected rotation settings.
+
+    Existing Metroliza-managed handlers that target unexpected paths are removed.
+    Handlers at target paths are replaced when they are not rotating handlers or
+    when their rotation parameters differ from expected values.
+    """
+
     target_paths = []
     user_log_dir = Path.home() / '.metroliza'
     user_log_dir.mkdir(parents=True, exist_ok=True)
@@ -115,6 +170,15 @@ def _configure_file_handlers(logger: logging.Logger, formatter: logging.Formatte
 
 
 def _configure_console_handler(logger: logging.Logger, formatter: logging.Formatter, console_level: int | None) -> None:
+    """Ensure a managed console handler matches the requested configuration.
+
+    Args:
+        logger: Logger to modify.
+        formatter: Formatter to apply to the managed console handler.
+        console_level: Desired console threshold, or ``None`` to remove the
+            managed console handler.
+    """
+
     console_handler = next((
         handler
         for handler in logger.handlers
@@ -137,7 +201,17 @@ def _configure_console_handler(logger: logging.Logger, formatter: logging.Format
 
 
 def ensure_application_logging(config: LoggingConfig | None = None, level: int | None = None):
-    """Ensure Metroliza logging writes to configured sinks with independent thresholds."""
+    """Apply resolved logging configuration to the root logger.
+
+    Args:
+        config: Optional pre-resolved logging configuration. When omitted,
+            :func:`resolve_logging_config` is used.
+        level: Optional override for root and file levels when ``config`` is not
+            provided. Console level still follows resolved environment behavior.
+
+    Returns:
+        The effective :class:`LoggingConfig` applied to logging.
+    """
     logger = logging.getLogger()
     formatter = logging.Formatter('%(asctime)s %(levelname)s [%(name)s] [%(threadName)s] %(message)s')
 
