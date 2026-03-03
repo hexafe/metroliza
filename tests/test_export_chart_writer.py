@@ -43,6 +43,15 @@ class DummyWorkbook:
 class DummyWorksheet:
     def __init__(self):
         self.insert_calls = []
+        self.formulas = []
+        self.columns = []
+        self.name = 'Ref'
+
+    def write_formula(self, row, col, formula):
+        self.formulas.append((row, col, formula))
+
+    def set_column(self, first_col, last_col, width=None, cell_format=None, options=None):
+        self.columns.append((first_col, last_col, width, cell_format, options))
 
     def insert_chart(self, row, col, chart):
         self.insert_calls.append((row, col, chart))
@@ -112,7 +121,11 @@ class TestExportChartWriter(unittest.TestCase):
 
         self.assertEqual(workbook.spec['type'], 'scatter')
         self.assertEqual(len(workbook.chart.series), 3)
-        self.assertEqual(worksheet.insert_calls[0][0:2], (12, 3))
+        self.assertEqual(worksheet.insert_calls[0][0:2], (7, 3))
+        self.assertEqual(workbook.chart.series[1]['categories'], '=Ref!$XFB1:XFB2')
+        self.assertEqual(workbook.chart.series[1]['values'], '=Ref!$XFC1:XFC2')
+        self.assertEqual(workbook.chart.series[2]['categories'], '=Ref!$XFB1:XFB2')
+        self.assertEqual(workbook.chart.series[2]['values'], '=Ref!$XFD1:XFD2')
 
     def test_series_specs_from_plan_matches_direct_builder(self):
         plan = {
