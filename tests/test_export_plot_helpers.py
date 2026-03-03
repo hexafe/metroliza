@@ -664,7 +664,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(policy['title']['name_font']['size'], 10)
         self.assertEqual(policy['y_axis']['major_gridlines']['visible'], False)
         self.assertEqual(policy['legend']['position'], 'none')
-        self.assertEqual(policy['size'], {'width': 419, 'height': 258})
+        self.assertEqual(policy['size'], {'width': 419, 'height': 240})
 
     def test_build_violin_group_stats_rows_marks_reference_and_computes_pvalues(self):
         labels = ['A', 'B']
