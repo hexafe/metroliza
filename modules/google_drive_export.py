@@ -20,8 +20,7 @@ GOOGLE_DRIVE_UPLOAD_URL = (
 )
 GOOGLE_DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
-GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
-GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE, GOOGLE_SHEETS_SCOPE)
+GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE,)
 GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
 GOOGLE_LIMIT_SERIES_NAMES = {"USL", "LSL"}
 
@@ -127,8 +126,8 @@ def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -
         "token_uri": credentials.token_uri,
         "client_id": credentials.client_id,
         "client_secret": credentials.client_secret,
-        "scopes": list(credentials.scopes or list(GOOGLE_OAUTH_SCOPES)),
-        "scope": " ".join(GOOGLE_OAUTH_SCOPES),
+        "scopes": list(credentials.scopes or [GOOGLE_DRIVE_SCOPE]),
+        "scope": credentials.scope or GOOGLE_DRIVE_SCOPE,
         "token_type": "Bearer",
         "expires_at": expires_at,
     }
@@ -192,7 +191,7 @@ def _refresh_access_token(token_payload: dict[str, Any], credentials: dict[str, 
     token_payload["expires_at"] = time.time() + expires_in
     if payload.get("refresh_token"):
         token_payload["refresh_token"] = payload["refresh_token"]
-    token_payload.setdefault("scope", " ".join(GOOGLE_OAUTH_SCOPES))
+    token_payload.setdefault("scope", GOOGLE_DRIVE_SCOPE)
     token_payload.setdefault("token_type", payload.get("token_type", "Bearer"))
     return token_payload
 

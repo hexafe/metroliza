@@ -27,6 +27,7 @@ Dependency files:
 3. Apply grouping labels where needed.
 4. Export Excel reports with summaries and plots.
 5. Optionally generate a Google Sheets version while always keeping a local `.xlsx` fallback.
+   - OAuth uses the minimal Drive scope: `https://www.googleapis.com/auth/drive.file`.
 
 
 ## CMM parser backend policy
