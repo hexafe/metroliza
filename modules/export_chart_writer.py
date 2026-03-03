@@ -1,4 +1,4 @@
-from xlsxwriter.utility import xl_range, xl_rowcol_to_cell
+from xlsxwriter.utility import xl_range
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
@@ -8,7 +8,6 @@ CHART_WIDTH_CM = 11.09
 CHART_HEIGHT_CM = 6.35
 CM_PER_INCH = 2.54
 PIXELS_PER_INCH = 96
-HELPER_START_COLUMN = 16381  # XFB..XFD, outside user-visible measurement blocks.
 
 
 def _cm_to_pixels(cm_value):
@@ -20,61 +19,6 @@ def _build_chart_size_policy():
     return {
         'width': _cm_to_pixels(CHART_WIDTH_CM),
         'height': _cm_to_pixels(CHART_HEIGHT_CM),
-    }
-
-
-def _write_limit_series_helper_range(worksheet, sheet_name, measurement_plan, chart_anchor_col):
-    """Write a 2-row helper range used to render horizontal USL/LSL lines."""
-    chart_index = chart_anchor_col // 5
-    helper_first_row = chart_index * 2
-    helper_last_row = helper_first_row + 1
-
-    first_data_row = measurement_plan['data_start_row']
-    last_data_row = measurement_plan['last_data_row']
-    x_column = measurement_plan['summary_column']
-    usl_column = measurement_plan['usl_column']
-    lsl_column = measurement_plan['lsl_column']
-
-    first_x_ref = xl_rowcol_to_cell(first_data_row, x_column, row_abs=True, col_abs=True)
-    last_x_ref = xl_rowcol_to_cell(last_data_row, x_column, row_abs=True, col_abs=True)
-    first_usl_ref = xl_rowcol_to_cell(first_data_row, usl_column, row_abs=True, col_abs=True)
-    last_usl_ref = xl_rowcol_to_cell(last_data_row, usl_column, row_abs=True, col_abs=True)
-    first_lsl_ref = xl_rowcol_to_cell(first_data_row, lsl_column, row_abs=True, col_abs=True)
-    last_lsl_ref = xl_rowcol_to_cell(last_data_row, lsl_column, row_abs=True, col_abs=True)
-
-    worksheet.write_formula(helper_first_row, HELPER_START_COLUMN, f'={first_x_ref}')
-    worksheet.write_formula(helper_last_row, HELPER_START_COLUMN, f'={last_x_ref}')
-    worksheet.write_formula(helper_first_row, HELPER_START_COLUMN + 1, f'={first_usl_ref}')
-    worksheet.write_formula(helper_last_row, HELPER_START_COLUMN + 1, f'={last_usl_ref}')
-    worksheet.write_formula(helper_first_row, HELPER_START_COLUMN + 2, f'={first_lsl_ref}')
-    worksheet.write_formula(helper_last_row, HELPER_START_COLUMN + 2, f'={last_lsl_ref}')
-    worksheet.set_column(HELPER_START_COLUMN, HELPER_START_COLUMN + 2, None, None, {'hidden': True})
-
-    return {
-        'usl_x': build_sheet_series_range(
-            sheet_name,
-            helper_first_row,
-            helper_last_row,
-            HELPER_START_COLUMN,
-        ),
-        'usl_y': build_sheet_series_range(
-            sheet_name,
-            helper_first_row,
-            helper_last_row,
-            HELPER_START_COLUMN + 1,
-        ),
-        'lsl_x': build_sheet_series_range(
-            sheet_name,
-            helper_first_row,
-            helper_last_row,
-            HELPER_START_COLUMN,
-        ),
-        'lsl_y': build_sheet_series_range(
-            sheet_name,
-            helper_first_row,
-            helper_last_row,
-            HELPER_START_COLUMN + 2,
-        ),
     }
 
 
@@ -236,11 +180,6 @@ def insert_measurement_chart(
         measurement_plan=measurement_plan,
         cache=cache,
     )
-    helper_range_specs = _write_limit_series_helper_range(worksheet, sheet_name, measurement_plan, chart_anchor_col)
-    series_specs[1]['categories'] = helper_range_specs['usl_x']
-    series_specs[1]['values'] = helper_range_specs['usl_y']
-    series_specs[2]['categories'] = helper_range_specs['lsl_x']
-    series_specs[2]['values'] = helper_range_specs['lsl_y']
     for series_spec in series_specs:
         chart.add_series(series_spec)
 

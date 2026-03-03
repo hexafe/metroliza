@@ -249,9 +249,9 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
 
             self.assertIn('REF-1!$B22:B23', chart_xml)
             self.assertIn('REF-1!$C22:C23', chart_xml)
-            self.assertIn('REF-1!$XFB1:XFB2', chart_xml)
-            self.assertIn('REF-1!$XFC1:XFC2', chart_xml)
-            self.assertIn('REF-1!$XFD1:XFD2', chart_xml)
+            self.assertIn('REF-1!$D22:D23', chart_xml)
+            self.assertIn('REF-1!$E22:E23', chart_xml)
+            self.assertNotIn('REF-1!$XFB1:XFB2', chart_xml)
             self.assertTrue(
                 any('ROUND(MIN(C22:C23), 3)' in sheet_xml for sheet_xml in sheet_xml_candidates),
                 msg='Expected summary formulas were not found in any worksheet XML payload.',
