@@ -5,7 +5,7 @@ This runbook defines how maintainers run and interpret the release-gated live Go
 ## Scope and intent
 
 - Script: `tests/google_conversion_smoke.py`.
-- Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm release-gated conversion metadata/warning expectations.
+- Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm release-gated conversion metadata/warning expectations without extra Sheets API post-validation calls.
 - Execution model: manual or explicitly gated CI job only (not part of default unit-test discovery).
 
 ## When smoke execution is mandatory
@@ -129,7 +129,7 @@ The smoke check is designed to fail with actionable messages when prerequisites 
 
 1. Treat any non-empty `warnings` result as a release-blocking signal until triaged.
 2. Inspect recent Google export logic changes for warning generation, conversion payload handling, or fallback-message behavior.
-3. Validate that mocked/unit tests still cover expected tab-title semantics and fallback behavior after recent changes.
+3. Validate that mocked/unit tests still cover fallback behavior after recent changes.
 4. Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
 
 ## Recording outcomes for release-gated changes
@@ -184,4 +184,4 @@ Use this template:
 - Release-gated smoke runs currently require `warnings=()` to pass.
 - If warnings appear, do not waive by default: record the exact warning text, impacted release candidate, and fallback implications before deciding next action.
 - Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
-- Tab-title verification is intentionally not performed by the live smoke script; keep that behavior covered in mocked/unit tests to avoid adding Sheets API dependency to the release gate.
+- The smoke script intentionally avoids any Sheets API tab-title verification; success criteria are limited to Drive conversion metadata and warning policy to keep the release gate lightweight and dependency-minimal.

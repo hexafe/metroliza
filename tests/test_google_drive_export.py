@@ -186,7 +186,7 @@ class TestGoogleDriveExport(unittest.TestCase):
             excel_path = Path(tmpdir) / "report.xlsx"
             excel_path.write_bytes(b"excel-content")
 
-            captured = {"upload_data": None, "folder_lookup": 0, "sheet_discovery": 0, "batch_update": 0}
+            captured = {"upload_data": None, "folder_lookup": 0, "batch_update": 0}
 
             def fake_urlopen(request, timeout=0):
                 if request.method == "GET" and "www.googleapis.com/drive/v3/files" in request.full_url:
@@ -200,9 +200,6 @@ class TestGoogleDriveExport(unittest.TestCase):
                             "webViewLink": "https://docs.google.com/spreadsheets/d/sheet123/edit",
                         }
                     )
-                if request.method == "GET" and "sheets.googleapis.com/v4/spreadsheets/" in request.full_url:
-                    captured["sheet_discovery"] += 1
-                    return _FakeResponse({"sheets": []})
                 if request.method == "POST" and request.full_url.endswith(":batchUpdate"):
                     captured["batch_update"] += 1
                     return _FakeResponse({"replies": []})
