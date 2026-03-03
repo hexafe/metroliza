@@ -42,3 +42,8 @@ Use the year of archival (not creation) for `YYYY`.
 Avoid adding new top-level (`/`) `.md` files unless the file is a core repository document (for example `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, or similarly foundational repo-wide docs).
 
 Project/task-specific docs should live under `docs/` and follow this policy.
+
+## 6. Documentation index hygiene
+
+When adding a new active document under `docs/` (or renaming an existing active document), update `docs/README.md` in the same change so the active-doc index remains complete and current.
+
