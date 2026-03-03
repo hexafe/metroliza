@@ -5,7 +5,7 @@ from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 CHART_ANCHOR_ROW = 7  # Excel row 8, zero-based for xlsxwriter.
 CHART_WIDTH_CM = 11.09
-CHART_HEIGHT_CM = 6.83
+CHART_HEIGHT_CM = 6.35
 CM_PER_INCH = 2.54
 PIXELS_PER_INCH = 96
 HELPER_START_COLUMN = 16381  # XFB..XFD, outside user-visible measurement blocks.
