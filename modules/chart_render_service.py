@@ -1,3 +1,10 @@
+"""Chart data sampling and bounded background execution primitives.
+
+This module provides deterministic frame downsampling helpers used by chart
+payload builders and a small worker pool that applies queue backpressure for
+bounded concurrent rendering workloads.
+"""
+
 from __future__ import annotations
 
 from concurrent.futures import Future
@@ -12,6 +19,15 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class ChartSamplingPolicy:
+    """Per-chart row limits used before building chart payloads.
+
+    Attributes:
+        distribution_limit: Maximum rows for distribution chart sampling.
+        iqr_limit: Maximum rows for IQR chart sampling.
+        histogram_limit: Maximum rows for histogram chart sampling.
+        trend_limit: Maximum rows for trend chart sampling.
+    """
+
     distribution_limit: int
     iqr_limit: int
     histogram_limit: int
@@ -19,12 +35,36 @@ class ChartSamplingPolicy:
 
 
 def resolve_chart_sampling_policy(*, density_mode: str) -> ChartSamplingPolicy:
+    """Resolve chart sampling limits for the requested density mode.
+
+    Args:
+        density_mode: Requested density profile.
+
+    Returns:
+        A :class:`ChartSamplingPolicy` with per-chart row limits.
+    """
+
     if density_mode == 'reduced':
         return ChartSamplingPolicy(distribution_limit=900, iqr_limit=750, histogram_limit=900, trend_limit=900)
     return ChartSamplingPolicy(distribution_limit=1500, iqr_limit=1200, histogram_limit=1500, trend_limit=1500)
 
 
 def deterministic_downsample_frame(df: pd.DataFrame, sample_limit: int) -> pd.DataFrame:
+    """Deterministically downsample a frame by evenly spaced positional indexes.
+
+    Args:
+        df: Source frame.
+        sample_limit: Maximum row count to retain.
+
+    Returns:
+        The original frame when no sampling is required, otherwise a copy of the
+        selected rows.
+
+    Notes:
+        Selection uses ``numpy.linspace`` over positional indexes, making output
+        stable for identical input ordering and limits.
+    """
+
     if sample_limit <= 0 or len(df) <= sample_limit:
         return df
     indexes = np.linspace(0, len(df) - 1, sample_limit, dtype=int)
@@ -32,6 +72,17 @@ def deterministic_downsample_frame(df: pd.DataFrame, sample_limit: int) -> pd.Da
 
 
 def sample_frame_for_chart(df: pd.DataFrame, chart_type: str, policy: ChartSamplingPolicy) -> pd.DataFrame:
+    """Sample a frame using the limit associated with a chart type.
+
+    Args:
+        df: Source frame.
+        chart_type: Chart type key.
+        policy: Sampling policy containing per-chart limits.
+
+    Returns:
+        A sampled frame constrained by the chart-specific limit.
+    """
+
     limit_by_chart = {
         'distribution': policy.distribution_limit,
         'iqr': policy.iqr_limit,
@@ -42,6 +93,21 @@ def sample_frame_for_chart(df: pd.DataFrame, chart_type: str, policy: ChartSampl
 
 
 def build_violin_payload_vectorized(sampled_group: pd.DataFrame, grouping_key: str, min_samplesize: int) -> tuple[list[str], list[list[float]], bool]:
+    """Build vectorized violin payload data grouped by a column.
+
+    Args:
+        sampled_group: Input frame containing ``MEAS`` and optional grouping
+            column.
+        grouping_key: Column used to split violin series.
+        min_samplesize: Minimum rows required per group to render violin plots.
+
+    Returns:
+        A tuple ``(labels, values, can_render_violin)`` where ``labels`` are
+        group names, ``values`` are per-group numeric arrays, and
+        ``can_render_violin`` indicates whether all groups meet
+        ``min_samplesize``.
+    """
+
     if sampled_group.empty or grouping_key not in sampled_group.columns:
         values = sampled_group.get('MEAS', pd.Series(dtype=float)).astype(float).tolist()
         return ['All'], [values], len(values) >= min_samplesize
@@ -58,7 +124,11 @@ def build_violin_payload_vectorized(sampled_group: pd.DataFrame, grouping_key: s
 
 
 class BoundedWorkerPool:
-    """Small bounded worker queue that blocks submitters for backpressure."""
+    """Bounded worker queue that applies backpressure to submitters.
+
+    The queue has a fixed capacity; once full, :meth:`submit` blocks until a
+    worker consumes an item. This prevents unbounded task accumulation.
+    """
 
     def __init__(self, *, max_workers: int, max_queue_size: int):
         self._max_workers = max(1, int(max_workers))
@@ -71,6 +141,24 @@ class BoundedWorkerPool:
             self._threads.append(worker)
 
     def submit(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Future:
+        """Submit a task for execution.
+
+        Args:
+            fn: Callable to execute in a worker thread.
+            *args: Positional arguments for ``fn``.
+            **kwargs: Keyword arguments for ``fn``.
+
+        Returns:
+            A :class:`concurrent.futures.Future` for the task.
+
+        Raises:
+            RuntimeError: If called after shutdown has begun.
+
+        Notes:
+            Submission uses a blocking queue ``put`` to enforce backpressure when
+            the queue is full.
+        """
+
         if self._closed:
             raise RuntimeError('Worker pool is closed.')
         future: Future = Future()
@@ -78,6 +166,8 @@ class BoundedWorkerPool:
         return future
 
     def _worker_loop(self):
+        """Continuously execute queued tasks until a shutdown sentinel is seen."""
+
         while True:
             item = self._queue.get()
             if item is None:
@@ -97,6 +187,16 @@ class BoundedWorkerPool:
                 self._queue.task_done()
 
     def shutdown(self, wait: bool = True):
+        """Shut down the pool and optionally wait for worker termination.
+
+        Args:
+            wait: Whether to join worker threads before returning.
+
+        Notes:
+            Shutdown is idempotent; repeated calls after closure are no-ops.
+            A sentinel is enqueued per worker so each thread exits cleanly.
+        """
+
         if self._closed:
             return
         self._closed = True
