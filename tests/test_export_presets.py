@@ -211,7 +211,6 @@ class TestExportCompletionMessaging(unittest.TestCase):
             message,
             'Data exported successfully to out.xlsx.\n'
             f'Export file: {expected_file_uri}\n'
-            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}\n"
             '\n'
             'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
         )
@@ -238,7 +237,6 @@ class TestExportCompletionMessaging(unittest.TestCase):
             message,
             'Data exported locally to out.xlsx.\n'
             f'Export file: {expected_file_uri}\n'
-            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}\n"
             '\n'
             'Google Sheets conversion was not fully completed.\n'
             'Warnings/Errors:\n'
@@ -267,7 +265,6 @@ class TestExportCompletionMessaging(unittest.TestCase):
             message,
             'Data exported locally to out.xlsx.\n'
             f'Export file: {expected_file_uri}\n'
-            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}\n"
             '\n'
             'Google Sheets conversion was not fully completed.',
         )
@@ -287,8 +284,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
-            f'Export file: {expected_file_uri}\n'
-            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}",
+            f'Export file: {expected_file_uri}'
         )
 
 
@@ -371,8 +367,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
-            f'Export file: {expected_file_uri}\n'
-            f"Export folder: {Path('out.xlsx').resolve().parent.as_uri()}",
+            f'Export file: {expected_file_uri}'
         )
 
 

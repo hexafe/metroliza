@@ -59,13 +59,10 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
     fallback_message = str(metadata.get('fallback_message', '')).strip()
     converted_url = str(metadata.get('converted_url', '')).strip()
     export_directory_line = build_export_directory_link_line(excel_file)
-    export_folder_line = build_export_folder_link_line(excel_file)
 
     base_success_lines = [f"Data exported successfully to {excel_file}."]
     if export_directory_line:
         base_success_lines.append(export_directory_line)
-    if export_folder_line:
-        base_success_lines.append(export_folder_line)
 
     if export_target == 'google_sheets_drive_convert':
         if warnings or fallback_message:
@@ -74,8 +71,6 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
             ]
             if export_directory_line:
                 message_lines.append(export_directory_line)
-            if export_folder_line:
-                message_lines.append(export_folder_line)
             message_lines.extend([
                 "",
                 "Google Sheets conversion was not fully completed.",
