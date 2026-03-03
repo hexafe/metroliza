@@ -1,3 +1,5 @@
+"""About dialog and clickable label helpers for application metadata display."""
+
 from PyQt6.QtCore import QSize, QTemporaryFile, Qt, QUrl
 from PyQt6.QtGui import QMovie, QDesktopServices, QCursor
 from PyQt6.QtWidgets import QDialog, QLabel, QVBoxLayout
@@ -7,6 +9,8 @@ import VersionDate
 
 
 class ClickableLabel(QLabel):
+    """Label that behaves like a hyperlink and opens a fixed URL when clicked."""
+
     def __init__(self, text, link):
         super().__init__(text)
         self.link = link
@@ -23,6 +27,12 @@ class ClickableLabel(QLabel):
 
 
 class AboutWindow(QDialog):
+    """Display version, license, and project attribution information.
+
+    The dialog renders an embedded GIF from in-memory base64 content and keeps
+    the movie instance alive for the dialog lifetime.
+    """
+
     def __init__(self, parent=None, days_until_expiration=0):
         super().__init__(parent)
 

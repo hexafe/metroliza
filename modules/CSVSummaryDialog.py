@@ -1,3 +1,5 @@
+"""CSV summary export dialogs and worker thread for workbook generation."""
+
 from PyQt6.QtCore import pyqtSlot, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QDialog,
@@ -43,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 def _compute_histogram_payload(series_values, bin_count):
+    """Return histogram bucket labels and counts for a numeric series."""
     series = pd.Series(series_values)
     bins = pd.cut(series, bins=bin_count)
     counts = bins.value_counts().sort_index()
@@ -50,6 +53,7 @@ def _compute_histogram_payload(series_values, bin_count):
 
 
 def _compute_boxplot_summary(series_values):
+    """Return five-number summary values used for boxplot worksheet output."""
     series = pd.Series(series_values)
     return [
         ('Min', float(series.min())),
@@ -61,6 +65,12 @@ def _compute_boxplot_summary(series_values):
 
 
 class FilterDialog(QDialog):
+    """Select index and data columns for CSV summary processing.
+
+    The dialog supports convenient defaults via special rows for first-column
+    index selection and selecting all non-index data columns.
+    """
+
     def __init__(self, parent, column_names):
         super().__init__(parent)
 
@@ -119,6 +129,7 @@ class FilterDialog(QDialog):
         self.data_list_widget.setCurrentRow(0)
 
     def get_selected_columns(self):
+        """Resolve selected list items into explicit index/data column lists."""
         # Get the selected indexes and data columns
         self.selected_indexes = [item.text() for item in self.index_list_widget.selectedItems()]
         self.selected_data_columns = [item.text() for item in self.data_list_widget.selectedItems()]
@@ -138,6 +149,8 @@ class FilterDialog(QDialog):
 
 
 class SpecLimitsDialog(QDialog):
+    """Edit per-column NOM/USL/LSL overrides used in generated summaries."""
+
     def __init__(self, parent, data_columns, existing_limits):
         super().__init__(parent)
         self.setWindowTitle("Column spec limits")
@@ -184,6 +197,7 @@ class SpecLimitsDialog(QDialog):
             return 0.0
 
     def get_limits(self):
+        """Collect spec-limit values from the table, coercing blanks to 0.0."""
         limits = {}
         for row, column_name in enumerate(self.data_columns):
             limits[column_name] = {
@@ -195,6 +209,12 @@ class SpecLimitsDialog(QDialog):
 
 
 class DataProcessingThread(QThread):
+    """Background worker that transforms CSV data into an Excel summary file.
+
+    Key state includes selected columns, cancellation status, plot toggles, and
+    stage timings used to tune chart-generation behavior across long runs.
+    """
+
     progress_signal = pyqtSignal(int)
     status_signal = pyqtSignal(str)
 
@@ -223,6 +243,7 @@ class DataProcessingThread(QThread):
         self._chart_executor = None
 
     def _ensure_chart_executor(self):
+        """Create or return the chart process executor when enabled."""
         if not self.optimization_toggles.get('enable_chart_multiprocessing', False):
             return None
         if self._chart_executor is None:
@@ -230,6 +251,7 @@ class DataProcessingThread(QThread):
         return self._chart_executor
 
     def _shutdown_chart_executor(self):
+        """Shut down the chart executor to avoid orphaned worker processes."""
         if self._chart_executor is not None:
             try:
                 self._chart_executor.shutdown(wait=True, cancel_futures=True)
@@ -281,6 +303,7 @@ class DataProcessingThread(QThread):
         return average_per_column * remaining_columns
 
     def write_summary_data(self, worksheet, data_column, selected_data, spec_limits):
+        """Write formulas and statistics rows for one data-column summary block."""
         col = selected_data.shape[1]
         nom = spec_limits.get('nom', 0.0)
         usl_offset = spec_limits.get('usl', 0.0)
@@ -339,6 +362,7 @@ class DataProcessingThread(QThread):
         return col, USL_cell, LSL_cell
 
     def apply_conditional_formatting(self, worksheet, selected_data, data_column, col, USL_cell, LSL_cell, writer):
+        """Apply tolerance-driven highlighting for out-of-spec measurement cells."""
         # Define the format for conditional formatting (highlight cells in red)
         red_format = writer.book.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1, 'num_format': '#,##0.000'})
 
@@ -351,6 +375,7 @@ class DataProcessingThread(QThread):
                                     {'type': 'cell', 'criteria': '<', 'value': LSL_cell, 'format': red_format})
 
     def add_xy_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
+        """Insert a scatter chart for one measurement column."""
         # Create an XY chart object
         chart = writer.book.add_chart({'type': 'scatter'})
 
@@ -389,6 +414,7 @@ class DataProcessingThread(QThread):
 
 
     def add_histogram_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
+        """Generate histogram data and insert a chart for one data column."""
         numeric_series = pd.to_numeric(selected_data[data_column], errors='coerce').dropna()
         if numeric_series.empty:
             return
@@ -431,6 +457,7 @@ class DataProcessingThread(QThread):
         worksheet.insert_chart(30, col + 5, chart)
 
     def add_boxplot_chart(self, worksheet, data_column, col, selected_data, writer, sheet_name):
+        """Create a boxplot-style visualization from summary statistics."""
         numeric_series = pd.to_numeric(selected_data[data_column], errors='coerce').dropna()
         if numeric_series.empty:
             return
@@ -525,12 +552,14 @@ class DataProcessingThread(QThread):
         worksheet.insert_chart(48, col + 5, chart)
 
     def write_overview_sheet(self, writer, overview_rows):
+        """Write aggregate column statistics to the final summary worksheet."""
         overview_df = pd.DataFrame(overview_rows)
         if overview_df.empty:
             return
         overview_df.to_excel(writer, sheet_name='CSV_SUMMARY', index=False)
 
     def run(self):
+        """Run workbook generation and emit status updates from the worker thread."""
         # Perform the data processing and save to the Excel file here
 
         if self.selected_indexes and self.selected_data_columns:
@@ -725,11 +754,18 @@ class DataProcessingThread(QThread):
             self._shutdown_chart_executor()
 
     def cancel(self):
+        """Request cooperative cancellation and stop background chart workers."""
         self.canceled = True
         self._shutdown_chart_executor()
 
 
 class CSVSummaryDialog(QDialog):
+    """Configure CSV summary options and launch background export processing.
+
+    Key state includes loaded CSV data, selected columns, optional spec limits,
+    and per-file preset data persisted under the user profile.
+    """
+
     def __init__(self, parent):
         super().__init__(parent)
 
@@ -791,6 +827,7 @@ class CSVSummaryDialog(QDialog):
         self.preset_path = Path.home() / '.metroliza' / '.csv_summary_presets.json'
 
     def _load_presets(self):
+        """Load and migrate saved presets from the persistent config file."""
         presets = load_csv_summary_presets(self.preset_path)
         migrated, changed = migrate_csv_summary_presets(presets)
         if changed:
@@ -798,6 +835,7 @@ class CSVSummaryDialog(QDialog):
         return migrated
 
     def _save_presets(self, preset_key, selected_indexes, selected_data_columns, csv_config, column_spec_limits, include_extended_plots, summary_only, plot_toggles):
+        """Persist current column/filter/report settings for a preset key."""
         if not preset_key:
             return
         presets = self._load_presets()
@@ -822,6 +860,7 @@ class CSVSummaryDialog(QDialog):
         return candidates
 
     def _resolve_preset_for_file(self, file_path):
+        """Resolve a preset using canonical and compatibility file-name keys."""
         presets = self._load_presets()
         for key in self._preset_key_candidates(file_path):
             preset = presets.get(key)
@@ -831,6 +870,7 @@ class CSVSummaryDialog(QDialog):
 
     # Define functions for button clicks
     def handle_input_button(self):
+        """Select an input CSV, load it, and restore matching preset values."""
         options = QFileDialog.Option.ReadOnly
         filename, _ = QFileDialog.getOpenFileName(self, "Select input file (CSV)", "", "CSV Files (*.csv);;All Files (*)", options=options)
         if filename:
@@ -885,6 +925,7 @@ class CSVSummaryDialog(QDialog):
             )
 
     def handle_filter_button(self):
+        """Open the column picker and guard against empty data selections."""
         logger.debug("FILTER button clicked.")
 
         # Open the FilterDialog and pass the column names to it
@@ -912,6 +953,7 @@ class CSVSummaryDialog(QDialog):
             QMessageBox.warning(self, "Warning", "No data loaded. Please select an input file first.")
 
     def handle_spec_limits_button(self):
+        """Open spec-limits editor and store normalized per-column values."""
         if not self.selected_data_columns:
             QMessageBox.information(self, "No data columns", "Select input/filter columns before setting spec limits.")
             return
@@ -921,6 +963,7 @@ class CSVSummaryDialog(QDialog):
             self.column_spec_limits = spec_dialog.get_limits()
 
     def handle_clear_presets_button(self):
+        """Clear all saved CSV presets after explicit user confirmation."""
         if not self.preset_path.exists():
             QMessageBox.information(self, "No presets", "No saved CSV presets were found.")
             return
@@ -929,6 +972,7 @@ class CSVSummaryDialog(QDialog):
         QMessageBox.information(self, "Presets cleared", "Saved CSV presets were removed.")
 
     def handle_output_button(self):
+        """Select an output workbook path and enable export start."""
         # options = QFileDialog.Option.DontUseNativeDialog
         default_name = self.input_file[:-4]
         if not default_name.endswith(".xlsx"):
@@ -955,6 +999,7 @@ class CSVSummaryDialog(QDialog):
 
     @pyqtSlot()
     def show_loading_screen(self):
+        """Create progress UI and hand CSV processing to a worker thread."""
         self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
             self,
             window_title="Processing...",
@@ -988,12 +1033,14 @@ class CSVSummaryDialog(QDialog):
         self.loading_bar.setValue(value)
 
     def stop_data_processing_and_close_loading(self):
+        """Forward cancel requests to the worker thread if it is active."""
         if self.worker_thread:
             # Stop the data processing thread if it exists
             self.worker_thread.cancel()
 
     @pyqtSlot()
     def on_data_processing_finished(self):
+        """Handle completion feedback for both canceled and successful runs."""
         # Data processing is complete or canceled
 
         if self.worker_thread.canceled:
@@ -1011,6 +1058,7 @@ class CSVSummaryDialog(QDialog):
 
 
     def _show_chart_generation_advisory(self):
+        """Warn about heavy chart workloads and offer a faster fallback mode."""
         chart_count = estimate_enabled_chart_count(
             self.selected_data_columns,
             self.plot_toggles,
@@ -1035,6 +1083,7 @@ class CSVSummaryDialog(QDialog):
             self.include_extended_plots.setChecked(False)
 
     def handle_start_button(self):
+        """Persist current settings and start processing when inputs are ready."""
         # Perform the desired action when the START button is clicked
         # You can access the input_file, output_file, and data_frame variables here for further processing
 
