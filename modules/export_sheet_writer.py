@@ -195,13 +195,8 @@ def build_measurement_write_bundle_cached(header, header_group, base_col, cache=
     ]
 
     row_count = len(header_group)
-    usl_vector = [None] * row_count
-    lsl_vector = [None] * row_count
-    if row_count:
-        usl_vector[0] = header_plan['usl']
-        lsl_vector[0] = header_plan['lsl']
-        usl_vector[-1] = header_plan['usl']
-        lsl_vector[-1] = header_plan['lsl']
+    usl_vector = [header_plan['usl']] * row_count
+    lsl_vector = [header_plan['lsl']] * row_count
 
     data_columns = [
         (measurement_plan['data_header_row'], base_col, 'Date', header_group['DATE'], None),

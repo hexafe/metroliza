@@ -54,8 +54,10 @@ class TestExportSheetWriter(unittest.TestCase):
 
         usl_values = bundle['data_columns'][3][3]
         lsl_values = bundle['data_columns'][4][3]
-        self.assertEqual(usl_values, [10.5, None, 10.5])
-        self.assertEqual(lsl_values, [9.5, None, 9.5])
+        self.assertEqual(usl_values, [10.5, 10.5, 10.5])
+        self.assertEqual(lsl_values, [9.5, 9.5, 9.5])
+        self.assertTrue(all(value is not None for value in usl_values))
+        self.assertTrue(all(value is not None for value in lsl_values))
 
         measurement_plan = bundle['measurement_plan']
         self.assertIn('usl_column', measurement_plan)
