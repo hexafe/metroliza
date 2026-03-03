@@ -1,3 +1,5 @@
+"""Parsing dialog for selecting input sources and running report ingestion."""
+
 from modules.progress_status import build_three_line_status
 from modules.ParseReportsThread import ParseReportsThread
 from modules.CustomLogger import CustomLogger
@@ -13,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 class ParsingDialog(QDialog):
+    """Collect parse inputs and coordinate parsing thread lifecycle.
+
+    The dialog tracks selected source/database paths and handles cancellation,
+    error propagation, and completion feedback from the worker thread.
+    """
+
     def __init__(self, parent=None, directory=None, db_file=None):
         super().__init__(parent)
 
@@ -82,6 +90,7 @@ class ParsingDialog(QDialog):
 
     @pyqtSlot()
     def select_directory(self):
+        """Choose a parse source, with a fallback path for archive selection."""
         try:
             # Open a dialog to select a directory first.
             selected_source = QFileDialog.getExistingDirectory(self, "Select directory")
@@ -121,6 +130,7 @@ class ParsingDialog(QDialog):
 
     @pyqtSlot()
     def select_database(self):
+        """Select or create the destination database and update parent state."""
         try:
             # Open a dialog to select a database file
             # options = QFileDialog.Options()
@@ -147,6 +157,7 @@ class ParsingDialog(QDialog):
 
     @pyqtSlot()
     def show_loading_screen(self):
+        """Validate parse request and hand processing to the parser thread."""
         try:
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
                 self,
@@ -173,6 +184,7 @@ class ParsingDialog(QDialog):
 
     @pyqtSlot()
     def stop_parsing(self):
+        """Request cooperative parser cancellation without blocking the UI."""
         try:
             # Request cooperative cancellation and return immediately to keep UI responsive
             self.parsing_canceled = True
@@ -185,11 +197,13 @@ class ParsingDialog(QDialog):
 
     @pyqtSlot(str)
     def on_parse_error(self, message):
+        """Capture parse errors for final summary when the worker finishes."""
         self.parse_error_message = message
         self.loading_label.setText(build_three_line_status("Parsing failed.", "See error details for context", "ETA --"))
 
     @pyqtSlot()
     def on_parse_finished(self):
+        """Handle parse completion, including cancellation and error paths."""
         try:
             if self.parse_error_message:
                 QMessageBox.warning(self, "Parsing failed", self.parse_error_message)

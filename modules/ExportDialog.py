@@ -1,3 +1,5 @@
+"""Export dialog UI, export option builders, and completion message helpers."""
+
 from modules.progress_status import build_three_line_status
 from modules.ExportDataThread import ExportDataThread
 from modules.FilterDialog import FilterDialog
@@ -40,6 +42,20 @@ from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
 def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results):
+    """Build a validated export-options payload from UI field values.
+
+    Args:
+        selected_preset: Preset identifier selected in the UI.
+        export_type: Optional chart type override from the combo box.
+        export_target: Export backend identifier.
+        sorting_parameter: Optional sort key selected by the user.
+        violin_input: Raw violin minimum sample-size input.
+        summary_scale_input: Raw summary plot scale input.
+        hide_ok_results: Whether in-tolerance rows should be hidden.
+
+    Returns:
+        ExportOptions: Options object ready for validation.
+    """
     preset_options = build_export_options_for_preset(selected_preset)
     return ExportOptions(
         preset=selected_preset,
@@ -54,6 +70,7 @@ def build_export_options_payload(selected_preset, export_type, export_target, so
 
 
 def build_export_completion_message(*, excel_file, export_target, completion_metadata):
+    """Compose the completion dialog payload for local and Google export flows."""
     metadata = completion_metadata or {}
     warnings = [str(w) for w in metadata.get('conversion_warnings', []) if str(w).strip()]
     fallback_message = str(metadata.get('fallback_message', '')).strip()
@@ -215,6 +232,12 @@ logger = logging.getLogger(__name__)
 
 
 class ExportDialog(QDialog):
+    """Dialog that gathers export settings and runs export work in a thread.
+
+    Key state includes selected database/output files, optional filter/grouping
+    selections, and persisted preset preferences stored in a user config file.
+    """
+
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         
@@ -247,6 +270,11 @@ class ExportDialog(QDialog):
         self.init_layout()
 
     def _load_dialog_config(self):
+        """Load and migrate persisted dialog settings from disk.
+
+        Returns:
+            dict: Configuration dictionary with at least a preset selection.
+        """
         try:
             config = load_export_dialog_config(self.config_path)
             migrated, changed = migrate_export_dialog_config(config)
@@ -257,6 +285,7 @@ class ExportDialog(QDialog):
             return {'selected_preset': 'fast_diagnostics'}
 
     def _save_dialog_config(self):
+        """Persist currently selected preset to the user config file."""
         try:
             selected_label = self.preset_combobox.currentText()
             selected_preset = get_export_preset_id_for_label(selected_label)
@@ -266,6 +295,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def apply_selected_preset(self):
+        """Apply the selected preset values to export controls and save them."""
         try:
             selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
             preset_options = build_export_options_for_preset(selected_preset)
@@ -573,6 +603,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def open_filter_window(self):
+        """Open or focus the filter dialog while keeping a single dialog instance."""
         try:
             # Check if export dialog is already open or visible
             if not self.filter_window:
@@ -588,6 +619,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
             
     def open_grouping_window(self):
+        """Open/focus the grouping dialog and refresh data for reused instances."""
         try:
             # Check if grouping dialog is already open or visible
             if not self.grouping_window:
@@ -640,6 +672,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def select_excel_file(self):
+        """Prompt for an output workbook path and avoid immediate name collisions."""
         try:
             """Open a file dialog to select an excel file"""
             default_name = self.db_file[:-3]
@@ -669,6 +702,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def show_loading_screen(self):
+        """Validate inputs, persist options, and hand work to the export thread."""
         try:
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
                 self,
@@ -724,6 +758,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def stop_exporting(self):
+        """Request cooperative cancelation and keep UI responsive while waiting."""
         try:
             # Request cooperative cancellation and return immediately to avoid blocking the UI thread
             if self.export_thread is not None and self.export_thread.isRunning():
@@ -739,10 +774,12 @@ class ExportDialog(QDialog):
 
 
     def on_export_error(self, message):
+        """Store export error details for finalization once the worker stops."""
         self.export_error_message = message
         self.loading_label.setText(build_three_line_status("Export failed.", "See error details for context", "ETA --"))
 
     def on_export_canceled(self):
+        """Handle explicit worker cancelation and restore dialog state."""
         try:
             QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
             self.loading_dialog.reject()
@@ -752,6 +789,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def on_export_finished(self):
+        """Finalize export flow with success/error messaging and UI reset."""
         try:
             if self.export_error_message:
                 QMessageBox.warning(self, "Export failed", self.export_error_message)
