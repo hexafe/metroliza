@@ -52,6 +52,7 @@ from modules.ExportDataThread import (  # noqa: E402
     build_summary_sheet_position_plan,
     build_histogram_table_data,
     build_sparse_unique_labels,
+    build_summary_panel_labels,
     build_trend_plot_payload,
 )
 
@@ -72,6 +73,14 @@ class TestExportThreadLabelHelpers(unittest.TestCase):
         self.assertEqual(result, ['A', 'B', '', 'C', ''])
 
 
+
+
+    def test_build_summary_panel_labels_keeps_group_labels_dense_when_grouping_active(self):
+        labels = ['G1', 'G1', 'G2', 'G2']
+
+        result = build_summary_panel_labels(labels, grouping_active=True)
+
+        self.assertEqual(result, ['G1', 'G1', 'G2', 'G2'])
 
     def test_normalize_plot_axis_values_converts_numeric_and_datetime_strings(self):
         values = ['1', '2.5', '2024-01-01', 'ABC']
@@ -153,6 +162,20 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(payload['labels'], ['1', '', '2', ''])
 
 
+
+    def test_build_trend_plot_payload_keeps_group_labels_dense_when_grouping_active(self):
+        import pandas as pd
+
+        header_group = pd.DataFrame({
+            'MEAS': ['1.0', '1.1', '1.2', '1.3'],
+            'GROUP': ['A', 'A', 'B', 'B'],
+            'SAMPLE_NUMBER': ['1', '1', '2', '2'],
+        })
+
+        payload = build_trend_plot_payload(header_group, grouping_active=True, label_column='GROUP')
+
+        self.assertEqual(payload['labels'], ['A', 'A', 'B', 'B'])
+
     def test_build_summary_scatter_payload_uses_datetime_axis_for_parseable_dates(self):
         import pandas as pd
 
@@ -166,6 +189,25 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual([value.year for value in x_values], [2024, 2024, 2024])
         self.assertEqual(list(y_values), [1.0, 1.2, 1.3])
         self.assertEqual(labels, ['2024-01-01', '2024-01-02', '2024-01-03'])
+
+
+    def test_build_summary_scatter_payload_uses_dense_group_labels_when_grouping_active(self):
+        import pandas as pd
+
+        header_group = pd.DataFrame({
+            'GROUP': ['A', 'A', 'B', 'B'],
+            'MEAS': ['1.0', '1.2', '1.3', '1.4'],
+        })
+
+        x_values, y_values, labels = ExportDataThread._build_summary_scatter_payload(
+            header_group,
+            'GROUP',
+            grouping_active=True,
+        )
+
+        self.assertEqual(list(x_values), [0.0, 1.0, 2.0, 3.0])
+        self.assertEqual(list(y_values), [1.0, 1.2, 1.3, 1.4])
+        self.assertEqual(labels, ['A', 'A', 'B', 'B'])
 
     def test_build_summary_sheet_position_plan_matches_five_column_block_math(self):
         first_block = build_summary_sheet_position_plan(5)

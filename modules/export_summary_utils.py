@@ -94,14 +94,34 @@ def build_sparse_unique_labels(labels):
     return sparse_labels
 
 
-def build_trend_plot_payload(header_group: pd.DataFrame):
-    """Return x/y points and sparse labels for the summary trend plot."""
+def build_summary_panel_labels(labels, *, grouping_active=False):
+    """Return summary-panel labels using one strategy across chart types.
+
+    When grouping is active, labels stay dense so group names remain visible.
+    Otherwise, repeated sample labels are blanked for readability.
+    """
+    normalized_labels = [str(label) if label is not None else '' for label in labels]
+    if grouping_active:
+        return normalized_labels
+    return build_sparse_unique_labels(normalized_labels)
+
+
+def build_trend_plot_payload(header_group: pd.DataFrame, *, grouping_active=False, label_column=None):
+    """Return x/y points and strategy-aligned labels for the summary trend plot."""
     measurements = normalize_plot_axis_values(list(header_group['MEAS']))
-    sample_labels = list(header_group['SAMPLE_NUMBER'])
+    resolved_label_column = label_column
+    if resolved_label_column is None:
+        resolved_label_column = 'GROUP' if grouping_active and 'GROUP' in header_group.columns else 'SAMPLE_NUMBER'
+
+    if resolved_label_column in header_group.columns:
+        raw_labels = list(header_group[resolved_label_column])
+    else:
+        raw_labels = list(range(1, len(measurements) + 1))
+
     return {
         'x': list(range(len(measurements))),
         'y': measurements,
-        'labels': build_sparse_unique_labels(sample_labels),
+        'labels': build_summary_panel_labels(raw_labels, grouping_active=grouping_active),
     }
 
 
