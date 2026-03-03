@@ -1467,7 +1467,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
                 local_xlsx_path=out_file,
                 fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
-                warnings=('Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',),
+                warnings=('chart patch skipped for one chart',),
             )
             try:
                 thread.run()
@@ -1477,10 +1477,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.completion_metadata['converted_file_id'], 'sheet-id')
             self.assertEqual(thread.completion_metadata['converted_url'], 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
             self.assertEqual(thread.completion_metadata['local_xlsx_path'], out_file)
-            self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.')
-            self.assertEqual(thread.completion_metadata['conversion_warning_details'][0]['reason'], 'missing_expected_tab')
-            self.assertEqual(thread.completion_metadata['conversion_warning_details'][0]['exception_class'], 'ValueError')
-            self.assertEqual(thread.completion_metadata['converted_tab_titles'], ['MEASUREMENTS'])
+            self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'chart patch skipped for one chart')
+            self.assertEqual(thread.completion_metadata['conversion_warning_details'], [])
+            self.assertEqual(thread.completion_metadata['converted_tab_titles'], [])
             fallback_stage_messages = [text for text in emitted if text.split('\n')[0].startswith('Google export stage: fallback')]
             self.assertTrue(fallback_stage_messages)
             self.assertIn(out_file, fallback_stage_messages[0])
@@ -1661,7 +1660,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
                 local_xlsx_path=out_file,
                 fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
-                warnings=('Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',),
+                warnings=('chart patch skipped for one chart',),
             )
             logger = logging.getLogger()
             previous_handlers = list(logger.handlers)
@@ -1685,7 +1684,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             warning_messages = [record.getMessage() for record in records if record.levelno >= logging.WARNING]
             self.assertTrue(any('Google export issue: conversion completed with warnings' in msg for msg in warning_messages))
             self.assertTrue(any('fallback=Conversion completed with warnings.' in msg for msg in warning_messages))
-            self.assertTrue(any('warnings=Google Sheets conversion appears partial. Missing expected tab(s): REF_A.' in msg for msg in warning_messages))
+            self.assertTrue(any('warnings=chart patch skipped for one chart' in msg for msg in warning_messages))
 
     def test_google_target_success_metadata_contains_expected_keys(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
