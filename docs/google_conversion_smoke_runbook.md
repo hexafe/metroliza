@@ -143,10 +143,11 @@ For release-candidate validations and PRs that modify Google auth/conversion beh
   - Command run (exact command text, including env vars).
   - Date/time (with timezone).
   - Environment/sandbox account (local/CI context + sandbox Google account/project identifier).
-  - Build identity under test (branch + commit SHA + artifact/build identifier).
-  - Pass/fail outcome.
-  - Fallback `.xlsx` behavior observed (path/link and whether fallback remained accessible as expected).
-  - Link/log location (CI job URL, artifact URI, or local log file path).
+- Build identity under test (branch + commit SHA + artifact/build identifier).
+- Pass/fail outcome.
+- Fallback `.xlsx` behavior observed (path/link and whether fallback remained accessible as expected).
+- Link/log location (CI job URL, artifact URI, or local log file path).
+- Do **not** require or record chart-patching/batchUpdate evidence; conversion validation is Drive upload+convert metadata plus fallback behavior only.
 
 ### Pass/fail escalation path
 
