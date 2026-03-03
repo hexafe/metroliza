@@ -1,5 +1,4 @@
 import json
-import sys
 import tempfile
 import unittest
 import urllib.error
