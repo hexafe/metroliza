@@ -82,7 +82,7 @@ Use the template below for every issue found during open testing.
 
 ## 4) Triage policy
 
-This runbook triage policy maps directly to **Release Candidate Checklist section 4 (Defect triage criteria)**: [`release_candidate_checklist.md#4-defect-triage-criteria-must-fix-vs-defer`](./release_candidate_checklist.md#4-defect-triage-criteria-must-fix-vs-defer).
+This runbook triage policy maps directly to the **Release Candidate Checklist [Defect triage criteria](./release_candidate_checklist.md#defect-triage-criteria) section**.
 
 ### Severity labels
 
@@ -97,9 +97,9 @@ This runbook triage policy maps directly to **Release Candidate Checklist sectio
 - **S1:** triage within 1 business day; owner and target RC identified.
 - **S2/S3:** triage within 2 business days; may defer with rationale.
 
-### Blocker definition (aligned with checklist section 4)
+### Blocker definition (aligned with the checklist Defect triage criteria section)
 
-A defect is a release blocker if it meets any "Must-fix before release" criterion in checklist section 4. Blockers must be labeled `must-fix` and resolved (or explicitly mitigated and reclassified by release owner + QA) before Go.
+A defect is a release blocker if it meets any "Must-fix before release" criterion in the checklist [Defect triage criteria](./release_candidate_checklist.md#defect-triage-criteria) section. Blockers must be labeled `must-fix` and resolved (or explicitly mitigated and reclassified by release owner + QA) before Go.
 
 ## 5) Daily/periodic cadence
 
@@ -140,10 +140,10 @@ Recommend **No-Go/Hold** when any blocker remains unresolved, required evidence 
 Before final RC decision, attach/confirm the following evidence in the release tracker and in the canonical RC checklist:
 
 - [ ] Open-testing summary (tested builds, coverage, high-risk areas).
-- [ ] Final defect ledger with `must-fix`/`defer` labels and rationale (aligned to checklist section 4).
-- [ ] Required test/packaging results linked against checklist section 3.
+- [ ] Final defect ledger with `must-fix`/`defer` labels and rationale (aligned to the checklist Defect triage criteria section).
+- [ ] Required test/packaging results linked against the checklist Required test suites and sign-off owners section.
 - [ ] Google conversion smoke evidence linked: [`google_conversion_smoke.md`](./google_conversion_smoke.md).
-- [ ] Sign-off note from QA + release owner referencing checklist section 5 decision gates.
+- [ ] Sign-off note from QA + release owner referencing checklist Open testing exit criteria decision gates.
 
 Then complete and store final decision details in:
 [`release_candidate_checklist.md`](./release_candidate_checklist.md).
