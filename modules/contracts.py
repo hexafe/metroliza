@@ -26,7 +26,6 @@ class ExportOptions:
     summary_plot_scale: int = 0
     hide_ok_results: bool = False
     generate_summary_sheet: bool = False
-    patch_google_chart_series_post_convert: bool = False
     chart_worker_count: int = 2
     chart_worker_queue_size: int = 4
 
@@ -159,9 +158,6 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
         summary_plot_scale=summary_scale,
         hide_ok_results=bool(getattr(options, "hide_ok_results", ExportOptions.hide_ok_results)),
         generate_summary_sheet=bool(getattr(options, "generate_summary_sheet", ExportOptions.generate_summary_sheet)),
-        patch_google_chart_series_post_convert=bool(
-            getattr(options, "patch_google_chart_series_post_convert", ExportOptions.patch_google_chart_series_post_convert)
-        ),
         chart_worker_count=worker_count,
         chart_worker_queue_size=worker_queue_size,
     )

@@ -4,6 +4,7 @@
 - **Google Sheets export implementation**: Google Sheets export is now available with a safe `.xlsx` fallback.
 - **Performance optimizations**: large report exports and CSV Summary workflows run faster in everyday use.
 - **Release candidate tag**: this build corresponds to `2026.03-rc1` for validation.
+- **Compatibility note (developer API)**: removed the deprecated `ExportOptions.patch_google_chart_series_post_convert` setting from the export options contract.
 
 ## 2026.02 (build 260223)
 - Performance improvements during report generation.
