@@ -167,9 +167,9 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(list(y_values), [1.0, 1.2, 1.3])
         self.assertEqual(labels, ['2024-01-01', '2024-01-02', '2024-01-03'])
 
-    def test_build_summary_sheet_position_plan_matches_existing_column_block_math(self):
-        first_block = build_summary_sheet_position_plan(3)
-        second_block = build_summary_sheet_position_plan(6)
+    def test_build_summary_sheet_position_plan_matches_five_column_block_math(self):
+        first_block = build_summary_sheet_position_plan(5)
+        second_block = build_summary_sheet_position_plan(10)
 
         self.assertEqual(first_block['row'], 0)
         self.assertEqual(first_block['header_row'], 0)

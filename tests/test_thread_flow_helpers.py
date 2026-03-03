@@ -729,11 +729,11 @@ class TestExportBackendSmoke(unittest.TestCase):
         }
 
         for index, (header, header_group) in enumerate(headers.items(), start=1):
-            thread.summary_sheet_fill(worksheet, header, header_group, col=index * 3)
+            thread.summary_sheet_fill(worksheet, header, header_group, col=index * 5)
 
         inserted_positions = set(worksheet.inserted_images)
         expected_iqr_positions = {
-            build_summary_image_anchor_plan(index * 3)['iqr']
+            build_summary_image_anchor_plan(index * 5)['iqr']
             for index in range(1, len(headers) + 1)
         }
 
@@ -774,10 +774,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
 
-        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
         inserted_positions = set(worksheet.inserted_images)
-        panel_slots = build_summary_image_anchor_plan(3)
+        panel_slots = build_summary_image_anchor_plan(5)
 
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
@@ -847,12 +847,12 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         module.build_trend_plot_payload = _unexpected_trend
         try:
-            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
         finally:
             module.build_trend_plot_payload = previous_trend_builder
 
         inserted_positions = set(worksheet.inserted_images)
-        panel_slots = build_summary_image_anchor_plan(3)
+        panel_slots = build_summary_image_anchor_plan(5)
         self.assertEqual(
             inserted_positions,
             {
@@ -955,7 +955,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
 
-        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
         self.assertEqual(len(executor.calls), 2)
         sampled_limit = thread._chart_sample_limit()
@@ -1001,9 +1001,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
 
-        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
-        panel_slots = build_summary_image_anchor_plan(3)
+        panel_slots = build_summary_image_anchor_plan(5)
         inserted_positions = set(worksheet.inserted_images)
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
@@ -1072,9 +1072,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
 
-        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
-        panel_slots = build_summary_image_anchor_plan(3)
+        panel_slots = build_summary_image_anchor_plan(5)
         inserted_positions = set(worksheet.inserted_images)
         self.assertIn(panel_slots['distribution'], inserted_positions)
         self.assertIn(panel_slots['iqr'], inserted_positions)
