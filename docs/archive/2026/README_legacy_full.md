@@ -37,7 +37,7 @@ Dependency files are split by purpose:
 
 ## Release highlights
 
-A short, non-technical changelog for end users is available in [`CHANGELOG.md`](CHANGELOG.md).
+A short, non-technical changelog for end users is available in [`CHANGELOG.md`](../../../CHANGELOG.md).
 
 Current release highlight (`2026.02`, build `260228`): Google Sheets export messaging is clearer, `.xlsx` fallback is explicit, and chart-heavy exports remain faster for daily use.
 
@@ -45,21 +45,21 @@ Canonical release metadata lives in `VersionDate.py` (`RELEASE_VERSION`, `VERSIO
 Use `python scripts/sync_release_metadata.py` to propagate updates into docs and `python scripts/sync_release_metadata.py --check` to validate consistency in CI.
 
 Active freeze/open-testing/release status is tracked first in:
-[`docs/release_checks/release_status.md`](docs/release_checks/release_status.md).
+[`docs/release_checks/release_status.md`](../../release_checks/release_status.md).
 Release-candidate readiness checklist:
-[`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md).
+[`docs/release_checks/release_candidate_checklist.md`](../../release_checks/release_candidate_checklist.md).
 Open-testing execution/triage cadence and RC handoff evidence:
-[`docs/release_checks/open_testing_runbook.md`](docs/release_checks/open_testing_runbook.md).
+[`docs/release_checks/open_testing_runbook.md`](../../release_checks/open_testing_runbook.md).
 Branching/RC workflow guidance for solo maintenance:
-[`docs/release_checks/release_branching_playbook.md`](docs/release_checks/release_branching_playbook.md).
+[`docs/release_checks/release_branching_playbook.md`](../../release_checks/release_branching_playbook.md).
 Archived planning/history (secondary reference):
-[`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md), [`docs/archive/2026/IMPLEMENTATION_PLAN.md`](docs/archive/2026/IMPLEMENTATION_PLAN.md), [`docs/archive/2026/TODO.md`](docs/archive/2026/TODO.md), [`docs/archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md`](docs/archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md).
+[`docs/archive/2026/repo_cleanup_and_docs_plan.md`](../../archive/2026/repo_cleanup_and_docs_plan.md), [`docs/archive/2026/IMPLEMENTATION_PLAN.md`](../../archive/2026/IMPLEMENTATION_PLAN.md), [`docs/archive/2026/TODO.md`](../../archive/2026/TODO.md), [`docs/archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md`](../../archive/2026/GOOGLE_SHEETS_MIGRATION_PLAN.md).
 Active documentation lifecycle rules are defined in:
-[`docs/documentation_policy.md`](docs/documentation_policy.md).
+[`docs/documentation_policy.md`](../../documentation_policy.md).
 Authoritative branch naming rules plus branch role/merge/tag policy:
-[`docs/release_checks/branching_strategy.md`](docs/release_checks/branching_strategy.md).
+[`docs/release_checks/branching_strategy.md`](../../release_checks/branching_strategy.md).
 Repository cleanup/documentation organization plan is tracked in (status: archived historical context):
-[`docs/archive/2026/repo_cleanup_and_docs_plan.md`](docs/archive/2026/repo_cleanup_and_docs_plan.md).
+[`docs/archive/2026/repo_cleanup_and_docs_plan.md`](../../archive/2026/repo_cleanup_and_docs_plan.md).
 
 Metroliza supports an end-to-end flow:
 
@@ -90,9 +90,9 @@ Before enabling **Also create Google Sheets version (Excel file is always kept l
 A local `.xlsx` is always produced and kept. Google Sheets conversion is optional and may have minor fidelity differences in some charts/styles. If conversion fails or warnings indicate degraded chart/format fidelity, Metroliza keeps and reports the generated `.xlsx` path as the guaranteed fallback artifact.
 
 Detailed smoke execution and troubleshooting guidance lives in the dedicated runbook:
-[`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md).
+[`docs/google_conversion_smoke_runbook.md`](../../google_conversion_smoke_runbook.md).
 Record release-gated smoke outcomes in:
-[`docs/release_checks/google_conversion_smoke.md`](docs/release_checks/google_conversion_smoke.md).
+[`docs/release_checks/google_conversion_smoke.md`](../../release_checks/google_conversion_smoke.md).
 
 ## Project layout
 
@@ -122,7 +122,7 @@ PYTHONPATH=. python -m unittest tests.test_phase4_integration_happy_path -v
 ### Release-only Google conversion smoke check (manual / CI-gated)
 
 Use the dedicated smoke harness for a real end-to-end sandbox Google Drive →
-Google Sheets conversion check (full runbook: [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md)):
+Google Sheets conversion check (full runbook: [`docs/google_conversion_smoke_runbook.md`](../../google_conversion_smoke_runbook.md)):
 
 ```bash
 METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
@@ -144,7 +144,7 @@ PYTHONPATH=. python tests/google_conversion_smoke.py
 Metroliza includes an optional native parser extension (`_metroliza_cmm_native`) with a
 pure-Python fallback. Full policy (supported platforms/architectures, wheel pipeline,
 PyInstaller/Nuitka inclusion, and smoke checks) is documented in
-[`docs/native_build_distribution.md`](docs/native_build_distribution.md).
+[`docs/native_build_distribution.md`](../../native_build_distribution.md).
 
 Runtime backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
 
@@ -268,7 +268,7 @@ For very large databases, prefer narrow filter scopes before export to reduce Ex
 ## Roadmap status
 
 Previous implementation roadmaps were archived in `docs/archive/2026/IMPLEMENTATION_PLAN.md`.
-For release-candidate validation and documentation sync requirements, use the canonical checklist in [`docs/release_checks/release_candidate_checklist.md`](docs/release_checks/release_candidate_checklist.md) (single RC source of truth).
+For release-candidate validation and documentation sync requirements, use the canonical checklist in [`docs/release_checks/release_candidate_checklist.md`](../../release_checks/release_candidate_checklist.md) (single RC source of truth).
 
 Current high-level state:
 - Phase 0: ✅ Completed.
