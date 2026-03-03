@@ -204,14 +204,17 @@ def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -
     if getattr(credentials, "expiry", None) is not None:
         expires_at = credentials.expiry.timestamp()
 
+    credential_scopes = list(getattr(credentials, "scopes", None) or [GOOGLE_DRIVE_SCOPE])
+    scope_value = getattr(credentials, "scope", None) or " ".join(credential_scopes)
+
     token_payload: dict[str, Any] = {
         "access_token": credentials.token,
         "refresh_token": credentials.refresh_token,
         "token_uri": credentials.token_uri,
         "client_id": credentials.client_id,
         "client_secret": credentials.client_secret,
-        "scopes": list(credentials.scopes or [GOOGLE_DRIVE_SCOPE]),
-        "scope": credentials.scope or GOOGLE_DRIVE_SCOPE,
+        "scopes": credential_scopes,
+        "scope": scope_value,
         "token_type": "Bearer",
         "expires_at": expires_at,
     }
