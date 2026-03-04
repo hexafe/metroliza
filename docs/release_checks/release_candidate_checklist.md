@@ -14,12 +14,25 @@ Complete before announcing code freeze or cutting an RC branch.
 - [ ] `CHANGELOG.md` includes user-facing notes for this RC.
 - [ ] `README.md` **Release highlights** reflects the current RC/release line.
 - [ ] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
-- [ ] Open blockers are triaged against the defect criteria in section 5.
+- [ ] Open blockers are triaged against the defect criteria in section 6.
 - [ ] Open implementation-item gate triage is completed in [`implementation_item_triage.md`](./implementation_item_triage.md) (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
+
+## 2) Documentation readiness
+
+Complete before beginning open testing on an RC build.
+
+- [ ] Public API changes have corresponding docstrings updated. *(Owner: Dev)*
+- [ ] Complex logic changes include explanatory inline comments where needed. *(Owner: Dev)*
+- [ ] `README.md` install/usage/config sections are validated against current behavior. *(Owner: QA)*
+- [ ] `docs/README.md` index is updated for any new or renamed active docs. *(Owner: Release manager)*
+- [ ] Runbooks/checklists touched by behavior changes are updated in the same PR. *(Owner: Dev/QA)*
+- [ ] Stale or outdated comments are removed. *(Owner: Dev)*
+- [ ] Documentation updates follow source-of-truth and archival requirements in [`docs/documentation_policy.md`](../documentation_policy.md). *(Owner: Release manager)*
+- [ ] Final documentation sign-off includes links to evidence (PRs/commits) for all relevant documentation updates. *(Owner: Release manager)*
 
 <a id="open-testing-entry-criteria"></a>
 
-## 2) Open testing entry criteria
+## 3) Open testing entry criteria
 
 Complete before beginning open testing on an RC build.
 
@@ -30,7 +43,7 @@ Complete before beginning open testing on an RC build.
 - [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
 - [ ] Bug reporting channel is announced (for example issue board + chat channel) and monitored. *(Owner: Release manager/QA)*
 
-## 3) RC branch creation
+## 4) RC branch creation
 
 Create the RC branch from the approved base commit (typically `main`):
 
@@ -53,7 +66,7 @@ git push -u origin release/2026.03-rc1
 
 <a id="required-test-suites-and-sign-off-owners"></a>
 
-## 4) Required test suites and sign-off owners
+## 5) Required test suites and sign-off owners
 
 Run and record all required checks from the RC branch:
 
@@ -103,7 +116,7 @@ python -m nuitka metroliza.py `
 
 <a id="defect-triage-criteria"></a>
 
-## 5) Defect triage criteria (must-fix vs defer)
+## 6) Defect triage criteria (must-fix vs defer)
 
 Use the following policy for RC exit triage:
 
@@ -125,7 +138,7 @@ Use the following policy for RC exit triage:
 
 <a id="open-testing-exit-criteria"></a>
 
-## 6) Open testing exit criteria
+## 7) Open testing exit criteria
 
 Complete before declaring open testing closed and moving to final Go/No-Go decision.
 
@@ -134,7 +147,7 @@ Complete before declaring open testing closed and moving to final Go/No-Go decis
 - [ ] Mandatory smoke baseline is re-run on the release candidate and passes. *(Owner: QA)*
 - [ ] Required sign-off owners have all recorded completion in the release tracker. *(Owner: Release manager)*
 
-## 7) Merge-to-main and tagging criteria
+## 8) Merge-to-main and tagging criteria
 
 Only promote RC when all gates are green and approvals are complete.
 
@@ -154,7 +167,7 @@ git tag -a v2026.03 <merge-commit-sha> -m "Release v2026.03"
 git push origin v2026.03
 ```
 
-## 8) Rollback plan and communication checklist
+## 9) Rollback plan and communication checklist
 
 Prepare before release announcement; execute if post-release issues require rollback.
 
