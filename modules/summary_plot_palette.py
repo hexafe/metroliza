@@ -30,4 +30,4 @@ SUMMARY_PLOT_PALETTE = {
     'quality_risk_text': '#991B1B',
 }
 
-EMPHASIS_TABLE_ROWS = {'Cp', 'Cpk', 'NOK', 'NOK %'}
+EMPHASIS_TABLE_ROWS = {'Cp', 'Cpk', 'NOK', 'NOK %', 'Normality'}

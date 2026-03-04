@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import norm, shapiro
 import math
 import re
 from matplotlib.lines import Line2D
@@ -70,6 +70,7 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
     nok_count = header_group[(meas > usl) | (meas < lsl)]['MEAS'].count()
 
     cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
+    normality = compute_normality_status(meas)
 
     return {
         'minimum': meas.min(),
@@ -82,7 +83,30 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
         'sample_size': sample_size,
         'nok_count': nok_count,
         'nok_pct': (nok_count / sample_size) if sample_size else 0,
+        'normality_status': normality['status'],
+        'normality_text': normality['text'],
     }
+
+
+def compute_normality_status(measurements):
+    """Classify measurement normality using Shapiro-Wilk when applicable."""
+    numeric_measurements = pd.to_numeric(pd.Series(measurements), errors='coerce').dropna().to_numpy(dtype=float)
+    sample_size = int(numeric_measurements.size)
+    if sample_size < 3 or sample_size > 5000:
+        return {'status': 'unknown', 'text': 'Unknown'}
+
+    sigma = float(np.std(numeric_measurements, ddof=1))
+    if np.isclose(sigma, 0.0):
+        return {'status': 'unknown', 'text': 'Unknown'}
+
+    try:
+        _statistic, p_value = shapiro(numeric_measurements)
+    except Exception:
+        return {'status': 'unknown', 'text': 'Unknown'}
+
+    if p_value >= 0.05:
+        return {'status': 'normal', 'text': f'Shapiro p={p_value:.4f} → Normal'}
+    return {'status': 'not_normal', 'text': f'Shapiro p={p_value:.4f} → Not normal'}
 
 
 def build_sparse_unique_labels(labels):
