@@ -14,6 +14,13 @@ pip install -r requirements-dev.txt
 python metroliza.py
 ```
 
+## Configuration essentials
+
+- Google Sheets export is optional. Most users can run local Excel exports only; use Google export only if you need cloud sharing/sync.
+- Google export needs local OAuth setup (Google Cloud project + OAuth client) before first use.
+- Keep Google OAuth secrets local only: `credentials.json` and generated `token.json` should stay on your machine and must never be committed.
+- For complete setup, validation, and troubleshooting, use the dedicated runbook: [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md).
+
 Dependency files:
 - `requirements.txt` - runtime
 - `requirements-dev.txt` - development/testing
