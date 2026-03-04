@@ -682,6 +682,100 @@ class TestExportBackendSmoke(unittest.TestCase):
             ['REF_A', 'REF_A_summary', 'REF_B', 'REF_B_summary'],
         )
 
+    def test_add_measurements_applies_default_column_formatting_through_last_generated_block_column(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        previous_reader = module.read_sql_dataframe
+        previous_builder = module.build_measurement_export_dataframe
+        previous_formats = module.create_measurement_formats
+        previous_write_block = module.write_measurement_block
+        previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_values = module.fetch_partition_values
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
+
+        class _RecordingWorksheet:
+            def __init__(self):
+                self.set_column_calls = []
+
+            def set_column(self, first_col, last_col, width=None, cell_format=None, options=None):
+                self.set_column_calls.append((first_col, last_col, width, cell_format, options))
+
+            def freeze_panes(self, *_args, **_kwargs):
+                return None
+
+        class _RecordingWorkbook:
+            def __init__(self):
+                self.added_sheet_names = []
+                self.worksheets = {}
+
+            def add_worksheet(self, name):
+                worksheet = _RecordingWorksheet()
+                self.added_sheet_names.append(name)
+                self.worksheets[name] = worksheet
+                return worksheet
+
+        class _Backend:
+            def __init__(self, workbook):
+                self._workbook = workbook
+
+            def get_workbook(self, _excel_writer):
+                return self._workbook
+
+            def list_sheet_names(self, _excel_writer):
+                return set(self._workbook.added_sheet_names)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(generate_summary_sheet=False),
+            )
+            thread = ExportDataThread(request)
+            thread._export_df_cache = object()
+            thread._export_df_column_order = ()
+            workbook = _RecordingWorkbook()
+            thread._active_backend = _Backend(workbook)
+            thread.update_progress.emit = lambda *_: None
+            thread.update_label.emit = lambda *_: None
+
+            header_count = 16
+            headers = [f'H{idx:02d}' for idx in range(1, header_count + 1)]
+            measurement_df = pd.DataFrame(
+                {
+                    'REFERENCE': ['REF_A'] * header_count,
+                    'HEADER - AX': headers,
+                    'NOM': [10.0] * header_count,
+                    '+TOL': [1.0] * header_count,
+                    '-TOL': [-1.0] * header_count,
+                    'BONUS': [0.0] * header_count,
+                    'MEAS': [10.0] * header_count,
+                    'DATE': ['2024-01-01'] * header_count,
+                    'SAMPLE_NUMBER': ['1'] * header_count,
+                }
+            )
+
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': header_count}
+            thread._iter_reference_partitions = lambda: iter([('REF_A', measurement_df.copy())])
+            module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
+            module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
+            module.insert_measurement_chart = lambda *_args, **_kwargs: None
+            try:
+                thread.add_measurements_horizontal_sheet(excel_writer=object())
+            finally:
+                module.create_measurement_formats = previous_formats
+                module.write_measurement_block = previous_write_block
+                module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+
+        worksheet = workbook.worksheets['REF_A']
+        first_set_column = worksheet.set_column_calls[0]
+        self.assertEqual(first_set_column[0], 0)
+        self.assertEqual(first_set_column[1], (header_count * 5) - 1)
+
     def test_summary_sheet_fill_populates_iqr_slot_for_each_header_when_deferred_charts_enabled(self):
         import pandas as pd
 
