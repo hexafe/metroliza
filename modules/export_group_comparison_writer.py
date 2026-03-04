@@ -10,17 +10,127 @@ from modules.group_stats_tests import select_group_stat_test
 
 SECTION_GAP = 2
 
+INTERPRETATION_NOTES = [
+    'Alpha threshold: 0.05 (results below alpha are treated as statistically significant).',
+    'Raw p-value: probability of observing the data assuming no true group difference.',
+    'Adjusted p-value: multiple-comparison corrected p-value (Holm) used for significance decisions.',
+    'Significance bands: adjusted p >= 0.05 (green), 0.01 to < 0.05 (yellow), < 0.01 (red).',
+    'Effect size guide (|d|): < 0.2 small/negligible, 0.2 to 0.5 moderate, > 0.5 large.',
+]
+
+
+def _build_pairwise_group_matrices(pairwise_df):
+    """Build per-metric square matrices for adjusted p-values and effect sizes."""
+    if pairwise_df.empty:
+        return {}, {}
+
+    significance_matrices = {}
+    effect_matrices = {}
+
+    for metric, metric_rows in pairwise_df.groupby('Metric', sort=True):
+        groups = pd.unique(metric_rows[['Group A', 'Group B']].values.ravel('K')).tolist()
+        sig_df = pd.DataFrame(index=groups, columns=groups, dtype=float)
+        effect_df = pd.DataFrame(index=groups, columns=groups, dtype=float)
+
+        for group in groups:
+            sig_df.loc[group, group] = 0.0
+            effect_df.loc[group, group] = 0.0
+
+        for _, comparison in metric_rows.iterrows():
+            group_a = comparison['Group A']
+            group_b = comparison['Group B']
+            adjusted_p = comparison.get('Adjusted p-value')
+            effect = comparison.get('Effect size')
+            sig_df.loc[group_a, group_b] = adjusted_p
+            sig_df.loc[group_b, group_a] = adjusted_p
+            absolute_effect = abs(effect) if pd.notna(effect) else effect
+            effect_df.loc[group_a, group_b] = absolute_effect
+            effect_df.loc[group_b, group_a] = absolute_effect
+
+        significance_matrices[metric] = sig_df
+        effect_matrices[metric] = effect_df
+
+    return significance_matrices, effect_matrices
+
+
+def _build_insights(working, pairwise_df, overall_test_rows):
+    """Create deterministic insight bullets for the worksheet."""
+    if working.empty:
+        return ['No grouped measurement rows available for comparison.']
+
+    insights = []
+    group_means = working.groupby('GROUP')['MEAS'].mean().sort_values(ascending=False)
+    if not group_means.empty:
+        highest_group = group_means.index[0]
+        lowest_group = group_means.index[-1]
+        insights.append(
+            f'Central tendency: highest mean={highest_group} ({group_means.iloc[0]:.3f}), '
+            f'lowest mean={lowest_group} ({group_means.iloc[-1]:.3f}).'
+        )
+
+    if pairwise_df.empty:
+        insights.extend(
+            [
+                'Significant pairwise findings: none (no pairwise comparisons were available).',
+                'No-difference outcomes: none (no pairwise comparisons were available).',
+                'Small-sample warning: no pairwise comparisons were available.',
+                'Assumption/test-choice notes: no per-metric test selection was available.',
+            ]
+        )
+        return insights
+
+    significant = pairwise_df[pairwise_df['Adjusted p-value'] < 0.05]
+    if significant.empty:
+        insights.append('Significant pairwise findings: none at adjusted p < 0.05.')
+    else:
+        significant_labels = [
+            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['Adjusted p-value']:.4f})"
+            for _, row in significant.sort_values(['Metric', 'Adjusted p-value', 'Group A', 'Group B']).iterrows()
+        ]
+        insights.append('Significant pairwise findings: ' + '; '.join(significant_labels) + '.')
+
+    no_difference = pairwise_df[pairwise_df['Adjusted p-value'] >= 0.05]
+    if no_difference.empty:
+        insights.append('No-difference outcomes: all tested pairs were significant after adjustment.')
+    else:
+        no_diff_labels = [
+            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['Adjusted p-value']:.4f})"
+            for _, row in no_difference.sort_values(['Metric', 'Adjusted p-value', 'Group A', 'Group B']).iterrows()
+        ]
+        insights.append('No-difference outcomes: ' + '; '.join(no_diff_labels) + '.')
+
+    small_sample_pairs = pairwise_df[(pairwise_df['n(A)'] < 5) | (pairwise_df['n(B)'] < 5)]
+    if small_sample_pairs.empty:
+        insights.append('Small-sample warning: all compared groups had n >= 5.')
+    else:
+        warning_labels = [
+            f"{row['Metric']} ({row['Group A']} n={row['n(A)']}, {row['Group B']} n={row['n(B)']})"
+            for _, row in small_sample_pairs.sort_values(['Metric', 'Group A', 'Group B']).iterrows()
+        ]
+        insights.append('Small-sample warning (n < 5): ' + '; '.join(warning_labels) + '.')
+
+    if not overall_test_rows:
+        insights.append('Assumption/test-choice notes: no per-metric test selection was available.')
+    else:
+        notes = []
+        for item in sorted(overall_test_rows, key=lambda x: x.get('Metric', '')):
+            note = item.get('Assumptions / warnings') or 'None'
+            notes.append(f"{item.get('Metric', 'Unknown')}: {item.get('Selected test', 'N/A')} [{note}]")
+        insights.append('Assumption/test-choice notes: ' + '; '.join(notes) + '.')
+
+    return insights
 
 
 def prepare_group_comparison_payload(grouped_df):
-    """Prepare metadata, summary rows, pairwise rows, heatmaps, and insights."""
+    """Prepare metadata, summary rows, pairwise rows, matrices, and insights."""
     if not isinstance(grouped_df, pd.DataFrame) or grouped_df.empty:
         return {
             'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0)],
             'overall_summary': [('Pairwise tests', 0), ('Significant (p < 0.05)', 0), ('Large effects (|d| >= 0.8)', 0)],
             'pairwise_rows': [],
-            'significance_heatmap': pd.DataFrame(),
-            'effect_heatmap': pd.DataFrame(),
+            'overall_test_rows': [],
+            'significance_matrices': {},
+            'effect_matrices': {},
             'insights': ['No grouped measurement rows available for comparison.'],
         }
 
@@ -36,8 +146,6 @@ def prepare_group_comparison_payload(grouped_df):
 
     pairwise_rows = []
     overall_test_rows = []
-    sig_map = {}
-    effect_map = {}
 
     for metric_key, metric_frame in working.groupby('metric_key', sort=False):
         group_series = {
@@ -70,8 +178,6 @@ def prepare_group_comparison_payload(grouped_df):
             sample_left = group_series[group_a]
             sample_right = group_series[group_b]
             mean_delta = float(pd.Series(sample_left).mean() - pd.Series(sample_right).mean())
-            p_value = item.get('p_value')
-            effect = item.get('effect_size')
             pairwise_rows.append(
                 {
                     'Metric': metric_key,
@@ -81,29 +187,17 @@ def prepare_group_comparison_payload(grouped_df):
                     'n(B)': len(sample_right),
                     'Mean Δ (A-B)': mean_delta,
                     'Test': item.get('test_used'),
-                    'p-value': p_value,
+                    'p-value': item.get('p_value'),
                     'Adjusted p-value': item.get('adjusted_p_value'),
-                    'Effect size': effect,
+                    'Effect size': item.get('effect_size'),
                     'Significant': item.get('significant'),
                 }
             )
-            label = f'{group_a} vs {group_b}'
-            sig_map.setdefault(metric_key, {})[label] = p_value
-            effect_map.setdefault(metric_key, {})[label] = effect
 
     pairwise_df = pd.DataFrame(pairwise_rows)
+    significance_matrices, effect_matrices = _build_pairwise_group_matrices(pairwise_df)
     significant_count = int(pairwise_df['Significant'].sum()) if not pairwise_df.empty else 0
     large_effect_count = int((pairwise_df['Effect size'].abs() >= 0.8).sum()) if not pairwise_df.empty else 0
-
-    insights = []
-    if pairwise_df.empty:
-        insights.append('Not enough distinct groups per metric to compute pairwise comparisons.')
-    else:
-        top_effect = pairwise_df.iloc[pairwise_df['Effect size'].abs().fillna(0).idxmax()]
-        insights.append(
-            f"Largest effect: {top_effect['Metric']} ({top_effect['Group A']} vs {top_effect['Group B']}) effect={top_effect['Effect size']:.3f}."
-        )
-        insights.append(f'Significant comparisons (adjusted p < 0.05): {significant_count}.')
 
     return {
         'metadata': [
@@ -118,9 +212,9 @@ def prepare_group_comparison_payload(grouped_df):
         ],
         'pairwise_rows': pairwise_rows,
         'overall_test_rows': overall_test_rows,
-        'significance_heatmap': pd.DataFrame(sig_map).T,
-        'effect_heatmap': pd.DataFrame(effect_map).T,
-        'insights': insights,
+        'significance_matrices': significance_matrices,
+        'effect_matrices': effect_matrices,
+        'insights': _build_insights(working, pairwise_df, overall_test_rows),
     }
 
 
@@ -152,54 +246,114 @@ def _write_table(worksheet, row, title, rows):
     return row + SECTION_GAP
 
 
-def _write_heatmap(worksheet, row, title, heatmap_df, *, color):
+def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type):
     worksheet.write(row, 0, title)
     row += 1
-    if heatmap_df.empty:
+    if matrix_df.empty:
         worksheet.write(row, 0, 'No heatmap data')
         return row + SECTION_GAP + 1
 
-    worksheet.write(row, 0, 'Metric')
-    for col, column_name in enumerate(heatmap_df.columns, start=1):
+    worksheet.write(row, 0, 'Group')
+    for col, column_name in enumerate(matrix_df.columns, start=1):
         worksheet.write(row, col, column_name)
     row += 1
 
     first_data_row = row
-    for metric, values in heatmap_df.iterrows():
-        worksheet.write(row, 0, metric)
+    for group, values in matrix_df.iterrows():
+        worksheet.write(row, 0, group)
         for col, value in enumerate(values.tolist(), start=1):
             worksheet.write(row, col, value)
         row += 1
 
-    worksheet.conditional_format(
-        first_data_row,
-        1,
-        row - 1,
-        max(1, len(heatmap_df.columns)),
-        {
-            'type': '3_color_scale',
-            'min_color': '#FFFFFF',
-            'mid_color': '#FFE699',
-            'max_color': color,
-        },
-    )
+    first_col = 1
+    last_col = max(1, len(matrix_df.columns))
+    if matrix_type == 'significance':
+        worksheet.conditional_format(
+            first_data_row,
+            first_col,
+            row - 1,
+            last_col,
+            {'type': 'cell', 'criteria': '>=', 'value': 0.05, 'format': {'bg_color': '#C6EFCE'}},
+        )
+        worksheet.conditional_format(
+            first_data_row,
+            first_col,
+            row - 1,
+            last_col,
+            {'type': 'cell', 'criteria': 'between', 'minimum': 0.01, 'maximum': 0.049999, 'format': {'bg_color': '#FFEB9C'}},
+        )
+        worksheet.conditional_format(
+            first_data_row,
+            first_col,
+            row - 1,
+            last_col,
+            {'type': 'cell', 'criteria': '<', 'value': 0.01, 'format': {'bg_color': '#FFC7CE'}},
+        )
+    else:
+        worksheet.conditional_format(
+            first_data_row,
+            first_col,
+            row - 1,
+            last_col,
+            {'type': 'cell', 'criteria': '<', 'value': 0.2, 'format': {'bg_color': '#C6EFCE'}},
+        )
+        worksheet.conditional_format(
+            first_data_row,
+            first_col,
+            row - 1,
+            last_col,
+            {'type': 'cell', 'criteria': 'between', 'minimum': 0.2, 'maximum': 0.5, 'format': {'bg_color': '#FFEB9C'}},
+        )
+        worksheet.conditional_format(
+            first_data_row,
+            first_col,
+            row - 1,
+            last_col,
+            {'type': 'cell', 'criteria': '>', 'value': 0.5, 'format': {'bg_color': '#FFC7CE'}},
+        )
     return row + SECTION_GAP
+
+
+def _write_matrix_collection(worksheet, row, title, matrices, *, matrix_type):
+    worksheet.write(row, 0, title)
+    row += 1
+    if not matrices:
+        worksheet.write(row, 0, 'No heatmap data')
+        return row + SECTION_GAP + 1
+
+    for metric in sorted(matrices):
+        row = _write_matrix(worksheet, row, f'Metric: {metric}', matrices[metric], matrix_type=matrix_type)
+    return row
 
 
 def write_group_comparison_sheet(worksheet, payload):
     """Render the complete Group Comparison worksheet layout."""
     row = 0
-    worksheet.write(row, 0, 'Group Comparison - Interpretation Guide')
+    worksheet.write(row, 0, 'How to interpret these results')
     row += 1
-    worksheet.write(row, 0, 'Use p-value (< 0.05) for statistical significance and Cohen d for effect magnitude.')
+    for note in INTERPRETATION_NOTES:
+        worksheet.write(row, 0, f'• {note}')
+        row += 1
     row += SECTION_GAP
 
     row = _write_kv_section(worksheet, row, 'Metadata', payload.get('metadata', []))
     row = _write_kv_section(worksheet, row, 'Overall Test Summary', payload.get('overall_summary', []))
     row = _write_table(worksheet, row, 'Recommended Statistical Tests', payload.get('overall_test_rows', []))
     row = _write_table(worksheet, row, 'Pairwise Tables', payload.get('pairwise_rows', []))
-    row = _write_heatmap(worksheet, row, 'Significance Heatmap (p-values)', payload.get('significance_heatmap', pd.DataFrame()), color='#F4B183')
-    row = _write_heatmap(worksheet, row, 'Effect Size Heatmap (|d|)', payload.get('effect_heatmap', pd.DataFrame()).abs(), color='#9DC3E6')
+    row = _write_matrix_collection(
+        worksheet,
+        row,
+        'Significance Matrix (adjusted p-values)',
+        payload.get('significance_matrices', {}),
+        matrix_type='significance',
+    )
+    row = _write_matrix_collection(
+        worksheet,
+        row,
+        'Effect Size Matrix (|d|)',
+        payload.get('effect_matrices', {}),
+        matrix_type='effect',
+    )
 
     worksheet.write(row, 0, 'Insights')
     row += 1
