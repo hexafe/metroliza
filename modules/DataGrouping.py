@@ -1,3 +1,9 @@
+"""Provide the data-grouping dialog used to curate export grouping presets.
+
+This UI reads report data from SQLite and coordinates with the main window to
+store, apply, and clear reference/part grouping assignments.
+"""
+
 from modules.CustomLogger import CustomLogger
 from modules.db import read_sql_dataframe
 from PyQt6.QtCore import Qt
@@ -18,6 +24,8 @@ import pandas as pd
 
 
 class DataGrouping(QDialog):
+    """DataGrouping public interface used by export and UI workflows."""
+
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         self.setWindowTitle("Data grouping")
@@ -36,6 +44,17 @@ class DataGrouping(QDialog):
         self.populate_list_widgets()
 
     def setup_ui(self):
+        """Handle `setup_ui` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.create_widgets()
             self.arrange_layout()
@@ -44,6 +63,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def create_widgets(self):
+        """Handle `create_widgets` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             # Create labels and list widgets for each column to be filtered
             self.reference_label = QLabel("REFERENCE:")
@@ -88,6 +118,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def arrange_layout(self):
+        """Handle `arrange_layout` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.layout = QGridLayout(self)
 
@@ -128,6 +169,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def connect_signals(self):
+        """Handle `connect_signals` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.reference_search_input.textChanged.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
             self.part_search_input.textChanged.connect(lambda: self.search_list_widgets(self.part_list, self.part_search_input.text()))
@@ -157,6 +209,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def read_data_to_df(self):
+        """Handle `read_data_to_df` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             filter_query = self.parent().get_filter_query() if self.parent() else None
             query = self._build_grouping_query(filter_query)
@@ -178,6 +241,17 @@ class DataGrouping(QDialog):
         """
 
     def refresh_data(self):
+        """Handle `refresh_data` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.read_data_to_df()
             self.add_default_group()
@@ -186,6 +260,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def add_default_group(self):
+        """Handle `add_default_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.df["GROUP"] = self.default_group
             self.df["GROUP_KEY"] = self._compute_group_key_for_df(self.df)
@@ -236,6 +321,17 @@ class DataGrouping(QDialog):
             self.part_group_list.addItem(item)
             
     def populate_list_widgets(self):
+        """Handle `populate_list_widgets` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             unique_references = self.df["REFERENCE"].unique()
             unique_groups = self.df["GROUP"].unique()
@@ -267,6 +363,19 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def search_list_widgets(self, list_widget, search_text):
+        """Handle `search_list_widgets` for `DataGrouping`.
+
+        Args:
+            list_widget (object): Method input value.
+            search_text (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_items = list_widget.selectedItems()
             list_widget.clearSelection()
@@ -295,6 +404,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def on_reference_selection_changed(self):
+        """Handle `on_reference_selection_changed` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_reference = self.reference_list.currentItem().text() if self.reference_list.currentItem() else None
             self._populate_part_list(selected_reference)
@@ -303,6 +423,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
     
     def on_part_selection_changed(self):
+        """Handle `on_part_selection_changed` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_part = self.part_list.currentItem() is not None
             self.create_group_button.setEnabled(selected_part)
@@ -310,6 +441,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
     
     def on_group_selection_changed(self):
+        """Handle `on_group_selection_changed` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_group_name = self.groups_list.currentItem().text() if self.groups_list.currentItem() else None
             self._populate_part_group_list(selected_group_name)
@@ -321,6 +463,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def on_part_group_selection_changed(self):
+        """Handle `on_part_group_selection_changed` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_part_group = self.part_group_list.currentItem() is not None
             self.remove_from_group_button.setEnabled(selected_part_group)
@@ -328,6 +481,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def create_group(self):
+        """Handle `create_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             # Get the selected items from the list widgets
             selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_list.selectedItems()]
@@ -346,6 +510,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def rename_group(self):
+        """Handle `rename_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_group = self.groups_list.currentItem().text()
             new_group_name, ok_pressed = QInputDialog.getText(self, "Rename group", f"Enter new name for '{selected_group}':")
@@ -360,6 +535,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def remove_from_group(self):
+        """Handle `remove_from_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_group = self.groups_list.currentItem().text() if self.groups_list.currentItem() else None
             selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_group_list.selectedItems()]
@@ -379,6 +565,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def delete_group(self):
+        """Handle `delete_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             # Get the selected group
             selected_group = self.groups_list.currentItem().text()
@@ -403,6 +600,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def use_grouping(self):
+        """Handle `use_grouping` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.hide()
             self.parent().set_df_for_grouping(self.df)
@@ -411,6 +619,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def dont_use_grouping(self):
+        """Handle `dont_use_grouping` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.hide()
             self.parent().set_df_for_grouping(None)
@@ -419,4 +638,16 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def log_and_exit(self, exception):
+        """Handle `log_and_exit` for `DataGrouping`.
+
+        Args:
+            exception (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         CustomLogger(exception, reraise=False)
