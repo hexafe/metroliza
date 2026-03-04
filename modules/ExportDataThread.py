@@ -903,6 +903,33 @@ def add_violin_annotation_legend(ax, style):
         fontsize=max(style.get('font_size', 6.8) - 0.2, 6.6),
     )
 
+
+def move_legend_to_figure(ax):
+    """Move an axis legend to the parent figure's top-right corner."""
+
+    fig = ax.figure
+    handles, labels = ax.get_legend_handles_labels()
+    existing_legend = ax.legend_
+
+    if existing_legend is not None:
+        existing_legend.remove()
+
+    if not handles and existing_legend is not None:
+        handles = list(getattr(existing_legend, 'legend_handles', []) or getattr(existing_legend, 'legendHandles', []))
+        labels = [text.get_text() for text in existing_legend.get_texts()]
+
+    if not handles:
+        return
+
+    fig.legend(
+        handles,
+        labels,
+        loc="upper right",
+        bbox_to_anchor=(0.99, 0.995),
+        bbox_transform=fig.transFigure,
+    )
+    fig.subplots_adjust(top=0.82)
+
 def render_violin(ax, values, labels, *, readability_scale=None, use_dynamic_offsets=True, show_annotation_legend=True):
     """Render violin plots and optional group-stat annotations on the provided axis."""
 
@@ -2541,7 +2568,8 @@ class ExportDataThread(QThread):
                     ax.set_ylim(y_min, y_max)
                     ax.set_xlabel(distribution_x_axis_label)
                     ax.set_ylabel('Measurement')
-                    ax.set_title(f'{header}')
+                    ax.set_title(f'{header}', pad=18)
+                    move_legend_to_figure(ax)
                     plt.subplots_adjust(right=0.8)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
@@ -2573,6 +2601,7 @@ class ExportDataThread(QThread):
                     )
                     render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
                     add_iqr_boxplot_legend(ax)
+                    move_legend_to_figure(ax)
                     apply_minimal_axis_style(ax, grid_axis='y')
                     apply_shared_x_axis_label_strategy(
                         ax,
@@ -2584,7 +2613,7 @@ class ExportDataThread(QThread):
                         ax.axhline(**line_spec)
                     ax.set_xlabel('Group')
                     ax.set_ylabel('Measurement')
-                    ax.set_title(f'{header} - IQR Outlier Detection')
+                    ax.set_title(f'{header} - IQR Outlier Detection', pad=18)
                     plt.subplots_adjust(right=0.8)
 
                     current_y_limits = ax.get_ylim()
@@ -2650,12 +2679,14 @@ class ExportDataThread(QThread):
                         render_density_line(ax, density_curve['x'], density_curve['y'])
 
                     mean_line_style = build_histogram_mean_line_style()
-                    ax.axvline(average, **mean_line_style)
-                    ax.axvline(USL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
-                    ax.axvline(LSL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
+                    ax.axvline(average, label='Mean', **mean_line_style)
+                    ax.axvline(USL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0, label='USL')
+                    ax.axvline(LSL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0, label='LSL')
+                    ax.legend(loc='upper left')
+                    move_legend_to_figure(ax)
                     ax.set_xlabel('Measurement')
                     ax.set_ylabel('Density')
-                    ax.set_title(f'{header}')
+                    ax.set_title(f'{header}', pad=18)
                     apply_minimal_axis_style(ax, grid_axis='y')
 
                     _, y_max = ax.get_ylim()
@@ -2704,7 +2735,7 @@ class ExportDataThread(QThread):
                         ax.axhline(**line_spec)
                     ax.set_xlabel('Sample #')
                     ax.set_ylabel('Measurement')
-                    ax.set_title(f'{header}')
+                    ax.set_title(f'{header}', pad=18)
                     apply_minimal_axis_style(ax, grid_axis='y')
                     apply_shared_x_axis_label_strategy(
                         ax,

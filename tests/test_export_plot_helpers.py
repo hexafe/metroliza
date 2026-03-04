@@ -70,6 +70,7 @@ from modules.ExportDataThread import (  # noqa: E402
     build_iqr_legend_handles,
     add_iqr_boxplot_legend,
     add_violin_annotation_legend,
+    move_legend_to_figure,
     apply_shared_x_axis_label_strategy,
     classify_capability_status,
     classify_nok_severity,
@@ -415,6 +416,60 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(table[-1], ('NOK %', '8.33%'))
+
+
+    def test_move_legend_to_figure_reparents_axis_legend_and_adjusts_top(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+
+        add_iqr_boxplot_legend(ax)
+        self.assertIsNotNone(ax.get_legend())
+        self.assertEqual(len(fig.legends), 0)
+
+        move_legend_to_figure(ax)
+
+        self.assertIsNone(ax.get_legend())
+        self.assertEqual(len(fig.legends), 1)
+        figure_legend = fig.legends[0]
+        self.assertEqual(1, figure_legend._loc)
+        bbox = figure_legend.get_bbox_to_anchor()._bbox
+        self.assertAlmostEqual(0.99, bbox.x0, places=2)
+        self.assertAlmostEqual(0.995, bbox.y0, places=2)
+        self.assertAlmostEqual(0.82, fig.subplotpars.top, places=2)
+        plt.close(fig)
+
+    def test_move_legend_to_figure_keeps_iqr_legend_labels(self):
+        fig, ax = plt.subplots()
+
+        render_iqr_boxplot(ax, [[1.0, 1.1, 1.2], [2.0, 2.1, 3.5]], ['G1', 'G2'])
+        add_iqr_boxplot_legend(ax)
+        move_legend_to_figure(ax)
+
+        self.assertEqual([text.get_text() for text in fig.legends[0].get_texts()], [
+            'IQR range (Q1-Q3)',
+            'Median',
+            'Whiskers (1.5 IQR rule)',
+            'Outliers',
+        ])
+        plt.close(fig)
+
+    def test_move_legend_to_figure_keeps_violin_annotation_legend_labels(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        render_violin(
+            ax,
+            [[1.0, 1.2, 0.8], [1.5, 1.7, 1.4]],
+            ['A', 'B'],
+            readability_scale=0.3,
+        )
+        move_legend_to_figure(ax)
+
+        legend_labels = [text.get_text() for text in fig.legends[0].get_texts()]
+        self.assertIn('Mean marker (μ)', legend_labels)
+        self.assertIn('Min marker', legend_labels)
+        self.assertIn('Max marker', legend_labels)
+        self.assertIn('±3σ span (visual)', legend_labels)
+        self.assertAlmostEqual(0.82, fig.subplotpars.top, places=2)
+        plt.close(fig)
 
     def test_add_iqr_boxplot_legend_uses_top_right_anchor(self):
         fig, ax = plt.subplots(figsize=(4, 3))
