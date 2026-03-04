@@ -49,6 +49,7 @@ class DataGrouping(QDialog):
             "#F9E2FF",
             "#FFF9C4",
         ]
+        self._group_display_to_name = {}
         
         self.setup_ui()
         
@@ -421,7 +422,12 @@ class DataGrouping(QDialog):
         selected = self.groups_list.currentItem()
         if selected is None:
             return None
-        return selected.data(Qt.ItemDataRole.UserRole) or selected.text().split(' (n=')[0]
+        canonical_name = selected.data(Qt.ItemDataRole.UserRole)
+        if canonical_name:
+            return str(canonical_name)
+
+        display_name = selected.text()
+        return self._group_display_to_name.get(display_name, display_name)
             
     def populate_list_widgets(self):
         """Handle `populate_list_widgets` for `DataGrouping`.
@@ -439,6 +445,7 @@ class DataGrouping(QDialog):
             unique_references = self.df["REFERENCE"].unique()
             self._ensure_group_color_integrity()
             unique_groups = self.df["GROUP"].unique()
+            self._group_display_to_name = {}
 
             # Populate reference_list
             self.reference_list.clear()
@@ -461,10 +468,12 @@ class DataGrouping(QDialog):
                 display_label = self._group_display_label(group_name, sample_size)
                 item = QListWidgetItem(display_label)
                 item.setData(Qt.ItemDataRole.UserRole, group_name)
+                self._group_display_to_name[display_label] = group_name
                 group_color = self.default_group_color
-                group_rows = self.df[self.df['GROUP'] == group_name]
-                if not group_rows.empty:
-                    group_color = str(group_rows[self.group_color_column].iloc[-1])
+                if group_name != self.default_group:
+                    group_rows = self.df[self.df['GROUP'] == group_name]
+                    if not group_rows.empty:
+                        group_color = str(group_rows[self.group_color_column].iloc[-1])
                 self._apply_item_color(item, group_color)
                 self.groups_list.addItem(item)
             
@@ -507,7 +516,12 @@ class DataGrouping(QDialog):
             for row in range(list_widget.count()):
                 item = list_widget.item(row)
                 item_text = item.text().lower()
-                if search_text in item_text:
+                canonical_text = ''
+                canonical_name = item.data(Qt.ItemDataRole.UserRole)
+                if canonical_name is not None:
+                    canonical_text = str(canonical_name).lower()
+
+                if search_text in item_text or search_text in canonical_text:
                     item.setHidden(False)
                 else:
                     item.setHidden(True)
