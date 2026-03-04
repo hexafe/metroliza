@@ -3,6 +3,10 @@ import numpy as np
 from scipy.stats import norm
 import math
 import re
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+
+from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 from modules.stats_utils import safe_process_capability
 
@@ -212,3 +216,63 @@ def apply_shared_x_axis_label_strategy(
         tick.set_rotation_mode('anchor')
 
     ax.tick_params(axis='x', pad=tick_padding)
+
+
+def render_tolerance_band(ax, nom, lsl, usl, one_sided=False, orientation='horizontal'):
+    """Render a subtle tolerance band for summary charts."""
+    if ax is None:
+        return None
+
+    band_kwargs = {
+        'alpha': 0.08,
+        'color': SUMMARY_PLOT_PALETTE['sigma_band'],
+        'zorder': 0,
+    }
+
+    if orientation == 'vertical':
+        lower, upper = (0, usl) if one_sided else (lsl, usl)
+        return ax.axvspan(lower, upper, **band_kwargs)
+
+    lower, upper = (0, usl) if one_sided else (lsl, usl)
+    return ax.axhspan(lower, upper, **band_kwargs)
+
+
+def render_spec_reference_lines(ax, nom, lsl, usl, orientation='horizontal'):
+    """Render nominal and spec-limit reference lines for summary charts."""
+    if ax is None:
+        return []
+
+    line_kwargs = {
+        'color': SUMMARY_PLOT_PALETTE['spec_limit'],
+        'linewidth': 1.0,
+        'zorder': 4,
+    }
+    nominal_kwargs = {**line_kwargs, 'linestyle': '--'}
+
+    if orientation == 'vertical':
+        return [
+            ax.axvline(lsl, **line_kwargs),
+            ax.axvline(usl, **line_kwargs),
+            ax.axvline(nom, **nominal_kwargs),
+        ]
+
+    return [
+        ax.axhline(lsl, **line_kwargs),
+        ax.axhline(usl, **line_kwargs),
+        ax.axhline(nom, **nominal_kwargs),
+    ]
+
+
+def build_tolerance_reference_legend_handles():
+    """Return legend handles for tolerance bands and spec-reference lines."""
+    return [
+        Patch(
+            facecolor=SUMMARY_PLOT_PALETTE['sigma_band'],
+            edgecolor='none',
+            alpha=0.08,
+            label='Tolerance band',
+        ),
+        Line2D([0], [0], color=SUMMARY_PLOT_PALETTE['spec_limit'], linewidth=1.0, label='LSL'),
+        Line2D([0], [0], color=SUMMARY_PLOT_PALETTE['spec_limit'], linewidth=1.0, label='USL'),
+        Line2D([0], [0], color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='--', linewidth=1.0, label='Nominal'),
+    ]

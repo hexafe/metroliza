@@ -51,6 +51,9 @@ from modules.export_summary_utils import (
     compute_measurement_summary,
     normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
+    render_spec_reference_lines as _render_spec_reference_lines,
+    render_tolerance_band as _render_tolerance_band,
+    build_tolerance_reference_legend_handles as _build_tolerance_reference_legend_handles,
 )
 from modules.export_summary_sheet_planner import (
     build_histogram_annotation_specs as _build_histogram_annotation_specs,
@@ -360,6 +363,37 @@ def apply_shared_x_axis_label_strategy(ax, labels, **kwargs):
     """Apply shared x-axis tick labeling policy to a matplotlib axis."""
 
     return _apply_shared_x_axis_label_strategy(ax, labels, **kwargs)
+
+
+def render_tolerance_band(ax, nom, lsl, usl, *, one_sided=False, orientation='horizontal'):
+    """Render tolerance band shading on summary charts."""
+
+    return _render_tolerance_band(
+        ax,
+        nom,
+        lsl,
+        usl,
+        one_sided=one_sided,
+        orientation=orientation,
+    )
+
+
+def render_spec_reference_lines(ax, nom, lsl, usl, *, orientation='horizontal'):
+    """Render nominal/LSL/USL reference lines on summary charts."""
+
+    return _render_spec_reference_lines(
+        ax,
+        nom,
+        lsl,
+        usl,
+        orientation=orientation,
+    )
+
+
+def build_tolerance_reference_legend_handles():
+    """Return reusable legend handles for tolerance/spec references."""
+
+    return _build_tolerance_reference_legend_handles()
 
 
 def build_histogram_table_data(summary_stats):
@@ -896,7 +930,7 @@ def annotate_violin_group_stats(
     return style
 
 
-def add_violin_annotation_legend(ax, style):
+def add_violin_annotation_legend(ax, style, *, include_tolerance_refs=False):
     """Render a legend that explains violin annotation markers and symbols."""
     handles = [
         Line2D([0], [0], marker='o', linestyle='None', markersize=5.5, color=SUMMARY_PLOT_PALETTE['central_tendency'], label='Mean marker (μ)'),
@@ -911,6 +945,9 @@ def add_violin_annotation_legend(ax, style):
         handles.append(
             Line2D([0], [0], linestyle=':', linewidth=max(style.get('sigma_line_width', 0.7), 0.7), color=SUMMARY_PLOT_PALETTE['sigma_band'], label=sigma_label),
         )
+
+    if include_tolerance_refs:
+        handles.extend(build_tolerance_reference_legend_handles())
 
     ax.legend(
         handles=handles,
@@ -955,6 +992,8 @@ def render_violin(
     *,
     nom=None,
     lsl=None,
+    usl=None,
+    one_sided=False,
     epsilon=None,
     readability_scale=None,
     use_dynamic_offsets=True,
@@ -969,6 +1008,10 @@ def render_violin(
         ax.violinplot(values, showmeans=False, showmedians=False, showextrema=False)
         ax.set_xticks(range(1, len(labels) + 1))
     ax.set_xticklabels(labels)
+    if lsl is not None and usl is not None:
+        render_tolerance_band(ax, nom, lsl, usl, one_sided=one_sided)
+        render_spec_reference_lines(ax, nom, lsl, usl)
+
     style = annotate_violin_group_stats(
         ax,
         labels,
@@ -980,7 +1023,11 @@ def render_violin(
         use_dynamic_offsets=use_dynamic_offsets,
     )
     if show_annotation_legend:
-        add_violin_annotation_legend(ax, style)
+        add_violin_annotation_legend(
+            ax,
+            style,
+            include_tolerance_refs=lsl is not None and usl is not None and nom is not None,
+        )
 
 
 def render_scatter(ax, data=None, x=None, y=None):
@@ -1099,9 +1146,12 @@ def build_iqr_legend_handles():
     ]
 
 
-def add_iqr_boxplot_legend(ax):
+def add_iqr_boxplot_legend(ax, *, include_tolerance_refs=False):
     """Attach a compact, non-overlapping legend for summary-sheet sized images."""
     handles = build_iqr_legend_handles()
+    if include_tolerance_refs:
+        handles.extend(build_tolerance_reference_legend_handles())
+
     ax.legend(
         handles=handles,
         loc='upper left',
@@ -2580,6 +2630,8 @@ class ExportDataThread(QThread):
                             distribution_labels,
                             nom=nom,
                             lsl=LSL,
+                            usl=USL,
+                            one_sided=is_one_sided_geometric_tolerance(nom, LSL),
                             readability_scale=self.summary_plot_scale,
                             use_dynamic_offsets=use_dynamic_annotation_offsets,
                             show_annotation_legend=show_violin_annotation_legend,
@@ -2594,8 +2646,6 @@ class ExportDataThread(QThread):
                         positions=label_positions,
                         force_sparse=force_sparse_x_labels,
                     )
-                    for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                        ax.axhline(**line_spec)
 
                     current_y_limits = ax.get_ylim()
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
@@ -2634,7 +2684,15 @@ class ExportDataThread(QThread):
                         grouping_active=grouping_applied,
                     )
                     render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
-                    add_iqr_boxplot_legend(ax)
+                    render_tolerance_band(
+                        ax,
+                        nom,
+                        LSL,
+                        USL,
+                        one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                    )
+                    render_spec_reference_lines(ax, nom, LSL, USL)
+                    add_iqr_boxplot_legend(ax, include_tolerance_refs=True)
                     move_legend_to_figure(ax)
                     apply_minimal_axis_style(ax, grid_axis='y')
                     apply_shared_x_axis_label_strategy(
@@ -2643,8 +2701,6 @@ class ExportDataThread(QThread):
                         positions=list(range(1, len(boxplot_labels) + 1)),
                         force_sparse=force_sparse_x_labels,
                     )
-                    for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                        ax.axhline(**line_spec)
                     ax.set_xlabel('Group')
                     ax.set_ylabel('Measurement')
                     ax.set_title(f'{header} - IQR Outlier Detection', pad=18)
@@ -2714,9 +2770,16 @@ class ExportDataThread(QThread):
 
                     mean_line_style = build_histogram_mean_line_style()
                     ax.axvline(average, label='Mean', **mean_line_style)
-                    ax.axvline(USL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0, label='USL')
-                    ax.axvline(LSL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0, label='LSL')
-                    ax.legend(loc='upper left')
+                    render_tolerance_band(
+                        ax,
+                        nom,
+                        LSL,
+                        USL,
+                        one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                        orientation='vertical',
+                    )
+                    render_spec_reference_lines(ax, nom, LSL, USL, orientation='vertical')
+                    ax.legend(handles=[Line2D([0], [0], **mean_line_style, label='Mean'), *build_tolerance_reference_legend_handles()], loc='upper left')
                     move_legend_to_figure(ax)
                     ax.set_xlabel('Measurement')
                     ax.set_ylabel('Density')
@@ -2764,9 +2827,9 @@ class ExportDataThread(QThread):
 
                     fig, ax = plt.subplots(figsize=(6, 4))
                     ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
-
                     for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                         ax.axhline(**line_spec)
+
                     ax.set_xlabel('Sample #')
                     ax.set_ylabel('Measurement')
                     ax.set_title(f'{header}', pad=18)
