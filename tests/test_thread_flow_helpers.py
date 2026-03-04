@@ -1104,6 +1104,107 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn(panel_slots['distribution'], inserted_positions)
         self.assertIn(panel_slots['iqr'], inserted_positions)
 
+    def test_summary_sheet_distribution_scatter_fallback_uses_group_bucket_labels(self):
+        import pandas as pd
+
+        import modules.ExportDataThread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
+        thread.violin_plot_min_samplesize = 3
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05],
+                'NOM': [10.0] * 5,
+                '+TOL': [0.2] * 5,
+                '-TOL': [-0.2] * 5,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
+                'DATE': ['2024-01-01'] * 5,
+            }
+        )
+        grouped_header = header_group.assign(GROUP=['A', 'A', 'B', 'B', 'C'])
+        thread._prepared_grouping_df = pd.DataFrame()
+        thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)
+
+        captured = {}
+        original_apply_labels = export_thread_module.apply_shared_x_axis_label_strategy
+        try:
+            def _capture_labels(_ax, labels, **kwargs):
+                captured['labels'] = list(labels)
+                captured['positions'] = list(kwargs.get('positions') or [])
+                return None
+
+            export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
+
+        self.assertEqual(captured['labels'], ['A', 'B', 'C'])
+        self.assertEqual(captured['positions'], [0.0, 1.0, 2.0])
+
+    def test_summary_sheet_distribution_scatter_fallback_non_grouped_sample_number_labels(self):
+        import pandas as pd
+
+        import modules.ExportDataThread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
+        thread.violin_plot_min_samplesize = 3
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05, 10.02],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '1', '2', '2', '3', '3'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        captured = {}
+        original_apply_labels = export_thread_module.apply_shared_x_axis_label_strategy
+        try:
+            def _capture_labels(_ax, labels, **kwargs):
+                captured['labels'] = list(labels)
+                captured['positions'] = list(kwargs.get('positions') or [])
+                return None
+
+            export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
+
+        self.assertEqual(captured['labels'], ['1', '2', '3'])
+        self.assertEqual(captured['positions'], [0.0, 1.0, 2.0])
+
     def test_default_export_target_uses_excel_backend(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
