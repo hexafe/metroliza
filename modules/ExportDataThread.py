@@ -74,6 +74,10 @@ from modules.export_query_service import (
     fetch_sql_measurement_summary,
     load_measurement_export_partition_dataframe,
 )
+from modules.export_group_comparison_writer import (
+    prepare_group_comparison_payload,
+    write_group_comparison_sheet,
+)
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
     apply_group_assignments as _apply_group_assignments,
@@ -1305,6 +1309,7 @@ class ExportDataThread(QThread):
         self._db_connection = None
         self._snapshot_table_name = None
         self._active_export_query = self.filter_query
+        self._cached_export_filtered_df = None
 
     def _register_chart_image(self, payload: bytes):
         image_data = BytesIO(payload)
@@ -1350,6 +1355,7 @@ class ExportDataThread(QThread):
     def _prepare_export_snapshot(self):
         if self._db_connection is None:
             self._active_export_query = self.filter_query
+            self._cached_export_filtered_df = None
             return
 
         snapshot_table_name = f'_export_snapshot_{int(time.time() * 1000)}_{id(self)}'
@@ -1367,15 +1373,18 @@ class ExportDataThread(QThread):
             )
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
+            self._cached_export_filtered_df = None
             return
 
         self._snapshot_table_name = snapshot_table_name
         self._active_export_query = f'SELECT * FROM "{snapshot_table_name}"'
+        self._cached_export_filtered_df = None
 
     def _cleanup_export_snapshot(self):
         if self._db_connection is None or not self._snapshot_table_name:
             self._active_export_query = self.filter_query
             self._snapshot_table_name = None
+            self._cached_export_filtered_df = None
             return
 
         try:
@@ -1389,6 +1398,7 @@ class ExportDataThread(QThread):
         finally:
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
+            self._cached_export_filtered_df = None
 
     def _iter_reference_partitions(self):
         partition_values = fetch_partition_values(
@@ -1408,7 +1418,9 @@ class ExportDataThread(QThread):
             yield partition_value, partition_df
 
     def _build_export_filtered_dataframe(self):
-        return read_sql_dataframe(self.db_file, self._active_export_query, connection=self._db_connection)
+        if self._cached_export_filtered_df is None:
+            self._cached_export_filtered_df = read_sql_dataframe(self.db_file, self._active_export_query, connection=self._db_connection)
+        return self._cached_export_filtered_df
 
     def _record_stage_timing(self, stage_name, elapsed):
         if stage_name in self._stage_timings:
@@ -2180,10 +2192,24 @@ class ExportDataThread(QThread):
 
                 worksheet.freeze_panes(7, 0)
 
+            self._write_group_comparison_sheet(workbook, used_sheet_names)
+
             if total_references == 0 or total_header_units == 0:
                 self._emit_stage_progress('measurement_sheets_charts', 1.0)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _write_group_comparison_sheet(self, workbook, used_sheet_names):
+        grouped_export_df = self._build_export_filtered_dataframe()
+        grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
+        grouped_export_df, _ = self._apply_group_assignments(grouped_export_df, self.prepared_grouping_df)
+
+        sheet_name = unique_sheet_name('Group Comparison', used_sheet_names)
+        worksheet = workbook.add_worksheet(sheet_name)
+        self._record_exported_sheet_name(sheet_name)
+
+        payload = prepare_group_comparison_payload(grouped_export_df)
+        write_group_comparison_sheet(worksheet, payload)
 
     def export_filtered_data(self, excel_writer):
         """Handle `export_filtered_data` for `ExportDataThread`.
