@@ -1309,6 +1309,7 @@ class ExportDataThread(QThread):
         self._db_connection = None
         self._snapshot_table_name = None
         self._active_export_query = self.filter_query
+        self._cached_export_filtered_df = None
 
     def _register_chart_image(self, payload: bytes):
         image_data = BytesIO(payload)
@@ -1354,6 +1355,7 @@ class ExportDataThread(QThread):
     def _prepare_export_snapshot(self):
         if self._db_connection is None:
             self._active_export_query = self.filter_query
+            self._cached_export_filtered_df = None
             return
 
         snapshot_table_name = f'_export_snapshot_{int(time.time() * 1000)}_{id(self)}'
@@ -1371,15 +1373,18 @@ class ExportDataThread(QThread):
             )
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
+            self._cached_export_filtered_df = None
             return
 
         self._snapshot_table_name = snapshot_table_name
         self._active_export_query = f'SELECT * FROM "{snapshot_table_name}"'
+        self._cached_export_filtered_df = None
 
     def _cleanup_export_snapshot(self):
         if self._db_connection is None or not self._snapshot_table_name:
             self._active_export_query = self.filter_query
             self._snapshot_table_name = None
+            self._cached_export_filtered_df = None
             return
 
         try:
@@ -1393,6 +1398,7 @@ class ExportDataThread(QThread):
         finally:
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
+            self._cached_export_filtered_df = None
 
     def _iter_reference_partitions(self):
         partition_values = fetch_partition_values(
@@ -1412,7 +1418,9 @@ class ExportDataThread(QThread):
             yield partition_value, partition_df
 
     def _build_export_filtered_dataframe(self):
-        return read_sql_dataframe(self.db_file, self._active_export_query, connection=self._db_connection)
+        if self._cached_export_filtered_df is None:
+            self._cached_export_filtered_df = read_sql_dataframe(self.db_file, self._active_export_query, connection=self._db_connection)
+        return self._cached_export_filtered_df
 
     def _record_stage_timing(self, stage_name, elapsed):
         if stage_name in self._stage_timings:
