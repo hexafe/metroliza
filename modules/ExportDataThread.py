@@ -49,6 +49,7 @@ from modules.export_summary_utils import (
     build_summary_panel_labels as _build_summary_panel_labels,
     build_trend_plot_payload as _build_trend_plot_payload,
     compute_measurement_summary,
+    compute_normality_status,
     normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
     render_spec_reference_lines as _render_spec_reference_lines,
@@ -413,6 +414,7 @@ def build_histogram_table_data(summary_stats):
         ('Samples', round(summary_stats['sample_size'], 1)),
         ('NOK nb', round(summary_stats['nok_count'], 1)),
         ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
+        ('Normality', summary_stats.get('normality_text', 'Unknown')),
     ]
 
 
@@ -1297,6 +1299,15 @@ def classify_nok_severity(nok_pct):
         'palette_key': 'quality_risk',
     }
 
+
+
+def classify_normality_status(normality_status):
+    """Map normality status to table badge palettes."""
+    if normality_status == 'normal':
+        return {'label': 'Normality normal', 'palette_key': 'quality_good'}
+    if normality_status == 'not_normal':
+        return {'label': 'Normality not normal', 'palette_key': 'quality_risk'}
+    return {'label': 'Normality unknown', 'palette_key': 'quality_unknown'}
 
 def build_summary_panel_subtitle(summary_stats):
     """Return compact panel subtitle text showing sample size and NOK share."""
@@ -2479,6 +2490,7 @@ class ExportDataThread(QThread):
                         average = float(average_raw)
                         sigma = float(sigma_raw or 0.0)
                         cp, cpk = safe_process_capability(nom, USL, LSL, sigma, average)
+                        normality = compute_normality_status(header_group['MEAS'])
                         summary_stats = {
                             'minimum': float(minimum_raw),
                             'maximum': float(maximum_raw),
@@ -2490,6 +2502,8 @@ class ExportDataThread(QThread):
                             'sample_size': sample_size,
                             'nok_count': nok_count,
                             'nok_pct': (nok_count / sample_size),
+                            'normality_status': normality['status'],
+                            'normality_text': normality['text'],
                         }
 
             if summary_stats is None:
@@ -2503,9 +2517,13 @@ class ExportDataThread(QThread):
             nok_row_badge = {
                 'NOK %': classify_nok_severity(summary_stats['nok_pct']),
             }
+            normality_row_badge = {
+                'Normality': classify_normality_status(summary_stats.get('normality_status')),
+            }
             histogram_row_badges = {
                 **capability_row_badges,
                 **nok_row_badge,
+                **normality_row_badge,
             }
             panel_subtitle = build_summary_panel_subtitle(summary_stats)
 

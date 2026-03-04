@@ -6,7 +6,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
+from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
+from modules.export_summary_utils import compute_normality_status
 
 
 qtcore_stub = types.ModuleType('PyQt6.QtCore')
@@ -80,6 +81,7 @@ from modules.ExportDataThread import (  # noqa: E402
     build_summary_panel_subtitle_text,
     build_histogram_table_data,
     style_histogram_stats_table,
+    classify_normality_status,
     resolve_violin_annotation_style,
     annotate_violin_group_stats,
     render_violin,
@@ -204,6 +206,9 @@ class TestExportPlotHelpers(unittest.TestCase):
             SUMMARY_PLOT_PALETTE['central_tendency'],
         )
 
+    def test_emphasis_table_rows_include_normality(self):
+        self.assertIn('Normality', EMPHASIS_TABLE_ROWS)
+
     def test_compute_scaled_y_limits_expands_symmetrically(self):
         y_min, y_max = compute_scaled_y_limits((10.0, 20.0), 0.4)
 
@@ -229,6 +234,29 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIsNotNone(payload)
         self.assertEqual(len(payload['x']), 100)
         self.assertEqual(len(payload['y']), 100)
+
+    def test_classify_normality_status_maps_all_quality_paths(self):
+        self.assertEqual(classify_normality_status('normal')['palette_key'], 'quality_good')
+        self.assertEqual(classify_normality_status('not_normal')['palette_key'], 'quality_risk')
+        self.assertEqual(classify_normality_status('unknown')['palette_key'], 'quality_unknown')
+
+    def test_compute_normality_status_returns_unknown_for_small_or_constant_samples(self):
+        self.assertEqual(compute_normality_status([1.0, 2.0])['text'], 'Unknown')
+        self.assertEqual(compute_normality_status([3.0, 3.0, 3.0])['text'], 'Unknown')
+
+    def test_compute_normality_status_returns_normal_for_gaussian_like_series(self):
+        result = compute_normality_status([-1.2, -0.4, -0.1, 0.0, 0.2, 0.5, 1.1, 1.4])
+
+        self.assertEqual(result['status'], 'normal')
+        self.assertIn('Shapiro p=', result['text'])
+        self.assertTrue(result['text'].endswith('→ Normal'))
+
+    def test_compute_normality_status_returns_not_normal_for_skewed_series(self):
+        result = compute_normality_status([0.0, 0.0, 0.0, 0.1, 0.2, 0.3, 4.0, 8.0])
+
+        self.assertEqual(result['status'], 'not_normal')
+        self.assertIn('Shapiro p=', result['text'])
+        self.assertTrue(result['text'].endswith('→ Not normal'))
 
     def test_render_histogram_handles_numeric_strings_without_matplotlib_warnings(self):
         import pandas as pd
@@ -418,7 +446,37 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+        self.assertEqual(table[-2], ('NOK %', '8.33%'))
+        self.assertEqual(table[-1], ('Normality', 'Unknown'))
+
+
+    def test_style_histogram_stats_table_applies_normality_badges_for_each_status(self):
+        scenarios = [
+            ('Shapiro p=0.2000 → Normal', 'normal', 'quality_good_bg'),
+            ('Shapiro p=0.0100 → Not normal', 'not_normal', 'quality_risk_bg'),
+            ('Unknown', 'unknown', 'quality_unknown_bg'),
+        ]
+
+        for normality_text, status, palette_bg in scenarios:
+            fig, ax = plt.subplots(figsize=(4, 3))
+            table_data = [('Normality', normality_text)]
+            ax_table = ax.table(cellText=table_data, colLabels=['Statistic', 'Value'], cellLoc='center')
+
+            style_histogram_stats_table(
+                ax_table,
+                table_data,
+                capability_row_badges={'Normality': classify_normality_status(status)},
+            )
+
+            self.assertEqual(
+                ax_table.get_celld()[(1, 0)].get_facecolor(),
+                matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE[palette_bg]),
+            )
+            self.assertEqual(
+                ax_table.get_celld()[(1, 1)].get_facecolor(),
+                matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE[palette_bg]),
+            )
+            plt.close(fig)
 
 
     def test_move_legend_to_figure_reparents_axis_legend_and_adjusts_top(self):
