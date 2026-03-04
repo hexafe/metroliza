@@ -2,38 +2,14 @@
 
 from __future__ import annotations
 
-import math
-from itertools import combinations
-
 import pandas as pd
-from scipy.stats import ttest_ind
 
+from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.group_stats_tests import select_group_stat_test
 
 
 SECTION_GAP = 2
 
-
-def _cohen_d(sample_a, sample_b):
-    if len(sample_a) < 2 or len(sample_b) < 2:
-        return None
-    var_a = pd.Series(sample_a).var(ddof=1)
-    var_b = pd.Series(sample_b).var(ddof=1)
-    if pd.isna(var_a) or pd.isna(var_b):
-        return None
-    pooled = ((len(sample_a) - 1) * var_a + (len(sample_b) - 1) * var_b) / (len(sample_a) + len(sample_b) - 2)
-    if pooled <= 0:
-        return None
-    return (pd.Series(sample_a).mean() - pd.Series(sample_b).mean()) / math.sqrt(pooled)
-
-
-def _ttest_p_value(sample_a, sample_b):
-    if len(sample_a) < 2 or len(sample_b) < 2:
-        return None
-    _, p_value = ttest_ind(sample_a, sample_b, equal_var=False, nan_policy='omit')
-    if pd.isna(p_value):
-        return None
-    return float(p_value)
 
 
 def prepare_group_comparison_payload(grouped_df):
@@ -83,41 +59,51 @@ def prepare_group_comparison_payload(grouped_df):
             }
         )
 
-        for left, right in combinations(group_series.keys(), 2):
-            sample_left = group_series[left]
-            sample_right = group_series[right]
-            p_value = _ttest_p_value(sample_left, sample_right)
-            effect = _cohen_d(sample_left, sample_right)
+        comparison_rows = compute_metric_pairwise_stats(
+            metric_key,
+            group_series,
+            config=ComparisonStatsConfig(correction_method='holm'),
+        )
+        for item in comparison_rows:
+            group_a = item['group_a']
+            group_b = item['group_b']
+            sample_left = group_series[group_a]
+            sample_right = group_series[group_b]
             mean_delta = float(pd.Series(sample_left).mean() - pd.Series(sample_right).mean())
+            p_value = item.get('p_value')
+            effect = item.get('effect_size')
             pairwise_rows.append(
                 {
                     'Metric': metric_key,
-                    'Group A': left,
-                    'Group B': right,
+                    'Group A': group_a,
+                    'Group B': group_b,
                     'n(A)': len(sample_left),
                     'n(B)': len(sample_right),
                     'Mean Δ (A-B)': mean_delta,
+                    'Test': item.get('test_used'),
                     'p-value': p_value,
-                    'Cohen d': effect,
+                    'Adjusted p-value': item.get('adjusted_p_value'),
+                    'Effect size': effect,
+                    'Significant': item.get('significant'),
                 }
             )
-            label = f'{left} vs {right}'
+            label = f'{group_a} vs {group_b}'
             sig_map.setdefault(metric_key, {})[label] = p_value
             effect_map.setdefault(metric_key, {})[label] = effect
 
     pairwise_df = pd.DataFrame(pairwise_rows)
-    significant_count = int((pairwise_df['p-value'] < 0.05).sum()) if not pairwise_df.empty else 0
-    large_effect_count = int((pairwise_df['Cohen d'].abs() >= 0.8).sum()) if not pairwise_df.empty else 0
+    significant_count = int(pairwise_df['Significant'].sum()) if not pairwise_df.empty else 0
+    large_effect_count = int((pairwise_df['Effect size'].abs() >= 0.8).sum()) if not pairwise_df.empty else 0
 
     insights = []
     if pairwise_df.empty:
         insights.append('Not enough distinct groups per metric to compute pairwise comparisons.')
     else:
-        top_effect = pairwise_df.iloc[pairwise_df['Cohen d'].abs().fillna(0).idxmax()]
+        top_effect = pairwise_df.iloc[pairwise_df['Effect size'].abs().fillna(0).idxmax()]
         insights.append(
-            f"Largest effect: {top_effect['Metric']} ({top_effect['Group A']} vs {top_effect['Group B']}) d={top_effect['Cohen d']:.3f}."
+            f"Largest effect: {top_effect['Metric']} ({top_effect['Group A']} vs {top_effect['Group B']}) effect={top_effect['Effect size']:.3f}."
         )
-        insights.append(f'Significant comparisons (p < 0.05): {significant_count}.')
+        insights.append(f'Significant comparisons (adjusted p < 0.05): {significant_count}.')
 
     return {
         'metadata': [
