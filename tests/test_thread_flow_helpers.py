@@ -1998,5 +1998,66 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(metadata['fallback_message'], f'Google export failed; using local .xlsx fallback: {out_file}')
             self.assertEqual(metadata['conversion_warnings'], ['temporary outage'])
 
+
+
+    def test_summary_sheet_grouped_violin_and_iqr_labels_include_sample_counts(self):
+        import pandas as pd
+
+        import modules.ExportDataThread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr'}
+        thread.violin_plot_min_samplesize = 2
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05],
+                'NOM': [10.0] * 5,
+                '+TOL': [0.2] * 5,
+                '-TOL': [-0.2] * 5,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
+                'DATE': ['2024-01-01'] * 5,
+            }
+        )
+        grouped_header = header_group.assign(GROUP=['A', 'A', 'B', 'B', 'B'])
+        thread._prepared_grouping_df = pd.DataFrame()
+        thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)
+
+        captured = {}
+        original_render_violin = export_thread_module.render_violin
+        original_render_iqr_boxplot = export_thread_module.render_iqr_boxplot
+        try:
+            def _capture_violin(_ax, _values, labels, **_kwargs):
+                captured['violin_labels'] = list(labels)
+                return None
+
+            def _capture_iqr(_ax, _values, labels):
+                captured['iqr_labels'] = list(labels)
+                return None
+
+            export_thread_module.render_violin = _capture_violin
+            export_thread_module.render_iqr_boxplot = _capture_iqr
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.render_violin = original_render_violin
+            export_thread_module.render_iqr_boxplot = original_render_iqr_boxplot
+
+        self.assertEqual(captured['violin_labels'], ['A (n=2)', 'B (n=3)'])
+        self.assertEqual(captured['iqr_labels'], ['A (n=2)', 'B (n=3)'])
+
+
 if __name__ == '__main__':
     unittest.main()
