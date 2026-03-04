@@ -325,6 +325,10 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
 
 def add_tolerances_to_blocks(pdf_blocks_text: list[list[Any]]) -> list[list[Any]]:
     """Mutate and return parsed blocks by applying tolerance normalization."""
+
+    def is_missing(value: Any) -> bool:
+        return value in ("", None)
+
     for block in pdf_blocks_text:
         tol_plus = 0
         tol_minus = 0
@@ -337,16 +341,16 @@ def add_tolerances_to_blocks(pdf_blocks_text: list[list[Any]]) -> list[list[Any]
                 bonus = block[1][-1][4]
 
                 for measurement_line in block[1]:
-                    if not measurement_line[2]:
+                    if is_missing(measurement_line[2]):
                         measurement_line[2] = tol_plus
                         measurement_line[3] = tol_minus
                         measurement_line[4] = bonus
             else:
                 for measurement_line in block[1]:
-                    if not measurement_line[2]:
+                    if is_missing(measurement_line[2]):
                         measurement_line[2] = tol_plus
-                    elif not measurement_line[3]:
+                    elif is_missing(measurement_line[3]):
                         measurement_line[3] = tol_minus
-                    elif not measurement_line[4]:
+                    elif is_missing(measurement_line[4]):
                         measurement_line[4] = bonus
     return pdf_blocks_text
