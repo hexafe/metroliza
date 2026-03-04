@@ -92,8 +92,8 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
                     'Metric': 'DIA - X',
                     'Group A': 'A',
                     'Group B': 'B',
-                    'Adjusted p-value': 0.012,
-                    'Effect size': -0.6,
+                    'adjusted p-value': 0.012,
+                    'effect size': -0.6,
                 }
             ]
         )
@@ -121,7 +121,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
                     'Metric': 'DIA - X',
                     'Group A': 'A',
                     'Group B': 'B',
-                    'Adjusted p-value': 0.03,
+                    'adjusted p-value': 0.03,
                     'n(A)': 2,
                     'n(B)': 2,
                 }
@@ -161,10 +161,36 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         payload = prepare_group_comparison_payload(grouped_df)
 
         self.assertIn(('Rows', 2), payload['metadata'])
+        self.assertIn(('Alpha', 0.05), payload['metadata'])
+        self.assertIn(('Correction method', 'Holm'), payload['metadata'])
+        self.assertIn(('Group sample sizes', 'A:1, B:1'), payload['metadata'])
         pairwise_row = payload['pairwise_rows'][0]
         self.assertEqual(pairwise_row['n(A)'], 1)
         self.assertEqual(pairwise_row['n(B)'], 1)
 
+
+
+    def test_prepare_payload_includes_method_traceability_fields(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 6,
+                'MEAS': [10.0, 10.5, 11.1, 11.4, 12.0, 12.2],
+                'GROUP': ['A', 'A', 'B', 'B', 'C', 'C'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        self.assertTrue(payload['overall_test_rows'])
+        per_metric = payload['overall_test_rows'][0]
+        self.assertEqual(per_metric['normality check used'], 'Shapiro-Wilk')
+        self.assertIn(per_metric['variance test used'], {'Levene', 'Brown-Forsythe'})
+        self.assertIn(per_metric['post-hoc strategy'], {'Tukey', 'Dunn'})
+
+        self.assertTrue(payload['pairwise_rows'])
+        pairwise = payload['pairwise_rows'][0]
+        for required in ['Group A', 'Group B', 'test used', 'p-value', 'adjusted p-value', 'effect size', 'significant']:
+            self.assertIn(required, pairwise)
 
     def test_integration_workbook_contains_group_comparison_sheet_and_headers(self):
         import tempfile

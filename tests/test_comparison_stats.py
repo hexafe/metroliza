@@ -68,7 +68,21 @@ def test_multi_group_rows_include_overall_effect_and_adjusted_significance():
 
     assert len(rows) == 3
     for row in rows:
-        assert set(['group_a', 'group_b', 'test_used', 'p_value', 'adjusted_p_value', 'effect_size', 'significant']).issubset(row.keys())
+        assert set([
+            'group_a',
+            'group_b',
+            'test_used',
+            'p_value',
+            'adjusted_p_value',
+            'effect_size',
+            'significant',
+            'normality_check_used',
+            'variance_test_used',
+            'omnibus_test_used',
+            'post_hoc_strategy',
+        ]).issubset(row.keys())
+        assert row['normality_check_used'] == 'Shapiro-Wilk'
+        assert row['post_hoc_strategy'] in {'Tukey', 'Dunn'}
         assert row['effect_size'] is not None
         assert row['effect_size_ci'] is not None
 
@@ -99,3 +113,19 @@ def test_pairwise_stats_handles_unequal_group_sizes_and_sets_sample_specific_tes
     assert rows[0]['group_a'] == 'A'
     assert rows[0]['group_b'] == 'B'
     assert rows[0]['test_used'] in {'Student t-test', 'Welch t-test', 'Mann-Whitney U'}
+
+
+def test_pairwise_rows_include_method_traceability_for_non_parametric_path():
+    grouped_values = {
+        'A': [0.0, 0.0, 0.0, 10.0, 10.0],
+        'B': [1.0, 1.0, 1.0, 11.0, 11.0],
+    }
+
+    rows = compute_metric_pairwise_stats('metric_trace', grouped_values)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row['normality_check_used'] == 'Shapiro-Wilk'
+    assert row['variance_test_used'] in {'Levene', 'Brown-Forsythe'}
+    assert row['omnibus_test_used'] == 'Mann-Whitney U'
+    assert row['post_hoc_strategy'] == 'Dunn'

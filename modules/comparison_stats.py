@@ -175,8 +175,12 @@ def compute_metric_pairwise_stats(
     selector_result = select_group_stat_test(labels=labels, grouped_values=[numeric_groups[label] for label in labels])
     selected_test = selector_result.get('test_name') or 'Unknown'
     is_non_parametric = selected_test in {'Mann-Whitney U', 'Kruskal-Wallis'}
-    variance_status = selector_result.get('assumptions', {}).get('variance_homogeneity', {}).get('status')
+    variance_assumption = selector_result.get('assumptions', {}).get('variance_homogeneity', {})
+    variance_status = variance_assumption.get('status')
     equal_var = variance_status == 'passed'
+    normality_check_used = 'Shapiro-Wilk'
+    variance_test_used = variance_assumption.get('test') or 'Brown-Forsythe'
+    post_hoc_strategy = 'Dunn' if is_non_parametric else 'Tukey'
 
     overall_effect: float | None = None
     overall_ci: tuple[float, float] | None = None
@@ -241,6 +245,10 @@ def compute_metric_pairwise_stats(
             'test_used': test_used,
             'p_value': p_value,
             'effect_size': effect_size,
+            'normality_check_used': normality_check_used,
+            'variance_test_used': variance_test_used,
+            'omnibus_test_used': selected_test,
+            'post_hoc_strategy': post_hoc_strategy,
         }
         if effect_ci is not None:
             row['effect_size_ci'] = effect_ci
