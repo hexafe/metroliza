@@ -996,9 +996,10 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         band = render_tolerance_band(ax, nom=0.0, lsl=0.0, usl=0.2, one_sided=True, orientation='vertical')
 
-        x_values = band.get_xy()[:, 0]
-        self.assertAlmostEqual(0.0, min(x_values), places=6)
-        self.assertAlmostEqual(0.2, max(x_values), places=6)
+        vertices = band.get_path().vertices
+        x_values = vertices[:, 0]
+        self.assertAlmostEqual(0.0, float(min(x_values)), places=6)
+        self.assertAlmostEqual(0.2, float(max(x_values)), places=6)
         plt.close(fig)
 
     def test_render_spec_reference_lines_adds_lsl_usl_nominal(self):
