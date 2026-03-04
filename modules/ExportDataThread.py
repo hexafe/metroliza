@@ -2061,7 +2061,12 @@ class ExportDataThread(QThread):
                 if self._check_canceled():
                     return
 
-                max_col = len(ref_group['HEADER - AX'].unique()) * 3
+                # Each measurement block consumes 5 worksheet columns in the
+                # exported layout (limits/stats/data). Keep the pre-format
+                # range aligned with the actual generated columns so widths and
+                # centering stay consistent for all populated blocks.
+                header_block_count = len(ref_group['HEADER - AX'].unique())
+                max_col = max((header_block_count * 5) - 1, 0)
 
                 self.update_label.emit(
                     self._build_measurement_label(
