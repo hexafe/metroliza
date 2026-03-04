@@ -1615,6 +1615,33 @@ class ExportDataThread(QThread):
         return boxplot_labels[::stride], boxplot_values[::stride]
 
     @staticmethod
+    def _compute_group_sample_counts(sampled_group, grouping_key):
+        if sampled_group is None or sampled_group.empty:
+            return {}
+        if grouping_key not in sampled_group.columns or 'MEAS' not in sampled_group.columns:
+            return {}
+
+        count_frame = sampled_group[[grouping_key, 'MEAS']].dropna(subset=[grouping_key, 'MEAS']).copy()
+        if count_frame.empty:
+            return {}
+
+        count_frame[grouping_key] = count_frame[grouping_key].astype(str)
+        grouped_counts = count_frame.groupby(grouping_key, sort=False)['MEAS'].size()
+        return {str(label): int(count) for label, count in grouped_counts.items()}
+
+    @staticmethod
+    def _append_group_sample_counts(labels, sample_counts):
+        if not labels:
+            return []
+
+        formatted_labels = []
+        for label in labels:
+            normalized_label = str(label)
+            count = int(sample_counts.get(normalized_label, 0))
+            formatted_labels.append(f"{normalized_label} (n={count})")
+        return formatted_labels
+
+    @staticmethod
     def _downsample_frame(df, sample_limit):
         return deterministic_downsample_frame(df, sample_limit)
 
@@ -2600,6 +2627,12 @@ class ExportDataThread(QThread):
                     distribution_key,
                     self.violin_plot_min_samplesize,
                 )
+
+            if grouping_applied:
+                distribution_counts = self._compute_group_sample_counts(sampled_distribution_group, distribution_key)
+                iqr_counts = self._compute_group_sample_counts(sampled_iqr_group, distribution_key)
+                distribution_labels = self._append_group_sample_counts(distribution_labels, distribution_counts)
+                iqr_labels = self._append_group_sample_counts(iqr_labels, iqr_counts)
 
             distribution_labels = build_summary_panel_labels(
                 distribution_labels,
