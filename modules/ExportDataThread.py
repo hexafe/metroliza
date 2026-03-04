@@ -98,7 +98,7 @@ from modules.export_sheet_writer import (
     write_measurement_block,
     build_summary_panel_write_plan,
 )
-from modules.stats_utils import safe_process_capability
+from modules.stats_utils import is_one_sided_geometric_tolerance, safe_process_capability
 from modules.chart_render_service import (
     BoundedWorkerPool,
     build_violin_payload_vectorized,
@@ -691,6 +691,9 @@ def annotate_violin_group_stats(
     labels,
     values,
     *,
+    nom=None,
+    lsl=None,
+    epsilon=None,
     readability_scale=None,
     annotation_mode='auto',
     use_dynamic_offsets=True,
@@ -704,6 +707,18 @@ def annotate_violin_group_stats(
     """
 
     group_count = max(len(values), len(labels))
+    epsilon_value = 1e-12 if epsilon is None else float(epsilon)
+    one_sided_sigma_mode = False
+    if nom is not None and lsl is not None:
+        try:
+            nom_value = float(nom)
+            lsl_value = float(lsl)
+            one_sided_sigma_mode = bool(is_one_sided_geometric_tolerance(nom_value, lsl_value))
+            if not one_sided_sigma_mode:
+                one_sided_sigma_mode = abs(nom_value) <= epsilon_value and abs(lsl_value) <= epsilon_value
+        except (TypeError, ValueError):
+            one_sided_sigma_mode = False
+
     style = resolve_violin_annotation_style(
         group_count=group_count,
         x_limits=ax.get_xlim(),
@@ -711,6 +726,7 @@ def annotate_violin_group_stats(
         mode=annotation_mode,
         readability_scale=readability_scale,
     )
+    style['one_sided_sigma_mode'] = one_sided_sigma_mode
     annotation_boxes = []
 
     dense_group_threshold = 16
@@ -865,9 +881,10 @@ def annotate_violin_group_stats(
         if style['show_sigma'] and std_val > 0:
             sigma_low = mean_val - (3 * std_val)
             sigma_high = mean_val + (3 * std_val)
+            sigma_start = mean_val if one_sided_sigma_mode else sigma_low
             ax.vlines(
                 xpos,
-                sigma_low,
+                sigma_start,
                 sigma_high,
                 colors=SUMMARY_PLOT_PALETTE['sigma_band'],
                 linestyles=':',
@@ -890,8 +907,9 @@ def add_violin_annotation_legend(ax, style):
             Line2D([0], [0], marker='^', linestyle='None', markersize=5.0, color=SUMMARY_PLOT_PALETTE['annotation_text'], label='Max marker'),
         ])
     if style.get('show_sigma'):
+        sigma_label = '+3σ span (visual)' if style.get('one_sided_sigma_mode') else '±3σ span (visual)'
         handles.append(
-            Line2D([0], [0], linestyle=':', linewidth=max(style.get('sigma_line_width', 0.7), 0.7), color=SUMMARY_PLOT_PALETTE['sigma_band'], label='±3σ span (visual)'),
+            Line2D([0], [0], linestyle=':', linewidth=max(style.get('sigma_line_width', 0.7), 0.7), color=SUMMARY_PLOT_PALETTE['sigma_band'], label=sigma_label),
         )
 
     ax.legend(
@@ -930,7 +948,18 @@ def move_legend_to_figure(ax):
     )
     fig.subplots_adjust(top=0.82)
 
-def render_violin(ax, values, labels, *, readability_scale=None, use_dynamic_offsets=True, show_annotation_legend=True):
+def render_violin(
+    ax,
+    values,
+    labels,
+    *,
+    nom=None,
+    lsl=None,
+    epsilon=None,
+    readability_scale=None,
+    use_dynamic_offsets=True,
+    show_annotation_legend=True,
+):
     """Render violin plots and optional group-stat annotations on the provided axis."""
 
     if _HAS_SEABORN:
@@ -944,6 +973,9 @@ def render_violin(ax, values, labels, *, readability_scale=None, use_dynamic_off
         ax,
         labels,
         values,
+        nom=nom,
+        lsl=lsl,
+        epsilon=epsilon,
         readability_scale=readability_scale,
         use_dynamic_offsets=use_dynamic_offsets,
     )
@@ -2546,6 +2578,8 @@ class ExportDataThread(QThread):
                             ax,
                             distribution_values,
                             distribution_labels,
+                            nom=nom,
+                            lsl=LSL,
                             readability_scale=self.summary_plot_scale,
                             use_dynamic_offsets=use_dynamic_annotation_offsets,
                             show_annotation_legend=show_violin_annotation_legend,

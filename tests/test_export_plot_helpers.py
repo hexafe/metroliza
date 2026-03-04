@@ -883,6 +883,42 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertTrue(any('μ=' in label for label in texts))
         plt.close(fig)
 
+    def test_annotate_violin_group_stats_two_sided_sigma_segment_spans_both_directions(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(-0.5, 0.5)
+
+        values = [[1.0, 2.0, 3.0, 4.0]]
+        style = annotate_violin_group_stats(ax, ['A'], values, annotation_mode='full', nom=1.0, lsl=0.5)
+
+        sigma_collection = ax.collections[-1]
+        segment = sigma_collection.get_segments()[0]
+        y_start = float(segment[0][1])
+        y_end = float(segment[1][1])
+        mean_val = float(sum(values[0]) / len(values[0]))
+
+        self.assertFalse(style['one_sided_sigma_mode'])
+        self.assertLess(y_start, mean_val)
+        self.assertGreater(y_end, mean_val)
+        plt.close(fig)
+
+    def test_annotate_violin_group_stats_one_sided_sigma_segment_starts_at_mean(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(-0.5, 0.5)
+
+        values = [[1.0, 2.0, 3.0, 4.0]]
+        style = annotate_violin_group_stats(ax, ['A'], values, annotation_mode='full', nom=0.0, lsl=0.0)
+
+        sigma_collection = ax.collections[-1]
+        segment = sigma_collection.get_segments()[0]
+        y_start = float(segment[0][1])
+        y_end = float(segment[1][1])
+        mean_val = float(sum(values[0]) / len(values[0]))
+
+        self.assertTrue(style['one_sided_sigma_mode'])
+        self.assertAlmostEqual(y_start, mean_val, places=7)
+        self.assertGreater(y_end, mean_val)
+        plt.close(fig)
+
     def test_render_violin_adds_legend_entries_for_annotation_symbols(self):
         fig, ax = plt.subplots(figsize=(6, 4))
 
@@ -900,6 +936,25 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('Min marker', legend_labels)
         self.assertIn('Max marker', legend_labels)
         self.assertIn('±3σ span (visual)', legend_labels)
+        plt.close(fig)
+
+    def test_render_violin_uses_one_sided_sigma_legend_label_for_gdt_mode(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        render_violin(
+            ax,
+            [[1.0, 1.2, 0.8], [1.5, 1.7, 1.4]],
+            ['A', 'B'],
+            nom=0.0,
+            lsl=0.0,
+            readability_scale=0.3,
+        )
+
+        legend = ax.get_legend()
+        self.assertIsNotNone(legend)
+        legend_labels = [text.get_text() for text in legend.get_texts()]
+        self.assertIn('+3σ span (visual)', legend_labels)
+        self.assertNotIn('±3σ span (visual)', legend_labels)
         plt.close(fig)
 
     def test_annotation_collision_resolution_is_deterministic_for_dense_groups(self):
