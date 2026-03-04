@@ -126,7 +126,8 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(table[0], ('Min', 1.235))
         self.assertEqual(table[5], ('Cp', 1.99))
         self.assertEqual(table[6], ('Cpk', 1.43))
-        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+        self.assertEqual(table[-2], ('NOK %', '8.33%'))
+        self.assertEqual(table[-1], ('Normality', 'Unknown'))
 
     def test_build_histogram_table_data_preserves_na_text_for_cp_fields(self):
         summary_stats = {
