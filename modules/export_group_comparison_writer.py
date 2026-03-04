@@ -22,7 +22,7 @@ SECTION_GAP = 2
 INTERPRETATION_NOTES = [
     'Alpha threshold: 0.05 (results below alpha are treated as statistically significant).',
     'Raw p-value: probability of observing the data assuming no true group difference.',
-    'Adjusted p-value: multiple-comparison corrected p-value (Holm) used for significance decisions.',
+    'Adjusted p-value: multiple-comparison corrected p-value (Holm by default; configurable Holm/BH) used for significance decisions.',
     'Significance bands: adjusted p >= 0.05 (green), 0.01 to < 0.05 (yellow), < 0.01 (red).',
     'Effect size guide (|d|): < 0.2 small/negligible, 0.2 to 0.5 moderate, > 0.5 large.',
 ]
@@ -48,8 +48,8 @@ def _build_pairwise_group_matrices(pairwise_df):
         for _, comparison in metric_rows.iterrows():
             group_a = comparison['Group A']
             group_b = comparison['Group B']
-            adjusted_p = comparison.get('Adjusted p-value')
-            effect = comparison.get('Effect size')
+            adjusted_p = comparison.get('adjusted p-value')
+            effect = comparison.get('effect size')
             sig_df.loc[group_a, group_b] = adjusted_p
             sig_df.loc[group_b, group_a] = adjusted_p
             absolute_effect = abs(effect) if pd.notna(effect) else effect
@@ -88,23 +88,23 @@ def _build_insights(working, pairwise_df, overall_test_rows):
         )
         return insights
 
-    significant = pairwise_df[pairwise_df['Adjusted p-value'] < 0.05]
+    significant = pairwise_df[pairwise_df['adjusted p-value'] < 0.05]
     if significant.empty:
         insights.append('Significant pairwise findings: none at adjusted p < 0.05.')
     else:
         significant_labels = [
-            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['Adjusted p-value']:.4f})"
-            for _, row in significant.sort_values(['Metric', 'Adjusted p-value', 'Group A', 'Group B']).iterrows()
+            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
+            for _, row in significant.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
         ]
         insights.append('Significant pairwise findings: ' + '; '.join(significant_labels) + '.')
 
-    no_difference = pairwise_df[pairwise_df['Adjusted p-value'] >= 0.05]
+    no_difference = pairwise_df[pairwise_df['adjusted p-value'] >= 0.05]
     if no_difference.empty:
         insights.append('No-difference outcomes: all tested pairs were significant after adjustment.')
     else:
         no_diff_labels = [
-            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['Adjusted p-value']:.4f})"
-            for _, row in no_difference.sort_values(['Metric', 'Adjusted p-value', 'Group A', 'Group B']).iterrows()
+            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
+            for _, row in no_difference.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
         ]
         insights.append('No-difference outcomes: ' + '; '.join(no_diff_labels) + '.')
 
@@ -130,6 +130,13 @@ def _build_insights(working, pairwise_df, overall_test_rows):
     return insights
 
 
+def _summarize_group_sample_sizes(working: pd.DataFrame) -> str:
+    if working.empty:
+        return 'No groups'
+    counts = working.groupby('GROUP', sort=True)['MEAS'].size()
+    return ', '.join(f"{group}:{int(size)}" for group, size in counts.items())
+
+
 def prepare_group_comparison_payload(grouped_df):
     """Prepare metadata, summary rows, pairwise rows, matrices, and insights.
 
@@ -143,7 +150,7 @@ def prepare_group_comparison_payload(grouped_df):
     """
     if not isinstance(grouped_df, pd.DataFrame) or grouped_df.empty:
         return {
-            'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0)],
+            'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0), ('Alpha', 0.05), ('Correction method', 'Holm'), ('Group sample sizes', 'No groups')],
             'overall_summary': [('Pairwise tests', 0), ('Significant (p < 0.05)', 0), ('Large effects (|d| >= 0.8)', 0)],
             'pairwise_rows': [],
             'overall_test_rows': [],
@@ -175,12 +182,18 @@ def prepare_group_comparison_payload(grouped_df):
             labels=list(group_series.keys()),
             grouped_values=list(group_series.values()),
         )
+        selected_test = selector_result.get('test_name') or 'N/A'
+        post_hoc_strategy = 'Dunn' if selected_test in {'Mann-Whitney U', 'Kruskal-Wallis'} else 'Tukey'
         overall_test_rows.append(
             {
                 'Metric': metric_key,
-                'Selected test': selector_result.get('test_name') or 'N/A',
+                'Selected test': selected_test,
                 'p-value': selector_result.get('p_value'),
                 'Sample sizes': ', '.join(f"{key}:{value}" for key, value in selector_result.get('sample_sizes', {}).items()),
+                'normality check used': 'Shapiro-Wilk',
+                'variance test used': selector_result.get('assumptions', {}).get('variance_homogeneity', {}).get('test') or 'Brown-Forsythe',
+                'omnibus test used': selected_test,
+                'post-hoc strategy': post_hoc_strategy,
                 'Assumptions / warnings': '; '.join(selector_result.get('warnings', [])) or 'None',
             }
         )
@@ -188,7 +201,7 @@ def prepare_group_comparison_payload(grouped_df):
         comparison_rows = compute_metric_pairwise_stats(
             metric_key,
             group_series,
-            config=ComparisonStatsConfig(correction_method='holm'),
+            config=ComparisonStatsConfig(alpha=0.05, correction_method='holm'),
         )
         for item in comparison_rows:
             group_a = item['group_a']
@@ -201,21 +214,25 @@ def prepare_group_comparison_payload(grouped_df):
                     'Metric': metric_key,
                     'Group A': group_a,
                     'Group B': group_b,
+                    'test used': item.get('test_used'),
+                    'p-value': item.get('p_value'),
+                    'adjusted p-value': item.get('adjusted_p_value'),
+                    'effect size': item.get('effect_size'),
+                    'significant': item.get('significant'),
                     'n(A)': len(sample_left),
                     'n(B)': len(sample_right),
                     'Mean Δ (A-B)': mean_delta,
-                    'Test': item.get('test_used'),
-                    'p-value': item.get('p_value'),
-                    'Adjusted p-value': item.get('adjusted_p_value'),
-                    'Effect size': item.get('effect_size'),
-                    'Significant': item.get('significant'),
+                    'normality check used': item.get('normality_check_used'),
+                    'variance test used': item.get('variance_test_used'),
+                    'omnibus test used': item.get('omnibus_test_used'),
+                    'post-hoc strategy': item.get('post_hoc_strategy'),
                 }
             )
 
     pairwise_df = pd.DataFrame(pairwise_rows)
     significance_matrices, effect_matrices = _build_pairwise_group_matrices(pairwise_df)
-    significant_count = int(pairwise_df['Significant'].sum()) if not pairwise_df.empty else 0
-    large_effect_series = pd.to_numeric(pairwise_df['Effect size'], errors='coerce') if not pairwise_df.empty else pd.Series(dtype=float)
+    significant_count = int(pairwise_df['significant'].sum()) if not pairwise_df.empty else 0
+    large_effect_series = pd.to_numeric(pairwise_df['effect size'], errors='coerce') if not pairwise_df.empty else pd.Series(dtype=float)
     large_effect_count = int((large_effect_series.abs() >= 0.8).sum()) if not pairwise_df.empty else 0
 
     return {
@@ -223,6 +240,9 @@ def prepare_group_comparison_payload(grouped_df):
             ('Rows', len(working)),
             ('Groups', working['GROUP'].nunique()),
             ('Headers', working['metric_key'].nunique()),
+            ('Alpha', 0.05),
+            ('Correction method', 'Holm'),
+            ('Group sample sizes', _summarize_group_sample_sizes(working)),
         ],
         'overall_summary': [
             ('Pairwise tests', len(pairwise_rows)),
