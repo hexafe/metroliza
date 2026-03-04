@@ -688,14 +688,10 @@ class TestExportBackendSmoke(unittest.TestCase):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
         module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
-        previous_reader = module.read_sql_dataframe
-        previous_builder = module.build_measurement_export_dataframe
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
-        previous_fetch_partition_values = module.fetch_partition_values
         previous_fetch_partition_header_counts = module.fetch_partition_header_counts
-        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
 
         class _RecordingWorksheet:
             def __init__(self):
