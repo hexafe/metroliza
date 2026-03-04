@@ -35,8 +35,8 @@ class _DummyQColor:
         return self._value.upper() if self.isValid() else '#000000'
 
     @classmethod
-    def fromHsl(cls, h, s, l):
-        return cls(f'#{(h % 256):02X}{(s % 256):02X}{(l % 256):02X}')
+    def fromHsl(cls, h, s, lightness):
+        return cls(f'#{(h % 256):02X}{(s % 256):02X}{(lightness % 256):02X}')
 
 
 class _DummyQBrush:
