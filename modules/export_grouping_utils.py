@@ -4,7 +4,7 @@ import pandas as pd
 
 
 _GROUP_KEY_COMPONENTS = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
-_GROUPING_OPTIONAL_COLUMNS = ['REPORT_ID', 'REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
+_GROUPING_OPTIONAL_COLUMNS = ['REPORT_ID', 'REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER', 'GROUP_COLOR']
 
 
 def add_group_key(df):
@@ -81,7 +81,10 @@ def apply_group_assignments(header_group, grouping_df):
     duplicated_mask = grouping_df.duplicated(subset=merge_keys, keep=False)
     duplicate_count = int(duplicated_mask.sum())
     deduped_grouping_df = grouping_df.drop_duplicates(subset=merge_keys, keep='last')
-    merge_projection = deduped_grouping_df[merge_keys + ['GROUP']]
+    projected_columns = merge_keys + ['GROUP']
+    if 'GROUP_COLOR' in deduped_grouping_df.columns:
+        projected_columns.append('GROUP_COLOR')
+    merge_projection = deduped_grouping_df[projected_columns]
     merged_group = pd.merge(keyed_header, merge_projection, on=merge_keys, how='left')
     merged_group['GROUP'] = merged_group['GROUP'].fillna('UNGROUPED')
     return merged_group, True, merge_keys, duplicate_count

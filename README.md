@@ -31,7 +31,7 @@ Dependency files:
 
 1. Parse metrology PDFs/ZIPs and CSV data.
 2. Store normalized records in SQLite.
-3. Apply grouping labels where needed.
+3. Apply grouping labels where needed (default POPULATION rows stay white; user-created groups are auto color-coded with persistent pastel backgrounds).
 4. Export Excel reports with summaries and plots.
 5. Optionally generate a Google Sheets version while always keeping a local `.xlsx` fallback.
    - OAuth uses the minimal Drive scope: `https://www.googleapis.com/auth/drive.file`.

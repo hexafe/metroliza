@@ -60,6 +60,25 @@ class TestExportSortingAndGrouping(unittest.TestCase):
 
         self.assertIsNone(prepared)
 
+
+    def test_prepare_grouping_dataframe_keeps_group_color_column(self):
+        grouping_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'],
+                'FILELOC': ['/a'],
+                'FILENAME': ['one.pdf'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'GROUP': ['G1'],
+                'GROUP_COLOR': ['#FDE2E4'],
+            }
+        )
+
+        prepared = prepare_grouping_dataframe(grouping_df)
+
+        self.assertIn('GROUP_COLOR', prepared.columns)
+        self.assertEqual(prepared['GROUP_COLOR'].iloc[0], '#FDE2E4')
+
     def test_apply_group_assignments_returns_contract_metadata(self):
         header_group = pd.DataFrame(
             {
@@ -79,6 +98,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
                 'DATE': ['2024-01-01'],
                 'SAMPLE_NUMBER': ['1'],
                 'GROUP': ['G1'],
+                'GROUP_COLOR': ['#FDE2E4'],
             }
         )
         grouping_df = prepare_grouping_dataframe(grouping_df)
@@ -89,6 +109,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(merge_keys, ['GROUP_KEY'])
         self.assertEqual(duplicate_count, 0)
         self.assertEqual(merged['GROUP'].tolist(), ['G1'])
+        self.assertEqual(merged['GROUP_COLOR'].tolist(), ['#FDE2E4'])
 
     def test_constructor_accepts_export_request_contract(self):
         request = ExportRequest(
