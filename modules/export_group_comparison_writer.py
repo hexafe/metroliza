@@ -1,4 +1,13 @@
-"""Build and render the Group Comparison worksheet sections for exports."""
+"""Build and render the Group Comparison worksheet sections for exports.
+
+Statistical rationale:
+    The sheet is designed to keep assumption checks, omnibus test choice,
+    pairwise correction, and effect-size context in one deterministic view.
+
+Fallback behavior:
+    Empty/invalid inputs still render all section scaffolding with explicit
+    "no rows/data" markers so users can distinguish missing data from failures.
+"""
 
 from __future__ import annotations
 
@@ -122,7 +131,16 @@ def _build_insights(working, pairwise_df, overall_test_rows):
 
 
 def prepare_group_comparison_payload(grouped_df):
-    """Prepare metadata, summary rows, pairwise rows, matrices, and insights."""
+    """Prepare metadata, summary rows, pairwise rows, matrices, and insights.
+
+    Rationale:
+        Converts export-filtered long-form measurements into stable comparison
+        artifacts used by both tables and heatmaps.
+
+    Fallback behavior:
+        Returns deterministic empty payload sections when the filtered dataframe
+        has no usable numeric measurements.
+    """
     if not isinstance(grouped_df, pd.DataFrame) or grouped_df.empty:
         return {
             'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0)],
@@ -197,7 +215,8 @@ def prepare_group_comparison_payload(grouped_df):
     pairwise_df = pd.DataFrame(pairwise_rows)
     significance_matrices, effect_matrices = _build_pairwise_group_matrices(pairwise_df)
     significant_count = int(pairwise_df['Significant'].sum()) if not pairwise_df.empty else 0
-    large_effect_count = int((pairwise_df['Effect size'].abs() >= 0.8).sum()) if not pairwise_df.empty else 0
+    large_effect_series = pd.to_numeric(pairwise_df['Effect size'], errors='coerce') if not pairwise_df.empty else pd.Series(dtype=float)
+    large_effect_count = int((large_effect_series.abs() >= 0.8).sum()) if not pairwise_df.empty else 0
 
     return {
         'metadata': [
@@ -273,21 +292,21 @@ def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type):
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': '>=', 'value': 0.05, 'format': {'bg_color': '#C6EFCE'}},
+            {'type': 'cell', 'criteria': '>=', 'value': 0.05},
         )
         worksheet.conditional_format(
             first_data_row,
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': 'between', 'minimum': 0.01, 'maximum': 0.049999, 'format': {'bg_color': '#FFEB9C'}},
+            {'type': 'cell', 'criteria': 'between', 'minimum': 0.01, 'maximum': 0.049999},
         )
         worksheet.conditional_format(
             first_data_row,
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': '<', 'value': 0.01, 'format': {'bg_color': '#FFC7CE'}},
+            {'type': 'cell', 'criteria': '<', 'value': 0.01},
         )
     else:
         worksheet.conditional_format(
@@ -295,21 +314,21 @@ def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type):
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': '<', 'value': 0.2, 'format': {'bg_color': '#C6EFCE'}},
+            {'type': 'cell', 'criteria': '<', 'value': 0.2},
         )
         worksheet.conditional_format(
             first_data_row,
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': 'between', 'minimum': 0.2, 'maximum': 0.5, 'format': {'bg_color': '#FFEB9C'}},
+            {'type': 'cell', 'criteria': 'between', 'minimum': 0.2, 'maximum': 0.5},
         )
         worksheet.conditional_format(
             first_data_row,
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': '>', 'value': 0.5, 'format': {'bg_color': '#FFC7CE'}},
+            {'type': 'cell', 'criteria': '>', 'value': 0.5},
         )
     return row + SECTION_GAP
 
@@ -327,7 +346,12 @@ def _write_matrix_collection(worksheet, row, title, matrices, *, matrix_type):
 
 
 def write_group_comparison_sheet(worksheet, payload):
-    """Render the complete Group Comparison worksheet layout."""
+    """Render the complete Group Comparison worksheet layout.
+
+    Fallback behavior:
+        Section headers are always emitted even when rows are absent, ensuring
+        workbook consumers and tests can rely on a stable report schema.
+    """
     row = 0
     worksheet.write(row, 0, 'How to interpret these results')
     row += 1

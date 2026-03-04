@@ -1641,6 +1641,17 @@ class ExportDataThread(QThread):
 
     @staticmethod
     def _build_grouped_summary_scatter_payload(header_group, x_column, *, grouping_active=False):
+        """Build grouped trend points and labels, including per-group sample counts.
+
+        Rationale:
+            Grouped trend panels aggregate to one point per category to avoid
+            overplotting and to make between-group central tendency easier to
+            compare.
+
+        Fallback behavior:
+            Returns empty arrays/lists when no finite grouped measurements are
+            available after filtering NaNs.
+        """
         scatter_frame = header_group.dropna(subset=['MEAS', x_column]).copy()
         if scatter_frame.empty:
             return np.array([]), np.array([]), []
@@ -1650,6 +1661,9 @@ class ExportDataThread(QThread):
             return np.array([]), np.array([]), []
 
         raw_labels = list(grouped_measurements.index)
+        if grouping_active:
+            group_sizes = scatter_frame.groupby(x_column, sort=False)['MEAS'].size()
+            raw_labels = [f"{label} (n={int(group_sizes.loc[label])})" for label in raw_labels]
         strategy_labels = build_summary_panel_labels(raw_labels, grouping_active=grouping_active)
         normalized_y = _normalize_plot_axis_values(list(grouped_measurements.values))
         y_numeric = pd.to_numeric(pd.Series(normalized_y), errors='coerce').to_numpy(dtype=float)

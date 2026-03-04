@@ -71,3 +71,31 @@ def test_multi_group_rows_include_overall_effect_and_adjusted_significance():
         assert set(['group_a', 'group_b', 'test_used', 'p_value', 'adjusted_p_value', 'effect_size', 'significant']).issubset(row.keys())
         assert row['effect_size'] is not None
         assert row['effect_size_ci'] is not None
+
+
+def test_pairwise_rows_include_holm_adjustment_for_all_pairs():
+    grouped_values = {
+        'A': [1.0, 1.1, 1.2, 1.3, 1.4],
+        'B': [1.0, 1.05, 1.1, 1.2, 1.25],
+        'C': [2.0, 2.1, 2.2, 2.1, 2.0],
+    }
+
+    rows = compute_metric_pairwise_stats('metric_holm', grouped_values)
+
+    assert len(rows) == 3
+    assert all(row['adjusted_p_value'] is not None for row in rows)
+    assert all(row['adjusted_p_value'] >= row['p_value'] for row in rows if row['p_value'] is not None)
+
+
+def test_pairwise_stats_handles_unequal_group_sizes_and_sets_sample_specific_test():
+    grouped_values = {
+        'A': [1.0, 1.2, 1.1, 1.3, 1.4, 1.5],
+        'B': [2.0, 2.2, 2.1],
+    }
+
+    rows = compute_metric_pairwise_stats('metric_unequal_n', grouped_values)
+
+    assert len(rows) == 1
+    assert rows[0]['group_a'] == 'A'
+    assert rows[0]['group_b'] == 'B'
+    assert rows[0]['test_used'] in {'Student t-test', 'Welch t-test', 'Mann-Whitney U'}
