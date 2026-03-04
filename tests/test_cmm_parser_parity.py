@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from modules.cmm_native_parser import native_backend_available, parse_blocks_with_backend
-from modules.cmm_parsing import parse_raw_lines_to_blocks
+from modules.cmm_parsing import add_tolerances_to_blocks, parse_raw_lines_to_blocks
 
 FIXTURE_DIR = Path("tests/fixtures/cmm_parser")
 
@@ -139,3 +139,40 @@ def test_measurement_rows_parse_for_inline_code_and_numbers_format():
     parsed = parse_raw_lines_to_blocks(raw_lines)
 
     assert any([line[0] for line in block[1]] == ["X", "Y"] for block in parsed)
+
+
+def test_add_tolerances_keeps_explicit_zero_values_for_tp_blocks():
+    pdf_blocks_text = [
+        [
+            [["ZERO TP"]],
+            [
+                ["X", 10.0, 0.0, 0.0, 0.0, 10.1, 0.1, 0.0],
+                ["Y", 5.0, None, None, None, 5.0, 0.0, 0.0],
+                ["TP", 0.0, 0.2, "", 0.0, 0.01, 0.01, 0.0],
+            ],
+        ]
+    ]
+
+    add_tolerances_to_blocks(pdf_blocks_text)
+
+    assert pdf_blocks_text[0][1][0] == ["X", 10.0, 0.0, 0.0, 0.0, 10.1, 0.1, 0.0]
+    assert pdf_blocks_text[0][1][1][2:5] == [0.1, -0.1, 0.0]
+
+
+def test_add_tolerances_keeps_explicit_zero_values_for_non_tp_blocks():
+    pdf_blocks_text = [
+        [
+            [["ZERO NON TP"]],
+            [
+                ["X", 10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0],
+                ["Y", 5.0, "", "", "", 5.0, 0.0, 0.0],
+                ["Z", 7.0, None, None, None, 7.0, 0.0, 0.0],
+            ],
+        ]
+    ]
+
+    add_tolerances_to_blocks(pdf_blocks_text)
+
+    assert pdf_blocks_text[0][1][0] == ["X", 10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0]
+    assert pdf_blocks_text[0][1][1][2:5] == [0, "", ""]
+    assert pdf_blocks_text[0][1][2][2:5] == [0, None, None]
