@@ -74,6 +74,10 @@ from modules.export_query_service import (
     fetch_sql_measurement_summary,
     load_measurement_export_partition_dataframe,
 )
+from modules.export_group_comparison_writer import (
+    prepare_group_comparison_payload,
+    write_group_comparison_sheet,
+)
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
     apply_group_assignments as _apply_group_assignments,
@@ -2180,10 +2184,24 @@ class ExportDataThread(QThread):
 
                 worksheet.freeze_panes(7, 0)
 
+            self._write_group_comparison_sheet(workbook, used_sheet_names)
+
             if total_references == 0 or total_header_units == 0:
                 self._emit_stage_progress('measurement_sheets_charts', 1.0)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _write_group_comparison_sheet(self, workbook, used_sheet_names):
+        grouped_export_df = self._build_export_filtered_dataframe()
+        grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
+        grouped_export_df, _ = self._apply_group_assignments(grouped_export_df, self.prepared_grouping_df)
+
+        sheet_name = unique_sheet_name('Group Comparison', used_sheet_names)
+        worksheet = workbook.add_worksheet(sheet_name)
+        self._record_exported_sheet_name(sheet_name)
+
+        payload = prepare_group_comparison_payload(grouped_export_df)
+        write_group_comparison_sheet(worksheet, payload)
 
     def export_filtered_data(self, excel_writer):
         """Handle `export_filtered_data` for `ExportDataThread`.
