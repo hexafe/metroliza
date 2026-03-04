@@ -71,6 +71,9 @@ from modules.ExportDataThread import (  # noqa: E402
     add_iqr_boxplot_legend,
     add_violin_annotation_legend,
     move_legend_to_figure,
+    render_tolerance_band,
+    render_spec_reference_lines,
+    build_tolerance_reference_legend_handles,
     apply_shared_x_axis_label_strategy,
     classify_capability_status,
     classify_nok_severity,
@@ -976,6 +979,101 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertTrue(any((x, y) not in base_offsets for x, y, _ in positions_one))
         plt.close(fig_one)
         plt.close(fig_two)
+
+
+    def test_render_tolerance_band_adds_horizontal_patch(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+
+        band = render_tolerance_band(ax, nom=10.0, lsl=9.5, usl=10.5)
+
+        self.assertIsNotNone(band)
+        self.assertEqual(len(ax.patches), 1)
+        self.assertEqual(matplotlib.colors.to_hex(band.get_facecolor()), matplotlib.colors.to_hex(SUMMARY_PLOT_PALETTE['sigma_band']))
+        plt.close(fig)
+
+    def test_render_tolerance_band_one_sided_vertical_starts_at_zero(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+
+        band = render_tolerance_band(ax, nom=0.0, lsl=0.0, usl=0.2, one_sided=True, orientation='vertical')
+
+        xy = band.get_xy()
+        if isinstance(xy, tuple):
+            x_min = float(xy[0])
+            x_max = float(xy[0] + band.get_width())
+        else:
+            x_values = [point[0] for point in xy]
+            x_min = float(min(x_values))
+            x_max = float(max(x_values))
+
+        self.assertAlmostEqual(0.0, x_min, places=6)
+        self.assertAlmostEqual(0.2, x_max, places=6)
+        plt.close(fig)
+
+    def test_render_spec_reference_lines_adds_lsl_usl_nominal(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+
+        render_spec_reference_lines(ax, nom=10.0, lsl=9.5, usl=10.5)
+
+        labels = [line.get_label() for line in ax.lines]
+        self.assertEqual(len(labels), 3)
+        self.assertEqual(ax.lines[-1].get_linestyle(), '--')
+        y_values = [line.get_ydata()[0] for line in ax.lines]
+        self.assertEqual(y_values, [9.5, 10.5, 10.0])
+        plt.close(fig)
+
+    def test_build_tolerance_reference_legend_handles_contains_required_labels(self):
+        labels = [handle.get_label() for handle in build_tolerance_reference_legend_handles()]
+
+        self.assertEqual(labels, ['Tolerance band', 'LSL', 'USL', 'Nominal'])
+
+    def test_violin_legend_includes_tolerance_reference_labels(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        render_violin(
+            ax,
+            [[1.0, 1.2, 0.8], [1.5, 1.7, 1.4]],
+            ['A', 'B'],
+            nom=1.2,
+            lsl=0.9,
+            usl=1.8,
+            readability_scale=0.3,
+        )
+        move_legend_to_figure(ax)
+
+        legend_labels = [text.get_text() for text in fig.legends[0].get_texts()]
+        self.assertIn('Tolerance band', legend_labels)
+        self.assertIn('LSL', legend_labels)
+        self.assertIn('USL', legend_labels)
+        self.assertIn('Nominal', legend_labels)
+        plt.close(fig)
+
+    def test_iqr_legend_includes_tolerance_reference_labels(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        render_iqr_boxplot(ax, [[1.0, 1.1, 1.2], [2.0, 2.1, 3.5]], ['G1', 'G2'])
+        add_iqr_boxplot_legend(ax, include_tolerance_refs=True)
+        move_legend_to_figure(ax)
+
+        legend_labels = [text.get_text() for text in fig.legends[0].get_texts()]
+        self.assertIn('Tolerance band', legend_labels)
+        self.assertIn('LSL', legend_labels)
+        self.assertIn('USL', legend_labels)
+        self.assertIn('Nominal', legend_labels)
+        plt.close(fig)
+
+    def test_histogram_legend_can_include_tolerance_reference_labels(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        mean_style = build_histogram_mean_line_style()
+        ax.legend(handles=[matplotlib.lines.Line2D([0], [0], **mean_style, label='Mean'), *build_tolerance_reference_legend_handles()])
+        move_legend_to_figure(ax)
+
+        legend_labels = [text.get_text() for text in fig.legends[0].get_texts()]
+        self.assertIn('Tolerance band', legend_labels)
+        self.assertIn('LSL', legend_labels)
+        self.assertIn('USL', legend_labels)
+        self.assertIn('Nominal', legend_labels)
+        plt.close(fig)
 
 
 if __name__ == '__main__':
