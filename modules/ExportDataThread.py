@@ -1,3 +1,12 @@
+"""Orchestrate threaded export workflows, rendering helpers, and Excel writing operations.
+
+This module coordinates data retrieval (`modules.export_query_service`), grouping
+(`modules.export_grouping_utils`), chart and summary planning
+(`modules.export_chart_writer`, `modules.export_summary_utils`,
+`modules.export_summary_sheet_planner`), and workbook output through
+`modules.export_backends`.
+"""
+
 import logging
 import warnings
 import inspect
@@ -105,42 +114,133 @@ logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 
 def build_export_dataframe(data, column_names):
+    """Build an export DataFrame from raw query rows and column metadata.
+
+    Args:
+        data (Sequence[Sequence[object]]): Raw database rows.
+        column_names (Sequence[str]): Column labels aligned with each row value.
+
+    Returns:
+        pandas.DataFrame: Normalized frame ready for export writing.
+
+    Side Effects:
+        Delegates implementation to `modules.export_query_service`.
+    """
+
     return _build_export_dataframe(data, column_names)
 
 
 def execute_export_query(db_file, export_query, select_reader=execute_select_with_columns):
+    """Execute an export SQL query and return rows with ordered column names.
+
+    Args:
+        db_file (str): SQLite database file path.
+        export_query (str): SQL query string to execute.
+        select_reader (Callable): Query executor with the `execute_select_with_columns`
+            contract.
+
+    Returns:
+        tuple[list[tuple], list[str]]: Query rows and associated column names.
+
+    Raises:
+        sqlite3.Error: Propagated when query execution fails.
+    """
+
     return _execute_export_query(db_file, export_query, select_reader=select_reader)
 
 
 def build_measurement_export_dataframe(df):
+    """Normalize measurement export rows into a plotting-friendly DataFrame.
+
+    Args:
+        df (pandas.DataFrame): Raw measurement export frame.
+
+    Returns:
+        pandas.DataFrame: Frame with standardized columns used by export rendering.
+    """
+
     return _build_measurement_export_dataframe(df)
 
 
 def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
+    """Build an Excel chart range string for a worksheet column slice.
+
+    Args:
+        sheet_name (str): Worksheet name.
+        first_row (int): First 1-based row index in the range.
+        last_row (int): Last 1-based row index in the range.
+        column_index (int): Zero-based worksheet column index.
+
+    Returns:
+        str: A fully-qualified A1-style sheet range string.
+    """
+
     return _build_sheet_series_range(sheet_name, first_row, last_row, column_index)
 
 
 def build_spec_limit_anchor_rows(usl, lsl):
+    """Resolve optional USL/LSL anchor rows used for chart limit lines.
+
+    Args:
+        usl (float | None): Upper specification limit.
+        lsl (float | None): Lower specification limit.
+
+    Returns:
+        dict[str, int | None]: Anchor row indexes keyed by limit type.
+    """
+
     return _build_spec_limit_anchor_rows(usl, lsl)
 
 
 def build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
+    """Create Excel formula strings for the measurement statistics block.
+
+    Args:
+        summary_col (str): Column letter for summary labels.
+        stats_col (str): Column letter for statistic formulas.
+        data_range_y (str): A1-style range containing measurement values.
+        nom_cell (str): Nominal value cell reference.
+        usl_cell (str): Upper spec limit cell reference.
+        lsl_cell (str): Lower spec limit cell reference.
+        nom_value (float | None): Nominal numeric value.
+        lsl_value (float | None): Lower spec limit numeric value.
+
+    Returns:
+        dict[str, str]: Statistic-keyed Excel formulas for worksheet writing.
+    """
+
     return _build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value)
 
 
 def build_measurement_stat_row_specs(stat_formulas):
+    """Convert stat formulas into ordered row specs for worksheet output.
+
+    Args:
+        stat_formulas (dict[str, str]): Formula map from
+            `build_measurement_stat_formulas`.
+
+    Returns:
+        list[dict[str, object]]: Row descriptors consumed by sheet writers.
+    """
+
     return _build_measurement_stat_row_specs(stat_formulas)
 
 
 def build_measurement_block_plan(*, base_col, sample_size):
+    """Build the layout plan for one horizontal measurement export block."""
+
     return _build_measurement_block_plan(base_col=base_col, sample_size=sample_size)
 
 
 def build_measurement_header_block_plan(header_group, base_col):
+    """Build worksheet header placement details for a measurement block."""
+
     return _build_measurement_header_block_plan(header_group, base_col)
 
 
 def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    """Build data range specs used to insert one measurement chart."""
+
     return _build_measurement_chart_range_specs(
         sheet_name=sheet_name,
         first_data_row=first_data_row,
@@ -151,6 +251,8 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
 
 
 def build_measurement_chart_series_specs(*, header, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    """Build chart series definitions for a measurement header group."""
+
     return _build_measurement_chart_series_specs(
         header=header,
         sheet_name=sheet_name,
@@ -162,22 +264,40 @@ def build_measurement_chart_series_specs(*, header, sheet_name, first_data_row, 
 
 
 def build_measurement_chart_format_policy(header):
+    """Resolve chart formatting options for a measurement header."""
+
     return _build_measurement_chart_format_policy(header)
 
 
 def build_horizontal_limit_line_specs(usl, lsl, **style):
+    """Build chart series specs for optional horizontal spec-limit lines."""
+
     return _build_horizontal_limit_line_specs(usl, lsl, **style)
 
 
 def build_measurement_write_bundle(header, header_group, base_col):
+    """Assemble the worksheet write bundle for one measurement group."""
+
     return _build_measurement_write_bundle(header, header_group, base_col)
 
 
 def build_measurement_write_bundle_cached(header, header_group, base_col, cache=None):
+    """Return a cached measurement write bundle when available."""
+
     return _build_measurement_write_bundle_cached(header, header_group, base_col, cache=cache)
 
 
 def run_export_steps(steps, should_cancel):
+    """Execute export callables sequentially until completion or cancellation.
+
+    Args:
+        steps (Sequence[Callable[[], None]]): Ordered export actions.
+        should_cancel (Callable[[], bool]): Cancellation predicate.
+
+    Returns:
+        bool: `True` when all steps run without a cancellation request.
+    """
+
     for step in steps:
         if should_cancel():
             return False
@@ -186,19 +306,27 @@ def run_export_steps(steps, should_cancel):
 
 
 def all_measurements_within_limits(measurements, lower_limit, upper_limit):
+    """Check whether every measurement value falls between inclusive limits."""
+
     series = pd.Series(measurements)
     return series.between(lower_limit, upper_limit, inclusive='both').all()
 
 
 def build_sparse_unique_labels(labels):
+    """Collapse repeated labels while preserving first occurrences for display."""
+
     return _build_sparse_unique_labels(labels)
 
 
 def build_summary_panel_labels(labels, *, grouping_active=False):
+    """Build summary-panel labels and suppress duplicates when grouping is active."""
+
     return _build_summary_panel_labels(labels, grouping_active=grouping_active)
 
 
 def build_trend_plot_payload(header_group, *, grouping_active=False, label_column=None):
+    """Prepare x/y label payload data for summary trend plotting."""
+
     return _build_trend_plot_payload(
         header_group,
         grouping_active=grouping_active,
@@ -207,10 +335,14 @@ def build_trend_plot_payload(header_group, *, grouping_active=False, label_colum
 
 
 def build_histogram_density_curve_payload(measurements, point_count=100):
+    """Build smooth density-curve payload arrays for histogram overlays."""
+
     return _build_histogram_density_curve_payload(measurements, point_count=point_count)
 
 
 def apply_shared_x_axis_label_strategy(ax, labels, **kwargs):
+    """Apply shared x-axis tick labeling policy to a matplotlib axis."""
+
     return _apply_shared_x_axis_label_strategy(ax, labels, **kwargs)
 
 
@@ -243,14 +375,20 @@ def compute_scaled_y_limits(current_limits, scale_factor):
 
 
 def build_summary_sheet_position_plan(base_col):
+    """Build summary-sheet column placement metadata for exports."""
+
     return _build_summary_sheet_position_plan(base_col)
 
 
 def build_summary_image_anchor_plan(base_col):
+    """Resolve image anchor cells for summary chart insertion."""
+
     return _build_summary_image_anchor_plan(base_col)
 
 
 def build_histogram_annotation_specs(average, usl, lsl, y_max):
+    """Build annotation descriptors for histogram mean and spec-limit markers."""
+
     return _build_histogram_annotation_specs(average, usl, lsl, y_max)
 
 
@@ -311,6 +449,8 @@ def resolve_summary_annotation_strategy(*, x_point_count):
 
 
 def build_summary_panel_subtitle_text(summary_stats):
+    """Generate subtitle text displayed under summary panel titles."""
+
     return build_summary_panel_subtitle(summary_stats)
 
 
@@ -748,6 +888,8 @@ def add_violin_annotation_legend(ax, style):
     )
 
 def render_violin(ax, values, labels, *, readability_scale=None, use_dynamic_offsets=True, show_annotation_legend=True):
+    """Render violin plots and optional group-stat annotations on the provided axis."""
+
     if _HAS_SEABORN:
         sns.violinplot(data=values, inner=None, cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
         ax.set_xticks(range(len(labels)))
@@ -767,16 +909,22 @@ def render_violin(ax, values, labels, *, readability_scale=None, use_dynamic_off
 
 
 def render_scatter(ax, data=None, x=None, y=None):
+    """Render a scatter plot from DataFrame columns on a matplotlib axis."""
+
     ax.scatter(data[x], data[y], color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
 def render_scatter_numeric(ax, x_values, y_values):
+    """Render a scatter plot from numeric coordinate arrays."""
+
     normalized_x = _normalize_plot_axis_values(list(x_values))
     normalized_y = _normalize_plot_axis_values(list(y_values))
     ax.scatter(normalized_x, normalized_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
 def render_histogram(ax, header_group):
+    """Render a histogram and density overlays for one measurement group."""
+
     normalized_meas = _normalize_plot_axis_values(list(header_group['MEAS']))
     histogram_values = pd.to_numeric(pd.Series(normalized_meas), errors='coerce').dropna().to_numpy(dtype=float)
     if histogram_values.size == 0:
@@ -894,6 +1042,8 @@ def add_iqr_boxplot_legend(ax):
 
 
 def render_density_line(ax, x, p):
+    """Render a density line over histogram bins."""
+
     if _HAS_SEABORN:
         sns.lineplot(x=x, y=p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4, ax=ax)
     else:
@@ -1061,6 +1211,12 @@ def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
 
 
 class ExportDataThread(QThread):
+    """Background worker thread that executes the full export pipeline.
+
+    The thread queries report data, applies grouping/filters, writes Excel sheets,
+    renders charts, and emits UI progress, status, and completion signals.
+    """
+
     PROGRESS_STAGE_RANGES = {
         'preparing_query': (0, 10),
         'filtered_sheet_write': (10, 30),
@@ -1386,6 +1542,17 @@ class ExportDataThread(QThread):
 
     @property
     def prepared_grouping_df(self):
+        """Handle `prepared_grouping_df` for `ExportDataThread`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         if self._prepared_grouping_df is None:
             self._prepared_grouping_df = self._prepare_grouping_df()
         return self._prepared_grouping_df
@@ -1506,6 +1673,17 @@ class ExportDataThread(QThread):
         return _resolve_group_merge_keys(header_group, grouping_df)
 
     def stop_exporting(self):
+        """Handle `stop_exporting` for `ExportDataThread`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.export_canceled = True
 
     def _check_canceled(self):
@@ -1519,6 +1697,18 @@ class ExportDataThread(QThread):
         return False
 
     def run_export_pipeline(self, excel_writer):
+        """Handle `run_export_pipeline` for `ExportDataThread`.
+
+        Args:
+            excel_writer (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         return run_export_steps(
             [
                 lambda: (
@@ -1539,6 +1729,17 @@ class ExportDataThread(QThread):
         )
 
     def get_export_backend(self):
+        """Handle `get_export_backend` for `ExportDataThread`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         target_to_backend = {
             'excel_xlsx': ExcelExportBackend(),
             'google_sheets_drive_convert': ExcelExportBackend(),
@@ -1602,6 +1803,17 @@ class ExportDataThread(QThread):
         )
 
     def run(self):
+        """Handle `run` for `ExportDataThread`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if self._check_canceled():
                 return
@@ -1754,6 +1966,18 @@ class ExportDataThread(QThread):
             self._db_connection = None
 
     def add_measurements_horizontal_sheet(self, excel_writer):
+        """Handle `add_measurements_horizontal_sheet` for `ExportDataThread`.
+
+        Args:
+            excel_writer (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             partition_header_counts = fetch_partition_header_counts(
                 self.db_file,
@@ -1931,6 +2155,18 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
 
     def export_filtered_data(self, excel_writer):
+        """Handle `export_filtered_data` for `ExportDataThread`.
+
+        Args:
+            excel_writer (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if self._check_canceled():
                 return
@@ -1940,6 +2176,20 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
 
     def write_data_to_excel(self, df, table_name, excel_writer):
+        """Handle `write_data_to_excel` for `ExportDataThread`.
+
+        Args:
+            df (object): Method input value.
+            table_name (object): Method input value.
+            excel_writer (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if self._check_canceled():
                 return
@@ -1966,6 +2216,18 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
 
     def calculate_column_width(self, data):
+        """Handle `calculate_column_width` for `ExportDataThread`.
+
+        Args:
+            data (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if data.empty:
                 return 12  # Return a default width 12 if the data is empty
@@ -1979,6 +2241,21 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
     
     def summary_sheet_fill(self, summary_worksheet, header, header_group, col):
+        """Handle `summary_sheet_fill` for `ExportDataThread`.
+
+        Args:
+            summary_worksheet (object): Method input value.
+            header (object): Method input value.
+            header_group (object): Method input value.
+            col (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if self._check_canceled():
                 return
@@ -2387,6 +2664,18 @@ class ExportDataThread(QThread):
             self._summary_sheet_failed = True
 
     def log_and_exit(self, exception):
+        """Handle `log_and_exit` for `ExportDataThread`.
+
+        Args:
+            exception (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         caller = inspect.stack()[1].function
         context = f"export operation ({caller})"
         self._log_export_stage(

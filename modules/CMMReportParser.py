@@ -1,3 +1,9 @@
+"""Parse CMM report files and persist normalized measurements to SQLite.
+
+The parser consumes raw report text, derives metadata from filenames, and writes
+rows used by downstream grouping and export workflows.
+"""
+
 import importlib.metadata
 import importlib.util
 import logging
@@ -82,6 +88,18 @@ class CMMReportParser:
         # self.open_database_and_check_filename()
 
     def get_file_path_from_filename(self, pdf_file_path: str):
+        """Handle `get_file_path_from_filename` for `CMMReportParser`.
+
+        Args:
+            pdf_file_path (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Retrieves the file path from the given PDF file path.
@@ -95,6 +113,18 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def get_file_name_from_filename(self, pdf_file_path: str):
+        """Handle `get_file_name_from_filename` for `CMMReportParser`.
+
+        Args:
+            pdf_file_path (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Retrieves the file name from the given PDF file path.
@@ -108,6 +138,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def get_date_from_filename(self):
+        """Handle `get_date_from_filename` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Retrieves the date from the filename using regular expressions.
@@ -124,6 +165,17 @@ class CMMReportParser:
             self.log_and_exit(e)
     
     def get_sample_number_from_file(self):
+        """Handle `get_sample_number_from_file` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Retrieves the sample number from the filename using regular expressions.
@@ -140,6 +192,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def get_reference_from_filename(self):
+        """Handle `get_reference_from_filename` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Retrieves the reference from the filename using regular expressions.
@@ -155,6 +218,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def open_database_and_check_filename(self):
+        """Handle `open_database_and_check_filename` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Checks if the opened file is already present in the database and performs appropriate actions.
@@ -207,6 +281,17 @@ class CMMReportParser:
         return fitz
 
     def cmm_open(self):
+        """Handle `cmm_open` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Method to open the CMM PDF file and store the text inside the pdf_raw_text attribute.
@@ -223,6 +308,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def show_raw_text(self):
+        """Handle `show_raw_text` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Method to print the raw text inside the PDF.
@@ -234,6 +330,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def show_blocks_text(self):
+        """Handle `show_blocks_text` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Method to print the pdf_blocks_text - blocks of measurements.
@@ -249,6 +356,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def show_blocks_text2(self):
+        """Handle `show_blocks_text2` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Method to print the pdf_blocks_text - blocks of measurements.
@@ -263,6 +381,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def split_text_to_blocks(self):
+        """Handle `split_text_to_blocks` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """Method to split raw text from pdf to blocks - split by measurements"""
             parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)
@@ -272,12 +401,34 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def add_tolerances(self):
+        """Handle `add_tolerances` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.pdf_blocks_text = add_tolerances_to_blocks(self.pdf_blocks_text)
         except Exception as e:
             self.log_and_exit(e)
 
     def to_dict(self):
+        """Handle `to_dict` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Converts the parsed CMM report data into a dictionary.
@@ -303,6 +454,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def to_df(self):
+        """Handle `to_df` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """This method converts blocks to dataframe"""
             df_list = []
@@ -333,6 +495,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def to_sqlite(self):
+        """Handle `to_sqlite` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """
             Creates tables (if necessary) and inserts measurements and reports data into an SQLite database.
@@ -431,6 +604,17 @@ class CMMReportParser:
             self.log_and_exit(e)
 
     def show_df(self):
+        """Handle `show_df` for `CMMReportParser`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             """Prints the dataframe with measurements"""
             logger.debug("%s", self.df)
@@ -438,4 +622,16 @@ class CMMReportParser:
             self.log_and_exit(e)
             
     def log_and_exit(self, exception):
+        """Handle `log_and_exit` for `CMMReportParser`.
+
+        Args:
+            exception (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         CustomLogger(exception, reraise=False)
