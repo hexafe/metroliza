@@ -113,6 +113,9 @@ logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 
+# Query wrappers keep the thread-facing import path stable while delegating
+# implementation to `export_query_service`, allowing tests to patch this module
+# without importing lower-level services directly.
 def build_export_dataframe(data, column_names):
     """Build an export DataFrame from raw query rows and column metadata.
 
@@ -162,6 +165,8 @@ def build_measurement_export_dataframe(df):
     return _build_measurement_export_dataframe(df)
 
 
+# Chart wrappers preserve existing call signatures used throughout this file and
+# by tests, while centralizing chart-spec logic in `export_chart_writer`.
 def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
     """Build an Excel chart range string for a worksheet column slice.
 
@@ -275,6 +280,8 @@ def build_horizontal_limit_line_specs(usl, lsl, **style):
     return _build_horizontal_limit_line_specs(usl, lsl, **style)
 
 
+# Worksheet-plan/write wrappers maintain a thin compatibility layer around
+# `export_sheet_writer` so callers keep one orchestration module API surface.
 def build_measurement_write_bundle(header, header_group, base_col):
     """Assemble the worksheet write bundle for one measurement group."""
 
@@ -293,6 +300,11 @@ def run_export_steps(steps, should_cancel):
     Args:
         steps (Sequence[Callable[[], None]]): Ordered export actions.
         should_cancel (Callable[[], bool]): Cancellation predicate.
+
+    Ordering Assumptions:
+        `steps` must already be topologically ordered. This helper intentionally
+        does not reorder or retry work because later stages can depend on prior
+        worksheet mutations.
 
     Returns:
         bool: `True` when all steps run without a cancellation request.
@@ -1726,6 +1738,8 @@ class ExportDataThread(QThread):
             May update UI state, database rows, or in-memory export context.
         """
 
+        # Stage order is deliberate: measurement sheets create workbook context
+        # consumed by filtered export and progress reporting.
         return run_export_steps(
             [
                 lambda: (
@@ -2210,20 +2224,14 @@ class ExportDataThread(QThread):
         try:
             if self._check_canceled():
                 return
-            # Write the DataFrame to the Excel file
             backend = self._active_backend or self.get_export_backend()
             safe_table_name = unique_sheet_name(table_name, backend.list_sheet_names(excel_writer))
             backend.write_dataframe(excel_writer, df, safe_table_name)
             self._record_exported_sheet_name(safe_table_name)
             worksheet = backend.get_worksheet(excel_writer, safe_table_name)
 
-            # Apply autofilter to enable filtering
             worksheet.autofilter(0, 0, df.shape[0], df.shape[1] - 1)
-
-            # Freeze first row
             worksheet.freeze_panes(1, 0)
-
-            # Adjust the column widths based on the data
             for i, column in enumerate(df.columns):
                 if self._check_canceled():
                     return
