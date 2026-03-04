@@ -226,7 +226,11 @@ class ExcelExportBackend:
 
     def create_writer(self, excel_file: str) -> Any:
         """Create an xlsxwriter-backed pandas writer for `excel_file`."""
-        return pd.ExcelWriter(excel_file, engine="xlsxwriter")
+        return pd.ExcelWriter(
+            excel_file,
+            engine="xlsxwriter",
+            engine_kwargs={"options": {"nan_inf_to_errors": True}},
+        )
 
     def close_writer(self, writer: Any) -> None:
         """Close the active writer and flush workbook contents to disk."""

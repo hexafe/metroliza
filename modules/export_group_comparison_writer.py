@@ -11,6 +11,7 @@ Fallback behavior:
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
@@ -285,6 +286,17 @@ def _write_table(worksheet, row, title, rows):
     return row + SECTION_GAP
 
 
+def _sanitize_matrix_value(value):
+    if pd.isna(value):
+        return None
+
+    if pd.api.types.is_number(value) and not isinstance(value, bool):
+        if not np.isfinite(value):
+            return None
+
+    return value
+
+
 def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type):
     worksheet.write(row, 0, title)
     row += 1
@@ -301,7 +313,7 @@ def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type):
     for group, values in matrix_df.iterrows():
         worksheet.write(row, 0, group)
         for col, value in enumerate(values.tolist(), start=1):
-            worksheet.write(row, col, value)
+            worksheet.write(row, col, _sanitize_matrix_value(value))
         row += 1
 
     first_col = 1

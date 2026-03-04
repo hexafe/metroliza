@@ -5,6 +5,7 @@ import pandas as pd
 from modules.export_group_comparison_writer import (
     _build_insights,
     _build_pairwise_group_matrices,
+    _write_matrix,
     prepare_group_comparison_payload,
     write_group_comparison_sheet,
 )
@@ -84,6 +85,41 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(effect_rules[0][4]['value'], 0.2)
         self.assertEqual(effect_rules[1][4]['maximum'], 0.5)
         self.assertEqual(effect_rules[2][4]['value'], 0.5)
+
+
+    def test_write_matrix_sanitizes_non_finite_values(self):
+        matrix = pd.DataFrame(
+            [[0.25, float("nan")], [float("inf"), float("-inf")]],
+            index=["A", "B"],
+            columns=["A", "B"],
+        )
+        worksheet = FakeWorksheet()
+
+        end_row = _write_matrix(worksheet, 0, 'Metric: M1', matrix, matrix_type='effect')
+
+        writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
+        self.assertEqual(writes_by_cell[(2, 1)], 0.25)
+        self.assertIsNone(writes_by_cell[(2, 2)])
+        self.assertIsNone(writes_by_cell[(3, 1)])
+        self.assertIsNone(writes_by_cell[(3, 2)])
+        self.assertEqual(end_row, 6)
+        self.assertEqual(len(worksheet.conditional_formats), 3)
+
+    def test_write_matrix_with_non_finite_values_is_deterministic(self):
+        matrix = pd.DataFrame(
+            [[0.5, float("nan")], [float("inf"), float("-inf")]],
+            index=["A", "B"],
+            columns=["A", "B"],
+        )
+
+        worksheet_first = FakeWorksheet()
+        worksheet_second = FakeWorksheet()
+
+        _write_matrix(worksheet_first, 0, 'Metric: M1', matrix, matrix_type='significance')
+        _write_matrix(worksheet_second, 0, 'Metric: M1', matrix, matrix_type='significance')
+
+        self.assertEqual(worksheet_first.writes, worksheet_second.writes)
+        self.assertEqual(worksheet_first.conditional_formats, worksheet_second.conditional_formats)
 
     def test_pairwise_matrix_construction_uses_adjusted_p_and_absolute_effect(self):
         pairwise_df = pd.DataFrame(
