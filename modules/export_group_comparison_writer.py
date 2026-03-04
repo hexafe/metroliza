@@ -8,6 +8,8 @@ from itertools import combinations
 import pandas as pd
 from scipy.stats import ttest_ind
 
+from modules.group_stats_tests import select_group_stat_test
+
 
 SECTION_GAP = 2
 
@@ -57,6 +59,7 @@ def prepare_group_comparison_payload(grouped_df):
     working = working.dropna(subset=['MEAS'])
 
     pairwise_rows = []
+    overall_test_rows = []
     sig_map = {}
     effect_map = {}
 
@@ -65,6 +68,21 @@ def prepare_group_comparison_payload(grouped_df):
             group_name: group_values['MEAS'].tolist()
             for group_name, group_values in metric_frame.groupby('GROUP', sort=False)
         }
+
+        selector_result = select_group_stat_test(
+            labels=list(group_series.keys()),
+            grouped_values=list(group_series.values()),
+        )
+        overall_test_rows.append(
+            {
+                'Metric': metric_key,
+                'Selected test': selector_result.get('test_name') or 'N/A',
+                'p-value': selector_result.get('p_value'),
+                'Sample sizes': ', '.join(f"{key}:{value}" for key, value in selector_result.get('sample_sizes', {}).items()),
+                'Assumptions / warnings': '; '.join(selector_result.get('warnings', [])) or 'None',
+            }
+        )
+
         for left, right in combinations(group_series.keys(), 2):
             sample_left = group_series[left]
             sample_right = group_series[right]
@@ -113,6 +131,7 @@ def prepare_group_comparison_payload(grouped_df):
             ('Large effects (|d| >= 0.8)', large_effect_count),
         ],
         'pairwise_rows': pairwise_rows,
+        'overall_test_rows': overall_test_rows,
         'significance_heatmap': pd.DataFrame(sig_map).T,
         'effect_heatmap': pd.DataFrame(effect_map).T,
         'insights': insights,
@@ -191,6 +210,7 @@ def write_group_comparison_sheet(worksheet, payload):
 
     row = _write_kv_section(worksheet, row, 'Metadata', payload.get('metadata', []))
     row = _write_kv_section(worksheet, row, 'Overall Test Summary', payload.get('overall_summary', []))
+    row = _write_table(worksheet, row, 'Recommended Statistical Tests', payload.get('overall_test_rows', []))
     row = _write_table(worksheet, row, 'Pairwise Tables', payload.get('pairwise_rows', []))
     row = _write_heatmap(worksheet, row, 'Significance Heatmap (p-values)', payload.get('significance_heatmap', pd.DataFrame()), color='#F4B183')
     row = _write_heatmap(worksheet, row, 'Effect Size Heatmap (|d|)', payload.get('effect_heatmap', pd.DataFrame()).abs(), color='#9DC3E6')
