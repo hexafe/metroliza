@@ -194,11 +194,13 @@ def compute_metric_pairwise_stats(
             effect_ci = None
             if config.include_effect_size_ci and effect_size is not None:
                 rng = np.random.default_rng(42)
-                effect_fn = (
-                    lambda sampled: _cliffs_delta(sampled[0], sampled[1])
-                    if is_non_parametric
-                    else _cohen_d(sampled[0], sampled[1])
-                )
+                if is_non_parametric:
+                    def effect_fn(sampled: list[np.ndarray]) -> float | None:
+                        return _cliffs_delta(sampled[0], sampled[1])
+                else:
+                    def effect_fn(sampled: list[np.ndarray]) -> float | None:
+                        return _cohen_d(sampled[0], sampled[1])
+
                 effect_ci = _bootstrap_ci(
                     rng=rng,
                     sample_builder=lambda: [
