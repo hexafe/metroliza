@@ -283,7 +283,8 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                     text_block.append(header_comment)
 
             else:
-                if line in MEASUREMENT_LINE_MAP:
+                tokens = line.split()
+                if tokens and tokens[0] in MEASUREMENT_LINE_MAP:
                     candidate_lines = raw_lines[index:]
                     parsed_tokens, raw_lines_consumed = extract_measurement_tokens_and_raw_lines_consumed(candidate_lines)
 

@@ -100,3 +100,42 @@ def test_first_line_comment_parsing_is_independent_of_last_line(first_line_comme
 
     assert parsed_with_trailing_comment[0][0] == [["FIRST HEADER"]]
     assert parsed_with_trailing_numeric_triplet[0][0] == [["FIRST HEADER"]]
+
+
+def test_measurement_rows_parse_for_single_token_start_format():
+    raw_lines = [
+        "#SINGLE TOKEN",
+        "DIM",
+        "X",
+        "10",
+        "0.2",
+        "-0.2",
+        "10.1",
+        "0.1",
+        "0",
+        "Y",
+        "5",
+        "0.1",
+        "-0.1",
+        "5.05",
+        "0.05",
+        "0",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert any([line[0] for line in block[1]] == ["X", "Y"] for block in parsed)
+
+
+def test_measurement_rows_parse_for_inline_code_and_numbers_format():
+    raw_lines = [
+        "#INLINE TOKENS",
+        "DIM",
+        "X 10 0.2 -0.2 10.1 0.1 0",
+        "Y 5 0.1 -0.1 5.05 0.05 0",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert any([line[0] for line in block[1]] == ["X", "Y"] for block in parsed)
