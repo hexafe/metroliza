@@ -46,6 +46,28 @@ Dependency files:
 
 Parity between native and Python backends is enforced through fixture-based tests in `tests/test_cmm_parser_parity.py`.
 
+## Group Comparison export sheet
+
+Excel exports now include a **Group Comparison** worksheet that consolidates:
+
+- Metadata and overall test summary counts.
+- Recommended per-metric omnibus test selection (assumption-driven).
+- Pairwise comparison table with multiple-comparison correction (default: **Holm**).
+- Adjusted p-value significance heatmaps and absolute effect-size heatmaps.
+- Deterministic text insights for central tendency, significant/non-significant pairs, and sample-size warnings.
+
+Interpretation guidance:
+
+- Use **adjusted p-values** (not raw p-values) for pairwise significance decisions.
+- Heatmap significance colors are thresholded at 0.05 and 0.01.
+- Effect-size magnitudes are shown as absolute values for ranking practical impact.
+- Effect sizes can indicate practical importance even when p-values are non-significant (e.g., small or imbalanced samples), so read both together.
+
+Effect size caveats:
+
+- Two-group parametric paths report Cohen's *d*; non-parametric paths report Cliff's delta.
+- Multi-group rows use an omnibus effect (eta-squared by default), so pairwise practical interpretation should consider group imbalance and distribution shape.
+
 ## Documentation map
 
 - Release highlights: [`CHANGELOG.md`](CHANGELOG.md)

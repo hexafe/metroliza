@@ -1028,6 +1028,24 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(iqr_labels, ['All'])
         self.assertEqual(iqr_values, [[1.0, 2.0, 3.0]])
 
+    def test_grouped_summary_scatter_payload_appends_group_sample_sizes_to_labels(self):
+        import pandas as pd
+
+        header_group = pd.DataFrame(
+            {
+                'GROUP': ['A', 'A', 'B', 'B', 'B'],
+                'MEAS': [1.0, 2.0, 5.0, 5.5, 6.0],
+            }
+        )
+
+        _x, _y, labels = ExportDataThread._build_grouped_summary_scatter_payload(
+            header_group,
+            'GROUP',
+            grouping_active=True,
+        )
+
+        self.assertEqual(labels, ['A (n=2)', 'B (n=3)'])
+
     def test_build_iqr_plot_payload_keeps_group_labels_dense_when_grouping_active(self):
         import pandas as pd
 
@@ -1153,7 +1171,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         finally:
             export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
 
-        self.assertEqual(captured['labels'], ['A', 'B', 'C'])
+        self.assertEqual(captured['labels'], ['A (n=2)', 'B (n=2)', 'C (n=1)'])
         self.assertEqual(captured['positions'], [0.0, 1.0, 2.0])
 
     def test_summary_sheet_distribution_scatter_fallback_non_grouped_sample_number_labels(self):

@@ -84,6 +84,33 @@ class TestGroupStatsTests(unittest.TestCase):
 
         self.assertEqual(result['test_name'], 'Kruskal-Wallis')
 
+
+    def test_assumption_driven_selection_prefers_non_parametric_when_normality_skipped_or_failed(self):
+        labels = ['A', 'B']
+        values = [
+            [1.0, 1.0, 1.0, 1.0, 1.0],
+            [2.0, 2.0, 2.0, 2.0, 2.0],
+        ]
+
+        result = select_group_stat_test(labels, values)
+
+        self.assertEqual(result['test_name'], 'Mann-Whitney U')
+        self.assertIn('contains_constant_group', result['warnings'])
+
+    def test_edge_case_with_empty_and_nan_groups_returns_no_test(self):
+        labels = ['A', 'B']
+        values = [
+            [float('nan'), None, 'bad'],
+            [1.0, float('nan')],
+        ]
+
+        result = select_group_stat_test(labels, values)
+
+        self.assertIsNone(result['test_name'])
+        self.assertIn('fewer_than_two_non_empty_groups', result['warnings'])
+        self.assertEqual(result['sample_sizes']['A'], 0)
+        self.assertEqual(result['sample_sizes']['B'], 1)
+
     def test_edge_cases_small_n_constant_and_nan_groups_report_warnings(self):
         labels = ['A', 'B', 'C']
         values = [

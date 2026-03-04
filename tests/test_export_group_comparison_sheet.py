@@ -147,6 +147,63 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('Small-sample warning (n < 5):', insights[3])
         self.assertIn('Assumption/test-choice notes:', insights[4])
 
+
+
+    def test_prepare_payload_counts_samples_after_nan_filtering(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 5,
+                'MEAS': [10.0, None, float('nan'), 'bad', 11.0],
+                'GROUP': ['A', 'A', 'A', 'B', 'B'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        self.assertIn(('Rows', 2), payload['metadata'])
+        pairwise_row = payload['pairwise_rows'][0]
+        self.assertEqual(pairwise_row['n(A)'], 1)
+        self.assertEqual(pairwise_row['n(B)'], 1)
+
+
+    def test_integration_workbook_contains_group_comparison_sheet_and_headers(self):
+        import tempfile
+        import zipfile
+
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 6,
+                'MEAS': [10.0, 10.5, 11.1, 11.4, 12.0, 12.2],
+                'GROUP': ['A', 'A', 'B', 'B', 'C', 'C'],
+            }
+        )
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workbook_path = f"{tmpdir}/group_comparison.xlsx"
+            import xlsxwriter
+            workbook = xlsxwriter.Workbook(workbook_path)
+            worksheet = workbook.add_worksheet('Group Comparison')
+            write_group_comparison_sheet(worksheet, payload)
+            workbook.close()
+
+            with zipfile.ZipFile(workbook_path, 'r') as archive:
+                workbook_xml = archive.read('xl/workbook.xml').decode('utf-8')
+                shared_strings = archive.read('xl/sharedStrings.xml').decode('utf-8')
+
+        self.assertIn('Group Comparison', workbook_xml)
+        for title in [
+            'How to interpret these results',
+            'Metadata',
+            'Overall Test Summary',
+            'Recommended Statistical Tests',
+            'Pairwise Tables',
+            'Significance Matrix (adjusted p-values)',
+            'Effect Size Matrix (|d|)',
+            'Insights',
+        ]:
+            self.assertIn(title, shared_strings)
+
     def test_writer_handles_empty_payload(self):
         payload = prepare_group_comparison_payload(pd.DataFrame())
         worksheet = FakeWorksheet()

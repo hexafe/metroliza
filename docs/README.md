@@ -4,6 +4,7 @@ This directory contains active operational and maintenance documentation.
 
 ## Active docs
 
+- Group Comparison worksheet interpretation and statistical caveats: see root `README.md` section "Group Comparison export sheet".
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.

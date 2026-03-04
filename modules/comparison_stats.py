@@ -1,4 +1,15 @@
-"""Pairwise comparison statistics for grouped metric samples."""
+"""Pairwise comparison statistics for grouped metric samples.
+
+Statistical rationale:
+    - Reuses assumption checks from :mod:`modules.group_stats_tests` to align
+      pairwise test choice with omnibus selection (parametric vs non-parametric).
+    - Applies multiplicity correction (Holm default) before significance flags.
+    - Reports practical effect magnitudes to complement p-values.
+
+Fallback behavior:
+    - Invalid/insufficient groups propagate ``None`` p-values/effects rather than
+      raising, allowing export pipelines to keep deterministic table shape.
+"""
 
 from __future__ import annotations
 
@@ -143,6 +154,17 @@ def compute_metric_pairwise_stats(
     *,
     config: ComparisonStatsConfig | None = None,
 ) -> list[dict[str, Any]]:
+    """Compute pairwise rows with aligned test selection and p-value correction.
+
+    Rationale:
+        Uses one assumption-driven decision per metric, then applies it
+        consistently across all pairs to reduce researcher degrees of freedom.
+
+    Fallback behavior:
+        Returns rows with ``None`` where tests/effects cannot be computed (for
+        example n < 2), and still emits adjusted-p placeholders for stable
+        downstream rendering.
+    """
     config = config or ComparisonStatsConfig()
 
     labels = list(grouped_values.keys())
