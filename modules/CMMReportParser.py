@@ -321,7 +321,7 @@ class CMMReportParser:
                 columns = ['AX', 'NOM', '+TOL', '-TOL', 'BONUS', 'MEAS', 'DEV', 'OUTTOL']
                 df = pandas.DataFrame(block[1], columns=columns)
                 df['Header'] = header
-                df['Reference'] = self.pdf_references
+                df['Reference'] = self.pdf_reference
                 df['File location'] = self.pdf_file_path
                 df['File name'] = self.pdf_file_name
                 df['Date'] = self.pdf_date

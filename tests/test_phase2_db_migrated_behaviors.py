@@ -73,6 +73,24 @@ class TestPhase2DbMigratedBehaviors(unittest.TestCase):
             self.assertEqual(reports_count, 1)
             self.assertEqual(measurements_count, 1)
 
+
+    def test_to_df_uses_pdf_reference_for_reference_column(self):
+        parser = CMMReportParser('REF01_2024-01-02_123.pdf', ':memory:')
+        parser.pdf_reference = 'REF_CUSTOM'
+        parser.pdf_blocks_text = [
+            (
+                [['HEADER A']],
+                [
+                    ['1', 10.0, 0.1, -0.1, 0.0, 10.05, 0.05, 0.0],
+                ],
+            )
+        ]
+
+        parser.to_df()
+
+        self.assertFalse(parser.df.empty)
+        self.assertTrue((parser.df['Reference'] == 'REF_CUSTOM').all())
+
     def test_modifydb_update_batch_rolls_back_on_failure(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'modify.db')
