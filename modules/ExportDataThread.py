@@ -1615,6 +1615,23 @@ class ExportDataThread(QThread):
 
         return x_values, y_numeric, strategy_labels
 
+    @staticmethod
+    def _build_grouped_summary_scatter_payload(header_group, x_column, *, grouping_active=False):
+        scatter_frame = header_group.dropna(subset=['MEAS', x_column]).copy()
+        if scatter_frame.empty:
+            return np.array([]), np.array([]), []
+
+        grouped_measurements = scatter_frame.groupby(x_column, sort=False)['MEAS'].mean()
+        if grouped_measurements.empty:
+            return np.array([]), np.array([]), []
+
+        raw_labels = list(grouped_measurements.index)
+        strategy_labels = build_summary_panel_labels(raw_labels, grouping_active=grouping_active)
+        normalized_y = _normalize_plot_axis_values(list(grouped_measurements.values))
+        y_numeric = pd.to_numeric(pd.Series(normalized_y), errors='coerce').to_numpy(dtype=float)
+        x_values = np.arange(len(grouped_measurements), dtype=float)
+        return x_values, y_numeric, strategy_labels
+
     def _sort_header_group(self, header_group):
         sort_mode = self.selected_sorting_parameter.strip().lower()
         sorted_group = header_group.copy()
@@ -2416,8 +2433,9 @@ class ExportDataThread(QThread):
             label_positions = None
             x_values = None
             y_values = None
+            distribution_x_axis_label = 'Group' if grouping_applied else 'Sample #'
             if not can_render_violin:
-                x_values, y_values, distribution_labels = self._build_summary_scatter_payload(
+                x_values, y_values, distribution_labels = self._build_grouped_summary_scatter_payload(
                     sampled_distribution_group,
                     scatter_key,
                     grouping_active=grouping_applied,
@@ -2468,7 +2486,7 @@ class ExportDataThread(QThread):
                     current_y_limits = ax.get_ylim()
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
-                    ax.set_xlabel('Sample #')
+                    ax.set_xlabel(distribution_x_axis_label)
                     ax.set_ylabel('Measurement')
                     ax.set_title(f'{header}')
                     plt.subplots_adjust(right=0.8)
