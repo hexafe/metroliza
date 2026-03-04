@@ -47,6 +47,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('Group Comparison - Interpretation Guide', titles)
         self.assertIn('Metadata', titles)
         self.assertIn('Overall Test Summary', titles)
+        self.assertIn('Recommended Statistical Tests', titles)
         self.assertIn('Pairwise Tables', titles)
         self.assertIn('Significance Heatmap (p-values)', titles)
         self.assertIn('Effect Size Heatmap (|d|)', titles)
