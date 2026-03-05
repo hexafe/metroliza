@@ -433,11 +433,13 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             progress_values = []
             thread.get_export_backend = lambda: _BackendRunner()
+            thread.add_measurements_horizontal_sheet = lambda *_args, **_kwargs: None
             thread.export_filtered_data = lambda *_: None
             thread.update_progress.emit = lambda value: progress_values.append(value)
             thread.update_label.emit = lambda *_: None
             thread.finished.emit = lambda: None
             thread._active_backend = fake_backend
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
 
             measurement_df = self._build_multi_header_measurement_dataframe()
             module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
@@ -490,6 +492,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_cache = object()
             thread._export_df_column_order = ()
             thread._active_backend = self._build_fake_measurement_backend()
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
 
             progress_values = []
             cancellation_state = {'triggered': False}
@@ -558,6 +561,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_cache = object()
             thread._export_df_column_order = ()
             thread._active_backend = self._build_fake_measurement_backend()
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
 
             labels = []
             counter = {'value': 0.0}
@@ -650,6 +654,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_column_order = ()
             workbook = _RecordingWorkbook()
             thread._active_backend = _Backend(workbook)
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
             thread.update_progress.emit = lambda *_: None
             thread.update_label.emit = lambda *_: None
 
@@ -735,6 +740,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_column_order = ()
             workbook = _RecordingWorkbook()
             thread._active_backend = _Backend(workbook)
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
             thread.update_progress.emit = lambda *_: None
             thread.update_label.emit = lambda *_: None
 
@@ -1425,6 +1431,56 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertTrue(completed)
             self.assertEqual(calls, ['measurements', 'filtered'])
             self.assertTrue(os.path.exists(out_file))
+
+
+    def test_run_aborts_pipeline_on_fatal_local_measurement_export_error(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, runner_thread):
+                    return runner_thread.run_export_pipeline(excel_writer=object())
+
+            thread.get_export_backend = lambda: _Backend()
+
+            calls = []
+            thread.export_filtered_data = lambda *_args, **_kwargs: calls.append('filtered')
+
+            emitted = []
+            errors = []
+            thread.update_label.emit = lambda text: emitted.append(text)
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: calls.append('finished')
+            thread.error_occurred.emit = lambda message: errors.append(message)
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+            previous_partition_counts = module.fetch_partition_header_counts
+            upload_called = {'value': False}
+            module.upload_and_convert_workbook = lambda *_args, **_kwargs: upload_called.__setitem__('value', True)
+            module.fetch_partition_header_counts = (
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('fatal measurement step failure'))
+            )
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+                module.fetch_partition_header_counts = previous_partition_counts
+
+            self.assertFalse(upload_called['value'])
+            self.assertNotIn('filtered', calls)
+            self.assertNotIn('finished', calls)
+            self.assertFalse(any('Export completed successfully.' in label for label in emitted))
+            self.assertTrue(any('Export failed during local workbook generation.' in label for label in emitted))
+            self.assertTrue(errors)
+            self.assertTrue(any('add_measurements_horizontal_sheet' in message for message in errors))
 
     def test_google_target_emits_canonical_stage_sequence_on_success(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
