@@ -59,7 +59,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(worksheet.frozen, (1, 0))
 
     def test_writer_registers_conditional_format_thresholds(self):
-        matrix = pd.DataFrame([[0.0, 0.03], [0.03, 0.0]], index=['A', 'B'], columns=['A', 'B'])
+        matrix = pd.DataFrame([[float('nan'), 0.03], [0.03, float('nan')]], index=['A', 'B'], columns=['A', 'B'])
         payload = {
             'metadata': [],
             'overall_summary': [],
@@ -140,9 +140,28 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         effect = effect_matrices['DIA - X']
         self.assertEqual(sig.loc['A', 'B'], 0.012)
         self.assertEqual(sig.loc['B', 'A'], 0.012)
-        self.assertEqual(sig.loc['A', 'A'], 0.0)
+        self.assertTrue(pd.isna(sig.loc['A', 'A']))
+        self.assertTrue(pd.isna(sig.loc['B', 'B']))
         self.assertEqual(effect.loc['A', 'B'], 0.6)
         self.assertEqual(effect.loc['B', 'A'], 0.6)
+        self.assertTrue(pd.isna(effect.loc['A', 'A']))
+        self.assertTrue(pd.isna(effect.loc['B', 'B']))
+
+    def test_write_matrix_renders_nan_diagonal_as_blank_cells(self):
+        matrix = pd.DataFrame(
+            [[float('nan'), 0.2], [0.2, float('nan')]],
+            index=['A', 'B'],
+            columns=['A', 'B'],
+        )
+        worksheet = FakeWorksheet()
+
+        _write_matrix(worksheet, 0, 'Metric: M1', matrix, matrix_type='significance')
+
+        writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
+        self.assertIsNone(writes_by_cell[(2, 1)])
+        self.assertEqual(writes_by_cell[(2, 2)], 0.2)
+        self.assertEqual(writes_by_cell[(3, 1)], 0.2)
+        self.assertIsNone(writes_by_cell[(3, 2)])
 
     def test_insights_are_deterministic_and_cover_scaffold_topics(self):
         working = pd.DataFrame(

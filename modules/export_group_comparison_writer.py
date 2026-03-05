@@ -43,8 +43,8 @@ def _build_pairwise_group_matrices(pairwise_df):
         effect_df = pd.DataFrame(index=groups, columns=groups, dtype=float)
 
         for group in groups:
-            sig_df.loc[group, group] = 0.0
-            effect_df.loc[group, group] = 0.0
+            sig_df.loc[group, group] = np.nan
+            effect_df.loc[group, group] = np.nan
 
         for _, comparison in metric_rows.iterrows():
             group_a = comparison['Group A']
