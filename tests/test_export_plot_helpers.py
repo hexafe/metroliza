@@ -460,7 +460,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         for normality_text, status, palette_bg in scenarios:
             fig, ax = plt.subplots(figsize=(4, 3))
-            table_data = [('Normality', normality_text)]
+            table_data = [('Normality', normality_text), ('', ''), ('', '')]
             ax_table = ax.table(cellText=table_data, colLabels=['Statistic', 'Value'], cellLoc='center')
 
             style_histogram_stats_table(
@@ -473,8 +473,16 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ax_table.get_celld()[(1, 0)].get_facecolor(),
                 matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE[palette_bg]),
             )
-            self.assertFalse(ax_table.get_celld()[(1, 1)].get_visible())
-            self.assertTrue(ax_table.get_celld()[(1, 0)].get_text().get_text().startswith('Normality:'))
+            self.assertEqual(
+                ax_table.get_celld()[(1, 1)].get_facecolor(),
+                matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE[palette_bg]),
+            )
+            self.assertFalse(ax_table.get_celld()[(2, 0)].get_visible())
+            self.assertFalse(ax_table.get_celld()[(2, 1)].get_visible())
+            self.assertFalse(ax_table.get_celld()[(3, 0)].get_visible())
+            self.assertFalse(ax_table.get_celld()[(3, 1)].get_visible())
+            self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), 'Normality')
+            self.assertIn(ax_table.get_celld()[(1, 1)].get_text().get_text(), {'Normal', 'Non-normal', 'Not sure'})
             plt.close(fig)
 
 

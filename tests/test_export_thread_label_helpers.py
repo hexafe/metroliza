@@ -51,6 +51,7 @@ from modules.ExportDataThread import (  # noqa: E402
     build_sheet_series_range,
     build_summary_sheet_position_plan,
     build_histogram_table_data,
+    build_histogram_table_render_data,
     build_sparse_unique_labels,
     build_summary_panel_labels,
     build_trend_plot_payload,
@@ -128,6 +129,14 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(table[6], ('Cpk', 1.43))
         self.assertEqual(table[-2], ('NOK %', '8.33%'))
         self.assertEqual(table[-1], ('Normality', 'Unknown'))
+
+
+    def test_build_histogram_table_render_data_inserts_two_rows_after_normality(self):
+        table_data = [('Min', 1.0), ('Normality', 'Unknown')]
+
+        render_data = build_histogram_table_render_data(table_data)
+
+        self.assertEqual(render_data, [('Min', 1.0), ('Normality', 'Unknown'), ('', ''), ('', '')])
 
     def test_build_histogram_table_data_preserves_na_text_for_cp_fields(self):
         summary_stats = {

@@ -296,9 +296,9 @@ def render_spec_reference_lines(ax, nom, lsl, usl, orientation='horizontal', inc
     return lines
 
 
-def build_tolerance_reference_legend_handles():
+def build_tolerance_reference_legend_handles(*, include_nominal=True):
     """Return legend handles for tolerance bands and spec-reference lines."""
-    return [
+    handles = [
         Patch(
             facecolor=SUMMARY_PLOT_PALETTE['sigma_band'],
             edgecolor='none',
@@ -307,5 +307,7 @@ def build_tolerance_reference_legend_handles():
         ),
         Line2D([0], [0], color=SUMMARY_PLOT_PALETTE['spec_limit'], linewidth=1.0, label='LSL'),
         Line2D([0], [0], color=SUMMARY_PLOT_PALETTE['spec_limit'], linewidth=1.0, label='USL'),
-        Line2D([0], [0], color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='--', linewidth=1.0, label='Nominal'),
     ]
+    if include_nominal:
+        handles.append(Line2D([0], [0], color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='--', linewidth=1.0, label='Nominal'))
+    return handles

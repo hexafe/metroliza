@@ -393,10 +393,10 @@ def render_spec_reference_lines(ax, nom, lsl, usl, *, orientation='horizontal', 
     )
 
 
-def build_tolerance_reference_legend_handles():
+def build_tolerance_reference_legend_handles(*, include_nominal=True):
     """Return reusable legend handles for tolerance/spec references."""
 
-    return _build_tolerance_reference_legend_handles()
+    return _build_tolerance_reference_legend_handles(include_nominal=include_nominal)
 
 
 def build_histogram_table_data(summary_stats):
@@ -426,6 +426,20 @@ def build_histogram_table_data(summary_stats):
         ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
         ('Normality', normality_feedback),
     ]
+
+
+def build_histogram_table_render_data(table_data):
+    """Expand histogram table rows with render-only spacer rows for merged cells."""
+
+    render_data = list(table_data)
+    normality_row_index = next((index for index, (label, _value) in enumerate(render_data) if label == 'Normality'), None)
+    if normality_row_index is None:
+        return render_data
+
+    # Matplotlib tables do not support row spans directly; reserve extra rows so
+    # the normality badge can span three rows while the statistic label spans two.
+    render_data[normality_row_index + 1:normality_row_index + 1] = [('', ''), ('', '')]
+    return render_data
 
 
 def compute_scaled_y_limits(current_limits, scale_factor):
@@ -483,6 +497,8 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
                 va='top',
                 fontsize=annotation_fontsize,
                 bbox=annotation_box,
+                zorder=10,
+                clip_on=False,
             )
         )
     return rendered
@@ -1220,14 +1236,29 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
         cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_header_text'])
 
     cp_cpk_rows = {'Cp', 'Cpk'}
+    row_index_by_label = {}
+    for row_index, (label, _value) in enumerate(table_data, start=1):
+        if label:
+            row_index_by_label.setdefault(label, row_index)
+
     for row_index, (label, value) in enumerate(table_data, start=1):
         if capability_row_badges and label in capability_row_badges:
             if label == 'Normality':
                 merged_feedback = 'Not sure' if str(value).strip().lower() == 'unknown' else value
-                _merge_table_row_cells(
+                _merge_table_column_cells(
                     ax_table,
                     row_index,
-                    text=f'Normality: {merged_feedback}',
+                    0,
+                    row_span=2,
+                    text='Normality',
+                    palette_key=capability_row_badges[label]['palette_key'],
+                )
+                _merge_table_column_cells(
+                    ax_table,
+                    row_index,
+                    1,
+                    row_span=3,
+                    text=merged_feedback,
                     palette_key=capability_row_badges[label]['palette_key'],
                 )
                 continue
@@ -1245,6 +1276,13 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
                 continue
             cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_emphasis_bg'])
             cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_emphasis_text'])
+
+    normality_row_index = row_index_by_label.get('Normality')
+    if normality_row_index is not None:
+        for spacer_offset in (1, 2):
+            spacer_left = ax_table.get_celld().get((normality_row_index + spacer_offset, 0))
+            if spacer_left is not None:
+                spacer_left.set_visible(False)
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
@@ -1377,6 +1415,32 @@ def _merge_table_row_cells(ax_table, row_index, *, text, palette_key):
     left_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
 
     right_cell.set_visible(False)
+
+
+def _merge_table_column_cells(ax_table, row_index, col_index, *, row_span, text, palette_key):
+    """Merge vertically-adjacent table cells into a single styled cell."""
+    if row_span <= 1:
+        return
+
+    primary_cell = ax_table.get_celld().get((row_index, col_index))
+    if primary_cell is None:
+        return
+
+    merged_height = primary_cell.get_height()
+    for offset in range(1, row_span):
+        sibling = ax_table.get_celld().get((row_index + offset, col_index))
+        if sibling is None:
+            continue
+        merged_height += sibling.get_height()
+        sibling.set_visible(False)
+
+    primary_cell.set_height(merged_height)
+    primary_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+    primary_text = primary_cell.get_text()
+    primary_text.set_text(text)
+    primary_text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+    primary_text.set_weight('bold')
+    primary_text.set_va('center')
 
 
 def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
@@ -2872,8 +2936,9 @@ class ExportDataThread(QThread):
                     )
 
                     table_data = build_histogram_table_data(summary_stats)
+                    table_render_data = build_histogram_table_render_data(table_data)
                     ax_table = plt.table(
-                        cellText=table_data,
+                        cellText=table_render_data,
                         colLabels=['Statistic', 'Value'],
                         cellLoc='center',
                         loc='right',
@@ -2883,7 +2948,7 @@ class ExportDataThread(QThread):
                     ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
                     style_histogram_stats_table(
                         ax_table,
-                        table_data,
+                        table_render_data,
                         capability_badge=capability_badge,
                         capability_row_badges=histogram_row_badges,
                     )
@@ -2907,8 +2972,8 @@ class ExportDataThread(QThread):
                         one_sided=is_one_sided_geometric_tolerance(nom, LSL),
                         orientation='vertical',
                     )
-                    render_spec_reference_lines(ax, nom, LSL, USL, orientation='vertical')
-                    ax.legend(handles=[Line2D([0], [0], **mean_line_style, label='Mean'), *build_tolerance_reference_legend_handles()], loc='upper left')
+                    render_spec_reference_lines(ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
+                    ax.legend(handles=[Line2D([0], [0], **mean_line_style, label='Mean'), *build_tolerance_reference_legend_handles(include_nominal=False)], loc='upper left')
                     move_legend_to_figure(ax)
                     ax.set_xlabel('Measurement')
                     ax.set_ylabel('Density')
