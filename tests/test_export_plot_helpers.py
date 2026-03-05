@@ -366,6 +366,71 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(ax_table.get_celld()[(1, 2)].PAD, 0.08)
 
         plt.close(fig)
+
+    def test_adjust_histogram_stats_table_geometry_merges_final_two_column_row(self):
+        fig, ax = plt.subplots()
+        table_rows = [('Min', '1.0'), ('Max', '2.0'), ('Normality', 'Shapiro p = N/A\nUnknown')]
+        ax_table = plt.table(
+            cellText=table_rows,
+            colLabels=['Statistic', 'Value'],
+            cellLoc='center',
+            loc='right',
+            bbox=[1, 0, 0.3, 1],
+        )
+
+        normality_row_index = len(table_rows)
+        base_height = ax_table.get_celld()[(normality_row_index, 0)].get_height()
+
+        style_histogram_stats_table(
+            ax_table,
+            table_rows,
+            capability_row_badges={'Normality': classify_normality_status('unknown')},
+        )
+        adjust_histogram_stats_table_geometry(
+            ax_table,
+            row_height_scale=1.1,
+            capability_row_badges={'Normality': classify_normality_status('unknown')},
+        )
+        fig.canvas.draw()
+
+        merged_left = ax_table.get_celld()[(normality_row_index, 0)]
+        merged_right = ax_table.get_celld()[(normality_row_index, 1)]
+        header_full_width = ax_table.get_celld()[(0, 0)].get_width() + ax_table.get_celld()[(0, 1)].get_width()
+
+        self.assertFalse(merged_right.get_visible())
+        self.assertEqual(merged_right.get_width(), 0)
+        self.assertAlmostEqual(merged_left.get_width(), header_full_width, places=6)
+        self.assertEqual(merged_left.get_text().get_text(), 'Shapiro p = N/A\nUnknown')
+        self.assertGreater(merged_left.get_height(), base_height)
+        self.assertEqual(
+            merged_left.get_facecolor(),
+            matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['quality_unknown_bg']),
+        )
+        self.assertEqual(merged_left.get_text().get_color(), SUMMARY_PLOT_PALETTE['quality_unknown_text'])
+        plt.close(fig)
+
+    def test_adjust_histogram_stats_table_geometry_two_column_merges_last_data_row_when_not_normality(self):
+        fig, ax = plt.subplots()
+        table_rows = [('Min', '1.0'), ('Max', '2.0')]
+        ax_table = plt.table(
+            cellText=table_rows,
+            colLabels=['Statistic', 'Value'],
+            cellLoc='center',
+            loc='right',
+            bbox=[1, 0, 0.3, 1],
+        )
+
+        final_row_index = len(table_rows)
+        adjust_histogram_stats_table_geometry(ax_table)
+        fig.canvas.draw()
+
+        merged_left = ax_table.get_celld()[(final_row_index, 0)]
+        merged_right = ax_table.get_celld()[(final_row_index, 1)]
+
+        self.assertFalse(merged_right.get_visible())
+        self.assertEqual(merged_left.get_text().get_text(), '2.0')
+        plt.close(fig)
+
     def test_build_histogram_density_curve_payload_accepts_numeric_string_measurements(self):
         payload = build_histogram_density_curve_payload(['1.0', '1.5', '2.0', '2.5'])
 

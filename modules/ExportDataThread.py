@@ -1450,6 +1450,40 @@ def adjust_histogram_stats_table_geometry(
         cell.PAD = cell_padding
 
     if not has_three_columns:
+        normality_palette_key = 'quality_unknown'
+        if capability_row_badges and 'Normality' in capability_row_badges:
+            normality_palette_key = capability_row_badges['Normality']['palette_key']
+
+        merged_row_index = None
+        for (row_index, col_index), cell in table_cells.items():
+            if row_index <= 0 or col_index != 0 or not cell.get_visible():
+                continue
+            if cell.get_text().get_text().strip() == 'Normality':
+                merged_row_index = row_index
+                break
+
+        if merged_row_index is None:
+            merged_row_index = max(
+                (
+                    row_index
+                    for (row_index, col_index), cell in table_cells.items()
+                    if row_index > 0 and col_index == 0 and cell.get_visible()
+                ),
+                default=None,
+            )
+
+        if merged_row_index is not None:
+            value_cell = table_cells.get((merged_row_index, 1))
+            merge_text = '' if value_cell is None else value_cell.get_text().get_text()
+            row_label = table_cells[(merged_row_index, 0)].get_text().get_text().strip()
+            _merge_table_row_cells(
+                ax_table,
+                merged_row_index,
+                col_span=2,
+                text=merge_text,
+                palette_key=normality_palette_key if row_label == 'Normality' else None,
+                height_scale=max(1.25, safe_row_scale),
+            )
         return
 
     for (row_index, col_index), cell in table_cells.items():
@@ -1487,7 +1521,7 @@ def adjust_histogram_stats_table_geometry(
             row_index,
             col_span=3,
             text=value_cell.get_text().get_text(),
-            palette_key=capability_row_badges['Normality']['palette_key'],
+            palette_key=normality_palette_key,
             height_scale=1.6,
         )
         break
