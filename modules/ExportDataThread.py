@@ -355,10 +355,10 @@ def build_trend_plot_payload(header_group, *, grouping_active=False, label_colum
     )
 
 
-def build_histogram_density_curve_payload(measurements, point_count=100):
+def build_histogram_density_curve_payload(measurements, point_count=100, *, mode='normal_fit'):
     """Build smooth density-curve payload arrays for histogram overlays."""
 
-    return _build_histogram_density_curve_payload(measurements, point_count=point_count)
+    return _build_histogram_density_curve_payload(measurements, point_count=point_count, mode=mode)
 
 
 def apply_shared_x_axis_label_strategy(ax, labels, **kwargs):
@@ -413,6 +413,24 @@ def build_histogram_table_data(summary_stats):
     else:
         normality_feedback = 'Unknown'
 
+    normality_test_name = summary_stats.get('normality_test_name', 'Shapiro')
+    normality_p_value = summary_stats.get('normality_p_value')
+    if isinstance(normality_p_value, (float, int)):
+        normality_header = f"{normality_test_name} p = {normality_p_value:.4f}"
+    else:
+        normality_header = f"{normality_test_name} p = N/A"
+    normality_block = f"{normality_header}\n{normality_feedback}"
+    cp_value = summary_stats.get('cp')
+    cpk_label = 'Cpk'
+    cpk_value = summary_stats.get('cpk')
+    if isinstance(cp_value, str):
+        sigma_value = summary_stats.get('sigma')
+        average_value = summary_stats.get('average')
+        usl_value = summary_stats.get('usl')
+        if all(isinstance(item, (float, int)) for item in (sigma_value, average_value, usl_value)) and sigma_value > 0:
+            cpk_label = 'Cpk+'
+            cpk_value = (usl_value - average_value) / (3 * sigma_value)
+
     return [
         ('Min', round(summary_stats['minimum'], 3)),
         ('Max', round(summary_stats['maximum'], 3)),
@@ -420,26 +438,18 @@ def build_histogram_table_data(summary_stats):
         ('Median', round(summary_stats['median'], 3)),
         ('Std Dev', round(summary_stats['sigma'], 3)),
         ('Cp', _rounded_or_text(summary_stats['cp'], 2)),
-        ('Cpk', _rounded_or_text(summary_stats['cpk'], 2)),
+        (cpk_label, _rounded_or_text(cpk_value, 2)),
         ('Samples', round(summary_stats['sample_size'], 1)),
-        ('NOK nb', round(summary_stats['nok_count'], 1)),
+        ('NOK', round(summary_stats['nok_count'], 1)),
         ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
-        ('Normality', normality_feedback),
+        ('Normality', normality_block),
     ]
 
 
 def build_histogram_table_render_data(table_data):
-    """Expand histogram table rows with render-only spacer rows for merged cells."""
+    """Return display-ready histogram table data."""
 
-    render_data = list(table_data)
-    normality_row_index = next((index for index, (label, _value) in enumerate(render_data) if label == 'Normality'), None)
-    if normality_row_index is None:
-        return render_data
-
-    # Matplotlib tables do not support row spans directly; reserve extra rows so
-    # the normality badge can span three rows while the statistic label spans two.
-    render_data[normality_row_index + 1:normality_row_index + 1] = [('', ''), ('', '')]
-    return render_data
+    return list(table_data)
 
 
 def compute_scaled_y_limits(current_limits, scale_factor):
@@ -482,19 +492,17 @@ def build_histogram_mean_line_style():
 def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, annotation_box):
     """Render histogram annotations with consistent font sizing policy."""
     rendered = []
-    x_min, x_max = ax.get_xlim()
-    x_span = max(x_max - x_min, 1e-9)
-    mean_text_offset = x_span * 0.015
+    transform = ax.get_xaxis_transform()
     for annotation in annotation_specs:
-        x_position = annotation['x'] + mean_text_offset if annotation['text'].startswith('μ=') else annotation['x']
         rendered.append(
             ax.text(
-                x_position,
-                annotation['y'],
+                annotation['x'],
+                annotation.get('text_y_axes', 1.02),
                 annotation['text'],
+                transform=transform,
                 color=annotation['color'],
                 ha=annotation['ha'],
-                va='top',
+                va='bottom',
                 fontsize=annotation_fontsize,
                 bbox=annotation_box,
                 zorder=10,
@@ -1099,10 +1107,29 @@ def render_histogram(ax, header_group):
     if histogram_values.size == 0:
         return
 
+    bin_count = max(3, min(int(round(np.sqrt(histogram_values.size))), 10))
+
     if _HAS_SEABORN:
-        sns.histplot(x=histogram_values, bins='auto', stat='density', alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white', ax=ax)
+        sns.histplot(
+            x=histogram_values,
+            bins=bin_count,
+            stat='count',
+            alpha=0.72,
+            color=SUMMARY_PLOT_PALETTE['distribution_base'],
+            edgecolor='white',
+            linewidth=0.5,
+            ax=ax,
+        )
     else:
-        ax.hist(histogram_values, bins='auto', density=True, alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white')
+        ax.hist(
+            histogram_values,
+            bins=bin_count,
+            density=False,
+            alpha=0.72,
+            color=SUMMARY_PLOT_PALETTE['distribution_base'],
+            edgecolor='white',
+            linewidth=0.5,
+        )
 
 
 def render_iqr_boxplot(ax, values, labels):
@@ -1235,7 +1262,7 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
         cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_header_bg'])
         cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_header_text'])
 
-    cp_cpk_rows = {'Cp', 'Cpk'}
+    cp_cpk_rows = {'Cp', 'Cpk', 'Cpk+'}
     row_index_by_label = {}
     for row_index, (label, _value) in enumerate(table_data, start=1):
         if label:
@@ -1244,21 +1271,10 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
     for row_index, (label, value) in enumerate(table_data, start=1):
         if capability_row_badges and label in capability_row_badges:
             if label == 'Normality':
-                merged_feedback = 'Not sure' if str(value).strip().lower() == 'unknown' else value
-                _merge_table_column_cells(
+                _merge_table_row_cells(
                     ax_table,
                     row_index,
-                    0,
-                    row_span=2,
-                    text='Normality',
-                    palette_key=capability_row_badges[label]['palette_key'],
-                )
-                _merge_table_column_cells(
-                    ax_table,
-                    row_index,
-                    1,
-                    row_span=3,
-                    text=merged_feedback,
+                    text=str(value),
                     palette_key=capability_row_badges[label]['palette_key'],
                 )
                 continue
@@ -1277,12 +1293,6 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
             cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_emphasis_bg'])
             cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_emphasis_text'])
 
-    normality_row_index = row_index_by_label.get('Normality')
-    if normality_row_index is not None:
-        for spacer_offset in (1, 2):
-            spacer_left = ax_table.get_celld().get((normality_row_index + spacer_offset, 0))
-            if spacer_left is not None:
-                spacer_left.set_visible(False)
 
 
 def adjust_histogram_stats_table_geometry(
@@ -1307,6 +1317,10 @@ def adjust_histogram_stats_table_geometry(
 
         if row_index >= 1:
             cell.set_height(cell.get_height() * safe_row_scale)
+
+        cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
+        cell.set_linewidth(0.6)
+        cell.PAD = 0.08
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
@@ -1438,6 +1452,8 @@ def _merge_table_row_cells(ax_table, row_index, *, text, palette_key):
     left_cell.get_text().set_weight('bold')
     left_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
 
+    right_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+    right_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
     right_cell.set_visible(False)
 
 
@@ -2687,15 +2703,22 @@ class ExportDataThread(QThread):
                             'nok_pct': (nok_count / sample_size),
                             'normality_status': normality['status'],
                             'normality_text': normality['text'],
+                            'normality_test_name': normality.get('test_name', 'Shapiro'),
+                            'normality_p_value': normality.get('p_value'),
+                            'usl': USL,
                         }
 
             if summary_stats is None:
                 summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
+            summary_stats.setdefault('normality_test_name', 'Shapiro')
+            summary_stats.setdefault('normality_p_value', None)
+            summary_stats['usl'] = USL
             average = summary_stats['average']
             capability_badge = classify_capability_status(summary_stats['cp'], summary_stats['cpk'])
+            cpk_row_label = 'Cpk+' if isinstance(summary_stats.get('cp'), str) else 'Cpk'
             capability_row_badges = {
                 'Cp': classify_capability_value(summary_stats['cp'], label_prefix='Cp'),
-                'Cpk': classify_capability_value(summary_stats['cpk'], label_prefix='Cpk'),
+                cpk_row_label: classify_capability_value(summary_stats['cpk'], label_prefix=cpk_row_label),
             }
             nok_row_badge = {
                 'NOK %': classify_nok_severity(summary_stats['nok_pct']),
@@ -2982,11 +3005,15 @@ class ExportDataThread(QThread):
                         row_height_scale=1.15,
                     )
 
-                    density_curve = precomputed_density_curve
+                    density_curve_mode = 'normal_fit' if summary_stats.get('normality_status') == 'normal' else 'kde'
+                    density_curve = None
+                    if density_curve_mode == 'normal_fit':
+                        density_curve = precomputed_density_curve
                     if density_curve is None:
                         density_curve = build_histogram_density_curve_payload(
                             sampled_histogram_group['MEAS'],
                             point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                            mode=density_curve_mode,
                         )
                     if density_curve is not None:
                         render_density_line(ax, density_curve['x'], density_curve['y'])
@@ -3003,13 +3030,12 @@ class ExportDataThread(QThread):
                     )
                     render_spec_reference_lines(ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
                     ax.set_xlabel('Measurement')
-                    ax.set_ylabel('Density')
+                    ax.set_ylabel('Count')
                     ax.set_title(build_wrapped_chart_title(header), pad=20)
                     apply_minimal_axis_style(ax, grid_axis='y')
 
-                    _, y_max = ax.get_ylim()
                     annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
-                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, y_max)
+                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
                     render_histogram_annotations(
                         ax,
                         annotation_specs,
@@ -3017,7 +3043,7 @@ class ExportDataThread(QThread):
                         annotation_box=annotation_box,
                     )
 
-                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'])
+                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=0.86)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     histogram_slot = panel_plan['image_slots']['histogram']
