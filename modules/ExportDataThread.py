@@ -491,9 +491,9 @@ def build_histogram_mean_line_style():
     return {
         'color': SUMMARY_PLOT_PALETTE['central_tendency'],
         'linestyle': '--',
-        'linewidth': 1.6,
-        'alpha': 0.55,
-        'zorder': 5,
+        'linewidth': 1.3,
+        'alpha': 0.48,
+        'zorder': 2,
     }
 
 
