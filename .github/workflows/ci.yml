@@ -48,7 +48,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Compile check
-        run: python -m compileall .
+        run: python -m compileall -x '^\./\.git/' .
 
       - name: Ruff lint (full repository)
         run: ruff check .
