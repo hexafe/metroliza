@@ -1463,9 +1463,12 @@ def adjust_histogram_stats_table_geometry(
         if sibling is None or not sibling.get_visible():
             continue
 
-        cell.set_width(cell.get_width() + sibling.get_width())
-        sibling.set_visible(False)
-        sibling.set_width(0)
+        _merge_table_row_cells(
+            ax_table,
+            row_index,
+            col_span=2,
+            text=label_text,
+        )
 
     normality_palette_key = 'quality_unknown'
     if capability_row_badges and 'Normality' in capability_row_badges:
@@ -1479,11 +1482,13 @@ def adjust_histogram_stats_table_geometry(
         value_cell = table_cells.get((row_index, 2))
         if value_cell is None:
             continue
-        _merge_table_row_cells_three_columns(
+        _merge_table_row_cells(
             ax_table,
             row_index,
+            col_span=3,
             text=value_cell.get_text().get_text(),
-            palette_key=normality_palette_key,
+            palette_key=capability_row_badges['Normality']['palette_key'],
+            height_scale=1.6,
         )
         break
 
@@ -1608,64 +1613,39 @@ def _apply_table_row_badge(ax_table, row_index, palette_key):
         text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
 
 
-def _merge_table_row_cells_three_columns(ax_table, row_index, *, text, palette_key):
-    """Merge (row, 0..2) into a single full-width badge cell."""
+def _merge_table_row_cells(ax_table, row_index, col_index=0, *, col_span, text=None, palette_key=None, height_scale=1.0):
+    """Merge adjacent cells in one row into a single styled cell."""
+    if col_span <= 1:
+        return
+
     cell_map = ax_table.get_celld()
-    left_cell = cell_map.get((row_index, 0))
-    middle_cell = cell_map.get((row_index, 1))
-    right_cell = cell_map.get((row_index, 2))
-
-    if left_cell is None:
-        return
-
-    merged_width = left_cell.get_width()
-    if middle_cell is not None:
-        merged_width += middle_cell.get_width()
-    if right_cell is not None:
-        merged_width += right_cell.get_width()
-
-    left_cell.set_width(merged_width)
-    left_cell.set_height(left_cell.get_height() * 1.6)
-    left_cell.get_text().set_text(text)
-    left_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-    left_cell.get_text().set_linespacing(1.2)
-    left_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
-
-    if middle_cell is not None:
-        middle_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
-        middle_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-        middle_cell.set_visible(False)
-
-    if right_cell is not None:
-        right_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
-        right_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-        right_cell.set_visible(False)
-
-
-def _merge_table_column_cells(ax_table, row_index, col_index, *, row_span, text, palette_key):
-    """Merge vertically-adjacent table cells into a single styled cell."""
-    if row_span <= 1:
-        return
-
-    primary_cell = ax_table.get_celld().get((row_index, col_index))
+    primary_cell = cell_map.get((row_index, col_index))
     if primary_cell is None:
         return
 
-    merged_height = primary_cell.get_height()
-    for offset in range(1, row_span):
-        sibling = ax_table.get_celld().get((row_index + offset, col_index))
+    merged_width = primary_cell.get_width()
+    for offset in range(1, col_span):
+        sibling = cell_map.get((row_index, col_index + offset))
         if sibling is None:
             continue
-        merged_height += sibling.get_height()
+        merged_width += sibling.get_width()
+        if palette_key:
+            sibling.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+            sibling.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
         sibling.set_visible(False)
+        sibling.set_width(0)
 
-    primary_cell.set_height(merged_height)
-    primary_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+    primary_cell.set_width(merged_width)
+    primary_cell.set_height(primary_cell.get_height() * height_scale)
+
     primary_text = primary_cell.get_text()
-    primary_text.set_text(text)
-    primary_text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-    primary_text.set_weight('bold')
-    primary_text.set_va('center')
+    if text is not None:
+        primary_text.set_text(text)
+
+    if palette_key:
+        primary_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+        primary_text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+        primary_text.set_linespacing(1.2)
 
 
 def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
