@@ -409,7 +409,7 @@ def build_histogram_table_data(summary_stats):
     elif normality_status == 'not_normal':
         normality_feedback = 'Non-normal'
     else:
-        normality_feedback = 'Not sure'
+        normality_feedback = 'Unknown'
 
     return [
         ('Min', round(summary_stats['minimum'], 3)),
@@ -1202,10 +1202,11 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
     for row_index, (label, value) in enumerate(table_data, start=1):
         if capability_row_badges and label in capability_row_badges:
             if label == 'Normality':
+                merged_feedback = 'Not sure' if str(value).strip().lower() == 'unknown' else value
                 _merge_table_row_cells(
                     ax_table,
                     row_index,
-                    text=f'Normality: {value}',
+                    text=f'Normality: {merged_feedback}',
                     palette_key=capability_row_badges[label]['palette_key'],
                 )
                 continue

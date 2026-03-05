@@ -447,7 +447,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(table[-2], ('NOK %', '8.33%'))
-        self.assertEqual(table[-1], ('Normality', 'Not sure'))
+        self.assertEqual(table[-1], ('Normality', 'Unknown'))
 
 
     def test_style_histogram_stats_table_applies_normality_badges_for_each_status(self):
