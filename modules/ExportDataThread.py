@@ -1345,14 +1345,6 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
     cp_cpk_rows = {'Cp', 'Cpk', 'Cpk+'}
     for row_index, (label, value) in enumerate(normalized_rows, start=1):
         if capability_row_badges and label in capability_row_badges:
-            if label == 'Normality':
-                _merge_table_row_cells_three_columns(
-                    ax_table,
-                    row_index,
-                    text=str(value),
-                    palette_key=capability_row_badges[label]['palette_key'],
-                )
-                continue
             _apply_table_row_badge(ax_table, row_index, capability_row_badges[label]['palette_key'])
             continue
         if capability_badge and label in cp_cpk_rows:
@@ -1375,6 +1367,7 @@ def adjust_histogram_stats_table_geometry(
     *,
     statistic_col_width_ratio=0.72,
     row_height_scale=1.12,
+    capability_row_badges=None,
 ):
     """Increase histogram stats-table readability via column and row geometry."""
     if ax_table is None:
@@ -1453,6 +1446,26 @@ def adjust_histogram_stats_table_geometry(
 
         cell.set_width(cell.get_width() + sibling.get_width())
         sibling.set_visible(False)
+        sibling.set_width(0)
+
+    if not capability_row_badges or 'Normality' not in capability_row_badges:
+        return
+
+    for (row_index, col_index), cell in table_cells.items():
+        if row_index <= 0 or col_index != 0:
+            continue
+        if cell.get_text().get_text().strip() != 'Normality':
+            continue
+        value_cell = table_cells.get((row_index, 2))
+        if value_cell is None:
+            continue
+        _merge_table_row_cells_three_columns(
+            ax_table,
+            row_index,
+            text=value_cell.get_text().get_text(),
+            palette_key=capability_row_badges['Normality']['palette_key'],
+        )
+        break
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
@@ -3157,6 +3170,7 @@ class ExportDataThread(QThread):
                         ax_table,
                         statistic_col_width_ratio=0.72,
                         row_height_scale=1.15,
+                        capability_row_badges=histogram_row_badges,
                     )
 
                     density_curve_mode = 'normal_fit' if summary_stats.get('normality_status') == 'normal' else 'kde'

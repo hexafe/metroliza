@@ -343,6 +343,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertAlmostEqual(header_w1 / header_total, 0.1232, places=3)
         self.assertAlmostEqual(header_w2 / header_total, 0.44, places=3)
         self.assertFalse(ax_table.get_celld()[(1, 1)].get_visible())
+        self.assertEqual(ax_table.get_celld()[(1, 1)].get_width(), 0)
         self.assertAlmostEqual(
             ax_table.get_celld()[(1, 0)].get_width(),
             header_w0 + header_w1,
@@ -917,6 +918,10 @@ class TestExportPlotHelpers(unittest.TestCase):
                 render_data,
                 capability_row_badges={'Normality': classify_normality_status(status)},
             )
+            adjust_histogram_stats_table_geometry(
+                ax_table,
+                capability_row_badges={'Normality': classify_normality_status(status)},
+            )
 
             self.assertEqual(
                 ax_table.get_celld()[(1, 0)].get_facecolor(),
@@ -981,6 +986,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ax_table,
                 statistic_col_width_ratio=0.56,
                 row_height_scale=1.15,
+                capability_row_badges={'Normality': classify_normality_status('normal')},
             )
             fig.canvas.draw()
 
