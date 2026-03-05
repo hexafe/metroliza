@@ -79,11 +79,11 @@ Effect size caveats:
 
 ## Release metadata
 
-Current release highlight (`2026.03`, build `260301`): Google Sheets export is now available with a safe `.xlsx` fallback and performance optimizations.
+Current release highlight (`2026.03`, build `260305`): Group creation now includes clearer color-coding/sample-size context, with cleaner extended-chart visuals and export polish.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.03`, build `260301`)
+### Changelog highlights (release `2026.03`, build `260305`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
