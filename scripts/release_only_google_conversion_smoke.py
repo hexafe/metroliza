@@ -1,4 +1,4 @@
-"""Manual/CI-gated smoke check for live Google Drive -> Sheets conversion.
+"""Release-only manual/CI-gated smoke check for live Google Drive -> Sheets conversion.
 
 Usage contract:
 - Inputs:
@@ -16,9 +16,9 @@ Usage contract:
     ``.xlsx`` as the fidelity-baseline fallback artifact while warning root cause
     is investigated.
 
-This module is intentionally excluded from default `unittest discover` runs by
-avoiding the `test_*.py` filename pattern. Invoke directly when release
-validation needs a real sandbox roundtrip.
+This module intentionally lives outside the `tests/` tree because it is
+release-only and opt-in; it is not part of regular PR test execution. Invoke
+directly when release validation needs a real sandbox roundtrip.
 """
 
 from __future__ import annotations

@@ -128,7 +128,7 @@ Google Sheets conversion check (full runbook: [`docs/google_conversion_smoke_run
 METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
 METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH=credentials.json \
 METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
-PYTHONPATH=. python tests/google_conversion_smoke.py
+PYTHONPATH=. python scripts/release_only_google_conversion_smoke.py
 ```
 
 - This smoke check is **optional/non-default** and is intentionally excluded from the

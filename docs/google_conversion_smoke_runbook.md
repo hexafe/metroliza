@@ -1,16 +1,16 @@
-# Google conversion smoke runbook (`tests/google_conversion_smoke.py`)
+# Google conversion smoke runbook (`scripts/release_only_google_conversion_smoke.py`)
 
 This runbook defines how maintainers run and interpret the release-gated live Google Drive → Google Sheets smoke check.
 
 ## Scope and intent
 
-- Script: `tests/google_conversion_smoke.py`.
+- Script: `scripts/release_only_google_conversion_smoke.py`.
 - Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm release-gated conversion metadata/warning expectations without extra Sheets API post-validation calls.
 - Execution model: manual or explicitly gated CI job only (not part of default unit-test discovery).
 
 ## When smoke execution is mandatory
 
-Run `tests/google_conversion_smoke.py` in all of these cases:
+Run `scripts/release_only_google_conversion_smoke.py` in all of these cases:
 
 - Every RC candidate build before it can be promoted to open testing.
 - Any PR/change set that modifies Google auth, Drive/Sheets conversion/export logic, or fallback `.xlsx` behavior.
@@ -35,7 +35,7 @@ Before running smoke:
 6. **Network path to Google APIs is available**
    - Outbound HTTPS access to Google OAuth/Drive endpoints.
 
-## Script usage contract (`tests/google_conversion_smoke.py`)
+## Script usage contract (`scripts/release_only_google_conversion_smoke.py`)
 
 ### Required/optional inputs
 
@@ -59,7 +59,7 @@ Reference command:
 METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
 METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH=credentials.json \
 METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
-PYTHONPATH=. python tests/google_conversion_smoke.py
+PYTHONPATH=. python scripts/release_only_google_conversion_smoke.py
 ```
 
 ### Expected success signals
@@ -172,7 +172,7 @@ Use this template:
   METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
   METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH=credentials.json \
   METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
-  PYTHONPATH=. python tests/google_conversion_smoke.py
+  PYTHONPATH=. python scripts/release_only_google_conversion_smoke.py
   ```
 - Pass/fail: <!-- PASS / FAIL -->
 - Fallback `.xlsx` behavior observed: <!-- preserved output path/link + observed behavior -->
