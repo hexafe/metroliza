@@ -111,6 +111,10 @@ def execute_with_retry(
             if not _is_transient_sqlite_error(exc) or attempt >= attempts - 1:
                 raise
             time.sleep(retry_delay_s)
+        except Exception:
+            if connection is not None:
+                connection.rollback()
+            raise
 
     return []
 
