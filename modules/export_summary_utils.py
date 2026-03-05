@@ -261,7 +261,7 @@ def render_tolerance_band(ax, nom, lsl, usl, one_sided=False, orientation='horiz
     return ax.axhspan(lower, upper, **band_kwargs)
 
 
-def render_spec_reference_lines(ax, nom, lsl, usl, orientation='horizontal'):
+def render_spec_reference_lines(ax, nom, lsl, usl, orientation='horizontal', include_nominal=True):
     """Render nominal and spec-limit reference lines for summary charts."""
     if ax is None:
         return []
@@ -273,18 +273,27 @@ def render_spec_reference_lines(ax, nom, lsl, usl, orientation='horizontal'):
     }
     nominal_kwargs = {**line_kwargs, 'linestyle': '--'}
 
-    if orientation == 'vertical':
-        return [
-            ax.axvline(lsl, **line_kwargs),
-            ax.axvline(usl, **line_kwargs),
-            ax.axvline(nom, **nominal_kwargs),
-        ]
+    lines = []
 
-    return [
-        ax.axhline(lsl, **line_kwargs),
-        ax.axhline(usl, **line_kwargs),
-        ax.axhline(nom, **nominal_kwargs),
-    ]
+    if lsl is not None:
+        if orientation == 'vertical':
+            lines.append(ax.axvline(lsl, **line_kwargs))
+        else:
+            lines.append(ax.axhline(lsl, **line_kwargs))
+
+    if usl is not None:
+        if orientation == 'vertical':
+            lines.append(ax.axvline(usl, **line_kwargs))
+        else:
+            lines.append(ax.axhline(usl, **line_kwargs))
+
+    if include_nominal and nom is not None:
+        if orientation == 'vertical':
+            lines.append(ax.axvline(nom, **nominal_kwargs))
+        else:
+            lines.append(ax.axhline(nom, **nominal_kwargs))
+
+    return lines
 
 
 def build_tolerance_reference_legend_handles():
