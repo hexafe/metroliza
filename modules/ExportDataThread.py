@@ -620,15 +620,22 @@ def apply_summary_plot_theme():
         'xtick.color': SUMMARY_PLOT_PALETTE['axis_text'],
         'ytick.color': SUMMARY_PLOT_PALETTE['axis_text'],
         'grid.color': SUMMARY_PLOT_PALETTE['grid'],
-        'grid.linewidth': 0.6,
-        'grid.alpha': 0.55,
+        'grid.linewidth': 0.5,
+        'grid.alpha': 0.4,
     })
 
 
 def apply_minimal_axis_style(ax, grid_axis='y'):
     """Apply a clean, minimal visual style on a chart axis."""
     ax.set_facecolor('white')
-    ax.grid(True, axis=grid_axis, linestyle='-', color=SUMMARY_PLOT_PALETTE['grid'], alpha=0.55)
+    ax.grid(
+        True,
+        axis=grid_axis,
+        linestyle='-',
+        linewidth=0.5,
+        color=SUMMARY_PLOT_PALETTE['grid'],
+        alpha=0.4,
+    )
     if grid_axis == 'y':
         ax.grid(False, axis='x')
     elif grid_axis == 'x':

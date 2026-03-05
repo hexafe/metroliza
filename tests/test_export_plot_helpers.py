@@ -92,10 +92,40 @@ from modules.ExportDataThread import (  # noqa: E402
     render_scatter_numeric,
     render_histogram,
     resolve_summary_annotation_strategy,
+    apply_summary_plot_theme,
+    apply_minimal_axis_style,
 )
 
 
 class TestExportPlotHelpers(unittest.TestCase):
+
+    def test_apply_summary_plot_theme_sets_lighter_grid_alpha_and_linewidth(self):
+        apply_summary_plot_theme()
+
+        self.assertEqual(plt.rcParams['grid.color'], SUMMARY_PLOT_PALETTE['grid'])
+        self.assertAlmostEqual(float(plt.rcParams['grid.alpha']), 0.4)
+        self.assertAlmostEqual(float(plt.rcParams['grid.linewidth']), 0.5)
+
+    def test_histogram_axis_style_uses_subtle_y_grid_policy(self):
+        import pandas as pd
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            render_histogram(ax, pd.DataFrame({'MEAS': [1.0, 1.5, 2.0, 2.5, 3.0]}))
+            apply_minimal_axis_style(ax, grid_axis='y')
+
+            y_gridlines = ax.get_ygridlines()
+            x_gridlines = ax.get_xgridlines()
+            self.assertTrue(any(line.get_visible() for line in y_gridlines))
+            self.assertFalse(any(line.get_visible() for line in x_gridlines))
+
+            first_visible = next(line for line in y_gridlines if line.get_visible())
+            self.assertEqual(first_visible.get_linestyle(), '-')
+            self.assertAlmostEqual(float(first_visible.get_alpha()), 0.4)
+            self.assertAlmostEqual(float(first_visible.get_linewidth()), 0.5)
+            self.assertEqual(first_visible.get_color(), SUMMARY_PLOT_PALETTE['grid'])
+        finally:
+            plt.close(fig)
 
 
     def test_resolve_summary_annotation_strategy_prefers_static_for_dense_axes(self):
