@@ -453,8 +453,23 @@ def build_histogram_table_data(summary_stats):
     ]
 
 
-def build_histogram_table_render_data(table_data):
+def build_histogram_table_render_data(table_data, *, three_column=False):
     """Expand histogram table rows with render-only spacer rows for merged cells."""
+
+    if three_column:
+        render_data = []
+        for label, value in table_data:
+            if label == 'Normality':
+                render_data.append([label, '', value])
+                continue
+            render_data.append([label, label, value])
+
+        normality_row_index = next((index for index, (label, _label_part2, _value) in enumerate(render_data) if label == 'Normality'), None)
+        if normality_row_index is None:
+            return render_data
+
+        render_data[normality_row_index + 1:normality_row_index + 1] = [['', '', ''], ['', '', '']]
+        return render_data
 
     render_data = list(table_data)
     normality_row_index = next((index for index, (label, _value) in enumerate(render_data) if label == 'Normality'), None)
@@ -598,8 +613,8 @@ def compute_histogram_table_layout(
     width_scale = min(1.25, max(0.8, fig_width / 6.0))
     oversized_font = max(0.0, float(table_fontsize) - 8.0)
 
-    table_bbox_width = 0.30 + (0.015 * oversized_font) - (0.01 * (width_scale - 1.0))
-    table_bbox_width = min(0.36, max(0.28, table_bbox_width))
+    table_bbox_width = 0.33 + (0.015 * oversized_font) - (0.01 * (width_scale - 1.0))
+    table_bbox_width = min(0.39, max(0.31, table_bbox_width))
 
     right_margin = 0.75 + (0.02 * (width_scale - 1.0)) - (0.015 * oversized_font)
     if has_table:
@@ -1306,21 +1321,28 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
     if ax_table is None:
         return
 
-    header_cells = [(0, 0), (0, 1)]
-    for cell_key in header_cells:
-        cell = ax_table.get_celld().get(cell_key)
+    cell_map = ax_table.get_celld()
+    column_indexes = sorted({col for (row, col) in cell_map.keys() if row == 0})
+    if not column_indexes:
+        column_indexes = [0, 1]
+
+    for col_index in column_indexes:
+        cell = cell_map.get((0, col_index))
         if cell is None:
             continue
         cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_header_bg'])
         cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_header_text'])
 
-    cp_cpk_rows = {'Cp', 'Cpk', 'Cpk+'}
-    row_index_by_label = {}
-    for row_index, (label, _value) in enumerate(table_data, start=1):
-        if label:
-            row_index_by_label.setdefault(label, row_index)
+    normalized_rows = []
+    for row in table_data:
+        if len(row) >= 3:
+            label, _label_part2, value = row[0], row[1], row[2]
+        else:
+            label, value = row[0], row[1]
+        normalized_rows.append((label, value))
 
-    for row_index, (label, value) in enumerate(table_data, start=1):
+    cp_cpk_rows = {'Cp', 'Cpk', 'Cpk+'}
+    for row_index, (label, value) in enumerate(normalized_rows, start=1):
         if capability_row_badges and label in capability_row_badges:
             if label == 'Normality':
                 _merge_table_row_cells(
@@ -1330,8 +1352,8 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
                     palette_key=capability_row_badges[label]['palette_key'],
                 )
                 for spacer_offset in (1, 2):
-                    for col_index in (0, 1):
-                        spacer = ax_table.get_celld().get((row_index + spacer_offset, col_index))
+                    for col_index in column_indexes:
+                        spacer = cell_map.get((row_index + spacer_offset, col_index))
                         if spacer is not None:
                             spacer.set_visible(False)
                 continue
@@ -1343,8 +1365,8 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
 
         if label not in EMPHASIS_TABLE_ROWS:
             continue
-        for col_index in (0, 1):
-            cell = ax_table.get_celld().get((row_index, col_index))
+        for col_index in column_indexes:
+            cell = cell_map.get((row_index, col_index))
             if cell is None:
                 continue
             cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_emphasis_bg'])
@@ -1355,27 +1377,47 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
 def adjust_histogram_stats_table_geometry(
     ax_table,
     *,
-    statistic_col_width_ratio=0.54,
+    statistic_col_width_ratio=0.72,
     row_height_scale=1.12,
 ):
     """Increase histogram stats-table readability via column and row geometry."""
     if ax_table is None:
         return
 
-    stat_ratio = min(0.7, max(0.3, float(statistic_col_width_ratio)))
-    value_ratio = 1.0 - stat_ratio
+    table_cells = ax_table.get_celld()
+    header_columns = sorted({col for (row, col) in table_cells.keys() if row == 0})
+    has_three_columns = 2 in header_columns
+
+    statistic_area_ratio = min(0.82, max(0.5, float(statistic_col_width_ratio)))
+    label_col0_ratio = statistic_area_ratio * 0.78
+    label_col1_ratio = statistic_area_ratio * 0.22
+    value_ratio = 1.0 - statistic_area_ratio
     safe_row_scale = min(1.4, max(0.9, float(row_height_scale)))
     border_linewidth = 0.45
     cell_padding = 0.12
 
-    for (row_index, col_index), cell in ax_table.get_celld().items():
+    for (row_index, col_index), cell in table_cells.items():
         if not cell.get_visible():
             continue
 
-        if col_index == 0:
-            cell.set_width(stat_ratio)
-        elif col_index == 1:
-            cell.set_width(value_ratio)
+        if has_three_columns:
+            if col_index == 0:
+                cell.set_width(label_col0_ratio)
+            elif col_index == 1:
+                cell.set_width(label_col1_ratio)
+            elif col_index == 2:
+                cell.set_width(value_ratio)
+                text = cell.get_text()
+                text.set_ha('right')
+                text.set_x(0.97)
+        else:
+            if col_index == 0:
+                cell.set_width(statistic_area_ratio)
+            elif col_index == 1:
+                cell.set_width(value_ratio)
+                text = cell.get_text()
+                text.set_ha('right')
+                text.set_x(0.97)
 
         if row_index >= 1:
             cell.set_height(cell.get_height() * safe_row_scale)
@@ -1383,6 +1425,23 @@ def adjust_histogram_stats_table_geometry(
         cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
         cell.set_linewidth(border_linewidth)
         cell.PAD = cell_padding
+
+    if not has_three_columns:
+        return
+
+    for (row_index, col_index), cell in table_cells.items():
+        if row_index <= 0 or col_index != 0 or not cell.get_visible():
+            continue
+        label_text = cell.get_text().get_text().strip()
+        if not label_text or label_text == 'Normality':
+            continue
+
+        sibling = table_cells.get((row_index, 1))
+        if sibling is None or not sibling.get_visible():
+            continue
+
+        cell.set_width(cell.get_width() + sibling.get_width())
+        sibling.set_visible(False)
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
@@ -1491,8 +1550,13 @@ def build_summary_panel_subtitle(summary_stats):
 
 
 def _apply_table_row_badge(ax_table, row_index, palette_key):
-    for col_index in (0, 1):
-        cell = ax_table.get_celld().get((row_index, col_index))
+    cell_map = ax_table.get_celld()
+    column_indexes = sorted({col for (row, col) in cell_map.keys() if row == 0})
+    if not column_indexes:
+        column_indexes = [0, 1]
+
+    for col_index in column_indexes:
+        cell = cell_map.get((row_index, col_index))
         if cell is None:
             continue
         cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
@@ -1503,20 +1567,35 @@ def _apply_table_row_badge(ax_table, row_index, palette_key):
 
 def _merge_table_row_cells(ax_table, row_index, *, text, palette_key):
     """Merge statistic/value cells for one row into a single full-width badge."""
-    left_cell = ax_table.get_celld().get((row_index, 0))
-    right_cell = ax_table.get_celld().get((row_index, 1))
-    if left_cell is None or right_cell is None:
+    cell_map = ax_table.get_celld()
+    left_cell = cell_map.get((row_index, 0))
+    middle_cell = cell_map.get((row_index, 1))
+    right_cell = cell_map.get((row_index, 2))
+
+    if left_cell is None:
         return
 
-    left_cell.set_width(left_cell.get_width() + right_cell.get_width())
+    merged_width = left_cell.get_width()
+    if middle_cell is not None:
+        merged_width += middle_cell.get_width()
+    if right_cell is not None:
+        merged_width += right_cell.get_width()
+
+    left_cell.set_width(merged_width)
     left_cell.get_text().set_text(text)
     left_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
     left_cell.get_text().set_weight('bold')
     left_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
 
-    right_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
-    right_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-    right_cell.set_visible(False)
+    if middle_cell is not None:
+        middle_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+        middle_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+        middle_cell.set_visible(False)
+
+    if right_cell is not None:
+        right_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+        right_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+        right_cell.set_visible(False)
 
 
 def _merge_table_column_cells(ax_table, row_index, col_index, *, row_span, text, palette_key):
@@ -3045,10 +3124,10 @@ class ExportDataThread(QThread):
                     )
 
                     table_data = build_histogram_table_data(summary_stats)
-                    table_render_data = build_histogram_table_render_data(table_data)
+                    table_render_data = build_histogram_table_render_data(table_data, three_column=True)
                     ax_table = plt.table(
                         cellText=table_render_data,
-                        colLabels=['Statistic', 'Value'],
+                        colLabels=['Statistic', ' ', 'Value'],
                         cellLoc='center',
                         loc='right',
                         bbox=[1, 0, histogram_table_layout['table_bbox_width'], 1],
@@ -3063,7 +3142,7 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         ax_table,
-                        statistic_col_width_ratio=0.56,
+                        statistic_col_width_ratio=0.72,
                         row_height_scale=1.15,
                     )
 
