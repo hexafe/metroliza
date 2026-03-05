@@ -45,7 +45,7 @@ Use this checklist/log when running the release-gated smoke command from:
   METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
   METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH=/tmp/.../credentials.json \
   METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=/tmp/.../token.json \
-  PYTHONPATH=. python tests/google_conversion_smoke.py
+  PYTHONPATH=. python scripts/release_only_google_conversion_smoke.py
   ```
 - Pass/fail: FAIL (network/proxy tunnel returned `403 Forbidden` during OAuth token refresh)
 - Fallback `.xlsx` behavior observed: fallback behavior was verified during the run and recorded in release tracker notes (artifact retained outside repo).
