@@ -379,7 +379,7 @@ def render_tolerance_band(ax, nom, lsl, usl, *, one_sided=False, orientation='ho
     )
 
 
-def render_spec_reference_lines(ax, nom, lsl, usl, *, orientation='horizontal'):
+def render_spec_reference_lines(ax, nom, lsl, usl, *, orientation='horizontal', include_nominal=True):
     """Render nominal/LSL/USL reference lines on summary charts."""
 
     return _render_spec_reference_lines(
@@ -388,6 +388,7 @@ def render_spec_reference_lines(ax, nom, lsl, usl, *, orientation='horizontal'):
         lsl,
         usl,
         orientation=orientation,
+        include_nominal=include_nominal,
     )
 
 
@@ -1020,7 +1021,7 @@ def render_violin(
     ax.set_xticklabels(labels)
     if lsl is not None and usl is not None:
         render_tolerance_band(ax, nom, lsl, usl, one_sided=one_sided)
-        render_spec_reference_lines(ax, nom, lsl, usl)
+        render_spec_reference_lines(ax, nom, lsl, usl, include_nominal=False)
 
     style = annotate_violin_group_stats(
         ax,
@@ -1036,7 +1037,7 @@ def render_violin(
         add_violin_annotation_legend(
             ax,
             style,
-            include_tolerance_refs=lsl is not None and usl is not None and nom is not None,
+            include_tolerance_refs=False,
         )
 
 
@@ -2736,6 +2737,16 @@ class ExportDataThread(QThread):
                         )
                     else:
                         render_scatter_numeric(ax, x_values, y_values)
+                        if LSL is not None and USL is not None:
+                            render_tolerance_band(
+                                ax,
+                                nom,
+                                LSL,
+                                USL,
+                                one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                            )
+                        if LSL is not None or USL is not None:
+                            render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
 
                     apply_minimal_axis_style(ax, grid_axis='y')
                     apply_shared_x_axis_label_strategy(
@@ -2789,8 +2800,8 @@ class ExportDataThread(QThread):
                         USL,
                         one_sided=is_one_sided_geometric_tolerance(nom, LSL),
                     )
-                    render_spec_reference_lines(ax, nom, LSL, USL)
-                    add_iqr_boxplot_legend(ax, include_tolerance_refs=True)
+                    render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
+                    add_iqr_boxplot_legend(ax, include_tolerance_refs=False)
                     move_legend_to_figure(ax)
                     apply_minimal_axis_style(ax, grid_axis='y')
                     apply_shared_x_axis_label_strategy(

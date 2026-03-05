@@ -1077,12 +1077,23 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(y_values, [9.5, 10.5, 10.0])
         plt.close(fig)
 
+    def test_render_spec_reference_lines_can_omit_nominal(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+
+        render_spec_reference_lines(ax, nom=10.0, lsl=9.5, usl=10.5, include_nominal=False)
+
+        self.assertEqual(len(ax.lines), 2)
+        y_values = [line.get_ydata()[0] for line in ax.lines]
+        self.assertEqual(y_values, [9.5, 10.5])
+        self.assertTrue(all(line.get_linestyle() == '-' for line in ax.lines))
+        plt.close(fig)
+
     def test_build_tolerance_reference_legend_handles_contains_required_labels(self):
         labels = [handle.get_label() for handle in build_tolerance_reference_legend_handles()]
 
         self.assertEqual(labels, ['Tolerance band', 'LSL', 'USL', 'Nominal'])
 
-    def test_violin_legend_includes_tolerance_reference_labels(self):
+    def test_violin_legend_excludes_tolerance_reference_labels(self):
         fig, ax = plt.subplots(figsize=(6, 4))
 
         render_violin(
@@ -1097,24 +1108,24 @@ class TestExportPlotHelpers(unittest.TestCase):
         move_legend_to_figure(ax)
 
         legend_labels = [text.get_text() for text in fig.legends[0].get_texts()]
-        self.assertIn('Tolerance band', legend_labels)
-        self.assertIn('LSL', legend_labels)
-        self.assertIn('USL', legend_labels)
-        self.assertIn('Nominal', legend_labels)
+        self.assertNotIn('Tolerance band', legend_labels)
+        self.assertNotIn('LSL', legend_labels)
+        self.assertNotIn('USL', legend_labels)
+        self.assertNotIn('Nominal', legend_labels)
         plt.close(fig)
 
-    def test_iqr_legend_includes_tolerance_reference_labels(self):
+    def test_iqr_legend_excludes_tolerance_reference_labels(self):
         fig, ax = plt.subplots(figsize=(6, 4))
 
         render_iqr_boxplot(ax, [[1.0, 1.1, 1.2], [2.0, 2.1, 3.5]], ['G1', 'G2'])
-        add_iqr_boxplot_legend(ax, include_tolerance_refs=True)
+        add_iqr_boxplot_legend(ax, include_tolerance_refs=False)
         move_legend_to_figure(ax)
 
         legend_labels = [text.get_text() for text in fig.legends[0].get_texts()]
-        self.assertIn('Tolerance band', legend_labels)
-        self.assertIn('LSL', legend_labels)
-        self.assertIn('USL', legend_labels)
-        self.assertIn('Nominal', legend_labels)
+        self.assertNotIn('Tolerance band', legend_labels)
+        self.assertNotIn('LSL', legend_labels)
+        self.assertNotIn('USL', legend_labels)
+        self.assertNotIn('Nominal', legend_labels)
         plt.close(fig)
 
     def test_histogram_legend_can_include_tolerance_reference_labels(self):

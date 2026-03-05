@@ -1319,6 +1319,57 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(captured['labels'], ['1', '2', '3'])
         self.assertEqual(captured['positions'], [0.0, 1.0, 2.0])
 
+
+    def test_summary_sheet_distribution_scatter_fallback_draws_only_lsl_usl_reference_lines(self):
+        import pandas as pd
+
+        import modules.ExportDataThread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
+        thread.violin_plot_min_samplesize = 10
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05, 10.02],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '1', '2', '2', '3', '3'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        captured_calls = []
+        original_render_spec_lines = export_thread_module.render_spec_reference_lines
+        try:
+            def _capture_spec_lines(_ax, nom, lsl, usl, **kwargs):
+                captured_calls.append({'nom': nom, 'lsl': lsl, 'usl': usl, 'kwargs': dict(kwargs)})
+                return []
+
+            export_thread_module.render_spec_reference_lines = _capture_spec_lines
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.render_spec_reference_lines = original_render_spec_lines
+
+        self.assertEqual(len(captured_calls), 1)
+        self.assertEqual(captured_calls[0]['lsl'], 9.8)
+        self.assertEqual(captured_calls[0]['usl'], 10.2)
+        self.assertFalse(captured_calls[0]['kwargs'].get('include_nominal', True))
+
+
     def test_default_export_target_uses_excel_backend(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
