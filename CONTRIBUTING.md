@@ -39,7 +39,7 @@ Before opening a PR, run:
 ```bash
 python -m compileall .
 ruff check .
-PYTHONPATH=. python -m unittest discover -s tests -v
+PYTHONPATH=. python -m pytest tests -q
 ```
 
 ## Architecture notes

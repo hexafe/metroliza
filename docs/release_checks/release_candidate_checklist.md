@@ -73,7 +73,7 @@ Run and record all required checks from the RC branch:
 ```bash
 python -m compileall .
 ruff check .
-PYTHONPATH=. python -m unittest discover -s tests -v
+PYTHONPATH=. python -m pytest tests -q
 ```
 
 - [ ] Compile check passed. *(Owner: Dev)*
