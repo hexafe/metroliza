@@ -1467,8 +1467,9 @@ def adjust_histogram_stats_table_geometry(
         sibling.set_visible(False)
         sibling.set_width(0)
 
-    if not capability_row_badges or 'Normality' not in capability_row_badges:
-        return
+    normality_palette_key = 'quality_unknown'
+    if capability_row_badges and 'Normality' in capability_row_badges:
+        normality_palette_key = capability_row_badges['Normality']['palette_key']
 
     for (row_index, col_index), cell in table_cells.items():
         if row_index <= 0 or col_index != 0:
@@ -1482,7 +1483,7 @@ def adjust_histogram_stats_table_geometry(
             ax_table,
             row_index,
             text=value_cell.get_text().get_text(),
-            palette_key=capability_row_badges['Normality']['palette_key'],
+            palette_key=normality_palette_key,
         )
         break
 
