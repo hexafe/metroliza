@@ -3,8 +3,8 @@ import logging
 import re
 import time
 
-from modules.CMMReportParser import CMMReportParser
-import modules.CustomLogger as custom_logger
+from modules.cmm_report_parser import CMMReportParser
+import modules.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass
 from pathlib import Path

@@ -1,12 +1,12 @@
 import base64
 from modules import Base64EncodedFiles
-from modules.ExportDialog import ExportDialog
-from modules.ParsingDialog import ParsingDialog
-from modules.ModifyDB import ModifyDB
-from modules.AboutWindow import AboutWindow
-from modules.ReleaseNotesDialog import ReleaseNotesDialog
-from modules.CustomLogger import CustomLogger
-from modules.CSVSummaryDialog import CSVSummaryDialog
+from modules.export_dialog import ExportDialog
+from modules.parsing_dialog import ParsingDialog
+from modules.modify_db import ModifyDB
+from modules.about_window import AboutWindow
+from modules.release_notes_dialog import ReleaseNotesDialog
+from modules.custom_logger import CustomLogger
+from modules.csv_summary_dialog import CSVSummaryDialog
 from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray
 from PyQt6.QtGui import QIcon, QPixmap, QAction

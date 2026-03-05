@@ -1,8 +1,8 @@
-from modules.MainWindow import MainWindow
-from modules.CustomLogger import CustomLogger
-from modules.Base64EncodedFiles import public_key_b64, encoded_icon
+from modules.main_window import MainWindow
+from modules.custom_logger import CustomLogger
+from modules.base64_encoded_files import public_key_b64, encoded_icon
 from modules.logging_utils import ensure_application_logging
-from modules.LicenseKeyManager import LicenseKeyManager
+from modules.license_key_manager import LicenseKeyManager
 import VersionDate
 from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QVBoxLayout, QHBoxLayout, QPushButton
 from PyQt6.QtCore import QByteArray

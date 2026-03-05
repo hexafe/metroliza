@@ -31,7 +31,7 @@ from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from scipy.stats import ttest_ind
 
 from modules.contracts import ExportRequest, validate_export_request
-import modules.CustomLogger as custom_logger
+import modules.custom_logger as custom_logger
 from modules.db import execute_select_with_columns, read_sql_dataframe, sqlite_connection_scope
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
