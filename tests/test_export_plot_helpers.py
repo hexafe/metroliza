@@ -83,6 +83,7 @@ from modules.ExportDataThread import (  # noqa: E402
     classify_nok_severity,
     build_summary_panel_subtitle_text,
     build_histogram_table_data,
+    build_histogram_table_render_data,
     style_histogram_stats_table,
     adjust_histogram_stats_table_geometry,
     classify_normality_status,
@@ -716,6 +717,62 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertFalse(ax_table.get_celld()[(1, 1)].get_visible())
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), normality_text)
             plt.close(fig)
+
+    def test_histogram_table_layout_keeps_normality_as_final_anchored_merged_row(self):
+        summary_stats = {
+            'minimum': 1.0,
+            'maximum': 2.0,
+            'average': 1.5,
+            'median': 1.5,
+            'sigma': 0.1,
+            'cp': 1.2,
+            'cpk': 1.1,
+            'sample_size': 10,
+            'nok_count': 2,
+            'nok_pct': 0.083333,
+            'normality_status': 'normal',
+            'normality_test_name': 'Shapiro',
+            'normality_p_value': 0.5123,
+        }
+        table_data = build_histogram_table_data(summary_stats)
+        self.assertEqual(table_data[-1][0], 'Normality')
+
+        table_render_data = build_histogram_table_render_data(table_data)
+        normality_row = next(index for index, (label, _value) in enumerate(table_render_data, start=1) if label == 'Normality')
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        ax_table = ax.table(
+            cellText=table_render_data,
+            colLabels=['Statistic', 'Value'],
+            cellLoc='center',
+            loc='right',
+            bbox=[1, 0, 0.3, 1],
+        )
+
+        style_histogram_stats_table(
+            ax_table,
+            table_render_data,
+            capability_row_badges={'Normality': classify_normality_status('normal')},
+        )
+        adjust_histogram_stats_table_geometry(ax_table)
+
+        stat_header_x = ax_table.get_celld()[(0, 0)].get_x()
+        value_header_x = ax_table.get_celld()[(0, 1)].get_x()
+
+        normality_left = ax_table.get_celld()[(normality_row, 0)]
+        normality_right = ax_table.get_celld()[(normality_row, 1)]
+
+        self.assertAlmostEqual(normality_left.get_x(), stat_header_x)
+        self.assertAlmostEqual(normality_right.get_x(), value_header_x)
+        self.assertEqual(normality_left.get_text().get_text(), table_data[-1][1])
+        self.assertFalse(normality_right.get_visible())
+
+        for spacer_offset in (1, 2):
+            self.assertFalse(ax_table.get_celld()[(normality_row + spacer_offset, 0)].get_visible())
+            self.assertFalse(ax_table.get_celld()[(normality_row + spacer_offset, 1)].get_visible())
+
+        self.assertEqual(len(ax.texts), 0)
+        plt.close(fig)
 
 
     def test_move_legend_to_figure_reparents_axis_legend_and_adjusts_top(self):
