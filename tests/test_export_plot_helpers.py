@@ -541,7 +541,9 @@ class TestExportPlotHelpers(unittest.TestCase):
         style = build_histogram_mean_line_style()
 
         self.assertEqual(style['linestyle'], '--')
-        self.assertLess(style['alpha'], 0.8)
+        self.assertLessEqual(style['linewidth'], 1.4)
+        self.assertLessEqual(style['alpha'], 0.5)
+        self.assertLess(style['zorder'], 3)
 
     def test_render_histogram_annotations_renders_mean_usl_lsl_and_offsets_mean_right(self):
         fig, ax = plt.subplots(figsize=(6, 4))
