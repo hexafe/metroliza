@@ -3157,10 +3157,10 @@ class ExportDataThread(QThread):
                         has_table=True,
                     )
 
-                    table_render_data = build_histogram_table_render_data(table_data, three_column=True)
+                    table_render_data = build_histogram_table_render_data(table_data)
                     ax_table = plt.table(
                         cellText=table_render_data,
-                        colLabels=['Statistic', ' ', 'Value'],
+                        colLabels=['Statistic', 'Value'],
                         cellLoc='center',
                         loc='right',
                         bbox=[1, 0, histogram_table_layout['table_bbox_width'], 1],
@@ -3175,7 +3175,7 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         ax_table,
-                        statistic_col_width_ratio=0.72,
+                        statistic_col_width_ratio=0.78,
                         row_height_scale=1.15,
                         capability_row_badges=histogram_row_badges,
                     )
