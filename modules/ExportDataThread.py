@@ -1605,7 +1605,6 @@ def _apply_table_row_badge(ax_table, row_index, palette_key):
         cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
         text = cell.get_text()
         text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-        text.set_weight('bold')
 
 
 def _merge_table_row_cells_three_columns(ax_table, row_index, *, text, palette_key):
@@ -1628,7 +1627,6 @@ def _merge_table_row_cells_three_columns(ax_table, row_index, *, text, palette_k
     left_cell.set_height(left_cell.get_height() * 1.6)
     left_cell.get_text().set_text(text)
     left_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-    left_cell.get_text().set_weight('bold')
     left_cell.get_text().set_linespacing(1.2)
     left_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
 

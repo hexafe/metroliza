@@ -974,6 +974,10 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ax_table.get_celld()[(1, 0)].get_text().get_color(),
                 SUMMARY_PLOT_PALETTE[palette_bg.replace('_bg', '_text')],
             )
+
+            self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_fontweight(), 'normal')
+            self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_fontweight(), 'normal')
+            self.assertEqual(ax_table.get_celld()[(1, 2)].get_text().get_fontweight(), 'normal')
             plt.close(fig)
 
     def test_histogram_table_layout_keeps_normality_as_final_anchored_merged_row(self):
@@ -1040,6 +1044,9 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertEqual(normality_left.get_text().get_va(), 'center')
             self.assertFalse(normality_middle.get_visible())
             self.assertFalse(normality_right.get_visible())
+            self.assertEqual(normality_left.get_text().get_fontweight(), 'normal')
+            self.assertEqual(normality_middle.get_text().get_fontweight(), 'normal')
+            self.assertEqual(normality_right.get_text().get_fontweight(), 'normal')
 
             visible_row_indices = [
                 row_index
