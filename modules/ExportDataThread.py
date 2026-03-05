@@ -418,15 +418,12 @@ def build_histogram_table_data(summary_stats):
     else:
         normality_feedback = 'Unknown'
 
-    normality_block = normality_feedback
-    if 'normality_p_value' in summary_stats or 'normality_test_name' in summary_stats:
-        normality_test_name = summary_stats.get('normality_test_name', 'Shapiro')
-        normality_p_value = summary_stats.get('normality_p_value')
-        if isinstance(normality_p_value, (float, int)):
-            normality_header = f"{normality_test_name} p = {normality_p_value:.4f}"
-        else:
-            normality_header = f"{normality_test_name} p = N/A"
-        normality_block = f"{normality_header}\n{normality_feedback}"
+    normality_p_value = summary_stats.get('normality_p_value')
+    if isinstance(normality_p_value, (float, int)):
+        normality_header = f"Shapiro p = {normality_p_value:.4f}"
+    else:
+        normality_header = "Shapiro p = N/A"
+    normality_block = f"{normality_header}\n{normality_feedback}"
     cp_value = summary_stats.get('cp')
     cpk_label = 'Cpk'
     cpk_value = summary_stats.get('cpk')
@@ -454,7 +451,7 @@ def build_histogram_table_data(summary_stats):
 
 
 def build_histogram_table_render_data(table_data, *, three_column=False):
-    """Expand histogram table rows with render-only spacer rows for merged cells."""
+    """Build render rows for histogram summary tables."""
 
     if three_column:
         render_data = []
@@ -464,19 +461,9 @@ def build_histogram_table_render_data(table_data, *, three_column=False):
                 continue
             render_data.append([label, label, value])
 
-        normality_row_index = next((index for index, (label, _label_part2, _value) in enumerate(render_data) if label == 'Normality'), None)
-        if normality_row_index is None:
-            return render_data
-
-        render_data[normality_row_index + 1:normality_row_index + 1] = [['', '', ''], ['', '', '']]
         return render_data
 
     render_data = list(table_data)
-    normality_row_index = next((index for index, (label, _value) in enumerate(render_data) if label == 'Normality'), None)
-    if normality_row_index is None:
-        return render_data
-
-    render_data[normality_row_index + 1:normality_row_index + 1] = [('', ''), ('', '')]
     return render_data
 
 
@@ -1345,17 +1332,12 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
     for row_index, (label, value) in enumerate(normalized_rows, start=1):
         if capability_row_badges and label in capability_row_badges:
             if label == 'Normality':
-                _merge_table_row_cells(
+                _merge_table_row_cells_three_columns(
                     ax_table,
                     row_index,
                     text=str(value),
                     palette_key=capability_row_badges[label]['palette_key'],
                 )
-                for spacer_offset in (1, 2):
-                    for col_index in column_indexes:
-                        spacer = cell_map.get((row_index + spacer_offset, col_index))
-                        if spacer is not None:
-                            spacer.set_visible(False)
                 continue
             _apply_table_row_badge(ax_table, row_index, capability_row_badges[label]['palette_key'])
             continue
@@ -1396,12 +1378,27 @@ def adjust_histogram_stats_table_geometry(
     border_linewidth = 0.45
     cell_padding = 0.12
 
+    full_width_rows = set()
+    if has_three_columns:
+        full_width_rows = {
+            row
+            for row in sorted({row for (row, col) in table_cells.keys() if row > 0 and col == 0})
+            if table_cells.get((row, 0)) is not None
+            and table_cells[(row, 0)].get_visible()
+            and table_cells.get((row, 1)) is not None
+            and not table_cells[(row, 1)].get_visible()
+            and table_cells.get((row, 2)) is not None
+            and not table_cells[(row, 2)].get_visible()
+        }
+
     for (row_index, col_index), cell in table_cells.items():
         if not cell.get_visible():
             continue
 
         if has_three_columns:
-            if col_index == 0:
+            if row_index in full_width_rows and col_index == 0:
+                pass
+            elif col_index == 0:
                 cell.set_width(label_col0_ratio)
             elif col_index == 1:
                 cell.set_width(label_col1_ratio)
@@ -1565,8 +1562,8 @@ def _apply_table_row_badge(ax_table, row_index, palette_key):
         text.set_weight('bold')
 
 
-def _merge_table_row_cells(ax_table, row_index, *, text, palette_key):
-    """Merge statistic/value cells for one row into a single full-width badge."""
+def _merge_table_row_cells_three_columns(ax_table, row_index, *, text, palette_key):
+    """Merge (row, 0..2) into a single full-width badge cell."""
     cell_map = ax_table.get_celld()
     left_cell = cell_map.get((row_index, 0))
     middle_cell = cell_map.get((row_index, 1))
@@ -1582,9 +1579,11 @@ def _merge_table_row_cells(ax_table, row_index, *, text, palette_key):
         merged_width += right_cell.get_width()
 
     left_cell.set_width(merged_width)
+    left_cell.set_height(left_cell.get_height() * 1.6)
     left_cell.get_text().set_text(text)
     left_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
     left_cell.get_text().set_weight('bold')
+    left_cell.get_text().set_linespacing(1.2)
     left_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
 
     if middle_cell is not None:

@@ -763,7 +763,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(table[-2], ('NOK %', '8.33%'))
-        self.assertEqual(table[-1], ('Normality', 'Unknown'))
+        self.assertEqual(table[-1], ('Normality', 'Shapiro p = N/A\nUnknown'))
 
 
     def test_build_histogram_table_data_uses_cpk_plus_for_one_sided_case(self):
@@ -799,11 +799,12 @@ class TestExportPlotHelpers(unittest.TestCase):
         for normality_text, status, palette_bg in scenarios:
             fig, ax = plt.subplots(figsize=(4, 3))
             table_data = [('Normality', normality_text)]
-            ax_table = ax.table(cellText=table_data, colLabels=['Statistic', 'Value'], cellLoc='center')
+            render_data = build_histogram_table_render_data(table_data, three_column=True)
+            ax_table = ax.table(cellText=render_data, colLabels=['Statistic', ' ', 'Value'], cellLoc='center')
 
             style_histogram_stats_table(
                 ax_table,
-                table_data,
+                render_data,
                 capability_row_badges={'Normality': classify_normality_status(status)},
             )
 
@@ -815,7 +816,12 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ax_table.get_celld()[(1, 1)].get_facecolor(),
                 matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE[palette_bg]),
             )
+            self.assertEqual(
+                ax_table.get_celld()[(1, 2)].get_facecolor(),
+                matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE[palette_bg]),
+            )
             self.assertFalse(ax_table.get_celld()[(1, 1)].get_visible())
+            self.assertFalse(ax_table.get_celld()[(1, 2)].get_visible())
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), normality_text)
             plt.close(fig)
 
@@ -832,23 +838,20 @@ class TestExportPlotHelpers(unittest.TestCase):
             'nok_count': 2,
             'nok_pct': 0.083333,
             'normality_status': 'normal',
-            'normality_test_name': 'Shapiro',
             'normality_p_value': 0.5123,
         }
         table_data = build_histogram_table_data(summary_stats)
         self.assertEqual(table_data[-1][0], 'Normality')
 
-        render_data = build_histogram_table_render_data(table_data)
+        render_data = build_histogram_table_render_data(table_data, three_column=True)
         normality_row_index = next(
-            index for index, (label, _value) in enumerate(render_data, start=1) if label == 'Normality'
+            index for index, (label, _label_part2, _value) in enumerate(render_data, start=1) if label == 'Normality'
         )
-        spacer_rows = (normality_row_index + 1, normality_row_index + 2)
-
         fig, ax = plt.subplots(figsize=(4, 3))
         try:
             ax_table = ax.table(
                 cellText=render_data,
-                colLabels=['Statistic', 'Value'],
+                colLabels=['Statistic', ' ', 'Value'],
                 cellLoc='center',
                 loc='right',
                 bbox=[1, 0, 0.3, 1],
@@ -867,26 +870,28 @@ class TestExportPlotHelpers(unittest.TestCase):
             fig.canvas.draw()
 
             stat_header_x = ax_table.get_celld()[(0, 0)].get_x()
-            value_header_x = ax_table.get_celld()[(0, 1)].get_x()
+            value_header_x = ax_table.get_celld()[(0, 2)].get_x()
             normality_left = ax_table.get_celld()[(normality_row_index, 0)]
-            normality_right = ax_table.get_celld()[(normality_row_index, 1)]
+            normality_middle = ax_table.get_celld()[(normality_row_index, 1)]
+            normality_right = ax_table.get_celld()[(normality_row_index, 2)]
 
             self.assertAlmostEqual(normality_left.get_x(), stat_header_x)
             self.assertAlmostEqual(normality_right.get_x(), value_header_x)
-            reference_stat_width = ax_table.get_celld()[(1, 0)].get_width()
-            self.assertAlmostEqual(normality_left.get_width(), reference_stat_width, places=8)
+            header_full_width = (
+                ax_table.get_celld()[(0, 0)].get_width()
+                + ax_table.get_celld()[(0, 1)].get_width()
+                + ax_table.get_celld()[(0, 2)].get_width()
+            )
+            self.assertAlmostEqual(normality_left.get_width(), header_full_width, places=2)
             self.assertEqual(normality_left.get_text().get_text(), table_data[-1][1])
             self.assertEqual(normality_left.get_text().get_va(), 'center')
+            self.assertFalse(normality_middle.get_visible())
             self.assertFalse(normality_right.get_visible())
-
-            for spacer_row in spacer_rows:
-                self.assertFalse(ax_table.get_celld()[(spacer_row, 0)].get_visible())
-                self.assertFalse(ax_table.get_celld()[(spacer_row, 1)].get_visible())
 
             visible_row_indices = [
                 row_index
                 for row_index in range(1, len(render_data) + 1)
-                if row_index != normality_row_index and row_index not in spacer_rows
+                if row_index != normality_row_index
             ]
             visible_heights = [ax_table.get_celld()[(row_index, 0)].get_height() for row_index in visible_row_indices]
             self.assertGreater(len(visible_heights), 1)
@@ -894,7 +899,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             renderer = fig.canvas.get_renderer()
             for row_index in visible_row_indices:
-                for col_index in (0, 1):
+                for col_index in (0, 2):
                     cell = ax_table.get_celld()[(row_index, col_index)]
                     text = cell.get_text()
                     self.assertEqual(text.get_va(), 'center')
