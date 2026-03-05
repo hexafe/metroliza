@@ -83,6 +83,7 @@ from modules.ExportDataThread import (  # noqa: E402
     classify_nok_severity,
     build_summary_panel_subtitle_text,
     build_histogram_table_data,
+    build_histogram_table_render_data,
     style_histogram_stats_table,
     adjust_histogram_stats_table_geometry,
     classify_normality_status,
@@ -715,6 +716,83 @@ class TestExportPlotHelpers(unittest.TestCase):
             )
             self.assertFalse(ax_table.get_celld()[(1, 1)].get_visible())
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), normality_text)
+            plt.close(fig)
+
+    def test_histogram_stats_table_normality_row_geometry_and_alignment_remain_stable(self):
+        base_table_data = [
+            ('Min', '1.000'),
+            ('Max', '2.000'),
+            ('Mean', '1.500'),
+            ('Normality', 'Shapiro p = 0.5000\nNormal'),
+            ('Cp', '1.45'),
+            ('Cpk', '1.38'),
+        ]
+        render_data = build_histogram_table_render_data(base_table_data)
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            ax_table = ax.table(
+                cellText=render_data,
+                colLabels=['Statistic', 'Value'],
+                cellLoc='center',
+                loc='right',
+                bbox=[1, 0, 0.3, 1],
+            )
+
+            style_histogram_stats_table(
+                ax_table,
+                render_data,
+                capability_row_badges={'Normality': classify_normality_status('normal')},
+            )
+            adjust_histogram_stats_table_geometry(
+                ax_table,
+                statistic_col_width_ratio=0.56,
+                row_height_scale=1.15,
+            )
+            fig.canvas.draw()
+
+            normality_row_index = next(
+                index for index, (label, _value) in enumerate(render_data, start=1) if label == 'Normality'
+            )
+            spacer_rows = (normality_row_index + 1, normality_row_index + 2)
+
+            visible_row_indices = [
+                row_index
+                for row_index in range(1, len(render_data) + 1)
+                if row_index != normality_row_index and row_index not in spacer_rows
+            ]
+            visible_heights = [ax_table.get_celld()[(row_index, 0)].get_height() for row_index in visible_row_indices]
+            self.assertGreater(len(visible_heights), 1)
+            self.assertAlmostEqual(max(visible_heights), min(visible_heights), places=8)
+
+            normality_left = ax_table.get_celld()[(normality_row_index, 0)]
+            normality_right = ax_table.get_celld()[(normality_row_index, 1)]
+            reference_stat_width = ax_table.get_celld()[(visible_row_indices[0], 0)].get_width()
+            self.assertAlmostEqual(normality_left.get_width(), reference_stat_width, places=8)
+            self.assertFalse(normality_right.get_visible())
+            self.assertEqual(normality_left.get_text().get_va(), 'center')
+
+            for spacer_row in spacer_rows:
+                self.assertFalse(ax_table.get_celld()[(spacer_row, 0)].get_visible())
+                self.assertFalse(ax_table.get_celld()[(spacer_row, 1)].get_visible())
+
+            cp_row_index = next(index for index, (label, _value) in enumerate(render_data, start=1) if label == 'Cp')
+            cp_cell = ax_table.get_celld()[(cp_row_index, 0)]
+            self.assertLess(cp_cell.get_y(), normality_left.get_y())
+
+            renderer = fig.canvas.get_renderer()
+            for row_index in visible_row_indices:
+                for col_index in (0, 1):
+                    cell = ax_table.get_celld()[(row_index, col_index)]
+                    text = cell.get_text()
+                    self.assertEqual(text.get_va(), 'center')
+
+                    cell_bbox = cell.get_window_extent(renderer=renderer)
+                    text_bbox = text.get_window_extent(renderer=renderer)
+                    cell_center_y = (cell_bbox.y0 + cell_bbox.y1) / 2
+                    text_center_y = (text_bbox.y0 + text_bbox.y1) / 2
+                    self.assertLess(abs(text_center_y - cell_center_y), 3.0)
+        finally:
             plt.close(fig)
 
 
