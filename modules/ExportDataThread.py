@@ -1284,6 +1284,30 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
             if spacer_left is not None:
                 spacer_left.set_visible(False)
 
+
+def adjust_histogram_stats_table_geometry(
+    ax_table,
+    *,
+    statistic_col_width_ratio=0.54,
+    row_height_scale=1.12,
+):
+    """Increase histogram stats-table readability via column and row geometry."""
+    if ax_table is None:
+        return
+
+    stat_ratio = min(0.7, max(0.3, float(statistic_col_width_ratio)))
+    value_ratio = 1.0 - stat_ratio
+    safe_row_scale = min(1.4, max(0.9, float(row_height_scale)))
+
+    for (row_index, col_index), cell in ax_table.get_celld().items():
+        if col_index == 0:
+            cell.set_width(stat_ratio)
+        elif col_index == 1:
+            cell.set_width(value_ratio)
+
+        if row_index >= 1:
+            cell.set_height(cell.get_height() * safe_row_scale)
+
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
 
@@ -2919,7 +2943,7 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    histogram_figsize = (6, 4)
+                    histogram_figsize = (6.2, 4)
                     chart_start = time.perf_counter()
                     fig, ax = plt.subplots(figsize=histogram_figsize)
                     render_histogram(ax, sampled_histogram_group)
@@ -2952,6 +2976,11 @@ class ExportDataThread(QThread):
                         capability_badge=capability_badge,
                         capability_row_badges=histogram_row_badges,
                     )
+                    adjust_histogram_stats_table_geometry(
+                        ax_table,
+                        statistic_col_width_ratio=0.56,
+                        row_height_scale=1.15,
+                    )
 
                     density_curve = precomputed_density_curve
                     if density_curve is None:
@@ -2963,7 +2992,7 @@ class ExportDataThread(QThread):
                         render_density_line(ax, density_curve['x'], density_curve['y'])
 
                     mean_line_style = build_histogram_mean_line_style()
-                    ax.axvline(average, label='Mean', **mean_line_style)
+                    ax.axvline(average, **mean_line_style)
                     render_tolerance_band(
                         ax,
                         nom,
@@ -2973,8 +3002,6 @@ class ExportDataThread(QThread):
                         orientation='vertical',
                     )
                     render_spec_reference_lines(ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
-                    ax.legend(handles=[Line2D([0], [0], **mean_line_style, label='Mean'), *build_tolerance_reference_legend_handles(include_nominal=False)], loc='upper left')
-                    move_legend_to_figure(ax)
                     ax.set_xlabel('Measurement')
                     ax.set_ylabel('Density')
                     ax.set_title(build_wrapped_chart_title(header), pad=20)
