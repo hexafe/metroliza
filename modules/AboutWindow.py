@@ -1,5 +1,7 @@
 """About dialog and clickable label helpers for application metadata display."""
 
+import os
+
 from PyQt6.QtCore import QSize, QTemporaryFile, Qt, QUrl
 from PyQt6.QtGui import QMovie, QDesktopServices, QCursor
 from PyQt6.QtWidgets import QDialog, QLabel, QVBoxLayout
@@ -35,6 +37,7 @@ class AboutWindow(QDialog):
 
     def __init__(self, parent=None, days_until_expiration=0):
         super().__init__(parent)
+        self._gif_temp_file_path = ""
 
         # Set the window title and layout
         self.setWindowTitle("About")
@@ -51,12 +54,13 @@ class AboutWindow(QDialog):
 
         # Create temporary file and save encoded gif to it
         temp_file = QTemporaryFile()
-        temp_file.setAutoRemove(True)
+        temp_file.setAutoRemove(False)
         temp_file_name = ""
         if temp_file.open():
             temp_file.write(gif_decoded)
             temp_file.close()
             temp_file_name = temp_file.fileName()
+            self._gif_temp_file_path = temp_file_name
 
         # Create the QMovie using the temporary file name
         self.gif = QMovie(temp_file_name)
@@ -89,3 +93,10 @@ class AboutWindow(QDialog):
         link_label.setOpenExternalLinks(True)
         link_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.layout.addWidget(link_label)
+
+    def closeEvent(self, event):
+        """Remove the temporary GIF file created for QMovie during teardown."""
+        if self._gif_temp_file_path and os.path.exists(self._gif_temp_file_path):
+            os.remove(self._gif_temp_file_path)
+            self._gif_temp_file_path = ""
+        super().closeEvent(event)
