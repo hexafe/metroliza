@@ -59,6 +59,7 @@ from modules.export_summary_utils import (
 )
 from modules.export_summary_sheet_planner import (
     build_histogram_annotation_specs as _build_histogram_annotation_specs,
+    compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
     build_summary_image_anchor_plan as _build_summary_image_anchor_plan,
     build_summary_sheet_position_plan as _build_summary_sheet_position_plan,
 )
@@ -488,6 +489,12 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
     """Build annotation descriptors for histogram mean and spec-limit markers."""
 
     return _build_histogram_annotation_specs(average, usl, lsl, y_max)
+
+
+def compute_histogram_annotation_rows(annotation_specs, distance_threshold, **kwargs):
+    """Compute collision-safe row assignments and text y-axis locations."""
+
+    return _compute_histogram_annotation_rows(annotation_specs, distance_threshold, **kwargs)
 
 
 def build_histogram_mean_line_style():
@@ -3087,20 +3094,22 @@ class ExportDataThread(QThread):
                     ax.set_xlabel('Measurement')
                     ax.set_ylabel('Count')
                     histogram_title_pad = 26
-                    histogram_annotation_band = {
-                        'mean': 1.03,
-                        'usl': 1.01,
-                        'lsl': 1.01,
-                    }
-                    histogram_top_margin = 0.82
+                    annotation_base_y = 1.01
+                    annotation_row_step = 0.025
 
                     ax.set_title(build_wrapped_chart_title(header), pad=histogram_title_pad)
                     apply_minimal_axis_style(ax, grid_axis='y')
 
                     annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
                     annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
-                    for annotation in annotation_specs:
-                        annotation['text_y_axes'] = histogram_annotation_band.get(annotation.get('kind'), 1.01)
+                    annotation_specs, max_annotation_row = compute_histogram_annotation_rows(
+                        annotation_specs,
+                        distance_threshold=0.04,
+                        threshold_mode='axis_fraction',
+                        x_span=ax.get_xlim()[1] - ax.get_xlim()[0],
+                        base_text_y_axes=annotation_base_y,
+                        row_step=annotation_row_step,
+                    )
                     render_histogram_annotations(
                         ax,
                         annotation_specs,
@@ -3108,6 +3117,7 @@ class ExportDataThread(QThread):
                         annotation_box=annotation_box,
                     )
 
+                    histogram_top_margin = max(0.82, 0.82 + (max_annotation_row * 0.04))
                     plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=histogram_top_margin)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
