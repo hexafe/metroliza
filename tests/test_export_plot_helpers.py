@@ -52,6 +52,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 from modules.ExportDataThread import (  # noqa: E402
     build_histogram_annotation_specs,
     build_histogram_mean_line_style,
+    compute_histogram_annotation_rows,
     compute_histogram_font_sizes,
     compute_histogram_table_layout,
     render_histogram_annotations,
@@ -229,7 +230,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(len(annotations), 3)
         self.assertEqual(annotations[0]['text'], 'Mean = 10.123')
         self.assertEqual(annotations[0]['x'], 10.1234)
-        self.assertEqual(annotations[0]['text_y_axes'], 1.06)
+        self.assertGreater(annotations[0]['text_y_axes'], annotations[1]['text_y_axes'])
         self.assertEqual(annotations[1]['text'], 'USL=10.600')
         self.assertEqual(annotations[1]['ha'], 'center')
         self.assertEqual(annotations[2]['text'], 'LSL=9.800')
@@ -462,13 +463,18 @@ class TestExportPlotHelpers(unittest.TestCase):
             )
 
             title_pad = 26
-            annotation_band = {'mean': 1.03, 'usl': 1.01, 'lsl': 1.01}
-            top_margin = 0.82
             title = ax.set_title(build_wrapped_chart_title('Histogram Layout Validation'), pad=title_pad)
 
             annotation_specs = build_histogram_annotation_specs(10.2, 10.6, 9.8, 1.0)
-            for annotation in annotation_specs:
-                annotation['text_y_axes'] = annotation_band.get(annotation.get('kind'), 1.01)
+            annotation_specs, max_annotation_row = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=ax.get_xlim()[1] - ax.get_xlim()[0],
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            top_margin = max(0.82, 0.82 + (max_annotation_row * 0.04))
             texts = render_histogram_annotations(
                 ax,
                 annotation_specs,
@@ -639,6 +645,43 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual({text.get_fontsize() for text in rendered}, {9.1})
         plt.close(fig)
+
+
+    def test_compute_histogram_annotation_rows_stacks_close_markers_and_keeps_mean_highest(self):
+        annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.01, lsl=9.99, y_max=1.0)
+
+        resolved, max_row = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.05,
+            threshold_mode='data_units',
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+
+        by_kind = {item['kind']: item for item in resolved}
+        self.assertEqual(max_row, 2)
+        self.assertGreater(by_kind['mean']['row_index'], by_kind['usl']['row_index'])
+        self.assertGreater(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
+        self.assertNotEqual(by_kind['usl']['row_index'], by_kind['lsl']['row_index'])
+        self.assertEqual(by_kind['mean']['x'], 10.0)
+
+    def test_compute_histogram_annotation_rows_allows_shared_lower_row_when_limits_are_far(self):
+        annotation_specs = build_histogram_annotation_specs(average=10.0, usl=12.0, lsl=8.0, y_max=1.0)
+
+        resolved, max_row = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.05,
+            threshold_mode='data_units',
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+
+        by_kind = {item['kind']: item for item in resolved}
+        self.assertEqual(max_row, 1)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 0)
+        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.035)
 
     def test_build_summary_panel_subtitle_text_formats_samples_and_nok_percent(self):
         subtitle = build_summary_panel_subtitle_text({'sample_size': 12, 'nok_pct': 0.083333})
