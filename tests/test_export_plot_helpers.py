@@ -737,42 +737,77 @@ class TestExportPlotHelpers(unittest.TestCase):
         table_data = build_histogram_table_data(summary_stats)
         self.assertEqual(table_data[-1][0], 'Normality')
 
-        table_render_data = build_histogram_table_render_data(table_data)
-        normality_row = next(index for index, (label, _value) in enumerate(table_render_data, start=1) if label == 'Normality')
+        render_data = build_histogram_table_render_data(table_data)
+        normality_row_index = next(
+            index for index, (label, _value) in enumerate(render_data, start=1) if label == 'Normality'
+        )
+        spacer_rows = (normality_row_index + 1, normality_row_index + 2)
 
         fig, ax = plt.subplots(figsize=(4, 3))
-        ax_table = ax.table(
-            cellText=table_render_data,
-            colLabels=['Statistic', 'Value'],
-            cellLoc='center',
-            loc='right',
-            bbox=[1, 0, 0.3, 1],
-        )
+        try:
+            ax_table = ax.table(
+                cellText=render_data,
+                colLabels=['Statistic', 'Value'],
+                cellLoc='center',
+                loc='right',
+                bbox=[1, 0, 0.3, 1],
+            )
 
-        style_histogram_stats_table(
-            ax_table,
-            table_render_data,
-            capability_row_badges={'Normality': classify_normality_status('normal')},
-        )
-        adjust_histogram_stats_table_geometry(ax_table)
+            style_histogram_stats_table(
+                ax_table,
+                render_data,
+                capability_row_badges={'Normality': classify_normality_status('normal')},
+            )
+            adjust_histogram_stats_table_geometry(
+                ax_table,
+                statistic_col_width_ratio=0.56,
+                row_height_scale=1.15,
+            )
+            fig.canvas.draw()
 
-        stat_header_x = ax_table.get_celld()[(0, 0)].get_x()
-        value_header_x = ax_table.get_celld()[(0, 1)].get_x()
+            stat_header_x = ax_table.get_celld()[(0, 0)].get_x()
+            value_header_x = ax_table.get_celld()[(0, 1)].get_x()
+            normality_left = ax_table.get_celld()[(normality_row_index, 0)]
+            normality_right = ax_table.get_celld()[(normality_row_index, 1)]
 
-        normality_left = ax_table.get_celld()[(normality_row, 0)]
-        normality_right = ax_table.get_celld()[(normality_row, 1)]
+            self.assertAlmostEqual(normality_left.get_x(), stat_header_x)
+            self.assertAlmostEqual(normality_right.get_x(), value_header_x)
+            reference_stat_width = ax_table.get_celld()[(1, 0)].get_width()
+            self.assertAlmostEqual(normality_left.get_width(), reference_stat_width, places=8)
+            self.assertEqual(normality_left.get_text().get_text(), table_data[-1][1])
+            self.assertEqual(normality_left.get_text().get_va(), 'center')
+            self.assertFalse(normality_right.get_visible())
 
-        self.assertAlmostEqual(normality_left.get_x(), stat_header_x)
-        self.assertAlmostEqual(normality_right.get_x(), value_header_x)
-        self.assertEqual(normality_left.get_text().get_text(), table_data[-1][1])
-        self.assertFalse(normality_right.get_visible())
+            for spacer_row in spacer_rows:
+                self.assertFalse(ax_table.get_celld()[(spacer_row, 0)].get_visible())
+                self.assertFalse(ax_table.get_celld()[(spacer_row, 1)].get_visible())
 
-        for spacer_offset in (1, 2):
-            self.assertFalse(ax_table.get_celld()[(normality_row + spacer_offset, 0)].get_visible())
-            self.assertFalse(ax_table.get_celld()[(normality_row + spacer_offset, 1)].get_visible())
+            visible_row_indices = [
+                row_index
+                for row_index in range(1, len(render_data) + 1)
+                if row_index != normality_row_index and row_index not in spacer_rows
+            ]
+            visible_heights = [ax_table.get_celld()[(row_index, 0)].get_height() for row_index in visible_row_indices]
+            self.assertGreater(len(visible_heights), 1)
+            self.assertAlmostEqual(max(visible_heights), min(visible_heights), places=8)
 
-        self.assertEqual(len(ax.texts), 0)
-        plt.close(fig)
+            renderer = fig.canvas.get_renderer()
+            for row_index in visible_row_indices:
+                for col_index in (0, 1):
+                    cell = ax_table.get_celld()[(row_index, col_index)]
+                    text = cell.get_text()
+                    self.assertEqual(text.get_va(), 'center')
+
+                    cell_bbox = cell.get_window_extent(renderer=renderer)
+                    text_bbox = text.get_window_extent(renderer=renderer)
+                    cell_center_y = (cell_bbox.y0 + cell_bbox.y1) / 2
+                    text_center_y = (text_bbox.y0 + text_bbox.y1) / 2
+                    self.assertLess(abs(text_center_y - cell_center_y), 3.0)
+
+            last_content_row = max(visible_row_indices + [normality_row_index])
+            self.assertEqual(last_content_row, normality_row_index)
+        finally:
+            plt.close(fig)
 
 
     def test_move_legend_to_figure_reparents_axis_legend_and_adjusts_top(self):
