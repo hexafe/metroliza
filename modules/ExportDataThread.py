@@ -456,9 +456,6 @@ def build_histogram_table_render_data(table_data, *, three_column=False):
     if three_column:
         render_data = []
         for label, value in table_data:
-            if label == 'Normality':
-                render_data.append([label, '', value])
-                continue
             render_data.append([label, '', value])
 
         return render_data
@@ -1433,7 +1430,7 @@ def adjust_histogram_stats_table_geometry(
                 text.set_ha('right')
                 text.set_x(0.97)
 
-        if row_index >= 1:
+        if row_index >= 1 and row_index not in full_width_rows:
             cell.set_height(cell.get_height() * safe_row_scale)
 
         cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
