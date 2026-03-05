@@ -120,6 +120,19 @@ def select_group_stat_test(
 ) -> dict[str, Any]:
     """Select and run a statistical test from grouped samples with assumption checks."""
 
+    if len(labels) != len(grouped_values):
+        return {
+            'test_name': None,
+            'p_value': None,
+            'sample_sizes': {},
+            'assumptions': {
+                'normality': {},
+                'variance_homogeneity': {'test': None, 'p_value': None, 'status': 'not_checked'},
+            },
+            'warnings': ['input_length_mismatch'],
+            'preprocess': {},
+        }
+
     preprocessed = [
         preprocess_group(label, values, small_n_threshold=small_n_threshold)
         for label, values in zip(labels, grouped_values)

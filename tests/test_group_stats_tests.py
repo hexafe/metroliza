@@ -97,6 +97,24 @@ class TestGroupStatsTests(unittest.TestCase):
         self.assertEqual(result['test_name'], 'Mann-Whitney U')
         self.assertIn('contains_constant_group', result['warnings'])
 
+
+    def test_input_length_mismatch_returns_warning_and_no_partial_processing(self):
+        labels = ['A', 'B', 'C']
+        values = [
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+        ]
+
+        result = select_group_stat_test(labels, values)
+
+        self.assertIsNone(result['test_name'])
+        self.assertIsNone(result['p_value'])
+        self.assertEqual(result['warnings'], ['input_length_mismatch'])
+        self.assertEqual(result['sample_sizes'], {})
+        self.assertEqual(result['preprocess'], {})
+        self.assertEqual(result['assumptions']['normality'], {})
+        self.assertEqual(result['assumptions']['variance_homogeneity']['status'], 'not_checked')
+
     def test_edge_case_with_empty_and_nan_groups_returns_no_test(self):
         labels = ['A', 'B']
         values = [
