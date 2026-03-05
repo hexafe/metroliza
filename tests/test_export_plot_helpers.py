@@ -849,7 +849,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(subtitle, 'n=12 • NOK=8.3%')
 
     def test_build_histogram_table_data_formats_nok_as_percent_string(self):
-        table = build_histogram_table_data(
+        payload = build_histogram_table_data(
             {
                 'minimum': 1.0,
                 'maximum': 2.0,
@@ -864,12 +864,13 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
+        table = payload['rows']
         self.assertEqual(table[-2], ('NOK %', '8.33%'))
         self.assertEqual(table[-1], ('Normality', 'Shapiro p = N/A\nUnknown'))
 
 
     def test_build_histogram_table_data_uses_cpk_plus_for_one_sided_case(self):
-        table = build_histogram_table_data(
+        payload = build_histogram_table_data(
             {
                 'minimum': 0.0,
                 'maximum': 0.06,
@@ -887,9 +888,39 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
+        table = payload['rows']
         labels = [label for label, _ in table]
         self.assertIn('Cpk+', labels)
         self.assertNotIn('Cpk', labels)
+
+    def test_build_histogram_table_data_exposes_cpk_plus_metadata_for_badges(self):
+        payload = build_histogram_table_data(
+            {
+                'minimum': 0.0,
+                'maximum': 0.06,
+                'average': 0.031,
+                'median': 0.031,
+                'sigma': 0.0099,
+                'cp': 'N/A',
+                'cpk': 0.0,
+                'sample_size': 8,
+                'nok_count': 0,
+                'nok_pct': 0.0,
+                'normality_status': 'normal',
+                'normality_p_value': 0.52,
+                'usl': 0.06,
+            }
+        )
+
+        cpk_row = next((row for row in payload['rows'] if row[0] == 'Cpk+'), None)
+        self.assertIsNotNone(cpk_row)
+
+        expected_cpk_plus = round((0.06 - 0.031) / (3 * 0.0099), 2)
+        self.assertEqual(cpk_row[1], expected_cpk_plus)
+        self.assertEqual(payload['capability_rows']['Cpk']['label'], 'Cpk+')
+        self.assertEqual(payload['capability_rows']['Cpk']['display_value'], expected_cpk_plus)
+        self.assertEqual(payload['capability_rows']['Cpk']['classification_value'], expected_cpk_plus)
+
 
     def test_build_histogram_table_render_data_three_column_duplicates_label_in_first_two_columns(self):
         table_data = [('Min', '1.0'), ('NOK %', '8.33%'), ('Normality', 'Shapiro p = N/A\nUnknown')]
@@ -960,7 +991,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             'normality_status': 'normal',
             'normality_p_value': 0.5123,
         }
-        table_data = build_histogram_table_data(summary_stats)
+        table_payload = build_histogram_table_data(summary_stats)
+        table_data = table_payload['rows']
         self.assertEqual(table_data[-1][0], 'Normality')
 
         render_data = build_histogram_table_render_data(table_data, three_column=True)
