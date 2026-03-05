@@ -403,6 +403,14 @@ def build_histogram_table_data(summary_stats):
     def _rounded_or_text(value, digits):
         return value if isinstance(value, str) else round(value, digits)
 
+    normality_status = summary_stats.get('normality_status')
+    if normality_status == 'normal':
+        normality_feedback = 'Normal'
+    elif normality_status == 'not_normal':
+        normality_feedback = 'Non-normal'
+    else:
+        normality_feedback = 'Unknown'
+
     return [
         ('Min', round(summary_stats['minimum'], 3)),
         ('Max', round(summary_stats['maximum'], 3)),
@@ -414,7 +422,7 @@ def build_histogram_table_data(summary_stats):
         ('Samples', round(summary_stats['sample_size'], 1)),
         ('NOK nb', round(summary_stats['nok_count'], 1)),
         ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
-        ('Normality', summary_stats.get('normality_text', 'Unknown')),
+        ('Normality', normality_feedback),
     ]
 
 
@@ -1191,8 +1199,17 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
         cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_header_text'])
 
     cp_cpk_rows = {'Cp', 'Cpk'}
-    for row_index, (label, _value) in enumerate(table_data, start=1):
+    for row_index, (label, value) in enumerate(table_data, start=1):
         if capability_row_badges and label in capability_row_badges:
+            if label == 'Normality':
+                merged_feedback = 'Not sure' if str(value).strip().lower() == 'unknown' else value
+                _merge_table_row_cells(
+                    ax_table,
+                    row_index,
+                    text=f'Normality: {merged_feedback}',
+                    palette_key=capability_row_badges[label]['palette_key'],
+                )
+                continue
             _apply_table_row_badge(ax_table, row_index, capability_row_badges[label]['palette_key'])
             continue
         if capability_badge and label in cp_cpk_rows:
@@ -1323,6 +1340,22 @@ def _apply_table_row_badge(ax_table, row_index, palette_key):
         text = cell.get_text()
         text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
         text.set_weight('bold')
+
+
+def _merge_table_row_cells(ax_table, row_index, *, text, palette_key):
+    """Merge statistic/value cells for one row into a single full-width badge."""
+    left_cell = ax_table.get_celld().get((row_index, 0))
+    right_cell = ax_table.get_celld().get((row_index, 1))
+    if left_cell is None or right_cell is None:
+        return
+
+    left_cell.set_width(left_cell.get_width() + right_cell.get_width())
+    left_cell.get_text().set_text(text)
+    left_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+    left_cell.get_text().set_weight('bold')
+    left_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+
+    right_cell.set_visible(False)
 
 
 def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):

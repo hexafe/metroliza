@@ -452,9 +452,9 @@ class TestExportPlotHelpers(unittest.TestCase):
 
     def test_style_histogram_stats_table_applies_normality_badges_for_each_status(self):
         scenarios = [
-            ('Shapiro p=0.2000 → Normal', 'normal', 'quality_good_bg'),
-            ('Shapiro p=0.0100 → Not normal', 'not_normal', 'quality_risk_bg'),
-            ('Unknown', 'unknown', 'quality_unknown_bg'),
+            ('Normal', 'normal', 'quality_good_bg'),
+            ('Non-normal', 'not_normal', 'quality_risk_bg'),
+            ('Not sure', 'unknown', 'quality_unknown_bg'),
         ]
 
         for normality_text, status, palette_bg in scenarios:
@@ -472,10 +472,8 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ax_table.get_celld()[(1, 0)].get_facecolor(),
                 matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE[palette_bg]),
             )
-            self.assertEqual(
-                ax_table.get_celld()[(1, 1)].get_facecolor(),
-                matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE[palette_bg]),
-            )
+            self.assertFalse(ax_table.get_celld()[(1, 1)].get_visible())
+            self.assertTrue(ax_table.get_celld()[(1, 0)].get_text().get_text().startswith('Normality:'))
             plt.close(fig)
 
 
