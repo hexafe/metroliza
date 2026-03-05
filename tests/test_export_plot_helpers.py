@@ -82,6 +82,7 @@ from modules.ExportDataThread import (  # noqa: E402
     build_summary_panel_subtitle_text,
     build_histogram_table_data,
     style_histogram_stats_table,
+    adjust_histogram_stats_table_geometry,
     classify_normality_status,
     resolve_violin_annotation_style,
     annotate_violin_group_stats,
@@ -229,6 +230,34 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIsNone(payload)
 
 
+
+    def test_adjust_histogram_stats_table_geometry_scales_rows_and_stat_column(self):
+        fig, ax = plt.subplots()
+        ax_table = plt.table(
+            cellText=[['Min', '1.0'], ['Max', '2.0']],
+            colLabels=['Statistic', 'Value'],
+            cellLoc='center',
+            loc='right',
+            bbox=[1, 0, 0.3, 1],
+        )
+
+        base_stat_width = ax_table.get_celld()[(1, 0)].get_width()
+        base_value_width = ax_table.get_celld()[(1, 1)].get_width()
+        base_height = ax_table.get_celld()[(1, 0)].get_height()
+
+        adjust_histogram_stats_table_geometry(
+            ax_table,
+            statistic_col_width_ratio=0.56,
+            row_height_scale=1.15,
+        )
+
+        self.assertAlmostEqual(ax_table.get_celld()[(0, 0)].get_width(), 0.56)
+        self.assertAlmostEqual(ax_table.get_celld()[(0, 1)].get_width(), 0.44)
+        self.assertGreater(ax_table.get_celld()[(1, 0)].get_height(), base_height)
+        self.assertGreater(ax_table.get_celld()[(1, 0)].get_width(), base_stat_width)
+        self.assertLess(ax_table.get_celld()[(1, 1)].get_width(), base_value_width)
+
+        plt.close(fig)
     def test_build_histogram_density_curve_payload_accepts_numeric_string_measurements(self):
         payload = build_histogram_density_curve_payload(['1.0', '1.5', '2.0', '2.5'])
 
