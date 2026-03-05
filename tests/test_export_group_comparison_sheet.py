@@ -184,6 +184,56 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('Assumption/test-choice notes:', insights[4])
 
 
+    def test_insights_skip_nan_adjusted_p_values_without_errors(self):
+        working = pd.DataFrame(
+            {
+                'GROUP': ['A', 'A', 'B', 'B'],
+                'MEAS': [10.0, 10.0, 8.0, 8.0],
+            }
+        )
+        pairwise_df = pd.DataFrame(
+            [
+                {
+                    'Metric': 'DIA - X',
+                    'Group A': 'A',
+                    'Group B': 'B',
+                    'adjusted p-value': None,
+                    'n(A)': 2,
+                    'n(B)': 2,
+                },
+                {
+                    'Metric': 'DIA - Y',
+                    'Group A': 'A',
+                    'Group B': 'C',
+                    'adjusted p-value': 0.031,
+                    'n(A)': 2,
+                    'n(B)': 2,
+                },
+                {
+                    'Metric': 'DIA - Z',
+                    'Group A': 'B',
+                    'Group B': 'C',
+                    'adjusted p-value': 0.52,
+                    'n(A)': 2,
+                    'n(B)': 2,
+                },
+            ]
+        )
+        overall_test_rows = []
+
+        insights = _build_insights(working, pairwise_df, overall_test_rows)
+
+        self.assertEqual(len(insights), 5)
+        self.assertEqual(
+            insights[1],
+            'Significant pairwise findings: DIA - Y (A vs C, adj p=0.0310).',
+        )
+        self.assertEqual(
+            insights[2],
+            'No-difference outcomes: DIA - Z (B vs C, adj p=0.5200).',
+        )
+
+
 
     def test_prepare_payload_counts_samples_after_nan_filtering(self):
         grouped_df = pd.DataFrame(

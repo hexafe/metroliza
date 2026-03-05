@@ -89,7 +89,9 @@ def _build_insights(working, pairwise_df, overall_test_rows):
         )
         return insights
 
-    significant = pairwise_df[pairwise_df['adjusted p-value'] < 0.05]
+    adj_p = pd.to_numeric(pairwise_df['adjusted p-value'], errors='coerce')
+
+    significant = pairwise_df[adj_p < 0.05]
     if significant.empty:
         insights.append('Significant pairwise findings: none at adjusted p < 0.05.')
     else:
@@ -99,7 +101,7 @@ def _build_insights(working, pairwise_df, overall_test_rows):
         ]
         insights.append('Significant pairwise findings: ' + '; '.join(significant_labels) + '.')
 
-    no_difference = pairwise_df[pairwise_df['adjusted p-value'] >= 0.05]
+    no_difference = pairwise_df[adj_p >= 0.05]
     if no_difference.empty:
         insights.append('No-difference outcomes: all tested pairs were significant after adjustment.')
     else:
