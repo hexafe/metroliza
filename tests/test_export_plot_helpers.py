@@ -287,6 +287,30 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertAlmostEqual(x_max, 7.35)
         plt.close(fig)
 
+    def test_render_histogram_xlim_includes_spec_limits_with_margin(self):
+        fig, ax = plt.subplots()
+        values = [8.274, 8.28, 8.288]
+        lsl = 8.15
+        usl = 8.23
+
+        render_histogram(ax, {'MEAS': values}, lsl=lsl, usl=usl)
+
+        x_min, x_max = ax.get_xlim()
+        self.assertLess(x_min, lsl)
+        self.assertGreater(x_max, max(values))
+        self.assertGreater(x_max, usl)
+        plt.close(fig)
+
+    def test_render_histogram_ignores_invalid_spec_limits(self):
+        fig, ax = plt.subplots()
+        values = [1.0, 2.0, 3.0]
+
+        render_histogram(ax, {'MEAS': values}, lsl=float('nan'), usl='bad')
+
+        x_min, x_max = ax.get_xlim()
+        self.assertLess(x_min, min(values))
+        self.assertGreater(x_max, max(values))
+        plt.close(fig)
 
 
     def test_adjust_histogram_stats_table_geometry_scales_rows_and_uses_three_column_width_contract(self):
@@ -871,8 +895,8 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         render_data = build_histogram_table_render_data(table_data, three_column=True)
 
-        self.assertEqual(render_data[0], ['Min', 'Min', '1.0'])
-        self.assertEqual(render_data[1], ['NOK %', 'NOK %', '8.33%'])
+        self.assertEqual(render_data[0], ['Min', '', '1.0'])
+        self.assertEqual(render_data[1], ['NOK %', '', '8.33%'])
         self.assertEqual(render_data[2], ['Normality', '', 'Shapiro p = N/A\nUnknown'])
 
     def test_style_histogram_stats_table_applies_normality_badges_for_each_status(self):
@@ -910,6 +934,10 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertFalse(ax_table.get_celld()[(1, 2)].get_visible())
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), normality_text)
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text().count('\n'), 1)
+            self.assertEqual(
+                ax_table.get_celld()[(1, 0)].get_text().get_color(),
+                SUMMARY_PLOT_PALETTE[palette_bg.replace('_bg', '_text')],
+            )
             plt.close(fig)
 
     def test_histogram_table_layout_keeps_normality_as_final_anchored_merged_row(self):

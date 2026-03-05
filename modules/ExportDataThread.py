@@ -459,7 +459,7 @@ def build_histogram_table_render_data(table_data, *, three_column=False):
             if label == 'Normality':
                 render_data.append([label, '', value])
                 continue
-            render_data.append([label, label, value])
+            render_data.append([label, '', value])
 
         return render_data
 
@@ -600,13 +600,13 @@ def compute_histogram_table_layout(
     width_scale = min(1.25, max(0.8, fig_width / 6.0))
     oversized_font = max(0.0, float(table_fontsize) - 8.0)
 
-    table_bbox_width = 0.33 + (0.015 * oversized_font) - (0.01 * (width_scale - 1.0))
-    table_bbox_width = min(0.39, max(0.31, table_bbox_width))
+    table_bbox_width = 0.36 + (0.016 * oversized_font) - (0.008 * (width_scale - 1.0))
+    table_bbox_width = min(0.43, max(0.34, table_bbox_width))
 
-    right_margin = 0.75 + (0.02 * (width_scale - 1.0)) - (0.015 * oversized_font)
+    right_margin = 0.72 + (0.02 * (width_scale - 1.0)) - (0.013 * oversized_font)
     if has_table:
         right_margin -= 0.005
-    right_margin = min(0.78, max(0.68, right_margin))
+    right_margin = min(0.76, max(0.64, right_margin))
 
     return {
         'table_bbox_width': table_bbox_width,
@@ -1127,7 +1127,7 @@ def render_scatter_numeric(ax, x_values, y_values):
     ax.scatter(normalized_x, normalized_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
-def render_histogram(ax, header_group):
+def render_histogram(ax, header_group, *, lsl=None, usl=None):
     """Render a histogram and density overlays for one measurement group."""
 
     normalized_meas = _normalize_plot_axis_values(list(header_group['MEAS']))
@@ -1135,15 +1135,32 @@ def render_histogram(ax, header_group):
     if histogram_values.size == 0:
         return
 
+    finite_spec_limits = []
+    for raw_limit in (lsl, usl):
+        if raw_limit is None:
+            continue
+        try:
+            limit_value = float(raw_limit)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(limit_value):
+            finite_spec_limits.append(limit_value)
+
     n = histogram_values.size
     data_min = float(np.min(histogram_values))
     data_max = float(np.max(histogram_values))
-    data_range = data_max - data_min
-    if data_range > 0:
-        x_padding = _HISTOGRAM_X_PADDING_RATIO * data_range
+    x_min_base = min([data_min, *finite_spec_limits])
+    x_max_base = max([data_max, *finite_spec_limits])
+    combined_range = x_max_base - x_min_base
+
+    reference_magnitude = max(abs(x_min_base), abs(x_max_base), 1.0)
+    minimum_margin = max(1e-6, 0.01 * reference_magnitude)
+    if combined_range > 0:
+        x_padding = max(_HISTOGRAM_X_PADDING_RATIO * combined_range, minimum_margin)
     else:
-        reference_magnitude = max(abs(data_min), 1.0)
-        x_padding = _HISTOGRAM_ZERO_RANGE_ABS_PADDING * reference_magnitude
+        x_padding = max(_HISTOGRAM_ZERO_RANGE_ABS_PADDING * reference_magnitude, minimum_margin)
+
+    data_range = data_max - data_min
 
     q1, q3 = np.percentile(histogram_values, [25, 75])
     iqr = float(q3 - q1)
@@ -1183,7 +1200,7 @@ def render_histogram(ax, header_group):
             linewidth=0.5,
         )
 
-    ax.set_xlim(data_min - x_padding, data_max + x_padding)
+    ax.set_xlim(x_min_base - x_padding, x_max_base + x_padding)
 
 
 def render_iqr_boxplot(ax, values, labels):
@@ -3109,7 +3126,7 @@ class ExportDataThread(QThread):
                     histogram_figsize = (6.2, 4)
                     chart_start = time.perf_counter()
                     fig, ax = plt.subplots(figsize=histogram_figsize)
-                    render_histogram(ax, sampled_histogram_group)
+                    render_histogram(ax, sampled_histogram_group, lsl=LSL, usl=USL)
 
                     histogram_font_sizes = compute_histogram_font_sizes(
                         histogram_figsize,
