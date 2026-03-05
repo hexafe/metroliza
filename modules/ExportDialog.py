@@ -1,10 +1,10 @@
 """Export dialog UI, export option builders, and completion message helpers."""
 
 from modules.progress_status import build_three_line_status
-from modules.ExportDataThread import ExportDataThread
-from modules.FilterDialog import FilterDialog
-from modules.DataGrouping import DataGrouping
-from modules.CustomLogger import CustomLogger
+from modules.export_data_thread import ExportDataThread
+from modules.filter_dialog import FilterDialog
+from modules.data_grouping import DataGrouping
+from modules.custom_logger import CustomLogger
 from modules.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_options, validate_paths
 from modules.export_preset_utils import (
     build_export_options_for_preset,

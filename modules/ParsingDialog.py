@@ -1,8 +1,8 @@
 """Parsing dialog for selecting input sources and running report ingestion."""
 
 from modules.progress_status import build_three_line_status
-from modules.ParseReportsThread import ParseReportsThread
-from modules.CustomLogger import CustomLogger
+from modules.parse_reports_thread import ParseReportsThread
+from modules.custom_logger import CustomLogger
 from PyQt6.QtCore import pyqtSlot
 from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QPushButton
 import logging
