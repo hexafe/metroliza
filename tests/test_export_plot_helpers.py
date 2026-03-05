@@ -301,6 +301,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         base_value_width = ax_table.get_celld()[(1, 1)].get_width()
         base_height = ax_table.get_celld()[(1, 0)].get_height()
 
+        style_histogram_stats_table(ax_table, [('Min', '1.0'), ('Max', '2.0')])
         adjust_histogram_stats_table_geometry(
             ax_table,
             statistic_col_width_ratio=0.56,
@@ -312,6 +313,18 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(ax_table.get_celld()[(1, 0)].get_height(), base_height)
         self.assertGreater(ax_table.get_celld()[(1, 0)].get_width(), base_stat_width)
         self.assertLess(ax_table.get_celld()[(1, 1)].get_width(), base_value_width)
+        self.assertEqual(
+            ax_table.get_celld()[(0, 0)].get_facecolor(),
+            matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['table_header_bg']),
+        )
+
+        edge_color = matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
+        self.assertEqual(ax_table.get_celld()[(1, 0)].get_edgecolor(), edge_color)
+        self.assertEqual(ax_table.get_celld()[(1, 1)].get_edgecolor(), edge_color)
+        self.assertAlmostEqual(ax_table.get_celld()[(1, 0)].get_linewidth(), 0.45)
+        self.assertAlmostEqual(ax_table.get_celld()[(1, 1)].get_linewidth(), 0.45)
+        self.assertGreater(ax_table.get_celld()[(1, 0)].PAD, 0.08)
+        self.assertGreater(ax_table.get_celld()[(1, 1)].PAD, 0.08)
 
         plt.close(fig)
     def test_build_histogram_density_curve_payload_accepts_numeric_string_measurements(self):

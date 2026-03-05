@@ -1358,8 +1358,13 @@ def adjust_histogram_stats_table_geometry(
     stat_ratio = min(0.7, max(0.3, float(statistic_col_width_ratio)))
     value_ratio = 1.0 - stat_ratio
     safe_row_scale = min(1.4, max(0.9, float(row_height_scale)))
+    border_linewidth = 0.45
+    cell_padding = 0.12
 
     for (row_index, col_index), cell in ax_table.get_celld().items():
+        if not cell.get_visible():
+            continue
+
         if col_index == 0:
             cell.set_width(stat_ratio)
         elif col_index == 1:
@@ -1369,8 +1374,8 @@ def adjust_histogram_stats_table_geometry(
             cell.set_height(cell.get_height() * safe_row_scale)
 
         cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
-        cell.set_linewidth(0.6)
-        cell.PAD = 0.08
+        cell.set_linewidth(border_linewidth)
+        cell.PAD = cell_padding
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
