@@ -72,6 +72,7 @@ from modules.ExportDataThread import (  # noqa: E402
     add_iqr_boxplot_legend,
     add_violin_annotation_legend,
     move_legend_to_figure,
+    build_wrapped_chart_title,
     render_tolerance_band,
     render_spec_reference_lines,
     build_tolerance_reference_legend_handles,
@@ -492,7 +493,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(1, figure_legend._loc)
         bbox = figure_legend.get_bbox_to_anchor()._bbox
         self.assertAlmostEqual(0.99, bbox.x0, places=2)
-        self.assertAlmostEqual(0.995, bbox.y0, places=2)
+        self.assertAlmostEqual(0.975, bbox.y0, places=2)
         self.assertAlmostEqual(0.82, fig.subplotpars.top, places=2)
         plt.close(fig)
 
@@ -529,6 +530,18 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('±3σ span (visual)', legend_labels)
         self.assertAlmostEqual(0.82, fig.subplotpars.top, places=2)
         plt.close(fig)
+
+
+    def test_build_wrapped_chart_title_wraps_and_truncates(self):
+        wrapped = build_wrapped_chart_title(
+            'A very long violin summary title that should wrap cleanly across multiple lines without breaking words',
+            width=30,
+            max_lines=2,
+        )
+
+        lines = wrapped.split('\n')
+        self.assertEqual(2, len(lines))
+        self.assertTrue(lines[-1].endswith('…'))
 
     def test_add_iqr_boxplot_legend_uses_top_right_anchor(self):
         fig, ax = plt.subplots(figsize=(4, 3))
