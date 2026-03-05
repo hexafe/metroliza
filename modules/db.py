@@ -86,22 +86,29 @@ def execute_with_retry(
     retry_delay_s: float = 0.05,
 ) -> list[tuple[Any, ...]]:
     """Execute a query and return rows with a small retry policy for transient SQLite errors."""
-    params = params or ()
     attempts = retries + 1
 
     for attempt in range(attempts):
         owns_connection = connection is None
         try:
+            normalized_params: tuple[Any, ...]
+            if params is None:
+                normalized_params = ()
+            elif isinstance(params, tuple):
+                normalized_params = params
+            else:
+                raise ValueError('params must be a tuple when provided')
+
             if owns_connection:
                 with sqlite_connection_scope(db_path) as conn:
                     with closing(conn.cursor()) as cursor:
-                        cursor.execute(query, params)
+                        cursor.execute(query, normalized_params)
                         rows = cursor.fetchall()
                     conn.commit()
                     return rows
 
             with closing(connection.cursor()) as cursor:
-                cursor.execute(query, params)
+                cursor.execute(query, normalized_params)
                 rows = cursor.fetchall()
             connection.commit()
             return rows
