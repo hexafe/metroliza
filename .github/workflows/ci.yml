@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, 'release/**', 'feature/**', 'hotfix/**', 'codex/**', 'work']
+    branches: ['**']
   workflow_dispatch:
     inputs:
       run_google_conversion_smoke:
