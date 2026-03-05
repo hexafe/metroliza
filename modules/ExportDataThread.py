@@ -122,6 +122,10 @@ logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 
+_HISTOGRAM_X_PADDING_RATIO = 0.05
+_HISTOGRAM_ZERO_RANGE_ABS_PADDING = 0.05
+
+
 # Query wrappers keep the thread-facing import path stable while delegating
 # implementation to `export_query_service`, allowing tests to patch this module
 # without importing lower-level services directly.
@@ -1119,6 +1123,11 @@ def render_histogram(ax, header_group):
     data_min = float(np.min(histogram_values))
     data_max = float(np.max(histogram_values))
     data_range = data_max - data_min
+    if data_range > 0:
+        x_padding = _HISTOGRAM_X_PADDING_RATIO * data_range
+    else:
+        reference_magnitude = max(abs(data_min), 1.0)
+        x_padding = _HISTOGRAM_ZERO_RANGE_ABS_PADDING * reference_magnitude
 
     q1, q3 = np.percentile(histogram_values, [25, 75])
     iqr = float(q3 - q1)
@@ -1157,6 +1166,8 @@ def render_histogram(ax, header_group):
             edgecolor=(1.0, 1.0, 1.0, 0.72),
             linewidth=0.5,
         )
+
+    ax.set_xlim(data_min - x_padding, data_max + x_padding)
 
 
 def render_iqr_boxplot(ax, values, labels):

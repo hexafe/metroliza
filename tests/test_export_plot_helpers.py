@@ -231,6 +231,30 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertIsNone(payload)
 
+    def test_render_histogram_sets_xlim_beyond_variable_data_min_max(self):
+        fig, ax = plt.subplots()
+        values = [10.0, 12.5, 15.0, 20.0]
+
+        render_histogram(ax, {'MEAS': values})
+
+        x_min, x_max = ax.get_xlim()
+        self.assertLess(x_min, min(values))
+        self.assertGreater(x_max, max(values))
+        plt.close(fig)
+
+    def test_render_histogram_sets_deterministic_xlim_padding_for_zero_range_data(self):
+        fig, ax = plt.subplots()
+        values = [7.0, 7.0, 7.0]
+
+        render_histogram(ax, {'MEAS': values})
+
+        x_min, x_max = ax.get_xlim()
+        self.assertLess(x_min, 7.0)
+        self.assertGreater(x_max, 7.0)
+        self.assertAlmostEqual(x_min, 6.65)
+        self.assertAlmostEqual(x_max, 7.35)
+        plt.close(fig)
+
 
 
     def test_adjust_histogram_stats_table_geometry_scales_rows_and_stat_column(self):
