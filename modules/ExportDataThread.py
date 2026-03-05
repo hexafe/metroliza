@@ -413,13 +413,15 @@ def build_histogram_table_data(summary_stats):
     else:
         normality_feedback = 'Unknown'
 
-    normality_test_name = summary_stats.get('normality_test_name', 'Shapiro')
-    normality_p_value = summary_stats.get('normality_p_value')
-    if isinstance(normality_p_value, (float, int)):
-        normality_header = f"{normality_test_name} p = {normality_p_value:.4f}"
-    else:
-        normality_header = f"{normality_test_name} p = N/A"
-    normality_block = f"{normality_header}\n{normality_feedback}"
+    normality_block = normality_feedback
+    if 'normality_p_value' in summary_stats or 'normality_test_name' in summary_stats:
+        normality_test_name = summary_stats.get('normality_test_name', 'Shapiro')
+        normality_p_value = summary_stats.get('normality_p_value')
+        if isinstance(normality_p_value, (float, int)):
+            normality_header = f"{normality_test_name} p = {normality_p_value:.4f}"
+        else:
+            normality_header = f"{normality_test_name} p = N/A"
+        normality_block = f"{normality_header}\n{normality_feedback}"
     cp_value = summary_stats.get('cp')
     cpk_label = 'Cpk'
     cpk_value = summary_stats.get('cpk')
@@ -447,9 +449,15 @@ def build_histogram_table_data(summary_stats):
 
 
 def build_histogram_table_render_data(table_data):
-    """Return display-ready histogram table data."""
+    """Expand histogram table rows with render-only spacer rows for merged cells."""
 
-    return list(table_data)
+    render_data = list(table_data)
+    normality_row_index = next((index for index, (label, _value) in enumerate(render_data) if label == 'Normality'), None)
+    if normality_row_index is None:
+        return render_data
+
+    render_data[normality_row_index + 1:normality_row_index + 1] = [('', ''), ('', '')]
+    return render_data
 
 
 def compute_scaled_y_limits(current_limits, scale_factor):
@@ -1116,7 +1124,7 @@ def render_histogram(ax, header_group):
             stat='count',
             alpha=0.72,
             color=SUMMARY_PLOT_PALETTE['distribution_base'],
-            edgecolor='white',
+            edgecolor=(1.0, 1.0, 1.0, 0.72),
             linewidth=0.5,
             ax=ax,
         )
@@ -1127,7 +1135,7 @@ def render_histogram(ax, header_group):
             density=False,
             alpha=0.72,
             color=SUMMARY_PLOT_PALETTE['distribution_base'],
-            edgecolor='white',
+            edgecolor=(1.0, 1.0, 1.0, 0.72),
             linewidth=0.5,
         )
 
@@ -1277,6 +1285,11 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
                     text=str(value),
                     palette_key=capability_row_badges[label]['palette_key'],
                 )
+                for spacer_offset in (1, 2):
+                    for col_index in (0, 1):
+                        spacer = ax_table.get_celld().get((row_index + spacer_offset, col_index))
+                        if spacer is not None:
+                            spacer.set_visible(False)
                 continue
             _apply_table_row_badge(ax_table, row_index, capability_row_badges[label]['palette_key'])
             continue

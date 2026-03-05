@@ -497,7 +497,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(table[-2], ('NOK %', '8.33%'))
-        self.assertEqual(table[-1], ('Normality', 'Shapiro p = N/A\nUnknown'))
+        self.assertEqual(table[-1], ('Normality', 'Unknown'))
 
 
     def test_build_histogram_table_data_uses_cpk_plus_for_one_sided_case(self):
