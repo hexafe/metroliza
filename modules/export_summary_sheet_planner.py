@@ -73,9 +73,10 @@ def compute_histogram_annotation_rows(
 ):
     """Assign collision-safe row indices for histogram annotations.
 
-    Mean is always positioned on the highest row, while USL/LSL are constrained
-    to rows below mean. Close x-neighbors (as defined by ``distance_threshold``)
-    are forced onto separate rows.
+    Mean is always positioned above the baseline label row, while close
+    x-neighbors (as defined by ``distance_threshold``) are forced onto separate
+    rows. Output preserves input ordering while row assignment stays
+    deterministic.
     """
 
     if not annotation_specs:
@@ -83,12 +84,9 @@ def compute_histogram_annotation_rows(
 
     safe_threshold = max(float(distance_threshold), 0.0)
     resolved_span = abs(float(x_span)) if x_span not in (None, 0) else None
-
-    def _distance(left, right):
-        delta = abs(float(left['x']) - float(right['x']))
-        if threshold_mode == 'axis_fraction' and resolved_span:
-            return delta / resolved_span
-        return delta
+    threshold_data_units = safe_threshold
+    if threshold_mode == 'axis_fraction' and resolved_span:
+        threshold_data_units = safe_threshold * resolved_span
 
     annotations = [dict(annotation) for annotation in annotation_specs]
     by_kind = {annotation.get('kind'): annotation for annotation in annotations}
@@ -98,30 +96,41 @@ def compute_histogram_annotation_rows(
 
     row_map = {}
     if mean and usl and lsl:
-        close_mean_usl = _distance(mean, usl) < safe_threshold
-        close_mean_lsl = _distance(mean, lsl) < safe_threshold
-        close_usl_lsl = _distance(usl, lsl) < safe_threshold
+        kind_order = {'mean': 0, 'usl': 1, 'lsl': 2}
+        sorted_annotations = sorted(
+            (mean, usl, lsl),
+            key=lambda item: (float(item['x']), kind_order.get(item.get('kind'), 99)),
+        )
+        sorted_kinds = [item['kind'] for item in sorted_annotations]
+        close_pairs = set()
+        for left_index, left in enumerate(sorted_annotations):
+            for right in sorted_annotations[left_index + 1 :]:
+                if abs(float(left['x']) - float(right['x'])) < threshold_data_units:
+                    close_pairs.add(tuple(sorted((left['kind'], right['kind']))))
+
+        def _is_close(left_kind, right_kind):
+            return tuple(sorted((left_kind, right_kind))) in close_pairs
 
         best_map = None
+        best_rank = None
         for mean_row in range(1, 6):
-            for usl_row in range(0, mean_row):
-                for lsl_row in range(0, mean_row):
-                    if close_mean_usl and mean_row == usl_row:
+            for usl_row in range(0, 6):
+                for lsl_row in range(0, 6):
+                    if _is_close('mean', 'usl') and mean_row == usl_row:
                         continue
-                    if close_mean_lsl and mean_row == lsl_row:
+                    if _is_close('mean', 'lsl') and mean_row == lsl_row:
                         continue
-                    if close_usl_lsl and usl_row == lsl_row:
+                    if _is_close('usl', 'lsl') and usl_row == lsl_row:
                         continue
 
                     candidate = {'mean': mean_row, 'usl': usl_row, 'lsl': lsl_row}
-                    if best_map is None:
-                        best_map = candidate
-                        continue
-                    candidate_max = max(candidate.values())
-                    best_max = max(best_map.values())
-                    if candidate_max < best_max:
-                        best_map = candidate
-                    elif candidate_max == best_max and (candidate['usl'], candidate['lsl']) > (best_map['usl'], best_map['lsl']):
+                    candidate_rank = (
+                        max(candidate.values()),
+                        -candidate['mean'],
+                        tuple(candidate[kind] for kind in sorted_kinds),
+                    )
+                    if best_rank is None or candidate_rank < best_rank:
+                        best_rank = candidate_rank
                         best_map = candidate
 
         row_map = best_map or {'mean': 1, 'usl': 0, 'lsl': 0}

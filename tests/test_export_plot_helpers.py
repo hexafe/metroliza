@@ -682,6 +682,64 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(by_kind['usl']['row_index'], 0)
         self.assertEqual(by_kind['lsl']['row_index'], 0)
         self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.035)
+    def test_compute_histogram_annotation_rows_stacks_mean_and_usl_when_close(self):
+        annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.02, lsl=7.0, y_max=1.0)
+
+        resolved, max_row = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.05,
+            threshold_mode='data_units',
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+
+        by_kind = {item['kind']: item for item in resolved}
+        self.assertEqual(max_row, 1)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 0)
+        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
+        self.assertEqual([item['x'] for item in resolved], [10.0, 10.02, 7.0])
+
+    def test_compute_histogram_annotation_rows_stacks_mean_and_lsl_when_close(self):
+        annotation_specs = build_histogram_annotation_specs(average=10.0, usl=13.0, lsl=10.03, y_max=1.0)
+
+        resolved, max_row = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.05,
+            threshold_mode='data_units',
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+
+        by_kind = {item['kind']: item for item in resolved}
+        self.assertEqual(max_row, 1)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 0)
+        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
+        self.assertEqual([item['x'] for item in resolved], [10.0, 13.0, 10.03])
+
+    def test_compute_histogram_annotation_rows_uses_axis_fraction_threshold_for_clustered_triplet(self):
+        annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.2, lsl=9.9, y_max=1.0)
+
+        resolved, max_row = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.04,
+            threshold_mode='axis_fraction',
+            x_span=10.0,
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+
+        by_kind = {item['kind']: item for item in resolved}
+        self.assertEqual(max_row, 2)
+        self.assertEqual(by_kind['mean']['row_index'], 2)
+        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
+        self.assertEqual([item['x'] for item in resolved], [10.0, 10.2, 9.9])
+
 
     def test_build_summary_panel_subtitle_text_formats_samples_and_nok_percent(self):
         subtitle = build_summary_panel_subtitle_text({'sample_size': 12, 'nok_pct': 0.083333})
