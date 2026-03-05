@@ -122,7 +122,8 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
             'nok_pct': 0.083333,
         }
 
-        table = build_histogram_table_data(summary_stats)
+        payload = build_histogram_table_data(summary_stats)
+        table = payload['rows']
 
         self.assertEqual(table[0], ('Min', 1.235))
         self.assertEqual(table[5], ('Cp', 1.99))
@@ -152,7 +153,8 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
             'nok_pct': 0.0,
         }
 
-        table = build_histogram_table_data(summary_stats)
+        payload = build_histogram_table_data(summary_stats)
+        table = payload['rows']
 
         self.assertEqual(table[5], ('Cp', 'N/A'))
         self.assertEqual(table[6], ('Cpk', 'N/A'))

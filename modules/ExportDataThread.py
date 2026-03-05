@@ -405,7 +405,7 @@ def build_tolerance_reference_legend_handles(*, include_nominal=True):
 
 
 def build_histogram_table_data(summary_stats):
-    """Build stable, display-ready statistics rows for histogram summary tables."""
+    """Build stable, display-ready statistics rows and row metadata for histograms."""
 
     def _rounded_or_text(value, digits):
         return value if isinstance(value, str) else round(value, digits)
@@ -435,19 +435,38 @@ def build_histogram_table_data(summary_stats):
             cpk_label = 'Cpk+'
             cpk_value = (usl_value - average_value) / (3 * sigma_value)
 
-    return [
+    cp_display_value = _rounded_or_text(summary_stats['cp'], 2)
+    cpk_display_value = _rounded_or_text(cpk_value, 2)
+
+    table_rows = [
         ('Min', round(summary_stats['minimum'], 3)),
         ('Max', round(summary_stats['maximum'], 3)),
         ('Mean', round(summary_stats['average'], 3)),
         ('Median', round(summary_stats['median'], 3)),
         ('Std Dev', round(summary_stats['sigma'], 3)),
-        ('Cp', _rounded_or_text(summary_stats['cp'], 2)),
-        (cpk_label, _rounded_or_text(cpk_value, 2)),
+        ('Cp', cp_display_value),
+        (cpk_label, cpk_display_value),
         ('Samples', round(summary_stats['sample_size'], 1)),
         ('NOK', round(summary_stats['nok_count'], 1)),
         ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
         ('Normality', normality_block),
     ]
+
+    return {
+        'rows': table_rows,
+        'capability_rows': {
+            'Cp': {
+                'label': 'Cp',
+                'display_value': cp_display_value,
+                'classification_value': cp_display_value,
+            },
+            'Cpk': {
+                'label': cpk_label,
+                'display_value': cpk_display_value,
+                'classification_value': cpk_display_value,
+            },
+        },
+    }
 
 
 def build_histogram_table_render_data(table_data, *, three_column=False):
@@ -2881,11 +2900,21 @@ class ExportDataThread(QThread):
             summary_stats.setdefault('normality_p_value', None)
             summary_stats['usl'] = USL
             average = summary_stats['average']
+            histogram_table_payload = build_histogram_table_data(summary_stats)
+            table_data = histogram_table_payload['rows']
+            capability_rows = histogram_table_payload['capability_rows']
+
             capability_badge = classify_capability_status(summary_stats['cp'], summary_stats['cpk'])
-            cpk_row_label = 'Cpk+' if isinstance(summary_stats.get('cp'), str) else 'Cpk'
+            cpk_row_label = capability_rows['Cpk']['label']
             capability_row_badges = {
-                'Cp': classify_capability_value(summary_stats['cp'], label_prefix='Cp'),
-                cpk_row_label: classify_capability_value(summary_stats['cpk'], label_prefix=cpk_row_label),
+                'Cp': classify_capability_value(
+                    capability_rows['Cp']['classification_value'],
+                    label_prefix=capability_rows['Cp']['label'],
+                ),
+                cpk_row_label: classify_capability_value(
+                    capability_rows['Cpk']['classification_value'],
+                    label_prefix=cpk_row_label,
+                ),
             }
             nok_row_badge = {
                 'NOK %': classify_nok_severity(summary_stats['nok_pct']),
@@ -3149,7 +3178,6 @@ class ExportDataThread(QThread):
                         has_table=True,
                     )
 
-                    table_data = build_histogram_table_data(summary_stats)
                     table_render_data = build_histogram_table_render_data(table_data, three_column=True)
                     ax_table = plt.table(
                         cellText=table_render_data,
