@@ -289,44 +289,56 @@ class TestExportPlotHelpers(unittest.TestCase):
 
 
 
-    def test_adjust_histogram_stats_table_geometry_scales_rows_and_stat_column(self):
+    def test_adjust_histogram_stats_table_geometry_scales_rows_and_uses_three_column_width_contract(self):
         fig, ax = plt.subplots()
+        render_data = build_histogram_table_render_data([('Min', '1.0'), ('Max', '2.0')], three_column=True)
         ax_table = plt.table(
-            cellText=[['Min', '1.0'], ['Max', '2.0']],
-            colLabels=['Statistic', 'Value'],
+            cellText=render_data,
+            colLabels=['Statistic', ' ', 'Value'],
             cellLoc='center',
             loc='right',
             bbox=[1, 0, 0.3, 1],
         )
 
-        base_stat_width = ax_table.get_celld()[(1, 0)].get_width()
-        base_value_width = ax_table.get_celld()[(1, 1)].get_width()
+        base_value_width = ax_table.get_celld()[(1, 2)].get_width()
         base_height = ax_table.get_celld()[(1, 0)].get_height()
 
-        style_histogram_stats_table(ax_table, [('Min', '1.0'), ('Max', '2.0')])
+        style_histogram_stats_table(ax_table, render_data)
         adjust_histogram_stats_table_geometry(
             ax_table,
             statistic_col_width_ratio=0.56,
             row_height_scale=1.15,
         )
+        fig.canvas.draw()
 
-        self.assertAlmostEqual(ax_table.get_celld()[(0, 0)].get_width(), 0.56)
-        self.assertAlmostEqual(ax_table.get_celld()[(0, 1)].get_width(), 0.44)
+        header_w0 = ax_table.get_celld()[(0, 0)].get_width()
+        header_w1 = ax_table.get_celld()[(0, 1)].get_width()
+        header_w2 = ax_table.get_celld()[(0, 2)].get_width()
+        header_total = header_w0 + header_w1 + header_w2
+        self.assertAlmostEqual(header_w0 / header_total, 0.4368, places=3)
+        self.assertAlmostEqual(header_w1 / header_total, 0.1232, places=3)
+        self.assertAlmostEqual(header_w2 / header_total, 0.44, places=3)
+        self.assertFalse(ax_table.get_celld()[(1, 1)].get_visible())
+        self.assertAlmostEqual(
+            ax_table.get_celld()[(1, 0)].get_width(),
+            header_w0 + header_w1,
+            places=6,
+        )
         self.assertGreater(ax_table.get_celld()[(1, 0)].get_height(), base_height)
-        self.assertGreater(ax_table.get_celld()[(1, 0)].get_width(), base_stat_width)
-        self.assertLess(ax_table.get_celld()[(1, 1)].get_width(), base_value_width)
+        self.assertLess(ax_table.get_celld()[(1, 2)].get_width(), base_value_width)
         self.assertEqual(
             ax_table.get_celld()[(0, 0)].get_facecolor(),
             matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['table_header_bg']),
         )
+        self.assertEqual(ax_table.get_celld()[(1, 2)].get_text().get_ha(), 'right')
 
         edge_color = matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
         self.assertEqual(ax_table.get_celld()[(1, 0)].get_edgecolor(), edge_color)
-        self.assertEqual(ax_table.get_celld()[(1, 1)].get_edgecolor(), edge_color)
+        self.assertEqual(ax_table.get_celld()[(1, 2)].get_edgecolor(), edge_color)
         self.assertAlmostEqual(ax_table.get_celld()[(1, 0)].get_linewidth(), 0.45)
-        self.assertAlmostEqual(ax_table.get_celld()[(1, 1)].get_linewidth(), 0.45)
+        self.assertAlmostEqual(ax_table.get_celld()[(1, 2)].get_linewidth(), 0.45)
         self.assertGreater(ax_table.get_celld()[(1, 0)].PAD, 0.08)
-        self.assertGreater(ax_table.get_celld()[(1, 1)].PAD, 0.08)
+        self.assertGreater(ax_table.get_celld()[(1, 2)].PAD, 0.08)
 
         plt.close(fig)
     def test_build_histogram_density_curve_payload_accepts_numeric_string_measurements(self):
@@ -740,6 +752,71 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 10.2, 9.9])
 
+    def test_compute_histogram_annotation_rows_keeps_mean_above_spec_rows_across_proximity_modes(self):
+        scenarios = [
+            dict(average=10.0, usl=10.01, lsl=9.99, kwargs={'threshold_mode': 'data_units', 'distance_threshold': 0.05}),
+            dict(average=10.0, usl=12.0, lsl=8.0, kwargs={'threshold_mode': 'data_units', 'distance_threshold': 0.05}),
+            dict(average=10.0, usl=10.2, lsl=9.9, kwargs={'threshold_mode': 'axis_fraction', 'x_span': 10.0, 'distance_threshold': 0.04}),
+        ]
+
+        for case in scenarios:
+            annotation_specs = build_histogram_annotation_specs(
+                average=case['average'],
+                usl=case['usl'],
+                lsl=case['lsl'],
+                y_max=1.0,
+            )
+            resolved, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+                **case['kwargs'],
+            )
+            by_kind = {item['kind']: item for item in resolved}
+            self.assertGreater(by_kind['mean']['row_index'], by_kind['usl']['row_index'])
+            self.assertGreater(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
+
+    def test_compute_histogram_annotation_rows_clustered_triplet_uses_non_overlapping_rows(self):
+        annotation_specs = build_histogram_annotation_specs(average=5.0, usl=5.01, lsl=4.99, y_max=1.0)
+
+        resolved, max_row = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.05,
+            threshold_mode='data_units',
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+        rows = [item['row_index'] for item in resolved]
+
+        self.assertEqual(max_row, 2)
+        self.assertEqual(len(set(rows)), 3)
+
+    def test_compute_histogram_annotation_rows_well_separated_triplet_keeps_compact_rows(self):
+        annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
+
+        resolved, max_row = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.05,
+            threshold_mode='data_units',
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+        by_kind = {item['kind']: item for item in resolved}
+
+        self.assertEqual(max_row, 1)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 0)
+        self.assertEqual(by_kind['lsl']['row_index'], 0)
+
+    def test_build_histogram_annotation_specs_aligns_annotation_x_to_marker_values(self):
+        average, usl, lsl = 10.123, 11.3, 9.4
+        specs = build_histogram_annotation_specs(average=average, usl=usl, lsl=lsl, y_max=1.0)
+        by_kind = {item['kind']: item for item in specs}
+
+        self.assertEqual(by_kind['mean']['x'], average)
+        self.assertEqual(by_kind['usl']['x'], usl)
+        self.assertEqual(by_kind['lsl']['x'], lsl)
+
 
     def test_build_summary_panel_subtitle_text_formats_samples_and_nok_percent(self):
         subtitle = build_summary_panel_subtitle_text({'sample_size': 12, 'nok_pct': 0.083333})
@@ -789,6 +866,15 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('Cpk+', labels)
         self.assertNotIn('Cpk', labels)
 
+    def test_build_histogram_table_render_data_three_column_duplicates_label_in_first_two_columns(self):
+        table_data = [('Min', '1.0'), ('NOK %', '8.33%'), ('Normality', 'Shapiro p = N/A\nUnknown')]
+
+        render_data = build_histogram_table_render_data(table_data, three_column=True)
+
+        self.assertEqual(render_data[0], ['Min', 'Min', '1.0'])
+        self.assertEqual(render_data[1], ['NOK %', 'NOK %', '8.33%'])
+        self.assertEqual(render_data[2], ['Normality', '', 'Shapiro p = N/A\nUnknown'])
+
     def test_style_histogram_stats_table_applies_normality_badges_for_each_status(self):
         scenarios = [
             ('Shapiro p = 0.5000\nNormal', 'normal', 'quality_good_bg'),
@@ -823,6 +909,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertFalse(ax_table.get_celld()[(1, 1)].get_visible())
             self.assertFalse(ax_table.get_celld()[(1, 2)].get_visible())
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), normality_text)
+            self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text().count('\n'), 1)
             plt.close(fig)
 
     def test_histogram_table_layout_keeps_normality_as_final_anchored_merged_row(self):
