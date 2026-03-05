@@ -1115,7 +1115,26 @@ def render_histogram(ax, header_group):
     if histogram_values.size == 0:
         return
 
-    bin_count = max(3, min(int(round(np.sqrt(histogram_values.size))), 10))
+    n = histogram_values.size
+    data_min = float(np.min(histogram_values))
+    data_max = float(np.max(histogram_values))
+    data_range = data_max - data_min
+
+    q1, q3 = np.percentile(histogram_values, [25, 75])
+    iqr = float(q3 - q1)
+
+    bins = None
+    if n > 0 and iqr > 0 and data_range > 0:
+        bin_width = 2 * iqr * (n ** (-1 / 3))
+        if np.isfinite(bin_width) and bin_width > 0:
+            fd_bins = np.ceil(data_range / bin_width)
+            if np.isfinite(fd_bins) and fd_bins > 0:
+                bins = int(fd_bins)
+
+    if bins is None:
+        bins = min(int(np.sqrt(n)), 10)
+
+    bin_count = max(3, bins)
 
     if _HAS_SEABORN:
         sns.histplot(

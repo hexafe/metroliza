@@ -5,6 +5,7 @@ import unittest
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import numpy as np
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
 from modules.export_summary_utils import compute_normality_status
@@ -294,17 +295,54 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('Shapiro p =', result['text'])
         self.assertTrue(result['text'].endswith('→ Non-normal'))
 
-    def test_render_histogram_uses_count_bins_and_bar_edge_style(self):
+    def test_render_histogram_uses_fd_bins_for_non_degenerate_data(self):
+        import pandas as pd
+
+        histogram_data = [
+            0.0, 0.5, 1.0, 1.5, 2.0,
+            2.5, 3.0, 3.5, 4.0, 4.5,
+            5.0, 5.5, 6.0, 6.5, 7.0,
+            7.5, 8.0, 8.5, 9.0, 9.5,
+            10.0, 10.5, 11.0, 11.5, 12.0,
+        ]
+        q1, q3 = pd.Series(histogram_data).quantile([0.25, 0.75])
+        iqr = q3 - q1
+        data_range = max(histogram_data) - min(histogram_data)
+        expected_fd_bins = int(np.ceil(data_range / (2 * iqr * (len(histogram_data) ** (-1 / 3)))))
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            render_histogram(ax, pd.DataFrame({'MEAS': histogram_data}))
+
+            self.assertEqual(len(ax.patches), expected_fd_bins)
+            self.assertEqual(len(ax.patches), 3)
+            self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), float(len(histogram_data)))
+            self.assertAlmostEqual(ax.patches[0].get_linewidth(), 0.5)
+            self.assertEqual(ax.patches[0].get_edgecolor(), (1.0, 1.0, 1.0, 0.72))
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_uses_fallback_bins_for_constant_data(self):
         import pandas as pd
 
         fig, ax = plt.subplots(figsize=(4, 3))
         try:
-            render_histogram(ax, pd.DataFrame({'MEAS': [float(index) for index in range(25)]}))
+            render_histogram(ax, pd.DataFrame({'MEAS': [7.0] * 25}))
 
             self.assertEqual(len(ax.patches), 5)
             self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), 25.0)
-            self.assertAlmostEqual(ax.patches[0].get_linewidth(), 0.5)
-            self.assertEqual(ax.patches[0].get_edgecolor(), (1.0, 1.0, 1.0, 0.72))
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_enforces_minimum_bin_count_of_three(self):
+        import pandas as pd
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            render_histogram(ax, pd.DataFrame({'MEAS': [1.0]}))
+
+            self.assertEqual(len(ax.patches), 3)
+            self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), 1.0)
         finally:
             plt.close(fig)
 
