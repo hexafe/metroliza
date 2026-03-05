@@ -194,13 +194,13 @@ class TestExportPlotHelpers(unittest.TestCase):
         annotations = build_histogram_annotation_specs(average=10.1234, usl=10.6, lsl=9.8, y_max=2.0)
 
         self.assertEqual(len(annotations), 3)
-        self.assertEqual(annotations[0]['text'], 'μ=10.123')
+        self.assertEqual(annotations[0]['text'], 'Mean = 10.123')
         self.assertEqual(annotations[0]['x'], 10.1234)
-        self.assertEqual(annotations[0]['y'], 1.9)
+        self.assertEqual(annotations[0]['text_y_axes'], 1.06)
         self.assertEqual(annotations[1]['text'], 'USL=10.600')
-        self.assertEqual(annotations[1]['ha'], 'right')
+        self.assertEqual(annotations[1]['ha'], 'center')
         self.assertEqual(annotations[2]['text'], 'LSL=9.800')
-        self.assertEqual(annotations[2]['ha'], 'left')
+        self.assertEqual(annotations[2]['ha'], 'center')
 
     def test_summary_palette_keeps_annotation_emphasis_alias_for_backward_compatibility(self):
         self.assertEqual(
@@ -265,28 +265,48 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(len(payload['x']), 100)
         self.assertEqual(len(payload['y']), 100)
 
+    def test_build_histogram_density_curve_payload_supports_kde_mode(self):
+        payload = build_histogram_density_curve_payload([0.0, 0.0, 0.1, 0.2, 0.4, 3.0, 7.0], mode='kde')
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(len(payload['x']), 100)
+
     def test_classify_normality_status_maps_all_quality_paths(self):
         self.assertEqual(classify_normality_status('normal')['palette_key'], 'quality_good')
         self.assertEqual(classify_normality_status('not_normal')['palette_key'], 'quality_risk')
         self.assertEqual(classify_normality_status('unknown')['palette_key'], 'quality_unknown')
 
     def test_compute_normality_status_returns_unknown_for_small_or_constant_samples(self):
-        self.assertEqual(compute_normality_status([1.0, 2.0])['text'], 'Unknown')
-        self.assertEqual(compute_normality_status([3.0, 3.0, 3.0])['text'], 'Unknown')
+        self.assertEqual(compute_normality_status([1.0, 2.0])['text'], 'Shapiro p = N/A → Unknown')
+        self.assertEqual(compute_normality_status([3.0, 3.0, 3.0])['text'], 'Shapiro p = N/A → Unknown')
 
     def test_compute_normality_status_returns_normal_for_gaussian_like_series(self):
         result = compute_normality_status([-1.2, -0.4, -0.1, 0.0, 0.2, 0.5, 1.1, 1.4])
 
         self.assertEqual(result['status'], 'normal')
-        self.assertIn('Shapiro p=', result['text'])
+        self.assertIn('Shapiro p =', result['text'])
         self.assertTrue(result['text'].endswith('→ Normal'))
 
     def test_compute_normality_status_returns_not_normal_for_skewed_series(self):
         result = compute_normality_status([0.0, 0.0, 0.0, 0.1, 0.2, 0.3, 4.0, 8.0])
 
         self.assertEqual(result['status'], 'not_normal')
-        self.assertIn('Shapiro p=', result['text'])
-        self.assertTrue(result['text'].endswith('→ Not normal'))
+        self.assertIn('Shapiro p =', result['text'])
+        self.assertTrue(result['text'].endswith('→ Non-normal'))
+
+    def test_render_histogram_uses_count_bins_and_bar_edge_style(self):
+        import pandas as pd
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            render_histogram(ax, pd.DataFrame({'MEAS': [float(index) for index in range(25)]}))
+
+            self.assertEqual(len(ax.patches), 5)
+            self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), 25.0)
+            self.assertAlmostEqual(ax.patches[0].get_linewidth(), 0.5)
+            self.assertEqual(ax.patches[0].get_edgecolor(), (1.0, 1.0, 1.0, 0.72))
+        finally:
+            plt.close(fig)
 
     def test_render_histogram_handles_numeric_strings_without_matplotlib_warnings(self):
         import pandas as pd
@@ -417,8 +437,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(len(rendered), 3)
-        self.assertEqual([text.get_text() for text in rendered], ['μ=4.000', 'USL=8.000', 'LSL=2.000'])
-        self.assertGreater(rendered[0].get_position()[0], 4.0)
+        self.assertEqual([text.get_text() for text in rendered], ['Mean = 4.000', 'USL=8.000', 'LSL=2.000'])
+        self.assertEqual(rendered[0].get_position()[0], 4.0)
         self.assertEqual(rendered[1].get_position()[0], 8.0)
         self.assertEqual(rendered[2].get_position()[0], 2.0)
         plt.close(fig)
@@ -480,16 +500,39 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(table[-1], ('Normality', 'Unknown'))
 
 
+    def test_build_histogram_table_data_uses_cpk_plus_for_one_sided_case(self):
+        table = build_histogram_table_data(
+            {
+                'minimum': 0.0,
+                'maximum': 0.06,
+                'average': 0.03,
+                'median': 0.03,
+                'sigma': 0.01,
+                'cp': 'N/A',
+                'cpk': 0.0,
+                'sample_size': 8,
+                'nok_count': 0,
+                'nok_pct': 0.0,
+                'normality_status': 'normal',
+                'normality_p_value': 0.52,
+                'usl': 0.06,
+            }
+        )
+
+        labels = [label for label, _ in table]
+        self.assertIn('Cpk+', labels)
+        self.assertNotIn('Cpk', labels)
+
     def test_style_histogram_stats_table_applies_normality_badges_for_each_status(self):
         scenarios = [
-            ('Normal', 'normal', 'quality_good_bg'),
-            ('Non-normal', 'not_normal', 'quality_risk_bg'),
-            ('Not sure', 'unknown', 'quality_unknown_bg'),
+            ('Shapiro p = 0.5000\nNormal', 'normal', 'quality_good_bg'),
+            ('Shapiro p = 0.0040\nNon-normal', 'not_normal', 'quality_risk_bg'),
+            ('Shapiro p = N/A\nUnknown', 'unknown', 'quality_unknown_bg'),
         ]
 
         for normality_text, status, palette_bg in scenarios:
             fig, ax = plt.subplots(figsize=(4, 3))
-            table_data = [('Normality', normality_text), ('', ''), ('', '')]
+            table_data = [('Normality', normality_text)]
             ax_table = ax.table(cellText=table_data, colLabels=['Statistic', 'Value'], cellLoc='center')
 
             style_histogram_stats_table(
@@ -506,12 +549,8 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ax_table.get_celld()[(1, 1)].get_facecolor(),
                 matplotlib.colors.to_rgba(SUMMARY_PLOT_PALETTE[palette_bg]),
             )
-            self.assertFalse(ax_table.get_celld()[(2, 0)].get_visible())
-            self.assertFalse(ax_table.get_celld()[(2, 1)].get_visible())
-            self.assertFalse(ax_table.get_celld()[(3, 0)].get_visible())
-            self.assertFalse(ax_table.get_celld()[(3, 1)].get_visible())
-            self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), 'Normality')
-            self.assertIn(ax_table.get_celld()[(1, 1)].get_text().get_text(), {'Normal', 'Non-normal', 'Not sure'})
+            self.assertFalse(ax_table.get_celld()[(1, 1)].get_visible())
+            self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), normality_text)
             plt.close(fig)
 
 
@@ -723,6 +762,17 @@ class TestExportPlotHelpers(unittest.TestCase):
     def test_build_measurement_block_plan_rejects_empty_sample_size(self):
         with self.assertRaises(ValueError):
             build_measurement_block_plan(base_col=4, sample_size=0)
+
+    def test_render_spec_reference_lines_vertical_use_updated_style_contract(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            lines = render_spec_reference_lines(ax, nom=10.0, lsl=9.5, usl=10.5, orientation='vertical', include_nominal=False)
+            self.assertEqual(len(lines), 2)
+            self.assertAlmostEqual(lines[0].get_alpha(), 0.8)
+            self.assertAlmostEqual(lines[0].get_linewidth(), 1.5)
+            self.assertEqual(tuple(lines[0].get_ydata()), (0, 0.92))
+        finally:
+            plt.close(fig)
 
     def test_build_horizontal_limit_line_specs_matches_summary_render_contract(self):
         line_specs = build_horizontal_limit_line_specs(10.6, 9.8)
