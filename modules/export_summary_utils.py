@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import norm, shapiro
+from scipy.stats import gaussian_kde, norm, shapiro
 import math
 import re
 from matplotlib.lines import Line2D
@@ -85,6 +85,8 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
         'nok_pct': (nok_count / sample_size) if sample_size else 0,
         'normality_status': normality['status'],
         'normality_text': normality['text'],
+        'normality_test_name': normality.get('test_name', 'Shapiro'),
+        'normality_p_value': normality.get('p_value'),
     }
 
 
@@ -92,21 +94,27 @@ def compute_normality_status(measurements):
     """Classify measurement normality using Shapiro-Wilk when applicable."""
     numeric_measurements = pd.to_numeric(pd.Series(measurements), errors='coerce').dropna().to_numpy(dtype=float)
     sample_size = int(numeric_measurements.size)
+    unknown_payload = {
+        'status': 'unknown',
+        'test_name': 'Shapiro',
+        'p_value': None,
+        'text': 'Shapiro p = N/A → Unknown',
+    }
     if sample_size < 3 or sample_size > 5000:
-        return {'status': 'unknown', 'text': 'Unknown'}
+        return unknown_payload
 
     sigma = float(np.std(numeric_measurements, ddof=1))
     if np.isclose(sigma, 0.0):
-        return {'status': 'unknown', 'text': 'Unknown'}
+        return unknown_payload
 
     try:
         _statistic, p_value = shapiro(numeric_measurements)
     except Exception:
-        return {'status': 'unknown', 'text': 'Unknown'}
+        return unknown_payload
 
     if p_value >= 0.05:
-        return {'status': 'normal', 'text': f'Shapiro p={p_value:.4f} → Normal'}
-    return {'status': 'not_normal', 'text': f'Shapiro p={p_value:.4f} → Not normal'}
+        return {'status': 'normal', 'test_name': 'Shapiro', 'p_value': float(p_value), 'text': f'Shapiro p = {p_value:.4f} → Normal'}
+    return {'status': 'not_normal', 'test_name': 'Shapiro', 'p_value': float(p_value), 'text': f'Shapiro p = {p_value:.4f} → Non-normal'}
 
 
 def build_sparse_unique_labels(labels):
@@ -153,21 +161,33 @@ def build_trend_plot_payload(header_group: pd.DataFrame, *, grouping_active=Fals
     }
 
 
-def build_histogram_density_curve_payload(measurements, point_count=100):
+def build_histogram_density_curve_payload(measurements, point_count=100, *, mode='normal_fit'):
     """Return x/y density curve data for histogram overlays, if available."""
     normalized_measurements = normalize_plot_axis_values(list(measurements))
     numeric_measurements = pd.to_numeric(pd.Series(normalized_measurements), errors='coerce').dropna().to_numpy(dtype=float)
     if numeric_measurements.size == 0:
         return None
 
-    mu, std = norm.fit(numeric_measurements)
-    if std <= 0:
-        return None
-
     x_min = float(np.min(numeric_measurements))
     x_max = float(np.max(numeric_measurements))
+    if np.isclose(x_min, x_max):
+        return None
+
     x_values = np.linspace(x_min, x_max, point_count)
-    y_values = norm.pdf(x_values, mu, std)
+    if mode == 'kde':
+        if numeric_measurements.size < 2:
+            return None
+        try:
+            kde = gaussian_kde(numeric_measurements)
+            y_values = kde(x_values)
+        except Exception:
+            return None
+    else:
+        mu, std = norm.fit(numeric_measurements)
+        if std <= 0:
+            return None
+        y_values = norm.pdf(x_values, mu, std)
+
     return {
         'x': x_values,
         'y': y_values,
@@ -268,8 +288,9 @@ def render_spec_reference_lines(ax, nom, lsl, usl, orientation='horizontal', inc
 
     line_kwargs = {
         'color': SUMMARY_PLOT_PALETTE['spec_limit'],
-        'linewidth': 1.0,
-        'zorder': 4,
+        'linewidth': 1.5,
+        'alpha': 0.8,
+        'zorder': 3,
     }
     nominal_kwargs = {**line_kwargs, 'linestyle': '--'}
 
@@ -277,19 +298,19 @@ def render_spec_reference_lines(ax, nom, lsl, usl, orientation='horizontal', inc
 
     if lsl is not None:
         if orientation == 'vertical':
-            lines.append(ax.axvline(lsl, **line_kwargs))
+            lines.append(ax.axvline(lsl, ymin=0, ymax=0.92, **line_kwargs))
         else:
             lines.append(ax.axhline(lsl, **line_kwargs))
 
     if usl is not None:
         if orientation == 'vertical':
-            lines.append(ax.axvline(usl, **line_kwargs))
+            lines.append(ax.axvline(usl, ymin=0, ymax=0.92, **line_kwargs))
         else:
             lines.append(ax.axhline(usl, **line_kwargs))
 
     if include_nominal and nom is not None:
         if orientation == 'vertical':
-            lines.append(ax.axvline(nom, **nominal_kwargs))
+            lines.append(ax.axvline(nom, ymin=0, ymax=0.92, **nominal_kwargs))
         else:
             lines.append(ax.axhline(nom, **nominal_kwargs))
 
