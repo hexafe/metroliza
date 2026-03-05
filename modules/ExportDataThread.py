@@ -3063,11 +3063,21 @@ class ExportDataThread(QThread):
                     render_spec_reference_lines(ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
                     ax.set_xlabel('Measurement')
                     ax.set_ylabel('Count')
-                    ax.set_title(build_wrapped_chart_title(header), pad=20)
+                    histogram_title_pad = 26
+                    histogram_annotation_band = {
+                        'mean': 1.03,
+                        'usl': 1.01,
+                        'lsl': 1.01,
+                    }
+                    histogram_top_margin = 0.82
+
+                    ax.set_title(build_wrapped_chart_title(header), pad=histogram_title_pad)
                     apply_minimal_axis_style(ax, grid_axis='y')
 
                     annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
                     annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
+                    for annotation in annotation_specs:
+                        annotation['text_y_axes'] = histogram_annotation_band.get(annotation.get('kind'), 1.01)
                     render_histogram_annotations(
                         ax,
                         annotation_specs,
@@ -3075,7 +3085,7 @@ class ExportDataThread(QThread):
                         annotation_box=annotation_box,
                     )
 
-                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=0.86)
+                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=histogram_top_margin)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     histogram_slot = panel_plan['image_slots']['histogram']

@@ -53,6 +53,7 @@ from modules.ExportDataThread import (  # noqa: E402
     build_histogram_annotation_specs,
     build_histogram_mean_line_style,
     compute_histogram_font_sizes,
+    compute_histogram_table_layout,
     render_histogram_annotations,
     build_measurement_chart_format_policy,
     build_measurement_block_plan,
@@ -361,6 +362,62 @@ class TestExportPlotHelpers(unittest.TestCase):
                 if 'matplotlib' in str(item.category).lower() or 'converter' in str(item.message).lower()
             ]
             self.assertEqual(matplotlib_warnings, [])
+        finally:
+            plt.close(fig)
+
+
+    def test_histogram_title_and_mean_annotation_keep_separate_bounding_boxes_with_table(self):
+        import pandas as pd
+
+        histogram_figsize = (6.2, 4)
+        fig, ax = plt.subplots(figsize=histogram_figsize)
+        try:
+            render_histogram(ax, pd.DataFrame({'MEAS': np.linspace(9.8, 10.6, 40)}))
+
+            font_sizes = compute_histogram_font_sizes(
+                histogram_figsize,
+                has_table=True,
+                readability_scale=0.0,
+            )
+            layout = compute_histogram_table_layout(
+                histogram_figsize,
+                table_fontsize=font_sizes['table_fontsize'],
+                has_table=True,
+            )
+
+            _ = plt.table(
+                cellText=[['Statistic', 'Value'], ['Mean', '10.200']],
+                colLabels=['Statistic', 'Value'],
+                cellLoc='center',
+                loc='right',
+                bbox=[1, 0, layout['table_bbox_width'], 1],
+            )
+
+            title_pad = 26
+            annotation_band = {'mean': 1.03, 'usl': 1.01, 'lsl': 1.01}
+            top_margin = 0.82
+            title = ax.set_title(build_wrapped_chart_title('Histogram Layout Validation'), pad=title_pad)
+
+            annotation_specs = build_histogram_annotation_specs(10.2, 10.6, 9.8, 1.0)
+            for annotation in annotation_specs:
+                annotation['text_y_axes'] = annotation_band.get(annotation.get('kind'), 1.01)
+            texts = render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=font_sizes['annotation_fontsize'],
+                annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#c0c0c0', 'alpha': 0.94},
+            )
+
+            plt.subplots_adjust(right=layout['subplot_right'], top=top_margin)
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+
+            title_bbox = title.get_window_extent(renderer=renderer)
+            mean_text = next(text for text, spec in zip(texts, annotation_specs) if spec.get('kind') == 'mean')
+            mean_bbox = mean_text.get_window_extent(renderer=renderer)
+
+            self.assertFalse(title_bbox.overlaps(mean_bbox))
+            self.assertLess(mean_bbox.y1, title_bbox.y0)
         finally:
             plt.close(fig)
 
