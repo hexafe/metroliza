@@ -2161,6 +2161,18 @@ class ExportDataThread(QThread):
                 return
             self.log_and_exit(e)
         except Exception as e:
+            self.update_label.emit(
+                build_three_line_status(
+                    "Export failed during local workbook generation.",
+                    "Export aborted before cloud conversion.",
+                    "ETA --",
+                )
+            )
+            self._log_export_stage(
+                "Export failed during local workbook generation",
+                stage="local_export_failed",
+                level="error",
+            )
             self.log_and_exit(e)
         finally:
             self._cleanup_export_snapshot()
@@ -2364,6 +2376,7 @@ class ExportDataThread(QThread):
                 self._emit_stage_progress('measurement_sheets_charts', 1.0)
         except Exception as e:
             self.log_and_exit(e)
+            raise
 
     def _write_group_comparison_sheet(self, workbook, used_sheet_names):
         grouped_export_df = self._build_export_filtered_dataframe()
@@ -2397,6 +2410,7 @@ class ExportDataThread(QThread):
             self.write_data_to_excel(export_df, "MEASUREMENTS", excel_writer)
         except Exception as e:
             self.log_and_exit(e)
+            raise
 
     def write_data_to_excel(self, df, table_name, excel_writer):
         """Handle `write_data_to_excel` for `ExportDataThread`.
