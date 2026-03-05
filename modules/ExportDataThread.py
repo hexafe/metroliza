@@ -12,6 +12,7 @@ import warnings
 import inspect
 import re
 import sqlite3
+import textwrap
 from io import BytesIO
 import os
 import time
@@ -991,10 +992,29 @@ def move_legend_to_figure(ax):
         handles,
         labels,
         loc="upper right",
-        bbox_to_anchor=(0.99, 0.995),
+        bbox_to_anchor=(0.99, 0.975),
         bbox_transform=fig.transFigure,
     )
     fig.subplots_adjust(top=0.82)
+
+
+def build_wrapped_chart_title(title, *, width=58, max_lines=2):
+    """Wrap long chart titles so figure-level legends do not overlap plot headers."""
+
+    safe_title = str(title or '').strip()
+    if not safe_title:
+        return ''
+
+    wrapped_lines = textwrap.wrap(
+        safe_title,
+        width=max(20, int(width)),
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    if len(wrapped_lines) > max_lines:
+        wrapped_lines = wrapped_lines[:max_lines]
+        wrapped_lines[-1] = wrapped_lines[-1].rstrip(' .') + '…'
+    return '\n'.join(wrapped_lines)
 
 def render_violin(
     ax,
@@ -2761,7 +2781,7 @@ class ExportDataThread(QThread):
                     ax.set_ylim(y_min, y_max)
                     ax.set_xlabel(distribution_x_axis_label)
                     ax.set_ylabel('Measurement')
-                    ax.set_title(f'{header}', pad=18)
+                    ax.set_title(build_wrapped_chart_title(header), pad=20)
                     move_legend_to_figure(ax)
                     plt.subplots_adjust(right=0.8)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
@@ -2812,7 +2832,7 @@ class ExportDataThread(QThread):
                     )
                     ax.set_xlabel('Group')
                     ax.set_ylabel('Measurement')
-                    ax.set_title(f'{header} - IQR Outlier Detection', pad=18)
+                    ax.set_title(build_wrapped_chart_title(f'{header} - IQR Outlier Detection'), pad=20)
                     plt.subplots_adjust(right=0.8)
 
                     current_y_limits = ax.get_ylim()
@@ -2892,7 +2912,7 @@ class ExportDataThread(QThread):
                     move_legend_to_figure(ax)
                     ax.set_xlabel('Measurement')
                     ax.set_ylabel('Density')
-                    ax.set_title(f'{header}', pad=18)
+                    ax.set_title(build_wrapped_chart_title(header), pad=20)
                     apply_minimal_axis_style(ax, grid_axis='y')
 
                     _, y_max = ax.get_ylim()
@@ -2941,7 +2961,7 @@ class ExportDataThread(QThread):
 
                     ax.set_xlabel('Sample #')
                     ax.set_ylabel('Measurement')
-                    ax.set_title(f'{header}', pad=18)
+                    ax.set_title(build_wrapped_chart_title(header), pad=20)
                     apply_minimal_axis_style(ax, grid_axis='y')
                     apply_shared_x_axis_label_strategy(
                         ax,
