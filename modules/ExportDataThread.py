@@ -3019,6 +3019,7 @@ class ExportDataThread(QThread):
                 try:
                     apply_summary_plot_theme()
                     chart_start = time.perf_counter()
+
                     fig, ax = plt.subplots(figsize=(6, 4))
                     if can_render_violin:
                         render_violin(
@@ -3263,7 +3264,14 @@ class ExportDataThread(QThread):
                     data_y = trend_payload['y']
                     unique_labels = trend_payload['labels']
 
-                    fig, ax = plt.subplots(figsize=(6, 4))
+                    trend_label_count = len(unique_labels)
+                    trend_figure_width = 6
+                    if trend_label_count > 24:
+                        trend_figure_width = 8
+                    if trend_label_count > 40:
+                        trend_figure_width = 10
+
+                    fig, ax = plt.subplots(figsize=(trend_figure_width, 4))
                     ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
                     for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                         ax.axhline(**line_spec)
@@ -3277,6 +3285,7 @@ class ExportDataThread(QThread):
                         unique_labels,
                         positions=data_x,
                         force_sparse=force_sparse_x_labels,
+                        allow_thinning=False,
                     )
 
                     current_y_limits = ax.get_ylim()
