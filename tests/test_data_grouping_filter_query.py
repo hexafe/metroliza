@@ -239,3 +239,23 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         dialog.search_list_widgets(dialog.groups_list, 'canonical')
 
         self.assertFalse(dialog.groups_list.item(0).hidden)
+
+    def test_double_click_group_item_triggers_rename(self):
+        from unittest.mock import Mock
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.rename_group = Mock()
+
+        dialog.on_group_item_double_clicked(_FakeListItem(text='Any'))
+
+        dialog.rename_group.assert_called_once_with()
+
+    def test_double_click_ignores_none_item(self):
+        from unittest.mock import Mock
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.rename_group = Mock()
+
+        dialog.on_group_item_double_clicked(None)
+
+        dialog.rename_group.assert_not_called()

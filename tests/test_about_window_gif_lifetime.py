@@ -136,5 +136,30 @@ class TestAboutWindowGifLifetime(unittest.TestCase):
             self.assertFalse(os.path.exists(gif_path))
 
 
+    def test_close_event_tolerates_transient_permission_error_on_cleanup(self):
+        qtcore, qtgui, qtwidgets = _install_qt_stubs()
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtGui": qtgui,
+                "PyQt6.QtWidgets": qtwidgets,
+            },
+            clear=False,
+        ):
+            sys.modules.pop("modules.AboutWindow", None)
+            about_module = importlib.import_module("modules.AboutWindow")
+            dialog = about_module.AboutWindow()
+
+            gif_path = dialog._gif_temp_file_path
+            self.assertTrue(os.path.exists(gif_path))
+
+            with patch("modules.AboutWindow.os.remove", side_effect=PermissionError):
+                dialog.closeEvent(None)
+
+            self.assertTrue(os.path.exists(gif_path))
+            os.remove(gif_path)
+
+
 if __name__ == "__main__":
     unittest.main()
