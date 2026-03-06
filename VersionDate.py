@@ -7,6 +7,7 @@ CURRENT_RELEASE_HIGHLIGHT = (
 release_notes = f"""
     <br><b>Current version {RELEASE_VERSION} (build {VERSION_DATE}):</b><br>
     - Group creation now highlights color-coding and sample-size details more clearly<br>
+    - Group names can now be renamed quickly by double-clicking them in the group list<br>
     - Extended charts have improved visual styling for better readability<br>
     - Additional export and reporting polish for a smoother workflow<br>
 

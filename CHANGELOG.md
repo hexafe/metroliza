@@ -1,6 +1,7 @@
 # Changelog (for end users)
 
 ## 2026.03 (build 260305) — current version
+- **Group names can now be renamed via double-click**: in the group management flow, you can quickly update a group name by double-clicking it directly instead of using a separate rename action.
 - **Group comparison matrices are cleaner and easier to read**: diagonal cells now stay intentionally blank, and exported values are sanitized more consistently so matrix outputs are clearer at a glance.
 - **Export pipeline reliability is stricter by design**: when a fatal local workbook error is detected, the pipeline now stops immediately instead of continuing with partial or misleading output.
 - **Grouped statistical test validation was hardened**: mismatched or invalid grouped test-selection inputs are now caught earlier, helping prevent silent issues in downstream statistical results.
