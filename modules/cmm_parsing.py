@@ -58,6 +58,12 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
     def process_line(line: list[str]) -> list[Any]:
         processed_line: list[Any] = []
 
+        # Keep code token but normalize payload to numeric tokens for
+        # non-TP measurement parsers. This makes non-TP parsing resilient to
+        # semantic labels/qualifiers embedded in report text while preserving
+        # existing positional mappings for numeric fields.
+        numeric_normalized_line = [line[0], *[token for token in line[1:] if is_number(token)]]
+
         def process_tp_line(tokens: list[str]) -> list[Any]:
             tp_qualifiers = {
                 "RFS",
@@ -88,6 +94,8 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                 tol_plus, bonus, meas, dev, outtol = numeric_values[:5]
 
             return ["TP", nom, tol_plus, "", bonus, meas, dev, outtol]
+
+        line = numeric_normalized_line if not line[0].startswith("TP") else line
 
         if (line[0] in ["X", "Y", "Z"]) and len(line) == 4:
             processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
