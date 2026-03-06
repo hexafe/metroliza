@@ -230,11 +230,12 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(len(annotations), 3)
         self.assertEqual(annotations[0]['text'], 'Mean = 10.123')
         self.assertEqual(annotations[0]['x'], 10.1234)
-        self.assertGreater(annotations[0]['text_y_axes'], annotations[1]['text_y_axes'])
         self.assertEqual(annotations[1]['text'], 'USL=10.600')
+        self.assertGreater(annotations[1]['text_y_axes'], annotations[0]['text_y_axes'])
         self.assertEqual(annotations[1]['ha'], 'center')
         self.assertEqual(annotations[2]['text'], 'LSL=9.800')
         self.assertEqual(annotations[2]['ha'], 'center')
+        self.assertGreater(annotations[0]['text_y_axes'], annotations[2]['text_y_axes'])
 
     def test_summary_palette_keeps_annotation_emphasis_alias_for_backward_compatibility(self):
         self.assertEqual(
@@ -409,7 +410,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(merged_left.get_text().get_color(), SUMMARY_PLOT_PALETTE['quality_unknown_text'])
         plt.close(fig)
 
-    def test_adjust_histogram_stats_table_geometry_two_column_merges_last_data_row_when_not_normality(self):
+    def test_adjust_histogram_stats_table_geometry_two_column_keeps_rows_unmerged_when_normality_missing(self):
         fig, ax = plt.subplots()
         table_rows = [('Min', '1.0'), ('Max', '2.0')]
         ax_table = plt.table(
@@ -424,11 +425,12 @@ class TestExportPlotHelpers(unittest.TestCase):
         adjust_histogram_stats_table_geometry(ax_table)
         fig.canvas.draw()
 
-        merged_left = ax_table.get_celld()[(final_row_index, 0)]
-        merged_right = ax_table.get_celld()[(final_row_index, 1)]
+        left = ax_table.get_celld()[(final_row_index, 0)]
+        right = ax_table.get_celld()[(final_row_index, 1)]
 
-        self.assertFalse(merged_right.get_visible())
-        self.assertEqual(merged_left.get_text().get_text(), '2.0')
+        self.assertTrue(right.get_visible())
+        self.assertEqual(left.get_text().get_text(), 'Max')
+        self.assertEqual(right.get_text().get_text(), '2.0')
         plt.close(fig)
 
     def test_build_histogram_density_curve_payload_accepts_numeric_string_measurements(self):
