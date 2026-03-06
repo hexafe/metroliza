@@ -133,7 +133,7 @@ def test_measurement_rows_parse_for_inline_code_and_numbers_format():
         "DIM",
         "X 10 0.2 -0.2 10.1 0.1 0",
         "Y 5 0.1 -0.1 5.05 0.05 0",
-        "#END",
+        "123 456 789",
     ]
 
     parsed = parse_raw_lines_to_blocks(raw_lines)
@@ -199,7 +199,7 @@ def test_tp_parser_supports_optional_qualifiers_and_semantic_labels():
         "#TP QUALIFIED",
         "DIM",
         "TP RFS NOM 0 +TOL 0.4 BONUS 0.1 MEAS 0.25 DEV 0.25 OUTTOL 0",
-        "#END",
+        "123 456 789",
     ]
 
     parsed = parse_raw_lines_to_blocks(raw_lines)
@@ -218,3 +218,82 @@ def test_tp_parser_defaults_nom_to_zero_when_absent():
     parsed = parse_raw_lines_to_blocks(raw_lines)
 
     assert parsed[0][1][0] == ["TP", 0.0, 0.4, 0, 0.1, 0.25, 0.25, 0.0]
+
+
+
+def test_dim_ax_subrows_d1_d2_d3_parse_with_eight_column_shape():
+    raw_lines = [
+        "#AX SUBROWS",
+        "DIM",
+        "D1 10 0.2 -0.2 10.03",
+        "D2 20 0.2 -0.2 20.01",
+        "D3 30 0.2 -0.2 29.98",
+        "123 456 789",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert [line[0] for line in parsed[0][1]] == ["D1", "D2", "D3"]
+    assert parsed[0][1][0] == ["D1", 10.0, 0.2, -0.2, 0, 10.03, "", ""]
+    assert parsed[0][1][1] == ["D2", 20.0, 0.2, -0.2, 0, 20.01, "", ""]
+    assert parsed[0][1][2] == ["D3", 30.0, 0.2, -0.2, 0, 29.98, "", ""]
+
+
+def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
+    import importlib.machinery
+    import importlib.util
+    import sys
+    import types
+    from pathlib import Path
+
+    custom_logger_stub = types.ModuleType("modules.CustomLogger")
+    custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
+    sys.modules["modules.CustomLogger"] = custom_logger_stub
+
+    fitz_stub = types.ModuleType("fitz")
+    fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
+    sys.modules["fitz"] = fitz_stub
+    pymupdf_stub = types.ModuleType("pymupdf")
+    pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec("pymupdf", loader=None)
+    sys.modules["pymupdf"] = pymupdf_stub
+
+    parser_spec = importlib.util.spec_from_file_location(
+        "_cmm_report_parser_real_for_test", Path("modules/CMMReportParser.py")
+    )
+    assert parser_spec is not None and parser_spec.loader is not None
+    parser_module = importlib.util.module_from_spec(parser_spec)
+    parser_spec.loader.exec_module(parser_module)
+    CMMReportParser = parser_module.CMMReportParser
+
+    from modules.db import execute_with_retry
+
+    db_path = str(tmp_path / "cmm.db")
+    parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
+    parser.pdf_reference = "REF01"
+    parser.pdf_file_path = "/tmp/reports"
+    parser.pdf_file_name = "REF01_2024-01-02_123.pdf"
+    parser.pdf_date = "2024-01-02"
+    parser.pdf_sample_number = "123"
+    parser.pdf_blocks_text = parse_raw_lines_to_blocks(
+        [
+            "#AX SUBROWS",
+            "DIM",
+            "D1 10 0.2 -0.2 10.03",
+            "D2 20 0.2 -0.2 20.01",
+            "D3 30 0.2 -0.2 29.98",
+            "123 456 789",
+        ]
+    )
+
+    parser.to_sqlite()
+
+    rows = execute_with_retry(
+        db_path,
+        'SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL FROM MEASUREMENTS ORDER BY AX',
+    )
+
+    assert rows == [
+        ("D1", 10.0, 0.2, -0.2, 0.0, 10.03, "", ""),
+        ("D2", 20.0, 0.2, -0.2, 0.0, 20.01, "", ""),
+        ("D3", 30.0, 0.2, -0.2, 0.0, 29.98, "", ""),
+    ]
