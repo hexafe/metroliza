@@ -3008,6 +3008,13 @@ class ExportDataThread(QThread):
                 )
                 label_positions = list(x_values)
 
+            distribution_title = header
+            if not can_render_violin:
+                distribution_title = (
+                    f"{header} - Mean by label "
+                    "(each point is the mean of all parts within a label)"
+                )
+
             summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
             annotation_strategy = resolve_summary_annotation_strategy(x_point_count=summary_point_count)
             force_sparse_x_labels = annotation_strategy['label_mode'] == 'sparse'
@@ -3067,7 +3074,7 @@ class ExportDataThread(QThread):
                     ax.set_ylim(y_min, y_max)
                     ax.set_xlabel(distribution_x_axis_label)
                     ax.set_ylabel('Measurement')
-                    ax.set_title(build_wrapped_chart_title(header), pad=20)
+                    ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
                     move_legend_to_figure(ax)
                     plt.subplots_adjust(right=0.8)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
@@ -3118,7 +3125,7 @@ class ExportDataThread(QThread):
                     )
                     ax.set_xlabel('Group')
                     ax.set_ylabel('Measurement')
-                    ax.set_title(build_wrapped_chart_title(f'{header} - IQR Outlier Detection'), pad=20)
+                    ax.set_title(build_wrapped_chart_title(header), pad=20)
                     plt.subplots_adjust(right=0.8)
 
                     current_y_limits = ax.get_ylim()
