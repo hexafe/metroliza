@@ -1557,12 +1557,12 @@ def classify_nok_severity(nok_pct):
 
 
 def classify_normality_status(normality_status):
-    """Map normality status to table badge palettes."""
+    """Map normality status to dedicated pastel normality palettes."""
     if normality_status == 'normal':
-        return {'label': 'Normality normal', 'palette_key': 'quality_good'}
+        return {'label': 'Normality normal', 'palette_key': 'normality_normal'}
     if normality_status == 'not_normal':
-        return {'label': 'Normality not normal', 'palette_key': 'quality_risk'}
-    return {'label': 'Normality unknown', 'palette_key': 'quality_unknown'}
+        return {'label': 'Normality not normal', 'palette_key': 'normality_not_normal'}
+    return {'label': 'Normality unknown', 'palette_key': 'normality_unknown'}
 
 def build_summary_panel_subtitle(summary_stats):
     """Return compact panel subtitle text showing sample size and NOK share."""
@@ -3142,26 +3142,27 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         ax_table,
-                        statistic_col_width_ratio=0.62,
+                        statistic_col_width_ratio=0.56,
                         row_height_scale=1.15,
                     )
 
                     normality_note = summary_stats.get('normality_text') or 'Shapiro p = N/A\nUnknown'
                     normality_table = plt.table(
                         cellText=[[normality_note]],
-                        cellLoc='left',
+                        cellLoc='center',
                         loc='right',
                         bbox=[1, -0.17, histogram_table_layout['table_bbox_width'], 0.15],
                     )
                     normality_table.auto_set_font_size(False)
                     normality_table.set_fontsize(histogram_font_sizes['table_fontsize'])
                     normality_cell = normality_table.get_celld()[(0, 0)]
-                    normality_cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_emphasis_bg'])
+                    normality_badge = classify_normality_status(summary_stats.get('normality_status'))
+                    normality_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f"{normality_badge['palette_key']}_bg"])
                     normality_cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
                     normality_cell.set_linewidth(0.45)
                     normality_cell.PAD = 0.03
-                    normality_cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_emphasis_text'])
-                    normality_cell.get_text().set_ha('left')
+                    normality_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f"{normality_badge['palette_key']}_text"])
+                    normality_cell.get_text().set_ha('center')
                     normality_cell.get_text().set_va('center')
 
                     density_curve_mode = 'normal_fit' if summary_stats.get('normality_status') == 'normal' else 'kde'
