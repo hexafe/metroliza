@@ -49,6 +49,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 from modules.ExportDataThread import ExportDataThread  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 from modules.export_grouping_utils import apply_group_assignments, prepare_grouping_dataframe  # noqa: E402
+from modules.chart_render_service import build_violin_payload_vectorized  # noqa: E402
 
 
 class TestExportSortingAndGrouping(unittest.TestCase):
@@ -219,7 +220,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
             }
         )
 
-        labels, values, can_render = ExportDataThread._build_violin_payload(
+        labels, values, can_render = build_violin_payload_vectorized(
             header_group,
             'GROUP',
             min_samplesize=1,
@@ -238,7 +239,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
             }
         )
 
-        labels, values, can_render = ExportDataThread._build_violin_payload(
+        labels, values, can_render = build_violin_payload_vectorized(
             header_group,
             'GROUP',
             min_samplesize=1,
@@ -256,7 +257,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
             }
         )
 
-        labels, values, can_render = ExportDataThread._build_violin_payload(
+        labels, values, can_render = build_violin_payload_vectorized(
             header_group,
             'SAMPLE_NUMBER',
             min_samplesize=2,
