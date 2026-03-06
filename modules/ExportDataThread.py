@@ -1217,6 +1217,31 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None):
         )
 
     ax.set_xlim(x_min_base - x_padding, x_max_base + x_padding)
+    enforce_minimum_histogram_bar_width(ax)
+
+
+def enforce_minimum_histogram_bar_width(ax, *, min_width_fraction=0.015):
+    """Widen ultra-thin histogram bars so at least one bar remains legible."""
+
+    if ax is None:
+        return
+
+    x_limits = ax.get_xlim()
+    x_span = x_limits[1] - x_limits[0]
+    if not np.isfinite(x_span) or x_span <= 0:
+        return
+
+    minimum_width = x_span * max(0.0, float(min_width_fraction))
+    if minimum_width <= 0:
+        return
+
+    for patch in ax.patches:
+        bar_width = patch.get_width()
+        if not np.isfinite(bar_width) or bar_width <= 0 or bar_width >= minimum_width:
+            continue
+        bar_center = patch.get_x() + (bar_width / 2.0)
+        patch.set_width(minimum_width)
+        patch.set_x(bar_center - (minimum_width / 2.0))
 
 
 def render_iqr_boxplot(ax, values, labels):
@@ -1432,7 +1457,7 @@ def adjust_histogram_stats_table_geometry(
                 cell.set_width(value_ratio)
                 text = cell.get_text()
                 text.set_ha('right')
-                text.set_x(0.97)
+                text.set_x(0.94)
         else:
             if col_index == 0:
                 cell.set_width(statistic_area_ratio)
@@ -1440,7 +1465,7 @@ def adjust_histogram_stats_table_geometry(
                 cell.set_width(value_ratio)
                 text = cell.get_text()
                 text.set_ha('right')
-                text.set_x(0.97)
+                text.set_x(0.94)
 
         if row_index >= 1 and row_index not in full_width_rows:
             cell.set_height(cell.get_height() * safe_row_scale)
