@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMessageBox,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QItemSelection, QItemSelectionModel
 import PyQt6.QtWidgets as QtWidgets
 import logging
 from modules.CustomLogger import CustomLogger
@@ -143,8 +143,17 @@ class ModifyDB(QDialog):
         if is_shift_pressed and previous_row is not None:
             start_row = min(previous_row, row)
             end_row = max(previous_row, row)
-            for index in range(start_row, end_row + 1):
-                table_widget.selectRow(index)
+            selection_model = table_widget.selectionModel()
+            table_model = table_widget.model()
+            last_column = max(table_widget.columnCount() - 1, 0)
+
+            selection = QItemSelection(
+                table_model.index(start_row, 0),
+                table_model.index(end_row, last_column),
+            )
+            selection_flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+            selection_model.select(selection, selection_flags)
+            selection_model.select(table_model.index(previous_row, 0), selection_flags)
             table_widget.setCurrentCell(row, 0)
             return
 
