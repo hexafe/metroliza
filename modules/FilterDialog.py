@@ -1,6 +1,6 @@
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_with_retry
-from PyQt6.QtCore import QDate
+from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtWidgets import(
     QAbstractItemView,
     QDateEdit,
@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import(
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QApplication,
 )
 
 
@@ -29,6 +30,8 @@ class FilterDialog(QDialog):
         else:
             self.filter_query = ""
         
+        self._last_clicked_row_by_list = {}
+
         self.setup_ui()
 
     def setup_ui(self):
@@ -147,11 +150,39 @@ class FilterDialog(QDialog):
             # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
             self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
 
+            self._connect_shift_range_for_list(self.ax_list)
+            self._connect_shift_range_for_list(self.reference_list)
+            self._connect_shift_range_for_list(self.header_list)
+            self._connect_shift_range_for_list(self.selected_headers_list)
+
             self.select_today_button.clicked.connect(self.select_today_as_date_to)
             self.select_beginning_button.clicked.connect(self.select_beginning_of_time)
             self.apply_button.clicked.connect(self.apply_filters)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _connect_shift_range_for_list(self, list_widget):
+        list_widget.itemPressed.connect(lambda item, lw=list_widget: self._handle_list_item_pressed(lw, item))
+
+    def _handle_list_item_pressed(self, list_widget, item):
+        if item is None:
+            return
+
+        row = list_widget.row(item)
+        previous_row = self._last_clicked_row_by_list.get(list_widget)
+        is_shift_pressed = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+
+        if is_shift_pressed and previous_row is not None:
+            start_row = min(previous_row, row)
+            end_row = max(previous_row, row)
+            for index in range(start_row, end_row + 1):
+                list_item = list_widget.item(index)
+                if list_item is not None and not list_item.isHidden():
+                    list_item.setSelected(True)
+            list_widget.setCurrentItem(item)
+            return
+
+        self._last_clicked_row_by_list[list_widget] = row
 
     def populate_list_widgets(self):
         try:

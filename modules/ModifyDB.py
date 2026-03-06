@@ -8,6 +8,9 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QFileDialog,
     QMessageBox,
+    QAbstractItemView,
+    QApplication,
+    QInputDialog,
 )
 from PyQt6.QtCore import Qt
 import logging
@@ -35,6 +38,7 @@ class ModifyDB(QDialog):
 
         self.db_file = db_file
         self.undo_data = {}
+        self._last_clicked_row_by_table = {}
 
         self.setup_ui()
 
@@ -50,16 +54,22 @@ class ModifyDB(QDialog):
         try:
             # Create table widgets for REFERENCE, PART NUMBER, and HEADER
             self.reference_table = QTableWidget()
+            self.reference_table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.reference_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.reference_table.setColumnCount(1)
             self.reference_table.setHorizontalHeaderLabels(["REFERENCE"])
             self.reference_table.setColumnWidth(0, 200)
 
             self.part_number_table = QTableWidget()
+            self.part_number_table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.part_number_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.part_number_table.setColumnCount(1)
             self.part_number_table.setHorizontalHeaderLabels(["SAMPLE NUMBER"])
             self.part_number_table.setColumnWidth(0, 200)
 
             self.header_table = QTableWidget()
+            self.header_table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.header_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.header_table.setColumnCount(1)
             self.header_table.setHorizontalHeaderLabels(["HEADER"])
             self.header_table.setColumnWidth(0, 200)
@@ -98,8 +108,82 @@ class ModifyDB(QDialog):
             self.apply_button.clicked.connect(self.confirm_and_apply_changes)
             self.undo_button.clicked.connect(self.undo_last_change)
             self.cancel_button.clicked.connect(self.cancel_changes)
+
+            self._connect_shift_range_for_table(self.reference_table)
+            self._connect_shift_range_for_table(self.part_number_table)
+            self._connect_shift_range_for_table(self.header_table)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _connect_shift_range_for_table(self, table_widget):
+        table_widget.cellPressed.connect(
+            lambda row, column, tw=table_widget: self._handle_table_cell_pressed(tw, row, column)
+        )
+
+    def _handle_table_cell_pressed(self, table_widget, row, column):
+        del column
+        previous_row = self._last_clicked_row_by_table.get(table_widget)
+        is_shift_pressed = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+
+        if is_shift_pressed and previous_row is not None:
+            start_row = min(previous_row, row)
+            end_row = max(previous_row, row)
+            for index in range(start_row, end_row + 1):
+                table_widget.selectRow(index)
+            table_widget.setCurrentCell(row, 0)
+            return
+
+        self._last_clicked_row_by_table[table_widget] = row
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._handle_bulk_rename_shortcut():
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
+
+    def _handle_bulk_rename_shortcut(self):
+        target_table = self._focused_table_widget()
+        if target_table is None:
+            return False
+
+        selected_rows = sorted({index.row() for index in target_table.selectionModel().selectedRows()})
+        if not selected_rows:
+            return False
+
+        current_item = target_table.currentItem()
+        suggested_value = current_item.text() if current_item is not None else ""
+        new_value, is_confirmed = QInputDialog.getText(
+            self,
+            "Rename selected items",
+            f"Enter new value for {len(selected_rows)} selected item(s):",
+            text=suggested_value,
+        )
+        if not is_confirmed:
+            return True
+
+        normalized_value = str(new_value)
+        for row in selected_rows:
+            item = target_table.item(row, 0)
+            if item is not None:
+                item.setText(normalized_value)
+
+        return True
+
+    def _focused_table_widget(self):
+        focused_widget = QApplication.focusWidget()
+        table_widgets = (self.reference_table, self.part_number_table, self.header_table)
+
+        for table_widget in table_widgets:
+            if focused_widget is table_widget or table_widget.isAncestorOf(focused_widget):
+                return table_widget
+
+        for table_widget in table_widgets:
+            if table_widget.hasFocus() or table_widget.viewport().hasFocus():
+                return table_widget
+
+        return None
 
     def select_db_file(self):
         """Select a database file and load editable values into each table."""
