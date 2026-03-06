@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from unittest import mock
 
 import matplotlib
 matplotlib.use('Agg')
@@ -1565,6 +1566,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             ax,
             ['A', 'B'],
             [[1.0, 1.2, 0.8], [1.5, 1.7, 1.4]],
+            [0, 1],
             annotation_mode='full',
         )
 
@@ -1578,7 +1580,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         ax.set_xlim(-0.5, 0.5)
 
         values = [[1.0, 2.0, 3.0, 4.0]]
-        style = annotate_violin_group_stats(ax, ['A'], values, annotation_mode='full', nom=1.0, lsl=0.5)
+        style = annotate_violin_group_stats(ax, ['A'], values, [0], annotation_mode='full', nom=1.0, lsl=0.5)
 
         sigma_collection = ax.collections[-1]
         segment = sigma_collection.get_segments()[0]
@@ -1596,7 +1598,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         ax.set_xlim(-0.5, 0.5)
 
         values = [[1.0, 2.0, 3.0, 4.0]]
-        style = annotate_violin_group_stats(ax, ['A'], values, annotation_mode='full', nom=0.0, lsl=0.0)
+        style = annotate_violin_group_stats(ax, ['A'], values, [0], annotation_mode='full', nom=0.0, lsl=0.0)
 
         sigma_collection = ax.collections[-1]
         segment = sigma_collection.get_segments()[0]
@@ -1653,12 +1655,12 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         fig_one, ax_one = plt.subplots(figsize=(6, 4))
         ax_one.set_xlim(-0.5, len(labels) - 0.5)
-        annotate_violin_group_stats(ax_one, labels, values, annotation_mode='full')
+        annotate_violin_group_stats(ax_one, labels, values, list(range(len(labels))), annotation_mode='full')
         positions_one = [(round(text.xyann[0], 2), round(text.xyann[1], 2), text.get_text()) for text in ax_one.texts]
 
         fig_two, ax_two = plt.subplots(figsize=(6, 4))
         ax_two.set_xlim(-0.5, len(labels) - 0.5)
-        annotate_violin_group_stats(ax_two, labels, values, annotation_mode='full')
+        annotate_violin_group_stats(ax_two, labels, values, list(range(len(labels))), annotation_mode='full')
         positions_two = [(round(text.xyann[0], 2), round(text.xyann[1], 2), text.get_text()) for text in ax_two.texts]
 
         self.assertEqual(positions_one, positions_two)
@@ -1666,6 +1668,57 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertTrue(any((x, y) not in base_offsets for x, y, _ in positions_one))
         plt.close(fig_one)
         plt.close(fig_two)
+
+    def test_annotate_violin_group_stats_uses_positions_for_sigma_and_mean_markers(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        values = [[1.0, 2.0, 3.0], [1.5, 1.7, 1.9]]
+        positions = [5, 8]
+
+        annotate_violin_group_stats(ax, ['A', 'B'], values, positions, annotation_mode='full')
+
+        sigma_segments = []
+        for collection in ax.collections:
+            if hasattr(collection, 'get_segments'):
+                sigma_segments.extend(collection.get_segments())
+        sigma_x_positions = sorted(float(segment[0][0]) for segment in sigma_segments)
+        self.assertEqual(sigma_x_positions, [5.0, 8.0])
+
+        scatter_x_positions = sorted(
+            {
+                float(point[0])
+                for collection in ax.collections
+                if hasattr(collection, 'get_offsets')
+                for point in collection.get_offsets()
+            }
+        )
+        self.assertIn(5.0, scatter_x_positions)
+        self.assertIn(8.0, scatter_x_positions)
+
+        text_x_positions = sorted({float(text.xy[0]) for text in ax.texts if text.get_text().startswith('μ=')})
+        self.assertEqual(text_x_positions, [5.0, 8.0])
+        plt.close(fig)
+
+    def test_render_violin_uses_backend_consistent_annotation_positions(self):
+        values = [[1.0, 2.0, 3.0], [1.5, 1.7, 1.9]]
+        labels = ['A', 'B']
+
+        fig_seaborn, ax_seaborn = plt.subplots(figsize=(6, 4))
+        seaborn_stub = types.SimpleNamespace(violinplot=lambda **kwargs: None)
+        with mock.patch('modules.ExportDataThread._HAS_SEABORN', True), mock.patch('modules.ExportDataThread.sns', seaborn_stub, create=True):
+            render_violin(ax_seaborn, values, labels)
+        seaborn_mean_x = sorted({float(text.xy[0]) for text in ax_seaborn.texts if text.get_text().startswith('μ=')})
+        self.assertEqual(seaborn_mean_x, [0.0, 1.0])
+        self.assertEqual(ax_seaborn.get_xticks().tolist(), [0.0, 1.0])
+
+        fig_matplotlib, ax_matplotlib = plt.subplots(figsize=(6, 4))
+        with mock.patch('modules.ExportDataThread._HAS_SEABORN', False):
+            render_violin(ax_matplotlib, values, labels)
+        matplotlib_mean_x = sorted({float(text.xy[0]) for text in ax_matplotlib.texts if text.get_text().startswith('μ=')})
+        self.assertEqual(matplotlib_mean_x, [1.0, 2.0])
+        self.assertEqual(ax_matplotlib.get_xticks().tolist(), [1.0, 2.0])
+
+        plt.close(fig_seaborn)
+        plt.close(fig_matplotlib)
 
 
     def test_render_tolerance_band_adds_horizontal_patch(self):
