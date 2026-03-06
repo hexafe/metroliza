@@ -1714,6 +1714,7 @@ class ExportDataThread(QThread):
         self.summary_plot_scale = validated_request.options.summary_plot_scale
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
+        self.allow_non_essential_chart_skipping = validated_request.options.allow_non_essential_chart_skipping
         self.chart_worker_count = validated_request.options.chart_worker_count
         self.chart_worker_queue_size = validated_request.options.chart_worker_queue_size
         self.export_canceled = False
@@ -1875,7 +1876,10 @@ class ExportDataThread(QThread):
         if chart_share >= 0.65:
             self._optimization_toggles['chart_density_mode'] = 'reduced'
             self._optimization_toggles['defer_non_essential_charts'] = True
-            self._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram'}
+            if self.allow_non_essential_chart_skipping:
+                self._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram'}
+            else:
+                self._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram', 'trend'}
         elif chart_share >= 0.45:
             self._optimization_toggles['chart_density_mode'] = 'reduced'
 

@@ -878,7 +878,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
 
-    def test_apply_bottleneck_optimizations_limits_summary_charts_for_deferred_mode(self):
+    def test_apply_bottleneck_optimizations_preserves_trend_for_normal_runs(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
         request = ExportRequest(
@@ -897,10 +897,39 @@ class TestExportBackendSmoke(unittest.TestCase):
         thread._apply_bottleneck_optimizations()
 
         self.assertTrue(thread._optimization_toggles['defer_non_essential_charts'])
-        self.assertEqual(thread._optimization_toggles['summary_sheet_minimum_charts'], {'distribution', 'iqr', 'histogram'})
+        self.assertEqual(
+            thread._optimization_toggles['summary_sheet_minimum_charts'],
+            {'distribution', 'iqr', 'histogram', 'trend'},
+        )
         self.assertTrue(thread._summary_chart_required('iqr'))
+        self.assertTrue(thread._summary_chart_required('trend'))
 
-    def test_summary_sheet_fill_deferred_mode_skips_only_trend_chart_section(self):
+    def test_apply_bottleneck_optimizations_can_skip_trend_when_opted_in(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(
+                generate_summary_sheet=True,
+                allow_non_essential_chart_skipping=True,
+            ),
+        )
+        thread = ExportDataThread(request)
+        thread._stage_timings.update(
+            {
+                'chart_rendering': 70.0,
+                'transform_grouping': 20.0,
+                'worksheet_writes': 10.0,
+            }
+        )
+
+        thread._apply_bottleneck_optimizations()
+
+        self.assertTrue(thread._optimization_toggles['defer_non_essential_charts'])
+        self.assertEqual(thread._optimization_toggles['summary_sheet_minimum_charts'], {'distribution', 'iqr', 'histogram'})
+        self.assertFalse(thread._summary_chart_required('trend'))
+
+    def test_summary_sheet_fill_deferred_mode_still_renders_trend_by_default(self):
         import pandas as pd
 
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -921,7 +950,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         )
         thread = ExportDataThread(request)
         thread._optimization_toggles['defer_non_essential_charts'] = True
-        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram'}
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram', 'trend'}
 
         worksheet = _FakeSummaryWorksheet()
         header_group = pd.DataFrame(
@@ -935,17 +964,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
 
-        module = __import__('modules.ExportDataThread', fromlist=['build_trend_plot_payload'])
-        previous_trend_builder = module.build_trend_plot_payload
-
-        def _unexpected_trend(*_args, **_kwargs):
-            raise AssertionError('trend section should not render in deferred chart mode')
-
-        module.build_trend_plot_payload = _unexpected_trend
-        try:
-            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
-        finally:
-            module.build_trend_plot_payload = previous_trend_builder
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
         inserted_positions = set(worksheet.inserted_images)
         panel_slots = build_summary_image_anchor_plan(5)
@@ -955,6 +974,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 panel_slots['distribution'],
                 panel_slots['iqr'],
                 panel_slots['histogram'],
+                panel_slots['trend'],
             },
         )
 

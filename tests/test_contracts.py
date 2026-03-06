@@ -53,8 +53,13 @@ class TestValidateExportOptions(unittest.TestCase):
         self.assertEqual(options.summary_plot_scale, 0)
         self.assertTrue(options.hide_ok_results)
         self.assertFalse(options.generate_summary_sheet)
+        self.assertFalse(options.allow_non_essential_chart_skipping)
         self.assertEqual(options.chart_worker_count, 2)
         self.assertEqual(options.chart_worker_queue_size, 4)
+
+    def test_normalizes_allow_non_essential_chart_skipping_flag(self):
+        options = validate_export_options(ExportOptions(allow_non_essential_chart_skipping=1))
+        self.assertTrue(options.allow_non_essential_chart_skipping)
 
 
     def test_clamps_chart_worker_settings(self):
