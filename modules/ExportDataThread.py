@@ -789,6 +789,7 @@ def annotate_violin_group_stats(
     ax,
     labels,
     values,
+    positions,
     *,
     nom=None,
     lsl=None,
@@ -835,7 +836,7 @@ def annotate_violin_group_stats(
             arr = np.asarray(group_values, dtype=float)
             if arr.size == 0:
                 continue
-            xpos = idx
+            xpos = positions[idx]
             mean_val = float(np.mean(arr))
             ax.scatter([xpos], [mean_val], color=SUMMARY_PLOT_PALETTE['central_tendency'], s=style['mean_marker_size'], marker='o', zorder=4)
             if idx % stride == 0:
@@ -919,7 +920,7 @@ def annotate_violin_group_stats(
         arr = np.asarray(group_values, dtype=float)
         if arr.size == 0:
             continue
-        xpos = idx
+        xpos = positions[idx]
         mean_val = float(np.mean(arr))
         std_val = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
         min_val = float(np.min(arr))
@@ -1086,11 +1087,13 @@ def render_violin(
     """Render violin plots and optional group-stat annotations on the provided axis."""
 
     if _HAS_SEABORN:
+        positions = list(range(len(labels)))
         sns.violinplot(data=values, inner=None, cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
-        ax.set_xticks(range(len(labels)))
+        ax.set_xticks(positions)
     else:
+        positions = list(range(1, len(labels) + 1))
         ax.violinplot(values, showmeans=False, showmedians=False, showextrema=False)
-        ax.set_xticks(range(1, len(labels) + 1))
+        ax.set_xticks(positions)
     ax.set_xticklabels(labels)
     if lsl is not None and usl is not None:
         render_tolerance_band(ax, nom, lsl, usl, one_sided=one_sided)
@@ -1100,6 +1103,7 @@ def render_violin(
         ax,
         labels,
         values,
+        positions,
         nom=nom,
         lsl=lsl,
         epsilon=epsilon,
