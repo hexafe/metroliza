@@ -143,7 +143,7 @@ def build_summary_panel_labels(labels, *, grouping_active=False):
 
 
 def build_trend_plot_payload(header_group: pd.DataFrame, *, grouping_active=False, label_column=None):
-    """Return x/y points and strategy-aligned labels for the summary trend plot."""
+    """Return x/y points and dense labels for the summary trend plot."""
     measurements = normalize_plot_axis_values(list(header_group['MEAS']))
     resolved_label_column = label_column
     if resolved_label_column is None:
@@ -154,10 +154,12 @@ def build_trend_plot_payload(header_group: pd.DataFrame, *, grouping_active=Fals
     else:
         raw_labels = list(range(1, len(measurements) + 1))
 
+    dense_labels = [str(label) if label is not None else '' for label in raw_labels]
+
     return {
         'x': list(range(len(measurements))),
         'y': measurements,
-        'labels': build_summary_panel_labels(raw_labels, grouping_active=grouping_active),
+        'labels': dense_labels,
     }
 
 
@@ -205,6 +207,7 @@ def apply_shared_x_axis_label_strategy(
     target_tick_count=16,
     tick_padding=6,
     force_sparse=False,
+    allow_thinning=True,
 ):
     """Apply a consistent x-axis label strategy for dense categorical charts."""
     if ax is None:
@@ -223,7 +226,9 @@ def apply_shared_x_axis_label_strategy(
     max_length = max((len(label) for label in safe_labels), default=0)
     label_count = len(safe_labels)
 
-    if label_count <= 6 and max_length <= 10:
+    if not allow_thinning and (label_count > 16 or max_length > 18):
+        rotation = 90
+    elif label_count <= 6 and max_length <= 10:
         rotation = 0
     elif label_count <= 12 and max_length <= 20:
         rotation = 30
@@ -242,7 +247,7 @@ def apply_shared_x_axis_label_strategy(
     display_labels = [_truncate(label) for label in safe_labels]
 
     indices = list(range(label_count))
-    if force_sparse or label_count > thinning_threshold:
+    if allow_thinning and (force_sparse or label_count > thinning_threshold):
         step = max(1, int(math.ceil(label_count / max(target_tick_count, 1))))
         indices = [idx for idx in indices if idx % step == 0]
         if (label_count - 1) not in indices:

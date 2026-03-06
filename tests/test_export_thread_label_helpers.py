@@ -159,7 +159,7 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(table[5], ('Cp', 'N/A'))
         self.assertEqual(table[6], ('Cpk', 'N/A'))
 
-    def test_build_trend_plot_payload_builds_dense_x_and_sparse_labels(self):
+    def test_build_trend_plot_payload_builds_dense_x_and_dense_labels(self):
         import pandas as pd
 
         header_group = pd.DataFrame({
@@ -171,7 +171,7 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
 
         self.assertEqual(payload['x'], [0, 1, 2, 3])
         self.assertEqual(payload['y'], [1.0, 1.1, 1.2, 1.3])
-        self.assertEqual(payload['labels'], ['1', '', '2', ''])
+        self.assertEqual(payload['labels'], ['1', '1', '2', '2'])
 
 
 
