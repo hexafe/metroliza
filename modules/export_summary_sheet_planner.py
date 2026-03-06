@@ -38,7 +38,7 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
         {
             'kind': 'mean',
             'x': average,
-            'text_y_axes': 1.06,
+            'text_y_axes': 1.045,
             'text': f'Mean = {average:.3f}',
             'color': SUMMARY_PLOT_PALETTE['annotation_text'],
             'ha': 'center',
@@ -46,7 +46,7 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
         {
             'kind': 'usl',
             'x': usl,
-            'text_y_axes': 1.02,
+            'text_y_axes': 1.075,
             'text': f'USL={usl:.3f}',
             'color': SUMMARY_PLOT_PALETTE['spec_limit'],
             'ha': 'center',
@@ -54,12 +54,13 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
         {
             'kind': 'lsl',
             'x': lsl,
-            'text_y_axes': 1.02,
+            'text_y_axes': 1.015,
             'text': f'LSL={lsl:.3f}',
             'color': SUMMARY_PLOT_PALETTE['spec_limit'],
             'ha': 'center',
         },
     ]
+
 
 
 def compute_histogram_annotation_rows(

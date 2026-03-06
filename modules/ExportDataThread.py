@@ -1487,26 +1487,15 @@ def adjust_histogram_stats_table_geometry(
                 merged_row_index = row_index
                 break
 
-        if merged_row_index is None:
-            merged_row_index = max(
-                (
-                    row_index
-                    for (row_index, col_index), cell in table_cells.items()
-                    if row_index > 0 and col_index == 0 and cell.get_visible()
-                ),
-                default=None,
-            )
-
         if merged_row_index is not None:
             value_cell = table_cells.get((merged_row_index, 1))
             merge_text = '' if value_cell is None else value_cell.get_text().get_text()
-            row_label = table_cells[(merged_row_index, 0)].get_text().get_text().strip()
             _merge_table_row_cells(
                 ax_table,
                 merged_row_index,
                 col_span=2,
                 text=merge_text,
-                palette_key=normality_palette_key if row_label == 'Normality' else None,
+                palette_key=normality_palette_key,
                 height_scale=max(1.25, safe_row_scale),
             )
         return
@@ -3266,21 +3255,14 @@ class ExportDataThread(QThread):
                     ax.set_xlabel('Measurement')
                     ax.set_ylabel('Count')
                     histogram_title_pad = 26
-                    annotation_base_y = 1.01
-                    annotation_row_step = 0.025
-
                     ax.set_title(build_wrapped_chart_title(header), pad=histogram_title_pad)
                     apply_minimal_axis_style(ax, grid_axis='y')
 
                     annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
                     annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
-                    annotation_specs, max_annotation_row = compute_histogram_annotation_rows(
-                        annotation_specs,
-                        distance_threshold=0.04,
-                        threshold_mode='axis_fraction',
-                        x_span=ax.get_xlim()[1] - ax.get_xlim()[0],
-                        base_text_y_axes=annotation_base_y,
-                        row_step=annotation_row_step,
+                    max_annotation_row = max(
+                        (annotation.get('text_y_axes', 1.01) for annotation in annotation_specs),
+                        default=1.01,
                     )
                     render_histogram_annotations(
                         ax,
@@ -3289,7 +3271,7 @@ class ExportDataThread(QThread):
                         annotation_box=annotation_box,
                     )
 
-                    histogram_top_margin = max(0.82, 0.82 + (max_annotation_row * 0.04))
+                    histogram_top_margin = max(0.82, 0.82 + max(0.0, max_annotation_row - 1.01))
                     plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=histogram_top_margin)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
