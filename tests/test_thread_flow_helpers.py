@@ -59,6 +59,7 @@ cmm_parser_stub.CMMReportParser = _DummyCmmReportParser
 sys.modules['modules.CMMReportParser'] = cmm_parser_stub
 from modules.ExportDataThread import (  # noqa: E402
     ExportDataThread,
+    classify_normality_status,
     build_summary_image_anchor_plan,
     build_export_dataframe,
     execute_export_query,
@@ -301,6 +302,12 @@ class TestExportHelpers(unittest.TestCase):
         df = build_export_dataframe([(1, 'A')], ['ID', 'NAME'])
         self.assertEqual(list(df.columns), ['ID', 'NAME'])
         self.assertEqual(df.iloc[0]['NAME'], 'A')
+
+    def test_classify_normality_status_maps_one_sided_not_applicable_to_neutral_badge(self):
+        badge = classify_normality_status('not_applicable')
+
+        self.assertEqual(badge['label'], 'Normality not applicable')
+        self.assertEqual(badge['palette_key'], 'normality_unknown')
 
     def test_run_export_steps_stops_when_canceled(self):
         order = []
