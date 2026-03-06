@@ -76,19 +76,30 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             }
             semantic_labels = {"NOM", "+TOL", "TOL", "BONUS", "MEAS", "DEV", "OUTTOL", "ACT", "OUT"}
 
+            has_tp_qualifier = False
+            has_explicit_nom_label = False
+
             numeric_values: list[float] = []
             for token in tokens[1:]:
                 normalized_token = token.upper().rstrip(":")
                 if is_number(token):
                     numeric_values.append(float(token))
-                elif normalized_token in tp_qualifiers or normalized_token in semantic_labels:
+                elif normalized_token in tp_qualifiers:
+                    has_tp_qualifier = True
+                    continue
+                elif normalized_token in semantic_labels:
+                    if normalized_token == "NOM":
+                        has_explicit_nom_label = True
                     continue
 
             if len(numeric_values) < 5:
                 return []
 
             nom = 0.0
-            if len(numeric_values) >= 6:
+            # Qualified TP rows frequently omit NOM and start directly with +TOL.
+            # In that shape we must not reinterpret an extra trailing numeric token
+            # (OCR spill-over / inherited row noise) as NOM.
+            if len(numeric_values) >= 6 and (has_explicit_nom_label or not has_tp_qualifier):
                 nom, tol_plus, bonus, meas, dev, outtol = numeric_values[:6]
             else:
                 tol_plus, bonus, meas, dev, outtol = numeric_values[:5]
