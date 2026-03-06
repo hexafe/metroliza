@@ -13,14 +13,14 @@ Use this page as the **active operational record** for implementation-item gate 
 ## Active build identity in scope
 
 - Branch: `work`
-- Commit SHA: `e86ecd214e21e42a89a28af1e794b33115857a6b`
-- Artifact/build ID: `2026.03-build260301-e86ecd2`
+- Commit SHA: `84a2302475b3559f319eb225b554a7f3bfbbc214`
+- Artifact/build ID: `2026.03-build260305-84a2302`
 
 ## Open-item RC triage decision table
 
 | Implementation item | Gate decision (`must-fix`/`defer`) | Owner | Target RC | Rationale |
 | --- | --- | --- | --- | --- |
-| Google conversion smoke rerun with valid sandbox OAuth credentials (`credentials.json` + `token.json`) for build `2026.03-build260301-e86ecd2`. | `must-fix` | QA owner + Release manager | 2026.03-rc1 | Current smoke evidence is a FAIL at OAuth token refresh (`403 Forbidden` via network/proxy path); release promotion is blocked until a PASS run is captured for this build identity or a superseding build identity. |
+| Google conversion smoke rerun with valid sandbox OAuth credentials (`credentials.json` + `token.json`) for build `2026.03-build260305-84a2302`. | `must-fix` | QA owner + Release manager | 2026.03-rc1 | Current smoke evidence for build `260305` is a FAIL at smoke credential preflight (`SmokeConfigError` missing `credentials.json`); release promotion is blocked until a PASS run is captured for this build identity or a superseding build identity. |
 | Export-flow architecture cleanup pass (behavior-parity refactor decomposition). | `defer` | App architecture owner | 2026.04-rc1 | Risk-reduction refactor scope; not required to prove release integrity for the active RC gate. |
 | Split `modules/ExportDataThread.py` into orchestration, payload-building, and post-processing modules with parity tests. | `defer` | Export pipeline maintainer | 2026.04-rc1 | Depends on architecture-cleanup sequencing and dedicated parity test scaffolding; not release-blocking for current build identity. |
 | Refactor `modules/CSVSummaryDialog.py` + `modules/ExportDialog.py` to isolate UI state from validation/request-building logic. | `defer` | UI/workflow maintainer | 2026.04-rc2 | Downstream of ExportDataThread decomposition; should not be mixed into the current RC stabilization window. |

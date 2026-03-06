@@ -51,3 +51,20 @@ Use this checklist/log when running the release-gated smoke command from:
 - Fallback `.xlsx` behavior observed: fallback behavior was verified during the run and recorded in release tracker notes (artifact retained outside repo).
 - Link/log location: GitHub Actions job log (external CI artifact/log link; not stored in-repo)
 - Notes/remediation: this second run replaced the earlier missing-file failure with a fully wired smoke attempt. The gate remains blocked until credentials and network path to Google OAuth/Drive are available and a PASS is recorded.
+
+## 2026-03-06 (run 3 / build 260305)
+- Date/time: 2026-03-06 20:42:09 UTC (+0000)
+- Environment/sandbox account: local workstation (non-production sandbox context), branch `work` commit `84a2302475b3559f319eb225b554a7f3bfbbc214`; run intentionally used local-only OAuth env var paths under `/tmp/metroliza-smoke-260305/` and no secrets were committed.
+- Evidence recorder owner role: QA owner (delegated Release manager for docs finalization)
+- Build identity under test: `work` + `84a2302475b3559f319eb225b554a7f3bfbbc214` + artifact/build ID `2026.03-build260305-84a2302`
+- Command:
+  ```bash
+  METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
+  METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH=/tmp/metroliza-smoke-260305/credentials.json \
+  METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=/tmp/metroliza-smoke-260305/token.json \
+  PYTHONPATH=. python scripts/release_only_google_conversion_smoke.py
+  ```
+- Pass/fail: FAIL (`SmokeConfigError`: missing required file `/tmp/metroliza-smoke-260305/credentials.json`)
+- Fallback `.xlsx` behavior observed: not exercised in this run because smoke exited at credential preflight before upload/conversion; no fallback `.xlsx` artifact was generated.
+- Link/log location: `logs/release_checks/google_conversion_smoke_260305_20260306T204206+0000.log`
+- Escalation/status action taken: **FAIL escalation path applied** — RC remains release-blocked and requires credential/bootstrap remediation plus smoke rerun for this same build identity (or a superseding build identity with fresh evidence).

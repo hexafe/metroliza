@@ -12,16 +12,16 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 ## Active build identity (single source for this status snapshot)
 
 - Branch: `work`
-- Commit SHA: `e86ecd214e21e42a89a28af1e794b33115857a6b`
-- Artifact/build ID: `2026.03-build260301-e86ecd2`
-- Release line metadata: `RELEASE_VERSION=2026.03`, `VERSION_DATE=260301`
+- Commit SHA: `84a2302475b3559f319eb225b554a7f3bfbbc214`
+- Artifact/build ID: `2026.03-build260305-84a2302`
+- Release line metadata: `RELEASE_VERSION=2026.03`, `VERSION_DATE=260305`
 
 | Track | Status | Notes | Primary doc |
 |---|---|---|---|
 | Freeze | Pre-freeze checks in progress | Implementation-item triage is complete, but broader freeze scope confirmation and owner assignment gates remain open. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
-| Open testing | Blocked (No-Go) | Do not promote this build to open testing: smoke evidence is recorded for the current build identity but outcome is **FAIL** due to OAuth refresh network/proxy `403 Forbidden`. | [`google_conversion_smoke.md`](./google_conversion_smoke.md), [`open_testing_runbook.md`](./open_testing_runbook.md) |
-| Release candidate readiness | Blocked pending smoke rerun | Current RC decision is **No-Go** for build `2026.03-build260301-e86ecd2`; rerun smoke with valid sandbox credentials or cut a new build identity and re-evidence. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
-| Google conversion smoke gate | Evidence complete, status FAIL | Evidence package exists (command, outcome notes, and build identity), but gate remains release-blocking until PASS. | [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
+| Open testing | Blocked (No-Go) | Do not promote this build to open testing: latest smoke evidence for build `2026.03-build260305-84a2302` is **FAIL** at credential preflight (`SmokeConfigError` missing local-only `credentials.json`). | [`google_conversion_smoke.md`](./google_conversion_smoke.md), [`open_testing_runbook.md`](./open_testing_runbook.md) |
+| Release candidate readiness | Blocked pending smoke rerun | Current RC decision is **No-Go** for build `2026.03-build260305-84a2302`; provide valid sandbox OAuth bootstrap files and rerun smoke, or cut a superseding build identity and re-evidence. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
+| Google conversion smoke gate | Evidence complete, status FAIL | Evidence package is up to date for build `260305` (command, log path, and build identity captured), but gate remains release-blocking until PASS. | [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
 
 ## Operating notes
 
