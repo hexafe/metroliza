@@ -425,9 +425,9 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(len(payload['x']), 100)
 
     def test_classify_normality_status_maps_all_quality_paths(self):
-        self.assertEqual(classify_normality_status('normal')['palette_key'], 'quality_good')
-        self.assertEqual(classify_normality_status('not_normal')['palette_key'], 'quality_risk')
-        self.assertEqual(classify_normality_status('unknown')['palette_key'], 'quality_unknown')
+        self.assertEqual(classify_normality_status('normal')['palette_key'], 'normality_normal')
+        self.assertEqual(classify_normality_status('not_normal')['palette_key'], 'normality_not_normal')
+        self.assertEqual(classify_normality_status('unknown')['palette_key'], 'normality_unknown')
 
     def test_compute_normality_status_returns_unknown_for_small_or_constant_samples(self):
         self.assertEqual(compute_normality_status([1.0, 2.0])['text'], 'Shapiro p = N/A\nUnknown')
@@ -977,9 +977,9 @@ class TestExportPlotHelpers(unittest.TestCase):
 
     def test_style_histogram_stats_table_applies_normality_badges_for_each_status(self):
         scenarios = [
-            ('Shapiro p = 0.5000\nNormal', 'normal', 'quality_good_bg'),
-            ('Shapiro p = 0.0040\nNon-normal', 'not_normal', 'quality_risk_bg'),
-            ('Shapiro p = N/A\nUnknown', 'unknown', 'quality_unknown_bg'),
+            ('Shapiro p = 0.5000\nNormal', 'normal', 'normality_normal_bg'),
+            ('Shapiro p = 0.0040\nNon-normal', 'not_normal', 'normality_not_normal_bg'),
+            ('Shapiro p = N/A\nUnknown', 'unknown', 'normality_unknown_bg'),
         ]
 
         for normality_text, status, palette_bg in scenarios:

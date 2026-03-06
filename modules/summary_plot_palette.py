@@ -28,6 +28,12 @@ SUMMARY_PLOT_PALETTE = {
     'quality_marginal_text': '#92400E',
     'quality_risk_bg': '#FEE2E2',
     'quality_risk_text': '#991B1B',
+    'normality_normal_bg': '#DCFCE7',
+    'normality_normal_text': '#166534',
+    'normality_unknown_bg': '#FEF9C3',
+    'normality_unknown_text': '#854D0E',
+    'normality_not_normal_bg': '#FEE2E2',
+    'normality_not_normal_text': '#991B1B',
 }
 
 EMPHASIS_TABLE_ROWS = {'Cp', 'Cpk', 'Normality'}
