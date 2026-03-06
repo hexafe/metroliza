@@ -54,6 +54,38 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
 
     def process_line(line: list[str]) -> list[Any]:
         processed_line: list[Any] = []
+
+        def process_tp_line(tokens: list[str]) -> list[Any]:
+            tp_qualifiers = {
+                "RFS",
+                "MMC",
+                "LMC",
+                "MMB",
+                "LMB",
+                "TANGENT",
+                "PROJECTED",
+            }
+            semantic_labels = {"NOM", "+TOL", "TOL", "BONUS", "MEAS", "DEV", "OUTTOL", "ACT", "OUT"}
+
+            numeric_values: list[float] = []
+            for token in tokens[1:]:
+                normalized_token = token.upper().rstrip(":")
+                if is_number(token):
+                    numeric_values.append(float(token))
+                elif normalized_token in tp_qualifiers or normalized_token in semantic_labels:
+                    continue
+
+            if len(numeric_values) < 5:
+                return []
+
+            nom = 0.0
+            if len(numeric_values) >= 6:
+                nom, tol_plus, bonus, meas, dev, outtol = numeric_values[:6]
+            else:
+                tol_plus, bonus, meas, dev, outtol = numeric_values[:5]
+
+            return ["TP", nom, tol_plus, "", bonus, meas, dev, outtol]
+
         if (line[0] in ["X", "Y", "Z"]) and len(line) == 4:
             processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
         elif (line[0] in ["X", "Y", "Z"]) and len(line) == 7:
@@ -67,28 +99,8 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                 float(line[5]),
                 float(line[6]),
             ]
-        elif line[0] == "TP" and len(line) == 6:
-            processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                "",
-                float(line[3]),
-                float(line[4]),
-                float(line[4]),
-                float(line[5]),
-            ]
-        elif line[0] == "TP" and len(line) == 7:
-            processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                "",
-                float(line[3]),
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
-            ]
+        elif line[0].startswith("TP"):
+            processed_line = process_tp_line(line)
         elif line[0] == "M" and len(line) == 7:
             processed_line = [
                 line[0],
@@ -185,7 +197,9 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             ]
         return processed_line
 
-    def extract_measurement_tokens_and_raw_lines_consumed(lines: list[str]) -> tuple[list[str], int]:
+    def extract_measurement_tokens_and_raw_lines_consumed(
+        lines: list[str], preserve_non_numeric_tokens: bool = False
+    ) -> tuple[list[str], int]:
         if not lines:
             return [], 0
 
@@ -197,18 +211,26 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
         parsed_tokens: list[str] = [code]
         raw_lines_consumed = 1
         max_token_count = MEASUREMENT_LINE_MAP.get(code, 0)
+        max_numeric_count = max(max_token_count - 1, 0) if max_token_count else 0
 
-        def append_numeric_tokens(tokens: list[str]) -> None:
+        def numeric_tokens_consumed() -> int:
+            return sum(1 for token in parsed_tokens[1:] if is_number(token))
+
+        def append_tokens(tokens: list[str]) -> None:
             for token in tokens:
                 if is_number(token):
                     parsed_tokens.append(token)
-                    if max_token_count and len(parsed_tokens) >= max_token_count:
+                    if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
+                        break
+                elif preserve_non_numeric_tokens:
+                    parsed_tokens.append(token)
+                    if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
                         break
 
-        append_numeric_tokens(first_line_tokens)
+        append_tokens(first_line_tokens)
 
         for raw_line in lines[1:]:
-            if max_token_count and len(parsed_tokens) >= max_token_count:
+            if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
                 break
 
             raw_line_tokens = raw_line.split()
@@ -220,7 +242,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                 break
 
             raw_lines_consumed += 1
-            append_numeric_tokens(raw_line_tokens)
+            append_tokens(raw_line_tokens)
 
         return parsed_tokens, raw_lines_consumed
 
@@ -286,10 +308,11 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                 tokens = line.split()
                 if tokens and tokens[0] in MEASUREMENT_LINE_MAP:
                     candidate_lines = raw_lines[index:]
-                    parsed_tokens, raw_lines_consumed = extract_measurement_tokens_and_raw_lines_consumed(candidate_lines)
-
-                    if parsed_tokens and parsed_tokens[0] == "TP" and len(parsed_tokens) > 1:
-                        parsed_tokens[1] = "0"
+                    preserve_non_numeric_tokens = tokens[0].startswith("TP")
+                    parsed_tokens, raw_lines_consumed = extract_measurement_tokens_and_raw_lines_consumed(
+                        candidate_lines,
+                        preserve_non_numeric_tokens=preserve_non_numeric_tokens,
+                    )
 
                     raw_lines_to_skip = max(raw_lines_consumed - 1, 0)
                     temp_line = process_line(parsed_tokens)
