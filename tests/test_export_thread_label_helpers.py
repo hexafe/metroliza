@@ -128,16 +128,16 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(table[0], ('Min', 1.235))
         self.assertEqual(table[5], ('Cp', 1.99))
         self.assertEqual(table[6], ('Cpk', 1.43))
-        self.assertEqual(table[-2], ('NOK %', '8.33%'))
-        self.assertEqual(table[-1], ('Normality', 'Shapiro p = N/A\nUnknown'))
+        self.assertEqual(table[-2], ('NOK', 1))
+        self.assertEqual(table[-1], ('NOK %', '8.33%'))
 
 
-    def test_build_histogram_table_render_data_keeps_normality_as_last_row(self):
-        table_data = [('Min', 1.0), ('Normality', 'Shapiro p = N/A\nUnknown')]
+    def test_build_histogram_table_render_data_keeps_row_order(self):
+        table_data = [('Min', 1.0), ('NOK %', '8.33%')]
 
         render_data = build_histogram_table_render_data(table_data)
 
-        self.assertEqual(render_data, [('Min', 1.0), ('Normality', 'Shapiro p = N/A\nUnknown')])
+        self.assertEqual(render_data, [('Min', 1.0), ('NOK %', '8.33%')])
 
     def test_build_histogram_table_data_preserves_na_text_for_cp_fields(self):
         summary_stats = {
