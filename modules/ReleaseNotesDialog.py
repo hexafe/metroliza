@@ -6,7 +6,8 @@ class ReleaseNotesDialog(QDialog):
 
         # Initialize the dialog window
         self.setWindowTitle("Release Notes")
-        self.setWindowIcon(parent.windowIcon())
+        if parent is not None and hasattr(parent, "windowIcon"):
+            self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 600, 400)
 
         # Create a QTextBrowser to display release notes

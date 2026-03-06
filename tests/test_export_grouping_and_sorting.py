@@ -49,6 +49,7 @@ sys.modules['modules.CustomLogger'] = custom_logger_stub
 from modules.ExportDataThread import ExportDataThread  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 from modules.export_grouping_utils import apply_group_assignments, prepare_grouping_dataframe  # noqa: E402
+from modules.chart_render_service import build_violin_payload_vectorized  # noqa: E402
 
 
 class TestExportSortingAndGrouping(unittest.TestCase):
@@ -59,6 +60,25 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         prepared = prepare_grouping_dataframe(grouping_df)
 
         self.assertIsNone(prepared)
+
+
+    def test_prepare_grouping_dataframe_keeps_group_color_column(self):
+        grouping_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'],
+                'FILELOC': ['/a'],
+                'FILENAME': ['one.pdf'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'GROUP': ['G1'],
+                'GROUP_COLOR': ['#FDE2E4'],
+            }
+        )
+
+        prepared = prepare_grouping_dataframe(grouping_df)
+
+        self.assertIn('GROUP_COLOR', prepared.columns)
+        self.assertEqual(prepared['GROUP_COLOR'].iloc[0], '#FDE2E4')
 
     def test_apply_group_assignments_returns_contract_metadata(self):
         header_group = pd.DataFrame(
@@ -79,6 +99,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
                 'DATE': ['2024-01-01'],
                 'SAMPLE_NUMBER': ['1'],
                 'GROUP': ['G1'],
+                'GROUP_COLOR': ['#FDE2E4'],
             }
         )
         grouping_df = prepare_grouping_dataframe(grouping_df)
@@ -89,6 +110,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(merge_keys, ['GROUP_KEY'])
         self.assertEqual(duplicate_count, 0)
         self.assertEqual(merged['GROUP'].tolist(), ['G1'])
+        self.assertEqual(merged['GROUP_COLOR'].tolist(), ['#FDE2E4'])
 
     def test_constructor_accepts_export_request_contract(self):
         request = ExportRequest(
@@ -198,7 +220,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
             }
         )
 
-        labels, values, can_render = ExportDataThread._build_violin_payload(
+        labels, values, can_render = build_violin_payload_vectorized(
             header_group,
             'GROUP',
             min_samplesize=1,
@@ -217,7 +239,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
             }
         )
 
-        labels, values, can_render = ExportDataThread._build_violin_payload(
+        labels, values, can_render = build_violin_payload_vectorized(
             header_group,
             'GROUP',
             min_samplesize=1,
@@ -235,7 +257,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
             }
         )
 
-        labels, values, can_render = ExportDataThread._build_violin_payload(
+        labels, values, can_render = build_violin_payload_vectorized(
             header_group,
             'SAMPLE_NUMBER',
             min_samplesize=2,
@@ -244,6 +266,36 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(labels, ['1', '2'])
         self.assertEqual(values, [[1.0, 1.1], [0.9]])
         self.assertFalse(can_render)
+
+    def test_build_summary_scatter_payload_uses_positional_x_for_string_groups(self):
+        header_group = pd.DataFrame(
+            {
+                'GROUP': ['A', 'A', 'B'],
+                'MEAS': [1.0, 1.1, 0.9],
+            }
+        )
+
+        x_values, y_values, labels = ExportDataThread._build_summary_scatter_payload(header_group, 'GROUP')
+
+        self.assertTrue(np.issubdtype(x_values.dtype, np.number))
+        self.assertEqual(x_values.tolist(), [0.0, 1.0, 2.0])
+        self.assertEqual(y_values.tolist(), [1.0, 1.1, 0.9])
+        self.assertEqual(labels, ['A', '', 'B'])
+
+    def test_build_summary_scatter_payload_preserves_numeric_sample_positions(self):
+        header_group = pd.DataFrame(
+            {
+                'SAMPLE_NUMBER': ['10', '11', '12'],
+                'MEAS': [1.0, 1.1, 0.9],
+            }
+        )
+
+        x_values, y_values, labels = ExportDataThread._build_summary_scatter_payload(header_group, 'SAMPLE_NUMBER')
+
+        self.assertTrue(np.issubdtype(x_values.dtype, np.number))
+        self.assertEqual(x_values.tolist(), [10.0, 11.0, 12.0])
+        self.assertEqual(y_values.tolist(), [1.0, 1.1, 0.9])
+        self.assertEqual(labels, ['10', '11', '12'])
 
     def test_prepared_grouping_df_is_cached_per_export_thread_instance(self):
         thread = ExportDataThread(

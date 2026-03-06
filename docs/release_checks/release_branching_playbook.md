@@ -1,6 +1,11 @@
 # Release branching playbook (solo maintainer)
 
-This guide explains how to combine multiple `feature/*` branches into one release candidate (RC) branch without confusion.
+This **tutorial-only** guide shows one practical way to combine multiple `feature/*` branches into one release candidate (RC) branch without confusion.
+
+For canonical policy (branch naming, merge rules, and tagging rules), always follow:
+
+- `docs/release_checks/branching_strategy.md`
+- `docs/release_checks/release_candidate_checklist.md`
 
 ## TL;DR flow
 
@@ -45,7 +50,7 @@ Assume you finished:
 
 ```bash
 git checkout main
-git pull
+git pull --ff-only origin main
 git checkout -b release/2026.03-rc1
 ```
 
@@ -83,7 +88,7 @@ Fix directly on RC:
 git checkout release/2026.03-rc1
 # apply fix
 git commit -m "Fix: <issue>"
-git tag v2026.03-rc2
+git tag -a v2026.03-rc2 -m "Release candidate v2026.03-rc2"
 ```
 
 Deploy rc2 and repeat until stable.
@@ -123,7 +128,7 @@ Use the monthly release format consistently for RC branches and tags.
 
 ## Release checklist linkage
 
-Use this playbook together with:
+Use this playbook as companion guidance together with:
 
 - `docs/release_checks/release_candidate_checklist.md`
 - `docs/google_conversion_smoke_runbook.md`

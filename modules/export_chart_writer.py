@@ -3,20 +3,42 @@ from xlsxwriter.utility import xl_range
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
+CHART_ANCHOR_ROW = 7  # Excel row 8, zero-based for xlsxwriter.
+CHART_WIDTH_CM = 11.09
+CHART_HEIGHT_CM = 6.35
+CM_PER_INCH = 2.54
+PIXELS_PER_INCH = 96
+
+
+def _cm_to_pixels(cm_value):
+    """Convert centimeters to xlsxwriter chart pixel units."""
+    return round((cm_value / CM_PER_INCH) * PIXELS_PER_INCH)
+
+
+def _build_chart_size_policy():
+    return {
+        'width': _cm_to_pixels(CHART_WIDTH_CM),
+        'height': _cm_to_pixels(CHART_HEIGHT_CM),
+    }
+
+
 def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
     """Build an absolute worksheet range string for xlsxwriter series definitions."""
     return f"={sheet_name}!${xl_range(first_row, column_index, last_row, column_index)}"
 
 
-def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column, cache=None):
+def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column, usl_column=None, lsl_column=None, cache=None):
     """Return worksheet range specs shared by chart backend helpers.
 
     The optional cache avoids rebuilding identical absolute range strings for repeated
     chart fragments in the same export run.
     """
+    resolved_usl_column = y_column if usl_column is None else usl_column
+    resolved_lsl_column = y_column if lsl_column is None else lsl_column
+
     if cache is not None:
         range_cache = cache.setdefault('range_specs', {})
-        cache_key = (sheet_name, first_data_row, last_data_row, x_column, y_column)
+        cache_key = (sheet_name, first_data_row, last_data_row, x_column, y_column, resolved_usl_column, resolved_lsl_column)
         cached = range_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -24,12 +46,12 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
     range_specs = {
         'data_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
         'data_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, y_column),
-        # Limit helper points are stored in fixed two-row blocks (USL: 0-1, LSL: 2-3),
-        # each containing the first/last sample domain anchors in x and matching y.
-        'usl_x': build_sheet_series_range(sheet_name, 0, 1, x_column),
-        'usl_y': build_sheet_series_range(sheet_name, 0, 1, y_column),
-        'lsl_x': build_sheet_series_range(sheet_name, 2, 3, x_column),
-        'lsl_y': build_sheet_series_range(sheet_name, 2, 3, y_column),
+        # USL/LSL vectors are stored on data rows with values at first/last index
+        # and blanks in between, so charts can anchor to explicit columns.
+        'usl_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
+        'usl_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, resolved_usl_column),
+        'lsl_x': build_sheet_series_range(sheet_name, first_data_row, last_data_row, x_column),
+        'lsl_y': build_sheet_series_range(sheet_name, first_data_row, last_data_row, resolved_lsl_column),
     }
     if cache is not None:
         range_cache[cache_key] = range_specs
@@ -39,30 +61,16 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
 def _build_limit_series_template(*, limit_name):
     return {
         'name': limit_name,
-        # Keep helper anchor series fully hidden so only the rendered spec limit
-        # trendline is visible in Excel.
-        'line': {'none': True},
+        'line': {
+            'color': '#c0504b',
+            'width': 2,
+            # xlsxwriter expresses alpha as transparency; 60% opacity == 40% transparency.
+            'transparency': 40,
+        },
         'marker': {'type': 'none'},
         'data_labels': {'value': False},
         'show_legend_key': False,
     }
-
-
-def _build_limit_trendline_spec(*, point_count):
-    """Return a linear trendline config that spans the full measurement domain."""
-    return {
-        'type': 'linear',
-        'line': {
-            'color': SUMMARY_PLOT_PALETTE['spec_limit'],
-            'width': 1,
-            # xlsxwriter expresses alpha as transparency; 60% opacity == 40% transparency.
-            'transparency': 40,
-        },
-        # USL/LSL series are anchored with two helper points. Extend the linear
-        # trendline to cover the remaining measurement x-domain.
-        'forward': max(point_count - 2, 0),
-    }
-
 
 def build_measurement_chart_series_specs(
     *,
@@ -72,6 +80,8 @@ def build_measurement_chart_series_specs(
     last_data_row,
     x_column,
     y_column,
+    usl_column=None,
+    lsl_column=None,
     cache=None,
 ):
     """Build stable chart series definitions for measurement and spec-limit overlays."""
@@ -81,6 +91,8 @@ def build_measurement_chart_series_specs(
         last_data_row=last_data_row,
         x_column=x_column,
         y_column=y_column,
+        usl_column=usl_column,
+        lsl_column=lsl_column,
         cache=cache,
     )
 
@@ -92,9 +104,6 @@ def build_measurement_chart_series_specs(
         usl_template = _build_limit_series_template(limit_name='USL')
         lsl_template = _build_limit_series_template(limit_name='LSL')
 
-    point_count = (last_data_row - first_data_row) + 1
-    trendline_spec = _build_limit_trendline_spec(point_count=point_count)
-
     return [
         {
             'name': header,
@@ -105,13 +114,11 @@ def build_measurement_chart_series_specs(
             **usl_template,
             'categories': range_specs['usl_x'],
             'values': range_specs['usl_y'],
-            'trendline': trendline_spec,
         },
         {
             **lsl_template,
             'categories': range_specs['lsl_x'],
             'values': range_specs['lsl_y'],
-            'trendline': trendline_spec,
         },
     ]
 
@@ -125,6 +132,8 @@ def build_measurement_chart_series_specs_from_plan(*, header, sheet_name, measur
         last_data_row=measurement_plan['last_data_row'],
         x_column=measurement_plan['summary_column'],
         y_column=measurement_plan['y_column'],
+        usl_column=measurement_plan['usl_column'],
+        lsl_column=measurement_plan['lsl_column'],
         cache=cache,
     )
 
@@ -135,7 +144,7 @@ def build_measurement_chart_format_policy(header):
         'title': {'name': f'{header}', 'name_font': {'size': 10}},
         'y_axis': {'major_gridlines': {'visible': False}},
         'legend': {'position': 'none'},
-        'size': {'width': 240, 'height': 160},
+        'size': _build_chart_size_policy(),
     }
 
 
@@ -179,4 +188,4 @@ def insert_measurement_chart(
     chart.set_y_axis(chart_policy['y_axis'])
     chart.set_legend(chart_policy['legend'])
     chart.set_size(chart_policy['size'])
-    worksheet.insert_chart(measurement_plan['chart_insert_row'], chart_anchor_col, chart)
+    worksheet.insert_chart(CHART_ANCHOR_ROW, chart_anchor_col, chart)

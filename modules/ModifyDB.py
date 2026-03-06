@@ -1,3 +1,5 @@
+"""Dialog for bulk editing selected reference fields in the SQLite database."""
+
 from PyQt6.QtWidgets import (
     QDialog,
     QGridLayout,
@@ -17,10 +19,17 @@ logger = logging.getLogger(__name__)
 
 
 class ModifyDB(QDialog):
+    """Provide table-based editing for key text fields in REPORTS/MEASUREMENTS.
+
+    The dialog loads distinct values from the database, lets users update them
+    in-place, and commits all detected changes in one transaction.
+    """
+
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         self.setWindowTitle("Modify database")
-        self.setWindowIcon(parent.windowIcon())
+        if parent is not None and hasattr(parent, "windowIcon"):
+            self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 640, 480)
         self.setModal(True)
 
@@ -93,6 +102,7 @@ class ModifyDB(QDialog):
             self.log_and_exit(e)
 
     def select_db_file(self):
+        """Select a database file and load editable values into each table."""
         try:
             """Open a file dialog to select a database file"""
             filename, _ = QFileDialog.getOpenFileName(
@@ -109,6 +119,7 @@ class ModifyDB(QDialog):
             self.log_and_exit(e)
 
     def populate_tables(self):
+        """Refresh all editor tables from the currently selected database."""
         try:
             # Clear existing items in table widgets and undo data
             self.reference_table.clearContents()
@@ -146,6 +157,7 @@ class ModifyDB(QDialog):
             self.undo_data[table][i] = str(value[0])
 
     def confirm_and_apply_changes(self):
+        """Show pending edits and apply them only after user confirmation."""
         try:
             modifications_text = self.collect_modifications()
             confirmation_dialog = QMessageBox(self)
@@ -162,6 +174,7 @@ class ModifyDB(QDialog):
             self.log_and_exit(e)
 
     def collect_modifications(self):
+        """Collect a user-facing summary of all modified rows across tables."""
         modifications_text = ""
 
         # Collect modifications for reference table
@@ -182,6 +195,7 @@ class ModifyDB(QDialog):
         return modifications_text
 
     def collect_table_modifications(self, table, table_name):
+        """Build a per-table change list using original values stored in UserRole."""
         modifications_text = ""
 
         for i in range(table.rowCount()):
@@ -197,6 +211,7 @@ class ModifyDB(QDialog):
         return modifications_text
 
     def apply_changes(self):
+        """Apply collected UPDATE statements in a single retried transaction."""
         try:
             statements = []
             statements.extend(self.build_update_statements(self.reference_table, "REPORTS", "REFERENCE"))
@@ -226,6 +241,7 @@ class ModifyDB(QDialog):
             cursor.execute(query, params)
 
     def build_update_statements(self, table_widget, table_name, column_name):
+        """Build SQL UPDATE statements for rows modified in the given table."""
         statements = []
         for row in range(table_widget.rowCount()):
             new_value = str(table_widget.item(row, 0).text())

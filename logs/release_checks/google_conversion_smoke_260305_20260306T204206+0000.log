@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/workspace/metroliza/scripts/release_only_google_conversion_smoke.py", line 140, in <module>
+    run_google_conversion_smoke_check()
+  File "/workspace/metroliza/scripts/release_only_google_conversion_smoke.py", line 91, in run_google_conversion_smoke_check
+    credentials_path = _resolve_secret_file(
+  File "/workspace/metroliza/scripts/release_only_google_conversion_smoke.py", line 60, in _resolve_secret_file
+    raise SmokeConfigError(
+__main__.SmokeConfigError: Missing required file: /tmp/metroliza-smoke-260305/credentials.json. Configure METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH (or create credentials.json) with sandbox OAuth data.

@@ -23,12 +23,12 @@ def test_invalid_backend_value_falls_back_to_auto(monkeypatch):
     assert parsed == parser.parse_raw_lines_to_blocks(_sample_lines())
 
 
-def test_native_unavailable_falls_back_to_python(monkeypatch):
+def test_auto_mode_falls_back_to_python_when_native_is_unavailable(monkeypatch):
     monkeypatch.setenv("METROLIZA_CMM_PARSER_BACKEND", "auto")
     parser = importlib.reload(cmm_native_parser)
     monkeypatch.setattr(parser, "_native_parse_blocks", None)
 
-    parsed = parser.parse_blocks_with_backend(_sample_lines(), use_native=True)
+    parsed = parser.parse_blocks_with_backend(_sample_lines())
     assert parsed == parser.parse_raw_lines_to_blocks(_sample_lines())
 
 

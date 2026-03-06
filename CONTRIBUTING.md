@@ -39,7 +39,7 @@ Before opening a PR, run:
 ```bash
 python -m compileall .
 ruff check .
-PYTHONPATH=. python -m unittest discover -s tests -v
+PYTHONPATH=. python -m pytest tests -q
 ```
 
 ## Architecture notes
@@ -59,6 +59,14 @@ Request/option contracts live in `modules/contracts.py`.
 - Export flows should build and validate `ExportRequest` and nested dataclasses (`AppPaths`, `ExportOptions`, `GroupingAssignment`).
 - Prefer adding validation to contract constructors/helpers instead of duplicating checks in UI/dialog code.
 
+
+## Module naming policy (`modules/`)
+
+- Use **`snake_case.py`** for all new Python modules under `modules/`.
+- Prefer importing from snake_case module names in new and touched code.
+- Legacy `CamelCase.py` modules are currently transition aliases and should not be used for new module names.
+- See [`docs/module_naming_migration.md`](docs/module_naming_migration.md) for the staged migration map and compatibility plan.
+
 ## Coding guidance
 
 - Keep changes incremental and aligned with active operational docs under `docs/` (especially release-check workflows in `docs/release_checks/`).
@@ -66,6 +74,7 @@ Request/option contracts live in `modules/contracts.py`.
 - **Transaction granularity:** each logical write unit (e.g., inserting one parsed report and all related measurements, or applying all edits from one Modify DB submission) must execute inside a single `run_transaction_with_retry` call so retries are atomic and rollback-safe.
 - Use `run_transaction_with_retry` for multi-statement write workflows; keep retries centralized in `modules/db.py` rather than implementing ad-hoc retry loops in feature modules.
 - Add or update tests in `tests/` for each behavior change.
+- Naming guardrail: `tests/test_module_naming_policy.py` enforces that any newly introduced `modules/*.py` files follow `snake_case.py` (with a temporary legacy allowlist during migration).
 
 
 ## Documentation source-of-truth hierarchy

@@ -19,11 +19,15 @@ class FilterDialog(QDialog):
         super().__init__(parent)
         
         self.setWindowTitle("Data filtering")
-        self.setWindowIcon(parent.windowIcon())
+        if parent is not None and hasattr(parent, "windowIcon"):
+            self.setWindowIcon(parent.windowIcon())
         self.setModal(True)
         
         self.db_file = db_file
-        self.filter_query = self.parent().get_filter_query()
+        if self.parent() is not None and hasattr(self.parent(), "get_filter_query"):
+            self.filter_query = self.parent().get_filter_query()
+        else:
+            self.filter_query = ""
         
         self.setup_ui()
 

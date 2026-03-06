@@ -1,6 +1,13 @@
+"""Provide the data-grouping dialog used to curate export grouping presets.
+
+This UI reads report data from SQLite and coordinates with the main window to
+store, apply, and clear reference/part grouping assignments.
+"""
+
 from modules.CustomLogger import CustomLogger
 from modules.db import read_sql_dataframe
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import(
     QAbstractItemView,
     QDialog,
@@ -18,23 +25,51 @@ import pandas as pd
 
 
 class DataGrouping(QDialog):
+    """DataGrouping public interface used by export and UI workflows."""
+
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         self.setWindowTitle("Data grouping")
-        self.setWindowIcon(parent.windowIcon())
+        if parent is not None and hasattr(parent, "windowIcon"):
+            self.setWindowIcon(parent.windowIcon())
         self.setModal(True)
         
         self.db_file = db_file
         self.df = None
         self.default_group = "POPULATION"
+        self.default_group_color = "#FFFFFF"
+        self.group_color_column = "GROUP_COLOR"
+        self.group_palette = [
+            "#FDE2E4",
+            "#E2ECE9",
+            "#E8E8FF",
+            "#FFF1E6",
+            "#E3F2FD",
+            "#E7F6E7",
+            "#F9E2FF",
+            "#FFF9C4",
+        ]
+        self._group_display_to_name = {}
         
         self.setup_ui()
         
         self.read_data_to_df()
         self.add_default_group()
+        self._restore_saved_grouping_state()
         self.populate_list_widgets()
 
     def setup_ui(self):
+        """Handle `setup_ui` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.create_widgets()
             self.arrange_layout()
@@ -43,6 +78,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def create_widgets(self):
+        """Handle `create_widgets` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             # Create labels and list widgets for each column to be filtered
             self.reference_label = QLabel("REFERENCE:")
@@ -87,6 +133,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def arrange_layout(self):
+        """Handle `arrange_layout` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.layout = QGridLayout(self)
 
@@ -112,7 +169,7 @@ class DataGrouping(QDialog):
                     if item is not None:
                         widget = item.widget()
                         if widget is not None:
-                            widget.setFixedWidth(200) if column == 0 else widget.setFixedWidth(200)
+                            widget.setFixedWidth(200)
 
             self.layout.addWidget(self.create_group_button, 4, 0, 1, 4)
             self.layout.addWidget(self.rename_group_button, 5, 0, 1, 4)
@@ -127,6 +184,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def connect_signals(self):
+        """Handle `connect_signals` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.reference_search_input.textChanged.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
             self.part_search_input.textChanged.connect(lambda: self.search_list_widgets(self.part_list, self.part_search_input.text()))
@@ -156,6 +224,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def read_data_to_df(self):
+        """Handle `read_data_to_df` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             filter_query = self.parent().get_filter_query() if self.parent() else None
             query = self._build_grouping_query(filter_query)
@@ -177,19 +256,118 @@ class DataGrouping(QDialog):
         """
 
     def refresh_data(self):
+        """Handle `refresh_data` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.read_data_to_df()
             self.add_default_group()
+            self._restore_saved_grouping_state()
             self.populate_list_widgets()
         except Exception as e:
             self.log_and_exit(e)
             
     def add_default_group(self):
+        """Handle `add_default_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.df["GROUP"] = self.default_group
+            self.df[self.group_color_column] = self.default_group_color
             self.df["GROUP_KEY"] = self._compute_group_key_for_df(self.df)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _restore_saved_grouping_state(self):
+        try:
+            parent = self.parent()
+            saved_df = getattr(parent, 'df_for_grouping', None) if parent is not None else None
+            if not isinstance(saved_df, pd.DataFrame) or saved_df.empty:
+                return
+
+            merge_columns = ['GROUP_KEY', 'GROUP']
+            if self.group_color_column in saved_df.columns:
+                merge_columns.append(self.group_color_column)
+
+            saved_projection = saved_df[merge_columns].drop_duplicates(subset=['GROUP_KEY'], keep='last')
+            merged = self.df.drop(columns=['GROUP'], errors='ignore').merge(saved_projection, on='GROUP_KEY', how='left')
+            self.df['GROUP'] = merged['GROUP'].fillna(self.default_group)
+            if self.group_color_column in merged.columns:
+                self.df[self.group_color_column] = merged[self.group_color_column].fillna(self.default_group_color)
+            else:
+                self.df[self.group_color_column] = self.default_group_color
+            self._ensure_group_color_integrity()
+        except Exception as e:
+            self.log_and_exit(e)
+
+    @staticmethod
+    def _ideal_text_color(background_hex):
+        color = QColor(background_hex)
+        if not color.isValid():
+            return '#000000'
+        luminance = ((0.299 * color.red()) + (0.587 * color.green()) + (0.114 * color.blue())) / 255
+        return '#000000' if luminance > 0.6 else '#FFFFFF'
+
+    def _next_group_color(self):
+        used = set(
+            self.df.loc[self.df['GROUP'] != self.default_group, self.group_color_column]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+        for color in self.group_palette:
+            if color not in used:
+                return color
+
+        seed = len(used)
+        hue = (seed * 47) % 360
+        generated = QColor.fromHsl(int(hue), 110, 225)
+        return generated.name().upper()
+
+    def _ensure_group_color_integrity(self):
+        if self.group_color_column not in self.df.columns:
+            self.df[self.group_color_column] = self.default_group_color
+
+        self.df[self.group_color_column] = self.df[self.group_color_column].fillna(self.default_group_color)
+        self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = self.default_group_color
+
+        for group_name in self.df['GROUP'].dropna().astype(str).unique():
+            if group_name == self.default_group:
+                continue
+            existing = self.df.loc[self.df['GROUP'] == group_name, self.group_color_column].dropna().astype(str)
+            assigned_color = next((value for value in existing if value and value != self.default_group_color), None)
+            if assigned_color is None:
+                assigned_color = self._next_group_color()
+            self.df.loc[self.df['GROUP'] == group_name, self.group_color_column] = assigned_color
+
+    def _group_color_for_row(self, row):
+        color = getattr(row, self.group_color_column, self.default_group_color)
+        if pd.isna(color) or not str(color).strip():
+            return self.default_group_color
+        return str(color)
+
+    def _apply_item_color(self, item, color_hex):
+        color = QColor(color_hex)
+        if not color.isValid():
+            color = QColor(self.default_group_color)
+        item.setBackground(QBrush(color))
+        item.setForeground(QBrush(QColor(self._ideal_text_color(color.name()))))
 
     def _compute_group_key_for_df(self, df):
         try:
@@ -200,9 +378,18 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def _part_display_label(self, row):
-        sample = str(row['SAMPLE_NUMBER'])
-        date = str(row['DATE']) if pd.notna(row['DATE']) else ''
-        filename = str(row['FILENAME']) if pd.notna(row['FILENAME']) else ''
+        def _field_value(field_name):
+            if hasattr(row, field_name):
+                return getattr(row, field_name)
+            return row[field_name]
+
+        sample_number = _field_value('SAMPLE_NUMBER')
+        date_value = _field_value('DATE')
+        filename_value = _field_value('FILENAME')
+
+        sample = str(sample_number)
+        date = str(date_value) if pd.notna(date_value) else ''
+        filename = str(filename_value) if pd.notna(filename_value) else ''
         return f"{sample} | {date} | {filename}"
 
     def _populate_part_list(self, selected_reference=None):
@@ -211,8 +398,9 @@ class DataGrouping(QDialog):
 
         self.part_list.clear()
         for row in rows_df.itertuples(index=False):
-            item = QListWidgetItem(f"{row.SAMPLE_NUMBER} | {row.DATE if pd.notna(row.DATE) else ''} | {row.FILENAME if pd.notna(row.FILENAME) else ''}")
+            item = QListWidgetItem(self._part_display_label(row))
             item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
+            self._apply_item_color(item, self._group_color_for_row(row))
             self.part_list.addItem(item)
 
     def _populate_part_group_list(self, selected_group=None):
@@ -221,14 +409,43 @@ class DataGrouping(QDialog):
 
         self.part_group_list.clear()
         for row in rows_df.itertuples(index=False):
-            item = QListWidgetItem(f"{row.SAMPLE_NUMBER} | {row.DATE if pd.notna(row.DATE) else ''} | {row.FILENAME if pd.notna(row.FILENAME) else ''}")
+            item = QListWidgetItem(self._part_display_label(row))
             item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
+            self._apply_item_color(item, self._group_color_for_row(row))
             self.part_group_list.addItem(item)
+
+    @staticmethod
+    def _group_display_label(group_name, sample_size):
+        return f"{group_name} (n={sample_size})"
+
+    def _selected_group_name(self):
+        selected = self.groups_list.currentItem()
+        if selected is None:
+            return None
+        canonical_name = selected.data(Qt.ItemDataRole.UserRole)
+        if canonical_name:
+            return str(canonical_name)
+
+        display_name = selected.text()
+        return self._group_display_to_name.get(display_name, display_name)
             
     def populate_list_widgets(self):
+        """Handle `populate_list_widgets` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             unique_references = self.df["REFERENCE"].unique()
+            self._ensure_group_color_integrity()
             unique_groups = self.df["GROUP"].unique()
+            self._group_display_to_name = {}
 
             # Populate reference_list
             self.reference_list.clear()
@@ -246,17 +463,42 @@ class DataGrouping(QDialog):
             self.all_parts_list.addItems(map(str, self.df['SAMPLE_NUMBER'].astype(str).unique()))
 
             self.groups_list.clear()
-            self.groups_list.addItems(map(str, unique_groups))
+            for group_name in map(str, unique_groups):
+                sample_size = int(self.df[self.df['GROUP'] == group_name]['GROUP_KEY'].nunique())
+                display_label = self._group_display_label(group_name, sample_size)
+                item = QListWidgetItem(display_label)
+                item.setData(Qt.ItemDataRole.UserRole, group_name)
+                self._group_display_to_name[display_label] = group_name
+                group_color = self.default_group_color
+                if group_name != self.default_group:
+                    group_rows = self.df[self.df['GROUP'] == group_name]
+                    if not group_rows.empty:
+                        group_color = str(group_rows[self.group_color_column].iloc[-1])
+                self._apply_item_color(item, group_color)
+                self.groups_list.addItem(item)
             
             # Select the first item in the groups_list by default
             if self.groups_list.count() > 0:
                 self.groups_list.setCurrentRow(0)
-            selected_group = self.groups_list.currentItem().text() if self.groups_list.currentItem() else None
+            selected_group = self._selected_group_name()
             self._populate_part_group_list(selected_group)
         except Exception as e:
             self.log_and_exit(e)
 
     def search_list_widgets(self, list_widget, search_text):
+        """Handle `search_list_widgets` for `DataGrouping`.
+
+        Args:
+            list_widget (object): Method input value.
+            search_text (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_items = list_widget.selectedItems()
             list_widget.clearSelection()
@@ -274,7 +516,12 @@ class DataGrouping(QDialog):
             for row in range(list_widget.count()):
                 item = list_widget.item(row)
                 item_text = item.text().lower()
-                if search_text in item_text:
+                canonical_text = ''
+                canonical_name = item.data(Qt.ItemDataRole.UserRole)
+                if canonical_name is not None:
+                    canonical_text = str(canonical_name).lower()
+
+                if search_text in item_text or search_text in canonical_text:
                     item.setHidden(False)
                 else:
                     item.setHidden(True)
@@ -285,6 +532,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def on_reference_selection_changed(self):
+        """Handle `on_reference_selection_changed` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_reference = self.reference_list.currentItem().text() if self.reference_list.currentItem() else None
             self._populate_part_list(selected_reference)
@@ -293,6 +551,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
     
     def on_part_selection_changed(self):
+        """Handle `on_part_selection_changed` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_part = self.part_list.currentItem() is not None
             self.create_group_button.setEnabled(selected_part)
@@ -300,8 +569,19 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
     
     def on_group_selection_changed(self):
+        """Handle `on_group_selection_changed` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
-            selected_group_name = self.groups_list.currentItem().text() if self.groups_list.currentItem() else None
+            selected_group_name = self._selected_group_name()
             self._populate_part_group_list(selected_group_name)
 
             selected_group = self.groups_list.currentItem() is not None
@@ -311,6 +591,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def on_part_group_selection_changed(self):
+        """Handle `on_part_group_selection_changed` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             selected_part_group = self.part_group_list.currentItem() is not None
             self.remove_from_group_button.setEnabled(selected_part_group)
@@ -318,17 +609,34 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def create_group(self):
+        """Handle `create_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             # Get the selected items from the list widgets
             selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_list.selectedItems()]
             new_group_name, ok_pressed = QInputDialog.getText(self, "New group", "Enter group name:")
 
             if ok_pressed and selected_part_keys:
+                group_exists = bool((self.df['GROUP'] == new_group_name).any())
+                assigned_color = self._next_group_color() if not group_exists else self.df.loc[self.df['GROUP'] == new_group_name, self.group_color_column].iloc[-1]
                 # Update the dataframe with the new group information
                 self.df.loc[
                     self.df['GROUP_KEY'].isin(selected_part_keys),
                     'GROUP'
                 ] = new_group_name
+                self.df.loc[
+                    self.df['GROUP_KEY'].isin(selected_part_keys),
+                    self.group_color_column
+                ] = assigned_color
                 
             self.populate_list_widgets()
             self.remove_from_group_button.setDisabled(True)
@@ -336,13 +644,26 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def rename_group(self):
+        """Handle `rename_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
-            selected_group = self.groups_list.currentItem().text()
+            selected_group = self._selected_group_name()
             new_group_name, ok_pressed = QInputDialog.getText(self, "Rename group", f"Enter new name for '{selected_group}':")
 
             if ok_pressed and selected_group and new_group_name:
+                existing_color = self.df.loc[self.df['GROUP'] == selected_group, self.group_color_column].iloc[-1]
                 # Update the dataframe with the new group name
                 self.df.loc[self.df['GROUP'] == selected_group, 'GROUP'] = new_group_name
+                self.df.loc[self.df['GROUP'] == new_group_name, self.group_color_column] = existing_color
                 
             self.populate_list_widgets()
             self.remove_from_group_button.setDisabled(True)
@@ -350,8 +671,19 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def remove_from_group(self):
+        """Handle `remove_from_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
-            selected_group = self.groups_list.currentItem().text() if self.groups_list.currentItem() else None
+            selected_group = self._selected_group_name()
             selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_group_list.selectedItems()]
 
             if selected_group and selected_part_keys:
@@ -361,6 +693,11 @@ class DataGrouping(QDialog):
                     (self.df['GROUP_KEY'].isin(selected_part_keys)),
                     'GROUP'
                 ] = self.default_group
+                self.df.loc[
+                    (self.df['GROUP'] == self.default_group) &
+                    (self.df['GROUP_KEY'].isin(selected_part_keys)),
+                    self.group_color_column
+                ] = self.default_group_color
 
                 # Repopulate the list widgets after updating the dataframe
                 self.populate_list_widgets()
@@ -369,9 +706,20 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def delete_group(self):
+        """Handle `delete_group` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             # Get the selected group
-            selected_group = self.groups_list.currentItem().text()
+            selected_group = self._selected_group_name()
 
             # Create a QMessageBox with the Question icon
             confirmation = QMessageBox(QMessageBox.Icon.Question, 'Confirm Deletion', f"Are you sure you want to delete group '{selected_group}'?")
@@ -385,6 +733,7 @@ class DataGrouping(QDialog):
             if result == QMessageBox.StandardButton.Yes and selected_group:
                 # Update the dataframe with the default group value for the selected group
                 self.df.loc[self.df['GROUP'] == selected_group, 'GROUP'] = self.default_group
+                self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = self.default_group_color
             
             # Repopulate the list widgets after updating the dataframe
             self.populate_list_widgets()
@@ -393,6 +742,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
 
     def use_grouping(self):
+        """Handle `use_grouping` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.hide()
             self.parent().set_df_for_grouping(self.df)
@@ -401,6 +761,17 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def dont_use_grouping(self):
+        """Handle `dont_use_grouping` for `DataGrouping`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             self.hide()
             self.parent().set_df_for_grouping(None)
@@ -409,4 +780,16 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def log_and_exit(self, exception):
+        """Handle `log_and_exit` for `DataGrouping`.
+
+        Args:
+            exception (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         CustomLogger(exception, reraise=False)

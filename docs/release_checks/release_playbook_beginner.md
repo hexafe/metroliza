@@ -27,7 +27,7 @@ Example target release: `v2026.03`.
    - This branch now holds only stabilization work (bug fixes, release blockers, docs/tests updates tied to release readiness).
 
 3. **Open testing entry criteria (before broad RC testing)**
-   - Confirm open testing entry checklist items in [`release_candidate_checklist.md`](./release_candidate_checklist.md#2-open-testing-entry-criteria): freeze timestamp, RC branch, build identifier, smoke baseline, known-issues link, and bug reporting channel.
+   - Confirm open testing entry checklist items in [`release_candidate_checklist.md`](./release_candidate_checklist.md#open-testing-entry-criteria): freeze timestamp, RC branch, build identifier, smoke baseline, known-issues link, and bug reporting channel.
 
 4. **Stabilize and test RC1**
    - QA executes release checklist, open testing, regression, and smoke testing.
@@ -39,7 +39,7 @@ Example target release: `v2026.03`.
    - Significant churn or reset of test confidence: cut `release/2026.03-rc2` from the current stabilized RC tip and retest.
 
 6. **Open testing exit criteria + Go decision**
-   - Confirm open testing exit checklist items in [`release_candidate_checklist.md`](./release_candidate_checklist.md#6-open-testing-exit-criteria): blocker count `0`, deferred list approved, smoke re-run pass, and sign-off owners complete.
+   - Confirm open testing exit checklist items in [`release_candidate_checklist.md`](./release_candidate_checklist.md#open-testing-exit-criteria): blocker count `0`, deferred list approved, smoke re-run pass, and sign-off owners complete.
 
    - QA signs off that required tests/checklists passed.
    - Engineering confirms no open release blockers.

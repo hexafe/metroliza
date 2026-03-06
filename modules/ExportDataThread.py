@@ -1,6 +1,19 @@
+"""Orchestrate threaded export workflows, rendering helpers, and Excel writing operations.
+
+This module coordinates data retrieval (`modules.export_query_service`), grouping
+(`modules.export_grouping_utils`), chart and summary planning
+(`modules.export_chart_writer`, `modules.export_summary_utils`,
+`modules.export_summary_sheet_planner`), and workbook output through
+`modules.export_backends`.
+"""
+
 import logging
 import warnings
 import inspect
+import re
+import sqlite3
+import textwrap
+from io import BytesIO
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -11,15 +24,17 @@ import numpy as np
 matplotlib.use('Agg')
 
 import importlib.util
-from io import BytesIO
 
 import matplotlib.pyplot as plt
+import matplotlib.transforms as mtransforms
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
 from scipy.stats import ttest_ind
 
 from modules.contracts import ExportRequest, validate_export_request
-import modules.CustomLogger as custom_logger
-from modules.db import execute_select_with_columns, read_sql_dataframe
+import modules.custom_logger as custom_logger
+from modules.db import execute_select_with_columns, read_sql_dataframe, sqlite_connection_scope
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
 from modules.google_drive_export import GoogleDriveAuthError, GoogleDriveExportError, upload_and_convert_workbook
@@ -33,12 +48,19 @@ from modules.export_summary_utils import (
     apply_shared_x_axis_label_strategy as _apply_shared_x_axis_label_strategy,
     build_histogram_density_curve_payload as _build_histogram_density_curve_payload,
     build_sparse_unique_labels as _build_sparse_unique_labels,
+    build_summary_panel_labels as _build_summary_panel_labels,
     build_trend_plot_payload as _build_trend_plot_payload,
     compute_measurement_summary,
+    compute_normality_status,
+    normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
+    render_spec_reference_lines as _render_spec_reference_lines,
+    render_tolerance_band as _render_tolerance_band,
+    build_tolerance_reference_legend_handles as _build_tolerance_reference_legend_handles,
 )
 from modules.export_summary_sheet_planner import (
     build_histogram_annotation_specs as _build_histogram_annotation_specs,
+    compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
     build_summary_image_anchor_plan as _build_summary_image_anchor_plan,
     build_summary_sheet_position_plan as _build_summary_sheet_position_plan,
 )
@@ -52,8 +74,16 @@ from modules.export_chart_writer import (
 )
 from modules.export_query_service import (
     build_export_dataframe as _build_export_dataframe,
-    build_measurement_export_dataframe,
+    build_measurement_export_dataframe as _build_measurement_export_dataframe,
     execute_export_query as _execute_export_query,
+    fetch_partition_header_counts,
+    fetch_partition_values,
+    fetch_sql_measurement_summary,
+    load_measurement_export_partition_dataframe,
+)
+from modules.export_group_comparison_writer import (
+    prepare_group_comparison_payload,
+    write_group_comparison_sheet,
 )
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
@@ -75,6 +105,15 @@ from modules.export_sheet_writer import (
     write_measurement_block,
     build_summary_panel_write_plan,
 )
+from modules.stats_utils import is_one_sided_geometric_tolerance, safe_process_capability
+# Canonical violin payload builder lives in `modules/chart_render_service.py`.
+from modules.chart_render_service import (
+    BoundedWorkerPool,
+    build_violin_payload_vectorized,
+    resolve_chart_sampling_policy,
+    sample_frame_for_chart,
+    deterministic_downsample_frame,
+)
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
 if _HAS_SEABORN:
@@ -82,41 +121,147 @@ if _HAS_SEABORN:
 
 
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 
+_HISTOGRAM_X_PADDING_RATIO = 0.05
+_HISTOGRAM_ZERO_RANGE_ABS_PADDING = 0.05
+
+
+# Query wrappers keep the thread-facing import path stable while delegating
+# implementation to `export_query_service`, allowing tests to patch this module
+# without importing lower-level services directly.
 def build_export_dataframe(data, column_names):
+    """Build an export DataFrame from raw query rows and column metadata.
+
+    Args:
+        data (Sequence[Sequence[object]]): Raw database rows.
+        column_names (Sequence[str]): Column labels aligned with each row value.
+
+    Returns:
+        pandas.DataFrame: Normalized frame ready for export writing.
+
+    Side Effects:
+        Delegates implementation to `modules.export_query_service`.
+    """
+
     return _build_export_dataframe(data, column_names)
 
 
 def execute_export_query(db_file, export_query, select_reader=execute_select_with_columns):
+    """Execute an export SQL query and return rows with ordered column names.
+
+    Args:
+        db_file (str): SQLite database file path.
+        export_query (str): SQL query string to execute.
+        select_reader (Callable): Query executor with the `execute_select_with_columns`
+            contract.
+
+    Returns:
+        tuple[list[tuple], list[str]]: Query rows and associated column names.
+
+    Raises:
+        sqlite3.Error: Propagated when query execution fails.
+    """
+
     return _execute_export_query(db_file, export_query, select_reader=select_reader)
 
 
+def build_measurement_export_dataframe(df):
+    """Normalize measurement export rows into a plotting-friendly DataFrame.
+
+    Args:
+        df (pandas.DataFrame): Raw measurement export frame.
+
+    Returns:
+        pandas.DataFrame: Frame with standardized columns used by export rendering.
+    """
+
+    return _build_measurement_export_dataframe(df)
+
+
+# Chart wrappers preserve existing call signatures used throughout this file and
+# by tests, while centralizing chart-spec logic in `export_chart_writer`.
 def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
+    """Build an Excel chart range string for a worksheet column slice.
+
+    Args:
+        sheet_name (str): Worksheet name.
+        first_row (int): First 1-based row index in the range.
+        last_row (int): Last 1-based row index in the range.
+        column_index (int): Zero-based worksheet column index.
+
+    Returns:
+        str: A fully-qualified A1-style sheet range string.
+    """
+
     return _build_sheet_series_range(sheet_name, first_row, last_row, column_index)
 
 
 def build_spec_limit_anchor_rows(usl, lsl):
+    """Resolve optional USL/LSL anchor rows used for chart limit lines.
+
+    Args:
+        usl (float | None): Upper specification limit.
+        lsl (float | None): Lower specification limit.
+
+    Returns:
+        dict[str, int | None]: Anchor row indexes keyed by limit type.
+    """
+
     return _build_spec_limit_anchor_rows(usl, lsl)
 
 
-def build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
-    return _build_measurement_stat_formulas(summary_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value)
+def build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value):
+    """Create Excel formula strings for the measurement statistics block.
+
+    Args:
+        summary_col (str): Column letter for summary labels.
+        stats_col (str): Column letter for statistic formulas.
+        data_range_y (str): A1-style range containing measurement values.
+        nom_cell (str): Nominal value cell reference.
+        usl_cell (str): Upper spec limit cell reference.
+        lsl_cell (str): Lower spec limit cell reference.
+        nom_value (float | None): Nominal numeric value.
+        lsl_value (float | None): Lower spec limit numeric value.
+
+    Returns:
+        dict[str, str]: Statistic-keyed Excel formulas for worksheet writing.
+    """
+
+    return _build_measurement_stat_formulas(summary_col, stats_col, data_range_y, nom_cell, usl_cell, lsl_cell, nom_value, lsl_value)
 
 
 def build_measurement_stat_row_specs(stat_formulas):
+    """Convert stat formulas into ordered row specs for worksheet output.
+
+    Args:
+        stat_formulas (dict[str, str]): Formula map from
+            `build_measurement_stat_formulas`.
+
+    Returns:
+        list[dict[str, object]]: Row descriptors consumed by sheet writers.
+    """
+
     return _build_measurement_stat_row_specs(stat_formulas)
 
 
 def build_measurement_block_plan(*, base_col, sample_size):
+    """Build the layout plan for one horizontal measurement export block."""
+
     return _build_measurement_block_plan(base_col=base_col, sample_size=sample_size)
 
 
 def build_measurement_header_block_plan(header_group, base_col):
+    """Build worksheet header placement details for a measurement block."""
+
     return _build_measurement_header_block_plan(header_group, base_col)
 
 
 def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    """Build data range specs used to insert one measurement chart."""
+
     return _build_measurement_chart_range_specs(
         sheet_name=sheet_name,
         first_data_row=first_data_row,
@@ -127,6 +272,8 @@ def build_measurement_chart_range_specs(*, sheet_name, first_data_row, last_data
 
 
 def build_measurement_chart_series_specs(*, header, sheet_name, first_data_row, last_data_row, x_column, y_column):
+    """Build chart series definitions for a measurement header group."""
+
     return _build_measurement_chart_series_specs(
         header=header,
         sheet_name=sheet_name,
@@ -138,22 +285,47 @@ def build_measurement_chart_series_specs(*, header, sheet_name, first_data_row, 
 
 
 def build_measurement_chart_format_policy(header):
+    """Resolve chart formatting options for a measurement header."""
+
     return _build_measurement_chart_format_policy(header)
 
 
 def build_horizontal_limit_line_specs(usl, lsl, **style):
+    """Build chart series specs for optional horizontal spec-limit lines."""
+
     return _build_horizontal_limit_line_specs(usl, lsl, **style)
 
 
+# Worksheet-plan/write wrappers maintain a thin compatibility layer around
+# `export_sheet_writer` so callers keep one orchestration module API surface.
 def build_measurement_write_bundle(header, header_group, base_col):
+    """Assemble the worksheet write bundle for one measurement group."""
+
     return _build_measurement_write_bundle(header, header_group, base_col)
 
 
 def build_measurement_write_bundle_cached(header, header_group, base_col, cache=None):
+    """Return a cached measurement write bundle when available."""
+
     return _build_measurement_write_bundle_cached(header, header_group, base_col, cache=cache)
 
 
 def run_export_steps(steps, should_cancel):
+    """Execute export callables sequentially until completion or cancellation.
+
+    Args:
+        steps (Sequence[Callable[[], None]]): Ordered export actions.
+        should_cancel (Callable[[], bool]): Cancellation predicate.
+
+    Ordering Assumptions:
+        `steps` must already be topologically ordered. This helper intentionally
+        does not reorder or retry work because later stages can depend on prior
+        worksheet mutations.
+
+    Returns:
+        bool: `True` when all steps run without a cancellation request.
+    """
+
     for step in steps:
         if should_cancel():
             return False
@@ -162,44 +334,140 @@ def run_export_steps(steps, should_cancel):
 
 
 def all_measurements_within_limits(measurements, lower_limit, upper_limit):
+    """Check whether every measurement value falls between inclusive limits."""
+
     series = pd.Series(measurements)
     return series.between(lower_limit, upper_limit, inclusive='both').all()
 
 
 def build_sparse_unique_labels(labels):
+    """Collapse repeated labels while preserving first occurrences for display."""
+
     return _build_sparse_unique_labels(labels)
 
 
-def build_trend_plot_payload(header_group):
-    return _build_trend_plot_payload(header_group)
+def build_summary_panel_labels(labels, *, grouping_active=False):
+    """Build summary-panel labels and suppress duplicates when grouping is active."""
+
+    return _build_summary_panel_labels(labels, grouping_active=grouping_active)
 
 
-def build_histogram_density_curve_payload(measurements, point_count=100):
-    return _build_histogram_density_curve_payload(measurements, point_count=point_count)
+def build_trend_plot_payload(header_group, *, grouping_active=False, label_column=None):
+    """Prepare x/y label payload data for summary trend plotting."""
+
+    return _build_trend_plot_payload(
+        header_group,
+        grouping_active=grouping_active,
+        label_column=label_column,
+    )
+
+
+def build_histogram_density_curve_payload(measurements, point_count=100, *, mode='normal_fit'):
+    """Build smooth density-curve payload arrays for histogram overlays."""
+
+    return _build_histogram_density_curve_payload(measurements, point_count=point_count, mode=mode)
 
 
 def apply_shared_x_axis_label_strategy(ax, labels, **kwargs):
+    """Apply shared x-axis tick labeling policy to a matplotlib axis."""
+
     return _apply_shared_x_axis_label_strategy(ax, labels, **kwargs)
 
 
+def render_tolerance_band(ax, nom, lsl, usl, *, one_sided=False, orientation='horizontal'):
+    """Render tolerance band shading on summary charts."""
+
+    return _render_tolerance_band(
+        ax,
+        nom,
+        lsl,
+        usl,
+        one_sided=one_sided,
+        orientation=orientation,
+    )
+
+
+def render_spec_reference_lines(ax, nom, lsl, usl, *, orientation='horizontal', include_nominal=True):
+    """Render nominal/LSL/USL reference lines on summary charts."""
+
+    return _render_spec_reference_lines(
+        ax,
+        nom,
+        lsl,
+        usl,
+        orientation=orientation,
+        include_nominal=include_nominal,
+    )
+
+
+def build_tolerance_reference_legend_handles(*, include_nominal=True):
+    """Return reusable legend handles for tolerance/spec references."""
+
+    return _build_tolerance_reference_legend_handles(include_nominal=include_nominal)
+
+
 def build_histogram_table_data(summary_stats):
-    """Build stable, display-ready statistics rows for histogram summary tables."""
+    """Build stable, display-ready statistics rows and row metadata for histograms."""
 
     def _rounded_or_text(value, digits):
         return value if isinstance(value, str) else round(value, digits)
 
-    return [
+    cp_value = summary_stats.get('cp')
+    cpk_label = 'Cpk'
+    cpk_value = summary_stats.get('cpk')
+    if isinstance(cp_value, str):
+        sigma_value = summary_stats.get('sigma')
+        average_value = summary_stats.get('average')
+        usl_value = summary_stats.get('usl')
+        if all(isinstance(item, (float, int)) for item in (sigma_value, average_value, usl_value)) and sigma_value > 0:
+            cpk_label = 'Cpk+'
+            cpk_value = (usl_value - average_value) / (3 * sigma_value)
+
+    cp_display_value = _rounded_or_text(summary_stats['cp'], 2)
+    cpk_display_value = _rounded_or_text(cpk_value, 2)
+
+    table_rows = [
         ('Min', round(summary_stats['minimum'], 3)),
         ('Max', round(summary_stats['maximum'], 3)),
         ('Mean', round(summary_stats['average'], 3)),
         ('Median', round(summary_stats['median'], 3)),
         ('Std Dev', round(summary_stats['sigma'], 3)),
-        ('Cp', _rounded_or_text(summary_stats['cp'], 2)),
-        ('Cpk', _rounded_or_text(summary_stats['cpk'], 2)),
+        ('Cp', cp_display_value),
+        (cpk_label, cpk_display_value),
         ('Samples', round(summary_stats['sample_size'], 1)),
-        ('NOK nb', round(summary_stats['nok_count'], 1)),
+        ('NOK', round(summary_stats['nok_count'], 1)),
         ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
     ]
+
+    return {
+        'rows': table_rows,
+        'capability_rows': {
+            'Cp': {
+                'label': 'Cp',
+                'display_value': cp_display_value,
+                'classification_value': cp_display_value,
+            },
+            'Cpk': {
+                'label': cpk_label,
+                'display_value': cpk_display_value,
+                'classification_value': cpk_display_value,
+            },
+        },
+    }
+
+
+def build_histogram_table_render_data(table_data, *, three_column=False):
+    """Build render rows for histogram summary tables."""
+
+    if three_column:
+        render_data = []
+        for label, value in table_data:
+            render_data.append([label, '', value])
+
+        return render_data
+
+    render_data = list(table_data)
+    return render_data
 
 
 def compute_scaled_y_limits(current_limits, scale_factor):
@@ -211,18 +479,88 @@ def compute_scaled_y_limits(current_limits, scale_factor):
 
 
 def build_summary_sheet_position_plan(base_col):
+    """Build summary-sheet column placement metadata for exports."""
+
     return _build_summary_sheet_position_plan(base_col)
 
 
 def build_summary_image_anchor_plan(base_col):
+    """Resolve image anchor cells for summary chart insertion."""
+
     return _build_summary_image_anchor_plan(base_col)
 
 
 def build_histogram_annotation_specs(average, usl, lsl, y_max):
+    """Build annotation descriptors for histogram mean and spec-limit markers."""
+
     return _build_histogram_annotation_specs(average, usl, lsl, y_max)
 
 
+def compute_histogram_annotation_rows(annotation_specs, distance_threshold, **kwargs):
+    """Compute collision-safe row assignments and text y-axis locations."""
+
+    return _compute_histogram_annotation_rows(annotation_specs, distance_threshold, **kwargs)
+
+
+def build_histogram_mean_line_style():
+    """Return style contract for histogram mean reference line."""
+    return {
+        'color': SUMMARY_PLOT_PALETTE['central_tendency'],
+        'linestyle': '--',
+        'linewidth': 1.3,
+        'alpha': 0.48,
+        'zorder': 2,
+    }
+
+
+def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, annotation_box):
+    """Render histogram annotations with consistent font sizing policy."""
+    rendered = []
+    transform = ax.get_xaxis_transform()
+    for annotation in annotation_specs:
+        rendered.append(
+            ax.text(
+                annotation['x'],
+                annotation.get('text_y_axes', 1.02),
+                annotation['text'],
+                transform=transform,
+                color=annotation['color'],
+                ha=annotation['ha'],
+                va='bottom',
+                fontsize=annotation_fontsize,
+                bbox=annotation_box,
+                zorder=10,
+                clip_on=False,
+            )
+        )
+    return rendered
+
+
+def resolve_summary_annotation_strategy(*, x_point_count):
+    """Resolve a low-overhead annotation strategy based on x-axis point density."""
+    safe_points = max(0, int(x_point_count))
+    if safe_points >= 60:
+        return {
+            'label_mode': 'sparse',
+            'annotation_mode': 'static_compact',
+            'show_violin_legend': False,
+        }
+    if safe_points >= 24:
+        return {
+            'label_mode': 'adaptive',
+            'annotation_mode': 'static_compact',
+            'show_violin_legend': True,
+        }
+    return {
+        'label_mode': 'adaptive',
+        'annotation_mode': 'dynamic',
+        'show_violin_legend': True,
+    }
+
+
 def build_summary_panel_subtitle_text(summary_stats):
+    """Generate subtitle text displayed under summary panel titles."""
+
     return build_summary_panel_subtitle(summary_stats)
 
 
@@ -265,13 +603,13 @@ def compute_histogram_table_layout(
     width_scale = min(1.25, max(0.8, fig_width / 6.0))
     oversized_font = max(0.0, float(table_fontsize) - 8.0)
 
-    table_bbox_width = 0.30 + (0.015 * oversized_font) - (0.01 * (width_scale - 1.0))
-    table_bbox_width = min(0.36, max(0.28, table_bbox_width))
+    table_bbox_width = 0.40 + (0.018 * oversized_font) - (0.008 * (width_scale - 1.0))
+    table_bbox_width = min(0.48, max(0.38, table_bbox_width))
 
-    right_margin = 0.75 + (0.02 * (width_scale - 1.0)) - (0.015 * oversized_font)
+    right_margin = 0.69 + (0.02 * (width_scale - 1.0)) - (0.013 * oversized_font)
     if has_table:
         right_margin -= 0.005
-    right_margin = min(0.78, max(0.68, right_margin))
+    right_margin = min(0.76, max(0.64, right_margin))
 
     return {
         'table_bbox_width': table_bbox_width,
@@ -294,15 +632,22 @@ def apply_summary_plot_theme():
         'xtick.color': SUMMARY_PLOT_PALETTE['axis_text'],
         'ytick.color': SUMMARY_PLOT_PALETTE['axis_text'],
         'grid.color': SUMMARY_PLOT_PALETTE['grid'],
-        'grid.linewidth': 0.6,
-        'grid.alpha': 0.55,
+        'grid.linewidth': 0.5,
+        'grid.alpha': 0.4,
     })
 
 
 def apply_minimal_axis_style(ax, grid_axis='y'):
     """Apply a clean, minimal visual style on a chart axis."""
     ax.set_facecolor('white')
-    ax.grid(True, axis=grid_axis, linestyle='-', color=SUMMARY_PLOT_PALETTE['grid'], alpha=0.55)
+    ax.grid(
+        True,
+        axis=grid_axis,
+        linestyle='-',
+        linewidth=0.5,
+        color=SUMMARY_PLOT_PALETTE['grid'],
+        alpha=0.4,
+    )
     if grid_axis == 'y':
         ax.grid(False, axis='x')
     elif grid_axis == 'x':
@@ -388,14 +733,16 @@ def resolve_violin_annotation_style(
         },
         'compact': {
             'font_size': 6.8,
-            'minmax_marker_size': 0,
+            'minmax_marker_size': 12,
             'mean_marker_size': 16,
             'offsets': {
+                'min': (2, -8),
                 'mean': (2, 1),
+                'max': (2, 1),
                 'sigma_low': (2, -8),
                 'sigma_high': (2, 1),
             },
-            'show_minmax': False,
+            'show_minmax': True,
             'show_sigma': True,
             'sigma_line_width': 0.7,
         },
@@ -440,7 +787,20 @@ def resolve_violin_annotation_style(
     return style
 
 
-def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, annotation_mode='auto'):
+def annotate_violin_group_stats(
+    ax,
+    labels,
+    values,
+    positions,
+    *,
+    nom=None,
+    lsl=None,
+    one_sided=None,
+    epsilon=None,
+    readability_scale=None,
+    annotation_mode='auto',
+    use_dynamic_offsets=True,
+):
     """Annotate group summary statistics on violin plots.
 
     Modes:
@@ -450,6 +810,22 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
     """
 
     group_count = max(len(values), len(labels))
+    epsilon_value = 1e-12 if epsilon is None else float(epsilon)
+    explicit_one_sided_mode = one_sided is not None
+    if explicit_one_sided_mode:
+        one_sided_sigma_mode = bool(one_sided)
+    else:
+        one_sided_sigma_mode = False
+        if nom is not None and lsl is not None:
+            try:
+                nom_value = float(nom)
+                lsl_value = float(lsl)
+                one_sided_sigma_mode = bool(is_one_sided_geometric_tolerance(nom_value, lsl_value))
+                if not one_sided_sigma_mode:
+                    one_sided_sigma_mode = abs(nom_value) <= epsilon_value and abs(lsl_value) <= epsilon_value
+            except (TypeError, ValueError):
+                one_sided_sigma_mode = False
+
     style = resolve_violin_annotation_style(
         group_count=group_count,
         x_limits=ax.get_xlim(),
@@ -457,11 +833,112 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
         mode=annotation_mode,
         readability_scale=readability_scale,
     )
+    style['one_sided_sigma_mode'] = one_sided_sigma_mode
+    style['one_sided_sigma_explicit'] = explicit_one_sided_mode
+    annotation_boxes = []
+    preview_text = None
+    renderer = None
+
+    dense_group_threshold = 16
+    if group_count > dense_group_threshold:
+        stride = max(1, int(np.ceil(group_count / 12)))
+        for idx, group_values in enumerate(values):
+            arr = np.asarray(group_values, dtype=float)
+            if arr.size == 0:
+                continue
+            xpos = positions[idx]
+            mean_val = float(np.mean(arr))
+            ax.scatter([xpos], [mean_val], color=SUMMARY_PLOT_PALETTE['central_tendency'], s=style['mean_marker_size'], marker='o', zorder=4)
+            if idx % stride == 0:
+                ax.annotate(
+                    f"μ={mean_val:.3f}",
+                    (xpos, mean_val),
+                    textcoords='offset points',
+                    xytext=style['offsets']['mean'],
+                    fontsize=style['font_size'],
+                    bbox={'boxstyle': 'round,pad=0.2', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.9},
+                )
+        style['show_minmax'] = False
+        style['show_sigma'] = False
+        style['mode'] = 'dense'
+        return style
+
+    if use_dynamic_offsets:
+        ax.figure.canvas.draw()
+        renderer = ax.figure.canvas.get_renderer()
+        preview_text = ax.text(0, 0, '', alpha=0)
+
+    def _resolve_annotation_offset(point_xy, text, base_offset, *, fontsize, color=None, bbox=None):
+        """Return a collision-free text offset while preserving deterministic behavior."""
+        candidate_offsets = [
+            tuple(base_offset),
+            (base_offset[0], base_offset[1] + 8),
+            (base_offset[0], base_offset[1] - 8),
+            (base_offset[0] + 8, base_offset[1]),
+            (base_offset[0] - 8, base_offset[1]),
+            (base_offset[0] + 12, base_offset[1] + 8),
+            (base_offset[0] - 12, base_offset[1] - 8),
+            (base_offset[0], base_offset[1] + 16),
+            (base_offset[0], base_offset[1] - 16),
+            (base_offset[0] + 16, base_offset[1]),
+            (base_offset[0] - 16, base_offset[1]),
+        ]
+
+        if not use_dynamic_offsets:
+            return tuple(base_offset)
+
+        selected_bbox = None
+        selected_offset = candidate_offsets[0]
+        for candidate_offset in candidate_offsets:
+            preview_text.set_text(text)
+            preview_text.set_position(point_xy)
+            preview_text.set_fontsize(fontsize)
+            preview_text.set_color(color if color is not None else SUMMARY_PLOT_PALETTE['annotation_text'])
+            preview_text.set_bbox(
+                dict(bbox)
+                if bbox is not None
+                else {'boxstyle': 'square,pad=0', 'fc': 'none', 'ec': 'none', 'alpha': 0.0}
+            )
+            preview_text.set_transform(
+                mtransforms.offset_copy(
+                    ax.transData,
+                    fig=ax.figure,
+                    x=candidate_offset[0],
+                    y=candidate_offset[1],
+                    units='points',
+                )
+            )
+            bbox_display = preview_text.get_window_extent(renderer=renderer).expanded(1.03, 1.08)
+
+            if not any(bbox_display.overlaps(existing_box['display']) for existing_box in annotation_boxes):
+                selected_bbox = bbox_display
+                selected_offset = candidate_offset
+                break
+
+            if selected_bbox is None:
+                selected_bbox = bbox_display
+
+        if selected_bbox is not None:
+            bbox_corners = selected_bbox.get_points()
+            data_points = ax.transData.inverted().transform(bbox_corners)
+            annotation_boxes.append(
+                {
+                    'display': selected_bbox,
+                    'data_bounds': (
+                        float(data_points[0][0]),
+                        float(data_points[0][1]),
+                        float(data_points[1][0]),
+                        float(data_points[1][1]),
+                    ),
+                }
+            )
+        return selected_offset
+
     for idx, group_values in enumerate(values):
         arr = np.asarray(group_values, dtype=float)
         if arr.size == 0:
             continue
-        xpos = idx
+        xpos = positions[idx]
         mean_val = float(np.mean(arr))
         std_val = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
         min_val = float(np.min(arr))
@@ -475,7 +952,13 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
                 f"min={min_val:.3f}",
                 (xpos, min_val),
                 textcoords='offset points',
-                xytext=style['offsets']['min'],
+                xytext=_resolve_annotation_offset(
+                    (xpos, min_val),
+                    f"min={min_val:.3f}",
+                    style['offsets']['min'],
+                    fontsize=style['font_size'],
+                    bbox=text_box,
+                ),
                 fontsize=style['font_size'],
                 bbox=text_box,
             )
@@ -485,7 +968,13 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
             f"μ={mean_val:.3f}",
             (xpos, mean_val),
             textcoords='offset points',
-            xytext=style['offsets']['mean'],
+            xytext=_resolve_annotation_offset(
+                (xpos, mean_val),
+                f"μ={mean_val:.3f}",
+                style['offsets']['mean'],
+                fontsize=style['font_size'],
+                bbox=text_box,
+            ),
             fontsize=style['font_size'],
             bbox=text_box,
         )
@@ -496,7 +985,13 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
                 f"max={max_val:.3f}",
                 (xpos, max_val),
                 textcoords='offset points',
-                xytext=style['offsets']['max'],
+                xytext=_resolve_annotation_offset(
+                    (xpos, max_val),
+                    f"max={max_val:.3f}",
+                    style['offsets']['max'],
+                    fontsize=style['font_size'],
+                    bbox=text_box,
+                ),
                 fontsize=style['font_size'],
                 bbox=text_box,
             )
@@ -504,9 +999,10 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
         if style['show_sigma'] and std_val > 0:
             sigma_low = mean_val - (3 * std_val)
             sigma_high = mean_val + (3 * std_val)
+            sigma_start = mean_val if one_sided_sigma_mode else sigma_low
             ax.vlines(
                 xpos,
-                sigma_low,
+                sigma_start,
                 sigma_high,
                 colors=SUMMARY_PLOT_PALETTE['sigma_band'],
                 linestyles=':',
@@ -514,56 +1010,283 @@ def annotate_violin_group_stats(ax, labels, values, *, readability_scale=None, a
                 alpha=0.8,
                 zorder=3,
             )
-            ax.annotate(
-                f"-3σ={sigma_low:.3f}",
-                (xpos, sigma_low),
-                textcoords='offset points',
-                xytext=style['offsets']['sigma_low'],
-                fontsize=style['font_size'],
-                color=SUMMARY_PLOT_PALETTE['annotation_text'],
-                bbox=text_box,
-            )
-            ax.annotate(
-                f"+3σ={sigma_high:.3f}",
-                (xpos, sigma_high),
-                textcoords='offset points',
-                xytext=style['offsets']['sigma_high'],
-                fontsize=style['font_size'],
-                color=SUMMARY_PLOT_PALETTE['annotation_text'],
-                bbox=text_box,
-            )
 
-def render_violin(ax, values, labels, *, readability_scale=None):
+    if preview_text is not None:
+        preview_text.remove()
+
+    return style
+
+
+def add_violin_annotation_legend(ax, style, *, include_tolerance_refs=False):
+    """Render a legend that explains violin annotation markers and symbols."""
+    handles = [
+        Line2D([0], [0], marker='o', linestyle='None', markersize=5.5, color=SUMMARY_PLOT_PALETTE['central_tendency'], label='Mean marker (μ)'),
+    ]
+    if style.get('show_minmax'):
+        handles.extend([
+            Line2D([0], [0], marker='v', linestyle='None', markersize=5.0, color=SUMMARY_PLOT_PALETTE['annotation_text'], label='Min marker'),
+            Line2D([0], [0], marker='^', linestyle='None', markersize=5.0, color=SUMMARY_PLOT_PALETTE['annotation_text'], label='Max marker'),
+        ])
+    if style.get('show_sigma'):
+        sigma_label = '+3σ span (visual)' if style.get('one_sided_sigma_mode') else '±3σ span (visual)'
+        handles.append(
+            Line2D([0], [0], linestyle=':', linewidth=max(style.get('sigma_line_width', 0.7), 0.7), color=SUMMARY_PLOT_PALETTE['sigma_band'], label=sigma_label),
+        )
+
+    if include_tolerance_refs:
+        handles.extend(build_tolerance_reference_legend_handles())
+
+    ax.legend(
+        handles=handles,
+        loc='upper left',
+        bbox_to_anchor=(1.0, 1.0),
+        borderaxespad=0.0,
+        frameon=True,
+        fontsize=max(style.get('font_size', 6.8) - 0.2, 6.6),
+    )
+
+
+def move_legend_to_figure(ax):
+    """Move an axis legend to the parent figure's top-right corner."""
+
+    fig = ax.figure
+    handles, labels = ax.get_legend_handles_labels()
+    existing_legend = ax.legend_
+
+    if existing_legend is not None:
+        existing_legend.remove()
+
+    if not handles and existing_legend is not None:
+        handles = list(getattr(existing_legend, 'legend_handles', []) or getattr(existing_legend, 'legendHandles', []))
+        labels = [text.get_text() for text in existing_legend.get_texts()]
+
+    if not handles:
+        return
+
+    fig.legend(
+        handles,
+        labels,
+        loc="upper right",
+        bbox_to_anchor=(0.99, 0.975),
+        bbox_transform=fig.transFigure,
+    )
+    fig.subplots_adjust(top=0.82)
+
+
+def build_wrapped_chart_title(title, *, width=42, max_lines=3):
+    """Wrap long chart titles so figure-level legends do not overlap plot headers."""
+
+    safe_title = str(title or '').strip()
+    if not safe_title:
+        return ''
+
+    wrapped_lines = textwrap.wrap(
+        safe_title,
+        width=max(20, int(width)),
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    if len(wrapped_lines) > max_lines:
+        wrapped_lines = wrapped_lines[:max_lines]
+        wrapped_lines[-1] = wrapped_lines[-1].rstrip(' .') + '…'
+    return '\n'.join(wrapped_lines)
+
+def render_violin(
+    ax,
+    values,
+    labels,
+    *,
+    nom=None,
+    lsl=None,
+    usl=None,
+    one_sided=None,
+    epsilon=None,
+    readability_scale=None,
+    use_dynamic_offsets=True,
+    show_annotation_legend=True,
+):
+    """Render violin plots and optional group-stat annotations on the provided axis."""
+
     if _HAS_SEABORN:
+        positions = list(range(len(labels)))
         sns.violinplot(data=values, inner=None, cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
-        ax.set_xticks(range(len(labels)))
+        ax.set_xticks(positions)
     else:
+        positions = list(range(1, len(labels) + 1))
         ax.violinplot(values, showmeans=False, showmedians=False, showextrema=False)
-        ax.set_xticks(range(1, len(labels) + 1))
+        ax.set_xticks(positions)
     ax.set_xticklabels(labels)
-    annotate_violin_group_stats(ax, labels, values, readability_scale=readability_scale)
+    if lsl is not None and usl is not None:
+        render_tolerance_band(ax, nom, lsl, usl, one_sided=one_sided)
+        render_spec_reference_lines(ax, nom, lsl, usl, include_nominal=False)
+
+    style = annotate_violin_group_stats(
+        ax,
+        labels,
+        values,
+        positions,
+        nom=nom,
+        lsl=lsl,
+        one_sided=one_sided,
+        epsilon=epsilon,
+        readability_scale=readability_scale,
+        use_dynamic_offsets=use_dynamic_offsets,
+    )
+    if show_annotation_legend:
+        add_violin_annotation_legend(
+            ax,
+            style,
+            include_tolerance_refs=False,
+        )
 
 
 def render_scatter(ax, data=None, x=None, y=None):
-    if _HAS_SEABORN:
-        sns.scatterplot(data=data, x=x, y=y, ax=ax, s=18, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], legend=False)
-    else:
-        ax.scatter(data[x], data[y], color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
+    """Render a scatter plot from DataFrame columns on a matplotlib axis."""
+
+    ax.scatter(data[x], data[y], color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
-def render_histogram(ax, header_group):
-    if _HAS_SEABORN:
-        sns.histplot(data=header_group, x='MEAS', bins='auto', stat='density', alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white', ax=ax)
+def render_scatter_numeric(ax, x_values, y_values):
+    """Render a scatter plot from numeric coordinate arrays."""
+
+    normalized_x = _normalize_plot_axis_values(list(x_values))
+    normalized_y = _normalize_plot_axis_values(list(y_values))
+    ax.scatter(normalized_x, normalized_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
+
+
+def render_histogram(ax, header_group, *, lsl=None, usl=None):
+    """Render a histogram and density overlays for one measurement group."""
+
+    normalized_meas = _normalize_plot_axis_values(list(header_group['MEAS']))
+    histogram_values = pd.to_numeric(pd.Series(normalized_meas), errors='coerce').dropna().to_numpy(dtype=float)
+    if histogram_values.size == 0:
+        return
+
+    finite_spec_limits = []
+    for raw_limit in (lsl, usl):
+        if raw_limit is None:
+            continue
+        try:
+            limit_value = float(raw_limit)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(limit_value):
+            finite_spec_limits.append(limit_value)
+
+    n = histogram_values.size
+    data_min = float(np.min(histogram_values))
+    data_max = float(np.max(histogram_values))
+    x_min_base = min([data_min, *finite_spec_limits])
+    x_max_base = max([data_max, *finite_spec_limits])
+    combined_range = x_max_base - x_min_base
+
+    reference_magnitude = max(abs(x_min_base), abs(x_max_base), 1.0)
+    minimum_margin = max(1e-6, 0.01 * reference_magnitude)
+    if combined_range > 0:
+        x_padding = max(_HISTOGRAM_X_PADDING_RATIO * combined_range, minimum_margin)
     else:
-        ax.hist(header_group['MEAS'], bins='auto', density=True, alpha=0.7, color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='white')
+        x_padding = max(_HISTOGRAM_ZERO_RANGE_ABS_PADDING * reference_magnitude, minimum_margin)
+
+    data_range = data_max - data_min
+
+    q1, q3 = np.percentile(histogram_values, [25, 75])
+    iqr = float(q3 - q1)
+
+    bins = None
+    if n > 0 and iqr > 0 and data_range > 0:
+        bin_width = 2 * iqr * (n ** (-1 / 3))
+        if np.isfinite(bin_width) and bin_width > 0:
+            fd_bins = np.ceil(data_range / bin_width)
+            if np.isfinite(fd_bins) and fd_bins > 0:
+                bins = int(fd_bins)
+
+    if bins is None:
+        bins = min(int(np.sqrt(n)), 10)
+
+    bin_count = max(3, bins)
+
+    if _HAS_SEABORN:
+        sns.histplot(
+            x=histogram_values,
+            bins=bin_count,
+            stat='count',
+            alpha=0.72,
+            color=SUMMARY_PLOT_PALETTE['distribution_base'],
+            edgecolor=(1.0, 1.0, 1.0, 0.72),
+            linewidth=0.5,
+            ax=ax,
+        )
+    else:
+        ax.hist(
+            histogram_values,
+            bins=bin_count,
+            density=False,
+            alpha=0.72,
+            color=SUMMARY_PLOT_PALETTE['distribution_base'],
+            edgecolor=(1.0, 1.0, 1.0, 0.72),
+            linewidth=0.5,
+        )
+
+    ax.set_xlim(x_min_base - x_padding, x_max_base + x_padding)
+    enforce_minimum_histogram_bar_width(ax)
+
+
+def enforce_minimum_histogram_bar_width(ax, *, min_width_fraction=0.015):
+    """Widen ultra-thin histogram bars so at least one bar remains legible."""
+
+    if ax is None:
+        return
+
+    x_limits = ax.get_xlim()
+    x_span = x_limits[1] - x_limits[0]
+    if not np.isfinite(x_span) or x_span <= 0:
+        return
+
+    minimum_width = x_span * max(0.0, float(min_width_fraction))
+    if minimum_width <= 0:
+        return
+
+    for patch in ax.patches:
+        bar_width = patch.get_width()
+        if not np.isfinite(bar_width) or bar_width <= 0 or bar_width >= minimum_width:
+            continue
+        bar_center = patch.get_x() + (bar_width / 2.0)
+        patch.set_width(minimum_width)
+        patch.set_x(bar_center - (minimum_width / 2.0))
 
 
 def render_iqr_boxplot(ax, values, labels):
     """Render a standard 1.5*IQR box plot used for outlier detection."""
-    if not values:
+    safe_values = values if isinstance(values, list) else []
+    safe_labels = labels if isinstance(labels, list) else []
+
+    normalized_values = []
+    for group_values in safe_values:
+        if isinstance(group_values, (list, tuple, np.ndarray, pd.Series)):
+            group_list = _normalize_plot_axis_values(list(group_values))
+            numeric_group = pd.to_numeric(pd.Series(group_list), errors='coerce').dropna().to_list()
+            if numeric_group:
+                normalized_values.append(numeric_group)
+
+    if not normalized_values:
         return
 
-    positions = list(range(1, len(values) + 1))
+    if not safe_labels:
+        safe_labels = [f'Group {index + 1}' for index in range(len(normalized_values))]
+
+    if len(safe_labels) != len(normalized_values):
+        min_length = min(len(safe_labels), len(normalized_values))
+        if min_length == 0:
+            safe_labels = [f'Group {index + 1}' for index in range(len(normalized_values))]
+        else:
+            logger.warning(
+                "IQR boxplot label/value length mismatch; applying deterministic truncation.",
+                extra={'label_count': len(safe_labels), 'value_count': len(normalized_values)},
+            )
+            safe_labels = safe_labels[:min_length]
+            normalized_values = normalized_values[:min_length]
+
+    positions = list(range(1, len(normalized_values) + 1))
     boxplot_kwargs = {
         'whis': 1.5,
         'patch_artist': True,
@@ -573,49 +1296,198 @@ def render_iqr_boxplot(ax, values, labels):
         'capprops': {'color': SUMMARY_PLOT_PALETTE['distribution_foreground'], 'linewidth': 0.9},
         'flierprops': {'marker': 'o', 'markersize': 3, 'markerfacecolor': SUMMARY_PLOT_PALETTE['outlier'], 'markeredgecolor': SUMMARY_PLOT_PALETTE['outlier'], 'alpha': 0.9},
     }
-    label_values = [str(label) for label in labels]
+    label_values = [str(label) for label in safe_labels]
     try:
-        ax.boxplot(values, tick_labels=label_values, **boxplot_kwargs)
+        ax.boxplot(normalized_values, tick_labels=label_values, **boxplot_kwargs)
     except TypeError:
-        ax.boxplot(values, labels=label_values, **boxplot_kwargs)
+        ax.boxplot(normalized_values, labels=label_values, **boxplot_kwargs)
     ax.set_xticks(positions)
-    ax.set_xticklabels([str(label) for label in labels])
+    ax.set_xticklabels([str(label) for label in safe_labels])
+
+
+def build_iqr_legend_handles():
+    """Build stable legend handles for the summary-sheet IQR boxplot."""
+    return [
+        Patch(
+            facecolor=SUMMARY_PLOT_PALETTE['distribution_base'],
+            edgecolor=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+            linewidth=0.9,
+            alpha=0.45,
+            label='IQR range (Q1-Q3)',
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=SUMMARY_PLOT_PALETTE['central_tendency'],
+            linewidth=1.1,
+            label='Median',
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+            linewidth=0.9,
+            label='Whiskers (1.5 IQR rule)',
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker='o',
+            linestyle='None',
+            markersize=4,
+            markerfacecolor=SUMMARY_PLOT_PALETTE['outlier'],
+            markeredgecolor=SUMMARY_PLOT_PALETTE['outlier'],
+            alpha=0.9,
+            label='Outliers',
+        ),
+    ]
+
+
+def add_iqr_boxplot_legend(ax, *, include_tolerance_refs=False):
+    """Attach a compact, non-overlapping legend for summary-sheet sized images."""
+    handles = build_iqr_legend_handles()
+    if include_tolerance_refs:
+        handles.extend(build_tolerance_reference_legend_handles())
+
+    ax.legend(
+        handles=handles,
+        loc='upper left',
+        bbox_to_anchor=(1.0, 1.0),
+        fontsize=7,
+        framealpha=0.9,
+        facecolor='white',
+        edgecolor=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+        borderaxespad=0.0,
+        handlelength=1.5,
+        labelspacing=0.25,
+    )
 
 
 def render_density_line(ax, x, p):
+    """Render a density line over histogram bins."""
+
     if _HAS_SEABORN:
         sns.lineplot(x=x, y=p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4, ax=ax)
     else:
         ax.plot(x, p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4)
 
 
-def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None):
+def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
     """Apply semantic emphasis colors to the histogram summary table."""
     if ax_table is None:
         return
 
-    header_cells = [(0, 0), (0, 1)]
-    for cell_key in header_cells:
-        cell = ax_table.get_celld().get(cell_key)
+    cell_map = ax_table.get_celld()
+    column_indexes = sorted({col for (row, col) in cell_map.keys() if row == 0})
+    if not column_indexes:
+        column_indexes = [0, 1]
+
+    for col_index in column_indexes:
+        cell = cell_map.get((0, col_index))
         if cell is None:
             continue
         cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_header_bg'])
         cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_header_text'])
 
-    cp_cpk_rows = {'Cp', 'Cpk'}
-    for row_index, (label, _value) in enumerate(table_data, start=1):
+    normalized_rows = []
+    for row in table_data:
+        if len(row) >= 3:
+            label, _label_part2, value = row[0], row[1], row[2]
+        else:
+            label, value = row[0], row[1]
+        normalized_rows.append((label, value))
+
+    cp_cpk_rows = {'Cp', 'Cpk', 'Cpk+'}
+    for row_index, (label, value) in enumerate(normalized_rows, start=1):
+        if capability_row_badges and label in capability_row_badges:
+            _apply_table_row_badge(ax_table, row_index, capability_row_badges[label]['palette_key'])
+            continue
         if capability_badge and label in cp_cpk_rows:
             _apply_table_row_badge(ax_table, row_index, capability_badge['palette_key'])
             continue
 
         if label not in EMPHASIS_TABLE_ROWS:
             continue
-        for col_index in (0, 1):
-            cell = ax_table.get_celld().get((row_index, col_index))
+        for col_index in column_indexes:
+            cell = cell_map.get((row_index, col_index))
             if cell is None:
                 continue
             cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_emphasis_bg'])
             cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_emphasis_text'])
+
+
+
+def adjust_histogram_stats_table_geometry(
+    ax_table,
+    *,
+    statistic_col_width_ratio=0.72,
+    row_height_scale=1.12,
+):
+    """Increase histogram stats-table readability via column and row geometry."""
+    if ax_table is None:
+        return
+
+    table_cells = ax_table.get_celld()
+    header_columns = sorted({col for (row, col) in table_cells.keys() if row == 0})
+    has_three_columns = 2 in header_columns
+
+    statistic_area_ratio = min(0.82, max(0.5, float(statistic_col_width_ratio)))
+    label_col0_ratio = statistic_area_ratio * 0.78
+    label_col1_ratio = statistic_area_ratio * 0.22
+    value_ratio = 1.0 - statistic_area_ratio
+    safe_row_scale = min(1.4, max(0.9, float(row_height_scale)))
+    border_linewidth = 0.45
+    cell_padding = 0.12
+
+    full_width_rows = set()
+    if has_three_columns:
+        full_width_rows = {
+            row
+            for row in sorted({row for (row, col) in table_cells.keys() if row > 0 and col == 0})
+            if table_cells.get((row, 0)) is not None
+            and table_cells[(row, 0)].get_visible()
+            and table_cells.get((row, 1)) is not None
+            and not table_cells[(row, 1)].get_visible()
+            and table_cells.get((row, 2)) is not None
+            and not table_cells[(row, 2)].get_visible()
+        }
+
+    for (row_index, col_index), cell in table_cells.items():
+        if not cell.get_visible():
+            continue
+
+        if has_three_columns:
+            if row_index in full_width_rows and col_index == 0:
+                pass
+            elif col_index == 0:
+                cell.set_width(label_col0_ratio)
+            elif col_index == 1:
+                cell.set_width(label_col1_ratio)
+            elif col_index == 2:
+                cell.set_width(value_ratio)
+                text = cell.get_text()
+                text.set_ha('right')
+                text.set_x(0.94)
+        else:
+            if col_index == 0:
+                cell.set_width(statistic_area_ratio)
+            elif col_index == 1:
+                cell.set_width(value_ratio)
+                text = cell.get_text()
+                text.set_ha('right')
+                text.set_x(0.94)
+
+        if row_index >= 1 and row_index not in full_width_rows:
+            cell.set_height(cell.get_height() * safe_row_scale)
+
+        cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
+        cell.set_linewidth(border_linewidth)
+        cell.PAD = cell_padding
+
+    if not has_three_columns:
+        return
+
+    return
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
@@ -642,7 +1514,7 @@ def classify_capability_status(cp, cpk):
             'palette_key': 'quality_capable',
         }
 
-    if cpk_value >= 1.33 and cp_value >= 1.33:
+    if cpk_value > 1.33 and cp_value > 1.33:
         return {
             'label': 'Cp/Cpk good',
             'palette_key': 'quality_good',
@@ -660,6 +1532,29 @@ def classify_capability_status(cp, cpk):
     }
 
 
+def classify_capability_value(value, *, label_prefix='Capability'):
+    """Classify a single Cp/Cpk value for independent row highlighting."""
+
+    def _as_float(raw):
+        if isinstance(raw, str):
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    numeric = _as_float(value)
+    if numeric is None:
+        return {'label': f'{label_prefix} N/A', 'palette_key': 'quality_unknown'}
+    if numeric >= 1.67:
+        return {'label': f'{label_prefix} capable', 'palette_key': 'quality_capable'}
+    if numeric > 1.33:
+        return {'label': f'{label_prefix} good', 'palette_key': 'quality_good'}
+    if numeric >= 1.0:
+        return {'label': f'{label_prefix} marginal', 'palette_key': 'quality_marginal'}
+    return {'label': f'{label_prefix} risk', 'palette_key': 'quality_risk'}
+
+
 def classify_nok_severity(nok_pct):
     """Classify NOK ratio severity for chart title cueing."""
     ratio = 0.0
@@ -668,19 +1563,13 @@ def classify_nok_severity(nok_pct):
     except (TypeError, ValueError):
         ratio = 0.0
 
-    if ratio <= 0:
+    if ratio <= 0.003:
         return {
             'label': 'NOK 0%',
             'palette_key': 'quality_capable',
         }
 
-    if ratio < 0.02:
-        return {
-            'label': f'NOK {ratio * 100:.1f}% low',
-            'palette_key': 'quality_good',
-        }
-
-    if ratio < 0.05:
+    if ratio <= 0.05:
         return {
             'label': f'NOK {ratio * 100:.1f}% watch',
             'palette_key': 'quality_marginal',
@@ -692,20 +1581,70 @@ def classify_nok_severity(nok_pct):
     }
 
 
+
+def classify_normality_status(normality_status):
+    """Map normality status to dedicated pastel normality palettes."""
+    if normality_status == 'normal':
+        return {'label': 'Normality normal', 'palette_key': 'normality_normal'}
+    if normality_status == 'not_normal':
+        return {'label': 'Normality not normal', 'palette_key': 'normality_not_normal'}
+    if normality_status == 'not_applicable':
+        return {'label': 'Normality not applicable', 'palette_key': 'normality_unknown'}
+    return {'label': 'Normality unknown', 'palette_key': 'normality_unknown'}
+
 def build_summary_panel_subtitle(summary_stats):
     """Return compact panel subtitle text showing sample size and NOK share."""
     return f"n={int(summary_stats['sample_size'])} • NOK={summary_stats['nok_pct'] * 100:.1f}%"
 
 
 def _apply_table_row_badge(ax_table, row_index, palette_key):
-    for col_index in (0, 1):
-        cell = ax_table.get_celld().get((row_index, col_index))
+    cell_map = ax_table.get_celld()
+    column_indexes = sorted({col for (row, col) in cell_map.keys() if row == 0})
+    if not column_indexes:
+        column_indexes = [0, 1]
+
+    for col_index in column_indexes:
+        cell = cell_map.get((row_index, col_index))
         if cell is None:
             continue
         cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
         text = cell.get_text()
         text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-        text.set_weight('bold')
+
+
+def _merge_table_row_cells(ax_table, row_index, col_index=0, *, col_span, text=None, palette_key=None, height_scale=1.0):
+    """Merge adjacent cells in one row into a single styled cell."""
+    if col_span <= 1:
+        return
+
+    cell_map = ax_table.get_celld()
+    primary_cell = cell_map.get((row_index, col_index))
+    if primary_cell is None:
+        return
+
+    merged_width = primary_cell.get_width()
+    for offset in range(1, col_span):
+        sibling = cell_map.get((row_index, col_index + offset))
+        if sibling is None:
+            continue
+        merged_width += sibling.get_width()
+        if palette_key:
+            sibling.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+            sibling.get_text().set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+        sibling.set_visible(False)
+        sibling.set_width(0)
+
+    primary_cell.set_width(merged_width)
+    primary_cell.set_height(primary_cell.get_height() * height_scale)
+
+    primary_text = primary_cell.get_text()
+    if text is not None:
+        primary_text.set_text(text)
+
+    if palette_key:
+        primary_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+        primary_text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+        primary_text.set_linespacing(1.2)
 
 
 def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
@@ -730,6 +1669,12 @@ def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
 
 
 class ExportDataThread(QThread):
+    """Background worker thread that executes the full export pipeline.
+
+    The thread queries report data, applies grouping/filters, writes Excel sheets,
+    renders charts, and emits UI progress, status, and completion signals.
+    """
+
     PROGRESS_STAGE_RANGES = {
         'preparing_query': (0, 10),
         'filtered_sheet_write': (10, 30),
@@ -771,10 +1716,20 @@ class ExportDataThread(QThread):
         self.summary_plot_scale = validated_request.options.summary_plot_scale
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
+        self.allow_non_essential_chart_skipping = validated_request.options.allow_non_essential_chart_skipping
+        self.chart_worker_count = validated_request.options.chart_worker_count
+        self.chart_worker_queue_size = validated_request.options.chart_worker_queue_size
         self.export_canceled = False
         self._cancel_signal_emitted = False
         self._prepared_grouping_df = None
-        self.completion_metadata = {"local_xlsx_path": self.excel_file}
+        self.completion_metadata = {
+            "local_xlsx_path": self.excel_file,
+            "converted_url": None,
+            "fallback_message": "",
+            "conversion_warnings": [],
+            "conversion_warning_details": [],
+            "converted_tab_titles": [],
+        }
         self._exported_sheet_names = []
         self._exported_sheet_name_set = set()
         self._last_emitted_progress = -1
@@ -790,13 +1745,29 @@ class ExportDataThread(QThread):
             'enable_chart_multiprocessing': os.getenv('METROLIZA_EXPORT_CHART_MP', '').lower() in {'1', 'true', 'yes', 'on'} and os.name != 'nt',
         }
         self._chart_executor = None
-        self._reset_export_df_cache()
+        self._summary_prep_executor = None
+        self._active_chart_images = []
+        self._summary_sheet_failed = False
+        self._summary_sheet_skip_warning_emitted = False
+        self._db_connection = None
+        self._snapshot_table_name = None
+        self._active_export_query = self.filter_query
+        self._cached_export_filtered_df = None
+
+    def _register_chart_image(self, payload: bytes):
+        image_data = BytesIO(payload)
+        image_data.seek(0)
+        self._active_chart_images.append(image_data)
+        return image_data
+
+    def _cleanup_chart_images(self):
+        self._active_chart_images.clear()
 
     def _ensure_chart_executor(self):
         if not self._optimization_toggles.get('enable_chart_multiprocessing'):
             return None
         if self._chart_executor is None:
-            self._chart_executor = ProcessPoolExecutor(max_workers=2)
+            self._chart_executor = ProcessPoolExecutor(max_workers=self.chart_worker_count)
         return self._chart_executor
 
     def _shutdown_chart_executor(self):
@@ -807,22 +1778,92 @@ class ExportDataThread(QThread):
         finally:
             self._chart_executor = None
 
-    def _reset_export_df_cache(self):
-        self._export_df_cache = None
-        self._export_df_column_order = None
+    def _ensure_summary_prep_executor(self):
+        if self._summary_prep_executor is None:
+            self._summary_prep_executor = BoundedWorkerPool(
+                max_workers=self.chart_worker_count,
+                max_queue_size=self.chart_worker_queue_size,
+            )
+        return self._summary_prep_executor
 
-    def _ensure_export_df_cache(self):
-        if self._export_df_cache is None:
-            export_df = read_sql_dataframe(self.db_file, self.filter_query)
-            self._export_df_cache = export_df
-            self._export_df_column_order = tuple(export_df.columns)
-        return self._export_df_cache
+    def _shutdown_summary_prep_executor(self):
+        if self._summary_prep_executor is None:
+            return
+        try:
+            self._summary_prep_executor.shutdown(wait=True)
+        finally:
+            self._summary_prep_executor = None
+
+
+    def _prepare_export_snapshot(self):
+        if self._db_connection is None:
+            self._active_export_query = self.filter_query
+            self._cached_export_filtered_df = None
+            return
+
+        snapshot_table_name = f'_export_snapshot_{int(time.time() * 1000)}_{id(self)}'
+        create_snapshot_query = (
+            f'CREATE TEMP TABLE "{snapshot_table_name}" AS '
+            f'SELECT * FROM ({self.filter_query}) AS export_scope'
+        )
+        try:
+            with self._db_connection:
+                self._db_connection.execute(create_snapshot_query)
+        except Exception:
+            logger.warning(
+                'Export snapshot materialization failed; falling back to live query scope.',
+                exc_info=True,
+            )
+            self._snapshot_table_name = None
+            self._active_export_query = self.filter_query
+            self._cached_export_filtered_df = None
+            return
+
+        self._snapshot_table_name = snapshot_table_name
+        self._active_export_query = f'SELECT * FROM "{snapshot_table_name}"'
+        self._cached_export_filtered_df = None
+
+    def _cleanup_export_snapshot(self):
+        if self._db_connection is None or not self._snapshot_table_name:
+            self._active_export_query = self.filter_query
+            self._snapshot_table_name = None
+            self._cached_export_filtered_df = None
+            return
+
+        try:
+            with self._db_connection:
+                self._db_connection.execute(f'DROP TABLE IF EXISTS "{self._snapshot_table_name}"')
+        except sqlite3.ProgrammingError:
+            logger.debug(
+                'Skipping export snapshot cleanup because database connection is already closed.',
+                exc_info=True,
+            )
+        finally:
+            self._snapshot_table_name = None
+            self._active_export_query = self.filter_query
+            self._cached_export_filtered_df = None
+
+    def _iter_reference_partitions(self):
+        partition_values = fetch_partition_values(
+            self.db_file,
+            self._active_export_query,
+            partition_column='REFERENCE',
+            connection=self._db_connection,
+        )
+        for partition_value in partition_values:
+            partition_df = load_measurement_export_partition_dataframe(
+                self.db_file,
+                self._active_export_query,
+                partition_value,
+                partition_column='REFERENCE',
+                connection=self._db_connection,
+            )
+            yield partition_value, partition_df
 
     def _build_export_filtered_dataframe(self):
-        export_df = self._ensure_export_df_cache()
-        if not self._export_df_column_order:
-            return export_df.copy()
-        return export_df.loc[:, list(self._export_df_column_order)].copy()
+        if self._cached_export_filtered_df is None:
+            self._cached_export_filtered_df = read_sql_dataframe(self.db_file, self._active_export_query, connection=self._db_connection)
+        return self._cached_export_filtered_df
 
     def _record_stage_timing(self, stage_name, elapsed):
         if stage_name in self._stage_timings:
@@ -837,19 +1878,57 @@ class ExportDataThread(QThread):
         if chart_share >= 0.65:
             self._optimization_toggles['chart_density_mode'] = 'reduced'
             self._optimization_toggles['defer_non_essential_charts'] = True
+            if self.allow_non_essential_chart_skipping:
+                self._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram'}
+            else:
+                self._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram', 'trend'}
         elif chart_share >= 0.45:
             self._optimization_toggles['chart_density_mode'] = 'reduced'
 
     def _chart_sample_limit(self):
-        return 900 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 3000
+        policy = resolve_chart_sampling_policy(density_mode=self._optimization_toggles['chart_density_mode'])
+        return policy.distribution_limit
 
     def _summary_chart_required(self, chart_name):
         required_charts = self._optimization_toggles.get('summary_sheet_minimum_charts', set())
         return chart_name in required_charts
 
-    def _build_iqr_plot_payload(self, labels, values, sampled_group):
-        boxplot_labels = labels if labels else ['All']
+    @staticmethod
+    def _save_summary_chart(fig, mode='workbook'):
+        """Persist summary-sheet charts with a workbook-friendly rendering policy."""
+        save_kwargs = {
+            'format': 'png',
+            'dpi': 150,
+        }
+        if mode == 'clipped':
+            # Keep a fallback for charts that may require clipping fixes.
+            save_kwargs['bbox_inches'] = 'tight'
+
+        image_buffer = BytesIO()
+        fig.savefig(image_buffer, **save_kwargs)
+        return image_buffer.getvalue()
+
+    def _build_iqr_plot_payload(self, labels, values, sampled_group, *, grouping_active=False):
+        strategy_labels = build_summary_panel_labels(labels or ['All'], grouping_active=grouping_active)
+        boxplot_labels = strategy_labels
         boxplot_values = values if values else [list(sampled_group['MEAS'])]
+
+        if len(boxplot_labels) != len(boxplot_values):
+            if sampled_group is not None and 'MEAS' in sampled_group:
+                logger.warning(
+                    "IQR payload labels/values mismatch detected; rebuilding fallback payload.",
+                    extra={'label_count': len(boxplot_labels), 'value_count': len(boxplot_values)},
+                )
+                boxplot_labels = ['All']
+                boxplot_values = [list(sampled_group['MEAS'])]
+            else:
+                min_length = min(len(boxplot_labels), len(boxplot_values))
+                logger.warning(
+                    "IQR payload labels/values mismatch detected; applying deterministic truncation.",
+                    extra={'label_count': len(boxplot_labels), 'value_count': len(boxplot_values), 'selected_length': min_length},
+                )
+                boxplot_labels = boxplot_labels[:min_length]
+                boxplot_values = boxplot_values[:min_length]
 
         if self._optimization_toggles['chart_density_mode'] != 'reduced':
             return boxplot_labels, boxplot_values
@@ -862,11 +1941,35 @@ class ExportDataThread(QThread):
         return boxplot_labels[::stride], boxplot_values[::stride]
 
     @staticmethod
+    def _compute_group_sample_counts(sampled_group, grouping_key):
+        if sampled_group is None or sampled_group.empty:
+            return {}
+        if grouping_key not in sampled_group.columns or 'MEAS' not in sampled_group.columns:
+            return {}
+
+        count_frame = sampled_group[[grouping_key, 'MEAS']].dropna(subset=[grouping_key, 'MEAS']).copy()
+        if count_frame.empty:
+            return {}
+
+        count_frame[grouping_key] = count_frame[grouping_key].astype(str)
+        grouped_counts = count_frame.groupby(grouping_key, sort=False)['MEAS'].size()
+        return {str(label): int(count) for label, count in grouped_counts.items()}
+
+    @staticmethod
+    def _append_group_sample_counts(labels, sample_counts):
+        if not labels:
+            return []
+
+        formatted_labels = []
+        for label in labels:
+            normalized_label = str(label)
+            count = int(sample_counts.get(normalized_label, 0))
+            formatted_labels.append(f"{normalized_label} (n={count})")
+        return formatted_labels
+
+    @staticmethod
     def _downsample_frame(df, sample_limit):
-        if len(df) <= sample_limit:
-            return df
-        stride = max(1, int(np.ceil(len(df) / sample_limit)))
-        return df.iloc[::stride].copy()
+        return deterministic_downsample_frame(df, sample_limit)
 
     @staticmethod
     def _clamp_progress(value):
@@ -936,6 +2039,17 @@ class ExportDataThread(QThread):
 
     @property
     def prepared_grouping_df(self):
+        """Handle `prepared_grouping_df` for `ExportDataThread`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         if self._prepared_grouping_df is None:
             self._prepared_grouping_df = self._prepare_grouping_df()
         return self._prepared_grouping_df
@@ -955,19 +2069,73 @@ class ExportDataThread(QThread):
 
     @staticmethod
     def _build_violin_payload(header_group, group_column, min_samplesize):
-        grouped_meas = (
-            header_group.dropna(subset=['MEAS'])
-            .groupby(group_column, sort=False)['MEAS']
-            .agg(list)
+        """Backward-compatible wrapper around the canonical vectorized builder."""
+
+        return build_violin_payload_vectorized(
+            header_group,
+            group_column,
+            min_samplesize=min_samplesize,
         )
 
-        if grouped_meas.empty:
-            return [], [], False
+    @staticmethod
+    def _build_summary_scatter_payload(header_group, x_column, *, grouping_active=False):
+        scatter_frame = header_group.dropna(subset=['MEAS']).copy()
+        if scatter_frame.empty:
+            return np.array([]), np.array([]), []
 
-        labels = list(grouped_meas.index)
-        values = list(grouped_meas.values)
-        can_render_violin = all(len(group_values) >= min_samplesize for group_values in values)
-        return labels, values, can_render_violin
+        raw_labels = scatter_frame[x_column].tolist()
+        strategy_labels = build_summary_panel_labels(raw_labels, grouping_active=grouping_active)
+
+        normalized_y = _normalize_plot_axis_values(list(scatter_frame['MEAS']))
+        y_numeric = pd.to_numeric(pd.Series(normalized_y), errors='coerce').to_numpy(dtype=float)
+
+        normalized_x = _normalize_plot_axis_values(raw_labels)
+        has_datetime_values = any(isinstance(value, (pd.Timestamp, np.datetime64)) or hasattr(value, 'year') for value in normalized_x)
+        if has_datetime_values and all(not isinstance(value, str) for value in normalized_x):
+            datetime_series = pd.to_datetime(pd.Series(normalized_x), errors='coerce')
+            if datetime_series.notna().all():
+                x_values = datetime_series.dt.to_pydatetime()
+            else:
+                x_values = np.arange(len(scatter_frame), dtype=float)
+        else:
+            x_numeric = pd.to_numeric(pd.Series(normalized_x), errors='coerce').to_numpy(dtype=float)
+            if np.isnan(x_numeric).any():
+                x_values = np.arange(len(scatter_frame), dtype=float)
+            else:
+                x_values = x_numeric
+
+        return x_values, y_numeric, strategy_labels
+
+    @staticmethod
+    def _build_grouped_summary_scatter_payload(header_group, x_column, *, grouping_active=False):
+        """Build grouped trend points and labels, including per-group sample counts.
+
+        Rationale:
+            Grouped trend panels aggregate to one point per category to avoid
+            overplotting and to make between-group central tendency easier to
+            compare.
+
+        Fallback behavior:
+            Returns empty arrays/lists when no finite grouped measurements are
+            available after filtering NaNs.
+        """
+        scatter_frame = header_group.dropna(subset=['MEAS', x_column]).copy()
+        if scatter_frame.empty:
+            return np.array([]), np.array([]), []
+
+        grouped_measurements = scatter_frame.groupby(x_column, sort=False)['MEAS'].mean()
+        if grouped_measurements.empty:
+            return np.array([]), np.array([]), []
+
+        raw_labels = list(grouped_measurements.index)
+        if grouping_active:
+            group_sizes = scatter_frame.groupby(x_column, sort=False)['MEAS'].size()
+            raw_labels = [f"{label} (n={int(group_sizes.loc[label])})" for label in raw_labels]
+        strategy_labels = build_summary_panel_labels(raw_labels, grouping_active=grouping_active)
+        normalized_y = _normalize_plot_axis_values(list(grouped_measurements.values))
+        y_numeric = pd.to_numeric(pd.Series(normalized_y), errors='coerce').to_numpy(dtype=float)
+        x_values = np.arange(len(grouped_measurements), dtype=float)
+        return x_values, y_numeric, strategy_labels
 
     def _sort_header_group(self, header_group):
         sort_mode = self.selected_sorting_parameter.strip().lower()
@@ -1027,6 +2195,17 @@ class ExportDataThread(QThread):
         return _resolve_group_merge_keys(header_group, grouping_df)
 
     def stop_exporting(self):
+        """Handle `stop_exporting` for `ExportDataThread`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.export_canceled = True
 
     def _check_canceled(self):
@@ -1040,8 +2219,20 @@ class ExportDataThread(QThread):
         return False
 
     def run_export_pipeline(self, excel_writer):
-        self._reset_export_df_cache()
-        self._ensure_export_df_cache()
+        """Handle `run_export_pipeline` for `ExportDataThread`.
+
+        Args:
+            excel_writer (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
+        # Stage order is deliberate: measurement sheets create workbook context
+        # consumed by filtered export and progress reporting.
         return run_export_steps(
             [
                 lambda: (
@@ -1062,6 +2253,17 @@ class ExportDataThread(QThread):
         )
 
     def get_export_backend(self):
+        """Handle `get_export_backend` for `ExportDataThread`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         target_to_backend = {
             'excel_xlsx': ExcelExportBackend(),
             'google_sheets_drive_convert': ExcelExportBackend(),
@@ -1125,40 +2327,77 @@ class ExportDataThread(QThread):
         )
 
     def run(self):
+        """Handle `run` for `ExportDataThread`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if self._check_canceled():
                 return
 
-            self._reset_export_df_cache()
             self._ensure_chart_executor()
+            self._ensure_summary_prep_executor()
 
-            self._emit_stage_progress('preparing_query', 0.0)
-            self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
-            self._log_export_stage("Export started", stage="started")
+            with sqlite_connection_scope(self.db_file) as connection:
+                self._db_connection = connection
+                self._prepare_export_snapshot()
+
+                self._emit_stage_progress('preparing_query', 0.0)
+                self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
+                self._log_export_stage("Export started", stage="started")
+                if self.export_target == "google_sheets_drive_convert":
+                    self._emit_google_stage("generating")
+
+                backend = self.get_export_backend()
+                self._active_backend = backend
+                completed = backend.run(self)
+                if not completed:
+                    return
+
             if self.export_target == "google_sheets_drive_convert":
-                self._emit_google_stage("generating")
+                stage_attempts = {
+                    "uploading": 0,
+                    "converting": 0,
+                    "validating": 0,
+                }
+                stage_attempt_totals = {}
 
-            backend = self.get_export_backend()
-            self._active_backend = backend
-            completed = backend.run(self)
-            if not completed:
-                return
+                def _log_google_conversion_stage(stage_name):
+                    stage_attempts[stage_name] += 1
+                    attempt_index = stage_attempts[stage_name]
+                    attempt_total = stage_attempt_totals.get(stage_name)
+                    stage_message = "Google conversion stage"
+                    if attempt_total and attempt_total > 1:
+                        stage_message = f"Google conversion stage (attempt {attempt_index}/{attempt_total})"
+                    self._log_export_stage(stage_message, stage=stage_name)
 
-            if self.export_target == "google_sheets_drive_convert":
                 def _stage_callback(stage_message):
                     if stage_message == "uploading":
                         self._emit_google_stage("uploading")
-                        self._log_export_stage("Google conversion stage", stage="uploading")
+                        _log_google_conversion_stage("uploading")
                         return
                     if stage_message == "converting":
                         self._emit_google_stage("converting")
-                        self._log_export_stage("Google conversion stage", stage="converting")
+                        _log_google_conversion_stage("converting")
                         return
                     if stage_message == "validating":
                         self._emit_google_stage("validating")
-                        self._log_export_stage("Google conversion stage", stage="validating")
+                        _log_google_conversion_stage("validating")
                         return
                     if stage_message.startswith("uploading retry"):
+                        retry_match = re.match(r"^uploading retry\s+(\d+)/(\d+)", stage_message)
+                        if retry_match:
+                            try:
+                                stage_attempt_totals["uploading"] = int(retry_match.group(2))
+                            except ValueError:
+                                pass
                         self._emit_google_stage("uploading", detail=stage_message)
                         self._log_export_stage("Google conversion upload retry", stage="uploading_retry", level="warning")
 
@@ -1167,14 +2406,19 @@ class ExportDataThread(QThread):
                     expected_sheet_names=self._build_expected_sheet_names(),
                     status_callback=_stage_callback,
                 )
+                conversion_warnings = list(conversion.warnings)
+                conversion_warning_details = list(getattr(conversion, "warning_details", ()))
+                converted_tab_titles = list(getattr(conversion, "converted_tab_titles", ()))
+
                 self.completion_metadata.update(
                     {
                         "converted_file_id": conversion.file_id,
                         "converted_url": conversion.web_url,
                         "local_xlsx_path": conversion.local_xlsx_path,
                         "fallback_message": conversion.fallback_message,
-                        "conversion_warnings": list(conversion.warnings),
-                        "converted_tab_titles": list(conversion.converted_tab_titles),
+                        "conversion_warnings": conversion_warnings,
+                        "conversion_warning_details": conversion_warning_details,
+                        "converted_tab_titles": converted_tab_titles,
                     }
                 )
                 self._log_export_stage(
@@ -1234,22 +2478,51 @@ class ExportDataThread(QThread):
                 )
                 if isinstance(e, GoogleDriveAuthError):
                     return
-                self.log_and_exit(e)
                 return
             self.log_and_exit(e)
         except Exception as e:
+            self.update_label.emit(
+                build_three_line_status(
+                    "Export failed during local workbook generation.",
+                    "Export aborted before cloud conversion.",
+                    "ETA --",
+                )
+            )
+            self._log_export_stage(
+                "Export failed during local workbook generation",
+                stage="local_export_failed",
+                level="error",
+            )
             self.log_and_exit(e)
         finally:
+            self._cleanup_export_snapshot()
             self._shutdown_chart_executor()
-            self._reset_export_df_cache()
+            self._shutdown_summary_prep_executor()
+            self._cleanup_chart_images()
+            self._db_connection = None
 
     def add_measurements_horizontal_sheet(self, excel_writer):
-        try:
-            df = build_measurement_export_dataframe(self._ensure_export_df_cache())
+        """Handle `add_measurements_horizontal_sheet` for `ExportDataThread`.
 
-            reference_groups = df.groupby('REFERENCE', sort=False)
-            total_references = reference_groups.ngroups
-            total_header_units = int(reference_groups['HEADER - AX'].nunique(dropna=False).sum())
+        Args:
+            excel_writer (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
+        try:
+            partition_header_counts = fetch_partition_header_counts(
+                self.db_file,
+                self._active_export_query,
+                partition_column='REFERENCE',
+                connection=self._db_connection,
+            )
+            total_references = len(partition_header_counts)
+            total_header_units = sum(partition_header_counts.values())
             completed_header_units = 0
             measurement_stage_start = time.perf_counter()
             label_emit_every_headers = 10
@@ -1262,11 +2535,17 @@ class ExportDataThread(QThread):
 
             formats = create_measurement_formats(workbook)
             column_width = 12
-            max_col = len(df['HEADER - AX'].unique()) * 3
 
-            for ref_index, (ref, ref_group) in enumerate(reference_groups, start=1):
+            for ref_index, (ref, ref_group) in enumerate(self._iter_reference_partitions(), start=1):
                 if self._check_canceled():
                     return
+
+                # Each measurement block consumes 5 worksheet columns in the
+                # exported layout (limits/stats/data). Keep the pre-format
+                # range aligned with the actual generated columns so widths and
+                # centering stay consistent for all populated blocks.
+                header_block_count = len(ref_group['HEADER - AX'].unique())
+                max_col = max((header_block_count * 5) - 1, 0)
 
                 self.update_label.emit(
                     self._build_measurement_label(
@@ -1313,7 +2592,7 @@ class ExportDataThread(QThread):
                     write_start = time.perf_counter()
                     measurement_plan = write_measurement_block(worksheet, write_bundle, formats, base_col=base_col)
 
-                    col += 3
+                    col += 5
                     header_col_end = col - 1
                     worksheet.set_column(header_col_end, header_col_end, None, cell_format=formats['border'])
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
@@ -1326,7 +2605,7 @@ class ExportDataThread(QThread):
                         header=header,
                         sheet_name=safe_ref_sheet_name,
                         measurement_plan=measurement_plan,
-                        chart_anchor_col=col - 3,
+                        chart_anchor_col=col - 5,
                         cache=optimization_cache,
                     )
 
@@ -1339,7 +2618,18 @@ class ExportDataThread(QThread):
                         return
 
                     if self.generate_summary_sheet:
-                        self.summary_sheet_fill(summary_worksheet, header, header_group, col)
+                        if self._summary_sheet_failed:
+                            if not self._summary_sheet_skip_warning_emitted:
+                                self.update_label.emit(
+                                    build_three_line_status(
+                                        "Warning: summary charts skipped after earlier error.",
+                                        "Continuing export without summary panel rendering",
+                                        "ETA --",
+                                    )
+                                )
+                                self._summary_sheet_skip_warning_emitted = True
+                        else:
+                            self.summary_sheet_fill(summary_worksheet, header, header_group, col)
                         if self._check_canceled():
                             return
 
@@ -1398,14 +2688,41 @@ class ExportDataThread(QThread):
                             ref,
                         )
 
-                worksheet.freeze_panes(12, 0)
+                worksheet.freeze_panes(7, 0)
+
+            self._write_group_comparison_sheet(workbook, used_sheet_names)
 
             if total_references == 0 or total_header_units == 0:
                 self._emit_stage_progress('measurement_sheets_charts', 1.0)
         except Exception as e:
             self.log_and_exit(e)
+            raise
+
+    def _write_group_comparison_sheet(self, workbook, used_sheet_names):
+        grouped_export_df = self._build_export_filtered_dataframe()
+        grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
+        grouped_export_df, _ = self._apply_group_assignments(grouped_export_df, self.prepared_grouping_df)
+
+        sheet_name = unique_sheet_name('Group Comparison', used_sheet_names)
+        worksheet = workbook.add_worksheet(sheet_name)
+        self._record_exported_sheet_name(sheet_name)
+
+        payload = prepare_group_comparison_payload(grouped_export_df)
+        write_group_comparison_sheet(worksheet, payload)
 
     def export_filtered_data(self, excel_writer):
+        """Handle `export_filtered_data` for `ExportDataThread`.
+
+        Args:
+            excel_writer (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if self._check_canceled():
                 return
@@ -1413,25 +2730,34 @@ class ExportDataThread(QThread):
             self.write_data_to_excel(export_df, "MEASUREMENTS", excel_writer)
         except Exception as e:
             self.log_and_exit(e)
+            raise
 
     def write_data_to_excel(self, df, table_name, excel_writer):
+        """Handle `write_data_to_excel` for `ExportDataThread`.
+
+        Args:
+            df (object): Method input value.
+            table_name (object): Method input value.
+            excel_writer (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if self._check_canceled():
                 return
-            # Write the DataFrame to the Excel file
             backend = self._active_backend or self.get_export_backend()
             safe_table_name = unique_sheet_name(table_name, backend.list_sheet_names(excel_writer))
             backend.write_dataframe(excel_writer, df, safe_table_name)
             self._record_exported_sheet_name(safe_table_name)
             worksheet = backend.get_worksheet(excel_writer, safe_table_name)
 
-            # Apply autofilter to enable filtering
             worksheet.autofilter(0, 0, df.shape[0], df.shape[1] - 1)
-
-            # Freeze first row
             worksheet.freeze_panes(1, 0)
-
-            # Adjust the column widths based on the data
             for i, column in enumerate(df.columns):
                 if self._check_canceled():
                     return
@@ -1441,6 +2767,18 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
 
     def calculate_column_width(self, data):
+        """Handle `calculate_column_width` for `ExportDataThread`.
+
+        Args:
+            data (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if data.empty:
                 return 12  # Return a default width 12 if the data is empty
@@ -1454,278 +2792,547 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
     
     def summary_sheet_fill(self, summary_worksheet, header, header_group, col):
+        """Handle `summary_sheet_fill` for `ExportDataThread`.
+
+        Args:
+            summary_worksheet (object): Method input value.
+            header (object): Method input value.
+            header_group (object): Method input value.
+            col (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         try:
             if self._check_canceled():
                 return
             transform_start = time.perf_counter()
             header_group = self._ensure_sample_number_column(header_group)
-            imgplot = BytesIO()
             limits = resolve_nominal_and_limits(header_group)
             nom = limits['nom']
             USL = limits['usl']
             LSL = limits['lsl']
 
-            summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
+            reference_value = header_group['REFERENCE'].iloc[0] if 'REFERENCE' in header_group.columns and not header_group.empty else None
+            header_value = header_group['HEADER'].iloc[0] if 'HEADER' in header_group.columns and not header_group.empty else None
+            axis_value = header_group['AX'].iloc[0] if 'AX' in header_group.columns and not header_group.empty else None
+
+            summary_stats = None
+            if reference_value is not None and header_value is not None and axis_value is not None:
+                sql_summary = fetch_sql_measurement_summary(
+                    self.db_file,
+                    self._active_export_query,
+                    reference=reference_value,
+                    header=header_value,
+                    ax=axis_value,
+                    usl=USL,
+                    lsl=LSL,
+                    connection=self._db_connection,
+                )
+                if sql_summary is not None:
+                    sample_size = int(sql_summary.get('sample_size') or 0)
+                    average_raw = sql_summary.get('average')
+                    minimum_raw = sql_summary.get('minimum')
+                    maximum_raw = sql_summary.get('maximum')
+                    sigma_raw = sql_summary.get('sigma')
+                    nok_count = int(sql_summary.get('nok_count') or 0)
+
+                    has_complete_sql_summary = (
+                        sample_size > 0
+                        and average_raw is not None
+                        and minimum_raw is not None
+                        and maximum_raw is not None
+                    )
+                    if has_complete_sql_summary:
+                        average = float(average_raw)
+                        sigma = float(sigma_raw or 0.0)
+                        cp, cpk = safe_process_capability(nom, USL, LSL, sigma, average)
+                        one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, LSL))
+                        normality = compute_normality_status(
+                            header_group['MEAS'],
+                            one_sided=one_sided_mode,
+                            location_bound=LSL,
+                        )
+                        summary_stats = {
+                            'minimum': float(minimum_raw),
+                            'maximum': float(maximum_raw),
+                            'sigma': sigma,
+                            'average': average,
+                            'median': float(header_group['MEAS'].median()),
+                            'cp': cp,
+                            'cpk': cpk,
+                            'sample_size': sample_size,
+                            'nok_count': nok_count,
+                            'nok_pct': (nok_count / sample_size),
+                            'normality_status': normality['status'],
+                            'normality_text': normality['text'],
+                            'normality_test_name': normality.get('test_name', 'Shapiro'),
+                            'normality_p_value': normality.get('p_value'),
+                            'usl': USL,
+                        }
+
+            if summary_stats is None:
+                summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
+            summary_stats.setdefault('normality_test_name', 'Shapiro')
+            summary_stats.setdefault('normality_p_value', None)
+            summary_stats['usl'] = USL
             average = summary_stats['average']
+            histogram_table_payload = build_histogram_table_data(summary_stats)
+            table_data = histogram_table_payload['rows']
+            capability_rows = histogram_table_payload['capability_rows']
+
             capability_badge = classify_capability_status(summary_stats['cp'], summary_stats['cpk'])
+            cpk_row_label = capability_rows['Cpk']['label']
+            capability_row_badges = {
+                'Cp': classify_capability_value(
+                    capability_rows['Cp']['classification_value'],
+                    label_prefix=capability_rows['Cp']['label'],
+                ),
+                cpk_row_label: classify_capability_value(
+                    capability_rows['Cpk']['classification_value'],
+                    label_prefix=cpk_row_label,
+                ),
+            }
+            normality_row_badge = {
+                'Normality': classify_normality_status(summary_stats.get('normality_status')),
+            }
+            histogram_row_badges = {
+                **capability_row_badges,
+                **normality_row_badge,
+                'NOK %': classify_nok_severity(summary_stats.get('nok_pct')),
+            }
             panel_subtitle = build_summary_panel_subtitle(summary_stats)
-            
-            apply_summary_plot_theme()
-            fig, ax = plt.subplots(figsize=(6, 4))
-            
+
             grouping_df = self.prepared_grouping_df
             header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
-            sampled_group = self._downsample_frame(header_group, self._chart_sample_limit())
+            sampling_policy = resolve_chart_sampling_policy(density_mode=self._optimization_toggles['chart_density_mode'])
+            sampled_distribution_group = sample_frame_for_chart(header_group, 'distribution', sampling_policy)
+            sampled_iqr_group = sample_frame_for_chart(header_group, 'iqr', sampling_policy)
+            sampled_histogram_group = sample_frame_for_chart(header_group, 'histogram', sampling_policy)
+            sampled_trend_group = sample_frame_for_chart(header_group, 'trend', sampling_policy)
             self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
 
-            chart_mp_enabled = self._chart_executor is not None and len(sampled_group) >= 2500
+            distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
+            scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
+
+            chart_mp_enabled = self._chart_executor is not None and len(header_group) >= 2500
             precomputed_density_curve = None
             precomputed_trend_payload = None
             if chart_mp_enabled:
                 try:
-                    density_future = self._chart_executor.submit(build_histogram_density_curve_payload, sampled_group['MEAS'])
-                    trend_future = self._chart_executor.submit(build_trend_plot_payload, sampled_group)
+                    density_future = self._chart_executor.submit(build_histogram_density_curve_payload, sampled_histogram_group['MEAS'])
+                    trend_future = self._chart_executor.submit(
+                        build_trend_plot_payload,
+                        sampled_trend_group,
+                        grouping_active=grouping_applied,
+                        label_column=distribution_key,
+                    )
                     precomputed_density_curve = density_future.result()
                     precomputed_trend_payload = trend_future.result()
                 except Exception:
                     precomputed_density_curve = None
                     precomputed_trend_payload = None
 
-            chart_start = time.perf_counter()
-            if grouping_applied:
-                labels, values, can_render_violin = self._build_violin_payload(
-                    sampled_group,
-                    'GROUP',
-                    self.violin_plot_min_samplesize,
-                )
-                if can_render_violin:
-                    render_violin(ax, values, labels, readability_scale=self.summary_plot_scale)
-                else:
-                    render_scatter(ax, data=sampled_group, x='GROUP', y='MEAS')
+            prep_executor = self._summary_prep_executor
+            if prep_executor is not None:
+                try:
+                    distribution_future = prep_executor.submit(
+                        build_violin_payload_vectorized,
+                        sampled_distribution_group,
+                        distribution_key,
+                        self.violin_plot_min_samplesize,
+                    )
+                    iqr_future = prep_executor.submit(
+                        build_violin_payload_vectorized,
+                        sampled_iqr_group,
+                        distribution_key,
+                        self.violin_plot_min_samplesize,
+                    )
+                    distribution_labels, distribution_values, can_render_violin = distribution_future.result()
+                    iqr_labels, iqr_values, _ = iqr_future.result()
+                except Exception:
+                    logger.debug(
+                        "Summary prep executor failed; falling back to in-process payload generation.",
+                        exc_info=True,
+                    )
+                    distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
+                        sampled_distribution_group,
+                        distribution_key,
+                        self.violin_plot_min_samplesize,
+                    )
+                    iqr_labels, iqr_values, _ = build_violin_payload_vectorized(
+                        sampled_iqr_group,
+                        distribution_key,
+                        self.violin_plot_min_samplesize,
+                    )
             else:
-                labels, values, can_render_violin = self._build_violin_payload(
-                    sampled_group,
-                    'SAMPLE_NUMBER',
+                distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
+                    sampled_distribution_group,
+                    distribution_key,
                     self.violin_plot_min_samplesize,
                 )
-                if can_render_violin:
-                    render_violin(ax, values, labels, readability_scale=self.summary_plot_scale)
-                else:
-                    render_scatter(ax, data=sampled_group, x='SAMPLE_NUMBER', y='MEAS')
+                iqr_labels, iqr_values, _ = build_violin_payload_vectorized(
+                    sampled_iqr_group,
+                    distribution_key,
+                    self.violin_plot_min_samplesize,
+                )
 
-            apply_minimal_axis_style(ax, grid_axis='y')
-            apply_shared_x_axis_label_strategy(ax, labels)
-            for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                ax.axhline(**line_spec)
+            if grouping_applied:
+                distribution_counts = self._compute_group_sample_counts(sampled_distribution_group, distribution_key)
+                iqr_counts = self._compute_group_sample_counts(sampled_iqr_group, distribution_key)
+                distribution_labels = self._append_group_sample_counts(distribution_labels, distribution_counts)
+                iqr_labels = self._append_group_sample_counts(iqr_labels, iqr_counts)
 
-            current_y_limits = ax.get_ylim()
-            y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+            distribution_labels = build_summary_panel_labels(
+                distribution_labels,
+                grouping_active=grouping_applied,
+            )
+            iqr_labels = build_summary_panel_labels(
+                iqr_labels,
+                grouping_active=grouping_applied,
+            )
 
-            # Set y-axis limits using the Axes object
-            ax.set_ylim(y_min, y_max)
+            label_positions = None
+            x_values = None
+            y_values = None
+            distribution_x_axis_label = 'Group' if grouping_applied else 'Sample #'
+            if not can_render_violin:
+                x_values, y_values, distribution_labels = self._build_grouped_summary_scatter_payload(
+                    sampled_distribution_group,
+                    scatter_key,
+                    grouping_active=grouping_applied,
+                )
+                label_positions = list(x_values)
 
-            ax.set_xlabel('Sample #')
-            ax.set_ylabel('Measurement')
-            ax.set_title(f'{header}')
-            fig.savefig(imgplot, format="png")
-            self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-            
-            imgplot.seek(0)
-            
+            distribution_title = header
+            if not can_render_violin:
+                distribution_title = f"{header} (means)"
+
+            summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
+            annotation_strategy = resolve_summary_annotation_strategy(x_point_count=summary_point_count)
+            force_sparse_x_labels = annotation_strategy['label_mode'] == 'sparse'
+            use_dynamic_annotation_offsets = annotation_strategy['annotation_mode'] == 'dynamic'
+            show_violin_annotation_legend = annotation_strategy['show_violin_legend']
+
             summary_anchors = build_summary_image_anchor_plan(col)
             panel_plan = build_summary_panel_write_plan(summary_anchors, header)
             header_cell = panel_plan['header_cell']
             write_start = time.perf_counter()
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
             summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, panel_subtitle)
-            distribution_slot = panel_plan['image_slots']['distribution']
-            summary_worksheet.insert_image(
-                distribution_slot['row'],
-                distribution_slot['col'],
-                "",
-                {'image_data': imgplot},
-            )
             self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
-            if self._check_canceled():
-                plt.close(fig)
-                return
+            if self._summary_chart_required('distribution'):
+                try:
+                    apply_summary_plot_theme()
+                    chart_start = time.perf_counter()
 
-            plt.close(fig)
+                    fig, ax = plt.subplots(figsize=(6, 4))
+                    if can_render_violin:
+                        render_violin(
+                            ax,
+                            distribution_values,
+                            distribution_labels,
+                            nom=nom,
+                            lsl=LSL,
+                            usl=USL,
+                            one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                            readability_scale=self.summary_plot_scale,
+                            use_dynamic_offsets=use_dynamic_annotation_offsets,
+                            show_annotation_legend=show_violin_annotation_legend,
+                        )
+                    else:
+                        render_scatter_numeric(ax, x_values, y_values)
+                        if LSL is not None and USL is not None:
+                            render_tolerance_band(
+                                ax,
+                                nom,
+                                LSL,
+                                USL,
+                                one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                            )
+                        if LSL is not None or USL is not None:
+                            render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
+
+                    apply_minimal_axis_style(ax, grid_axis='y')
+                    apply_shared_x_axis_label_strategy(
+                        ax,
+                        distribution_labels,
+                        positions=label_positions,
+                        force_sparse=force_sparse_x_labels,
+                    )
+
+                    current_y_limits = ax.get_ylim()
+                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_ylim(y_min, y_max)
+                    ax.set_xlabel(distribution_x_axis_label)
+                    ax.set_ylabel('Measurement')
+                    ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
+                    move_legend_to_figure(ax)
+                    plt.subplots_adjust(right=0.8)
+                    image_data = self._register_chart_image(self._save_summary_chart(fig))
+                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+
+                    distribution_slot = panel_plan['image_slots']['distribution']
+                    write_start = time.perf_counter()
+                    summary_worksheet.insert_image(distribution_slot['row'], distribution_slot['col'], '', {'image_data': image_data})
+                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+
+                    if self._check_canceled():
+                        plt.close(fig)
+                        return
+                    plt.close(fig)
+                finally:
+                    pass
 
             if self._check_canceled():
                 return
 
             if self._summary_chart_required('iqr'):
-                imgplot = BytesIO()
-                chart_start = time.perf_counter()
-                fig, ax = plt.subplots(figsize=(6, 4))
-                boxplot_labels, boxplot_values = self._build_iqr_plot_payload(labels, values, sampled_group)
-                render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
-                apply_minimal_axis_style(ax, grid_axis='y')
-                apply_shared_x_axis_label_strategy(ax, boxplot_labels, positions=list(range(1, len(boxplot_labels) + 1)))
-                for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                    ax.axhline(**line_spec)
-                ax.set_xlabel('Group')
-                ax.set_ylabel('Measurement')
-                ax.set_title(f'{header} - IQR Outlier Detection')
+                try:
+                    chart_start = time.perf_counter()
+                    fig, ax = plt.subplots(figsize=(6, 4))
+                    boxplot_labels, boxplot_values = self._build_iqr_plot_payload(
+                        iqr_labels,
+                        iqr_values,
+                        sampled_iqr_group,
+                        grouping_active=grouping_applied,
+                    )
+                    render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
+                    render_tolerance_band(
+                        ax,
+                        nom,
+                        LSL,
+                        USL,
+                        one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                    )
+                    render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
+                    add_iqr_boxplot_legend(ax, include_tolerance_refs=False)
+                    move_legend_to_figure(ax)
+                    apply_minimal_axis_style(ax, grid_axis='y')
+                    apply_shared_x_axis_label_strategy(
+                        ax,
+                        boxplot_labels,
+                        positions=list(range(1, len(boxplot_labels) + 1)),
+                        force_sparse=force_sparse_x_labels,
+                    )
+                    ax.set_xlabel('Group')
+                    ax.set_ylabel('Measurement')
+                    ax.set_title(build_wrapped_chart_title(header), pad=20)
+                    plt.subplots_adjust(right=0.8)
 
-                current_y_limits = ax.get_ylim()
-                y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                ax.set_ylim(y_min, y_max)
+                    current_y_limits = ax.get_ylim()
+                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_ylim(y_min, y_max)
 
-                fig.savefig(imgplot, format="png", bbox_inches='tight')
-                self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                imgplot.seek(0)
-                iqr_slot = panel_plan['image_slots']['iqr']
-                write_start = time.perf_counter()
-                summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], "", {'image_data': imgplot})
-                self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    image_data = self._register_chart_image(self._save_summary_chart(fig))
+                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    iqr_slot = panel_plan['image_slots']['iqr']
+                    write_start = time.perf_counter()
+                    summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], '', {'image_data': image_data})
+                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
-                if self._check_canceled():
+                    if self._check_canceled():
+                        plt.close(fig)
+                        return
                     plt.close(fig)
-                    return
+                finally:
+                    pass
 
-                plt.close(fig)
-            
-            imgplot = BytesIO()
-            # Plot the histogram with auto-defined bins
-            histogram_figsize = (6, 4)
-            chart_start = time.perf_counter()
-            fig, ax = plt.subplots(figsize=histogram_figsize)
-            render_histogram(ax, sampled_group)
+            if self._summary_chart_required('histogram'):
+                try:
+                    histogram_figsize = (6.2, 4)
+                    chart_start = time.perf_counter()
+                    fig, ax = plt.subplots(figsize=histogram_figsize)
+                    render_histogram(ax, sampled_histogram_group, lsl=LSL, usl=USL)
 
-            histogram_font_sizes = compute_histogram_font_sizes(
-                histogram_figsize,
-                has_table=True,
-                readability_scale=self.summary_plot_scale,
-            )
-            histogram_table_layout = compute_histogram_table_layout(
-                histogram_figsize,
-                table_fontsize=histogram_font_sizes['table_fontsize'],
-                has_table=True,
-            )
-            
-            # Add a table with statistics
-            table_data = build_histogram_table_data(summary_stats)
+                    histogram_font_sizes = compute_histogram_font_sizes(
+                        histogram_figsize,
+                        has_table=True,
+                        readability_scale=self.summary_plot_scale,
+                    )
+                    histogram_table_layout = compute_histogram_table_layout(
+                        histogram_figsize,
+                        table_fontsize=histogram_font_sizes['table_fontsize'],
+                        has_table=True,
+                    )
 
-            ax_table = plt.table(
-                cellText=table_data,
-                colLabels=['Statistic', 'Value'],
-                cellLoc='center',
-                loc='right',
-                bbox=[1, 0, histogram_table_layout['table_bbox_width'], 1],
-            )
+                    table_render_data = build_histogram_table_render_data(table_data)
+                    ax_table = plt.table(
+                        cellText=table_render_data,
+                        colLabels=['Statistic', 'Value'],
+                        cellLoc='center',
+                        loc='right',
+                        bbox=[1, 0.06, histogram_table_layout['table_bbox_width'], 0.94],
+                    )
+                    ax_table.auto_set_font_size(False)
+                    ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
+                    style_histogram_stats_table(
+                        ax_table,
+                        table_render_data,
+                        capability_badge=capability_badge,
+                        capability_row_badges=histogram_row_badges,
+                    )
+                    adjust_histogram_stats_table_geometry(
+                        ax_table,
+                        statistic_col_width_ratio=0.54,
+                        row_height_scale=1.15,
+                    )
 
-            # Format the table
-            ax_table.auto_set_font_size(False)
-            ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
-            style_histogram_stats_table(ax_table, table_data, capability_badge=capability_badge)
+                    normality_note = summary_stats.get('normality_text') or 'Shapiro p = N/A\nUnknown'
+                    normality_table = plt.table(
+                        cellText=[[normality_note]],
+                        cellLoc='center',
+                        loc='right',
+                        bbox=[1, -0.17, histogram_table_layout['table_bbox_width'], 0.15],
+                    )
+                    normality_table.auto_set_font_size(False)
+                    normality_table.set_fontsize(histogram_font_sizes['table_fontsize'])
+                    normality_cell = normality_table.get_celld()[(0, 0)]
+                    normality_badge = classify_normality_status(summary_stats.get('normality_status'))
+                    normality_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f"{normality_badge['palette_key']}_bg"])
+                    normality_cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
+                    normality_cell.set_linewidth(0.45)
+                    normality_cell.PAD = 0.03
+                    normality_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f"{normality_badge['palette_key']}_text"])
+                    normality_cell.get_text().set_ha('center')
+                    normality_cell.get_text().set_va('center')
 
-            density_curve = precomputed_density_curve
-            if density_curve is None:
-                density_curve = build_histogram_density_curve_payload(sampled_group['MEAS'], point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100)
-            if density_curve is not None:
-                render_density_line(ax, density_curve['x'], density_curve['y'])
-            
-            # Add vertical lines for mean, LSL and USL
-            ax.axvline(
-                average,
-                color=SUMMARY_PLOT_PALETTE['central_tendency'],
-                linestyle='-',
-                linewidth=1.8,
-                alpha=0.95,
-                zorder=5,
-            )
-            ax.axvline(USL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
-            ax.axvline(LSL, color=SUMMARY_PLOT_PALETTE['spec_limit'], linestyle='dashed', linewidth=1.0)
+                    density_curve_mode = 'normal_fit' if summary_stats.get('normality_status') == 'normal' else 'kde'
+                    density_curve = None
+                    if density_curve_mode == 'normal_fit':
+                        density_curve = precomputed_density_curve
+                    if density_curve is None:
+                        density_curve = build_histogram_density_curve_payload(
+                            sampled_histogram_group['MEAS'],
+                            point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                            mode=density_curve_mode,
+                        )
+                    if density_curve is not None:
+                        render_density_line(ax, density_curve['x'], density_curve['y'])
 
-            # Set labels and title
-            ax.set_xlabel('Measurement')
-            ax.set_ylabel('Density')
-            ax.set_title(f'{header}')
-            apply_minimal_axis_style(ax, grid_axis='y')
+                    mean_line_style = build_histogram_mean_line_style()
+                    ax.axvline(average, **mean_line_style)
+                    render_tolerance_band(
+                        ax,
+                        nom,
+                        LSL,
+                        USL,
+                        one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                        orientation='vertical',
+                    )
+                    render_spec_reference_lines(ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
+                    ax.set_xlabel('Measurement')
+                    ax.set_ylabel('Count')
+                    histogram_title_pad = 26
+                    ax.set_title(build_wrapped_chart_title(header), pad=histogram_title_pad)
+                    apply_minimal_axis_style(ax, grid_axis='y')
 
-            _, y_max = ax.get_ylim()
-            annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
-            annotation_specs = build_histogram_annotation_specs(average, USL, LSL, y_max)
-            if histogram_font_sizes['annotation_fontsize'] < 8.2:
-                annotation_specs = [annotation_specs[0]]
-            for annotation in annotation_specs:
-                ax.text(
-                    annotation['x'],
-                    annotation['y'],
-                    annotation['text'],
-                    color=annotation['color'],
-                    ha=annotation['ha'],
-                    va='top',
-                    fontsize=histogram_font_sizes['annotation_fontsize'],
-                    bbox=annotation_box,
-                )
+                    annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
+                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
+                    max_annotation_row = max(
+                        (annotation.get('text_y_axes', 1.01) for annotation in annotation_specs),
+                        default=1.01,
+                    )
+                    render_histogram_annotations(
+                        ax,
+                        annotation_specs,
+                        annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
+                        annotation_box=annotation_box,
+                    )
 
-            plt.subplots_adjust(right=histogram_table_layout['subplot_right'])
-            
-            fig.savefig(imgplot, format="png")
-            self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-            imgplot.seek(0)
-            histogram_slot = panel_plan['image_slots']['histogram']
-            write_start = time.perf_counter()
-            summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], "", {'image_data': imgplot})
-            self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    histogram_top_margin = max(0.82, 0.82 + max(0.0, max_annotation_row - 1.01))
+                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=histogram_top_margin, bottom=0.18)
+                    image_data = self._register_chart_image(self._save_summary_chart(fig))
+                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    histogram_slot = panel_plan['image_slots']['histogram']
+                    write_start = time.perf_counter()
+                    summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], '', {'image_data': image_data})
+                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
-            if self._check_canceled():
-                plt.close(fig)
-                return
+                    if self._check_canceled():
+                        plt.close(fig)
+                        return
+                    plt.close(fig)
+                finally:
+                    pass
 
-            plt.close(fig)
-            
-            imgplot = BytesIO()
-            apply_summary_plot_theme()
-            
-            chart_start = time.perf_counter()
-            trend_payload = precomputed_trend_payload or build_trend_plot_payload(sampled_group)
-            data_x = trend_payload['x']
-            data_y = trend_payload['y']
-            unique_labels = trend_payload['labels']
+            if self._summary_chart_required('trend'):
+                try:
+                    apply_summary_plot_theme()
 
-            fig, ax = plt.subplots(figsize=(6, 4))
+                    chart_start = time.perf_counter()
+                    trend_payload = precomputed_trend_payload or build_trend_plot_payload(
+                        sampled_trend_group,
+                        grouping_active=grouping_applied,
+                        label_column=distribution_key,
+                    )
+                    data_x = trend_payload['x']
+                    data_y = trend_payload['y']
+                    unique_labels = trend_payload['labels']
 
-            # Trend scatter plot
-            if _HAS_SEABORN:
-                sns.scatterplot(x=data_x, y=data_y, ax=ax, s=20, legend=False)
-            else:
-                ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.')
+                    trend_label_count = len(unique_labels)
+                    trend_figure_width = 6
+                    if trend_label_count > 24:
+                        trend_figure_width = 8
+                    if trend_label_count > 40:
+                        trend_figure_width = 10
 
-            for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                ax.axhline(**line_spec)
-            ax.set_xlabel('Sample #')
-            ax.set_ylabel('Measurement')
-            ax.set_title(f'{header}')
-            apply_minimal_axis_style(ax, grid_axis='y')
+                    fig, ax = plt.subplots(figsize=(trend_figure_width, 4))
+                    ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
+                    for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                        ax.axhline(**line_spec)
 
-            apply_shared_x_axis_label_strategy(ax, unique_labels, positions=data_x)
-            
-            current_y_limits = ax.get_ylim()
-            y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_xlabel(distribution_x_axis_label)
+                    ax.set_ylabel('Measurement')
+                    ax.set_title(build_wrapped_chart_title(header), pad=20)
+                    apply_minimal_axis_style(ax, grid_axis='y')
+                    apply_shared_x_axis_label_strategy(
+                        ax,
+                        unique_labels,
+                        positions=data_x,
+                        force_sparse=force_sparse_x_labels,
+                        allow_thinning=False,
+                    )
 
-            # Set y-axis limits using the Axes object
-            ax.set_ylim(y_min, y_max)
+                    current_y_limits = ax.get_ylim()
+                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_ylim(y_min, y_max)
 
-            # Saving the plot to BytesIO
-            imgplot = BytesIO()
-            fig.savefig(imgplot, format="png", bbox_inches='tight')
-            self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-            imgplot.seek(0)
-            trend_slot = panel_plan['image_slots']['trend']
-            write_start = time.perf_counter()
-            summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], "", {'image_data': imgplot})
-            self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
-            plt.close(fig)
-            
+                    image_data = self._register_chart_image(self._save_summary_chart(fig))
+                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    trend_slot = panel_plan['image_slots']['trend']
+                    write_start = time.perf_counter()
+                    summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], '', {'image_data': image_data})
+                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    if self._check_canceled():
+                        plt.close(fig)
+                        return
+                    plt.close(fig)
+                finally:
+                    pass
+
         except Exception as e:
             self.log_and_exit(e)
-            
+            self._summary_sheet_failed = True
+
     def log_and_exit(self, exception):
+        """Handle `log_and_exit` for `ExportDataThread`.
+
+        Args:
+            exception (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         caller = inspect.stack()[1].function
         context = f"export operation ({caller})"
         self._log_export_stage(

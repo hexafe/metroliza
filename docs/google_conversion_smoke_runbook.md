@@ -1,16 +1,16 @@
-# Google conversion smoke runbook (`tests/google_conversion_smoke.py`)
+# Google conversion smoke runbook (`scripts/release_only_google_conversion_smoke.py`)
 
 This runbook defines how maintainers run and interpret the release-gated live Google Drive → Google Sheets smoke check.
 
 ## Scope and intent
 
-- Script: `tests/google_conversion_smoke.py`.
-- Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm release-gated conversion metadata/warning expectations.
+- Script: `scripts/release_only_google_conversion_smoke.py`.
+- Purpose: verify that Metroliza can upload a generated `.xlsx` workbook to Google Drive, convert it to a Google Sheet, and confirm release-gated conversion metadata/warning expectations without extra Sheets API post-validation calls.
 - Execution model: manual or explicitly gated CI job only (not part of default unit-test discovery).
 
 ## When smoke execution is mandatory
 
-Run `tests/google_conversion_smoke.py` in all of these cases:
+Run `scripts/release_only_google_conversion_smoke.py` in all of these cases:
 
 - Every RC candidate build before it can be promoted to open testing.
 - Any PR/change set that modifies Google auth, Drive/Sheets conversion/export logic, or fallback `.xlsx` behavior.
@@ -30,10 +30,12 @@ Before running smoke:
    - Both files must remain local-only and gitignored.
 4. **Google APIs are enabled for the sandbox project**
    - Google Drive API.
-5. **Network path to Google APIs is available**
+5. **OAuth consent grants Drive upload scope**
+   - Interactive consent should include only `https://www.googleapis.com/auth/drive.file`.
+6. **Network path to Google APIs is available**
    - Outbound HTTPS access to Google OAuth/Drive endpoints.
 
-## Script usage contract (`tests/google_conversion_smoke.py`)
+## Script usage contract (`scripts/release_only_google_conversion_smoke.py`)
 
 ### Required/optional inputs
 
@@ -57,7 +59,7 @@ Reference command:
 METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
 METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH=credentials.json \
 METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
-PYTHONPATH=. python tests/google_conversion_smoke.py
+PYTHONPATH=. python scripts/release_only_google_conversion_smoke.py
 ```
 
 ### Expected success signals
@@ -106,7 +108,8 @@ The smoke check is designed to fail with actionable messages when prerequisites 
 2. Delete stale `token.json` and re-run interactive auth flow to mint a fresh token.
 3. Verify OAuth consent screen and client type match desktop/local app usage.
 4. Confirm the account running smoke still has Drive access and has not revoked consent.
-5. Re-run smoke after token refresh/regeneration.
+5. Confirm the granted token scope includes `https://www.googleapis.com/auth/drive.file` (no Sheets scope required).
+6. Re-run smoke after token refresh/regeneration.
 
 ### Quota/rate-limit failures (HTTP 429 / quotaExceeded / rateLimitExceeded)
 
@@ -126,7 +129,7 @@ The smoke check is designed to fail with actionable messages when prerequisites 
 
 1. Treat any non-empty `warnings` result as a release-blocking signal until triaged.
 2. Inspect recent Google export logic changes for warning generation, conversion payload handling, or fallback-message behavior.
-3. Validate that mocked/unit tests still cover expected tab-title semantics and fallback behavior after recent changes.
+3. Validate that mocked/unit tests still cover fallback behavior after recent changes.
 4. Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
 
 ## Recording outcomes for release-gated changes
@@ -140,10 +143,11 @@ For release-candidate validations and PRs that modify Google auth/conversion beh
   - Command run (exact command text, including env vars).
   - Date/time (with timezone).
   - Environment/sandbox account (local/CI context + sandbox Google account/project identifier).
-  - Build identity under test (branch + commit SHA + artifact/build identifier).
-  - Pass/fail outcome.
-  - Fallback `.xlsx` behavior observed (path/link and whether fallback remained accessible as expected).
-  - Link/log location (CI job URL, artifact URI, or local log file path).
+- Build identity under test (branch + commit SHA + artifact/build identifier).
+- Pass/fail outcome.
+- Fallback `.xlsx` behavior observed (path/link and whether fallback remained accessible as expected).
+- Link/log location (CI job URL, artifact URI, or local log file path).
+- Do **not** require or record chart-patching/batchUpdate evidence; conversion validation is Drive upload+convert metadata plus fallback behavior only.
 
 ### Pass/fail escalation path
 
@@ -168,7 +172,7 @@ Use this template:
   METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE=1 \
   METROLIZA_GOOGLE_SMOKE_CREDENTIALS_PATH=credentials.json \
   METROLIZA_GOOGLE_SMOKE_TOKEN_PATH=token.json \
-  PYTHONPATH=. python tests/google_conversion_smoke.py
+  PYTHONPATH=. python scripts/release_only_google_conversion_smoke.py
   ```
 - Pass/fail: <!-- PASS / FAIL -->
 - Fallback `.xlsx` behavior observed: <!-- preserved output path/link + observed behavior -->
@@ -181,4 +185,4 @@ Use this template:
 - Release-gated smoke runs currently require `warnings=()` to pass.
 - If warnings appear, do not waive by default: record the exact warning text, impacted release candidate, and fallback implications before deciding next action.
 - Keep the converted Google Sheet as convenience output and treat the generated `.xlsx` as the fidelity-baseline fallback artifact while warning root cause is investigated.
-- Tab-title verification is intentionally not performed by the live smoke script; keep that behavior covered in mocked/unit tests to avoid adding Sheets API dependency to the release gate.
+- The smoke script intentionally avoids any Sheets API tab-title verification; success criteria are limited to Drive conversion metadata and warning policy to keep the release gate lightweight and dependency-minimal.

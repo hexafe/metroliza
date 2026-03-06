@@ -1,3 +1,9 @@
+"""Manage parent/child BOM relationships in the desktop UI.
+
+The dialog reads and updates BOM records in SQLite so grouping and export flows
+can resolve parent part context consistently.
+"""
+
 from PyQt6.QtWidgets import (
     QMainWindow,
     QLabel,
@@ -19,6 +25,8 @@ from modules.db import (
 
 
 class BOMManager(QMainWindow):
+    """BOMManager public interface used by export and UI workflows."""
+
     def __init__(self, database_path='bom.db'):
         super().__init__()
         self.setWindowTitle("BOM Manager")
@@ -61,6 +69,17 @@ class BOMManager(QMainWindow):
 
     def create_bom_table(self):
         # Create a BOM table in the database if it doesn't exist
+        """Handle `create_bom_table` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self._execute_write('''CREATE TABLE IF NOT EXISTS bom (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             product_reference TEXT,
@@ -73,6 +92,17 @@ class BOMManager(QMainWindow):
 
     def create_input_widgets(self):
         # Create the input widgets
+        """Handle `create_input_widgets` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.product_reference_label = QLabel("Product Reference:")
         self.product_reference_input = QLineEdit()
         self.description_label = QLabel("Description:")
@@ -94,6 +124,17 @@ class BOMManager(QMainWindow):
 
     def create_parent_combo_box(self):
         # Create the parent combo box
+        """Handle `create_parent_combo_box` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.parent_label = QLabel("Parent Entry:")
         self.parent_combo_box = QComboBox()
         self.populate_parent_combo_box()
@@ -104,6 +145,17 @@ class BOMManager(QMainWindow):
 
     def create_buttons(self):
         # Create the buttons
+        """Handle `create_buttons` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.add_button = QPushButton("Add")
         self.add_button.clicked.connect(self.add_bom_entry)
         self.delete_button = QPushButton("Delete")
@@ -118,6 +170,17 @@ class BOMManager(QMainWindow):
 
     def create_bom_table_widget(self):
         # Create the table to display the BOM
+        """Handle `create_bom_table_widget` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.bom_table = QTableWidget()
         self.bom_table.setColumnCount(5)
         self.bom_table.setHorizontalHeaderLabels(
@@ -131,6 +194,17 @@ class BOMManager(QMainWindow):
 
     def create_save_button(self):
         # Create the save button
+        """Handle `create_save_button` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.save_button = QPushButton("Save")
         self.save_button.clicked.connect(self.save_modified_bom_entry)
         self.save_button.setEnabled(False)  # Initially disabled
@@ -140,6 +214,17 @@ class BOMManager(QMainWindow):
 
     def refresh_table(self):
         # Clear the table
+        """Handle `refresh_table` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.bom_table.setRowCount(0)
         self.populate_parent_combo_box()
 
@@ -174,6 +259,18 @@ class BOMManager(QMainWindow):
 
     def get_parent_reference(self, parent_id):
         # Retrieve the parent reference based on the parent_id
+        """Handle `get_parent_reference` for `BOMManager`.
+
+        Args:
+            parent_id (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         parent_rows = self._execute_read("SELECT part_reference FROM bom WHERE id = ?", (parent_id,))
         if parent_rows:
             return parent_rows[0][0]
@@ -182,6 +279,17 @@ class BOMManager(QMainWindow):
 
     def get_bom_entries(self):
         # Retrieve the BOM entries from the database
+        """Handle `get_bom_entries` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         bom_entries = self._execute_read("SELECT id, product_reference FROM bom")
 
         # Format the entries as strings for the combo box
@@ -194,11 +302,34 @@ class BOMManager(QMainWindow):
         return entries
 
     def populate_parent_combo_box(self):
+        """Handle `populate_parent_combo_box` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.parent_combo_box.clear()
         for entry_id, product_reference in self._execute_read("SELECT id, product_reference FROM bom"):
             self.parent_combo_box.addItem(f"{entry_id} - {product_reference}", entry_id)
 
     def find_parent_index_by_id(self, parent_id):
+        """Handle `find_parent_index_by_id` for `BOMManager`.
+
+        Args:
+            parent_id (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         if parent_id is None:
             return -1
 
@@ -209,6 +340,17 @@ class BOMManager(QMainWindow):
         return -1
 
     def add_bom_entry(self):
+        """Handle `add_bom_entry` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         product_reference = self.product_reference_input.text()
         description = self.description_input.text()
         part_reference = self.part_reference_input.text()
@@ -227,6 +369,17 @@ class BOMManager(QMainWindow):
 
     def save_modified_bom_entry(self):
         # Get the modified data from the input fields
+        """Handle `save_modified_bom_entry` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         product_reference = self.product_reference_input.text()
         description = self.description_input.text()
         part_reference = self.part_reference_input.text()
@@ -247,6 +400,17 @@ class BOMManager(QMainWindow):
         self.selected_entry_id = None
 
     def delete_bom_entry(self):
+        """Handle `delete_bom_entry` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         selection_model = self.bom_table.selectionModel()
         selected_row_indexes = selection_model.selectedRows() if selection_model else []
 
@@ -281,6 +445,17 @@ class BOMManager(QMainWindow):
 
     def clear_inputs(self):
         # Clear the input fields
+        """Handle `clear_inputs` for `BOMManager`.
+
+        Args:
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         self.product_reference_input.clear()
         self.description_input.clear()
         self.part_reference_input.clear()
@@ -289,6 +464,19 @@ class BOMManager(QMainWindow):
 
     def modify_bom_entry(self, row, column):
         # Get the data of the selected row
+        """Handle `modify_bom_entry` for `BOMManager`.
+
+        Args:
+            row (object): Method input value.
+            column (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         selected_data = self.bom_table.item(row, 0).data(Qt.UserRole)
         if selected_data:
             self.modifying_row = True
@@ -309,4 +497,16 @@ class BOMManager(QMainWindow):
 
     def closeEvent(self, event):
         # No persistent database handle is maintained; call the parent handler.
+        """Handle `closeEvent` for `BOMManager`.
+
+        Args:
+            event (object): Method input value.
+
+        Returns:
+            object | None: Method result for caller workflows.
+
+        Side Effects:
+            May update UI state, database rows, or in-memory export context.
+        """
+
         super().closeEvent(event)

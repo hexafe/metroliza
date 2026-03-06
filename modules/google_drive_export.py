@@ -1,3 +1,26 @@
+"""Google Drive upload + conversion helpers for Excel exports.
+
+This module owns the full Drive export lifecycle used by reporting workflows:
+
+* OAuth credential and token handling (`credentials.json` / `token.json`), including
+  interactive authorization and refresh-token based renewal.
+* Drive folder discovery/creation and multipart upload that converts local `.xlsx`
+  files into Google Sheets.
+* Error mapping and retry boundaries that classify failures into auth,
+  quota/rate-limit, transient/network/server, and non-retryable response errors.
+
+Retry behavior is intentionally narrow:
+
+* OAuth refresh does not retry locally; network/HTTP failures are classified and
+  delegated to callers via typed exceptions.
+* Upload retries only for transient/quota/network classes, sleeping a fixed delay
+  between attempts.
+
+Callers should branch on `GoogleDriveAuthError`, `GoogleDriveQuotaError`,
+`GoogleDriveTransientError`, and `GoogleDriveResponseError` to decide whether to
+re-prompt users, back off, or fail fast.
+"""
+
 from __future__ import annotations
 
 import json
@@ -19,8 +42,8 @@ GOOGLE_DRIVE_UPLOAD_URL = (
 )
 GOOGLE_DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE,)
 GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
-
 logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
 
 
@@ -54,15 +77,50 @@ def _build_google_log_extra(*, file_ref="", error=None, outcome="") -> dict[str,
 
 @dataclass(frozen=True)
 class GoogleDriveConversionResult:
+    """Structured output from a Drive upload + conversion attempt.
+
+    Attributes:
+        file_id: Google Drive file identifier for the converted Spreadsheet. Always
+            present for successful uploads.
+        web_url: Browser-accessible Drive/Sheets URL for the converted file. May be
+            absent in raw API responses, in which case response parsing raises.
+        local_xlsx_path: Filesystem path to the original local workbook fallback.
+            Empty only in intermediate parsed responses before enrichment.
+        fallback_message: User-facing guidance that explains fallback behavior.
+            Empty only in intermediate parsed responses before enrichment.
+        warnings: Human-readable warning summaries emitted during validation.
+            Empty when no validation warnings are detected.
+        warning_details: Structured warning records for logs/UI detail views.
+            Empty when no validation warnings are detected.
+        converted_tab_titles: Worksheet titles confirmed post-conversion when
+            validation is enabled. Empty when not validated.
+    """
+
     file_id: str
     web_url: str
     local_xlsx_path: str
     fallback_message: str
     warnings: tuple[str, ...] = ()
+    warning_details: tuple[dict[str, str], ...] = ()
     converted_tab_titles: tuple[str, ...] = ()
 
 
 def _read_json_file(path: Path) -> dict[str, Any]:
+    """Load and decode a JSON file used by OAuth/token workflows.
+
+    Args:
+        path: Path to a JSON document on disk.
+
+    Returns:
+        Parsed JSON object.
+
+    Side Effects:
+        Reads from the filesystem.
+
+    Raises:
+        GoogleDriveAuthError: If the file does not exist or contains invalid JSON.
+    """
+
     if not path.exists():
         raise GoogleDriveAuthError(f"Required file not found: {path}")
     try:
@@ -72,6 +130,21 @@ def _read_json_file(path: Path) -> dict[str, Any]:
 
 
 def _read_credentials(credentials_path: Path) -> dict[str, Any]:
+    """Read and validate OAuth client metadata from `credentials.json`.
+
+    Args:
+        credentials_path: Path to an OAuth client secret JSON file.
+
+    Returns:
+        The `installed` or `web` OAuth client section.
+
+    Side Effects:
+        Reads from the filesystem via `_read_json_file`.
+
+    Raises:
+        GoogleDriveAuthError: If required OAuth fields are missing or malformed.
+    """
+
     payload = _read_json_file(credentials_path)
     installed = payload.get("installed") or payload.get("web")
     if not isinstance(installed, dict):
@@ -84,9 +157,26 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any]:
 
 
 def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -> dict[str, Any]:
+    """Run browser-based OAuth and persist a fresh token payload.
+
+    Args:
+        credentials_path: Path to OAuth client secrets.
+        token_path: Destination path for persisted token payload.
+
+    Returns:
+        Newly authorized token payload compatible with refresh flow.
+
+    Side Effects:
+        Opens an interactive local-server OAuth flow in the browser and writes
+        `token.json` to disk.
+
+    Raises:
+        GoogleDriveAuthError: If authorization is canceled, times out, or fails.
+    """
+
     from google_auth_oauthlib.flow import InstalledAppFlow
 
-    flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), scopes=[GOOGLE_DRIVE_SCOPE])
+    flow = InstalledAppFlow.from_client_secrets_file(str(credentials_path), scopes=list(GOOGLE_OAUTH_SCOPES))
     try:
         credentials = flow.run_local_server(
             host="127.0.0.1",
@@ -97,7 +187,6 @@ def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -
             timeout_seconds=120,
         )
     except TypeError:
-        # Older google-auth-oauthlib versions may not support timeout_seconds.
         credentials = flow.run_local_server(
             host="127.0.0.1",
             port=0,
@@ -115,14 +204,17 @@ def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -
     if getattr(credentials, "expiry", None) is not None:
         expires_at = credentials.expiry.timestamp()
 
+    credential_scopes = list(getattr(credentials, "scopes", None) or [GOOGLE_DRIVE_SCOPE])
+    scope_value = getattr(credentials, "scope", None) or " ".join(credential_scopes)
+
     token_payload: dict[str, Any] = {
         "access_token": credentials.token,
         "refresh_token": credentials.refresh_token,
         "token_uri": credentials.token_uri,
         "client_id": credentials.client_id,
         "client_secret": credentials.client_secret,
-        "scopes": list(credentials.scopes or [GOOGLE_DRIVE_SCOPE]),
-        "scope": GOOGLE_DRIVE_SCOPE,
+        "scopes": credential_scopes,
+        "scope": scope_value,
         "token_type": "Bearer",
         "expires_at": expires_at,
     }
@@ -131,6 +223,21 @@ def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -
 
 
 def _load_token_payload(token_path: Path) -> dict[str, Any]:
+    """Load a persisted OAuth token payload.
+
+    Args:
+        token_path: Path to `token.json`.
+
+    Returns:
+        Parsed token payload.
+
+    Side Effects:
+        Reads from the filesystem.
+
+    Raises:
+        GoogleDriveAuthError: If the token file is missing or unreadable JSON.
+    """
+
     if not token_path.exists():
         raise GoogleDriveAuthError(
             "Missing token.json for Google Drive export. Please complete OAuth authorization first."
@@ -139,6 +246,19 @@ def _load_token_payload(token_path: Path) -> dict[str, Any]:
 
 
 def _token_is_valid(token_payload: dict[str, Any]) -> bool:
+    """Check whether a token payload has a non-expiring access token.
+
+    The check includes a 60-second safety buffer so requests do not start with an
+    about-to-expire token.
+
+    Args:
+        token_payload: Token payload dictionary.
+
+    Returns:
+        `True` when `access_token` exists and `expires_at` is sufficiently in the
+        future.
+    """
+
     access_token = token_payload.get("access_token")
     expires_at = token_payload.get("expires_at")
     if not access_token or not expires_at:
@@ -147,6 +267,28 @@ def _token_is_valid(token_payload: dict[str, Any]) -> bool:
 
 
 def _refresh_access_token(token_payload: dict[str, Any], credentials: dict[str, Any]) -> dict[str, Any]:
+    """Refresh an OAuth access token using the stored refresh token.
+
+    Args:
+        token_payload: Existing token payload (mutated in-place before return).
+        credentials: OAuth client metadata (`client_id`, `client_secret`,
+            `token_uri`).
+
+    Returns:
+        Updated token payload with refreshed access token and expiry.
+
+    Side Effects:
+        Performs a network POST to the OAuth token endpoint and mutates
+        `token_payload`.
+
+    Raises:
+        GoogleDriveAuthError: If refresh token is missing, refresh is unauthorized,
+            or response lacks an access token.
+        GoogleDriveQuotaError: If the endpoint reports quota/rate-limit issues.
+        GoogleDriveTransientError: If network/server failures occur.
+        GoogleDriveResponseError: For other non-retryable token endpoint failures.
+    """
+
     refresh_token = token_payload.get("refresh_token")
     if not refresh_token:
         raise GoogleDriveAuthError(
@@ -192,10 +334,41 @@ def _refresh_access_token(token_payload: dict[str, Any], credentials: dict[str, 
 
 
 def _save_token_payload(token_path: Path, token_payload: dict[str, Any]) -> None:
+    """Persist OAuth token payload to disk.
+
+    Args:
+        token_path: Destination `token.json` path.
+        token_payload: Token payload to serialize.
+
+    Side Effects:
+        Writes JSON to the filesystem.
+    """
+
     token_path.write_text(json.dumps(token_payload, indent=2), encoding="utf-8")
 
 
 def _ensure_access_token(credentials_path: Path, token_path: Path) -> str:
+    """Return a valid OAuth access token, authorizing or refreshing as needed.
+
+    Flow:
+        1. Read OAuth client credentials.
+        2. Load existing token payload or launch interactive authorization.
+        3. Reuse valid token, otherwise refresh; if refresh is impossible, force a
+           new interactive authorization.
+
+    Side Effects:
+        Reads credentials/token files, may trigger browser OAuth, performs token
+        refresh network calls, and writes updated token payloads.
+
+    Raises:
+        GoogleDriveAuthError: For missing/invalid credentials, failed interactive
+            auth, missing refresh token, or auth-rejected refresh.
+        GoogleDriveQuotaError: If token refresh is rate-limited.
+        GoogleDriveTransientError: If refresh fails due to transient network/server
+            issues.
+        GoogleDriveResponseError: For non-retryable refresh endpoint responses.
+    """
+
     credentials = _read_credentials(credentials_path)
     if token_path.exists():
         token_payload = _load_token_payload(token_path)
@@ -216,6 +389,18 @@ def _ensure_access_token(credentials_path: Path, token_path: Path) -> str:
 
 
 def parse_drive_conversion_response(payload: dict[str, Any]) -> GoogleDriveConversionResult:
+    """Parse required Drive conversion fields from upload response JSON.
+
+    Args:
+        payload: Raw Drive upload response payload.
+
+    Returns:
+        Partially populated conversion result containing Drive identifiers/URL.
+
+    Raises:
+        GoogleDriveResponseError: If required identifiers or URLs are missing.
+    """
+
     file_id = payload.get("id")
     web_url = payload.get("webViewLink") or payload.get("webContentLink") or payload.get("alternateLink")
     if not file_id or not web_url:
@@ -229,6 +414,24 @@ def parse_drive_conversion_response(payload: dict[str, Any]) -> GoogleDriveConve
 
 
 def map_google_http_error(status_code: int, payload_text: str) -> GoogleDriveExportError:
+    """Classify Google API HTTP errors into domain-specific exception types.
+
+    Args:
+        status_code: HTTP status code.
+        payload_text: Raw API response body text.
+
+    Returns:
+        A typed `GoogleDriveExportError` subclass representing retryability.
+
+    Retry/Failure Taxonomy:
+        * `GoogleDriveAuthError`: auth/permission failures (non-retryable until
+          credentials or scopes change).
+        * `GoogleDriveQuotaError`: rate-limit/quota failures (retryable with
+          backoff).
+        * `GoogleDriveTransientError`: 5xx/internal backend failures (retryable).
+        * `GoogleDriveResponseError`: other non-retryable API failures.
+    """
+
     reason = ""
     message = payload_text
     try:
@@ -256,10 +459,32 @@ def map_google_http_error(status_code: int, payload_text: str) -> GoogleDriveExp
 
 
 def map_google_network_error(context: str, exc: urllib.error.URLError) -> GoogleDriveTransientError:
+    """Wrap network-layer request failures as transient Drive export errors.
+
+    Args:
+        context: Human-readable request context.
+        exc: Underlying URL/network error.
+
+    Returns:
+        `GoogleDriveTransientError` suitable for retry flows.
+    """
+
     return GoogleDriveTransientError(f"{context} due to network error: {exc}")
 
 
 def _build_upload_request_body(*, boundary: str, metadata: dict[str, Any], file_mime_type: str, file_bytes: bytes) -> bytes:
+    """Build multipart/related payload for Drive file upload + conversion.
+
+    Args:
+        boundary: MIME boundary token.
+        metadata: Drive file metadata body.
+        file_mime_type: MIME type of uploaded workbook bytes.
+        file_bytes: Local workbook bytes.
+
+    Returns:
+        Encoded multipart request body.
+    """
+
     metadata_part = (
         f"--{boundary}\r\n"
         "Content-Type: application/json; charset=UTF-8\r\n\r\n"
@@ -274,6 +499,25 @@ def _build_upload_request_body(*, boundary: str, metadata: dict[str, Any], file_
 
 
 def _request_json(request: urllib.request.Request, *, context: str) -> dict[str, Any]:
+    """Execute an HTTP request and parse JSON response with typed error mapping.
+
+    Args:
+        request: Prepared urllib request object.
+        context: Context string used for mapped network errors.
+
+    Returns:
+        Parsed JSON response object.
+
+    Side Effects:
+        Performs a network call.
+
+    Raises:
+        GoogleDriveAuthError: For auth-related HTTP responses.
+        GoogleDriveQuotaError: For quota/rate-limit HTTP responses.
+        GoogleDriveTransientError: For transient HTTP/network responses.
+        GoogleDriveResponseError: For other non-retryable HTTP responses.
+    """
+
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -285,6 +529,28 @@ def _request_json(request: urllib.request.Request, *, context: str) -> dict[str,
 
 
 def _ensure_reports_folder(access_token: str) -> str:
+    """Ensure the reports folder exists and return its Drive folder id.
+
+    The function first searches for an existing `metroliza_reports` folder; if none
+    is found, it creates one.
+
+    Args:
+        access_token: Bearer token used for Drive API calls.
+
+    Returns:
+        Drive folder id for the reports folder.
+
+    Side Effects:
+        Performs Drive list/create network requests; may create a folder remotely.
+
+    Raises:
+        GoogleDriveAuthError: If access token lacks required Drive permissions.
+        GoogleDriveQuotaError: If folder lookup/creation is rate-limited.
+        GoogleDriveTransientError: For transient network/server failures.
+        GoogleDriveResponseError: If folder creation succeeds without required id,
+            or other non-retryable API responses.
+    """
+
     folder_query = (
         f"name='{GOOGLE_DRIVE_REPORTS_FOLDER_NAME}' and "
         "mimeType='application/vnd.google-apps.folder' and trashed=false"
@@ -338,6 +604,38 @@ def upload_and_convert_workbook(
     retry_delay_seconds: float = 1.0,
     status_callback=None,
 ) -> GoogleDriveConversionResult:
+    """Upload a local workbook to Drive and convert it into Google Sheets.
+
+    Args:
+        excel_path: Path to the local `.xlsx` file.
+        credentials_path: OAuth client credentials JSON path.
+        token_path: OAuth token JSON path.
+        expected_sheet_names: Optional sheet names for post-conversion validation.
+        max_retries: Maximum upload attempts for retryable failures.
+        retry_delay_seconds: Fixed delay between retry attempts.
+        status_callback: Optional callback receiving lifecycle messages such as
+            `uploading`, retry notices, `converting`, and `validating`.
+
+    Returns:
+        Fully populated conversion result including Drive URL and local fallback.
+
+    Side Effects:
+        Reads local workbook bytes, reads/writes OAuth files, makes OAuth/Drive
+        network calls, may create a Drive folder, and emits structured logs.
+
+    Retry/Failure Boundaries:
+        Upload retries are attempted only for `GoogleDriveTransientError`,
+        `GoogleDriveQuotaError`, and network errors mapped to transient errors.
+        Auth and response-shape failures fail fast without retry.
+
+    Raises:
+        GoogleDriveAuthError: For OAuth or Drive permission/authentication failures.
+        GoogleDriveQuotaError: For quota/rate-limit failures after retries.
+        GoogleDriveTransientError: For network/server failures after retries.
+        GoogleDriveResponseError: For missing input file, malformed API payloads,
+            and other non-retryable API failures.
+    """
+
     excel_file = Path(excel_path)
     if not excel_file.exists():
         raise GoogleDriveResponseError(f"Excel export file not found: {excel_path}")
@@ -426,9 +724,12 @@ def upload_and_convert_workbook(
     if callable(status_callback):
         status_callback("converting")
 
-    _ = expected_sheet_names
-    warnings: list[str] = []
-    converted_tab_titles: list[str] = []
+    converted_tab_titles: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    warning_details: tuple[dict[str, str], ...] = ()
+
+    if callable(status_callback):
+        status_callback("validating")
 
     fallback_message = ""
     if warnings:
@@ -439,8 +740,9 @@ def upload_and_convert_workbook(
         web_url=parsed.web_url,
         local_xlsx_path=str(excel_file),
         fallback_message=fallback_message,
-        warnings=tuple(warnings),
-        converted_tab_titles=tuple(converted_tab_titles),
+        warnings=warnings,
+        warning_details=warning_details,
+        converted_tab_titles=converted_tab_titles,
     )
     logger.info(
         "Google Sheets conversion completed",

@@ -3,8 +3,8 @@ import logging
 import re
 import time
 
-from modules.CMMReportParser import CMMReportParser
-import modules.CustomLogger as custom_logger
+from modules.cmm_report_parser import CMMReportParser
+import modules.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 import shutil
 from modules.report_fingerprint import build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
-from modules.db import execute_with_retry
+from modules.db import execute_with_retry, sqlite_connection_scope
 from modules.log_context import build_parse_log_extra, get_operation_logger
 from modules.progress_status import build_three_line_status
 
@@ -21,6 +21,9 @@ from modules.progress_status import build_three_line_status
 class ParseBatchResult:
     parsed_files: int
     total_files: int
+
+
+PARSE_TELEMETRY_BATCH_SIZE = 25
 
 
 def build_report_fingerprints_from_rows(rows, should_cancel=lambda: False):
@@ -58,6 +61,7 @@ def parse_new_reports(
     persist_report,
     should_cancel=lambda: False,
     on_progress=None,
+    on_file_parsed=None,
 ):
     parsed_files = 0
     total_files = len(report_paths)
@@ -66,12 +70,17 @@ def parse_new_reports(
         if should_cancel():
             break
 
+        report_parse_start = time.perf_counter()
         parser = parser_factory(report)
         fingerprint = build_parser_fingerprint(parser)
         if fingerprint not in report_fingerprints:
             persist_report(parser)
             report_fingerprints.add(fingerprint)
         parsed_files += 1
+        parse_duration_s = time.perf_counter() - report_parse_start
+
+        if on_file_parsed:
+            on_file_parsed(parser, parsed_files, total_files, parse_duration_s)
 
         if on_progress:
             on_progress(parsed_files, total_files)
@@ -250,7 +259,7 @@ class ParseReportsThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
 
-    def get_report_fingerprints_in_database(self):
+    def get_report_fingerprints_in_database(self, connection=None):
         try:
             # Create a set to store report fingerprints
             report_fingerprints = set()
@@ -270,6 +279,7 @@ class ParseReportsThread(QThread):
             table_exists = execute_with_retry(
                 self.db_file,
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='REPORTS'",
+                connection=connection,
                 retries=5,
                 retry_delay_s=1,
             )
@@ -306,6 +316,7 @@ class ParseReportsThread(QThread):
                         f"FROM REPORTS WHERE FILENAME IN ({placeholders})"
                     ),
                     tuple(filename_batch),
+                    connection=connection,
                     retries=5,
                     retry_delay_s=1,
                 )
@@ -332,6 +343,7 @@ class ParseReportsThread(QThread):
                         f"FROM REPORTS WHERE {conditions}"
                     ),
                     params,
+                    connection=connection,
                     retries=5,
                     retry_delay_s=1,
                 )
@@ -379,50 +391,95 @@ class ParseReportsThread(QThread):
                         total_files=len(list_of_reports),
                         parsed_count=0,
                         cancel_flag=True,
-                    ),
+                    )
                 )
                 self.parsing_finished.emit()
                 return
 
-            report_fingerprints = self.get_report_fingerprints_in_database()
+            with sqlite_connection_scope(self.db_file) as connection:
+                report_fingerprints = self.get_report_fingerprints_in_database(connection)
 
-            logger.info(
-                "Parse processing started",
-                extra=build_parse_log_extra(
-                    source_path=self.directory,
-                    total_files=len(list_of_reports),
-                    parsed_count=0,
-                    cancel_flag=self.parsing_canceled,
-                ),
-            )
-
-            start_time = time.perf_counter()
-            result = parse_new_reports(
-                list_of_reports,
-                report_fingerprints,
-                parser_factory=lambda report: CMMReportParser(report, self.db_file),
-                persist_report=lambda parser: parser.open_database_and_check_filename(),
-                should_cancel=lambda: self.parsing_canceled,
-                on_progress=lambda parsed_files, total_files: (
-                    self._emit_stage_progress('parse_reports', parsed_files / total_files if total_files else 1.0),
-                    self.update_label.emit(
-                        self._build_parse_label(
-                            parsed_files=parsed_files,
-                            total_files=total_files,
-                            start_time=start_time,
-                        )
+                logger.info(
+                    "Parse processing started",
+                    extra=build_parse_log_extra(
+                        source_path=self.directory,
+                        total_files=len(list_of_reports),
+                        parsed_count=0,
+                        cancel_flag=self.parsing_canceled,
                     ),
-                    logger.debug(
-                        "Parse progress update",
+                )
+
+                start_time = time.perf_counter()
+                telemetry_batch_start = time.perf_counter()
+                telemetry_batch_first_index = 1
+                telemetry_batch_elapsed_s = 0.0
+                telemetry_batch_backend_counts = {}
+
+                def _record_file_telemetry(parser, parsed_files, total_files, parse_duration_s):
+                    nonlocal telemetry_batch_start, telemetry_batch_first_index
+                    nonlocal telemetry_batch_elapsed_s, telemetry_batch_backend_counts
+
+                    backend = getattr(parser, "parse_backend_used", "unknown")
+                    telemetry_batch_elapsed_s += parse_duration_s
+                    telemetry_batch_backend_counts[backend] = telemetry_batch_backend_counts.get(backend, 0) + 1
+
+                    completed_batch_size = parsed_files - telemetry_batch_first_index + 1
+                    is_batch_boundary = (completed_batch_size >= PARSE_TELEMETRY_BATCH_SIZE) or (parsed_files == total_files)
+                    if not is_batch_boundary:
+                        return
+
+                    wall_clock_elapsed_s = time.perf_counter() - telemetry_batch_start
+                    logger.info(
+                        "Parse batch completed",
                         extra=build_parse_log_extra(
                             source_path=self.directory,
                             total_files=total_files,
                             parsed_count=parsed_files,
                             cancel_flag=self.parsing_canceled,
+                        )
+                        | {
+                            "batch_start_index": telemetry_batch_first_index,
+                            "batch_end_index": parsed_files,
+                            "batch_file_count": completed_batch_size,
+                            "batch_parse_elapsed_s": round(telemetry_batch_elapsed_s, 4),
+                            "batch_wall_elapsed_s": round(wall_clock_elapsed_s, 4),
+                            "batch_avg_parse_s": round(telemetry_batch_elapsed_s / completed_batch_size, 4),
+                            "batch_backend_counts": dict(telemetry_batch_backend_counts),
+                        },
+                    )
+
+                    telemetry_batch_start = time.perf_counter()
+                    telemetry_batch_first_index = parsed_files + 1
+                    telemetry_batch_elapsed_s = 0.0
+                    telemetry_batch_backend_counts = {}
+
+                result = parse_new_reports(
+                    list_of_reports,
+                    report_fingerprints,
+                    parser_factory=lambda report: CMMReportParser(report, self.db_file, connection=connection),
+                    persist_report=lambda parser: parser.open_database_and_check_filename(),
+                    should_cancel=lambda: self.parsing_canceled,
+                    on_progress=lambda parsed_files, total_files: (
+                        self._emit_stage_progress('parse_reports', parsed_files / total_files if total_files else 1.0),
+                        self.update_label.emit(
+                            self._build_parse_label(
+                                parsed_files=parsed_files,
+                                total_files=total_files,
+                                start_time=start_time,
+                            )
+                        ),
+                        logger.debug(
+                            "Parse progress update",
+                            extra=build_parse_log_extra(
+                                source_path=self.directory,
+                                total_files=total_files,
+                                parsed_count=parsed_files,
+                                cancel_flag=self.parsing_canceled,
+                            ),
                         ),
                     ),
-                ),
-            )
+                    on_file_parsed=_record_file_telemetry,
+                )
 
             if result.total_files == 0:
                 self._emit_stage_progress('parse_reports', 1.0)

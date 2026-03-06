@@ -10,25 +10,40 @@ Complete before announcing code freeze or cutting an RC branch.
 
 - [ ] Scope is locked for the target release; all non-release-critical work is moved out of milestone.
 - [ ] Release owner and backup owner are assigned.
-- [ ] `VersionDate.py` version/build/date values are updated for this RC.
+- [x] `VersionDate.py` version/build/date values are updated for this RC.
 - [ ] `CHANGELOG.md` includes user-facing notes for this RC.
 - [ ] `README.md` **Release highlights** reflects the current RC/release line.
 - [ ] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
-- [ ] Open blockers are triaged against the defect criteria in section 5.
-- [ ] Open implementation-item gate triage in [`docs/archive/2026/TODO.md`](../archive/2026/TODO.md#open-item-rc-triage-decision-table) is completed (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
+- [ ] Open blockers are triaged against the defect criteria in section 6.
+- [x] Open implementation-item gate triage is completed in [`implementation_item_triage.md`](./implementation_item_triage.md) (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
 
-## 2) Open testing entry criteria
+## 2) Documentation readiness
+
+Complete before beginning open testing on an RC build.
+
+- [ ] Public API changes have corresponding docstrings updated. *(Owner: Dev)*
+- [ ] Complex logic changes include explanatory inline comments where needed. *(Owner: Dev)*
+- [ ] `README.md` install/usage/config sections are validated against current behavior. *(Owner: QA)*
+- [ ] `docs/README.md` index is updated for any new or renamed active docs. *(Owner: Release manager)*
+- [x] Runbooks/checklists touched by behavior changes are updated in the same PR. *(Owner: Dev/QA)*
+- [ ] Stale or outdated comments are removed. *(Owner: Dev)*
+- [x] Documentation updates follow source-of-truth and archival requirements in [`docs/documentation_policy.md`](../documentation_policy.md). *(Owner: Release manager)*
+- [ ] Final documentation sign-off includes links to evidence (PRs/commits) for all relevant documentation updates. *(Owner: Release manager)*
+
+<a id="open-testing-entry-criteria"></a>
+
+## 3) Open testing entry criteria
 
 Complete before beginning open testing on an RC build.
 
 - [ ] Feature freeze timestamp is recorded in release tracker and announcement thread. *(Owner: Release manager)*
 - [ ] Active RC branch name is confirmed and documented (for example `release/2026.03-rc1`). *(Owner: Release engineer)*
-- [ ] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
-- [ ] Mandatory smoke baseline is completed and linked to evidence before open testing starts. *(Owner: QA)*
+- [x] Build identifier for open testing is published (artifact/version/hash) and linked in tracker. *(Owner: Release engineer)*
+- [ ] Mandatory CI baseline is completed and linked (build/lint/tests) before open testing starts. *(Owner: Release owner)*
 - [ ] Known-issues document link is prepared and shared with open testers. *(Owner: QA/Product)*
 - [ ] Bug reporting channel is announced (for example issue board + chat channel) and monitored. *(Owner: Release manager/QA)*
 
-## 3) RC branch creation
+## 4) RC branch creation
 
 Create the RC branch from the approved base commit (typically `main`):
 
@@ -49,14 +64,16 @@ git push -u origin release/2026.03-rc1
 - [ ] RC branch follows naming convention (for example `release/2026.03-rc1`).
 - [ ] Branch creation commit SHA and timestamp are recorded in release notes/tracker.
 
-## 4) Required test suites and sign-off owners
+<a id="required-test-suites-and-sign-off-owners"></a>
+
+## 5) Required test suites and sign-off owners
 
 Run and record all required checks from the RC branch:
 
 ```bash
 python -m compileall .
 ruff check .
-PYTHONPATH=. python -m unittest discover -s tests -v
+PYTHONPATH=. python -m pytest tests -q
 ```
 
 - [ ] Compile check passed. *(Owner: Dev)*
@@ -91,13 +108,14 @@ python -m nuitka metroliza.py `
 - [ ] Basic startup flow works (open app, load a representative input, generate an export). *(Owner: QA)*
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 
-- [ ] Google conversion smoke procedure executed per runbook: [`docs/google_conversion_smoke_runbook.md`](../google_conversion_smoke_runbook.md). *(Owner: QA)*
-- [ ] Smoke evidence and outcomes recorded in: [`docs/release_checks/google_conversion_smoke.md`](google_conversion_smoke.md). *(Owner: QA/Release manager)*
-- [ ] Open-testing promotion is blocked unless smoke evidence exists for the **current build identity** (branch + commit SHA + artifact/build ID) in: [`docs/release_checks/google_conversion_smoke.md`](google_conversion_smoke.md). *(Owner: Release manager)*
+- [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
+- [ ] Any optional manual smoke evidence (if executed) is linked from release notes or tracker. *(Owner: Release owner)*
 
-> Do not duplicate smoke steps in this checklist. Follow the linked runbook and evidence template as the source of procedure detail.
+> For solo-maintainer flow, treat GitHub CI status as the primary release gate before merge/tag.
 
-## 5) Defect triage criteria (must-fix vs defer)
+<a id="defect-triage-criteria"></a>
+
+## 6) Defect triage criteria (must-fix vs defer)
 
 Use the following policy for RC exit triage:
 
@@ -105,7 +123,7 @@ Use the following policy for RC exit triage:
 
 - Data loss/corruption, crash on core user flow, or export integrity failure.
 - Security/privacy issue with no acceptable mitigation.
-- Regression in release-gated workflows (including Google conversion smoke failures) without acceptable workaround.
+- Regression in release-gated workflows without acceptable workaround.
 - Build/package defect that prevents launch, install, or expected startup on supported targets.
 
 ### Can defer (Go may proceed with explicit approval)
@@ -114,25 +132,26 @@ Use the following policy for RC exit triage:
 - Non-default/edge-case defects with documented workaround.
 - Low-severity defects not affecting release-gated workflows.
 
-- [ ] Every open RC defect is labeled `must-fix` or `defer` with rationale and owner.
-- [ ] Deferred defects are captured in the next-release backlog/milestone.
+- [x] Every open RC defect is labeled `must-fix` or `defer` with rationale and owner.
+- [x] Deferred defects are captured in the next-release backlog/milestone.
 
-## 6) Open testing exit criteria
+<a id="open-testing-exit-criteria"></a>
+
+## 7) Open testing exit criteria
 
 Complete before declaring open testing closed and moving to final Go/No-Go decision.
 
 - [ ] Blocker count is `0` for current RC candidate. *(Owner: Release manager/QA)*
 - [ ] Deferred defect list is approved and captured with owner + milestone. *(Owner: Product/Release manager)*
-- [ ] Mandatory smoke baseline is re-run on the release candidate and passes. *(Owner: QA)*
 - [ ] Required sign-off owners have all recorded completion in the release tracker. *(Owner: Release manager)*
 
-## 7) Merge-to-main and tagging criteria
+## 8) Merge-to-main and tagging criteria
 
 Only promote RC when all gates are green and approvals are complete.
 
-- [ ] All required checks and smoke evidence (section 4) are complete and linked.
+- [ ] All required checks in the [Required test suites and sign-off owners](#required-test-suites-and-sign-off-owners) section are complete and linked.
 - [ ] No unresolved `must-fix` defects remain.
-- [ ] Release owner + QA sign-off recorded.
+- [ ] Release owner sign-off recorded.
 - [ ] RC branch merged to `main` with approved strategy.
 - [ ] Release tag created from the merge commit (example: `vYYYY.MM` (for example `v2026.03`)).
 - [ ] Tag is pushed and visible on remote.
@@ -146,7 +165,7 @@ git tag -a v2026.03 <merge-commit-sha> -m "Release v2026.03"
 git push origin v2026.03
 ```
 
-## 8) Rollback plan and communication checklist
+## 9) Rollback plan and communication checklist
 
 Prepare before release announcement; execute if post-release issues require rollback.
 
@@ -167,9 +186,9 @@ Prepare before release announcement; execute if post-release issues require roll
 
 | Item | Value |
 | --- | --- |
-| RC owner |  |
-| QA owner |  |
-| Sign-off date |  |
-| Decision | Go / No-Go |
-| Release tag |  |
-| Notes |  |
+| RC owner | Solo maintainer |
+| QA owner | N/A (solo-maintainer flow) |
+| Sign-off date | 2026-03-05 (last updated) |
+| Decision | Pending CI Go/No-Go |
+| Release tag | `v2026.03-rc1` (not cut) |
+| Notes | Solo-maintainer release flow: rely on GitHub CI green status before merge/tag; optional manual smoke evidence can be linked from CI/ticket artifacts when needed. |

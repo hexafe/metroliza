@@ -35,6 +35,37 @@ class TestExportPresetSerialization(unittest.TestCase):
         self.assertTrue(changed_invalid)
         self.assertEqual(migrated_invalid['selected_preset'], EXPORT_PRESET_DEFAULT)
 
+    def test_load_export_dialog_config_malformed_json_logs_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / '.metroliza' / '.export_dialog_config.json'
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text('{"selected_preset":', encoding='utf-8')
+
+            with patch('modules.export_preset_utils.logger.warning') as warning_mock:
+                loaded = load_export_dialog_config(config_path)
+
+            self.assertEqual({}, loaded)
+            warning_mock.assert_called_once()
+            args = warning_mock.call_args.args
+            self.assertEqual(config_path, args[1])
+            self.assertEqual('JSONDecodeError', args[2])
+
+    def test_load_export_dialog_config_unreadable_logs_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / '.metroliza' / '.export_dialog_config.json'
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text('{}', encoding='utf-8')
+
+            with patch('pathlib.Path.open', side_effect=OSError('permission denied')):
+                with patch('modules.export_preset_utils.logger.warning') as warning_mock:
+                    loaded = load_export_dialog_config(config_path)
+
+            self.assertEqual({}, loaded)
+            warning_mock.assert_called_once()
+            args = warning_mock.call_args.args
+            self.assertEqual(config_path, args[1])
+            self.assertEqual('OSError', args[2])
+
 
 class TestExportPresetOptionMapping(unittest.TestCase):
     def test_preset_option_baselines(self):
@@ -253,7 +284,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
-            f'Export file: {expected_file_uri}',
+            f'Export file: {expected_file_uri}'
         )
 
 
@@ -288,6 +319,33 @@ class TestExportCompletionMessaging(unittest.TestCase):
         expected_file_uri = Path('out.xlsx').resolve().as_uri()
         self.assertEqual(build_export_directory_link_line('out.xlsx'), f'Export file: {expected_file_uri}')
 
+
+    def test_build_export_folder_link_line_points_to_parent_directory(self):
+        from modules.ExportDialog import build_export_folder_link_line
+
+        expected_folder_uri = Path('out.xlsx').resolve().parent.as_uri()
+        self.assertEqual(build_export_folder_link_line('out.xlsx'), f'Export folder: {expected_folder_uri}')
+
+    def test_google_fallback_still_includes_google_url_when_available(self):
+        from modules.ExportDialog import build_export_completion_message
+
+        metadata = {
+            'fallback_message': 'Google conversion completed with warnings; local xlsx remains fallback.',
+            'conversion_warnings': ['Trendline patch skipped'],
+            'converted_url': 'https://docs.google.com/spreadsheets/d/abc/edit',
+            'converted_tab_titles': ['MEASUREMENTS'],
+        }
+
+        level, title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='google_sheets_drive_convert',
+            completion_metadata=metadata,
+        )
+
+        self.assertEqual(level, 'warning')
+        self.assertEqual(title, 'Export completed with Google fallback')
+        self.assertIn('Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit', message)
+
     def test_excel_target_message_is_unchanged_even_with_google_metadata(self):
         from modules.ExportDialog import build_export_completion_message
 
@@ -309,7 +367,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(
             message,
             'Data exported successfully to out.xlsx.\n'
-            f'Export file: {expected_file_uri}',
+            f'Export file: {expected_file_uri}'
         )
 
 
@@ -404,6 +462,103 @@ class TestShowExportResultMessage(unittest.TestCase):
         self.assertEqual(warning_title, 'Unable to open file location')
         self.assertIn('Could not open the export location for out.xlsx.', warning_text)
         self.assertIn('boom', warning_text)
+
+
+class TestExportDialogCompletionFlow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_on_export_finished_success_keeps_dialog_open_and_closes_progress(self):
+        from modules.ExportDialog import ExportDialog
+
+        class _LoadingDialog:
+            def __init__(self):
+                self.accept_calls = 0
+
+            def accept(self):
+                self.accept_calls += 1
+
+        class _Button:
+            def __init__(self):
+                self.enabled_states = []
+
+            def setEnabled(self, enabled):
+                self.enabled_states.append(enabled)
+
+        class _Thread:
+            export_target = 'excel_xlsx'
+            completion_metadata = {}
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.export_error_message = None
+        dialog.excel_file = 'out.xlsx'
+        dialog.export_thread = _Thread()
+        dialog.loading_dialog = _LoadingDialog()
+        dialog.export_button = _Button()
+        dialog.accept_called = False
+        dialog.accept = lambda: setattr(dialog, 'accept_called', True)
+
+        with patch('modules.ExportDialog.build_export_completion_message', return_value=('info', 'Export successful', 'ok')) as build_mock, \
+             patch('modules.ExportDialog.show_export_result_message') as show_mock:
+            dialog.on_export_finished()
+
+        build_mock.assert_called_once()
+        show_mock.assert_called_once_with(dialog, 'info', 'Export successful', 'ok', excel_file='out.xlsx')
+        self.assertEqual(dialog.loading_dialog.accept_calls, 1)
+        self.assertFalse(dialog.accept_called)
+        self.assertEqual(dialog.export_button.enabled_states, [True])
+        self.assertIsNone(dialog.export_error_message)
+
+    def test_on_export_finished_falls_back_to_plain_message_when_rich_message_fails(self):
+        from modules.ExportDialog import ExportDialog
+
+        class _LoadingDialog:
+            def __init__(self):
+                self.accept_calls = 0
+
+            def accept(self):
+                self.accept_calls += 1
+
+        class _Button:
+            def __init__(self):
+                self.enabled_states = []
+
+            def setEnabled(self, enabled):
+                self.enabled_states.append(enabled)
+
+        class _Thread:
+            export_target = 'excel_xlsx'
+            completion_metadata = {}
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.export_error_message = None
+        dialog.excel_file = 'out.xlsx'
+        dialog.export_thread = _Thread()
+        dialog.loading_dialog = _LoadingDialog()
+        dialog.export_button = _Button()
+        dialog.accept_called = False
+        dialog.accept = lambda: setattr(dialog, 'accept_called', True)
+
+        class _InfoMessageBox:
+            information_calls = []
+
+            @staticmethod
+            def information(parent, title, text):
+                _InfoMessageBox.information_calls.append((parent, title, text))
+
+        with patch('modules.ExportDialog.build_export_completion_message', return_value=('info', 'Export successful', 'ok')) as build_mock, \
+             patch('modules.ExportDialog.show_export_result_message', side_effect=RuntimeError('boom')) as show_mock, \
+             patch('modules.ExportDialog.QMessageBox', _InfoMessageBox):
+            dialog.on_export_finished()
+
+        build_mock.assert_called_once()
+        show_mock.assert_called_once()
+        self.assertEqual(_InfoMessageBox.information_calls, [(dialog, 'Export successful', 'Data exported successfully to out.xlsx.')])
+        self.assertEqual(dialog.loading_dialog.accept_calls, 1)
+        self.assertFalse(dialog.accept_called)
+        self.assertEqual(dialog.export_button.enabled_states, [True])
+        self.assertIsNone(dialog.export_error_message)
 
 
 if __name__ == '__main__':

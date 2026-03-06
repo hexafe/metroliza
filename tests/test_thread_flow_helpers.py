@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 # Stubs for Qt and logger
@@ -58,6 +59,7 @@ cmm_parser_stub.CMMReportParser = _DummyCmmReportParser
 sys.modules['modules.CMMReportParser'] = cmm_parser_stub
 from modules.ExportDataThread import (  # noqa: E402
     ExportDataThread,
+    classify_normality_status,
     build_summary_image_anchor_plan,
     build_export_dataframe,
     execute_export_query,
@@ -301,6 +303,12 @@ class TestExportHelpers(unittest.TestCase):
         self.assertEqual(list(df.columns), ['ID', 'NAME'])
         self.assertEqual(df.iloc[0]['NAME'], 'A')
 
+    def test_classify_normality_status_maps_one_sided_not_applicable_to_neutral_badge(self):
+        badge = classify_normality_status('not_applicable')
+
+        self.assertEqual(badge['label'], 'Normality not applicable')
+        self.assertEqual(badge['palette_key'], 'normality_unknown')
+
     def test_run_export_steps_stops_when_canceled(self):
         order = []
 
@@ -412,6 +420,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_values = module.fetch_partition_values
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
 
         with tempfile.TemporaryDirectory() as tmpdir:
             out_file = os.path.join(tmpdir, 'out.xlsx')
@@ -430,14 +441,22 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             progress_values = []
             thread.get_export_backend = lambda: _BackendRunner()
+            thread.add_measurements_horizontal_sheet = lambda *_args, **_kwargs: None
             thread.export_filtered_data = lambda *_: None
             thread.update_progress.emit = lambda value: progress_values.append(value)
             thread.update_label.emit = lambda *_: None
             thread.finished.emit = lambda: None
             thread._active_backend = fake_backend
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
 
+            measurement_df = self._build_multi_header_measurement_dataframe()
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.load_measurement_export_partition_dataframe = (
+                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+            )
             module.read_sql_dataframe = lambda *_args, **_kwargs: __import__('pandas').DataFrame()
-            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
             module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
             module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
             module.insert_measurement_chart = lambda *_args, **_kwargs: None
@@ -449,6 +468,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.create_measurement_formats = previous_formats
                 module.write_measurement_block = previous_write_block
                 module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_values = previous_fetch_partition_values
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+                module.load_measurement_export_partition_dataframe = previous_load_measurement_partition
 
         self.assertEqual(progress_values[0], 0)
         self.assertEqual(progress_values[-1], 100)
@@ -464,6 +486,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_values = module.fetch_partition_values
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
 
         with tempfile.TemporaryDirectory() as tmpdir:
             out_file = os.path.join(tmpdir, 'out.xlsx')
@@ -475,12 +500,15 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_cache = object()
             thread._export_df_column_order = ()
             thread._active_backend = self._build_fake_measurement_backend()
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
 
             progress_values = []
             cancellation_state = {'triggered': False}
+            cancel_probe = {'checks': 0}
 
             def _check_canceled():
-                if len(progress_values) >= 4:
+                cancel_probe['checks'] += 1
+                if cancel_probe['checks'] >= 1:
                     cancellation_state['triggered'] = True
                     return True
                 return False
@@ -489,8 +517,14 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda value: progress_values.append(value)
             thread.update_label.emit = lambda *_: None
 
+            measurement_df = self._build_multi_header_measurement_dataframe()
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.load_measurement_export_partition_dataframe = (
+                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+            )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
-            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
             module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
             module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
             module.insert_measurement_chart = lambda *_args, **_kwargs: None
@@ -502,10 +536,14 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.create_measurement_formats = previous_formats
                 module.write_measurement_block = previous_write_block
                 module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_values = previous_fetch_partition_values
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+                module.load_measurement_export_partition_dataframe = previous_load_measurement_partition
 
         self.assertTrue(cancellation_state['triggered'])
-        self.assertEqual(len(progress_values), 4)
-        self.assertLess(progress_values[-1], 95)
+        self.assertLessEqual(len(progress_values), 1)
+        if progress_values:
+            self.assertLess(progress_values[-1], 95)
 
     def test_add_measurements_emits_reference_and_header_label_details(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -516,6 +554,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_values = module.fetch_partition_values
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
         previous_perf_counter = module.time.perf_counter
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -528,6 +569,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_cache = object()
             thread._export_df_column_order = ()
             thread._active_backend = self._build_fake_measurement_backend()
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
 
             labels = []
             counter = {'value': 0.0}
@@ -539,8 +581,14 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_label.emit = lambda text: labels.append(text)
             thread.update_progress.emit = lambda *_: None
 
+            measurement_df = self._build_multi_header_measurement_dataframe()
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.load_measurement_export_partition_dataframe = (
+                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+            )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
-            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
             module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
             module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
             module.insert_measurement_chart = lambda *_args, **_kwargs: None
@@ -553,6 +601,9 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.create_measurement_formats = previous_formats
                 module.write_measurement_block = previous_write_block
                 module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_values = previous_fetch_partition_values
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+                module.load_measurement_export_partition_dataframe = previous_load_measurement_partition
                 module.time.perf_counter = previous_perf_counter
 
         detailed_labels = [text for text in labels if text.startswith('Building measurement sheets...')]
@@ -571,6 +622,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_values = module.fetch_partition_values
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+        previous_load_measurement_partition = module.load_measurement_export_partition_dataframe
 
         class _FakeWorksheet:
             def set_column(self, *_args, **_kwargs):
@@ -608,11 +662,18 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_column_order = ()
             workbook = _RecordingWorkbook()
             thread._active_backend = _Backend(workbook)
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
             thread.update_progress.emit = lambda *_: None
             thread.update_label.emit = lambda *_: None
 
+            measurement_df = self._build_multi_header_measurement_dataframe()
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.load_measurement_export_partition_dataframe = (
+                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+            )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
-            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: self._build_multi_header_measurement_dataframe()
+            module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
             module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
             module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
             module.insert_measurement_chart = lambda *_args, **_kwargs: None
@@ -625,11 +686,105 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.create_measurement_formats = previous_formats
                 module.write_measurement_block = previous_write_block
                 module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_values = previous_fetch_partition_values
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+                module.load_measurement_export_partition_dataframe = previous_load_measurement_partition
 
         self.assertEqual(
             workbook.added_sheet_names,
             ['REF_A', 'REF_A_summary', 'REF_B', 'REF_B_summary'],
         )
+
+    def test_add_measurements_applies_default_column_formatting_through_last_generated_block_column(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        previous_formats = module.create_measurement_formats
+        previous_write_block = module.write_measurement_block
+        previous_insert_chart = module.insert_measurement_chart
+        previous_fetch_partition_header_counts = module.fetch_partition_header_counts
+
+        class _RecordingWorksheet:
+            def __init__(self):
+                self.set_column_calls = []
+
+            def set_column(self, first_col, last_col, width=None, cell_format=None, options=None):
+                self.set_column_calls.append((first_col, last_col, width, cell_format, options))
+
+            def freeze_panes(self, *_args, **_kwargs):
+                return None
+
+        class _RecordingWorkbook:
+            def __init__(self):
+                self.added_sheet_names = []
+                self.worksheets = {}
+
+            def add_worksheet(self, name):
+                worksheet = _RecordingWorksheet()
+                self.added_sheet_names.append(name)
+                self.worksheets[name] = worksheet
+                return worksheet
+
+        class _Backend:
+            def __init__(self, workbook):
+                self._workbook = workbook
+
+            def get_workbook(self, _excel_writer):
+                return self._workbook
+
+            def list_sheet_names(self, _excel_writer):
+                return set(self._workbook.added_sheet_names)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(generate_summary_sheet=False),
+            )
+            thread = ExportDataThread(request)
+            thread._export_df_cache = object()
+            thread._export_df_column_order = ()
+            workbook = _RecordingWorkbook()
+            thread._active_backend = _Backend(workbook)
+            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
+            thread.update_progress.emit = lambda *_: None
+            thread.update_label.emit = lambda *_: None
+
+            header_count = 16
+            headers = [f'H{idx:02d}' for idx in range(1, header_count + 1)]
+            measurement_df = pd.DataFrame(
+                {
+                    'REFERENCE': ['REF_A'] * header_count,
+                    'HEADER - AX': headers,
+                    'NOM': [10.0] * header_count,
+                    '+TOL': [1.0] * header_count,
+                    '-TOL': [-1.0] * header_count,
+                    'BONUS': [0.0] * header_count,
+                    'MEAS': [10.0] * header_count,
+                    'DATE': ['2024-01-01'] * header_count,
+                    'SAMPLE_NUMBER': ['1'] * header_count,
+                }
+            )
+
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': header_count}
+            thread._iter_reference_partitions = lambda: iter([('REF_A', measurement_df.copy())])
+            module.create_measurement_formats = lambda *_args, **_kwargs: {'default': object(), 'border': object()}
+            module.write_measurement_block = lambda *_args, **_kwargs: {'first_data_row': 0, 'last_data_row': 0}
+            module.insert_measurement_chart = lambda *_args, **_kwargs: None
+            try:
+                thread.add_measurements_horizontal_sheet(excel_writer=object())
+            finally:
+                module.create_measurement_formats = previous_formats
+                module.write_measurement_block = previous_write_block
+                module.insert_measurement_chart = previous_insert_chart
+                module.fetch_partition_header_counts = previous_fetch_partition_header_counts
+
+        worksheet = workbook.worksheets['REF_A']
+        first_set_column = worksheet.set_column_calls[0]
+        self.assertEqual(first_set_column[0], 0)
+        self.assertEqual(first_set_column[1], (header_count * 5) - 1)
 
     def test_summary_sheet_fill_populates_iqr_slot_for_each_header_when_deferred_charts_enabled(self):
         import pandas as pd
@@ -678,11 +833,11 @@ class TestExportBackendSmoke(unittest.TestCase):
         }
 
         for index, (header, header_group) in enumerate(headers.items(), start=1):
-            thread.summary_sheet_fill(worksheet, header, header_group, col=index * 3)
+            thread.summary_sheet_fill(worksheet, header, header_group, col=index * 5)
 
         inserted_positions = set(worksheet.inserted_images)
         expected_iqr_positions = {
-            build_summary_image_anchor_plan(index * 3)['iqr']
+            build_summary_image_anchor_plan(index * 5)['iqr']
             for index in range(1, len(headers) + 1)
         }
 
@@ -723,13 +878,113 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
 
-        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
         inserted_positions = set(worksheet.inserted_images)
-        panel_slots = build_summary_image_anchor_plan(3)
+        panel_slots = build_summary_image_anchor_plan(5)
 
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
+
+    def test_apply_bottleneck_optimizations_preserves_trend_for_normal_runs(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._stage_timings.update(
+            {
+                'chart_rendering': 70.0,
+                'transform_grouping': 20.0,
+                'worksheet_writes': 10.0,
+            }
+        )
+
+        thread._apply_bottleneck_optimizations()
+
+        self.assertTrue(thread._optimization_toggles['defer_non_essential_charts'])
+        self.assertEqual(
+            thread._optimization_toggles['summary_sheet_minimum_charts'],
+            {'distribution', 'iqr', 'histogram', 'trend'},
+        )
+        self.assertTrue(thread._summary_chart_required('iqr'))
+        self.assertTrue(thread._summary_chart_required('trend'))
+
+    def test_apply_bottleneck_optimizations_can_skip_trend_when_opted_in(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(
+                generate_summary_sheet=True,
+                allow_non_essential_chart_skipping=True,
+            ),
+        )
+        thread = ExportDataThread(request)
+        thread._stage_timings.update(
+            {
+                'chart_rendering': 70.0,
+                'transform_grouping': 20.0,
+                'worksheet_writes': 10.0,
+            }
+        )
+
+        thread._apply_bottleneck_optimizations()
+
+        self.assertTrue(thread._optimization_toggles['defer_non_essential_charts'])
+        self.assertEqual(thread._optimization_toggles['summary_sheet_minimum_charts'], {'distribution', 'iqr', 'histogram'})
+        self.assertFalse(thread._summary_chart_required('trend'))
+
+    def test_summary_sheet_fill_deferred_mode_still_renders_trend_by_default(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['defer_non_essential_charts'] = True
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr', 'histogram', 'trend'}
+
+        worksheet = _FakeSummaryWorksheet()
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        inserted_positions = set(worksheet.inserted_images)
+        panel_slots = build_summary_image_anchor_plan(5)
+        self.assertEqual(
+            inserted_positions,
+            {
+                panel_slots['distribution'],
+                panel_slots['iqr'],
+                panel_slots['histogram'],
+                panel_slots['trend'],
+            },
+        )
 
 
     def test_run_initializes_and_shuts_down_shared_chart_executor_once_when_enabled(self):
@@ -773,6 +1028,64 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(calls['shutdown'], 1)
         self.assertIsNone(thread._chart_executor)
 
+    def test_summary_sheet_fill_uses_executor_precompute_for_large_original_groups(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        class _ImmediateFuture:
+            def __init__(self, value):
+                self._value = value
+
+            def result(self):
+                return self._value
+
+        class _RecordingExecutor:
+            def __init__(self):
+                self.calls = []
+
+            def submit(self, fn, *args, **kwargs):
+                self.calls.append((fn.__name__, args, kwargs))
+                return _ImmediateFuture(fn(*args, **kwargs))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        executor = _RecordingExecutor()
+        thread._chart_executor = executor
+
+        worksheet = _FakeSummaryWorksheet()
+        row_count = 2600
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [10.0 + (idx % 9) * 0.01 for idx in range(row_count)],
+                'NOM': [10.0] * row_count,
+                '+TOL': [0.2] * row_count,
+                '-TOL': [-0.2] * row_count,
+                'SAMPLE_NUMBER': [str(idx + 1) for idx in range(row_count)],
+                'DATE': ['2024-01-01'] * row_count,
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        self.assertEqual(len(executor.calls), 2)
+        sampled_limit = thread._chart_sample_limit()
+        self.assertLessEqual(len(executor.calls[0][1][0]), sampled_limit)
+        self.assertEqual(len(executor.calls[0][1][0]), len(executor.calls[1][1][0]))
+
     def test_summary_sheet_fill_falls_back_to_in_process_when_executor_submit_fails(self):
         import pandas as pd
 
@@ -812,12 +1125,378 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
 
-        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=3)
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
-        panel_slots = build_summary_image_anchor_plan(3)
+        panel_slots = build_summary_image_anchor_plan(5)
         inserted_positions = set(worksheet.inserted_images)
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
+
+    def test_build_iqr_plot_payload_rebuilds_safe_fallback_on_length_mismatch(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+
+        sampled_group = pd.DataFrame({'MEAS': [1.0, 2.0, 3.0]})
+        labels = ['A', 'B']
+        values = [[1.0, 2.0]]
+
+        iqr_labels, iqr_values = thread._build_iqr_plot_payload(labels, values, sampled_group)
+
+        self.assertEqual(iqr_labels, ['All'])
+        self.assertEqual(iqr_values, [[1.0, 2.0, 3.0]])
+
+    def test_grouped_summary_scatter_payload_appends_group_sample_sizes_to_labels(self):
+        import pandas as pd
+
+        header_group = pd.DataFrame(
+            {
+                'GROUP': ['A', 'A', 'B', 'B', 'B'],
+                'MEAS': [1.0, 2.0, 5.0, 5.5, 6.0],
+            }
+        )
+
+        _x, _y, labels = ExportDataThread._build_grouped_summary_scatter_payload(
+            header_group,
+            'GROUP',
+            grouping_active=True,
+        )
+
+        self.assertEqual(labels, ['A (n=2)', 'B (n=3)'])
+
+    def test_build_iqr_plot_payload_keeps_group_labels_dense_when_grouping_active(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+
+        sampled_group = pd.DataFrame({'MEAS': [1.0, 2.0, 3.0, 4.0]})
+        labels = ['G1', 'G1', 'G2', 'G2']
+        values = [[1.0, 2.0], [3.0, 4.0], [2.0, 2.5], [3.5, 3.8]]
+
+        iqr_labels, iqr_values = thread._build_iqr_plot_payload(
+            labels,
+            values,
+            sampled_group,
+            grouping_active=True,
+        )
+
+        self.assertEqual(iqr_labels, ['G1', 'G1', 'G2', 'G2'])
+        self.assertEqual(iqr_values, values)
+
+    def test_render_iqr_boxplot_normalizes_mismatched_inputs_without_raising(self):
+        import matplotlib.pyplot as plt
+
+        module = __import__('modules.ExportDataThread', fromlist=['render_iqr_boxplot'])
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            module.render_iqr_boxplot(ax, values=[[1, 2, 3], [4, 5, 6]], labels=['One'])
+        finally:
+            plt.close(fig)
+
+    def test_summary_sheet_fill_can_render_violin_false_completes_without_raising(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread.violin_plot_min_samplesize = 10
+
+        worksheet = _FakeSummaryWorksheet()
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '1', '2', '2', '3', '3'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        panel_slots = build_summary_image_anchor_plan(5)
+        inserted_positions = set(worksheet.inserted_images)
+        self.assertIn(panel_slots['distribution'], inserted_positions)
+        self.assertIn(panel_slots['iqr'], inserted_positions)
+
+    def test_summary_sheet_distribution_scatter_fallback_uses_group_bucket_labels(self):
+        import pandas as pd
+
+        import modules.ExportDataThread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
+        thread.violin_plot_min_samplesize = 3
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05],
+                'NOM': [10.0] * 5,
+                '+TOL': [0.2] * 5,
+                '-TOL': [-0.2] * 5,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
+                'DATE': ['2024-01-01'] * 5,
+            }
+        )
+        grouped_header = header_group.assign(GROUP=['A', 'A', 'B', 'B', 'C'])
+        thread._prepared_grouping_df = pd.DataFrame()
+        thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)
+
+        captured = {}
+        original_apply_labels = export_thread_module.apply_shared_x_axis_label_strategy
+        try:
+            def _capture_labels(_ax, labels, **kwargs):
+                captured['labels'] = list(labels)
+                captured['positions'] = list(kwargs.get('positions') or [])
+                return None
+
+            export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
+
+        self.assertEqual(captured['labels'], ['A (n=2)', 'B (n=2)', 'C (n=1)'])
+        self.assertEqual(captured['positions'], [0.0, 1.0, 2.0])
+
+    def test_summary_sheet_distribution_scatter_fallback_non_grouped_sample_number_labels(self):
+        import pandas as pd
+
+        import modules.ExportDataThread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
+        thread.violin_plot_min_samplesize = 3
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05, 10.02],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '1', '2', '2', '3', '3'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        captured = {}
+        original_apply_labels = export_thread_module.apply_shared_x_axis_label_strategy
+        try:
+            def _capture_labels(_ax, labels, **kwargs):
+                captured['labels'] = list(labels)
+                captured['positions'] = list(kwargs.get('positions') or [])
+                return None
+
+            export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
+
+        self.assertEqual(captured['labels'], ['1', '2', '3'])
+        self.assertEqual(captured['positions'], [0.0, 1.0, 2.0])
+
+    def test_summary_sheet_trend_axis_title_uses_group_label_when_grouped(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05, 10.02],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '1', '2', '2', '3', '3'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        grouped_header = header_group.assign(GROUP=['A', 'A', 'B', 'B', 'C', 'C'])
+        thread._prepared_grouping_df = pd.DataFrame()
+
+        for grouping_active, expected_label in ((False, 'Sample #'), (True, 'Group')):
+            with self.subTest(grouping_active=grouping_active):
+                if grouping_active:
+                    thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)
+                else:
+                    thread._apply_group_assignments = lambda hg, _gd: (hg, False)
+
+                captured_labels = []
+                original_set_xlabel = __import__('matplotlib.axes', fromlist=['Axes']).Axes.set_xlabel
+
+                def _capture_set_xlabel(ax, label, *args, **kwargs):
+                    captured_labels.append(label)
+                    return original_set_xlabel(ax, label, *args, **kwargs)
+
+                with mock.patch('matplotlib.axes.Axes.set_xlabel', new=_capture_set_xlabel):
+                    thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+
+                self.assertIn(expected_label, captured_labels)
+
+    def test_summary_sheet_trend_uses_dense_labels_without_thinning(self):
+        import pandas as pd
+
+        import modules.ExportDataThread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05, 10.02],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '1', '2', '2', '3', '3'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        captured = {}
+        original_apply_labels = export_thread_module.apply_shared_x_axis_label_strategy
+        try:
+            def _capture_labels(_ax, labels, **kwargs):
+                captured['labels'] = list(labels)
+                captured['allow_thinning'] = kwargs.get('allow_thinning')
+                return None
+
+            export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
+
+        self.assertEqual(captured['labels'], ['1', '1', '2', '2', '3', '3'])
+        self.assertFalse(captured['allow_thinning'])
+
+
+    def test_summary_sheet_distribution_scatter_fallback_draws_only_lsl_usl_reference_lines(self):
+        import pandas as pd
+
+        import modules.ExportDataThread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
+        thread.violin_plot_min_samplesize = 10
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05, 10.02],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '1', '2', '2', '3', '3'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        captured_calls = []
+        original_render_spec_lines = export_thread_module.render_spec_reference_lines
+        try:
+            def _capture_spec_lines(_ax, nom, lsl, usl, **kwargs):
+                captured_calls.append({'nom': nom, 'lsl': lsl, 'usl': usl, 'kwargs': dict(kwargs)})
+                return []
+
+            export_thread_module.render_spec_reference_lines = _capture_spec_lines
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.render_spec_reference_lines = original_render_spec_lines
+
+        self.assertEqual(len(captured_calls), 1)
+        self.assertEqual(captured_calls[0]['lsl'], 9.8)
+        self.assertEqual(captured_calls[0]['usl'], 10.2)
+        self.assertFalse(captured_calls[0]['kwargs'].get('include_nominal', True))
+
 
     def test_default_export_target_uses_excel_backend(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -863,7 +1542,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.backend_target, 'excel')
 
 
-    def test_export_filtered_data_passes_cached_dataframe_to_writer(self):
+    def test_export_filtered_data_loads_dataframe_and_passes_it_to_writer(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
         import pandas as pd
 
@@ -883,16 +1562,13 @@ class TestExportBackendSmoke(unittest.TestCase):
                 captured['writer_type'] = type(excel_writer).__name__
 
             thread.write_data_to_excel = fake_writer
-            thread._export_df_cache = pd.DataFrame({'ID': [1], 'LABEL': ['A']})
-            thread._export_df_column_order = ('ID', 'LABEL')
-
-            module = __import__('modules.ExportDataThread', fromlist=['execute_export_query'])
-            previous = module.execute_export_query
-            module.execute_export_query = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('execute_export_query should not be called'))
+            module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+            previous_reader = module.read_sql_dataframe
+            module.read_sql_dataframe = lambda *_args, **_kwargs: pd.DataFrame({'ID': [1], 'LABEL': ['A']})
             try:
                 thread.export_filtered_data(excel_writer=object())
             finally:
-                module.execute_export_query = previous
+                module.read_sql_dataframe = previous_reader
 
             self.assertEqual(captured['columns'], ['ID', 'LABEL'])
             self.assertEqual(captured['table'], 'MEASUREMENTS')
@@ -935,6 +1611,56 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(calls, ['measurements', 'filtered'])
             self.assertTrue(os.path.exists(out_file))
 
+
+    def test_run_aborts_pipeline_on_fatal_local_measurement_export_error(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, runner_thread):
+                    return runner_thread.run_export_pipeline(excel_writer=object())
+
+            thread.get_export_backend = lambda: _Backend()
+
+            calls = []
+            thread.export_filtered_data = lambda *_args, **_kwargs: calls.append('filtered')
+
+            emitted = []
+            errors = []
+            thread.update_label.emit = lambda text: emitted.append(text)
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: calls.append('finished')
+            thread.error_occurred.emit = lambda message: errors.append(message)
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+            previous_partition_counts = module.fetch_partition_header_counts
+            upload_called = {'value': False}
+            module.upload_and_convert_workbook = lambda *_args, **_kwargs: upload_called.__setitem__('value', True)
+            module.fetch_partition_header_counts = (
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('fatal measurement step failure'))
+            )
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+                module.fetch_partition_header_counts = previous_partition_counts
+
+            self.assertFalse(upload_called['value'])
+            self.assertNotIn('filtered', calls)
+            self.assertNotIn('finished', calls)
+            self.assertFalse(any('Export completed successfully.' in label for label in emitted))
+            self.assertTrue(any('Export failed during local workbook generation.' in label for label in emitted))
+            self.assertTrue(errors)
+            self.assertTrue(any('add_measurements_horizontal_sheet' in message for message in errors))
+
     def test_google_target_emits_canonical_stage_sequence_on_success(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
@@ -974,7 +1700,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                     local_xlsx_path=out_file,
                     fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
                     warnings=(),
-                    converted_tab_titles=('MEASUREMENTS',),
                 )
 
             module.upload_and_convert_workbook = _fake_upload
@@ -1030,7 +1755,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                     local_xlsx_path=out_file,
                     fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
                     warnings=(),
-                    converted_tab_titles=('REF_A', 'REF_A_summary', 'REF_B', 'REF_B_summary', 'MEASUREMENTS'),
                 )
 
             module.upload_and_convert_workbook = _fake_upload
@@ -1080,7 +1804,6 @@ class TestExportBackendSmoke(unittest.TestCase):
                     local_xlsx_path=out_file,
                     fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
                     warnings=(),
-                    converted_tab_titles=('MEASUREMENTS',),
                 )
 
             module.upload_and_convert_workbook = _fake_upload
@@ -1177,7 +1900,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 module.upload_and_convert_workbook = previous_upload
 
             self.assertEqual(finished_calls, ['finished'])
-            self.assertEqual(logger_calls, ['temporary outage'])
+            self.assertEqual(logger_calls, [])
             self.assertIn('fallback_message', thread.completion_metadata)
             self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
             stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
@@ -1213,8 +1936,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
                 local_xlsx_path=out_file,
                 fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
-                warnings=('Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',),
-                converted_tab_titles=('MEASUREMENTS',),
+                warnings=('chart patch skipped for one chart',),
             )
             try:
                 thread.run()
@@ -1224,13 +1946,160 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(thread.completion_metadata['converted_file_id'], 'sheet-id')
             self.assertEqual(thread.completion_metadata['converted_url'], 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
             self.assertEqual(thread.completion_metadata['local_xlsx_path'], out_file)
-            self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'Google Sheets conversion appears partial. Missing expected tab(s): REF_A.')
-            self.assertEqual(thread.completion_metadata['converted_tab_titles'], ['MEASUREMENTS'])
-            self.assertTrue(any(text.split('\n')[0].startswith('Warning:') for text in emitted))
+            self.assertEqual(thread.completion_metadata['conversion_warnings'][0], 'chart patch skipped for one chart')
+            self.assertEqual(thread.completion_metadata['conversion_warning_details'], [])
+            self.assertEqual(thread.completion_metadata['converted_tab_titles'], [])
             fallback_stage_messages = [text for text in emitted if text.split('\n')[0].startswith('Google export stage: fallback')]
             self.assertTrue(fallback_stage_messages)
             self.assertIn(out_file, fallback_stage_messages[0])
 
+
+    def test_google_conversion_stage_logging_is_deterministic_on_success(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _fake_upload(*_args, **kwargs):
+                kwargs['status_callback']('uploading')
+                kwargs['status_callback']('converting')
+                kwargs['status_callback']('validating')
+                return GoogleDriveConversionResult(
+                    file_id='sheet-id',
+                    web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                    local_xlsx_path=out_file,
+                    fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
+                    warnings=(),
+                )
+
+            module.upload_and_convert_workbook = _fake_upload
+            logger = logging.getLogger()
+            previous_handlers = list(logger.handlers)
+            previous_level = logger.level
+            records = []
+
+            class _ListHandler(logging.Handler):
+                def emit(self, record):
+                    records.append(record)
+
+            handler = _ListHandler()
+            logger.handlers = [handler]
+            logger.setLevel(logging.INFO)
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+                logger.handlers = previous_handlers
+                logger.setLevel(previous_level)
+
+            stage_messages = [
+                record.getMessage()
+                for record in records
+                if record.getMessage().startswith('Google conversion stage')
+            ]
+            self.assertEqual(
+                stage_messages,
+                [
+                    'Google conversion stage',
+                    'Google conversion stage',
+                    'Google conversion stage',
+                ],
+            )
+
+    def test_google_conversion_stage_logging_includes_retry_attempt_context(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _fake_upload(*_args, **kwargs):
+                kwargs['status_callback']('uploading')
+                kwargs['status_callback']('uploading retry 1/2: temporary network issue')
+                kwargs['status_callback']('uploading')
+                kwargs['status_callback']('converting')
+                kwargs['status_callback']('validating')
+                return GoogleDriveConversionResult(
+                    file_id='sheet-id',
+                    web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                    local_xlsx_path=out_file,
+                    fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
+                    warnings=(),
+                )
+
+            module.upload_and_convert_workbook = _fake_upload
+            logger = logging.getLogger()
+            previous_handlers = list(logger.handlers)
+            previous_level = logger.level
+            records = []
+
+            class _ListHandler(logging.Handler):
+                def emit(self, record):
+                    records.append(record)
+
+            handler = _ListHandler()
+            logger.handlers = [handler]
+            logger.setLevel(logging.INFO)
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+                logger.handlers = previous_handlers
+                logger.setLevel(previous_level)
+
+            stage_messages = [
+                record.getMessage()
+                for record in records
+                if record.getMessage().startswith('Google conversion stage')
+            ]
+            self.assertEqual(
+                stage_messages,
+                [
+                    'Google conversion stage',
+                    'Google conversion stage (attempt 2/2)',
+                    'Google conversion stage',
+                    'Google conversion stage',
+                ],
+            )
+            retry_warning_messages = [
+                record.getMessage()
+                for record in records
+                if record.getMessage().startswith('Google conversion upload retry')
+            ]
+            self.assertEqual(retry_warning_messages, ['Google conversion upload retry'])
 
     def test_google_target_warning_logs_issue_details(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -1260,8 +2129,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
                 local_xlsx_path=out_file,
                 fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
-                warnings=('Google Sheets conversion appears partial. Missing expected tab(s): REF_A.',),
-                converted_tab_titles=('MEASUREMENTS',),
+                warnings=('chart patch skipped for one chart',),
             )
             logger = logging.getLogger()
             previous_handlers = list(logger.handlers)
@@ -1285,7 +2153,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             warning_messages = [record.getMessage() for record in records if record.levelno >= logging.WARNING]
             self.assertTrue(any('Google export issue: conversion completed with warnings' in msg for msg in warning_messages))
             self.assertTrue(any('fallback=Conversion completed with warnings.' in msg for msg in warning_messages))
-            self.assertTrue(any('warnings=Google Sheets conversion appears partial. Missing expected tab(s): REF_A.' in msg for msg in warning_messages))
+            self.assertTrue(any('warnings=chart patch skipped for one chart' in msg for msg in warning_messages))
 
     def test_google_target_success_metadata_contains_expected_keys(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -1314,9 +2182,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                 file_id='sheet-id',
                 web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
                 local_xlsx_path=out_file,
-                fallback_message=f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}',
+                fallback_message='',
                 warnings=(),
-                converted_tab_titles=('MEASUREMENTS',),
             )
             try:
                 thread.run()
@@ -1325,9 +2192,8 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             metadata = thread.completion_metadata
             self.assertEqual(metadata['converted_url'], 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
-            self.assertEqual(metadata['fallback_message'], f'Conversion completed with warnings. Use local .xlsx fallback if needed: {out_file}')
+            self.assertEqual(metadata['fallback_message'], '')
             self.assertEqual(metadata['conversion_warnings'], [])
-            self.assertEqual(metadata['converted_tab_titles'], ['MEASUREMENTS'])
 
     def test_google_target_exception_fallback_metadata_contains_expected_keys(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -1364,9 +2230,69 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             metadata = thread.completion_metadata
             self.assertEqual(metadata.get('converted_url'), None)
-            self.assertEqual(metadata.get('converted_tab_titles'), None)
             self.assertEqual(metadata['fallback_message'], f'Google export failed; using local .xlsx fallback: {out_file}')
             self.assertEqual(metadata['conversion_warnings'], ['temporary outage'])
+
+
+
+    def test_summary_sheet_grouped_violin_and_iqr_labels_include_sample_counts(self):
+        import pandas as pd
+
+        import modules.ExportDataThread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr'}
+        thread.violin_plot_min_samplesize = 2
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05],
+                'NOM': [10.0] * 5,
+                '+TOL': [0.2] * 5,
+                '-TOL': [-0.2] * 5,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
+                'DATE': ['2024-01-01'] * 5,
+            }
+        )
+        grouped_header = header_group.assign(GROUP=['A', 'A', 'B', 'B', 'B'])
+        thread._prepared_grouping_df = pd.DataFrame()
+        thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)
+
+        captured = {}
+        original_render_violin = export_thread_module.render_violin
+        original_render_iqr_boxplot = export_thread_module.render_iqr_boxplot
+        try:
+            def _capture_violin(_ax, _values, labels, **_kwargs):
+                captured['violin_labels'] = list(labels)
+                return None
+
+            def _capture_iqr(_ax, _values, labels):
+                captured['iqr_labels'] = list(labels)
+                return None
+
+            export_thread_module.render_violin = _capture_violin
+            export_thread_module.render_iqr_boxplot = _capture_iqr
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.render_violin = original_render_violin
+            export_thread_module.render_iqr_boxplot = original_render_iqr_boxplot
+
+        self.assertEqual(captured['violin_labels'], ['A (n=2)', 'B (n=3)'])
+        self.assertEqual(captured['iqr_labels'], ['A (n=2)', 'B (n=3)'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,8 +1,10 @@
+"""Export dialog UI, export option builders, and completion message helpers."""
+
 from modules.progress_status import build_three_line_status
-from modules.ExportDataThread import ExportDataThread
-from modules.FilterDialog import FilterDialog
-from modules.DataGrouping import DataGrouping
-from modules.CustomLogger import CustomLogger
+from modules.export_data_thread import ExportDataThread
+from modules.filter_dialog import FilterDialog
+from modules.data_grouping import DataGrouping
+from modules.custom_logger import CustomLogger
 from modules.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_options, validate_paths
 from modules.export_preset_utils import (
     build_export_options_for_preset,
@@ -40,6 +42,20 @@ from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
 def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results):
+    """Build a validated export-options payload from UI field values.
+
+    Args:
+        selected_preset: Preset identifier selected in the UI.
+        export_type: Optional chart type override from the combo box.
+        export_target: Export backend identifier.
+        sorting_parameter: Optional sort key selected by the user.
+        violin_input: Raw violin minimum sample-size input.
+        summary_scale_input: Raw summary plot scale input.
+        hide_ok_results: Whether in-tolerance rows should be hidden.
+
+    Returns:
+        ExportOptions: Options object ready for validation.
+    """
     preset_options = build_export_options_for_preset(selected_preset)
     return ExportOptions(
         preset=selected_preset,
@@ -54,6 +70,7 @@ def build_export_options_payload(selected_preset, export_type, export_target, so
 
 
 def build_export_completion_message(*, excel_file, export_target, completion_metadata):
+    """Compose the completion dialog payload for local and Google export flows."""
     metadata = completion_metadata or {}
     warnings = [str(w) for w in metadata.get('conversion_warnings', []) if str(w).strip()]
     fallback_message = str(metadata.get('fallback_message', '')).strip()
@@ -103,6 +120,15 @@ def build_export_directory_link_line(excel_file):
     except Exception:
         return ""
     return f"Export file: {export_file_uri}"
+
+
+def build_export_folder_link_line(excel_file):
+    """Build a file:// URI pointing to the export parent folder for clickable dialogs."""
+    try:
+        export_folder_uri = Path(str(excel_file)).resolve(strict=False).parent.as_uri()
+    except Exception:
+        return ""
+    return f"Export folder: {export_folder_uri}"
 
 
 def format_message_with_clickable_links(message):
@@ -201,11 +227,18 @@ logger = logging.getLogger(__name__)
 
 
 class ExportDialog(QDialog):
+    """Dialog that gathers export settings and runs export work in a thread.
+
+    Key state includes selected database/output files, optional filter/grouping
+    selections, and persisted preset preferences stored in a user config file.
+    """
+
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         
         self.setWindowTitle("Export")
-        self.setWindowIcon(parent.windowIcon())
+        if parent is not None and hasattr(parent, "windowIcon"):
+            self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 300, 150)
 
         self.db_file = db_file
@@ -232,6 +265,11 @@ class ExportDialog(QDialog):
         self.init_layout()
 
     def _load_dialog_config(self):
+        """Load and migrate persisted dialog settings from disk.
+
+        Returns:
+            dict: Configuration dictionary with at least a preset selection.
+        """
         try:
             config = load_export_dialog_config(self.config_path)
             migrated, changed = migrate_export_dialog_config(config)
@@ -242,6 +280,7 @@ class ExportDialog(QDialog):
             return {'selected_preset': 'fast_diagnostics'}
 
     def _save_dialog_config(self):
+        """Persist currently selected preset to the user config file."""
         try:
             selected_label = self.preset_combobox.currentText()
             selected_preset = get_export_preset_id_for_label(selected_label)
@@ -251,6 +290,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def apply_selected_preset(self):
+        """Apply the selected preset values to export controls and save them."""
         try:
             selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
             preset_options = build_export_options_for_preset(selected_preset)
@@ -407,11 +447,6 @@ class ExportDialog(QDialog):
             self.hide_ok_results_checkbox.setChecked(False)
             self.hide_ok_results_checkbox.setToolTip("When enabled, only OK results will be visible (columns with OK results will be hidden, not deleted)")
             
-            self.advanced_options_toggle = QPushButton("Advanced options")
-            self.advanced_options_toggle.setCheckable(True)
-            self.advanced_options_toggle.setChecked(False)
-            self.advanced_options_toggle.toggled.connect(self._toggle_advanced_options)
-
             self.advanced_options_container = QWidget()
             advanced_options_layout = QVBoxLayout(self.advanced_options_container)
             advanced_options_layout.setContentsMargins(0, 0, 0, 0)
@@ -420,7 +455,6 @@ class ExportDialog(QDialog):
             advanced_options_layout.addWidget(self.summary_plot_scale_label)
             advanced_options_layout.addWidget(self.summary_plot_scale)
             advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
-            self.advanced_options_container.hide()
 
             self.apply_selected_preset()
         except Exception as e:
@@ -481,11 +515,6 @@ class ExportDialog(QDialog):
             report_profile_layout.addWidget(self.sort_measurements_label, 5, 0)
             report_profile_layout.addWidget(self.sort_measurements_combobox, 5, 1)
 
-            advanced_options_layout = QVBoxLayout()
-            advanced_options_layout.setContentsMargins(0, 0, 0, 0)
-            advanced_options_layout.addWidget(self.advanced_options_toggle)
-            advanced_options_layout.addWidget(self.advanced_options_container)
-
             action_layout = QVBoxLayout()
             action_layout.setContentsMargins(0, 0, 0, 0)
             action_layout.addWidget(self.export_button)
@@ -493,7 +522,7 @@ class ExportDialog(QDialog):
             self.layout.addWidget(build_section_widget("Source / target files", source_target_layout))
             self.layout.addWidget(build_section_widget("Data scope", data_scope_layout))
             self.layout.addWidget(build_section_widget("Report profile", report_profile_layout))
-            self.layout.addWidget(build_section_widget("Advanced options", advanced_options_layout))
+            self.layout.addWidget(build_section_widget("Advanced options", self.advanced_options_container.layout()))
             self.layout.addWidget(build_section_widget("Primary action", action_layout))
 
             self.setLayout(self.layout)
@@ -505,8 +534,7 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.preset_combobox, self.include_google_sheets_checkbox)
             self.setTabOrder(self.include_google_sheets_checkbox, self.export_type_combobox)
             self.setTabOrder(self.export_type_combobox, self.sort_measurements_combobox)
-            self.setTabOrder(self.sort_measurements_combobox, self.advanced_options_toggle)
-            self.setTabOrder(self.advanced_options_toggle, self.violin_plot_min_samplesize)
+            self.setTabOrder(self.sort_measurements_combobox, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
             self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
             self.setTabOrder(self.hide_ok_results_checkbox, self.export_button)
@@ -531,9 +559,6 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setText(str(input_value))
         except Exception as e:
             self.log_and_exit(e)
-
-    def _toggle_advanced_options(self, is_visible):
-        self.advanced_options_container.setVisible(bool(is_visible))
 
     def validate_plot_scale_input(self):
         try:
@@ -573,6 +598,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def open_filter_window(self):
+        """Open or focus the filter dialog while keeping a single dialog instance."""
         try:
             # Check if export dialog is already open or visible
             if not self.filter_window:
@@ -588,6 +614,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
             
     def open_grouping_window(self):
+        """Open/focus the grouping dialog and refresh data for reused instances."""
         try:
             # Check if grouping dialog is already open or visible
             if not self.grouping_window:
@@ -640,6 +667,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def select_excel_file(self):
+        """Prompt for an output workbook path and avoid immediate name collisions."""
         try:
             """Open a file dialog to select an excel file"""
             default_name = self.db_file[:-3]
@@ -669,6 +697,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def show_loading_screen(self):
+        """Validate inputs, persist options, and hand work to the export thread."""
         try:
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
                 self,
@@ -724,6 +753,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def stop_exporting(self):
+        """Request cooperative cancelation and keep UI responsive while waiting."""
         try:
             # Request cooperative cancellation and return immediately to avoid blocking the UI thread
             if self.export_thread is not None and self.export_thread.isRunning():
@@ -739,10 +769,12 @@ class ExportDialog(QDialog):
 
 
     def on_export_error(self, message):
+        """Store export error details for finalization once the worker stops."""
         self.export_error_message = message
         self.loading_label.setText(build_three_line_status("Export failed.", "See error details for context", "ETA --"))
 
     def on_export_canceled(self):
+        """Handle explicit worker cancelation and restore dialog state."""
         try:
             QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
             self.loading_dialog.reject()
@@ -752,6 +784,7 @@ class ExportDialog(QDialog):
             self.log_and_exit(e)
 
     def on_export_finished(self):
+        """Finalize export flow with success/error messaging and UI reset."""
         try:
             if self.export_error_message:
                 QMessageBox.warning(self, "Export failed", self.export_error_message)
@@ -762,20 +795,24 @@ class ExportDialog(QDialog):
                     completion_metadata=getattr(self.export_thread, 'completion_metadata', {}),
                 )
 
-                show_export_result_message(self, level, title, message, excel_file=self.excel_file)
+                try:
+                    show_export_result_message(self, level, title, message, excel_file=self.excel_file)
+                except Exception:
+                    logger.exception("Failed to show rich export completion dialog; falling back to basic message box.")
+                    QMessageBox.information(
+                        self,
+                        "Export successful",
+                        f"Data exported successfully to {self.excel_file}.",
+                    )
 
             # Close the loading dialog
             self.loading_dialog.accept()
-
-            # Re-enable the export button
-            self.export_button.setEnabled(True)
-
-            self.export_error_message = None
-
-            # Close the exporting dialog
-            self.accept()
         except Exception as e:
             self.log_and_exit(e)
+        finally:
+            # Re-enable actions after completion flow and clear transient error state.
+            self.export_button.setEnabled(True)
+            self.export_error_message = None
             
     def log_and_exit(self, exception):
         CustomLogger(exception, reraise=False)
