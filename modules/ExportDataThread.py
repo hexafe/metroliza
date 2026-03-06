@@ -3276,7 +3276,7 @@ class ExportDataThread(QThread):
                     for line_spec in build_horizontal_limit_line_specs(USL, LSL):
                         ax.axhline(**line_spec)
 
-                    ax.set_xlabel('Sample #')
+                    ax.set_xlabel(distribution_x_axis_label)
                     ax.set_ylabel('Measurement')
                     ax.set_title(build_wrapped_chart_title(header), pad=20)
                     apply_minimal_axis_style(ax, grid_axis='y')

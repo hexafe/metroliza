@@ -4,6 +4,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 # Stubs for Qt and logger
@@ -1338,6 +1339,58 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         self.assertEqual(captured['labels'], ['1', '2', '3'])
         self.assertEqual(captured['positions'], [0.0, 1.0, 2.0])
+
+    def test_summary_sheet_trend_axis_title_uses_group_label_when_grouped(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.95, 10.0, 10.2, 10.1, 10.05, 10.02],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '1', '2', '2', '3', '3'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        grouped_header = header_group.assign(GROUP=['A', 'A', 'B', 'B', 'C', 'C'])
+        thread._prepared_grouping_df = pd.DataFrame()
+
+        for grouping_active, expected_label in ((False, 'Sample #'), (True, 'Group')):
+            with self.subTest(grouping_active=grouping_active):
+                if grouping_active:
+                    thread._apply_group_assignments = lambda hg, _gd: (grouped_header.copy(), True)
+                else:
+                    thread._apply_group_assignments = lambda hg, _gd: (hg, False)
+
+                captured_labels = []
+                original_set_xlabel = __import__('matplotlib.axes', fromlist=['Axes']).Axes.set_xlabel
+
+                def _capture_set_xlabel(ax, label, *args, **kwargs):
+                    captured_labels.append(label)
+                    return original_set_xlabel(ax, label, *args, **kwargs)
+
+                with mock.patch('matplotlib.axes.Axes.set_xlabel', new=_capture_set_xlabel):
+                    thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+
+                self.assertIn(expected_label, captured_labels)
 
     def test_summary_sheet_trend_uses_dense_labels_without_thinning(self):
         import pandas as pd
