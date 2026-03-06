@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -133,7 +134,7 @@ def test_measurement_rows_parse_for_inline_code_and_numbers_format():
         "DIM",
         "X 10 0.2 -0.2 10.1 0.1 0",
         "Y 5 0.1 -0.1 5.05 0.05 0",
-        "123 456 789",
+        "#END",
     ]
 
     parsed = parse_raw_lines_to_blocks(raw_lines)
@@ -199,7 +200,7 @@ def test_tp_parser_supports_optional_qualifiers_and_semantic_labels():
         "#TP QUALIFIED",
         "DIM",
         "TP RFS NOM 0 +TOL 0.4 BONUS 0.1 MEAS 0.25 DEV 0.25 OUTTOL 0",
-        "123 456 789",
+        "#END",
     ]
 
     parsed = parse_raw_lines_to_blocks(raw_lines)
@@ -228,7 +229,7 @@ def test_dim_ax_subrows_d1_d2_d3_parse_with_eight_column_shape():
         "D1 10 0.2 -0.2 10.03",
         "D2 20 0.2 -0.2 20.01",
         "D3 30 0.2 -0.2 29.98",
-        "123 456 789",
+        "#END",
     ]
 
     parsed = parse_raw_lines_to_blocks(raw_lines)
@@ -281,7 +282,7 @@ def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
             "D1 10 0.2 -0.2 10.03",
             "D2 20 0.2 -0.2 20.01",
             "D3 30 0.2 -0.2 29.98",
-            "123 456 789",
+            "#END",
         ]
     )
 
@@ -297,3 +298,112 @@ def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
         ("D2", 20.0, 0.2, -0.2, 0.0, 20.01, "", ""),
         ("D3", 30.0, 0.2, -0.2, 0.0, 29.98, "", ""),
     ]
+
+
+def _load_cmm_report_parser_with_test_stubs():
+    import importlib.machinery
+    import importlib.util
+    import sys
+    import types
+
+    custom_logger_stub = types.ModuleType("modules.CustomLogger")
+    custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
+    sys.modules["modules.CustomLogger"] = custom_logger_stub
+
+    fitz_stub = types.ModuleType("fitz")
+    fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
+    sys.modules["fitz"] = fitz_stub
+    pymupdf_stub = types.ModuleType("pymupdf")
+    pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec("pymupdf", loader=None)
+    sys.modules["pymupdf"] = pymupdf_stub
+
+    parser_spec = importlib.util.spec_from_file_location(
+        "_cmm_report_parser_real_for_pipeline_test", Path("modules/CMMReportParser.py")
+    )
+    assert parser_spec is not None and parser_spec.loader is not None
+    parser_module = importlib.util.module_from_spec(parser_spec)
+    parser_spec.loader.exec_module(parser_module)
+    return parser_module.CMMReportParser
+
+
+def _assert_tp_pipeline_roundtrip(parsed_blocks, tmp_path):
+    from modules.db import execute_with_retry
+
+    CMMReportParser = _load_cmm_report_parser_with_test_stubs()
+
+    assert parsed_blocks[0][1][0] == ["TP", 0.0, 0.2, 0, 0.0, 0.344, 0.344, 0.144]
+
+    db_path = str(tmp_path / "tp_pipeline.db")
+    parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
+    parser.pdf_reference = "REF01"
+    parser.pdf_file_path = "/tmp/reports"
+    parser.pdf_file_name = "REF01_2024-01-02_123.pdf"
+    parser.pdf_date = "2024-01-02"
+    parser.pdf_sample_number = "123"
+    parser.pdf_blocks_text = parsed_blocks
+    parser.to_sqlite()
+
+    measurement_rows = execute_with_retry(
+        db_path,
+        'SELECT NOM, "+TOL", BONUS, MEAS, DEV, OUTTOL FROM MEASUREMENTS WHERE AX = "TP"',
+    )
+    assert measurement_rows == [(0.0, 0.2, 0.0, 0.344, 0.344, 0.144)]
+
+    with sqlite3.connect(db_path) as conn:
+        export_rows = conn.execute(
+            """
+            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
+                MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
+                MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
+                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
+            FROM MEASUREMENTS
+            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            WHERE 1=1
+            """
+        ).fetchall()
+
+    assert export_rows == [
+        (
+            "TP",
+            0.0,
+            0.2,
+            0.0,
+            0.0,
+            0.344,
+            0.344,
+            0.144,
+            "TP QUALIFIER PIPELINE",
+            "REF01",
+            "/tmp/reports",
+            "REF01_2024-01-02_123.pdf",
+            "2024-01-02",
+            "123",
+        )
+    ]
+
+
+def test_tp_qualifier_pipeline_roundtrip_python_backend(tmp_path):
+    raw_lines = [
+        "#TP QUALIFIER PIPELINE",
+        "DIM",
+        "TP RFS 0.200 0.000 0.344 0.344 0.144",
+        "#END",
+    ]
+
+    parsed = parse_blocks_with_backend(raw_lines, use_native=False)
+    _assert_tp_pipeline_roundtrip(parsed, tmp_path)
+
+
+def test_tp_qualifier_pipeline_roundtrip_native_backend_when_available(tmp_path):
+    if not native_backend_available():
+        pytest.skip("Native CMM parser prototype module is not built in this environment")
+
+    raw_lines = [
+        "#TP QUALIFIER PIPELINE",
+        "DIM",
+        "TP RFS 0.200 0.000 0.344 0.344 0.144",
+        "#END",
+    ]
+
+    parsed = parse_blocks_with_backend(raw_lines, use_native=True)
+    _assert_tp_pipeline_roundtrip(parsed, tmp_path)
