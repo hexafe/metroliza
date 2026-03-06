@@ -25,6 +25,9 @@ MEASUREMENT_LINE_MAP = {
     "PR": 7,
     "PA": 4,
     "D1": 5,
+    "D2": 5,
+    "D3": 5,
+    "D4": 5,
     "A": 7,
 }
 
@@ -182,7 +185,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
         elif line[0] == "PA" and len(line) == 4:
             processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-        elif line[0] == "D1" and len(line) == 5 and line[1].isnumeric():
+        elif line[0] in {"D1", "D2", "D3", "D4"} and len(line) == 5 and is_number(line[1]):
             processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
         elif line[0] == "A" and len(line) == 7:
             processed_line = [
