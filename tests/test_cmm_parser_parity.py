@@ -221,6 +221,33 @@ def test_tp_parser_defaults_nom_to_zero_when_absent():
     assert parsed[0][1][0] == ["TP", 0.0, 0.4, 0, 0.1, 0.25, 0.25, 0.0]
 
 
+
+@pytest.mark.parametrize("qualifier", ["RFS", "MMC", "LMC", "MMB", "LMB", "TANGENT", "PROJECTED"])
+def test_tp_parser_defaults_nom_to_zero_for_qualified_numeric_only_rows(qualifier):
+    raw_lines = [
+        "#TP QUALIFIED NUMERIC",
+        "DIM",
+        f"TP {qualifier} 0.600 0.000 0.237 0.237 0.000",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed[0][1][0] == ["TP", 0.0, 0.6, 0, 0.0, 0.237, 0.237, 0.0]
+
+
+def test_tp_parser_keeps_explicit_nom_for_qualified_rows_with_nom_label():
+    raw_lines = [
+        "#TP QUALIFIED EXPLICIT NOM",
+        "DIM",
+        "TP RFS NOM 0.600 +TOL 0.200 BONUS 0.000 MEAS 0.237 DEV 0.237 OUTTOL 0.000",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed[0][1][0] == ["TP", 0.6, 0.2, 0, 0.0, 0.237, 0.237, 0.0]
+
 def test_non_tp_x_parser_ignores_semantic_labels_without_shifting_values():
     raw_lines = [
         "#X LABELED",
