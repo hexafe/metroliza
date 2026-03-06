@@ -26,6 +26,7 @@ matplotlib.use('Agg')
 import importlib.util
 
 import matplotlib.pyplot as plt
+import matplotlib.transforms as mtransforms
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
@@ -828,6 +829,8 @@ def annotate_violin_group_stats(
     )
     style['one_sided_sigma_mode'] = one_sided_sigma_mode
     annotation_boxes = []
+    preview_text = None
+    renderer = None
 
     dense_group_threshold = 16
     if group_count > dense_group_threshold:
@@ -853,6 +856,11 @@ def annotate_violin_group_stats(
         style['mode'] = 'dense'
         return style
 
+    if use_dynamic_offsets:
+        ax.figure.canvas.draw()
+        renderer = ax.figure.canvas.get_renderer()
+        preview_text = ax.text(0, 0, '', alpha=0)
+
     def _resolve_annotation_offset(point_xy, text, base_offset, *, fontsize, color=None, bbox=None):
         """Return a collision-free text offset while preserving deterministic behavior."""
         candidate_offsets = [
@@ -872,23 +880,28 @@ def annotate_violin_group_stats(
         if not use_dynamic_offsets:
             return tuple(base_offset)
 
-        renderer = ax.figure.canvas.get_renderer()
         selected_bbox = None
         selected_offset = candidate_offsets[0]
         for candidate_offset in candidate_offsets:
-            preview = ax.annotate(
-                text,
-                point_xy,
-                textcoords='offset points',
-                xytext=candidate_offset,
-                fontsize=fontsize,
-                color=color,
-                bbox=bbox,
-                alpha=0,
+            preview_text.set_text(text)
+            preview_text.set_position(point_xy)
+            preview_text.set_fontsize(fontsize)
+            preview_text.set_color(color if color is not None else SUMMARY_PLOT_PALETTE['annotation_text'])
+            preview_text.set_bbox(
+                dict(bbox)
+                if bbox is not None
+                else {'boxstyle': 'square,pad=0', 'fc': 'none', 'ec': 'none', 'alpha': 0.0}
             )
-            ax.figure.canvas.draw()
-            bbox_display = preview.get_window_extent(renderer=renderer).expanded(1.03, 1.08)
-            preview.remove()
+            preview_text.set_transform(
+                mtransforms.offset_copy(
+                    ax.transData,
+                    fig=ax.figure,
+                    x=candidate_offset[0],
+                    y=candidate_offset[1],
+                    units='points',
+                )
+            )
+            bbox_display = preview_text.get_window_extent(renderer=renderer).expanded(1.03, 1.08)
 
             if not any(bbox_display.overlaps(existing_box['display']) for existing_box in annotation_boxes):
                 selected_bbox = bbox_display
@@ -914,8 +927,6 @@ def annotate_violin_group_stats(
             )
         return selected_offset
 
-    if use_dynamic_offsets:
-        ax.figure.canvas.draw()
     for idx, group_values in enumerate(values):
         arr = np.asarray(group_values, dtype=float)
         if arr.size == 0:
@@ -992,6 +1003,9 @@ def annotate_violin_group_stats(
                 alpha=0.8,
                 zorder=3,
             )
+
+    if preview_text is not None:
+        preview_text.remove()
 
     return style
 
