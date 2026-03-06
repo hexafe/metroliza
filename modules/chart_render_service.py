@@ -113,7 +113,12 @@ def build_violin_payload_vectorized(sampled_group: pd.DataFrame, grouping_key: s
         values = cleaned_values.tolist()
         return ['All'], [values], len(cleaned_values) >= min_samplesize
 
-    work_df = sampled_group[[grouping_key, 'MEAS']].dropna(subset=['MEAS']).copy()
+    work_df = sampled_group[[grouping_key, 'MEAS']].dropna(how='all', subset=[grouping_key, 'MEAS']).copy()
+    work_df = work_df.dropna(subset=['MEAS'])
+    if pd.api.types.is_string_dtype(work_df[grouping_key]) or pd.api.types.is_object_dtype(work_df[grouping_key]):
+        work_df[grouping_key] = work_df[grouping_key].str.strip()
+    work_df = work_df[work_df[grouping_key].notna()]
+    work_df = work_df[work_df[grouping_key] != '']
     work_df[grouping_key] = work_df[grouping_key].astype(str)
 
     grouped = work_df.groupby(grouping_key, sort=False)['MEAS']
