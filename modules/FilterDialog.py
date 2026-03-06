@@ -1,8 +1,8 @@
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_with_retry
-from PyQt6.QtCore import QDate
+from PyQt6.QtCore import QDate, Qt
+import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtWidgets import(
-    QAbstractItemView,
     QDateEdit,
     QDialog,
     QGridLayout,
@@ -29,7 +29,21 @@ class FilterDialog(QDialog):
         else:
             self.filter_query = ""
         
+        self._last_clicked_row_by_list = {}
+
         self.setup_ui()
+
+    @staticmethod
+    def _multi_selection_mode():
+        selection_mode_enum = getattr(getattr(QtWidgets, "QAbstractItemView", None), "SelectionMode", None)
+        return getattr(selection_mode_enum, "MultiSelection", 2)
+
+    @staticmethod
+    def _keyboard_modifiers():
+        app_cls = getattr(QtWidgets, "QApplication", None)
+        if app_cls is None or not hasattr(app_cls, "keyboardModifiers"):
+            return 0
+        return app_cls.keyboardModifiers()
 
     def setup_ui(self):
         try:
@@ -45,21 +59,21 @@ class FilterDialog(QDialog):
             # Create labels and list widgets for each column to be filtered
             self.ax_label = QLabel("AX:")
             self.ax_list = QListWidget()
-            self.ax_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.ax_list.setSelectionMode(self._multi_selection_mode())
 
             self.reference_label = QLabel("REFERENCE:")
             self.reference_list = QListWidget()
-            self.reference_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.reference_list.setSelectionMode(self._multi_selection_mode())
 
             self.header_label = QLabel("HEADER:")
             self.header_list = QListWidget()
-            self.header_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.header_list.setSelectionMode(self._multi_selection_mode())
             self.all_headers_list = QListWidget()
-            self.all_headers_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.all_headers_list.setSelectionMode(self._multi_selection_mode())
             
             self.selected_headers_label = QLabel("SELECTED HEADERS:")
             self.selected_headers_list = QListWidget()
-            self.selected_headers_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.selected_headers_list.setSelectionMode(self._multi_selection_mode())
 
             self.date_from_label = QLabel("MEASUREMENT DATE FROM:")
             self.date_from_calendar = QDateEdit(calendarPopup=True)
@@ -147,11 +161,39 @@ class FilterDialog(QDialog):
             # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
             self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
 
+            self._connect_shift_range_for_list(self.ax_list)
+            self._connect_shift_range_for_list(self.reference_list)
+            self._connect_shift_range_for_list(self.header_list)
+            self._connect_shift_range_for_list(self.selected_headers_list)
+
             self.select_today_button.clicked.connect(self.select_today_as_date_to)
             self.select_beginning_button.clicked.connect(self.select_beginning_of_time)
             self.apply_button.clicked.connect(self.apply_filters)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _connect_shift_range_for_list(self, list_widget):
+        list_widget.itemPressed.connect(lambda item, lw=list_widget: self._handle_list_item_pressed(lw, item))
+
+    def _handle_list_item_pressed(self, list_widget, item):
+        if item is None:
+            return
+
+        row = list_widget.row(item)
+        previous_row = self._last_clicked_row_by_list.get(list_widget)
+        is_shift_pressed = bool(self._keyboard_modifiers() & Qt.KeyboardModifier.ShiftModifier)
+
+        if is_shift_pressed and previous_row is not None:
+            start_row = min(previous_row, row)
+            end_row = max(previous_row, row)
+            for index in range(start_row, end_row + 1):
+                list_item = list_widget.item(index)
+                if list_item is not None and not list_item.isHidden():
+                    list_item.setSelected(True)
+            list_widget.setCurrentItem(item)
+            return
+
+        self._last_clicked_row_by_list[list_widget] = row
 
     def populate_list_widgets(self):
         try:
