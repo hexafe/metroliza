@@ -737,27 +737,50 @@ class DataGrouping(QDialog):
         """
 
         try:
-            selected_group = self._selected_group_name()
-            selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_group_list.selectedItems()]
-
-            if selected_group and selected_part_keys:
-                # Update the dataframe with the default group information for selected rows only
-                self.df.loc[
-                    (self.df['GROUP'] == selected_group) &
-                    (self.df['GROUP_KEY'].isin(selected_part_keys)),
-                    'GROUP'
-                ] = self.default_group
-                self.df.loc[
-                    (self.df['GROUP'] == self.default_group) &
-                    (self.df['GROUP_KEY'].isin(selected_part_keys)),
-                    self.group_color_column
-                ] = self.default_group_color
-
-                # Repopulate the list widgets after updating the dataframe
-                self.populate_list_widgets()
-                self.remove_from_group_button.setDisabled(True)
+            self._delete_selected_parts_from_group()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _delete_selected_parts_from_group(self):
+        selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_group_list.selectedItems()]
+        selected_group = self._selected_group_name()
+
+        if not selected_group or not selected_part_keys:
+            return False
+
+        rows_to_reassign = (
+            (self.df['GROUP'] == selected_group)
+            & (self.df['GROUP_KEY'].isin(selected_part_keys))
+        )
+        self.df.loc[rows_to_reassign, 'GROUP'] = self.default_group
+        self.df.loc[rows_to_reassign, self.group_color_column] = self.default_group_color
+
+        self.populate_list_widgets()
+        self.remove_from_group_button.setDisabled(True)
+        return True
+
+    def keyPressEvent(self, event):
+        try:
+            pressed_key = event.key() if event is not None and hasattr(event, "key") else None
+            if (
+                pressed_key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+                and self.part_group_list is not None
+                and (
+                    self.part_group_list.hasFocus()
+                    or (
+                        hasattr(self.part_group_list, "viewport")
+                        and self.part_group_list.viewport() is not None
+                        and self.part_group_list.viewport().hasFocus()
+                    )
+                )
+            ):
+                self._delete_selected_parts_from_group()
+                event.accept()
+                return
+        except Exception as e:
+            self.log_and_exit(e)
+
+        super().keyPressEvent(event)
             
     def delete_group(self):
         """Handle `delete_group` for `DataGrouping`.
