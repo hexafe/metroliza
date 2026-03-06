@@ -56,6 +56,20 @@ class TestChartRenderService(unittest.TestCase):
 
         self.assertEqual(len(sampled), policy.iqr_limit)
 
+    def test_vectorized_violin_payload_excludes_null_and_blank_groups(self):
+        frame = pd.DataFrame(
+            {
+                'GROUP': ['A', None, '', '   ', 'B'],
+                'MEAS': [1.0, 9.9, 8.8, 7.7, 2.0],
+            }
+        )
+
+        labels, values, can_render = build_violin_payload_vectorized(frame, 'GROUP', 1)
+
+        self.assertEqual(labels, ['A', 'B'])
+        self.assertEqual(values, [[1.0], [2.0]])
+        self.assertTrue(can_render)
+
 
 if __name__ == '__main__':
     unittest.main()
