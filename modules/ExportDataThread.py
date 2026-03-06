@@ -794,6 +794,7 @@ def annotate_violin_group_stats(
     *,
     nom=None,
     lsl=None,
+    one_sided=None,
     epsilon=None,
     readability_scale=None,
     annotation_mode='auto',
@@ -809,16 +810,20 @@ def annotate_violin_group_stats(
 
     group_count = max(len(values), len(labels))
     epsilon_value = 1e-12 if epsilon is None else float(epsilon)
-    one_sided_sigma_mode = False
-    if nom is not None and lsl is not None:
-        try:
-            nom_value = float(nom)
-            lsl_value = float(lsl)
-            one_sided_sigma_mode = bool(is_one_sided_geometric_tolerance(nom_value, lsl_value))
-            if not one_sided_sigma_mode:
-                one_sided_sigma_mode = abs(nom_value) <= epsilon_value and abs(lsl_value) <= epsilon_value
-        except (TypeError, ValueError):
-            one_sided_sigma_mode = False
+    explicit_one_sided_mode = one_sided is not None
+    if explicit_one_sided_mode:
+        one_sided_sigma_mode = bool(one_sided)
+    else:
+        one_sided_sigma_mode = False
+        if nom is not None and lsl is not None:
+            try:
+                nom_value = float(nom)
+                lsl_value = float(lsl)
+                one_sided_sigma_mode = bool(is_one_sided_geometric_tolerance(nom_value, lsl_value))
+                if not one_sided_sigma_mode:
+                    one_sided_sigma_mode = abs(nom_value) <= epsilon_value and abs(lsl_value) <= epsilon_value
+            except (TypeError, ValueError):
+                one_sided_sigma_mode = False
 
     style = resolve_violin_annotation_style(
         group_count=group_count,
@@ -828,6 +833,7 @@ def annotate_violin_group_stats(
         readability_scale=readability_scale,
     )
     style['one_sided_sigma_mode'] = one_sided_sigma_mode
+    style['one_sided_sigma_explicit'] = explicit_one_sided_mode
     annotation_boxes = []
     preview_text = None
     renderer = None
@@ -1092,7 +1098,7 @@ def render_violin(
     nom=None,
     lsl=None,
     usl=None,
-    one_sided=False,
+    one_sided=None,
     epsilon=None,
     readability_scale=None,
     use_dynamic_offsets=True,
@@ -1120,6 +1126,7 @@ def render_violin(
         positions,
         nom=nom,
         lsl=lsl,
+        one_sided=one_sided,
         epsilon=epsilon,
         readability_scale=readability_scale,
         use_dynamic_offsets=use_dynamic_offsets,

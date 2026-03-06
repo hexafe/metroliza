@@ -1593,6 +1593,78 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(y_end, mean_val)
         plt.close(fig)
 
+
+    def test_annotate_violin_group_stats_explicit_one_sided_true_overrides_heuristic(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(-0.5, 0.5)
+
+        values = [[1.0, 2.0, 3.0, 4.0]]
+        style = annotate_violin_group_stats(
+            ax,
+            ['A'],
+            values,
+            [0],
+            annotation_mode='full',
+            nom=1.0,
+            lsl=0.5,
+            one_sided=True,
+        )
+
+        sigma_collection = ax.collections[-1]
+        segment = sigma_collection.get_segments()[0]
+        y_start = float(segment[0][1])
+        mean_val = float(sum(values[0]) / len(values[0]))
+
+        self.assertTrue(style['one_sided_sigma_mode'])
+        self.assertTrue(style['one_sided_sigma_explicit'])
+        self.assertAlmostEqual(y_start, mean_val, places=7)
+        plt.close(fig)
+
+    def test_annotate_violin_group_stats_explicit_one_sided_false_overrides_heuristic(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(-0.5, 0.5)
+
+        values = [[1.0, 2.0, 3.0, 4.0]]
+        style = annotate_violin_group_stats(
+            ax,
+            ['A'],
+            values,
+            [0],
+            annotation_mode='full',
+            nom=0.0,
+            lsl=0.0,
+            one_sided=False,
+        )
+
+        sigma_collection = ax.collections[-1]
+        segment = sigma_collection.get_segments()[0]
+        y_start = float(segment[0][1])
+        mean_val = float(sum(values[0]) / len(values[0]))
+
+        self.assertFalse(style['one_sided_sigma_mode'])
+        self.assertTrue(style['one_sided_sigma_explicit'])
+        self.assertLess(y_start, mean_val)
+        plt.close(fig)
+
+    def test_render_violin_fallback_heuristic_uses_one_sided_sigma_when_mode_not_provided(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        render_violin(
+            ax,
+            [[1.0, 1.2, 0.8], [1.5, 1.7, 1.4]],
+            ['A', 'B'],
+            nom=0.0,
+            lsl=0.0,
+            readability_scale=0.3,
+        )
+
+        legend = ax.get_legend()
+        self.assertIsNotNone(legend)
+        legend_labels = [text.get_text() for text in legend.get_texts()]
+        self.assertIn('+3σ span (visual)', legend_labels)
+        self.assertNotIn('±3σ span (visual)', legend_labels)
+        plt.close(fig)
+
     def test_annotate_violin_group_stats_one_sided_sigma_segment_starts_at_mean(self):
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.set_xlim(-0.5, 0.5)
@@ -1630,15 +1702,16 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('±3σ span (visual)', legend_labels)
         plt.close(fig)
 
-    def test_render_violin_uses_one_sided_sigma_legend_label_for_gdt_mode(self):
+    def test_render_violin_uses_one_sided_sigma_legend_label_for_explicit_mode(self):
         fig, ax = plt.subplots(figsize=(6, 4))
 
         render_violin(
             ax,
             [[1.0, 1.2, 0.8], [1.5, 1.7, 1.4]],
             ['A', 'B'],
-            nom=0.0,
-            lsl=0.0,
+            nom=1.0,
+            lsl=0.5,
+            one_sided=True,
             readability_scale=0.3,
         )
 
@@ -1647,6 +1720,26 @@ class TestExportPlotHelpers(unittest.TestCase):
         legend_labels = [text.get_text() for text in legend.get_texts()]
         self.assertIn('+3σ span (visual)', legend_labels)
         self.assertNotIn('±3σ span (visual)', legend_labels)
+        plt.close(fig)
+
+    def test_render_violin_uses_plus_minus_sigma_legend_label_for_explicit_two_sided_mode(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        render_violin(
+            ax,
+            [[1.0, 1.2, 0.8], [1.5, 1.7, 1.4]],
+            ['A', 'B'],
+            nom=0.0,
+            lsl=0.0,
+            one_sided=False,
+            readability_scale=0.3,
+        )
+
+        legend = ax.get_legend()
+        self.assertIsNotNone(legend)
+        legend_labels = [text.get_text() for text in legend.get_texts()]
+        self.assertIn('±3σ span (visual)', legend_labels)
+        self.assertNotIn('+3σ span (visual)', legend_labels)
         plt.close(fig)
 
     def test_annotation_collision_resolution_is_deterministic_for_dense_groups(self):
