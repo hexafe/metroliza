@@ -176,3 +176,29 @@ def test_add_tolerances_keeps_explicit_zero_values_for_non_tp_blocks():
     assert pdf_blocks_text[0][1][0] == ["X", 10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0]
     assert pdf_blocks_text[0][1][1][2:5] == [0, "", ""]
     assert pdf_blocks_text[0][1][2][2:5] == [0, None, None]
+
+
+def test_tp_parser_supports_optional_qualifiers_and_semantic_labels():
+    raw_lines = [
+        "#TP QUALIFIED",
+        "DIM",
+        "TP RFS NOM 0 +TOL 0.4 BONUS 0.1 MEAS 0.25 DEV 0.25 OUTTOL 0",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed[0][1][0] == ["TP", 0.0, 0.4, 0, 0.1, 0.25, 0.25, 0.0]
+
+
+def test_tp_parser_defaults_nom_to_zero_when_absent():
+    raw_lines = [
+        "#TP NOM DEFAULT",
+        "DIM",
+        "TP MMC +TOL 0.4 BONUS 0.1 MEAS 0.25 DEV 0.25 OUTTOL 0",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed[0][1][0] == ["TP", 0.0, 0.4, 0, 0.1, 0.25, 0.25, 0.0]
