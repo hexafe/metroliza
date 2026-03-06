@@ -105,6 +105,7 @@ from modules.export_sheet_writer import (
     build_summary_panel_write_plan,
 )
 from modules.stats_utils import is_one_sided_geometric_tolerance, safe_process_capability
+# Canonical violin payload builder lives in `modules/chart_render_service.py`.
 from modules.chart_render_service import (
     BoundedWorkerPool,
     build_violin_payload_vectorized,
@@ -2041,19 +2042,13 @@ class ExportDataThread(QThread):
 
     @staticmethod
     def _build_violin_payload(header_group, group_column, min_samplesize):
-        grouped_meas = (
-            header_group.dropna(subset=['MEAS'])
-            .groupby(group_column, sort=False)['MEAS']
-            .agg(list)
+        """Backward-compatible wrapper around the canonical vectorized builder."""
+
+        return build_violin_payload_vectorized(
+            header_group,
+            group_column,
+            min_samplesize=min_samplesize,
         )
-
-        if grouped_meas.empty:
-            return [], [], False
-
-        labels = list(grouped_meas.index)
-        values = list(grouped_meas.values)
-        can_render_violin = all(len(group_values) >= min_samplesize for group_values in values)
-        return labels, values, can_render_violin
 
     @staticmethod
     def _build_summary_scatter_payload(header_group, x_column, *, grouping_active=False):
