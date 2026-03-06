@@ -12,16 +12,16 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 ## Active build identity (single source for this status snapshot)
 
 - Branch: `work`
-- Commit SHA: `e86ecd214e21e42a89a28af1e794b33115857a6b`
-- Artifact/build ID: `2026.03-build260301-e86ecd2`
-- Release line metadata: `RELEASE_VERSION=2026.03`, `VERSION_DATE=260301`
+- Commit SHA: `84a2302475b3559f319eb225b554a7f3bfbbc214`
+- Artifact/build ID: `2026.03-build260305-84a2302`
+- Release line metadata: `RELEASE_VERSION=2026.03`, `VERSION_DATE=260305`
 
 | Track | Status | Notes | Primary doc |
 |---|---|---|---|
-| Freeze | Pre-freeze checks in progress | Implementation-item triage is complete, but broader freeze scope confirmation and owner assignment gates remain open. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
-| Open testing | Blocked (No-Go) | Do not promote this build to open testing: smoke evidence is recorded for the current build identity but outcome is **FAIL** due to OAuth refresh network/proxy `403 Forbidden`. | [`google_conversion_smoke.md`](./google_conversion_smoke.md), [`open_testing_runbook.md`](./open_testing_runbook.md) |
-| Release candidate readiness | Blocked pending smoke rerun | Current RC decision is **No-Go** for build `2026.03-build260301-e86ecd2`; rerun smoke with valid sandbox credentials or cut a new build identity and re-evidence. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
-| Google conversion smoke gate | Evidence complete, status FAIL | Evidence package exists (command, outcome notes, and build identity), but gate remains release-blocking until PASS. | [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
+| Freeze | Pre-freeze checks in progress | Implementation-item triage is complete, but freeze scope lock, release owner assignment, and metadata sync checks remain open in the RC checklist. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
+| Open testing | Blocked (No-Go) | Do not promote build `2026.03-build260305-84a2302`: release-gated Google smoke evidence is not yet recorded for this build identity, and the prior `260301` run ended **FAIL** (`403 Forbidden`) and cannot be reused. | [`google_conversion_smoke.md`](./google_conversion_smoke.md), [`open_testing_runbook.md`](./open_testing_runbook.md) |
+| Release candidate readiness | Blocked pending current-build smoke evidence | Current RC decision is **No-Go** for build `2026.03-build260305-84a2302`; run smoke on branch `work` commit `84a2302475b3559f319eb225b554a7f3bfbbc214` and capture a PASS evidence set before promotion (or cut a superseding build and re-evidence). | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
+| Google conversion smoke gate | Blocked (no PASS for current build) | Latest recorded evidence targets prior build `2026.03-build260301-e86ecd2` and is **FAIL**; gate remains release-blocking until a PASS is captured for active build `2026.03-build260305-84a2302`. | [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
 
 ## Operating notes
 
