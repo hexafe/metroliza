@@ -448,6 +448,16 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('Shapiro p =', result['text'])
         self.assertTrue(result['text'].endswith('\nNon-normal'))
 
+    def test_compute_normality_status_marks_one_sided_mode_not_applicable(self):
+        result = compute_normality_status([0.0, 0.02, 0.03, 0.05, 0.04, 0.01], one_sided=True, location_bound=0.0)
+
+        self.assertEqual(result['status'], 'not_applicable')
+        self.assertEqual(result['test_name'], 'One-sided tolerance model')
+        self.assertIsNone(result['p_value'])
+        self.assertIn('One-sided tolerance', result['text'])
+        self.assertIn('Bound = 0.0000', result['text'])
+        self.assertTrue(result['text'].endswith('\nNormality not applicable'))
+
     def test_render_histogram_uses_fd_bins_for_non_degenerate_data(self):
         import pandas as pd
 
@@ -981,6 +991,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             ('Shapiro p = 0.5000\nNormal', 'normal', 'normality_normal_bg'),
             ('Shapiro p = 0.0040\nNon-normal', 'not_normal', 'normality_not_normal_bg'),
             ('Shapiro p = N/A\nUnknown', 'unknown', 'normality_unknown_bg'),
+            ('One-sided tolerance\nNormality not applicable', 'not_applicable', 'normality_unknown_bg'),
         ]
 
         for normality_text, status, palette_bg in scenarios:

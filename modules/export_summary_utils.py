@@ -8,7 +8,7 @@ from matplotlib.patches import Patch
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
-from modules.stats_utils import safe_process_capability
+from modules.stats_utils import is_one_sided_geometric_tolerance, safe_process_capability
 
 
 _INTEGER_PATTERN = re.compile(r'^[+-]?\d+$')
@@ -70,7 +70,8 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
     nok_count = header_group[(meas > usl) | (meas < lsl)]['MEAS'].count()
 
     cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
-    normality = compute_normality_status(meas)
+    one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, lsl))
+    normality = compute_normality_status(meas, one_sided=one_sided_mode, location_bound=lsl)
 
     return {
         'minimum': meas.min(),
@@ -90,10 +91,22 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
     }
 
 
-def compute_normality_status(measurements):
+def compute_normality_status(measurements, *, one_sided=False, location_bound=None):
     """Classify measurement normality using Shapiro-Wilk when applicable."""
     numeric_measurements = pd.to_numeric(pd.Series(measurements), errors='coerce').dropna().to_numpy(dtype=float)
     sample_size = int(numeric_measurements.size)
+
+    if one_sided:
+        location_note = ''
+        if isinstance(location_bound, (int, float)) and not math.isnan(location_bound):
+            location_note = f'\nBound = {location_bound:.4f}'
+        return {
+            'status': 'not_applicable',
+            'test_name': 'One-sided tolerance model',
+            'p_value': None,
+            'text': f'One-sided tolerance{location_note}\nNormality not applicable',
+        }
+
     unknown_payload = {
         'status': 'unknown',
         'test_name': 'Shapiro',

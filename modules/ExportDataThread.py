@@ -1588,6 +1588,8 @@ def classify_normality_status(normality_status):
         return {'label': 'Normality normal', 'palette_key': 'normality_normal'}
     if normality_status == 'not_normal':
         return {'label': 'Normality not normal', 'palette_key': 'normality_not_normal'}
+    if normality_status == 'not_applicable':
+        return {'label': 'Normality not applicable', 'palette_key': 'normality_unknown'}
     return {'label': 'Normality unknown', 'palette_key': 'normality_unknown'}
 
 def build_summary_panel_subtitle(summary_stats):
@@ -2849,7 +2851,12 @@ class ExportDataThread(QThread):
                         average = float(average_raw)
                         sigma = float(sigma_raw or 0.0)
                         cp, cpk = safe_process_capability(nom, USL, LSL, sigma, average)
-                        normality = compute_normality_status(header_group['MEAS'])
+                        one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, LSL))
+                        normality = compute_normality_status(
+                            header_group['MEAS'],
+                            one_sided=one_sided_mode,
+                            location_bound=LSL,
+                        )
                         summary_stats = {
                             'minimum': float(minimum_raw),
                             'maximum': float(maximum_raw),
