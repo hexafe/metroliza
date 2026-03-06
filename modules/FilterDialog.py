@@ -195,6 +195,28 @@ class FilterDialog(QDialog):
 
         self._last_clicked_row_by_list[list_widget] = row
 
+    def keyPressEvent(self, event):
+        try:
+            pressed_key = event.key() if event is not None and hasattr(event, "key") else None
+            if (
+                pressed_key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+                and self.selected_headers_list is not None
+                and self.selected_headers_list.hasFocus()
+            ):
+                selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}
+                if selected_headers:
+                    for row in range(self.header_list.count()):
+                        header_item = self.header_list.item(row)
+                        if header_item is not None and header_item.text() in selected_headers:
+                            header_item.setSelected(False)
+                    self.update_selected_headers()
+                event.accept()
+                return
+        except Exception as e:
+            self.log_and_exit(e)
+
+        super().keyPressEvent(event)
+
     def populate_list_widgets(self):
         try:
             ax_values = execute_with_retry(self.db_file, "SELECT DISTINCT AX FROM MEASUREMENTS;")
