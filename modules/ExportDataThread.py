@@ -2872,6 +2872,7 @@ class ExportDataThread(QThread):
             histogram_row_badges = {
                 **capability_row_badges,
                 **normality_row_badge,
+                'NOK %': classify_nok_severity(summary_stats.get('nok_pct')),
             }
             panel_subtitle = build_summary_panel_subtitle(summary_stats)
 
@@ -3142,7 +3143,7 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         ax_table,
-                        statistic_col_width_ratio=0.56,
+                        statistic_col_width_ratio=0.54,
                         row_height_scale=1.15,
                     )
 
