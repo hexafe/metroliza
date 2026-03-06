@@ -221,6 +221,32 @@ def test_tp_parser_defaults_nom_to_zero_when_absent():
     assert parsed[0][1][0] == ["TP", 0.0, 0.4, 0, 0.1, 0.25, 0.25, 0.0]
 
 
+def test_non_tp_x_parser_ignores_semantic_labels_without_shifting_values():
+    raw_lines = [
+        "#X LABELED",
+        "DIM",
+        "X NOM 10 +TOL 0.2 -TOL -0.2 MEAS 10.1 DEV 0.1 OUTTOL 0",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed[0][1][0] == ["X", 10.0, 0.2, -0.2, 0, 10.1, 0.1, 0.0]
+
+
+def test_non_tp_m_parser_ignores_semantic_labels_without_shifting_values():
+    raw_lines = [
+        "#M LABELED",
+        "DIM",
+        "M NOM 5 +TOL 0.1 -TOL -0.1 BONUS 0.0 MEAS 5.02 DEV 0.02 OUTTOL 0",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed[0][1][0] == ["M", 5.0, 0.1, -0.1, 0.0, 5.02, 0.02, 0.0]
+
+
 
 def test_dim_ax_subrows_d1_d2_d3_parse_with_eight_column_shape():
     raw_lines = [
