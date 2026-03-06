@@ -1669,6 +1669,67 @@ class TestExportPlotHelpers(unittest.TestCase):
         plt.close(fig_one)
         plt.close(fig_two)
 
+    def test_annotate_violin_group_stats_dynamic_offsets_keep_marker_and_style_behavior(self):
+        labels = ['A', 'B']
+        values = [[1.0, 1.2, 1.4], [1.5, 1.7, 1.9]]
+        positions = [0, 1]
+
+        fig_static, ax_static = plt.subplots(figsize=(6, 4))
+        ax_static.set_xlim(-0.5, 1.5)
+        style_static = annotate_violin_group_stats(
+            ax_static,
+            labels,
+            values,
+            positions,
+            annotation_mode='full',
+            use_dynamic_offsets=False,
+        )
+
+        fig_dynamic, ax_dynamic = plt.subplots(figsize=(6, 4))
+        ax_dynamic.set_xlim(-0.5, 1.5)
+        style_dynamic = annotate_violin_group_stats(
+            ax_dynamic,
+            labels,
+            values,
+            positions,
+            annotation_mode='full',
+            use_dynamic_offsets=True,
+        )
+
+        self.assertEqual(style_dynamic, style_static)
+        static_text_map = {text.get_text(): (round(text.xyann[0], 2), round(text.xyann[1], 2)) for text in ax_static.texts}
+        dynamic_text_map = {text.get_text(): (round(text.xyann[0], 2), round(text.xyann[1], 2)) for text in ax_dynamic.texts}
+        self.assertEqual(set(static_text_map), set(dynamic_text_map))
+
+        expected_offsets = {
+            'min=1.000': (4.0, -10.0),
+            'μ=1.200': (4.0, 2.0),
+            'max=1.400': (4.0, 2.0),
+            'min=1.500': (4.0, -10.0),
+            'μ=1.700': (4.0, 2.0),
+            'max=1.900': (4.0, 2.0),
+        }
+        self.assertEqual(dynamic_text_map, expected_offsets)
+
+        static_markers = sorted(
+            (float(point[0]), float(point[1]))
+            for collection in ax_static.collections
+            if hasattr(collection, 'get_offsets')
+            for point in collection.get_offsets()
+            if np.isfinite(point[0]) and np.isfinite(point[1])
+        )
+        dynamic_markers = sorted(
+            (float(point[0]), float(point[1]))
+            for collection in ax_dynamic.collections
+            if hasattr(collection, 'get_offsets')
+            for point in collection.get_offsets()
+            if np.isfinite(point[0]) and np.isfinite(point[1])
+        )
+        self.assertEqual(dynamic_markers, static_markers)
+
+        plt.close(fig_static)
+        plt.close(fig_dynamic)
+
     def test_annotate_violin_group_stats_uses_positions_for_sigma_and_mean_markers(self):
         fig, ax = plt.subplots(figsize=(6, 4))
         values = [[1.0, 2.0, 3.0], [1.5, 1.7, 1.9]]
