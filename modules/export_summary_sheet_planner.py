@@ -38,7 +38,7 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
         {
             'kind': 'mean',
             'x': average,
-            'text_y_axes': 1.012,
+            'text_y_axes': 0.998,
             'text': f'Mean = {average:.3f}',
             'color': SUMMARY_PLOT_PALETTE['annotation_text'],
             'ha': 'center',
