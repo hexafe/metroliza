@@ -186,15 +186,31 @@ class FilterDialog(QDialog):
         if is_shift_pressed and previous_row is not None:
             start_row = min(previous_row, row)
             end_row = max(previous_row, row)
-            should_select = not item.isSelected()
-            for index in range(start_row, end_row + 1):
-                list_item = list_widget.item(index)
-                if list_item is not None and not list_item.isHidden():
-                    list_item.setSelected(should_select)
+            visible_items = [
+                list_widget.item(index)
+                for index in range(start_row, end_row + 1)
+                if list_widget.item(index) is not None and not list_widget.item(index).isHidden()
+            ]
+            should_select = any(not list_item.isSelected() for list_item in visible_items)
+            for list_item in visible_items:
+                list_item.setSelected(should_select)
             list_widget.setCurrentItem(item)
             return
 
         self._last_clicked_row_by_list[list_widget] = row
+
+    def _delete_selected_headers(self):
+        selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}
+        if not selected_headers:
+            return False
+
+        for row in range(self.header_list.count()):
+            header_item = self.header_list.item(row)
+            if header_item is not None and header_item.text() in selected_headers:
+                header_item.setSelected(False)
+
+        self.update_selected_headers()
+        return True
 
     def keyPressEvent(self, event):
         try:
@@ -202,15 +218,16 @@ class FilterDialog(QDialog):
             if (
                 pressed_key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
                 and self.selected_headers_list is not None
-                and self.selected_headers_list.hasFocus()
+                and (
+                    self.selected_headers_list.hasFocus()
+                    or (
+                        hasattr(self.selected_headers_list, "viewport")
+                        and self.selected_headers_list.viewport() is not None
+                        and self.selected_headers_list.viewport().hasFocus()
+                    )
+                )
             ):
-                selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}
-                if selected_headers:
-                    for row in range(self.header_list.count()):
-                        header_item = self.header_list.item(row)
-                        if header_item is not None and header_item.text() in selected_headers:
-                            header_item.setSelected(False)
-                    self.update_selected_headers()
+                self._delete_selected_headers()
                 event.accept()
                 return
         except Exception as e:
