@@ -41,6 +41,25 @@ class TestChartRenderService(unittest.TestCase):
         self.assertEqual(values, [[2.0, 2.2], [1.0, 1.1]])
         self.assertTrue(can_render)
 
+
+    def test_vectorized_violin_payload_ungrouped_nans_only_cannot_render(self):
+        frame = pd.DataFrame({'MEAS': [float('nan'), None, float('nan')]})
+
+        labels, values, can_render = build_violin_payload_vectorized(frame, 'GROUP', 1)
+
+        self.assertEqual(labels, ['All'])
+        self.assertEqual(values, [[]])
+        self.assertFalse(can_render)
+
+    def test_vectorized_violin_payload_ungrouped_drops_nans_for_count_and_values(self):
+        frame = pd.DataFrame({'MEAS': [1.0, float('nan'), '2.5', None, 3]})
+
+        labels, values, can_render = build_violin_payload_vectorized(frame, 'GROUP', 3)
+
+        self.assertEqual(labels, ['All'])
+        self.assertEqual(values, [[1.0, 2.5, 3.0]])
+        self.assertTrue(can_render)
+
     def test_bounded_worker_pool_executes_work_items(self):
         pool = BoundedWorkerPool(max_workers=1, max_queue_size=1)
         try:

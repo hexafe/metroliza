@@ -109,8 +109,9 @@ def build_violin_payload_vectorized(sampled_group: pd.DataFrame, grouping_key: s
     """
 
     if sampled_group.empty or grouping_key not in sampled_group.columns:
-        values = sampled_group.get('MEAS', pd.Series(dtype=float)).astype(float).tolist()
-        return ['All'], [values], len(values) >= min_samplesize
+        cleaned_values = pd.to_numeric(sampled_group.get('MEAS', pd.Series(dtype=float)), errors='coerce').dropna()
+        values = cleaned_values.tolist()
+        return ['All'], [values], len(cleaned_values) >= min_samplesize
 
     work_df = sampled_group[[grouping_key, 'MEAS']].dropna(subset=['MEAS']).copy()
     work_df[grouping_key] = work_df[grouping_key].astype(str)
