@@ -206,6 +206,7 @@ class DataGrouping(QDialog):
             
             # Connect the itemSelectionChanged signal of the "GROUPS" list to the on_group_selection_changed method
             self.groups_list.itemSelectionChanged.connect(self.on_group_selection_changed)
+            self.groups_list.itemDoubleClicked.connect(self.on_group_item_double_clicked)
             
             # Connect the itemSelectionChanged signal of the "PART #" list to the on_part_selection_changed method
             self.part_list.itemSelectionChanged.connect(self.on_part_selection_changed)
@@ -587,6 +588,16 @@ class DataGrouping(QDialog):
             selected_group = self.groups_list.currentItem() is not None
             self.rename_group_button.setEnabled(selected_group)
             self.delete_group_button.setEnabled(selected_group)
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def on_group_item_double_clicked(self, item):
+        """Open rename flow when a group is double-clicked."""
+
+        try:
+            if item is None:
+                return
+            self.rename_group()
         except Exception as e:
             self.log_and_exit(e)
             
