@@ -241,21 +241,30 @@ def test_dim_ax_subrows_d1_d2_d3_parse_with_eight_column_shape():
 
 def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
     import importlib.machinery
+    import importlib.util
     import sys
     import types
+    from pathlib import Path
 
     custom_logger_stub = types.ModuleType("modules.CustomLogger")
     custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
-    sys.modules.setdefault("modules.CustomLogger", custom_logger_stub)
+    sys.modules["modules.CustomLogger"] = custom_logger_stub
 
     fitz_stub = types.ModuleType("fitz")
     fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
-    sys.modules.setdefault("fitz", fitz_stub)
+    sys.modules["fitz"] = fitz_stub
     pymupdf_stub = types.ModuleType("pymupdf")
     pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec("pymupdf", loader=None)
-    sys.modules.setdefault("pymupdf", pymupdf_stub)
+    sys.modules["pymupdf"] = pymupdf_stub
 
-    from modules.CMMReportParser import CMMReportParser
+    parser_spec = importlib.util.spec_from_file_location(
+        "_cmm_report_parser_real_for_test", Path("modules/CMMReportParser.py")
+    )
+    assert parser_spec is not None and parser_spec.loader is not None
+    parser_module = importlib.util.module_from_spec(parser_spec)
+    parser_spec.loader.exec_module(parser_module)
+    CMMReportParser = parser_module.CMMReportParser
+
     from modules.db import execute_with_retry
 
     db_path = str(tmp_path / "cmm.db")
