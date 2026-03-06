@@ -1,8 +1,8 @@
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_with_retry
 from PyQt6.QtCore import QDate, Qt
+import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtWidgets import(
-    QAbstractItemView,
     QDateEdit,
     QDialog,
     QGridLayout,
@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import(
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QApplication,
 )
 
 
@@ -34,6 +33,18 @@ class FilterDialog(QDialog):
 
         self.setup_ui()
 
+    @staticmethod
+    def _multi_selection_mode():
+        selection_mode_enum = getattr(getattr(QtWidgets, "QAbstractItemView", None), "SelectionMode", None)
+        return getattr(selection_mode_enum, "MultiSelection", 2)
+
+    @staticmethod
+    def _keyboard_modifiers():
+        app_cls = getattr(QtWidgets, "QApplication", None)
+        if app_cls is None or not hasattr(app_cls, "keyboardModifiers"):
+            return 0
+        return app_cls.keyboardModifiers()
+
     def setup_ui(self):
         try:
             self.create_widgets()
@@ -48,21 +59,21 @@ class FilterDialog(QDialog):
             # Create labels and list widgets for each column to be filtered
             self.ax_label = QLabel("AX:")
             self.ax_list = QListWidget()
-            self.ax_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.ax_list.setSelectionMode(self._multi_selection_mode())
 
             self.reference_label = QLabel("REFERENCE:")
             self.reference_list = QListWidget()
-            self.reference_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.reference_list.setSelectionMode(self._multi_selection_mode())
 
             self.header_label = QLabel("HEADER:")
             self.header_list = QListWidget()
-            self.header_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.header_list.setSelectionMode(self._multi_selection_mode())
             self.all_headers_list = QListWidget()
-            self.all_headers_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.all_headers_list.setSelectionMode(self._multi_selection_mode())
             
             self.selected_headers_label = QLabel("SELECTED HEADERS:")
             self.selected_headers_list = QListWidget()
-            self.selected_headers_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.selected_headers_list.setSelectionMode(self._multi_selection_mode())
 
             self.date_from_label = QLabel("MEASUREMENT DATE FROM:")
             self.date_from_calendar = QDateEdit(calendarPopup=True)
@@ -170,7 +181,7 @@ class FilterDialog(QDialog):
 
         row = list_widget.row(item)
         previous_row = self._last_clicked_row_by_list.get(list_widget)
-        is_shift_pressed = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+        is_shift_pressed = bool(self._keyboard_modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
         if is_shift_pressed and previous_row is not None:
             start_row = min(previous_row, row)

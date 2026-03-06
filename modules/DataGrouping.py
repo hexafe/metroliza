@@ -7,9 +7,9 @@ store, apply, and clear reference/part grouping assignments.
 from modules.CustomLogger import CustomLogger
 from modules.db import read_sql_dataframe
 from PyQt6.QtCore import Qt
+import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtGui import QColor, QBrush
 from PyQt6.QtWidgets import(
-    QAbstractItemView,
     QDialog,
     QGridLayout,
     QLabel,
@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import(
     QPushButton,
     QInputDialog,
     QMessageBox,
-    QApplication,
 )
 import hashlib
 import pandas as pd
@@ -60,6 +59,18 @@ class DataGrouping(QDialog):
         self._restore_saved_grouping_state()
         self.populate_list_widgets()
 
+    @staticmethod
+    def _multi_selection_mode():
+        selection_mode_enum = getattr(getattr(QtWidgets, "QAbstractItemView", None), "SelectionMode", None)
+        return getattr(selection_mode_enum, "MultiSelection", 2)
+
+    @staticmethod
+    def _keyboard_modifiers():
+        app_cls = getattr(QtWidgets, "QApplication", None)
+        if app_cls is None or not hasattr(app_cls, "keyboardModifiers"):
+            return 0
+        return app_cls.keyboardModifiers()
+
     def setup_ui(self):
         """Handle `setup_ui` for `DataGrouping`.
 
@@ -98,16 +109,16 @@ class DataGrouping(QDialog):
 
             self.part_label = QLabel("PART #:")
             self.part_list = QListWidget()
-            self.part_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.part_list.setSelectionMode(self._multi_selection_mode())
             self.all_parts_list = QListWidget()
-            self.all_parts_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.all_parts_list.setSelectionMode(self._multi_selection_mode())
             
             self.groups_label = QLabel("GROUPS:")
             self.groups_list = QListWidget()
             
             self.part_group_label = QLabel("PART IN SELECTED GROUP:")
             self.part_group_list = QListWidget()
-            self.part_group_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.part_group_list.setSelectionMode(self._multi_selection_mode())
 
             # Create separate QLineEdit widgets for searching in each list widget
             self.reference_search_input = QLineEdit()
@@ -238,7 +249,7 @@ class DataGrouping(QDialog):
 
         row = list_widget.row(item)
         previous_row = self._last_clicked_row_by_list.get(list_widget)
-        is_shift_pressed = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+        is_shift_pressed = bool(self._keyboard_modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
         if is_shift_pressed and previous_row is not None:
             start_row = min(previous_row, row)

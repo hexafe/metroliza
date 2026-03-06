@@ -8,11 +8,9 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QFileDialog,
     QMessageBox,
-    QAbstractItemView,
-    QApplication,
-    QInputDialog,
 )
 from PyQt6.QtCore import Qt
+import PyQt6.QtWidgets as QtWidgets
 import logging
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_select_with_columns, run_transaction_with_retry
@@ -42,6 +40,23 @@ class ModifyDB(QDialog):
 
         self.setup_ui()
 
+    @staticmethod
+    def _multi_selection_mode():
+        selection_mode_enum = getattr(getattr(QtWidgets, "QAbstractItemView", None), "SelectionMode", None)
+        return getattr(selection_mode_enum, "MultiSelection", 2)
+
+    @staticmethod
+    def _select_rows_behavior():
+        selection_behavior_enum = getattr(getattr(QtWidgets, "QAbstractItemView", None), "SelectionBehavior", None)
+        return getattr(selection_behavior_enum, "SelectRows", 1)
+
+    @staticmethod
+    def _keyboard_modifiers():
+        app_cls = getattr(QtWidgets, "QApplication", None)
+        if app_cls is None or not hasattr(app_cls, "keyboardModifiers"):
+            return 0
+        return app_cls.keyboardModifiers()
+
     def setup_ui(self):
         try:
             self.create_widgets()
@@ -54,22 +69,22 @@ class ModifyDB(QDialog):
         try:
             # Create table widgets for REFERENCE, PART NUMBER, and HEADER
             self.reference_table = QTableWidget()
-            self.reference_table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-            self.reference_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            self.reference_table.setSelectionMode(self._multi_selection_mode())
+            self.reference_table.setSelectionBehavior(self._select_rows_behavior())
             self.reference_table.setColumnCount(1)
             self.reference_table.setHorizontalHeaderLabels(["REFERENCE"])
             self.reference_table.setColumnWidth(0, 200)
 
             self.part_number_table = QTableWidget()
-            self.part_number_table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-            self.part_number_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            self.part_number_table.setSelectionMode(self._multi_selection_mode())
+            self.part_number_table.setSelectionBehavior(self._select_rows_behavior())
             self.part_number_table.setColumnCount(1)
             self.part_number_table.setHorizontalHeaderLabels(["SAMPLE NUMBER"])
             self.part_number_table.setColumnWidth(0, 200)
 
             self.header_table = QTableWidget()
-            self.header_table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-            self.header_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            self.header_table.setSelectionMode(self._multi_selection_mode())
+            self.header_table.setSelectionBehavior(self._select_rows_behavior())
             self.header_table.setColumnCount(1)
             self.header_table.setHorizontalHeaderLabels(["HEADER"])
             self.header_table.setColumnWidth(0, 200)
@@ -123,7 +138,7 @@ class ModifyDB(QDialog):
     def _handle_table_cell_pressed(self, table_widget, row, column):
         del column
         previous_row = self._last_clicked_row_by_table.get(table_widget)
-        is_shift_pressed = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+        is_shift_pressed = bool(self._keyboard_modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
         if is_shift_pressed and previous_row is not None:
             start_row = min(previous_row, row)
@@ -154,7 +169,7 @@ class ModifyDB(QDialog):
 
         current_item = target_table.currentItem()
         suggested_value = current_item.text() if current_item is not None else ""
-        new_value, is_confirmed = QInputDialog.getText(
+        new_value, is_confirmed = QtWidgets.QInputDialog.getText(
             self,
             "Rename selected items",
             f"Enter new value for {len(selected_rows)} selected item(s):",
@@ -172,7 +187,8 @@ class ModifyDB(QDialog):
         return True
 
     def _focused_table_widget(self):
-        focused_widget = QApplication.focusWidget()
+        app_cls = getattr(QtWidgets, "QApplication", None)
+        focused_widget = app_cls.focusWidget() if app_cls is not None and hasattr(app_cls, "focusWidget") else None
         table_widgets = (self.reference_table, self.part_number_table, self.header_table)
 
         for table_widget in table_widgets:
