@@ -354,8 +354,8 @@ def add_tolerances_to_blocks(pdf_blocks_text: list[list[Any]]) -> list[list[Any]
 
     for block in pdf_blocks_text:
         tol_plus = 0
-        tol_minus = 0
-        bonus = 0
+        tol_minus = None
+        bonus = None
         if block[1]:
             if block[1][-1][0] == "TP":
                 block[1][-1][3] = 0
@@ -369,11 +369,25 @@ def add_tolerances_to_blocks(pdf_blocks_text: list[list[Any]]) -> list[list[Any]
                         measurement_line[3] = tol_minus
                         measurement_line[4] = bonus
             else:
+                saw_explicit_tol_source = False
                 for measurement_line in block[1]:
-                    if is_missing(measurement_line[2]):
+                    if not is_missing(measurement_line[2]):
+                        tol_plus = measurement_line[2]
+                        saw_explicit_tol_source = True
+                    if not is_missing(measurement_line[3]):
+                        tol_minus = measurement_line[3]
+                        saw_explicit_tol_source = True
+                    if not is_missing(measurement_line[4]):
+                        bonus = measurement_line[4]
+
+                if bonus is None and saw_explicit_tol_source:
+                    bonus = 0
+
+                for measurement_line in block[1]:
+                    if is_missing(measurement_line[2]) and tol_plus is not None:
                         measurement_line[2] = tol_plus
-                    elif is_missing(measurement_line[3]):
+                    if is_missing(measurement_line[3]) and tol_minus is not None:
                         measurement_line[3] = tol_minus
-                    elif is_missing(measurement_line[4]):
+                    if is_missing(measurement_line[4]) and bonus is not None:
                         measurement_line[4] = bonus
     return pdf_blocks_text

@@ -174,8 +174,24 @@ def test_add_tolerances_keeps_explicit_zero_values_for_non_tp_blocks():
     add_tolerances_to_blocks(pdf_blocks_text)
 
     assert pdf_blocks_text[0][1][0] == ["X", 10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0]
-    assert pdf_blocks_text[0][1][1][2:5] == [0, "", ""]
-    assert pdf_blocks_text[0][1][2][2:5] == [0, None, None]
+    assert pdf_blocks_text[0][1][1][2:5] == [0, 0, 0]
+    assert pdf_blocks_text[0][1][2][2:5] == [0, 0, 0]
+
+
+def test_add_tolerances_non_tp_propagates_all_missing_fields_from_explicit_row():
+    pdf_blocks_text = [
+        [
+            [["NON TP PROPAGATION"]],
+            [
+                ["X", 10.0, 0.2, -0.2, 0.1, 10.0, 0.0, 0.0],
+                ["Y", 5.0, "", "", "", 5.0, 0.0, 0.0],
+            ],
+        ]
+    ]
+
+    add_tolerances_to_blocks(pdf_blocks_text)
+
+    assert pdf_blocks_text[0][1][1][2:5] == [0.2, -0.2, 0.1]
 
 
 def test_tp_parser_supports_optional_qualifiers_and_semantic_labels():
