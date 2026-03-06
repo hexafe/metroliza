@@ -410,20 +410,6 @@ def build_histogram_table_data(summary_stats):
     def _rounded_or_text(value, digits):
         return value if isinstance(value, str) else round(value, digits)
 
-    normality_status = summary_stats.get('normality_status')
-    if normality_status == 'normal':
-        normality_feedback = 'Normal'
-    elif normality_status == 'not_normal':
-        normality_feedback = 'Non-normal'
-    else:
-        normality_feedback = 'Unknown'
-
-    normality_p_value = summary_stats.get('normality_p_value')
-    if isinstance(normality_p_value, (float, int)):
-        normality_header = f"Shapiro p = {normality_p_value:.4f}"
-    else:
-        normality_header = "Shapiro p = N/A"
-    normality_block = f"{normality_header}\n{normality_feedback}"
     cp_value = summary_stats.get('cp')
     cpk_label = 'Cpk'
     cpk_value = summary_stats.get('cpk')
@@ -449,7 +435,6 @@ def build_histogram_table_data(summary_stats):
         ('Samples', round(summary_stats['sample_size'], 1)),
         ('NOK', round(summary_stats['nok_count'], 1)),
         ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
-        ('Normality', normality_block),
     ]
 
     return {
@@ -1411,7 +1396,6 @@ def adjust_histogram_stats_table_geometry(
     *,
     statistic_col_width_ratio=0.72,
     row_height_scale=1.12,
-    capability_row_badges=None,
 ):
     """Increase histogram stats-table readability via column and row geometry."""
     if ax_table is None:
@@ -1475,70 +1459,9 @@ def adjust_histogram_stats_table_geometry(
         cell.PAD = cell_padding
 
     if not has_three_columns:
-        normality_palette_key = 'quality_unknown'
-        if capability_row_badges and 'Normality' in capability_row_badges:
-            normality_palette_key = capability_row_badges['Normality']['palette_key']
-
-        merged_row_index = None
-        for (row_index, col_index), cell in table_cells.items():
-            if row_index <= 0 or col_index != 0 or not cell.get_visible():
-                continue
-            if cell.get_text().get_text().strip() == 'Normality':
-                merged_row_index = row_index
-                break
-
-        if merged_row_index is not None:
-            value_cell = table_cells.get((merged_row_index, 1))
-            merge_text = '' if value_cell is None else value_cell.get_text().get_text()
-            _merge_table_row_cells(
-                ax_table,
-                merged_row_index,
-                col_span=2,
-                text=merge_text,
-                palette_key=normality_palette_key,
-                height_scale=max(1.25, safe_row_scale),
-            )
         return
 
-    for (row_index, col_index), cell in table_cells.items():
-        if row_index <= 0 or col_index != 0 or not cell.get_visible():
-            continue
-        label_text = cell.get_text().get_text().strip()
-        if not label_text or label_text == 'Normality':
-            continue
-
-        sibling = table_cells.get((row_index, 1))
-        if sibling is None or not sibling.get_visible():
-            continue
-
-        _merge_table_row_cells(
-            ax_table,
-            row_index,
-            col_span=2,
-            text=label_text,
-        )
-
-    normality_palette_key = 'quality_unknown'
-    if capability_row_badges and 'Normality' in capability_row_badges:
-        normality_palette_key = capability_row_badges['Normality']['palette_key']
-
-    for (row_index, col_index), cell in table_cells.items():
-        if row_index <= 0 or col_index != 0:
-            continue
-        if cell.get_text().get_text().strip() != 'Normality':
-            continue
-        value_cell = table_cells.get((row_index, 2))
-        if value_cell is None:
-            continue
-        _merge_table_row_cells(
-            ax_table,
-            row_index,
-            col_span=3,
-            text=value_cell.get_text().get_text(),
-            palette_key=normality_palette_key,
-            height_scale=1.6,
-        )
-        break
+    return
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
@@ -3225,7 +3148,25 @@ class ExportDataThread(QThread):
                         ax_table,
                         statistic_col_width_ratio=0.78,
                         row_height_scale=1.15,
-                        capability_row_badges=histogram_row_badges,
+                    )
+
+                    normality_note = summary_stats.get('normality_text') or 'Shapiro p = N/A → Unknown'
+                    ax.text(
+                        1.01,
+                        -0.08,
+                        normality_note,
+                        transform=ax.transAxes,
+                        ha='left',
+                        va='top',
+                        fontsize=histogram_font_sizes['table_fontsize'],
+                        color=SUMMARY_PLOT_PALETTE['table_emphasis_text'],
+                        bbox={
+                            'boxstyle': 'round,pad=0.2',
+                            'fc': SUMMARY_PLOT_PALETTE['table_emphasis_bg'],
+                            'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                            'alpha': 0.95,
+                        },
+                        clip_on=False,
                     )
 
                     density_curve_mode = 'normal_fit' if summary_stats.get('normality_status') == 'normal' else 'kde'
@@ -3272,7 +3213,7 @@ class ExportDataThread(QThread):
                     )
 
                     histogram_top_margin = max(0.82, 0.82 + max(0.0, max_annotation_row - 1.01))
-                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=histogram_top_margin)
+                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=histogram_top_margin, bottom=0.18)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     histogram_slot = panel_plan['image_slots']['histogram']
