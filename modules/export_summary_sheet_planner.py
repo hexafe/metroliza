@@ -54,7 +54,7 @@ def build_histogram_annotation_specs(average, usl, lsl, y_max):
         {
             'kind': 'lsl',
             'x': lsl,
-            'text_y_axes': 0.985,
+            'text_y_axes': 0.94,
             'text': f'LSL={lsl:.3f}',
             'color': SUMMARY_PLOT_PALETTE['spec_limit'],
             'ha': 'center',

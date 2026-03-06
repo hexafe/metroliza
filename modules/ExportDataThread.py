@@ -601,10 +601,10 @@ def compute_histogram_table_layout(
     width_scale = min(1.25, max(0.8, fig_width / 6.0))
     oversized_font = max(0.0, float(table_fontsize) - 8.0)
 
-    table_bbox_width = 0.36 + (0.016 * oversized_font) - (0.008 * (width_scale - 1.0))
-    table_bbox_width = min(0.43, max(0.34, table_bbox_width))
+    table_bbox_width = 0.40 + (0.018 * oversized_font) - (0.008 * (width_scale - 1.0))
+    table_bbox_width = min(0.48, max(0.38, table_bbox_width))
 
-    right_margin = 0.72 + (0.02 * (width_scale - 1.0)) - (0.013 * oversized_font)
+    right_margin = 0.69 + (0.02 * (width_scale - 1.0)) - (0.013 * oversized_font)
     if has_table:
         right_margin -= 0.005
     right_margin = min(0.76, max(0.64, right_margin))
@@ -3130,7 +3130,7 @@ class ExportDataThread(QThread):
                         colLabels=['Statistic', 'Value'],
                         cellLoc='center',
                         loc='right',
-                        bbox=[1, 0, histogram_table_layout['table_bbox_width'], 1],
+                        bbox=[1, 0.06, histogram_table_layout['table_bbox_width'], 0.94],
                     )
                     ax_table.auto_set_font_size(False)
                     ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
@@ -3142,28 +3142,27 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         ax_table,
-                        statistic_col_width_ratio=0.70,
+                        statistic_col_width_ratio=0.62,
                         row_height_scale=1.15,
                     )
 
                     normality_note = summary_stats.get('normality_text') or 'Shapiro p = N/A\nUnknown'
-                    ax.text(
-                        1.01,
-                        -0.08,
-                        normality_note,
-                        transform=ax.transAxes,
-                        ha='left',
-                        va='top',
-                        fontsize=histogram_font_sizes['table_fontsize'],
-                        color=SUMMARY_PLOT_PALETTE['table_emphasis_text'],
-                        bbox={
-                            'boxstyle': 'round,pad=0.2',
-                            'fc': SUMMARY_PLOT_PALETTE['table_emphasis_bg'],
-                            'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
-                            'alpha': 0.95,
-                        },
-                        clip_on=False,
+                    normality_table = plt.table(
+                        cellText=[[normality_note]],
+                        cellLoc='left',
+                        loc='right',
+                        bbox=[1, -0.17, histogram_table_layout['table_bbox_width'], 0.15],
                     )
+                    normality_table.auto_set_font_size(False)
+                    normality_table.set_fontsize(histogram_font_sizes['table_fontsize'])
+                    normality_cell = normality_table.get_celld()[(0, 0)]
+                    normality_cell.set_facecolor(SUMMARY_PLOT_PALETTE['table_emphasis_bg'])
+                    normality_cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
+                    normality_cell.set_linewidth(0.45)
+                    normality_cell.PAD = 0.03
+                    normality_cell.get_text().set_color(SUMMARY_PLOT_PALETTE['table_emphasis_text'])
+                    normality_cell.get_text().set_ha('left')
+                    normality_cell.get_text().set_va('center')
 
                     density_curve_mode = 'normal_fit' if summary_stats.get('normality_status') == 'normal' else 'kde'
                     density_curve = None
