@@ -1130,6 +1130,26 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(2, len(lines))
         self.assertTrue(lines[-1].endswith('…'))
 
+    def test_build_wrapped_chart_title_supports_three_line_iqr_titles(self):
+        wrapped = build_wrapped_chart_title(
+            '51.3 mm from plane L - D - IQR Outlier Detection with a very long extra descriptor that should avoid legend overlap',
+            width=42,
+            max_lines=3,
+        )
+
+        lines = wrapped.split('\n')
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertLessEqual(len(lines), 3)
+
+    def test_build_wrapped_chart_title_uses_shared_default_strategy(self):
+        wrapped = build_wrapped_chart_title(
+            'A very long shared summary title that should wrap consistently across violin iqr histogram and trend plots',
+        )
+
+        lines = wrapped.split('\n')
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertLessEqual(len(lines), 3)
+
     def test_add_iqr_boxplot_legend_uses_top_right_anchor(self):
         fig, ax = plt.subplots(figsize=(4, 3))
 

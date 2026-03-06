@@ -1051,7 +1051,7 @@ def move_legend_to_figure(ax):
     fig.subplots_adjust(top=0.82)
 
 
-def build_wrapped_chart_title(title, *, width=58, max_lines=2):
+def build_wrapped_chart_title(title, *, width=42, max_lines=3):
     """Wrap long chart titles so figure-level legends do not overlap plot headers."""
 
     safe_title = str(title or '').strip()
