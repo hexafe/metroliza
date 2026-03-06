@@ -38,6 +38,7 @@ class AboutWindow(QDialog):
     def __init__(self, parent=None, days_until_expiration=0):
         super().__init__(parent)
         self._gif_temp_file_path = ""
+        self._gif_label = None
 
         # Set the window title and layout
         self.setWindowTitle("About")
@@ -47,6 +48,7 @@ class AboutWindow(QDialog):
 
         # Create a QLabel to display the loading GIF
         gif_label = QLabel()
+        self._gif_label = gif_label
         # gif_label.setFixedSize(200, 200)
 
         # Load the loading.gif from a file, create a QMovie from it, and set it to the label
@@ -96,7 +98,21 @@ class AboutWindow(QDialog):
 
     def closeEvent(self, event):
         """Remove the temporary GIF file created for QMovie during teardown."""
+        if getattr(self, "gif", None) is not None:
+            if hasattr(self.gif, "stop"):
+                self.gif.stop()
+
+            if self._gif_label is not None:
+                self._gif_label.setMovie(None)
+
+            if hasattr(self.gif, "setFileName"):
+                self.gif.setFileName("")
+
         if self._gif_temp_file_path and os.path.exists(self._gif_temp_file_path):
-            os.remove(self._gif_temp_file_path)
-            self._gif_temp_file_path = ""
+            try:
+                os.remove(self._gif_temp_file_path)
+                self._gif_temp_file_path = ""
+            except PermissionError:
+                # On Windows, delayed movie teardown can transiently keep the file handle open.
+                pass
         super().closeEvent(event)
