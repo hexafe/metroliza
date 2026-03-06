@@ -3010,10 +3010,7 @@ class ExportDataThread(QThread):
 
             distribution_title = header
             if not can_render_violin:
-                distribution_title = (
-                    f"{header} - Mean by label "
-                    "(each point is the mean of all parts within a label)"
-                )
+                distribution_title = f"{header} (means)"
 
             summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
             annotation_strategy = resolve_summary_annotation_strategy(x_point_count=summary_point_count)
