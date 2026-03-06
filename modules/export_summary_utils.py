@@ -98,7 +98,7 @@ def compute_normality_status(measurements):
         'status': 'unknown',
         'test_name': 'Shapiro',
         'p_value': None,
-        'text': 'Shapiro p = N/A → Unknown',
+        'text': 'Shapiro p = N/A\nUnknown',
     }
     if sample_size < 3 or sample_size > 5000:
         return unknown_payload
@@ -113,8 +113,8 @@ def compute_normality_status(measurements):
         return unknown_payload
 
     if p_value >= 0.05:
-        return {'status': 'normal', 'test_name': 'Shapiro', 'p_value': float(p_value), 'text': f'Shapiro p = {p_value:.4f} → Normal'}
-    return {'status': 'not_normal', 'test_name': 'Shapiro', 'p_value': float(p_value), 'text': f'Shapiro p = {p_value:.4f} → Non-normal'}
+        return {'status': 'normal', 'test_name': 'Shapiro', 'p_value': float(p_value), 'text': f'Shapiro p = {p_value:.4f}\nNormal'}
+    return {'status': 'not_normal', 'test_name': 'Shapiro', 'p_value': float(p_value), 'text': f'Shapiro p = {p_value:.4f}\nNon-normal'}
 
 
 def build_sparse_unique_labels(labels):

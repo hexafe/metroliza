@@ -2866,15 +2866,11 @@ class ExportDataThread(QThread):
                     label_prefix=cpk_row_label,
                 ),
             }
-            nok_row_badge = {
-                'NOK %': classify_nok_severity(summary_stats['nok_pct']),
-            }
             normality_row_badge = {
                 'Normality': classify_normality_status(summary_stats.get('normality_status')),
             }
             histogram_row_badges = {
                 **capability_row_badges,
-                **nok_row_badge,
                 **normality_row_badge,
             }
             panel_subtitle = build_summary_panel_subtitle(summary_stats)
@@ -3146,11 +3142,11 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         ax_table,
-                        statistic_col_width_ratio=0.78,
+                        statistic_col_width_ratio=0.70,
                         row_height_scale=1.15,
                     )
 
-                    normality_note = summary_stats.get('normality_text') or 'Shapiro p = N/A → Unknown'
+                    normality_note = summary_stats.get('normality_text') or 'Shapiro p = N/A\nUnknown'
                     ax.text(
                         1.01,
                         -0.08,

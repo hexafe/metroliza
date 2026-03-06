@@ -430,22 +430,22 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(classify_normality_status('unknown')['palette_key'], 'quality_unknown')
 
     def test_compute_normality_status_returns_unknown_for_small_or_constant_samples(self):
-        self.assertEqual(compute_normality_status([1.0, 2.0])['text'], 'Shapiro p = N/A → Unknown')
-        self.assertEqual(compute_normality_status([3.0, 3.0, 3.0])['text'], 'Shapiro p = N/A → Unknown')
+        self.assertEqual(compute_normality_status([1.0, 2.0])['text'], 'Shapiro p = N/A\nUnknown')
+        self.assertEqual(compute_normality_status([3.0, 3.0, 3.0])['text'], 'Shapiro p = N/A\nUnknown')
 
     def test_compute_normality_status_returns_normal_for_gaussian_like_series(self):
         result = compute_normality_status([-1.2, -0.4, -0.1, 0.0, 0.2, 0.5, 1.1, 1.4])
 
         self.assertEqual(result['status'], 'normal')
         self.assertIn('Shapiro p =', result['text'])
-        self.assertTrue(result['text'].endswith('→ Normal'))
+        self.assertTrue(result['text'].endswith('\nNormal'))
 
     def test_compute_normality_status_returns_not_normal_for_skewed_series(self):
         result = compute_normality_status([0.0, 0.0, 0.0, 0.1, 0.2, 0.3, 4.0, 8.0])
 
         self.assertEqual(result['status'], 'not_normal')
         self.assertIn('Shapiro p =', result['text'])
-        self.assertTrue(result['text'].endswith('→ Non-normal'))
+        self.assertTrue(result['text'].endswith('\nNon-normal'))
 
     def test_render_histogram_uses_fd_bins_for_non_degenerate_data(self):
         import pandas as pd
