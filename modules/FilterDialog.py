@@ -186,10 +186,11 @@ class FilterDialog(QDialog):
         if is_shift_pressed and previous_row is not None:
             start_row = min(previous_row, row)
             end_row = max(previous_row, row)
+            should_select = not item.isSelected()
             for index in range(start_row, end_row + 1):
                 list_item = list_widget.item(index)
                 if list_item is not None and not list_item.isHidden():
-                    list_item.setSelected(True)
+                    list_item.setSelected(should_select)
             list_widget.setCurrentItem(item)
             return
 
