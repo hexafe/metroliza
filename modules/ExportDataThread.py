@@ -410,20 +410,6 @@ def build_histogram_table_data(summary_stats):
     def _rounded_or_text(value, digits):
         return value if isinstance(value, str) else round(value, digits)
 
-    normality_status = summary_stats.get('normality_status')
-    if normality_status == 'normal':
-        normality_feedback = 'Normal'
-    elif normality_status == 'not_normal':
-        normality_feedback = 'Non-normal'
-    else:
-        normality_feedback = 'Unknown'
-
-    normality_p_value = summary_stats.get('normality_p_value')
-    if isinstance(normality_p_value, (float, int)):
-        normality_header = f"Shapiro p = {normality_p_value:.4f}"
-    else:
-        normality_header = "Shapiro p = N/A"
-    normality_block = f"{normality_header}\n{normality_feedback}"
     cp_value = summary_stats.get('cp')
     cpk_label = 'Cpk'
     cpk_value = summary_stats.get('cpk')
