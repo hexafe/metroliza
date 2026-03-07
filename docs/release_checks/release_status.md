@@ -26,6 +26,8 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 ## Operating notes
 
 - Active release operations are governed by documents under `docs/release_checks/`.
+- RC2 stabilization execution sequencing is tracked in [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md), and this RC2 track is parity-first structural risk reduction, not rewrite scope.
+- During RC2, only small behavior-preserving, test-backed stabilization slices should move forward; larger decomposition/architecture moves remain deferred per triage.
 - Archived planning docs are references only and should not be used as the operational status tracker.
 - If status changes, update this page first, then update linked runbooks/checklists as needed.
 
