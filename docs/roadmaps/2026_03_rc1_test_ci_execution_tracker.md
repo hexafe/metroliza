@@ -142,7 +142,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Release checklist/runbook updated to match behavior.
 
 ### TCI-005 - Expand native parser parity corpus with one incremental edge fixture set
-- Status: todo
+- Status: completed
 - Phase: Phase 2 - Regression protection
 - Priority: medium
 - Why: Current fixture depth is limited for parser parity-sensitive code.
@@ -156,6 +156,23 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Tracker records risk reduction and remaining gaps.
 
 ## 10. Progress Log
+
+- 2026-03-07 — **TCI-005 completed**.
+  - Work completed:
+    - Added a new parser parity fixture for interrupted multi-line tokenization with semantic label interruptions (`interrupted_multiline_tokens.json`) to expand parity corpus depth with a realistic edge shape.
+    - Added a focused intent test that loads the named fixture and explicitly asserts this edge shape remains a single block containing `X` and `Y` measurement rows.
+  - Changed files:
+    - `tests/fixtures/cmm_parser/interrupted_multiline_tokens.json`
+    - `tests/test_cmm_parser_parity.py`
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `python -m pytest tests/test_cmm_parser_parity.py -q`
+  - Docs reviewed/updated:
+    - Reviewed: this tracker.
+    - **docs update required and applied**: tracker updated to record TCI-005 completion, changed files, executed tests, and remaining risks.
+  - New/remaining risks:
+    - Parser parity corpus depth improved, but additional edge shapes (e.g., mixed TP qualifiers across multi-block reports and malformed-token recovery) remain unrepresented.
+    - Packaging/startup CI confidence remains limited until TCI-004.
 
 - 2026-03-07 — **TCI-003 completed**.
   - Work completed:
