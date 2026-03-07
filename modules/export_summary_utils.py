@@ -97,14 +97,11 @@ def compute_normality_status(measurements, *, one_sided=False, location_bound=No
     sample_size = int(numeric_measurements.size)
 
     if one_sided:
-        location_note = ''
-        if isinstance(location_bound, (int, float)) and not math.isnan(location_bound):
-            location_note = f'\nBound = {location_bound:.4f}'
         return {
             'status': 'not_applicable',
             'test_name': 'One-sided tolerance model',
             'p_value': None,
-            'text': f'One-sided tolerance{location_note}\nNormality not applicable',
+            'text': 'One-sided tolerance\nNormality not applicable',
         }
 
     unknown_payload = {

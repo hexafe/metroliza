@@ -455,7 +455,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(result['test_name'], 'One-sided tolerance model')
         self.assertIsNone(result['p_value'])
         self.assertIn('One-sided tolerance', result['text'])
-        self.assertIn('Bound = 0.0000', result['text'])
+        self.assertNotIn('Bound =', result['text'])
         self.assertTrue(result['text'].endswith('\nNormality not applicable'))
 
     def test_render_histogram_uses_fd_bins_for_non_degenerate_data(self):
