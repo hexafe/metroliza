@@ -2,6 +2,7 @@ param(
     [string]$EntryPoint = "metroliza.py",
     [string]$OutputName,
     [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
+    [string]$CredentialsPath = "credentials.json",
     [switch]$FastDev,
     [switch]$RequireNative
 )
@@ -39,9 +40,11 @@ if ($LASTEXITCODE -eq 0) {
 $jobs = if ($env:NUMBER_OF_PROCESSORS) { $env:NUMBER_OF_PROCESSORS } else { 4 }
 $modeLabel = if ($FastDev) { "standalone (faster dev build)" } else { "onefile (release-like build)" }
 $nativeModeLabel = if ($RequireNative) { "required" } else { "optional" }
+$credentialsPathLabel = if ($CredentialsPath) { $CredentialsPath } else { "(disabled)" }
 
 Write-Host "[2/4] Build mode: $modeLabel"
 Write-Host "      Native parser module: $nativeModeLabel"
+Write-Host "      Credentials bundle path: $credentialsPathLabel"
 
 $nativeModuleAvailable = $false
 python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('_metroliza_cmm_native') else 1)" 2>$null
@@ -69,6 +72,26 @@ if ($nativeModuleAvailable) {
     $commonArgs += "--include-module=_metroliza_cmm_native"
 } else {
     Write-Warning "Native module '_metroliza_cmm_native' not found in this environment. Building with pure-Python parser fallback only."
+}
+
+$tokenExcludePatterns = @(
+    "token.json",
+    "*token.json",
+    "**/token.json",
+    "**/*token.json"
+)
+foreach ($pattern in $tokenExcludePatterns) {
+    $commonArgs += "--noinclude-data-files=$pattern"
+}
+
+if ($CredentialsPath) {
+    $resolvedCredentialsPath = Resolve-Path -LiteralPath $CredentialsPath -ErrorAction SilentlyContinue
+    if ($resolvedCredentialsPath) {
+        $destinationName = [System.IO.Path]::GetFileName($resolvedCredentialsPath.Path)
+        $commonArgs += "--include-data-files=$($resolvedCredentialsPath.Path)=$destinationName"
+    } else {
+        Write-Warning "Credentials file '$CredentialsPath' was not found. Continuing without bundling credentials.json."
+    }
 }
 
 if (-not $FastDev) {
