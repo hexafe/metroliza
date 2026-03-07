@@ -64,14 +64,20 @@ If hidden import resolution fails on a platform, release may proceed only if pur
 
 ## Nuitka inclusion rules and smoke checks
 
-`packaging/build_nuitka.ps1` includes:
+`packaging/build_nuitka.ps1` now conditionally includes the native parser module when available in the build environment and auto-generates output naming from release metadata:
 
-- `--include-module=_metroliza_cmm_native`
+- default output filename is `metroliza_N_<RELEASE_VERSION>(<VERSION_DATE>).exe` from `VersionDate.py`
+- still supports explicit override with `-OutputName`
+- auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
+- defaults to pure-Python fallback packaging when native module is absent
+- supports `-RequireNative` to fail fast if native module is missing
 
 Smoke checks after build:
 
 ```powershell
 ./packaging/build_nuitka.ps1 -FastDev
+# strict mode: require native parser to be present in the build env
+./packaging/build_nuitka.ps1 -RequireNative
 # run the built executable in a sandbox and verify startup
 ```
 
