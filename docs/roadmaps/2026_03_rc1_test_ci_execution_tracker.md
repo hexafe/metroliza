@@ -1,0 +1,201 @@
+# 2026.03 RC1 Test/CI Audit and Execution Tracker
+
+## 1. Purpose
+Drive a controlled, iterative test/CI confidence-improvement workflow for `release/2026.03-rc1`, with one small reviewable step at a time and clear release-readiness impact.
+
+## 2. Scope
+- Audit and improve test safety-net quality under `tests/`.
+- Audit and improve CI signal quality in `.github/workflows/ci.yml`.
+- Improve coverage visibility and regression protection for critical flows.
+- Improve release/package confidence guardrails where practical.
+- Keep `docs/ci-policy.md`, `docs/release_checks/*`, and related docs aligned with actual behavior.
+
+## 3. Non-goals
+- Broad architecture refactors unrelated to release confidence.
+- Big-bang module renaming.
+- Making environment-dependent Google OAuth smoke mandatory for all PR CI.
+- Heavy platform-matrix expansion in one pass.
+- Any change that weakens existing blocking CI checks.
+
+## 4. Current-State Audit Summary
+- Test suite breadth is strong (46 test modules) with targeted regression coverage for export helpers/flows, DB migration behavior, parser behavior, docs hygiene, and policy checks.
+- CI has meaningful blocking lanes: static checks, full pytest, native wheel build/smoke, native parser parity tests; plus opt-in manual Google conversion smoke.
+- Native parser confidence exists but parity fixture corpus is currently small (3 fixture JSON files), leaving potential edge-shape gaps.
+- Coverage visibility is missing in CI and tooling (no `pytest-cov`, no coverage artifact/trend).
+- Release docs and CI policy are generally coherent, but critical-flow mapping and “blocking vs manual release gate” semantics can be clearer in one operational stream.
+- Desktop packaging/startup confidence is partly documented but not represented as a regular automated CI smoke lane.
+
+## 5. Strengths
+- Existing CI validates both Python and native parser quality paths.
+- Export-related tests are substantial and include artifact-level assertions in integration slices.
+- Repo includes docs/runbook checks in tests (link validation, docstring policy, requirements hygiene).
+- Release metadata consistency and secret-hygiene checks are automated.
+- Google conversion constraints are explicitly documented as environment-dependent release smoke.
+
+## 6. Gaps and Risks
+- **Coverage blind spot:** no quantitative visibility into tested/uncovered areas in CI.
+- **Critical-flow mapping gap:** release-critical path coverage is not summarized in one maintainable matrix.
+- **Parity depth risk:** small parser fixture set may miss native/python divergence edge cases.
+- **Packaging confidence gap:** no routine packaging/startup smoke lane in CI for desktop release risk.
+- **Docs clarity risk:** if CI/manual gate boundaries drift, “green CI vs release readiness” can be misinterpreted.
+
+## 7. High-Priority Recommendations
+1. Add non-blocking coverage reporting first (high value, low risk).
+2. Add/strengthen one critical export golden-path regression assertion to protect user-visible output.
+3. Add CI/release-smoke confidence increment (manual/dispatch packaging smoke first, not PR-blocking).
+4. Tighten docs/checklist language for blocking CI vs manual release gates.
+5. Expand native parser parity fixtures incrementally for realistic edge patterns.
+
+## 8. Phased Implementation Plan
+### Phase 1 - Audit and visibility
+- Objective: Make risk visible without adding merge friction.
+- Why: Immediate confidence gain with low disruption.
+- Target files: `requirements-dev.txt`, `.github/workflows/ci.yml`, `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`.
+- Dependencies: Completed audit baseline.
+- Acceptance criteria: Coverage report generated in CI as non-blocking informational signal and documented.
+- Risk level: low.
+
+### Phase 2 - Regression protection
+- Objective: Add targeted tests for critical user-facing regression risk.
+- Why: Raise confidence where failures are costly (export outputs/parity).
+- Target files: `tests/test_phase4_integration_happy_path.py`, selected `tests/test_export_*`, `tests/fixtures/cmm_parser/*.json`, `tests/test_cmm_parser_parity.py`.
+- Dependencies: Phase 1 visibility baseline.
+- Acceptance criteria: At least one strengthened export golden-path test and one parser parity-fixture increment (or explicit deferral rationale).
+- Risk level: low-medium.
+
+### Phase 3 - CI and release-smoke improvements
+- Objective: Improve packaging/release confidence with practical CI/manual smoke strategy.
+- Why: Desktop release risk extends beyond unit tests.
+- Target files: `.github/workflows/ci.yml`, `docs/release_checks/open_testing_runbook.md`, `docs/release_checks/release_candidate_checklist.md`, `docs/ci-policy.md`.
+- Dependencies: Phase 1–2 outputs.
+- Acceptance criteria: Useful packaging/startup smoke path defined and aligned with docs; non-blocking for standard PRs unless proven stable/value-positive.
+- Risk level: medium.
+
+### Phase 4 - Docs and checklist alignment
+- Objective: Keep release/testing documentation synchronized with real CI/test behavior.
+- Why: Operational clarity is part of release readiness.
+- Target files: `docs/ci-policy.md`, `docs/release_checks/*`, `docs/README.md`, this tracker.
+- Dependencies: Ongoing; applies after each step.
+- Acceptance criteria: Every behavior/policy change reflected in docs in same step, with explicit rationale when no update is needed.
+- Risk level: low.
+
+## 9. Prioritized TODO Backlog
+### TCI-001 - Audit current tests, CI, and release-validation coverage
+- Status: done
+- Phase: Phase 1 - Audit and visibility
+- Priority: high
+- Why: Establish accurate baseline before making guardrail changes.
+- Target files: `tests/`, `.github/workflows/ci.yml`, `pyproject.toml`, `requirements-dev.txt`, `docs/ci-policy.md`, `docs/release_checks/*`, `docs/README.md`, `scripts/release_only_google_conversion_smoke.py`, `scripts/sync_release_metadata.py`
+- Tests/checks: repository inspection commands; targeted inventory counts
+- Docs review: `docs/README.md`, `docs/ci-policy.md`, `docs/release_checks/*`, tracker
+- Risk notes: audit can miss implicit runtime assumptions if not paired with future focused implementation steps
+- Definition of done:
+  - Repository-specific strengths/gaps documented.
+  - Phased plan and prioritized TODO backlog recorded.
+  - Exactly one recommended next step identified.
+
+### TCI-002 - Add coverage visibility/reporting plan and implement the safest first increment
+- Status: todo
+- Phase: Phase 1 - Audit and visibility
+- Priority: high
+- Why: Coverage visibility is currently absent, reducing confidence trend tracking.
+- Target files: `requirements-dev.txt`, `.github/workflows/ci.yml`, `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`, this tracker
+- Tests/checks: run unit tests with coverage locally (or dry-run CI command), validate CI YAML and docs consistency
+- Docs review: `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`, tracker
+- Risk notes: avoid introducing noisy blocking thresholds initially
+- Definition of done:
+  - Coverage tool dependency added and CI emits coverage output/artifact.
+  - Coverage remains non-blocking initially.
+  - Docs explicitly describe coverage lane semantics.
+
+### TCI-003 - Strengthen regression protection for one critical export path
+- Status: todo
+- Phase: Phase 2 - Regression protection
+- Priority: high
+- Why: Critical export confidence still relies heavily on helper-level tests.
+- Target files: `tests/test_phase4_integration_happy_path.py` and/or targeted `tests/test_export_*`
+- Tests/checks: run targeted pytest module(s) and relevant integration/regression tests
+- Docs review: tracker; release docs only if release/test process expectations change
+- Risk notes: avoid brittle assertions tied to unstable formatting internals
+- Definition of done:
+  - One meaningful artifact-level regression assertion added/strengthened.
+  - Test is deterministic and reviewable.
+  - Existing related tests remain green.
+
+### TCI-004 - Improve CI/release-smoke confidence and align docs/checklists
+- Status: todo
+- Phase: Phase 3 - CI and release-smoke improvements
+- Priority: high
+- Why: Desktop packaging/startup confidence is only partially represented in CI.
+- Target files: `.github/workflows/ci.yml`, `docs/ci-policy.md`, `docs/release_checks/open_testing_runbook.md`, `docs/release_checks/release_candidate_checklist.md`, tracker
+- Tests/checks: validate workflow syntax and run any introduced smoke script/check locally where feasible
+- Docs review: `docs/ci-policy.md`, `docs/release_checks/*`, `docs/README.md` (if docs set changes), tracker
+- Risk notes: platform-specific runners/cost/time may require staged rollout
+- Definition of done:
+  - CI/manual smoke increment implemented or explicitly deferred with concrete rationale.
+  - Blocking vs non-blocking semantics documented clearly.
+  - Release checklist/runbook updated to match behavior.
+
+### TCI-005 - Expand native parser parity corpus with one incremental edge fixture set
+- Status: todo
+- Phase: Phase 2 - Regression protection
+- Priority: medium
+- Why: Current fixture depth is limited for parser parity-sensitive code.
+- Target files: `tests/fixtures/cmm_parser/*.json`, `tests/test_cmm_parser_parity.py`, tracker
+- Tests/checks: `python -m pytest tests/test_cmm_parser_parity.py -q`
+- Docs review: tracker
+- Risk notes: ensure fixture additions reflect realistic parser inputs and avoid overfitting
+- Definition of done:
+  - At least one new edge-pattern fixture added.
+  - Parity assertions pass in python backend and native-enabled contexts where available.
+  - Tracker records risk reduction and remaining gaps.
+
+## 10. Progress Log
+- 2026-03-07 — **TCI-001 completed**.
+  - Work completed:
+    - Performed repository-specific audit across required areas (tests, CI workflow, test config, release docs, release scripts, native parity fixtures).
+    - Captured strengths, gaps/risks, recommendations, phased plan, and prioritized backlog in this tracker.
+  - Changed files:
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `sed` review pass over required files (`ci.yml`, `pyproject.toml`, `requirements-dev.txt`, docs and runbooks).
+    - Python inventory check for test module count and parser fixture count.
+  - Docs reviewed/updated:
+    - Reviewed: `docs/README.md`, `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`, `docs/release_checks/open_testing_runbook.md`, `docs/release_checks/google_conversion_smoke.md`.
+    - **docs update required and applied**: this tracker created as the required operational source of truth.
+  - New/remaining risks:
+    - Coverage visibility still absent until TCI-002.
+    - Packaging/startup CI confidence remains limited until TCI-004.
+
+## 11. Test Strategy Notes
+- Keep existing full-suite and native parity checks as baseline hard gates.
+- Next confidence increment is visibility-first (coverage reporting) before threshold enforcement.
+- Prefer deterministic artifact-level regression assertions for export critical paths.
+- Keep Google conversion smoke as release/manual evidence due to local OAuth dependency model.
+
+## 12. CI Strategy Notes
+- Preserve current blocking checks: static checks, unit tests, native artifacts/parity.
+- Introduce coverage reporting as non-blocking informational signal first.
+- Treat Google conversion smoke as release gate evidence (manual/opt-in), not standard PR blocker.
+- Stage packaging smoke confidence increment carefully to avoid high-cost/noisy PR friction.
+
+## 13. Documentation Review Rules
+For every step, explicitly review and record outcome for:
+- touched docstrings/comments
+- `README.md` if setup/workflow/developer instructions change
+- `docs/README.md` if active docs are added/renamed
+- `docs/ci-policy.md`
+- relevant files under `docs/release_checks/`
+- this tracker
+- any release/test/runbook/checklist affected by the change
+
+For each step, include one explicit statement:
+- “docs update required and applied”, or
+- “docs reviewed, no update needed, because ...”
+
+## 14. Deferred Items
+- Coverage threshold gating in CI is deferred until coverage baseline data is collected and noise profile is known.
+- Any broad multi-OS packaging matrix expansion is deferred unless incremental smoke lanes show clear value.
+
+## 15. Next Recommended Step
+Execute **TCI-002** only: add non-blocking coverage visibility in CI and update CI/release docs accordingly.
