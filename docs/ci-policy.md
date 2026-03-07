@@ -28,6 +28,7 @@ The following checks must pass on every PR and branch push.
   - machine-readable artifact via `coverage.xml` (`--cov-report=xml:coverage.xml`)
 - Coverage reporting is **visibility-only** right now and is **not** a merge gate.
 - There is intentionally no fail-under threshold configured yet.
+- Threshold go/no-go governance criteria (observation window, evidence sources, owner, and decision output) are tracked in the RC1 execution tracker: `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md` under **"TCI-007 governance criteria (deferred threshold decision)"**.
 - Reviewers can inspect coverage evidence in:
   - the `unit-tests` job log (terminal summary), and
   - the uploaded workflow artifact named `unit-test-coverage` (contains `coverage.xml`).
