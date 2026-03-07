@@ -128,7 +128,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Existing related tests remain green.
 
 ### TCI-004 - Improve CI/release-smoke confidence and align docs/checklists
-- Status: todo
+- Status: completed
 - Phase: Phase 3 - CI and release-smoke improvements
 - Priority: high
 - Dependency/sequencing: Can proceed in parallel with TCI-005, but preferred sequence is **TCI-005 first, then TCI-004** so parser-confidence gains land before higher-cost CI/workflow changes.
@@ -158,6 +158,28 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Tracker records risk reduction and remaining gaps.
 
 ## 10. Progress Log
+
+
+- 2026-03-07 — **TCI-004 completed**.
+  - Work completed:
+    - Added a new manual/opt-in CI lane `packaging-smoke` gated behind `workflow_dispatch` input `run_packaging_smoke=1`.
+    - Implemented low-cost packaging confidence signal by building the PyInstaller onefile artifact and asserting expected output existence (`dist/metroliza`).
+    - Updated CI and release docs to clearly classify packaging smoke as non-blocking for regular PR/push CI and as optional release evidence.
+  - Changed files:
+    - `.github/workflows/ci.yml`
+    - `docs/ci-policy.md`
+    - `docs/release_checks/release_candidate_checklist.md`
+    - `docs/release_checks/open_testing_runbook.md`
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `python -m compileall .github/workflows/ci.yml docs/ci-policy.md docs/release_checks/release_candidate_checklist.md docs/release_checks/open_testing_runbook.md docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+    - `python -m pytest tests/test_docs_markdown_links.py -q`
+    - `git diff -- .github/workflows/ci.yml docs/ci-policy.md docs/release_checks/release_candidate_checklist.md docs/release_checks/open_testing_runbook.md docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Docs reviewed/updated:
+    - Reviewed: `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`, `docs/release_checks/open_testing_runbook.md`, this tracker.
+    - **docs update required and applied**: CI/manual smoke semantics and checklist/runbook references aligned to new `packaging-smoke` lane behavior.
+  - New/remaining risks:
+    - Packaging smoke currently validates build + artifact existence only; launch/runtime behavior remains a manual release checklist gate.
 
 - 2026-03-07 — **TCI-005 completed**.
   - Work completed:
@@ -278,4 +300,4 @@ For each step, include one explicit statement:
 ## 15. Next Recommended Step
 Sequencing note: **TCI-005 was intentionally prioritized ahead of/alongside TCI-004** because it delivers faster confidence gain at lower implementation and operational risk; TCI-004 introduces broader CI/workflow surface area and potential runtime/cost noise.
 
-Execute **TCI-004** next: implement the packaging/startup CI/release-smoke increment and align policy/checklist docs with explicit blocking vs non-blocking semantics.
+Execute **TCI-006** next: perform a docs-only semantics alignment pass across `docs/release_checks/release_status.md` and related runbooks so "PR-blocking CI" vs "release-blocking manual evidence" distinctions remain explicit and drift-resistant.

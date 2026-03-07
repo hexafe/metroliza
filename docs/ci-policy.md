@@ -38,6 +38,7 @@ These checks are explicitly non-blocking for normal PR CI:
 
 | Check | Workflow job name (`ci.yml`) | Trigger model | Blocking status |
 |---|---|---|---|
+| Packaging smoke build (release-only) | `packaging-smoke` | Manual `workflow_dispatch` with `run_packaging_smoke=1` | **Non-blocking** for regular PRs and pushes |
 | Google conversion smoke (release-only) | `google-conversion-smoke` | Manual `workflow_dispatch` with `run_google_conversion_smoke=1` | **Non-blocking** for regular PRs and pushes |
 
 ## PR checklist
@@ -48,4 +49,4 @@ Use this quick checklist when opening or reviewing PRs:
 - [ ] Metadata consistency checks pass (`static-checks`)
 - [ ] Full pytest suite passes (`unit-tests`)
 - [ ] Native artifact smoke/parity checks pass (`native-artifacts`)
-- [ ] Optional/manual non-blocking checks reviewed as needed (`google-conversion-smoke`)
+- [ ] Optional/manual non-blocking checks reviewed as needed (`packaging-smoke`, `google-conversion-smoke`)
