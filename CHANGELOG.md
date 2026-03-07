@@ -1,9 +1,9 @@
 # Changelog (for end users)
 
 ## 2026.03 (build 260307) — current version
-- UX improvements across the main workflow with cleaner dialogs and more readable in-app messaging.
-- Group renaming remains instant via double-click in the group list, reducing click-through steps.
-- Release notes visibility in the main window was refreshed to make version updates easier to scan.
+- Group names can be renamed instantly via double-click in the group list.
+- Extended charts have improved visuals for better readability in complex views.
+- General UX polish improves clarity and flow across the main workflow.
 ## 2026.02 (build 260223)
 - Performance improvements during report generation.
 - Additional stability improvements in export and grouping flows.
