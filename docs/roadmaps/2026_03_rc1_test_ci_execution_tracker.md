@@ -131,6 +131,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 - Status: todo
 - Phase: Phase 3 - CI and release-smoke improvements
 - Priority: high
+- Dependency/sequencing: Can proceed in parallel with TCI-005, but preferred sequence is **TCI-005 first, then TCI-004** so parser-confidence gains land before higher-cost CI/workflow changes.
 - Why: Desktop packaging/startup confidence is only partially represented in CI.
 - Target files: `.github/workflows/ci.yml`, `docs/ci-policy.md`, `docs/release_checks/open_testing_runbook.md`, `docs/release_checks/release_candidate_checklist.md`, tracker
 - Tests/checks: validate workflow syntax and run any introduced smoke script/check locally where feasible
@@ -145,6 +146,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 - Status: completed
 - Phase: Phase 2 - Regression protection
 - Priority: medium
+- Dependency/sequencing: Chosen to run **before TCI-004** (or in parallel) because it is lower risk, faster to validate, and improves confidence without introducing CI runtime/cost volatility.
 - Why: Current fixture depth is limited for parser parity-sensitive code.
 - Target files: `tests/fixtures/cmm_parser/*.json`, `tests/test_cmm_parser_parity.py`, tracker
 - Tests/checks: `python -m pytest tests/test_cmm_parser_parity.py -q`
@@ -274,4 +276,6 @@ For each step, include one explicit statement:
 - Any broad multi-OS packaging matrix expansion is deferred unless incremental smoke lanes show clear value.
 
 ## 15. Next Recommended Step
-Execute **TCI-005** next: expand native parser parity fixture corpus with one incremental edge-pattern fixture set and update this tracker with resulting risk reduction.
+Sequencing note: **TCI-005 was intentionally prioritized ahead of/alongside TCI-004** because it delivers faster confidence gain at lower implementation and operational risk; TCI-004 introduces broader CI/workflow surface area and potential runtime/cost noise.
+
+Execute **TCI-004** next: implement the packaging/startup CI/release-smoke increment and align policy/checklist docs with explicit blocking vs non-blocking semantics.
