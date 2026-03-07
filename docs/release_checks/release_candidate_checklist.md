@@ -109,6 +109,7 @@ python -m nuitka metroliza.py `
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 
 - [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
+- [ ] Coverage visibility output from `unit-tests` is reviewed (job log summary and `unit-test-coverage` artifact `coverage.xml`) as RC confidence evidence; this is informational and not a blocking PR check. *(Owner: Release owner/QA)*
 - [ ] Any optional manual smoke evidence (if executed) is linked from release notes or tracker. *(Owner: Release owner)*
 
 > For solo-maintainer flow, treat GitHub CI status as the primary release gate before merge/tag.

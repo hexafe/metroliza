@@ -95,7 +95,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Exactly one recommended next step identified.
 
 ### TCI-002 - Add coverage visibility/reporting plan and implement the safest first increment
-- Status: todo
+- Status: completed
 - Phase: Phase 1 - Audit and visibility
 - Priority: high
 - Why: Coverage visibility is currently absent, reducing confidence trend tracking.
@@ -151,6 +151,28 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Tracker records risk reduction and remaining gaps.
 
 ## 10. Progress Log
+- 2026-03-07 — **TCI-002 completed**.
+  - Work completed:
+    - Added `pytest-cov` to developer/test dependencies for local and CI coverage support.
+    - Updated `unit-tests` in CI to emit coverage summary in logs and generate `coverage.xml`.
+    - Added coverage artifact upload (`unit-test-coverage`) for reviewer visibility.
+    - Updated CI/release docs to clarify coverage is informational (non-blocking) and where evidence is reviewed.
+  - Changed files:
+    - `requirements-dev.txt`
+    - `.github/workflows/ci.yml`
+    - `docs/ci-policy.md`
+    - `docs/release_checks/release_candidate_checklist.md`
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `python -m pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml` (failed locally before dependency install due missing `pytest-cov` in environment)
+    - `PYTHONPATH=. python -m pytest tests -q`
+    - `git diff -- requirements-dev.txt .github/workflows/ci.yml docs/ci-policy.md docs/release_checks/release_candidate_checklist.md docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Docs reviewed/updated:
+    - Reviewed: `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`, this tracker.
+    - **docs update required and applied**: coverage semantics/evidence locations documented and RC checklist updated.
+  - New/remaining risks:
+    - Coverage remains visibility-only until a baseline is established for future threshold gating.
+
 - 2026-03-07 — **TCI-001 completed**.
   - Work completed:
     - Performed repository-specific audit across required areas (tests, CI workflow, test config, release docs, release scripts, native parity fixtures).
