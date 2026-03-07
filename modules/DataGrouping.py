@@ -582,8 +582,12 @@ class DataGrouping(QDialog):
             self._populate_part_group_list(selected_group_name)
 
             selected_group = self.groups_list.currentItem() is not None
+            is_default_group = selected_group_name == self.default_group
             self.rename_group_button.setEnabled(selected_group)
-            self.delete_group_button.setEnabled(selected_group)
+            self.delete_group_button.setEnabled(selected_group and not is_default_group)
+
+            selected_part_group = self.part_group_list.currentItem() is not None
+            self.remove_from_group_button.setEnabled(selected_group and not is_default_group and selected_part_group)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -611,7 +615,8 @@ class DataGrouping(QDialog):
 
         try:
             selected_part_group = self.part_group_list.currentItem() is not None
-            self.remove_from_group_button.setEnabled(selected_part_group)
+            selected_group_name = self._selected_group_name()
+            self.remove_from_group_button.setEnabled(selected_part_group and selected_group_name != self.default_group)
         except Exception as e:
             self.log_and_exit(e)
             
@@ -752,6 +757,8 @@ class DataGrouping(QDialog):
         try:
             # Get the selected group
             selected_group = self._selected_group_name()
+            if selected_group == self.default_group:
+                return
 
             # Create a QMessageBox with the Question icon
             confirmation = QMessageBox(QMessageBox.Icon.Question, 'Confirm Deletion', f"Are you sure you want to delete group '{selected_group}'?")

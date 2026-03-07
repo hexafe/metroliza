@@ -188,8 +188,14 @@ class _FakeListWidget:
 
 
 class _FakeButton:
+    def __init__(self):
+        self.disabled = None
+
     def setDisabled(self, value):
         self.disabled = value
+
+    def setEnabled(self, value):
+        self.disabled = not bool(value)
 
 
 class TestDataGroupingGroupLabels(unittest.TestCase):
@@ -214,6 +220,7 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         from unittest.mock import patch
 
         dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
         dialog.group_color_column = 'GROUP_COLOR'
         dialog.df = pd.DataFrame(
             {
@@ -233,6 +240,117 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
 
         self.assertIn('Operations', dialog.df['GROUP'].tolist())
         self.assertNotIn('Ops Team', dialog.df['GROUP'].tolist())
+
+    def test_rename_group_allows_default_population_group(self):
+        from unittest.mock import patch
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'GROUP': ['POPULATION', 'Ops Team'],
+                'GROUP_COLOR': ['#FFFFFF', '#ABCDEF'],
+            }
+        )
+        dialog._selected_group_name = lambda: 'POPULATION'
+        dialog.populate_list_widgets = lambda: None
+        dialog.remove_from_group_button = _FakeButton()
+
+        input_dialog_cls = DataGrouping.rename_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('All Samples', True), create=True) as mocked_get_text:
+            dialog.rename_group()
+
+        mocked_get_text.assert_called_once()
+        self.assertIn('All Samples', dialog.df['GROUP'].tolist())
+        self.assertNotIn('POPULATION', dialog.df['GROUP'].tolist())
+
+    def test_delete_group_ignores_default_population_group(self):
+        from unittest.mock import patch
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.default_group_color = '#FFFFFF'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'GROUP': ['POPULATION', 'Ops Team'],
+                'GROUP_COLOR': ['#FFFFFF', '#ABCDEF'],
+            }
+        )
+        dialog._selected_group_name = lambda: 'POPULATION'
+        dialog.populate_list_widgets = lambda: None
+        dialog.remove_from_group_button = _FakeButton()
+
+        message_box_cls = DataGrouping.delete_group.__globals__['QMessageBox']
+        with patch.object(message_box_cls, '__init__', return_value=None, create=True), \
+             patch.object(message_box_cls, 'setStandardButtons', return_value=None, create=True), \
+             patch.object(message_box_cls, 'exec', return_value=1, create=True) as mocked_exec:
+            dialog.delete_group()
+
+        mocked_exec.assert_not_called()
+        self.assertEqual(dialog.df['GROUP'].tolist(), ['POPULATION', 'Ops Team'])
+
+    def test_delete_group_reassigns_non_default_group_to_population(self):
+        from unittest.mock import patch
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.default_group_color = '#FFFFFF'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'GROUP': ['Ops Team', 'Ops Team', 'POPULATION'],
+                'GROUP_COLOR': ['#ABCDEF', '#ABCDEF', '#FFFFFF'],
+            }
+        )
+        dialog._selected_group_name = lambda: 'Ops Team'
+        dialog.populate_list_widgets = lambda: None
+        dialog.remove_from_group_button = _FakeButton()
+
+        message_box_cls = DataGrouping.delete_group.__globals__['QMessageBox']
+        with patch.object(message_box_cls, 'Icon', type('Icon', (), {'Question': object()}), create=True), \
+             patch.object(message_box_cls, 'StandardButton', type('StandardButton', (), {'Yes': 1, 'No': 2}), create=True), \
+             patch.object(message_box_cls, '__init__', return_value=None, create=True), \
+             patch.object(message_box_cls, 'setStandardButtons', return_value=None, create=True), \
+             patch.object(message_box_cls, 'exec', return_value=1, create=True):
+            dialog.delete_group()
+
+        self.assertTrue((dialog.df['GROUP'] == 'POPULATION').all())
+
+    def test_on_group_selection_changed_disables_delete_but_keeps_rename_for_default_group(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.groups_list = _FakeListWidget([_FakeListItem(text='POPULATION (n=2)', user_role='POPULATION')])
+        dialog.part_group_list = _FakeListWidget([_FakeListItem(text='P1')])
+        dialog.rename_group_button = _FakeButton()
+        dialog.delete_group_button = _FakeButton()
+        dialog.remove_from_group_button = _FakeButton()
+        dialog._selected_group_name = lambda: 'POPULATION'
+        dialog._populate_part_group_list = lambda selected_group: None
+
+        dialog.on_group_selection_changed()
+
+        self.assertFalse(dialog.rename_group_button.disabled)
+        self.assertTrue(dialog.delete_group_button.disabled)
+        self.assertTrue(dialog.remove_from_group_button.disabled)
+
+    def test_on_group_selection_changed_enables_rename_and_delete_for_non_default_group(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team (n=1)', user_role='Ops Team')])
+        dialog.part_group_list = _FakeListWidget([_FakeListItem(text='P1')])
+        dialog.rename_group_button = _FakeButton()
+        dialog.delete_group_button = _FakeButton()
+        dialog.remove_from_group_button = _FakeButton()
+        dialog._selected_group_name = lambda: 'Ops Team'
+        dialog._populate_part_group_list = lambda selected_group: None
+
+        dialog.on_group_selection_changed()
+
+        self.assertFalse(dialog.rename_group_button.disabled)
+        self.assertFalse(dialog.delete_group_button.disabled)
+        self.assertFalse(dialog.remove_from_group_button.disabled)
 
     def test_group_search_matches_canonical_name(self):
         from modules.list_selection_utils import ListSelectionUtils
