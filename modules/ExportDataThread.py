@@ -38,6 +38,11 @@ from modules.db import execute_select_with_columns, read_sql_dataframe, sqlite_c
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
 from modules.google_drive_export import GoogleDriveAuthError, GoogleDriveExportError, upload_and_convert_workbook
+from modules.export_google_result_utils import (
+    build_google_conversion_metadata,
+    build_google_fallback_metadata,
+    build_google_stage_message,
+)
 from modules.progress_status import build_three_line_status
 from modules.log_context import (
     build_export_log_extra,
@@ -2271,21 +2276,10 @@ class ExportDataThread(QThread):
         return target_to_backend[self.export_target]
 
     def _emit_google_stage(self, stage, detail=""):
-        stage_labels = {
-            "generating": "Google export stage: generating workbook",
-            "uploading": "Google export stage: uploading",
-            "converting": "Google export stage: converting",
-            "validating": "Google export stage: validating",
-            "completed": "Google export stage: completed",
-            "fallback": "Google export stage: fallback",
-        }
-        base = stage_labels.get(stage)
-        if not base:
+        stage_message = build_google_stage_message(stage, detail=detail)
+        if not stage_message:
             return
-        if detail:
-            self.update_label.emit(build_three_line_status(f"{base} ({detail})", "Exporting data...", "ETA --"))
-            return
-        self.update_label.emit(build_three_line_status(base, "Exporting data...", "ETA --"))
+        self.update_label.emit(build_three_line_status(stage_message, "Exporting data...", "ETA --"))
 
     def _build_export_context(self, *, stage, fallback_reason=""):
         return build_export_log_extra(
@@ -2406,21 +2400,8 @@ class ExportDataThread(QThread):
                     expected_sheet_names=self._build_expected_sheet_names(),
                     status_callback=_stage_callback,
                 )
-                conversion_warnings = list(conversion.warnings)
-                conversion_warning_details = list(getattr(conversion, "warning_details", ()))
-                converted_tab_titles = list(getattr(conversion, "converted_tab_titles", ()))
 
-                self.completion_metadata.update(
-                    {
-                        "converted_file_id": conversion.file_id,
-                        "converted_url": conversion.web_url,
-                        "local_xlsx_path": conversion.local_xlsx_path,
-                        "fallback_message": conversion.fallback_message,
-                        "conversion_warnings": conversion_warnings,
-                        "conversion_warning_details": conversion_warning_details,
-                        "converted_tab_titles": converted_tab_titles,
-                    }
-                )
+                self.completion_metadata.update(build_google_conversion_metadata(conversion))
                 self._log_export_stage(
                     "Google conversion returned",
                     stage="google_conversion",
@@ -2458,12 +2439,7 @@ class ExportDataThread(QThread):
             QCoreApplication.processEvents()
         except GoogleDriveExportError as e:
             if self.export_target == "google_sheets_drive_convert":
-                self.completion_metadata.update(
-                    {
-                        "fallback_message": f"Google export failed; using local .xlsx fallback: {self.excel_file}",
-                        "conversion_warnings": [str(e)],
-                    }
-                )
+                self.completion_metadata.update(build_google_fallback_metadata(excel_file=self.excel_file, error=e))
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
                 self.update_label.emit(build_three_line_status(f"Warning: {e}", "Exporting data...", "ETA --"))
                 self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))

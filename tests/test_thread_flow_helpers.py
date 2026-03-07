@@ -67,6 +67,11 @@ from modules.ExportDataThread import (  # noqa: E402
 )
 from modules.export_backends import ExcelExportBackend  # noqa: E402
 from modules.google_drive_export import GoogleDriveConversionResult  # noqa: E402
+from modules.export_google_result_utils import (  # noqa: E402
+    build_google_conversion_metadata,
+    build_google_fallback_metadata,
+    build_google_stage_message,
+)
 from modules.ParseReportsThread import build_report_fingerprints_from_rows, parse_new_reports  # noqa: E402
 
 
@@ -334,6 +339,46 @@ class TestExportHelpers(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             execute_export_query(':memory:', 'SELECT 1', select_reader=failing_reader)
+
+    def test_google_stage_message_builder_matches_existing_semantics(self):
+        self.assertEqual(
+            build_google_stage_message('completed', 'https://docs.google.com/spreadsheets/d/sheet-id/edit'),
+            'Google export stage: completed (https://docs.google.com/spreadsheets/d/sheet-id/edit)',
+        )
+        self.assertEqual(
+            build_google_stage_message('uploading'),
+            'Google export stage: uploading',
+        )
+        self.assertIsNone(build_google_stage_message('unknown'))
+
+    def test_google_conversion_metadata_builder_preserves_warning_and_fallback_fields(self):
+        result = GoogleDriveConversionResult(
+            file_id='sheet-id',
+            web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+            local_xlsx_path='out.xlsx',
+            fallback_message='Use local .xlsx fallback if needed: out.xlsx',
+            warnings=('chart patch skipped',),
+            warning_details=('applied safe palette',),
+            converted_tab_titles=('MEASUREMENTS',),
+        )
+
+        metadata = build_google_conversion_metadata(result)
+
+        self.assertEqual(metadata['converted_url'], 'https://docs.google.com/spreadsheets/d/sheet-id/edit')
+        self.assertEqual(metadata['local_xlsx_path'], 'out.xlsx')
+        self.assertEqual(metadata['fallback_message'], 'Use local .xlsx fallback if needed: out.xlsx')
+        self.assertEqual(metadata['conversion_warnings'], ['chart patch skipped'])
+        self.assertEqual(metadata['conversion_warning_details'], ['applied safe palette'])
+        self.assertEqual(metadata['converted_tab_titles'], ['MEASUREMENTS'])
+
+    def test_google_fallback_metadata_builder_preserves_local_fallback_contract(self):
+        metadata = build_google_fallback_metadata(
+            excel_file='out.xlsx',
+            error=RuntimeError('temporary outage'),
+        )
+
+        self.assertEqual(metadata['fallback_message'], 'Google export failed; using local .xlsx fallback: out.xlsx')
+        self.assertEqual(metadata['conversion_warnings'], ['temporary outage'])
 
     def test_check_canceled_emits_cancel_signal_once(self):
         request = __import__('modules.contracts', fromlist=['ExportRequest', 'AppPaths', 'ExportOptions'])
