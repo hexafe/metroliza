@@ -1,15 +1,14 @@
 RELEASE_VERSION = "2026.03"
-VERSION_DATE = "260305"
+VERSION_DATE = "260307"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Group creation now includes clearer color-coding/sample-size context, with cleaner extended-chart visuals and export polish."
+    "UX refresh: quicker group renaming, clearer chart visuals, and cleaner release messaging in the app."
 )
 
 release_notes = f"""
     <br><b>Current version {RELEASE_VERSION} (build {VERSION_DATE}):</b><br>
-    - Group creation now highlights color-coding and sample-size details more clearly<br>
-    - Group names can now be renamed quickly by double-clicking them in the group list<br>
-    - Extended charts have improved visual styling for better readability<br>
-    - Additional export and reporting polish for a smoother workflow<br>
+    - UX polish update: improved readability and smoother navigation across core dialogs<br>
+    - Group renaming flow is faster with direct double-click editing in the group list<br>
+    - Release messaging was refreshed for clearer in-app version visibility<br>
 
     <br><b>Version 2026.03 (build 260301):</b><br>
     - Google Sheets export implementation with safe `.xlsx` fallback<br>
