@@ -85,8 +85,18 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 - Risk level: low.
 
 ## 9. Prioritized TODO Backlog
+
+| Item | Current status | Lifecycle |
+| --- | --- | --- |
+| TCI-001 | completed | `todo` -> `in_progress` -> `completed` |
+| TCI-002 | completed | `todo` -> `in_progress` -> `completed` |
+| TCI-003 | completed | `todo` -> `in_progress` -> `completed` |
+| TCI-004 | completed | `todo` -> `in_progress` -> `completed` |
+| TCI-005 | completed | `todo` -> `in_progress` -> `completed` |
+| TCI-006 | todo | `todo` -> `in_progress` -> `completed` |
+
 ### TCI-001 - Audit current tests, CI, and release-validation coverage
-- Status: done
+- Status: completed
 - Phase: Phase 1 - Audit and visibility
 - Priority: high
 - Why: Establish accurate baseline before making guardrail changes.
@@ -156,6 +166,20 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - At least one new edge-pattern fixture added.
   - Parity assertions pass in python backend and native-enabled contexts where available.
   - Tracker records risk reduction and remaining gaps.
+
+### TCI-006 - Align docs semantics for PR-blocking CI checks vs release-blocking manual evidence
+- Status: todo
+- Phase: Phase 4 - Docs and checklist alignment
+- Priority: high
+- Why: Section 15 identifies a docs-only alignment pass to keep PR-blocking CI semantics clearly separated from release-blocking manual evidence, preventing policy drift and misread release readiness.
+- Target files: `docs/release_checks/release_status.md`, `docs/release_checks/release_candidate_checklist.md`, `docs/release_checks/open_testing_runbook.md`, `docs/ci-policy.md`, this tracker
+- Tests/checks: `python -m pytest tests/test_docs_markdown_links.py -q`; `python -m pytest tests/test_ci_policy_sync.py -q` (or closest docs-policy consistency check available)
+- Docs review: `docs/release_checks/release_status.md`, `docs/release_checks/release_candidate_checklist.md`, `docs/release_checks/open_testing_runbook.md`, `docs/ci-policy.md`, tracker, and section 15 sequencing note
+- Risk notes: language-only changes can still introduce semantic ambiguity if terms like “blocking,” “required,” and “evidence” are not used consistently across all docs touchpoints
+- Definition of done:
+  - Docs explicitly distinguish PR-blocking CI checks from release-blocking manual evidence using consistent terms.
+  - Any checklist/status matrices map each gate type to an owner/evidence source without contradiction.
+  - Tracker and section 15 stay synchronized on next-step intent and lifecycle status transitions.
 
 ## 10. Progress Log
 
