@@ -94,6 +94,7 @@ from modules.ExportDataThread import (  # noqa: E402
     render_violin,
     render_scatter_numeric,
     render_histogram,
+    render_density_line,
     resolve_summary_annotation_strategy,
     apply_summary_plot_theme,
     apply_minimal_axis_style,
@@ -130,6 +131,30 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
+
+    def test_histogram_y_axis_tracks_bar_counts_not_overlay_curve(self):
+        import pandas as pd
+
+        values = [1.0] * 14 + [1.25] * 12 + [1.5] * 10 + [1.75] * 8 + [2.0] * 6
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            render_histogram(ax, pd.DataFrame({'MEAS': values}))
+            bar_ylim_before_overlay = ax.get_ylim()
+
+            x_values = np.linspace(min(values), max(values), 50)
+            exaggerated_curve = np.linspace(80.0, 120.0, 50)
+            render_density_line(ax, x_values, exaggerated_curve)
+
+            bar_ylim_after_overlay = ax.get_ylim()
+            self.assertEqual(bar_ylim_after_overlay, bar_ylim_before_overlay)
+
+            max_bar_height = max((patch.get_height() for patch in ax.patches), default=0.0)
+            self.assertGreater(max_bar_height, 0.0)
+            self.assertGreaterEqual(bar_ylim_after_overlay[1], max_bar_height)
+            self.assertLessEqual(bar_ylim_after_overlay[1], max_bar_height * 1.2)
+        finally:
+            plt.close(fig)
 
     def test_resolve_summary_annotation_strategy_prefers_static_for_dense_axes(self):
         sparse = resolve_summary_annotation_strategy(x_point_count=80)

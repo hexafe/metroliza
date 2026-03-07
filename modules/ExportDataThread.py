@@ -1234,6 +1234,34 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None):
 
     ax.set_xlim(x_min_base - x_padding, x_max_base + x_padding)
     enforce_minimum_histogram_bar_width(ax)
+    lock_histogram_y_axis_to_bar_heights(ax)
+
+
+def lock_histogram_y_axis_to_bar_heights(ax, *, top_padding_ratio=0.08):
+    """Anchor histogram y-axis limits to rendered bar heights.
+
+    Overlay curves (normal/KDE) are informational and should not drive y-axis
+    scaling because bar counts are the primary chart reference.
+    """
+
+    if ax is None:
+        return
+
+    bar_heights = []
+    for patch in ax.patches:
+        height = patch.get_height()
+        if np.isfinite(height) and height >= 0:
+            bar_heights.append(float(height))
+
+    if not bar_heights:
+        return
+
+    max_height = max(bar_heights)
+    if max_height <= 0:
+        max_height = 1.0
+
+    top_padding = max_height * max(0.0, float(top_padding_ratio))
+    ax.set_ylim(0.0, max_height + top_padding)
 
 
 def enforce_minimum_histogram_bar_width(ax, *, min_width_fraction=0.015):
@@ -1369,12 +1397,19 @@ def add_iqr_boxplot_legend(ax, *, include_tolerance_refs=False):
 
 
 def render_density_line(ax, x, p):
-    """Render a density line over histogram bins."""
+    """Render a density line over histogram bins without rescaling count axis."""
+
+    if ax is None:
+        return
+
+    original_y_limits = ax.get_ylim()
 
     if _HAS_SEABORN:
         sns.lineplot(x=x, y=p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4, ax=ax)
     else:
         ax.plot(x, p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4)
+
+    ax.set_ylim(*original_y_limits)
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
