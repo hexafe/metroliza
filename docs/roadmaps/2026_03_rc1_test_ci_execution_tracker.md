@@ -109,7 +109,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Docs explicitly describe coverage lane semantics.
 
 ### TCI-003 - Strengthen regression protection for one critical export path
-- Status: todo
+- Status: completed
 - Phase: Phase 2 - Regression protection
 - Priority: high
 - Why: Critical export confidence still relies heavily on helper-level tests.
@@ -151,6 +151,23 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Tracker records risk reduction and remaining gaps.
 
 ## 10. Progress Log
+
+- 2026-03-07 — **TCI-003 completed**.
+  - Work completed:
+    - Strengthened the phase-4 happy-path workbook regression by asserting exported worksheet XML includes expected measurement payload values (`10.1`, `10.2`) in addition to existing chart-range/formula checks.
+    - Kept assertion scope artifact-level and deterministic to protect user-visible export behavior without coupling to unstable formatting internals.
+  - Changed files:
+    - `tests/test_phase4_integration_happy_path.py`
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `python -m pytest tests/test_phase4_integration_happy_path.py -q`
+  - Docs reviewed/updated:
+    - Reviewed: this tracker.
+    - **docs reviewed, no update needed, because** this change only strengthens an existing test assertion and does not alter CI policy, release gates, or developer workflow behavior.
+  - New/remaining risks:
+    - Native parser parity fixture depth remains limited until TCI-005.
+    - Packaging/startup CI confidence remains limited until TCI-004.
+
 - 2026-03-07 — **TCI-002 completed**.
   - Work completed:
     - Added `pytest-cov` to developer/test dependencies for local and CI coverage support.
@@ -220,4 +237,4 @@ For each step, include one explicit statement:
 - Any broad multi-OS packaging matrix expansion is deferred unless incremental smoke lanes show clear value.
 
 ## 15. Next Recommended Step
-Execute **TCI-002** only: add non-blocking coverage visibility in CI and update CI/release docs accordingly.
+Execute **TCI-005** next: expand native parser parity fixture corpus with one incremental edge-pattern fixture set and update this tracker with resulting risk reduction.

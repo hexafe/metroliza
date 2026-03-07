@@ -256,6 +256,10 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 any('ROUND(MIN(C22:C23), 3)' in sheet_xml for sheet_xml in sheet_xml_candidates),
                 msg='Expected summary formulas were not found in any worksheet XML payload.',
             )
+            self.assertTrue(
+                any('<v>10.1</v>' in sheet_xml and '<v>10.2</v>' in sheet_xml for sheet_xml in sheet_xml_candidates),
+                msg='Expected exported measurement values were not found in worksheet XML payload.',
+            )
 
 
 if __name__ == '__main__':
