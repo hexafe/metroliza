@@ -448,8 +448,41 @@ class DataGrouping(QDialog):
 
         display_name = selected.text()
         return self._group_display_to_name.get(display_name, display_name)
+
+    def _selected_reference_name(self):
+        reference_list = getattr(self, 'reference_list', None)
+        if reference_list is None or not hasattr(reference_list, 'currentItem'):
+            return None
+
+        selected = reference_list.currentItem()
+        if selected is None:
+            return None
+        return selected.text()
+
+    def _reassign_group_keys_to_default(self, selected_part_keys, preferred_group_name=None, preferred_reference_name=None):
+        if not selected_part_keys:
+            return False
+
+        rows_to_reassign = (
+            (self.df['GROUP'] != self.default_group)
+            & (self.df['GROUP_KEY'].isin(selected_part_keys))
+        )
+        self.df.loc[rows_to_reassign, 'GROUP'] = self.default_group
+        self.df.loc[rows_to_reassign, self.group_color_column] = self.default_group_color
+
+        try:
+            self.populate_list_widgets(
+                preferred_group_name=preferred_group_name,
+                preferred_reference_name=preferred_reference_name,
+            )
+        except TypeError:
+            # Compatibility for tests/stubs that override populate_list_widgets
+            # with the historical single-parameter signature.
+            self.populate_list_widgets(preferred_group_name=preferred_group_name)
+        self.remove_from_group_button.setDisabled(True)
+        return bool(rows_to_reassign.any())
             
-    def populate_list_widgets(self, preferred_group_name=None):
+    def populate_list_widgets(self, preferred_group_name=None, preferred_reference_name=None):
         """Handle `populate_list_widgets` for `DataGrouping`.
 
         Args:
@@ -462,18 +495,21 @@ class DataGrouping(QDialog):
         """
 
         try:
-            unique_references = self.df["REFERENCE"].unique()
+            unique_references = list(map(str, self.df["REFERENCE"].unique()))
             self._ensure_group_color_integrity()
             unique_groups = self.df["GROUP"].unique()
             self._group_display_to_name = {}
 
             # Populate reference_list
             self.reference_list.clear()
-            self.reference_list.addItems(map(str, unique_references))
+            self.reference_list.addItems(unique_references)
             
             # Select the first item in the reference_list by default
             if self.reference_list.count() > 0:
-                self.reference_list.setCurrentRow(0)
+                preferred_reference_index = 0
+                if preferred_reference_name in unique_references:
+                    preferred_reference_index = unique_references.index(preferred_reference_name)
+                self.reference_list.setCurrentRow(preferred_reference_index)
 
             # Use clear and addItems for the rest of the lists
             selected_reference = self.reference_list.currentItem().text() if self.reference_list.currentItem() else None
@@ -706,20 +742,24 @@ class DataGrouping(QDialog):
     def _delete_selected_parts_from_group(self):
         selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_group_list.selectedItems()]
         selected_group = self._selected_group_name()
+        selected_reference = self._selected_reference_name()
 
         if not selected_group or not selected_part_keys:
             return False
 
-        rows_to_reassign = (
-            (self.df['GROUP'] == selected_group)
-            & (self.df['GROUP_KEY'].isin(selected_part_keys))
+        return self._reassign_group_keys_to_default(
+            selected_part_keys,
+            preferred_group_name=selected_group,
+            preferred_reference_name=selected_reference,
         )
-        self.df.loc[rows_to_reassign, 'GROUP'] = self.default_group
-        self.df.loc[rows_to_reassign, self.group_color_column] = self.default_group_color
 
-        self.populate_list_widgets(preferred_group_name=selected_group)
-        self.remove_from_group_button.setDisabled(True)
-        return True
+    def _delete_selected_parts_from_part_list(self):
+        selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_list.selectedItems()]
+        return self._reassign_group_keys_to_default(
+            selected_part_keys,
+            preferred_group_name=self._selected_group_name(),
+            preferred_reference_name=self._selected_reference_name(),
+        )
 
     def keyPressEvent(self, event):
         """Handle Delete/Backspace in the selected-group parts list."""
@@ -728,6 +768,21 @@ class DataGrouping(QDialog):
             pressed_key = event.key() if event is not None and hasattr(event, "key") else None
             is_delete_shortcut = pressed_key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
             if is_delete_shortcut:
+                if (
+                    self.part_list is not None
+                    and (
+                        self.part_list.hasFocus()
+                        or (
+                            hasattr(self.part_list, "viewport")
+                            and self.part_list.viewport() is not None
+                            and self.part_list.viewport().hasFocus()
+                        )
+                    )
+                ):
+                    self._delete_selected_parts_from_part_list()
+                    event.accept()
+                    return
+
                 if (
                     self.part_group_list is not None
                     and (
