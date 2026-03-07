@@ -21,9 +21,14 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 - Test suite breadth is strong (46 test modules) with targeted regression coverage for export helpers/flows, DB migration behavior, parser behavior, docs hygiene, and policy checks.
 - CI has meaningful blocking lanes: static checks, full pytest, native wheel build/smoke, native parser parity tests; plus opt-in manual Google conversion smoke.
 - Native parser confidence exists but parity fixture corpus is currently small (3 fixture JSON files), leaving potential edge-shape gaps.
-- Coverage visibility is missing in CI and tooling (no `pytest-cov`, no coverage artifact/trend).
+- Coverage visibility baseline is in place (`pytest-cov`, `coverage.xml`, and uploaded CI artifact), with threshold gating intentionally deferred.
 - Release docs and CI policy are generally coherent, but critical-flow mapping and “blocking vs manual release gate” semantics can be clearer in one operational stream.
 - Desktop packaging/startup confidence is partly documented but not represented as a regular automated CI smoke lane.
+
+### Current baseline (as of now)
+- `requirements-dev.txt` includes `pytest-cov` for local and CI coverage collection.
+- `.github/workflows/ci.yml` `unit-tests` runs `--cov-report=xml:coverage.xml` and uploads the `unit-test-coverage` artifact.
+- `docs/ci-policy.md` and `docs/release_checks/release_candidate_checklist.md` define coverage as informational/non-blocking evidence.
 
 ## 5. Strengths
 - Existing CI validates both Python and native parser quality paths.
@@ -33,7 +38,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 - Google conversion constraints are explicitly documented as environment-dependent release smoke.
 
 ## 6. Gaps and Risks
-- **Coverage blind spot:** no quantitative visibility into tested/uncovered areas in CI.
+- **Coverage governance gap:** quantitative coverage visibility exists, but threshold policy remains intentionally deferred pending trend data.
 - **Critical-flow mapping gap:** release-critical path coverage is not summarized in one maintainable matrix.
 - **Parity depth risk:** small parser fixture set may miss native/python divergence edge cases.
 - **Packaging confidence gap:** no routine packaging/startup smoke lane in CI for desktop release risk.
@@ -206,6 +211,21 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
     - Coverage visibility still absent until TCI-002.
     - Packaging/startup CI confidence remains limited until TCI-004.
 
+- 2026-03-07 — **Tracker consistency update completed**.
+  - Work completed:
+    - Updated tracker narrative to reflect implemented coverage baseline state and removed stale statements claiming missing visibility.
+    - Added explicit "Current baseline (as of now)" references to dependency, CI workflow behavior, and docs semantics.
+    - Recorded deferred threshold work as trend-based governance decision rather than setup work.
+  - Changed files:
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `git diff -- docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Docs reviewed/updated:
+    - Reviewed: this tracker.
+    - **docs update required and applied**: this was a tracker consistency pass only; no CI behavior change.
+  - New/remaining risks:
+    - Coverage threshold decision remains deferred pending baseline trend/noise profile.
+
 ## 11. Test Strategy Notes
 - Keep existing full-suite and native parity checks as baseline hard gates.
 - Next confidence increment is visibility-first (coverage reporting) before threshold enforcement.
@@ -233,7 +253,7 @@ For each step, include one explicit statement:
 - “docs reviewed, no update needed, because ...”
 
 ## 14. Deferred Items
-- Coverage threshold gating in CI is deferred until coverage baseline data is collected and noise profile is known.
+- **TCI-007 (deferred):** coverage threshold decision pending baseline trend and noise profile.
 - Any broad multi-OS packaging matrix expansion is deferred unless incremental smoke lanes show clear value.
 
 ## 15. Next Recommended Step
