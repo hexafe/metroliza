@@ -561,5 +561,88 @@ class TestExportDialogCompletionFlow(unittest.TestCase):
         self.assertIsNone(dialog.export_error_message)
 
 
+class TestExportDialogCancellationFlow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_stop_exporting_without_active_thread_closes_only_progress_dialog(self):
+        from modules.ExportDialog import ExportDialog
+
+        class _LoadingDialog:
+            def __init__(self):
+                self.reject_calls = 0
+
+            def reject(self):
+                self.reject_calls += 1
+
+        class _Button:
+            def __init__(self):
+                self.enabled_states = []
+
+            def setEnabled(self, enabled):
+                self.enabled_states.append(enabled)
+
+        class _InfoMessageBox:
+            information_calls = []
+
+            @staticmethod
+            def information(parent, title, text):
+                _InfoMessageBox.information_calls.append((parent, title, text))
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.export_thread = None
+        dialog.loading_dialog = _LoadingDialog()
+        dialog.export_button = _Button()
+        dialog.close_called = False
+        dialog.close = lambda: setattr(dialog, 'close_called', True)
+
+        with patch('modules.ExportDialog.QMessageBox', _InfoMessageBox):
+            dialog.stop_exporting()
+
+        self.assertEqual(_InfoMessageBox.information_calls, [(dialog, 'Export canceled', 'Data exporting has been canceled')])
+        self.assertEqual(dialog.loading_dialog.reject_calls, 1)
+        self.assertEqual(dialog.export_button.enabled_states, [True])
+        self.assertFalse(dialog.close_called)
+
+    def test_on_export_canceled_keeps_export_dialog_open(self):
+        from modules.ExportDialog import ExportDialog
+
+        class _LoadingDialog:
+            def __init__(self):
+                self.reject_calls = 0
+
+            def reject(self):
+                self.reject_calls += 1
+
+        class _Button:
+            def __init__(self):
+                self.enabled_states = []
+
+            def setEnabled(self, enabled):
+                self.enabled_states.append(enabled)
+
+        class _InfoMessageBox:
+            information_calls = []
+
+            @staticmethod
+            def information(parent, title, text):
+                _InfoMessageBox.information_calls.append((parent, title, text))
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.loading_dialog = _LoadingDialog()
+        dialog.export_button = _Button()
+        dialog.close_called = False
+        dialog.close = lambda: setattr(dialog, 'close_called', True)
+
+        with patch('modules.ExportDialog.QMessageBox', _InfoMessageBox):
+            dialog.on_export_canceled()
+
+        self.assertEqual(_InfoMessageBox.information_calls, [(dialog, 'Export canceled', 'Data exporting has been canceled')])
+        self.assertEqual(dialog.loading_dialog.reject_calls, 1)
+        self.assertEqual(dialog.export_button.enabled_states, [True])
+        self.assertFalse(dialog.close_called)
+
+
 if __name__ == '__main__':
     unittest.main()

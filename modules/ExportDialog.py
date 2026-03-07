@@ -763,7 +763,7 @@ class ExportDialog(QDialog):
 
             QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
             self.loading_dialog.reject()
-            self.close()
+            self.export_button.setEnabled(True)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -779,7 +779,6 @@ class ExportDialog(QDialog):
             QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
             self.loading_dialog.reject()
             self.export_button.setEnabled(True)
-            self.close()
         except Exception as e:
             self.log_and_exit(e)
 
