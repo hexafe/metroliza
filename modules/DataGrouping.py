@@ -689,8 +689,9 @@ class DataGrouping(QDialog):
                     ].dropna().unique().tolist()
 
             new_group_name, ok_pressed = QInputDialog.getText(self, "New group", "Enter group name:")
+            new_group_name = (new_group_name or "").strip()
 
-            if ok_pressed and target_group_keys:
+            if ok_pressed and target_group_keys and new_group_name:
                 group_exists = bool((self.df['GROUP'] == new_group_name).any())
                 assigned_color = self._next_group_color() if not group_exists else self.df.loc[self.df['GROUP'] == new_group_name, self.group_color_column].iloc[-1]
                 # Update the dataframe with the new group information
@@ -757,7 +758,7 @@ class DataGrouping(QDialog):
         selected_group = self._selected_group_name()
         selected_reference = self._selected_reference_name()
 
-        if not selected_group or not selected_part_keys:
+        if selected_group is None or not selected_part_keys:
             return False
 
         return self._reassign_group_keys_to_default(
@@ -857,7 +858,7 @@ class DataGrouping(QDialog):
             # Execute the QMessageBox and check the result
             result = confirmation.exec()
 
-            if result == QMessageBox.StandardButton.Yes and selected_group:
+            if result == QMessageBox.StandardButton.Yes and selected_group is not None:
                 # Update the dataframe with the default group value for the selected group
                 self.df.loc[self.df['GROUP'] == selected_group, 'GROUP'] = self.default_group
                 self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = self.default_group_color

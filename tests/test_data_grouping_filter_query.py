@@ -318,6 +318,33 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
 
         self.assertTrue((dialog.df['GROUP'] == 'POPULATION').all())
 
+    def test_delete_group_allows_legacy_empty_group_name(self):
+        from unittest.mock import patch
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.default_group_color = '#FFFFFF'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'GROUP': ['', '', 'POPULATION'],
+                'GROUP_COLOR': ['#ABCDEF', '#ABCDEF', '#FFFFFF'],
+            }
+        )
+        dialog._selected_group_name = lambda: ''
+        dialog.populate_list_widgets = lambda: None
+        dialog.remove_from_group_button = _FakeButton()
+
+        message_box_cls = DataGrouping.delete_group.__globals__['QMessageBox']
+        with patch.object(message_box_cls, 'Icon', type('Icon', (), {'Question': object()}), create=True), \
+             patch.object(message_box_cls, 'StandardButton', type('StandardButton', (), {'Yes': 1, 'No': 2}), create=True), \
+             patch.object(message_box_cls, '__init__', return_value=None, create=True), \
+             patch.object(message_box_cls, 'setStandardButtons', return_value=None, create=True), \
+             patch.object(message_box_cls, 'exec', return_value=1, create=True):
+            dialog.delete_group()
+
+        self.assertTrue((dialog.df['GROUP'] == 'POPULATION').all())
+
     def test_on_group_selection_changed_disables_delete_but_keeps_rename_for_default_group(self):
         dialog = DataGrouping.__new__(DataGrouping)
         dialog.default_group = 'POPULATION'
@@ -479,6 +506,20 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
         sibling_part_group = dialog.df.loc[dialog.df['GROUP_KEY'] == 'k1', 'GROUP'].iloc[0]
         self.assertEqual(selected_part_group, 'Single Part Group')
         self.assertEqual(sibling_part_group, 'POPULATION')
+
+    def test_create_group_ignores_blank_group_name(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k1')])
+        dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k1')]
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('   ', True), create=True):
+            dialog.create_group()
+
+        self.assertTrue((dialog.df['GROUP'] == 'POPULATION').all())
+
 
 class TestDataGroupingSelectionRetention(unittest.TestCase):
     def test_populate_list_widgets_prefers_existing_group_name(self):
