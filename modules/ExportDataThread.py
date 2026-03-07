@@ -2690,7 +2690,8 @@ class ExportDataThread(QThread):
 
                 worksheet.freeze_panes(7, 0)
 
-            self._write_group_comparison_sheet(workbook, used_sheet_names)
+            # Temporarily disabled for this RC run; resume in a future release cycle.
+            # self._write_group_comparison_sheet(workbook, used_sheet_names)
 
             if total_references == 0 or total_header_units == 0:
                 self._emit_stage_progress('measurement_sheets_charts', 1.0)
