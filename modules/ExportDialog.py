@@ -6,10 +6,10 @@ from modules.filter_dialog import FilterDialog
 from modules.data_grouping import DataGrouping
 from modules.custom_logger import CustomLogger
 from modules.export_dialog_service import (
-    build_export_completion_message as _build_export_completion_message,
-    build_export_directory_link_line as _build_export_directory_link_line,
-    build_export_folder_link_line as _build_export_folder_link_line,
-    build_export_options_payload as _build_export_options_payload,
+    build_export_completion_message,
+    build_export_directory_link_line,
+    build_export_folder_link_line,
+    build_export_options_payload,
     build_validated_export_request,
 )
 from modules.export_preset_utils import (
@@ -47,39 +47,7 @@ from pathlib import Path
 from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
-def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results):
-    """Backward-compatible import surface for payload builder."""
-    return _build_export_options_payload(
-        selected_preset,
-        export_type,
-        export_target,
-        sorting_parameter,
-        violin_input,
-        summary_scale_input,
-        hide_ok_results,
-    )
-
-
-def build_export_completion_message(*, excel_file, export_target, completion_metadata):
-    """Backward-compatible import surface for completion message builder."""
-    return _build_export_completion_message(
-        excel_file=excel_file,
-        export_target=export_target,
-        completion_metadata=completion_metadata,
-    )
-
-
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
-
-
-def build_export_directory_link_line(excel_file):
-    """Backward-compatible import surface for file link line builder."""
-    return _build_export_directory_link_line(excel_file)
-
-
-def build_export_folder_link_line(excel_file):
-    """Backward-compatible import surface for folder link line builder."""
-    return _build_export_folder_link_line(excel_file)
 
 
 def format_message_with_clickable_links(message):
