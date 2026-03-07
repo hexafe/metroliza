@@ -93,7 +93,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 | TCI-003 | completed | `todo` -> `in_progress` -> `completed` |
 | TCI-004 | completed | `todo` -> `in_progress` -> `completed` |
 | TCI-005 | completed | `todo` -> `in_progress` -> `completed` |
-| TCI-006 | todo | `todo` -> `in_progress` -> `completed` |
+| TCI-006 | completed | `todo` -> `in_progress` -> `completed` |
 
 ### TCI-001 - Audit current tests, CI, and release-validation coverage
 - Status: completed
@@ -168,7 +168,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Tracker records risk reduction and remaining gaps.
 
 ### TCI-006 - Align docs semantics for PR-blocking CI checks vs release-blocking manual evidence
-- Status: todo
+- Status: completed
 - Phase: Phase 4 - Docs and checklist alignment
 - Priority: high
 - Why: Section 15 identifies a docs-only alignment pass to keep PR-blocking CI semantics clearly separated from release-blocking manual evidence, preventing policy drift and misread release readiness.
@@ -183,6 +183,23 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 
 ## 10. Progress Log
 
+
+- 2026-03-07 — **TCI-006 completed**.
+  - Work completed:
+    - Added explicit gate-semantics quick reference in `release_status.md` to separate PR-blocking CI gates from release-blocking manual evidence gates.
+    - Confirmed `docs/ci-policy.md`, `release_candidate_checklist.md`, and `open_testing_runbook.md` already use consistent blocking/non-blocking terminology and evidence ownership language.
+    - Updated this tracker lifecycle status and next-step recommendation to keep sequencing aligned.
+  - Changed files:
+    - `docs/release_checks/release_status.md`
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `rg -n "blocking|manual|evidence|required|CI|packaging-smoke|google-conversion-smoke|PR" docs/release_checks/release_status.md docs/release_checks/release_candidate_checklist.md docs/release_checks/open_testing_runbook.md docs/ci-policy.md`
+    - `git diff -- docs/release_checks/release_status.md docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Docs reviewed/updated:
+    - Reviewed: `docs/ci-policy.md`, `docs/release_checks/release_status.md`, `docs/release_checks/release_candidate_checklist.md`, `docs/release_checks/open_testing_runbook.md`, this tracker.
+    - **docs update required and applied**: added release-status quick reference for gate semantics; other docs already aligned and required no textual change.
+  - New/remaining risks:
+    - Coverage threshold policy remains deferred (`TCI-007`) until observation-window data is collected and decision criteria are met.
 
 - 2026-03-07 — **TCI-004 completed**.
   - Work completed:
@@ -336,4 +353,4 @@ For each step, include one explicit statement:
 ## 15. Next Recommended Step
 Sequencing note: **TCI-005 was intentionally prioritized ahead of/alongside TCI-004** because it delivers faster confidence gain at lower implementation and operational risk; TCI-004 introduces broader CI/workflow surface area and potential runtime/cost noise.
 
-Execute **TCI-006** next: perform a docs-only semantics alignment pass across `docs/release_checks/release_status.md` and related runbooks so "PR-blocking CI" vs "release-blocking manual evidence" distinctions remain explicit and drift-resistant.
+Execute **TCI-007 governance follow-up** next: continue collecting routine `unit-tests` coverage evidence for the documented 2-4 week observation window, then record a dated go/no-go decision on fail-under threshold gating in this tracker.
