@@ -71,6 +71,8 @@ If hidden import resolution fails on a platform, release may proceed only if pur
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
 - defaults to pure-Python fallback packaging when native module is absent
 - supports `-RequireNative` to fail fast if native module is missing
+- bundles `credentials.json` into the executable only when the configured `-CredentialsPath` exists (default: `credentials.json`)
+- always applies `--noinclude-data-files` guards for `token.json` path variants so OAuth tokens are not bundled
 
 Smoke checks after build:
 
