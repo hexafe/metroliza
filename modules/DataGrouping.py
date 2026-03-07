@@ -449,7 +449,7 @@ class DataGrouping(QDialog):
         display_name = selected.text()
         return self._group_display_to_name.get(display_name, display_name)
             
-    def populate_list_widgets(self):
+    def populate_list_widgets(self, preferred_group_name=None):
         """Handle `populate_list_widgets` for `DataGrouping`.
 
         Args:
@@ -482,8 +482,9 @@ class DataGrouping(QDialog):
             self.all_parts_list.clear()
             self.all_parts_list.addItems(map(str, self.df['SAMPLE_NUMBER'].astype(str).unique()))
 
+            group_names = list(map(str, unique_groups))
             self.groups_list.clear()
-            for group_name in map(str, unique_groups):
+            for group_name in group_names:
                 sample_size = int(self.df[self.df['GROUP'] == group_name]['GROUP_KEY'].nunique())
                 display_label = self._group_display_label(group_name, sample_size)
                 item = QListWidgetItem(display_label)
@@ -499,7 +500,10 @@ class DataGrouping(QDialog):
             
             # Select the first item in the groups_list by default
             if self.groups_list.count() > 0:
-                self.groups_list.setCurrentRow(0)
+                preferred_group_index = 0
+                if preferred_group_name in group_names:
+                    preferred_group_index = group_names.index(preferred_group_name)
+                self.groups_list.setCurrentRow(preferred_group_index)
             selected_group = self._selected_group_name()
             self._populate_part_group_list(selected_group)
         except Exception as e:
@@ -713,7 +717,7 @@ class DataGrouping(QDialog):
         self.df.loc[rows_to_reassign, 'GROUP'] = self.default_group
         self.df.loc[rows_to_reassign, self.group_color_column] = self.default_group_color
 
-        self.populate_list_widgets()
+        self.populate_list_widgets(preferred_group_name=selected_group)
         self.remove_from_group_button.setDisabled(True)
         return True
 

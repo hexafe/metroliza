@@ -208,7 +208,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
         dialog.remove_from_group_button = _FakeButton()
         dialog.log_and_exit = lambda *_args, **_kwargs: None
         dialog.populate_list_widgets_called = 0
-        dialog.populate_list_widgets = lambda: setattr(dialog, "populate_list_widgets_called", dialog.populate_list_widgets_called + 1)
+        dialog.populate_list_widgets = lambda *args, **kwargs: setattr(dialog, "populate_list_widgets_called", dialog.populate_list_widgets_called + 1)
         return dialog
 
     def _load_data_grouping_module(self):

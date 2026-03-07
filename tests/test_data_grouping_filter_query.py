@@ -382,3 +382,146 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         dialog.on_group_item_double_clicked(None)
 
         dialog.rename_group.assert_not_called()
+
+
+class _PopulateListItem:
+    def __init__(self, text=''):
+        self._text = text
+        self._user_role = None
+
+    def setData(self, role, value):
+        self._user_role = value
+
+    def data(self, role):
+        return self._user_role
+
+    def text(self):
+        return self._text
+
+
+class _PopulateListWidget:
+    def __init__(self):
+        self._items = []
+        self._current_index = -1
+
+    def clear(self):
+        self._items = []
+        self._current_index = -1
+
+    def addItems(self, values):
+        for value in values:
+            self._items.append(_PopulateListItem(str(value)))
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def setCurrentRow(self, row):
+        self._current_index = row
+
+    def currentItem(self):
+        if self._current_index < 0 or self._current_index >= len(self._items):
+            return None
+        return self._items[self._current_index]
+
+
+class TestDataGroupingSelectionRetention(unittest.TestCase):
+    def test_populate_list_widgets_prefers_existing_group_name(self):
+        from unittest.mock import patch
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.default_group_color = '#FFFFFF'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1', 'R1', 'R2'],
+                'GROUP': ['POPULATION', 'Ops Team', 'Ops Team'],
+                'GROUP_KEY': ['k1', 'k2', 'k3'],
+                'SAMPLE_NUMBER': [1, 2, 3],
+                'DATE': ['2024-01-01', '2024-01-02', '2024-01-03'],
+                'FILENAME': ['a.csv', 'b.csv', 'c.csv'],
+                'GROUP_COLOR': ['#FFFFFF', '#ABCDEF', '#ABCDEF'],
+            }
+        )
+        dialog._group_display_to_name = {}
+        dialog.reference_list = _PopulateListWidget()
+        dialog.part_list = _PopulateListWidget()
+        dialog.all_parts_list = _PopulateListWidget()
+        dialog.groups_list = _PopulateListWidget()
+        dialog.part_group_list = _PopulateListWidget()
+        dialog._ensure_group_color_integrity = lambda: None
+        dialog._apply_item_color = lambda item, color: None
+        dialog._populate_part_list = lambda selected_reference: None
+
+        captured_group = {'value': None}
+        dialog._populate_part_group_list = lambda selected_group: captured_group.update(value=selected_group)
+
+        with patch.dict(DataGrouping.populate_list_widgets.__globals__, {'QListWidgetItem': _PopulateListItem}):
+            dialog.populate_list_widgets(preferred_group_name='Ops Team')
+
+        self.assertEqual(dialog._selected_group_name(), 'Ops Team')
+        self.assertEqual(captured_group['value'], 'Ops Team')
+
+    def test_populate_list_widgets_falls_back_to_first_when_group_missing(self):
+        from unittest.mock import patch
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.default_group_color = '#FFFFFF'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1', 'R2'],
+                'GROUP': ['POPULATION', 'Other Group'],
+                'GROUP_KEY': ['k1', 'k2'],
+                'SAMPLE_NUMBER': [1, 2],
+                'DATE': ['2024-01-01', '2024-01-02'],
+                'FILENAME': ['a.csv', 'b.csv'],
+                'GROUP_COLOR': ['#FFFFFF', '#ABCDEF'],
+            }
+        )
+        dialog._group_display_to_name = {}
+        dialog.reference_list = _PopulateListWidget()
+        dialog.part_list = _PopulateListWidget()
+        dialog.all_parts_list = _PopulateListWidget()
+        dialog.groups_list = _PopulateListWidget()
+        dialog.part_group_list = _PopulateListWidget()
+        dialog._ensure_group_color_integrity = lambda: None
+        dialog._apply_item_color = lambda item, color: None
+        dialog._populate_part_list = lambda selected_reference: None
+        dialog._populate_part_group_list = lambda selected_group: None
+
+        with patch.dict(DataGrouping.populate_list_widgets.__globals__, {'QListWidgetItem': _PopulateListItem}):
+            dialog.populate_list_widgets(preferred_group_name='Removed Group')
+
+        self.assertEqual(dialog._selected_group_name(), 'POPULATION')
+
+    def test_delete_selected_parts_requests_preferred_group_reselection(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.default_group_color = '#FFFFFF'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'GROUP': ['Ops Team', 'Ops Team', 'POPULATION'],
+                'GROUP_KEY': ['k1', 'k2', 'k3'],
+                'GROUP_COLOR': ['#ABCDEF', '#ABCDEF', '#FFFFFF'],
+            }
+        )
+        dialog.part_group_list = _FakeListWidget([_FakeListItem(user_role='k1')])
+        dialog.part_group_list.selectedItems = lambda: [_FakeListItem(user_role='k1')]
+        dialog._selected_group_name = lambda: 'Ops Team'
+        dialog.remove_from_group_button = _FakeButton()
+
+        call_args = {'preferred_group_name': None}
+        dialog.populate_list_widgets = lambda preferred_group_name=None: call_args.update(preferred_group_name=preferred_group_name)
+
+        result = dialog._delete_selected_parts_from_group()
+
+        self.assertTrue(result)
+        self.assertEqual(call_args['preferred_group_name'], 'Ops Team')
+        reassigned_group = dialog.df.loc[dialog.df['GROUP_KEY'] == 'k1', 'GROUP'].iloc[0]
+        self.assertEqual(reassigned_group, 'POPULATION')
