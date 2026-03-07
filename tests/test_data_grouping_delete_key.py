@@ -203,6 +203,11 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
         dialog.part_group_list = _FakeListWidget()
         dialog.part_group_list.addItem(_FakeItem("A", user_data="A"))
         dialog.part_group_list.addItem(_FakeItem("B", user_data="B"))
+        dialog.part_list = _FakeListWidget()
+        dialog.part_list.addItem(_FakeItem("A", user_data="A"))
+        dialog.part_list.addItem(_FakeItem("B", user_data="B"))
+        dialog.part_list.addItem(_FakeItem("C", user_data="C"))
+        dialog.reference_list = types.SimpleNamespace(currentItem=lambda: types.SimpleNamespace(text=lambda: "REF1"))
         dialog.groups_list = types.SimpleNamespace()
         dialog._selected_group_name = lambda: "CUSTOM"
         dialog.remove_from_group_button = _FakeButton()
@@ -316,6 +321,7 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
 
             self.assertFalse(event.accepted)
             self.assertEqual(delete_group_call_count["count"], 0)
+
     def test_non_delete_key_does_not_reassign_parts(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
         fake_db = types.ModuleType("modules.db")
@@ -347,6 +353,40 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             still_custom = dialog.df.loc[dialog.df["GROUP_KEY"] == "B"].iloc[0]
             self.assertEqual(still_custom["GROUP"], "CUSTOM")
             self.assertEqual(still_custom["GROUP_COLOR"], "#FDE2E4")
+
+    def test_delete_key_reassigns_selected_part_list_items_to_population(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = types.ModuleType("modules.db")
+        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
+            dialog = self._build_dialog(data_grouping_module)
+            dialog.part_list._items[0].setSelected(True)
+            dialog.part_list.setViewportFocus()
+
+            event = _FakeKeyEvent(_FakeQtKey.Key_Backspace)
+            data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
+
+            self.assertTrue(event.accepted)
+            self.assertEqual(dialog.populate_list_widgets_called, 1)
+            reassigned = dialog.df.loc[dialog.df["GROUP_KEY"] == "A"].iloc[0]
+            untouched = dialog.df.loc[dialog.df["GROUP_KEY"] == "B"].iloc[0]
+            self.assertEqual(reassigned["GROUP"], "POPULATION")
+            self.assertEqual(reassigned["GROUP_COLOR"], "#FFFFFF")
+            self.assertEqual(untouched["GROUP"], "CUSTOM")
 
 
 if __name__ == "__main__":
