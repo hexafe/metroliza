@@ -561,87 +561,155 @@ class TestExportDialogCompletionFlow(unittest.TestCase):
         self.assertIsNone(dialog.export_error_message)
 
 
-class TestExportDialogCancellationFlow(unittest.TestCase):
+class TestExportDialogServiceRequestAssembly(unittest.TestCase):
+    def test_build_validated_export_request_matches_existing_coercion_contract(self):
+        from modules.export_dialog_service import build_export_options_payload, build_validated_export_request
+
+        request = build_validated_export_request(
+            db_file='input.db',
+            excel_file=Path('out.xlsx'),
+            selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
+            export_type='Line',
+            export_target='excel_xlsx',
+            sorting_parameter='Sample #',
+            violin_input='1',
+            summary_scale_input='-4',
+            hide_ok_results=True,
+            filter_query='SELECT * FROM T',
+            grouping_df=None,
+        )
+
+        expected_options = validate_export_options(
+            build_export_options_payload(
+                selected_preset=EXPORT_PRESET_FAST_DIAGNOSTICS,
+                export_type='Line',
+                export_target='excel_xlsx',
+                sorting_parameter='Sample #',
+                violin_input='1',
+                summary_scale_input='-4',
+                hide_ok_results=True,
+            )
+        )
+
+        self.assertEqual(request.paths.db_file, 'input.db')
+        self.assertEqual(request.paths.excel_file, 'out.xlsx')
+        self.assertEqual(request.options, expected_options)
+        self.assertEqual(request.options.violin_plot_min_samplesize, 2)
+        self.assertEqual(request.options.summary_plot_scale, 0)
+        self.assertEqual(request.filter_query, 'SELECT * FROM T')
+        self.assertIsNone(request.grouping_df)
+
+
+class TestExportDialogThreadStartupContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         TestExportPresetFlowIntegration.setUpClass()
 
-    def test_stop_exporting_without_active_thread_closes_only_progress_dialog(self):
+    def test_show_loading_screen_starts_thread_with_validated_export_request_keyword(self):
         from modules.ExportDialog import ExportDialog
 
-        class _LoadingDialog:
+        class _Signal:
             def __init__(self):
-                self.reject_calls = 0
+                self.connected = []
 
-            def reject(self):
-                self.reject_calls += 1
+            def connect(self, slot):
+                self.connected.append(slot)
 
-        class _Button:
+        class _FakeThread:
+            init_kwargs = None
+
+            def __init__(self, *args, **kwargs):
+                _FakeThread.init_kwargs = kwargs
+                self.update_label = _Signal()
+                self.update_progress = _Signal()
+                self.error_occurred = _Signal()
+                self.finished = _Signal()
+                self.canceled = _Signal()
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        class _FakeButton:
             def __init__(self):
-                self.enabled_states = []
+                self.disabled_states = []
 
-            def setEnabled(self, enabled):
-                self.enabled_states.append(enabled)
+            def setDisabled(self, value):
+                self.disabled_states.append(value)
 
-        class _InfoMessageBox:
-            information_calls = []
+        class _FakeDialog:
+            def __init__(self):
+                self.show_calls = 0
 
-            @staticmethod
-            def information(parent, title, text):
-                _InfoMessageBox.information_calls.append((parent, title, text))
+            def show(self):
+                self.show_calls += 1
+
+        class _FakeLabel:
+            def setText(self, _text):
+                return None
+
+        class _FakeBar:
+            def setValue(self, _value):
+                return None
+
+        class _FakeLineEdit:
+            def __init__(self, value):
+                self._value = value
+
+            def text(self):
+                return self._value
+
+            def setText(self, value):
+                self._value = value
+
+        class _FakeCombo:
+            def __init__(self, value):
+                self._value = value
+
+            def currentText(self):
+                return self._value
+
+        class _FakeCheckbox:
+            def __init__(self, checked):
+                self._checked = checked
+
+            def isChecked(self):
+                return self._checked
 
         dialog = ExportDialog.__new__(ExportDialog)
-        dialog.export_thread = None
-        dialog.loading_dialog = _LoadingDialog()
-        dialog.export_button = _Button()
-        dialog.close_called = False
-        dialog.close = lambda: setattr(dialog, 'close_called', True)
+        dialog.export_button = _FakeButton()
+        dialog.violin_plot_min_samplesize = _FakeLineEdit('1')
+        dialog.summary_plot_scale = _FakeLineEdit('-5')
+        dialog.preset_combobox = _FakeCombo('Main plots')
+        dialog.export_type_combobox = _FakeCombo('Line')
+        dialog.sort_measurements_combobox = _FakeCombo('Sample #')
+        dialog.include_google_sheets_checkbox = _FakeCheckbox(False)
+        dialog.hide_ok_results_checkbox = _FakeCheckbox(False)
+        dialog.filter_query = 'SELECT 1'
+        dialog.df_for_grouping = None
+        dialog.db_file = 'input.db'
+        dialog.excel_file = Path('out.xlsx')
+        dialog.config = {}
+        dialog.config_path = Path('/tmp/nonexistent-export-config.json')
+        dialog.stop_exporting = lambda: None
+        dialog.on_export_error = lambda *_: None
+        dialog.on_export_finished = lambda: None
+        dialog.on_export_canceled = lambda: None
 
-        with patch('modules.ExportDialog.QMessageBox', _InfoMessageBox):
-            dialog.stop_exporting()
+        with patch('modules.ExportDialog.create_worker_progress_dialog', return_value=(_FakeDialog(), _FakeLabel(), _FakeBar(), object())), \
+             patch('modules.ExportDialog.save_export_dialog_config'), \
+             patch('modules.ExportDialog.ExportDataThread', _FakeThread):
+            dialog.show_loading_screen()
 
-        self.assertEqual(_InfoMessageBox.information_calls, [(dialog, 'Export canceled', 'Data exporting has been canceled')])
-        self.assertEqual(dialog.loading_dialog.reject_calls, 1)
-        self.assertEqual(dialog.export_button.enabled_states, [True])
-        self.assertFalse(dialog.close_called)
+        self.assertIsNotNone(_FakeThread.init_kwargs)
+        self.assertEqual(set(_FakeThread.init_kwargs.keys()), {'export_request'})
+        request = _FakeThread.init_kwargs['export_request']
+        self.assertEqual(request.paths.db_file, 'input.db')
+        self.assertEqual(request.paths.excel_file, 'out.xlsx')
+        self.assertEqual(request.options.export_target, 'excel_xlsx')
+        self.assertEqual(request.options.violin_plot_min_samplesize, 2)
+        self.assertEqual(request.options.summary_plot_scale, 0)
 
-    def test_on_export_canceled_keeps_export_dialog_open(self):
-        from modules.ExportDialog import ExportDialog
-
-        class _LoadingDialog:
-            def __init__(self):
-                self.reject_calls = 0
-
-            def reject(self):
-                self.reject_calls += 1
-
-        class _Button:
-            def __init__(self):
-                self.enabled_states = []
-
-            def setEnabled(self, enabled):
-                self.enabled_states.append(enabled)
-
-        class _InfoMessageBox:
-            information_calls = []
-
-            @staticmethod
-            def information(parent, title, text):
-                _InfoMessageBox.information_calls.append((parent, title, text))
-
-        dialog = ExportDialog.__new__(ExportDialog)
-        dialog.loading_dialog = _LoadingDialog()
-        dialog.export_button = _Button()
-        dialog.close_called = False
-        dialog.close = lambda: setattr(dialog, 'close_called', True)
-
-        with patch('modules.ExportDialog.QMessageBox', _InfoMessageBox):
-            dialog.on_export_canceled()
-
-        self.assertEqual(_InfoMessageBox.information_calls, [(dialog, 'Export canceled', 'Data exporting has been canceled')])
-        self.assertEqual(dialog.loading_dialog.reject_calls, 1)
-        self.assertEqual(dialog.export_button.enabled_states, [True])
-        self.assertFalse(dialog.close_called)
 
 
 if __name__ == '__main__':
