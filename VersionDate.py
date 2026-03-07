@@ -1,11 +1,12 @@
-RELEASE_VERSION = "2026.03"
+RELEASE_VERSION = "2026.03rc1"
 VERSION_DATE = "260307"
+VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
     "UX improvements: faster group renaming, clearer extended-chart visuals, and cleaner workflow readability."
 )
 
 release_notes = f"""
-    <br><b>Current version {RELEASE_VERSION} (build {VERSION_DATE}):</b><br>
+    <br><b>Current version {VERSION_LABEL}:</b><br>
     - Group names can be renamed instantly by double-clicking them in the group list<br>
     - Extended charts now have cleaner visuals for easier reading in dense plots<br>
     - General UX polish improves readability across main workflows<br>

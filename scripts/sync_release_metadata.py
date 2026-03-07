@@ -20,6 +20,7 @@ CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"
 class ReleaseMetadata:
     release_version: str
     build: str
+    version_label: str
     highlight: str
 
 
@@ -49,6 +50,7 @@ def load_metadata() -> ReleaseMetadata:
     return ReleaseMetadata(
         release_version=str(module.RELEASE_VERSION),
         build=str(module.VERSION_DATE),
+        version_label=f"{module.RELEASE_VERSION}({module.VERSION_DATE})",
         highlight=str(module.CURRENT_RELEASE_HIGHLIGHT).strip(),
     )
 
@@ -64,14 +66,14 @@ def sync_readme(meta: ReleaseMetadata, apply: bool) -> UpdateResult:
     text = README_PATH.read_text(encoding="utf-8")
     updated = _replace_one(
         text,
-        r"^Current release highlight \(`[^`]+`, build `\d+`\): .*$",
-        f"Current release highlight (`{meta.release_version}`, build `{meta.build}`): {meta.highlight}",
+        r"^Current release highlight \(`[^`]+`(?:, build `\d+`)?\): .*$",
+        f"Current release highlight (`{meta.version_label}`): {meta.highlight}",
         README_PATH,
     )
     updated = _replace_one(
         updated,
-        r"^### Changelog highlights \(release `[^`]+`, build `\d+`\)$",
-        f"### Changelog highlights (release `{meta.release_version}`, build `{meta.build}`)",
+        r"^### Changelog highlights \(release `[^`]+`(?:, build `\d+`)?\)$",
+        f"### Changelog highlights (release `{meta.version_label}`)",
         README_PATH,
     )
 
@@ -85,8 +87,8 @@ def sync_changelog(meta: ReleaseMetadata, apply: bool) -> UpdateResult:
     text = CHANGELOG_PATH.read_text(encoding="utf-8")
     updated = _replace_one(
         text,
-        r"^## [0-9]{4}\.[0-9]{2} \(build \d+\) — current version$",
-        f"## {meta.release_version} (build {meta.build}) — current version",
+        r"^## .+ — current version$",
+        f"## {meta.version_label} — current version",
         CHANGELOG_PATH,
     )
 

@@ -137,7 +137,7 @@ if __name__ == "__main__":
                 days_until_expiration = None
             
             # Initialize MainWindow with the version date
-            main_window = MainWindow(VersionDate.VERSION_DATE, days_until_expiration)
+            main_window = MainWindow(VersionDate.VERSION_LABEL, days_until_expiration)
             main_window.show()
             sys.exit(app.exec())
         else:
