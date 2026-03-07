@@ -1,0 +1,57 @@
+{
+  "name": "interrupted multi-line token stream parses as one block",
+  "raw_lines": [
+    "#INTERRUPTED",
+    "DIM",
+    "X",
+    "10",
+    "NOMINAL",
+    "0.2",
+    "TOL",
+    "-0.2",
+    "ACT",
+    "10.1",
+    "DEV",
+    "0.1",
+    "OUT",
+    "0",
+    "Y",
+    "5",
+    "0.1",
+    "-0.1",
+    "5.05",
+    "0.05",
+    "0"
+  ],
+  "expected_blocks": [
+    [
+      [
+        [
+          "INTERRUPTED"
+        ]
+      ],
+      [
+        [
+          "X",
+          10.0,
+          0.2,
+          -0.2,
+          0,
+          10.1,
+          0.1,
+          0.0
+        ],
+        [
+          "Y",
+          5.0,
+          0.1,
+          -0.1,
+          0,
+          5.05,
+          0.05,
+          0.0
+        ]
+      ]
+    ]
+  ]
+}

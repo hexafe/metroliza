@@ -14,6 +14,10 @@ def _load_fixtures():
     return [json.loads(path.read_text()) for path in sorted(FIXTURE_DIR.glob("*.json"))]
 
 
+def _fixture_by_name(name):
+    return next(fixture for fixture in _load_fixtures() if fixture["name"] == name)
+
+
 @pytest.mark.parametrize("fixture", _load_fixtures(), ids=lambda f: f["name"])
 def test_parser_interface_matches_fixture_snapshot(fixture):
     parsed = parse_raw_lines_to_blocks(fixture["raw_lines"])
@@ -72,6 +76,15 @@ def test_measurement_tokens_can_span_lines_with_interruptions_without_block_dupl
     assert [line[0] for line in parsed[0][1]] == ["X", "Y"]
     assert parsed[0][1][0] == ["X", 10.0, 0.2, -0.2, 0, 10.1, 0.1, 0.0]
     assert parsed[0][1][1] == ["Y", 5.0, 0.1, -0.1, 0, 5.05, 0.05, 0.0]
+
+
+def test_interrupted_multiline_fixture_keeps_single_block_intent_explicit():
+    fixture = _fixture_by_name("interrupted multi-line token stream parses as one block")
+
+    parsed = parse_raw_lines_to_blocks(fixture["raw_lines"])
+
+    assert len(parsed) == 1
+    assert [line[0] for line in parsed[0][1]] == ["X", "Y"]
 
 
 @pytest.fixture
