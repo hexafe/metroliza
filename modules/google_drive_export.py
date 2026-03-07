@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -127,6 +128,37 @@ def _read_json_file(path: Path) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise GoogleDriveAuthError(f"Invalid JSON content in {path}: {exc}") from exc
+
+
+def _resolve_credentials_path(credentials_path: str) -> Path:
+    """Resolve a credentials path across normal and bundled runtime layouts.
+
+    Relative paths are attempted in this order:
+
+    1. Current working directory.
+    2. Application root inferred from this module location.
+    3. Executable directory (frozen/Nuitka runtime).
+
+    This allows `credentials.json` included as bundled data to be discovered in
+    onefile/standalone builds even when the process working directory differs.
+    """
+
+    path = Path(credentials_path)
+    if path.is_absolute():
+        return path
+
+    candidates: list[Path] = [path]
+    module_root = Path(__file__).resolve().parent.parent
+    candidates.append(module_root / path)
+
+    executable_path = getattr(sys, "executable", "")
+    if executable_path:
+        candidates.append(Path(executable_path).resolve().parent / path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return path
 
 
 def _read_credentials(credentials_path: Path) -> dict[str, Any]:
@@ -640,7 +672,7 @@ def upload_and_convert_workbook(
     if not excel_file.exists():
         raise GoogleDriveResponseError(f"Excel export file not found: {excel_path}")
 
-    access_token = _ensure_access_token(Path(credentials_path), Path(token_path))
+    access_token = _ensure_access_token(_resolve_credentials_path(credentials_path), Path(token_path))
     reports_folder_id = _ensure_reports_folder(access_token)
 
     excel_mime = mimetypes.guess_type(excel_file.name)[0] or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

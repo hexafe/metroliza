@@ -1,10 +1,12 @@
 import json
+import os
 import tempfile
 import unittest
 import urllib.error
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+import sys
 
 from modules.google_drive_export import (
     GOOGLE_DRIVE_REPORTS_FOLDER_NAME,
@@ -16,6 +18,7 @@ from modules.google_drive_export import (
     GoogleDriveResponseError,
     GoogleDriveTransientError,
     _build_upload_request_body,
+    _resolve_credentials_path,
     _load_token_payload,
     _refresh_access_token,
     map_google_http_error,
@@ -40,6 +43,35 @@ class _FakeResponse:
 
 
 class TestGoogleDriveExport(unittest.TestCase):
+    def test_resolve_credentials_path_prefers_existing_relative_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cwd = Path(tmpdir)
+            credentials = cwd / "credentials.json"
+            credentials.write_text("{}", encoding="utf-8")
+
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(cwd)
+                resolved = _resolve_credentials_path("credentials.json")
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertEqual(credentials, resolved)
+
+    def test_resolve_credentials_path_uses_executable_directory_when_cwd_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            executable_dir = base / "bundle"
+            executable_dir.mkdir(parents=True, exist_ok=True)
+            executable_credentials = executable_dir / "credentials.json"
+            executable_credentials.write_text("{}", encoding="utf-8")
+            fake_executable = executable_dir / "metroliza.exe"
+
+            with patch.object(sys, "executable", str(fake_executable)):
+                resolved = _resolve_credentials_path("credentials.json")
+
+            self.assertEqual(executable_credentials, resolved)
+
     def test_upload_url_requests_only_drive_v3_supported_fields(self):
         self.assertNotIn("alternateLink", GOOGLE_DRIVE_UPLOAD_URL)
         self.assertIn("webViewLink", GOOGLE_DRIVE_UPLOAD_URL)
