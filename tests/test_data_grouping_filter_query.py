@@ -427,6 +427,59 @@ class _PopulateListWidget:
         return self._items[self._current_index]
 
 
+
+
+class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
+    def _base_dialog(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group = 'POPULATION'
+        dialog.group_color_column = 'GROUP_COLOR'
+        dialog.df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-1', 'REF-2'],
+                'GROUP_KEY': ['k1', 'k2', 'k3'],
+                'GROUP': ['POPULATION', 'POPULATION', 'POPULATION'],
+                'GROUP_COLOR': ['#FFFFFF', '#FFFFFF', '#FFFFFF'],
+            }
+        )
+        dialog._selected_reference_name = lambda: 'REF-1'
+        dialog._next_group_color = lambda: '#ABC123'
+        dialog.populate_list_widgets = lambda: None
+        dialog.remove_from_group_button = _FakeButton()
+        return dialog
+
+    def test_create_group_uses_selected_reference_when_no_parts_selected(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.part_list = _FakeListWidget([])
+        dialog.part_list.selectedItems = lambda: []
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('Ref Group', True), create=True):
+            dialog.create_group()
+
+        ref1_groups = dialog.df.loc[dialog.df['REFERENCE'] == 'REF-1', 'GROUP'].tolist()
+        ref2_group = dialog.df.loc[dialog.df['REFERENCE'] == 'REF-2', 'GROUP'].iloc[0]
+        self.assertEqual(ref1_groups, ['Ref Group', 'Ref Group'])
+        self.assertEqual(ref2_group, 'POPULATION')
+
+    def test_create_group_prefers_explicit_part_selection_over_reference(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.part_list = _FakeListWidget([_FakeListItem(user_role='k2')])
+        dialog.part_list.selectedItems = lambda: [_FakeListItem(user_role='k2')]
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('Single Part Group', True), create=True):
+            dialog.create_group()
+
+        selected_part_group = dialog.df.loc[dialog.df['GROUP_KEY'] == 'k2', 'GROUP'].iloc[0]
+        sibling_part_group = dialog.df.loc[dialog.df['GROUP_KEY'] == 'k1', 'GROUP'].iloc[0]
+        self.assertEqual(selected_part_group, 'Single Part Group')
+        self.assertEqual(sibling_part_group, 'POPULATION')
+
 class TestDataGroupingSelectionRetention(unittest.TestCase):
     def test_populate_list_widgets_prefers_existing_group_name(self):
         from unittest.mock import patch
