@@ -1,8 +1,9 @@
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_with_retry
-from PyQt6.QtCore import QDate
+from modules.list_selection_utils import ListSelectionUtils
+from PyQt6.QtCore import QDate, Qt
+import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtWidgets import(
-    QAbstractItemView,
     QDateEdit,
     QDialog,
     QGridLayout,
@@ -28,8 +29,15 @@ class FilterDialog(QDialog):
             self.filter_query = self.parent().get_filter_query()
         else:
             self.filter_query = ""
-        
+
+        self._list_selection_utils = ListSelectionUtils()
+
         self.setup_ui()
+
+    @staticmethod
+    def _multi_selection_mode():
+        selection_mode_enum = getattr(getattr(QtWidgets, "QAbstractItemView", None), "SelectionMode", None)
+        return getattr(selection_mode_enum, "MultiSelection", 2)
 
     def setup_ui(self):
         try:
@@ -45,21 +53,21 @@ class FilterDialog(QDialog):
             # Create labels and list widgets for each column to be filtered
             self.ax_label = QLabel("AX:")
             self.ax_list = QListWidget()
-            self.ax_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.ax_list.setSelectionMode(self._multi_selection_mode())
 
             self.reference_label = QLabel("REFERENCE:")
             self.reference_list = QListWidget()
-            self.reference_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.reference_list.setSelectionMode(self._multi_selection_mode())
 
             self.header_label = QLabel("HEADER:")
             self.header_list = QListWidget()
-            self.header_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.header_list.setSelectionMode(self._multi_selection_mode())
             self.all_headers_list = QListWidget()
-            self.all_headers_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.all_headers_list.setSelectionMode(self._multi_selection_mode())
             
             self.selected_headers_label = QLabel("SELECTED HEADERS:")
             self.selected_headers_list = QListWidget()
-            self.selected_headers_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+            self.selected_headers_list.setSelectionMode(self._multi_selection_mode())
 
             self.date_from_label = QLabel("MEASUREMENT DATE FROM:")
             self.date_from_calendar = QDateEdit(calendarPopup=True)
@@ -147,11 +155,58 @@ class FilterDialog(QDialog):
             # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
             self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
 
+            self._connect_shift_range_for_list(self.ax_list)
+            self._connect_shift_range_for_list(self.reference_list)
+            self._connect_shift_range_for_list(self.header_list)
+            self._connect_shift_range_for_list(self.selected_headers_list)
+
             self.select_today_button.clicked.connect(self.select_today_as_date_to)
             self.select_beginning_button.clicked.connect(self.select_beginning_of_time)
             self.apply_button.clicked.connect(self.apply_filters)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _connect_shift_range_for_list(self, list_widget):
+        self._list_selection_utils.connect_shift_range_behavior(list_widget)
+
+    def _handle_list_item_pressed(self, list_widget, item):
+        self._list_selection_utils.handle_shift_range_press(list_widget, item)
+
+    def _delete_selected_headers(self):
+        selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}
+        if not selected_headers:
+            return False
+
+        for row in range(self.header_list.count()):
+            header_item = self.header_list.item(row)
+            if header_item is not None and header_item.text() in selected_headers:
+                header_item.setSelected(False)
+
+        self.update_selected_headers()
+        return True
+
+    def keyPressEvent(self, event):
+        try:
+            pressed_key = event.key() if event is not None and hasattr(event, "key") else None
+            if (
+                pressed_key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+                and self.selected_headers_list is not None
+                and (
+                    self.selected_headers_list.hasFocus()
+                    or (
+                        hasattr(self.selected_headers_list, "viewport")
+                        and self.selected_headers_list.viewport() is not None
+                        and self.selected_headers_list.viewport().hasFocus()
+                    )
+                )
+            ):
+                self._delete_selected_headers()
+                event.accept()
+                return
+        except Exception as e:
+            self.log_and_exit(e)
+
+        super().keyPressEvent(event)
 
     def populate_list_widgets(self):
         try:
@@ -178,29 +233,7 @@ class FilterDialog(QDialog):
 
     def search_list_widgets(self, list_widget, search_text):
         try:
-            selected_items = list_widget.selectedItems()
-            list_widget.clearSelection()
-
-            if not search_text:
-                for row in range(list_widget.count()):
-                    item = list_widget.item(row)
-                    item.setHidden(False)
-                for item in selected_items:
-                    item.setSelected(True)
-                return
-
-            search_text = search_text.lower()
-
-            for row in range(list_widget.count()):
-                item = list_widget.item(row)
-                item_text = item.text().lower()
-                if search_text in item_text:
-                    item.setHidden(False)
-                else:
-                    item.setHidden(True)
-
-            for item in selected_items:
-                item.setSelected(True)
+            self._list_selection_utils.preserve_selection_during_filter(list_widget, search_text)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -233,7 +266,11 @@ class FilterDialog(QDialog):
             self.selected_headers_list.clear()
 
             # Get selected items from the "HEADER" list
-            selected_header_items = self.header_list.selectedItems()
+            selected_header_items = [
+                self.header_list.item(row)
+                for row in range(self.header_list.count())
+                if self.header_list.item(row) is not None and self.header_list.item(row).isSelected()
+            ]
 
             # Add the selected headers to the "SELECTED HEADERS" list
             for item in selected_header_items:
