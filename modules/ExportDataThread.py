@@ -2400,7 +2400,6 @@ class ExportDataThread(QThread):
                     expected_sheet_names=self._build_expected_sheet_names(),
                     status_callback=_stage_callback,
                 )
-                conversion_warnings = list(conversion.warnings)
 
                 self.completion_metadata.update(build_google_conversion_metadata(conversion))
                 self._log_export_stage(
