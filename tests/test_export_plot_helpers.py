@@ -156,6 +156,23 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
+    def test_render_density_line_uses_hidden_secondary_y_axis(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            x_values = np.linspace(0.0, 1.0, 20)
+            density_values = np.linspace(0.2, 2.0, 20)
+
+            render_density_line(ax, x_values, density_values)
+
+            self.assertEqual(len(fig.axes), 2)
+            secondary_axis = fig.axes[1]
+            self.assertFalse(secondary_axis.yaxis.get_visible())
+            self.assertEqual(list(secondary_axis.get_yticks()), [])
+            self.assertFalse(secondary_axis.spines['right'].get_visible())
+            self.assertEqual(len(secondary_axis.lines), 1)
+        finally:
+            plt.close(fig)
+
     def test_resolve_summary_annotation_strategy_prefers_static_for_dense_axes(self):
         sparse = resolve_summary_annotation_strategy(x_point_count=80)
         medium = resolve_summary_annotation_strategy(x_point_count=30)
