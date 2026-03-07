@@ -1397,19 +1397,49 @@ def add_iqr_boxplot_legend(ax, *, include_tolerance_refs=False):
 
 
 def render_density_line(ax, x, p):
-    """Render a density line over histogram bins without rescaling count axis."""
+    """Render a density line on a hidden secondary y-axis.
+
+    Histogram bar counts remain on the primary axis while the density curve uses
+    an independent scale to avoid clipping or extending beyond count bounds.
+    """
 
     if ax is None:
         return
 
-    original_y_limits = ax.get_ylim()
+    density_axis = ax.twinx()
+    density_axis.set_facecolor('none')
+    density_axis.patch.set_alpha(0.0)
+    density_axis.grid(False)
+
+    density_axis.tick_params(
+        axis='y',
+        which='both',
+        left=False,
+        right=False,
+        labelleft=False,
+        labelright=False,
+        length=0,
+    )
+    density_axis.set_yticks([])
+    density_axis.yaxis.set_visible(False)
+
+    for spine_name in ('left', 'right', 'top'):
+        spine = density_axis.spines.get(spine_name)
+        if spine is not None:
+            spine.set_visible(False)
 
     if _HAS_SEABORN:
-        sns.lineplot(x=x, y=p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4, ax=ax)
+        sns.lineplot(x=x, y=p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4, ax=density_axis)
     else:
-        ax.plot(x, p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4)
+        density_axis.plot(x, p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4)
 
-    ax.set_ylim(*original_y_limits)
+    density_values = np.asarray(p, dtype=float)
+    finite_density_values = density_values[np.isfinite(density_values)]
+    if finite_density_values.size > 0:
+        density_max = float(np.max(finite_density_values))
+        if density_max <= 0:
+            density_max = 1.0
+        density_axis.set_ylim(0.0, density_max * 1.05)
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
