@@ -25,6 +25,10 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 
 ## Operating notes
 
+- Gate semantics quick reference:
+  - **PR-blocking CI gates** are defined in [`../ci-policy.md`](../ci-policy.md) and must be green for merge readiness.
+  - **Release-blocking manual evidence gates** are defined in [`release_candidate_checklist.md`](./release_candidate_checklist.md) and must be complete for RC Go decisions.
+  - Optional/manual workflow-dispatch lanes (`packaging-smoke`, `google-conversion-smoke`) are non-blocking for normal PR CI but may be linked as release confidence evidence when executed.
 - Active release operations are governed by documents under `docs/release_checks/`.
 - RC2 stabilization execution sequencing is tracked in [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md), and this RC2 track is parity-first structural risk reduction, not rewrite scope.
 - During RC2, only small behavior-preserving, test-backed stabilization slices should move forward; larger decomposition/architecture moves remain deferred per triage.
