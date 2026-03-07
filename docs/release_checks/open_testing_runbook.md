@@ -15,7 +15,7 @@ Use this runbook to coordinate release-candidate (RC) open testing with internal
 
 - RC package install/launch validation on supported targets.
 - Core workflows: representative input load, processing, and export generation.
-- Release-gated checks from the RC checklist, including packaging/startup expectations and Google conversion smoke evidence collection.
+- Release-gated checks from the RC checklist, including packaging/startup expectations and optional manual smoke evidence collection (`packaging-smoke`, `google-conversion-smoke`).
 - Regression checks for recently changed areas and prior high-impact defects.
 
 ### Out of scope
@@ -142,6 +142,7 @@ Before final RC decision, attach/confirm the following evidence in the release t
 - [ ] Open-testing summary (tested builds, coverage, high-risk areas).
 - [ ] Final defect ledger with `must-fix`/`defer` labels and rationale (aligned to the checklist Defect triage criteria section).
 - [ ] Required test/packaging results linked against the checklist Required test suites and sign-off owners section.
+- [ ] Optional packaging smoke workflow evidence linked (if executed).
 - [ ] Google conversion smoke evidence linked: [`google_conversion_smoke.md`](./google_conversion_smoke.md).
 - [ ] Sign-off note from QA + release owner referencing checklist Open testing exit criteria decision gates.
 

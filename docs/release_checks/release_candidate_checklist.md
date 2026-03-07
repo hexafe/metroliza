@@ -110,7 +110,17 @@ python -m nuitka metroliza.py `
 
 - [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
 - [ ] Coverage visibility output from `unit-tests` is reviewed (job log summary and `unit-test-coverage` artifact `coverage.xml`) as RC confidence evidence; this is informational and not a blocking PR check. *(Owner: Release owner/QA)*
-- [ ] Any optional manual smoke evidence (if executed) is linked from release notes or tracker. *(Owner: Release owner)*
+- [ ] Any optional manual smoke evidence (if executed) is linked from release notes or tracker (`packaging-smoke`, `google-conversion-smoke`). *(Owner: Release owner)*
+
+Optional CI/manual smoke commands (non-blocking for regular PRs/pushes):
+
+```bash
+# Packaging smoke build
+# Trigger CI workflow_dispatch with input: run_packaging_smoke=1
+
+# Google conversion smoke
+# Trigger CI workflow_dispatch with input: run_google_conversion_smoke=1
+```
 
 > For solo-maintainer flow, treat GitHub CI status as the primary release gate before merge/tag.
 
