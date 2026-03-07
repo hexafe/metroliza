@@ -266,7 +266,11 @@ class FilterDialog(QDialog):
             self.selected_headers_list.clear()
 
             # Get selected items from the "HEADER" list
-            selected_header_items = self.header_list.selectedItems()
+            selected_header_items = [
+                self.header_list.item(row)
+                for row in range(self.header_list.count())
+                if self.header_list.item(row) is not None and self.header_list.item(row).isSelected()
+            ]
 
             # Add the selected headers to the "SELECTED HEADERS" list
             for item in selected_header_items:
