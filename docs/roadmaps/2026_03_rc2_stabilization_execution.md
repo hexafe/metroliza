@@ -118,6 +118,26 @@ Primary architecture observations guiding this plan:
 - Any roadmap-affecting decision must cross-reference `docs/roadmaps/plugin_architecture_llm_factory/README.md`.
 - All documentation edits must respect `docs/documentation_policy.md`.
 
+### Mandatory completed-step checklist template
+Every tracker item must include the following checklist in its tracker notes before status can be set to `done`.
+Items are considered **not done** until every checklist field is filled with either concrete update details or an explicit `reviewed/no-update-needed` rationale.
+
+```md
+- docs touched or explicitly reviewed/no-update-needed rationale:
+  - docstrings/comments in changed modules:
+  - `README.md` (if behavior changed):
+  - `docs/README.md` index (for new/renamed active docs):
+  - relevant `docs/release_checks/*`:
+  - roadmap/execution tracker status:
+  - naming migration docs if import/module guidance changed:
+
+- test review:
+  - risked behavior:
+  - existing coverage:
+  - tests run/updated:
+  - remaining parity gap:
+```
+
 ## 11. Risk register
 | Risk ID | Risk | Likelihood | Impact | Mitigation | Trigger |
 |---|---|---|---|---|---|
@@ -134,6 +154,8 @@ Primary architecture observations guiding this plan:
 - Do not stack multiple high-risk refactors in a single change set.
 
 ## 13. Progress tracker
+> Completion policy: do not mark any item as `done` until the mandatory completed-step checklist (Section 10) is fully filled in that item's notes.
+
 | Item ID | current status | owner | last update | notes | next candidate step |
 |---|---|---|---|---|---|
 | EX-001 | todo | maintainer | 2026-03-01 | Planned as first low-risk extraction in export flow | Start EX-001 |
