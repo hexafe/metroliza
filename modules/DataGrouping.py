@@ -583,7 +583,8 @@ class DataGrouping(QDialog):
         try:
             selected_reference = self.reference_list.currentItem().text() if self.reference_list.currentItem() else None
             self._populate_part_list(selected_reference)
-            self.create_group_button.setDisabled(True)
+            has_part_selection = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else False
+            self.create_group_button.setEnabled(bool(selected_reference) or has_part_selection)
         except Exception as e:
             self.log_and_exit(e)
     
@@ -600,8 +601,9 @@ class DataGrouping(QDialog):
         """
 
         try:
-            selected_part = self.part_list.currentItem() is not None
-            self.create_group_button.setEnabled(selected_part)
+            selected_part = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else (self.part_list.currentItem() is not None)
+            selected_reference = self._selected_reference_name()
+            self.create_group_button.setEnabled(selected_part or bool(selected_reference))
         except Exception as e:
             self.log_and_exit(e)
     
@@ -675,18 +677,29 @@ class DataGrouping(QDialog):
         try:
             # Get the selected items from the list widgets
             selected_part_keys = [item.data(Qt.ItemDataRole.UserRole) for item in self.part_list.selectedItems()]
+            if selected_part_keys:
+                target_group_keys = selected_part_keys
+            else:
+                selected_reference = self._selected_reference_name()
+                target_group_keys = []
+                if selected_reference:
+                    target_group_keys = self.df.loc[
+                        self.df['REFERENCE'] == selected_reference,
+                        'GROUP_KEY',
+                    ].dropna().unique().tolist()
+
             new_group_name, ok_pressed = QInputDialog.getText(self, "New group", "Enter group name:")
 
-            if ok_pressed and selected_part_keys:
+            if ok_pressed and target_group_keys:
                 group_exists = bool((self.df['GROUP'] == new_group_name).any())
                 assigned_color = self._next_group_color() if not group_exists else self.df.loc[self.df['GROUP'] == new_group_name, self.group_color_column].iloc[-1]
                 # Update the dataframe with the new group information
                 self.df.loc[
-                    self.df['GROUP_KEY'].isin(selected_part_keys),
+                    self.df['GROUP_KEY'].isin(target_group_keys),
                     'GROUP'
                 ] = new_group_name
                 self.df.loc[
-                    self.df['GROUP_KEY'].isin(selected_part_keys),
+                    self.df['GROUP_KEY'].isin(target_group_keys),
                     self.group_color_column
                 ] = assigned_color
                 
