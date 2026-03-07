@@ -20,10 +20,10 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 ## 4. Current-State Audit Summary
 - Test suite breadth is strong (46 test modules) with targeted regression coverage for export helpers/flows, DB migration behavior, parser behavior, docs hygiene, and policy checks.
 - CI has meaningful blocking lanes: static checks, full pytest, native wheel build/smoke, native parser parity tests; plus opt-in manual Google conversion smoke.
-- Native parser confidence exists but parity fixture corpus is currently small (3 fixture JSON files), leaving potential edge-shape gaps.
-- Coverage visibility baseline is in place (`pytest-cov`, `coverage.xml`, and uploaded CI artifact), with threshold gating intentionally deferred.
-- Release docs and CI policy are generally coherent, but critical-flow mapping and “blocking vs manual release gate” semantics can be clearer in one operational stream.
-- Desktop packaging/startup confidence is partly documented but not represented as a regular automated CI smoke lane.
+- Native parser confidence exists and parity fixture corpus depth was incrementally improved with interrupted multi-line edge coverage (**addressed by TCI-005**); additional edge-shape expansion remains iterative (**still open**).
+- Coverage visibility baseline is in place (`pytest-cov`, `coverage.xml`, and uploaded CI artifact) (**addressed by TCI-002**), with threshold gating intentionally deferred pending trend/noise governance (**still open; see deferred TCI-007**).
+- Release docs and CI policy are generally coherent, with explicit CI-vs-manual gate language tightened in key policy/checklist/runbook surfaces (**addressed by TCI-004**); cross-doc semantics drift resistance across all release-status touchpoints remains pending (**still open; targeted by TCI-006**).
+- Desktop packaging/startup confidence now has a manual/opt-in CI packaging smoke lane for build/artifact existence evidence (**addressed by TCI-004**), while runtime launch behavior remains manual release evidence (**still open**).
 
 ### Current baseline (as of now)
 - `requirements-dev.txt` includes `pytest-cov` for local and CI coverage collection.
@@ -38,18 +38,18 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 - Google conversion constraints are explicitly documented as environment-dependent release smoke.
 
 ## 6. Gaps and Risks
-- **Coverage governance gap:** quantitative coverage visibility exists, but threshold policy remains intentionally deferred pending trend data.
-- **Critical-flow mapping gap:** release-critical path coverage is not summarized in one maintainable matrix.
-- **Parity depth risk:** small parser fixture set may miss native/python divergence edge cases.
-- **Packaging confidence gap:** no routine packaging/startup smoke lane in CI for desktop release risk.
-- **Docs clarity risk:** if CI/manual gate boundaries drift, “green CI vs release readiness” can be misinterpreted.
+- **Coverage governance gap (still open):** quantitative coverage visibility and artifacts are now established (**addressed by TCI-002**), but threshold policy remains intentionally deferred pending trend/noise data (**deferred TCI-007**).
+- **Critical-flow mapping gap (partially addressed):** export golden-path regression assertions were strengthened for user-visible workbook payloads (**addressed by TCI-003**), but no single maintainable critical-flow matrix exists yet (**still open**).
+- **Parity depth risk (partially addressed):** parser parity corpus gained a realistic interrupted multi-line edge fixture and intent assertion (**addressed by TCI-005**), but additional divergence edge shapes remain unrepresented (**still open**).
+- **Packaging confidence gap (partially addressed):** manual/dispatch packaging smoke now exists for build/artifact evidence (**addressed by TCI-004**), but startup/runtime confidence is still checklist/manual rather than routine automated CI (**still open**).
+- **Docs-semantics drift risk (still open):** CI/manual gate boundary language was improved in policy/checklist/runbook updates (**addressed by TCI-004**), but explicit drift-resistant alignment across release-status semantics is still pending (**targeted by TCI-006**).
 
 ## 7. High-Priority Recommendations
-1. Add non-blocking coverage reporting first (high value, low risk).
-2. Add/strengthen one critical export golden-path regression assertion to protect user-visible output.
-3. Add CI/release-smoke confidence increment (manual/dispatch packaging smoke first, not PR-blocking).
-4. Tighten docs/checklist language for blocking CI vs manual release gates.
-5. Expand native parser parity fixtures incrementally for realistic edge patterns.
+1. Add non-blocking coverage reporting first (high value, low risk) (**addressed by TCI-002**); keep threshold governance deferred until baseline trend/noise data is mature (**still open; TCI-007**).
+2. Add/strengthen one critical export golden-path regression assertion to protect user-visible output (**addressed by TCI-003**); follow-on critical-flow matrix consolidation remains (**still open**).
+3. Add CI/release-smoke confidence increment (manual/dispatch packaging smoke first, not PR-blocking) (**addressed by TCI-004**); expand from build/artifact checks toward stable startup/runtime evidence as feasible (**still open**).
+4. Tighten docs/checklist language for blocking CI vs manual release gates (**partially addressed by TCI-004**); complete cross-doc, drift-resistant semantics alignment including release-status surfaces (**still open; TCI-006 next**).
+5. Expand native parser parity fixtures incrementally for realistic edge patterns (**addressed in part by TCI-005; still open for further fixtures**).
 
 ## 8. Phased Implementation Plan
 ### Phase 1 - Audit and visibility
