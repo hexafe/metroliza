@@ -10,8 +10,9 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
     def test_load_metadata_has_required_fields(self):
         metadata = sync_release_metadata.load_metadata()
 
-        self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}$")
+        self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
+        self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
         self.assertTrue(metadata.highlight)
 
     def test_sync_readme_detects_drift_in_check_mode(self):
@@ -44,7 +45,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
 
             self.assertTrue(result.changed)
             self.assertIn(
-                f"## {metadata.release_version} (build {metadata.build}) — current version",
+                f"## {metadata.version_label} — current version",
                 temp_changelog.read_text(encoding="utf-8"),
             )
 

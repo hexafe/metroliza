@@ -79,11 +79,11 @@ Effect size caveats:
 
 ## Release metadata
 
-Current release highlight (`2026.03`, build `260307`): UX improvements: faster group renaming, clearer extended-chart visuals, and cleaner workflow readability.
+Current release highlight (`2026.03rc1(260307)`): UX improvements: faster group renaming, clearer extended-chart visuals, and cleaner workflow readability.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.03`, build `260307`)
+### Changelog highlights (release `2026.03rc1(260307)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

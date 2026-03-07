@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
-#import version_date
-#VERSION_DATE = version_date.VERSION_DATE
-
-VERSION_DATE = "260228"
-
 block_cipher = None
 ROOT_DIR = Path(__file__).resolve().parents[1]
+VERSION_NS = {}
+exec((ROOT_DIR / "VersionDate.py").read_text(encoding="utf-8"), VERSION_NS)
+RELEASE_VERSION = VERSION_NS["RELEASE_VERSION"]
+VERSION_DATE = VERSION_NS["VERSION_DATE"]
+VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 ICON_PATH = Path(__file__).resolve().with_name('metroliza_icon2.ico')
 
 
@@ -36,7 +36,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name=f'metroliza_V_{VERSION_DATE}',
+    name=f'metroliza_PYI_{VERSION_LABEL}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

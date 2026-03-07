@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.03 (build 260307) — current version
+## 2026.03rc1(260307) — current version
 - Group names can be renamed instantly via double-click in the group list.
 - Extended charts have improved visuals for better readability in complex views.
 - General UX polish improves clarity and flow across the main workflow.

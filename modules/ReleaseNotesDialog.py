@@ -1,3 +1,4 @@
+import VersionDate
 from PyQt6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout
 
 class ReleaseNotesDialog(QDialog):
@@ -5,7 +6,7 @@ class ReleaseNotesDialog(QDialog):
         super().__init__(parent)
 
         # Initialize the dialog window
-        self.setWindowTitle("Release Notes")
+        self.setWindowTitle(f"Release Notes - {VersionDate.VERSION_LABEL}")
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 600, 400)

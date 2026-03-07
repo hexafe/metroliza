@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 class MainWindow(QMainWindow):
     """A main window class that provides the user interface for the Metroliza application."""
 
-    def __init__(self, VERSION_DATE, days_until_expiration):
+    def __init__(self, version_label, days_until_expiration):
         """Initialize the main window and its components.
 
         Args:
@@ -31,9 +31,9 @@ class MainWindow(QMainWindow):
 
         # Initialize the main window and layout
         if days_until_expiration is None:
-            self.setWindowTitle(f"Metroliza [{VERSION_DATE}]")
+            self.setWindowTitle(f"Metroliza [{version_label}]")
         else:
-            self.setWindowTitle(f"Metroliza [{VERSION_DATE}] ({days_until_expiration+1} day{'s' if days_until_expiration+1 > 1 else ''} left)")
+            self.setWindowTitle(f"Metroliza [{version_label}] ({days_until_expiration+1} day{'s' if days_until_expiration+1 > 1 else ''} left)")
         self.setGeometry(100, 100, 300, 150)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
