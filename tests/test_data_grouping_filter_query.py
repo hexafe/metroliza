@@ -223,17 +223,22 @@ class TestDataGroupingGroupLabels(unittest.TestCase):
         )
         dialog._group_display_to_name = {'Ops Team (n=1)': 'Ops Team'}
         dialog.groups_list = _FakeListWidget([_FakeListItem(text='Ops Team (n=1)', user_role='Ops Team')])
+        dialog._selected_group_name = lambda: 'Ops Team'
         dialog.populate_list_widgets = lambda: None
         dialog.remove_from_group_button = _FakeButton()
 
-        with patch('modules.DataGrouping.QInputDialog.getText', return_value=('Operations', True), create=True):
+        input_dialog_cls = DataGrouping.rename_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('Operations', True), create=True):
             dialog.rename_group()
 
         self.assertIn('Operations', dialog.df['GROUP'].tolist())
         self.assertNotIn('Ops Team', dialog.df['GROUP'].tolist())
 
     def test_group_search_matches_canonical_name(self):
+        from modules.list_selection_utils import ListSelectionUtils
+
         dialog = DataGrouping.__new__(DataGrouping)
+        dialog._list_selection_utils = ListSelectionUtils()
         dialog.groups_list = _FakeListWidget([_FakeListItem(text='Fancy Label (n=4)', user_role='CanonicalGroup')])
 
         dialog.search_list_widgets(dialog.groups_list, 'canonical')

@@ -6,6 +6,7 @@ store, apply, and clear reference/part grouping assignments.
 
 from modules.CustomLogger import CustomLogger
 from modules.db import read_sql_dataframe
+from modules.list_selection_utils import ListSelectionUtils
 from PyQt6.QtCore import Qt
 import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtGui import QColor, QBrush
@@ -50,7 +51,7 @@ class DataGrouping(QDialog):
             "#FFF9C4",
         ]
         self._group_display_to_name = {}
-        self._last_clicked_row_by_list = {}
+        self._list_selection_utils = ListSelectionUtils()
 
         self.setup_ui()
         
@@ -63,13 +64,6 @@ class DataGrouping(QDialog):
     def _multi_selection_mode():
         selection_mode_enum = getattr(getattr(QtWidgets, "QAbstractItemView", None), "SelectionMode", None)
         return getattr(selection_mode_enum, "MultiSelection", 2)
-
-    @staticmethod
-    def _keyboard_modifiers():
-        app_cls = getattr(QtWidgets, "QApplication", None)
-        if app_cls is None or not hasattr(app_cls, "keyboardModifiers"):
-            return 0
-        return app_cls.keyboardModifiers()
 
     def setup_ui(self):
         """Handle `setup_ui` for `DataGrouping`.
@@ -241,31 +235,10 @@ class DataGrouping(QDialog):
             self.log_and_exit(e)
             
     def _connect_shift_range_for_list(self, list_widget):
-        list_widget.itemPressed.connect(lambda item, lw=list_widget: self._handle_list_item_pressed(lw, item))
+        self._list_selection_utils.connect_shift_range_behavior(list_widget)
 
     def _handle_list_item_pressed(self, list_widget, item):
-        if item is None:
-            return
-
-        row = list_widget.row(item)
-        previous_row = self._last_clicked_row_by_list.get(list_widget)
-        is_shift_pressed = bool(self._keyboard_modifiers() & Qt.KeyboardModifier.ShiftModifier)
-
-        if is_shift_pressed and previous_row is not None:
-            start_row = min(previous_row, row)
-            end_row = max(previous_row, row)
-            visible_items = [
-                list_widget.item(index)
-                for index in range(start_row, end_row + 1)
-                if list_widget.item(index) is not None and not list_widget.item(index).isHidden()
-            ]
-            should_select = any(not list_item.isSelected() for list_item in visible_items)
-            for list_item in visible_items:
-                list_item.setSelected(should_select)
-            list_widget.setCurrentItem(item)
-            return
-
-        self._last_clicked_row_by_list[list_widget] = row
+        self._list_selection_utils.handle_shift_range_press(list_widget, item)
 
     def read_data_to_df(self):
         """Handle `read_data_to_df` for `DataGrouping`.
@@ -547,34 +520,11 @@ class DataGrouping(QDialog):
         """
 
         try:
-            selected_items = list_widget.selectedItems()
-            list_widget.clearSelection()
-
-            if not search_text:
-                for row in range(list_widget.count()):
-                    item = list_widget.item(row)
-                    item.setHidden(False)
-                for item in selected_items:
-                    item.setSelected(True)
-                return
-
-            search_text = search_text.lower()
-
-            for row in range(list_widget.count()):
-                item = list_widget.item(row)
-                item_text = item.text().lower()
-                canonical_text = ''
-                canonical_name = item.data(Qt.ItemDataRole.UserRole)
-                if canonical_name is not None:
-                    canonical_text = str(canonical_name).lower()
-
-                if search_text in item_text or search_text in canonical_text:
-                    item.setHidden(False)
-                else:
-                    item.setHidden(True)
-
-            for item in selected_items:
-                item.setSelected(True)
+            self._list_selection_utils.preserve_selection_during_filter(
+                list_widget,
+                search_text,
+                canonical_text_getter=lambda item: item.data(Qt.ItemDataRole.UserRole),
+            )
         except Exception as e:
             self.log_and_exit(e)
             
