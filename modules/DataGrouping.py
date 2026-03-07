@@ -466,7 +466,10 @@ class DataGrouping(QDialog):
         selected = self.groups_list.currentItem()
         if selected is None:
             return None
-        canonical_name = selected.data(Qt.ItemDataRole.UserRole)
+
+        item_data_role = getattr(Qt, "ItemDataRole", None)
+        user_role = getattr(item_data_role, "UserRole", None)
+        canonical_name = selected.data(user_role) if user_role is not None and hasattr(selected, "data") else None
         if canonical_name:
             return str(canonical_name)
 
@@ -760,6 +763,8 @@ class DataGrouping(QDialog):
         return True
 
     def keyPressEvent(self, event):
+        """Handle Delete/Backspace in the selected-group parts list."""
+
         try:
             pressed_key = event.key() if event is not None and hasattr(event, "key") else None
             if (

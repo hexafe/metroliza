@@ -211,6 +211,12 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
         dialog.populate_list_widgets = lambda: setattr(dialog, "populate_list_widgets_called", dialog.populate_list_widgets_called + 1)
         return dialog
 
+    def _load_data_grouping_module(self):
+        existing_module = sys.modules.get("modules.DataGrouping")
+        if existing_module is not None:
+            return existing_module
+        return importlib.import_module("modules.DataGrouping")
+
     def test_delete_key_moves_selected_part_group_items_to_population(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
         fake_db = types.ModuleType("modules.db")
@@ -227,8 +233,9 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             },
             clear=False,
         ):
-            sys.modules.pop("modules.DataGrouping", None)
-            data_grouping_module = importlib.import_module("modules.DataGrouping")
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
             dialog = self._build_dialog(data_grouping_module)
             dialog.part_group_list._items[1].setSelected(True)
             dialog.part_group_list.setFocus()
@@ -261,8 +268,9 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             },
             clear=False,
         ):
-            sys.modules.pop("modules.DataGrouping", None)
-            data_grouping_module = importlib.import_module("modules.DataGrouping")
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
             dialog = self._build_dialog(data_grouping_module)
             dialog.part_group_list._items[1].setSelected(True)
             dialog.part_group_list.setViewportFocus()
