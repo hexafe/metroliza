@@ -5,7 +5,13 @@ from modules.export_data_thread import ExportDataThread
 from modules.filter_dialog import FilterDialog
 from modules.data_grouping import DataGrouping
 from modules.custom_logger import CustomLogger
-from modules.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_options, validate_paths
+from modules.export_dialog_service import (
+    build_export_completion_message as _build_export_completion_message,
+    build_export_directory_link_line as _build_export_directory_link_line,
+    build_export_folder_link_line as _build_export_folder_link_line,
+    build_export_options_payload as _build_export_options_payload,
+    build_validated_export_request,
+)
 from modules.export_preset_utils import (
     build_export_options_for_preset,
     get_export_preset_id_for_label,
@@ -42,93 +48,38 @@ from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
 def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results):
-    """Build a validated export-options payload from UI field values.
-
-    Args:
-        selected_preset: Preset identifier selected in the UI.
-        export_type: Optional chart type override from the combo box.
-        export_target: Export backend identifier.
-        sorting_parameter: Optional sort key selected by the user.
-        violin_input: Raw violin minimum sample-size input.
-        summary_scale_input: Raw summary plot scale input.
-        hide_ok_results: Whether in-tolerance rows should be hidden.
-
-    Returns:
-        ExportOptions: Options object ready for validation.
-    """
-    preset_options = build_export_options_for_preset(selected_preset)
-    return ExportOptions(
-        preset=selected_preset,
-        export_type=export_type or preset_options['export_type'],
-        export_target=export_target or ExportOptions.export_target,
-        sorting_parameter=sorting_parameter or preset_options['sorting_parameter'],
-        violin_plot_min_samplesize=int(violin_input if violin_input not in (None, "") else preset_options['violin_plot_min_samplesize']),
-        summary_plot_scale=int(summary_scale_input if summary_scale_input not in (None, "") else preset_options['summary_plot_scale']),
-        hide_ok_results=bool(hide_ok_results),
-        generate_summary_sheet=bool(preset_options['generate_summary_sheet']),
+    """Backward-compatible import surface for payload builder."""
+    return _build_export_options_payload(
+        selected_preset,
+        export_type,
+        export_target,
+        sorting_parameter,
+        violin_input,
+        summary_scale_input,
+        hide_ok_results,
     )
 
 
 def build_export_completion_message(*, excel_file, export_target, completion_metadata):
-    """Compose the completion dialog payload for local and Google export flows."""
-    metadata = completion_metadata or {}
-    warnings = [str(w) for w in metadata.get('conversion_warnings', []) if str(w).strip()]
-    fallback_message = str(metadata.get('fallback_message', '')).strip()
-    converted_url = str(metadata.get('converted_url', '')).strip()
-    export_directory_line = build_export_directory_link_line(excel_file)
-
-    base_success_lines = [f"Data exported successfully to {excel_file}."]
-    if export_directory_line:
-        base_success_lines.append(export_directory_line)
-
-    if export_target == 'google_sheets_drive_convert':
-        if warnings or fallback_message:
-            message_lines = [
-                f"Data exported locally to {excel_file}.",
-            ]
-            if export_directory_line:
-                message_lines.append(export_directory_line)
-            message_lines.extend([
-                "",
-                "Google Sheets conversion was not fully completed.",
-            ])
-            if converted_url:
-                message_lines.append(f"Google Sheet: {converted_url}")
-            if warnings:
-                message_lines.append("Warnings/Errors:")
-                message_lines.extend(f"- {warning}" for warning in warnings)
-            return 'warning', 'Export completed with Google fallback', "\n".join(message_lines)
-
-        if converted_url:
-            message_lines = list(base_success_lines)
-            message_lines.extend([
-                "",
-                f"Google Sheet: {converted_url}",
-            ])
-            return 'info', 'Export successful', "\n".join(message_lines)
-
-    return 'info', 'Export successful', "\n".join(base_success_lines)
+    """Backward-compatible import surface for completion message builder."""
+    return _build_export_completion_message(
+        excel_file=excel_file,
+        export_target=export_target,
+        completion_metadata=completion_metadata,
+    )
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
 
 
 def build_export_directory_link_line(excel_file):
-    """Build a file:// URI pointing to the exported file for clickable dialogs."""
-    try:
-        export_file_uri = Path(str(excel_file)).resolve(strict=False).as_uri()
-    except Exception:
-        return ""
-    return f"Export file: {export_file_uri}"
+    """Backward-compatible import surface for file link line builder."""
+    return _build_export_directory_link_line(excel_file)
 
 
 def build_export_folder_link_line(excel_file):
-    """Build a file:// URI pointing to the export parent folder for clickable dialogs."""
-    try:
-        export_folder_uri = Path(str(excel_file)).resolve(strict=False).parent.as_uri()
-    except Exception:
-        return ""
-    return f"Export folder: {export_folder_uri}"
+    """Backward-compatible import surface for folder link line builder."""
+    return _build_export_folder_link_line(excel_file)
 
 
 def format_message_with_clickable_links(message):
@@ -717,29 +668,23 @@ class ExportDialog(QDialog):
             self.config['selected_preset'] = selected_preset
             save_export_dialog_config(self.config_path, self.config)
 
-            options = validate_export_options(
-                build_export_options_payload(
-                    selected_preset=selected_preset,
-                    export_type=self.export_type_combobox.currentText(),
-                    export_target=self._selected_export_target(),
-                    sorting_parameter=self.sort_measurements_combobox.currentText(),
-                    violin_input=violin_input,
-                    summary_scale_input=summary_scale_input,
-                    hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
-                )
-            )
-            validate_paths(AppPaths(db_file=self.db_file, excel_file=str(self.excel_file)))
-
-            # Normalize user-visible values after validation/coercion.
-            self.violin_plot_min_samplesize.setText(str(options.violin_plot_min_samplesize))
-            self.summary_plot_scale.setText(str(options.summary_plot_scale))
-
-            export_request = ExportRequest(
-                paths=AppPaths(db_file=self.db_file, excel_file=str(self.excel_file)),
-                options=options,
+            export_request = build_validated_export_request(
+                db_file=self.db_file,
+                excel_file=self.excel_file,
+                selected_preset=selected_preset,
+                export_type=self.export_type_combobox.currentText(),
+                export_target=self._selected_export_target(),
+                sorting_parameter=self.sort_measurements_combobox.currentText(),
+                violin_input=violin_input,
+                summary_scale_input=summary_scale_input,
+                hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
                 filter_query=self.filter_query,
                 grouping_df=self.df_for_grouping,
             )
+
+            # Normalize user-visible values after validation/coercion.
+            self.violin_plot_min_samplesize.setText(str(export_request.options.violin_plot_min_samplesize))
+            self.summary_plot_scale.setText(str(export_request.options.summary_plot_scale))
 
             # Start the exporting thread with validated options
             self.export_thread = ExportDataThread(export_request=export_request)
