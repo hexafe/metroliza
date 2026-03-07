@@ -252,6 +252,70 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             self.assertEqual(reassigned["GROUP_COLOR"], "#FFFFFF")
             self.assertEqual(untouched["GROUP"], "CUSTOM")
 
+
+    def test_delete_key_invokes_delete_group_when_groups_list_has_focus(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = types.ModuleType("modules.db")
+        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
+            dialog = self._build_dialog(data_grouping_module)
+            dialog.groups_list = _FakeListWidget()
+            dialog.groups_list.setViewportFocus()
+
+            delete_group_call_count = {"count": 0}
+            dialog.delete_group = lambda: delete_group_call_count.__setitem__("count", delete_group_call_count["count"] + 1)
+
+            event = _FakeKeyEvent(_FakeQtKey.Key_Delete)
+            data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
+
+            self.assertTrue(event.accepted)
+            self.assertEqual(delete_group_call_count["count"], 1)
+
+    def test_non_delete_key_does_not_invoke_delete_group_for_groups_list_focus(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = types.ModuleType("modules.db")
+        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
+            dialog = self._build_dialog(data_grouping_module)
+            dialog.groups_list = _FakeListWidget()
+            dialog.groups_list.setFocus()
+
+            delete_group_call_count = {"count": 0}
+            dialog.delete_group = lambda: delete_group_call_count.__setitem__("count", delete_group_call_count["count"] + 1)
+
+            event = _FakeKeyEvent(_FakeQtKey.Key_A)
+            data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
+
+            self.assertFalse(event.accepted)
+            self.assertEqual(delete_group_call_count["count"], 0)
     def test_non_delete_key_does_not_reassign_parts(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
         fake_db = types.ModuleType("modules.db")

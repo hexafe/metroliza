@@ -726,21 +726,37 @@ class DataGrouping(QDialog):
 
         try:
             pressed_key = event.key() if event is not None and hasattr(event, "key") else None
-            if (
-                pressed_key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
-                and self.part_group_list is not None
-                and (
-                    self.part_group_list.hasFocus()
-                    or (
-                        hasattr(self.part_group_list, "viewport")
-                        and self.part_group_list.viewport() is not None
-                        and self.part_group_list.viewport().hasFocus()
+            is_delete_shortcut = pressed_key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+            if is_delete_shortcut:
+                if (
+                    self.part_group_list is not None
+                    and (
+                        self.part_group_list.hasFocus()
+                        or (
+                            hasattr(self.part_group_list, "viewport")
+                            and self.part_group_list.viewport() is not None
+                            and self.part_group_list.viewport().hasFocus()
+                        )
                     )
-                )
-            ):
-                self._delete_selected_parts_from_group()
-                event.accept()
-                return
+                ):
+                    self._delete_selected_parts_from_group()
+                    event.accept()
+                    return
+
+                if (
+                    self.groups_list is not None
+                    and (
+                        self.groups_list.hasFocus()
+                        or (
+                            hasattr(self.groups_list, "viewport")
+                            and self.groups_list.viewport() is not None
+                            and self.groups_list.viewport().hasFocus()
+                        )
+                    )
+                ):
+                    self.delete_group()
+                    event.accept()
+                    return
         except Exception as e:
             self.log_and_exit(e)
 
