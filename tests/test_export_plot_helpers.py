@@ -7,6 +7,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
 from modules.export_summary_utils import compute_normality_status
@@ -171,6 +172,56 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertEqual(list(secondary_axis.get_yticks()), [])
             self.assertFalse(secondary_axis.spines['right'].get_visible())
             self.assertEqual(len(secondary_axis.lines), 1)
+        finally:
+            plt.close(fig)
+
+    def test_render_violin_draws_horizontal_spec_reference_lines(self):
+        values = [[-1.89, -1.88, -1.90], [-1.87, -1.86, -1.88]]
+        labels = ['A', 'B']
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            render_violin(ax, values, labels, lsl=-1.90, usl=-1.82)
+
+            horizontal_candidates = []
+            vertical_candidates = []
+            for line in ax.lines:
+                x_data = np.asarray(line.get_xdata(), dtype=float)
+                y_data = np.asarray(line.get_ydata(), dtype=float)
+                if x_data.size < 2 or y_data.size < 2:
+                    continue
+                if np.allclose(y_data, y_data[0], atol=1e-9):
+                    horizontal_candidates.append(line)
+                if np.allclose(x_data, x_data[0], atol=1e-9):
+                    vertical_candidates.append(line)
+
+            self.assertGreaterEqual(len(horizontal_candidates), 2)
+            self.assertEqual(len(vertical_candidates), 0)
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_grouped_mode_uses_secondary_y_axis_and_group_legend(self):
+        histogram_frame = pd.DataFrame(
+            {
+                'GROUP': ['A'] * 8 + ['B'] * 6,
+                'MEAS': [1.01, 1.02, 1.03, 1.04, 1.02, 1.01, 1.05, 1.03, 1.08, 1.09, 1.07, 1.08, 1.10, 1.09],
+            }
+        )
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            meta = render_histogram(ax, histogram_frame, group_column='GROUP')
+
+            self.assertTrue(meta['is_grouped'])
+            self.assertEqual(meta['group_labels'], ['A', 'B'])
+            self.assertEqual(len(fig.axes), 2)
+            secondary_axis = fig.axes[1]
+            self.assertIn('Count (B)', secondary_axis.get_ylabel())
+
+            legend = ax.get_legend()
+            self.assertIsNotNone(legend)
+            legend_labels = [text.get_text() for text in legend.get_texts()]
+            self.assertEqual(legend_labels, ['A', 'B'])
         finally:
             plt.close(fig)
 
