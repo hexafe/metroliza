@@ -97,10 +97,7 @@ from modules.export_grouping_utils import (
     prepare_grouping_dataframe as _prepare_grouping_dataframe,
     resolve_group_merge_keys as _resolve_group_merge_keys,
 )
-from modules.group_analysis_service import (
-    build_group_analysis_payload,
-    evaluate_group_analysis_readiness,
-)
+from modules.group_analysis_service import build_group_analysis_payload
 from modules.group_analysis_writer import (
     write_group_analysis_diagnostics_sheet,
     write_group_analysis_sheet,
@@ -2787,10 +2784,6 @@ class ExportDataThread(QThread):
         )
 
         requested_scope = str(self.group_analysis_scope or 'auto').strip().lower()
-        readiness = evaluate_group_analysis_readiness(
-            grouped_export_df,
-            requested_scope=requested_scope,
-        )
         payload = build_group_analysis_payload(
             grouped_export_df,
             requested_scope=requested_scope,
@@ -2801,6 +2794,7 @@ class ExportDataThread(QThread):
         group_worksheet = workbook.add_worksheet(group_sheet_name)
         self._record_exported_sheet_name(group_sheet_name)
 
+        readiness = payload.get('readiness') or {}
         skip_reason = readiness.get('skip_reason') or payload.get('skip_reason') or {}
         skip_code = str(skip_reason.get('code') or '')
         if skip_code in {
