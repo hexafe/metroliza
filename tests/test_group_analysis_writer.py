@@ -6,16 +6,31 @@ from modules.group_analysis_writer import (
 )
 
 
+class FakeWorkbook:
+    def __init__(self):
+        self.formats = []
+
+    def add_format(self, props):
+        fmt = {'props': dict(props)}
+        self.formats.append(fmt)
+        return fmt
+
+
 class FakeWorksheet:
     def __init__(self):
         self.writes = []
         self.frozen = None
+        self.book = FakeWorkbook()
+        self.conditional_formats = []
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
 
     def freeze_panes(self, row, col):
         self.frozen = (row, col)
+
+    def conditional_format(self, first_row, first_col, last_row, last_col, options):
+        self.conditional_formats.append((first_row, first_col, last_row, last_col, dict(options)))
 
 
 class TestGroupAnalysisWriter(unittest.TestCase):
@@ -74,7 +89,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'adjusted_p_value': 0.03,
                             'effect_size': 0.7,
                             'difference': 'YES',
-                            'comment': 'DIFFERENCE',
+                            'comment': 'USE CAUTION',
                         }
                     ],
                     'insights': ['Line 1', 'Line 2'],
@@ -96,11 +111,20 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Delta mean', values)
         self.assertIn('Difference', values)
         self.assertIn('YES', values)
-        self.assertIn('DIFFERENCE', values)
+        self.assertIn('USE CAUTION', values)
         text_values = [str(value).upper() for value in values]
         self.assertNotIn('TRUE', text_values)
         self.assertNotIn('FALSE', text_values)
         self.assertEqual(worksheet.frozen, (1, 0))
+
+        pairwise_rules = [
+            rule
+            for rule in worksheet.conditional_formats
+            if rule[1] in {2, 3, 6, 7}
+        ]
+        self.assertGreaterEqual(len(pairwise_rules), 6)
+        self.assertTrue(any(r[4].get('criteria') == 'containing' and r[4].get('value') == 'YES' for r in pairwise_rules))
+        self.assertTrue(any(r[4].get('criteria') == '<' and r[4].get('value') == 0.01 for r in pairwise_rules))
 
     def test_group_analysis_diagnostics_sheet_smoke(self):
         worksheet = FakeWorksheet()
@@ -158,6 +182,12 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('M1: pairwise disabled', values)
         self.assertIn('nom_mismatch=1', values)
         self.assertEqual(worksheet.frozen, (1, 0))
+
+        coverage_rules = [rule for rule in worksheet.conditional_formats if rule[1] in {2, 4, 5, 6}]
+        self.assertGreaterEqual(len(coverage_rules), 13)
+        self.assertTrue(any(r[1] == 4 and r[4].get('value') == 'YES' for r in coverage_rules))
+        self.assertTrue(any(r[1] == 5 and r[4].get('value') == 'NO' for r in coverage_rules))
+        self.assertTrue(any(r[1] == 2 and r[4].get('value') == 'Spec missing' for r in coverage_rules))
 
 
 if __name__ == '__main__':
