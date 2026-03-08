@@ -82,8 +82,15 @@ def resolve_group_merge_keys(header_group, grouping_df):
     return None
 
 
-def apply_group_assignments(header_group, grouping_df, *, group_analysis_mode=False):
+def apply_group_assignments(header_group, grouping_df, *, group_analysis_mode=False, fallback_group_label=None):
     """Merge grouping assignments into measurement rows.
+
+    Fallback behavior is legacy-compatible by default:
+    - ``group_analysis_mode=False`` falls back to ``"UNGROUPED"``.
+    - ``group_analysis_mode=True`` falls back to ``"POPULATION"``.
+
+    Pass ``fallback_group_label`` to override the fallback label explicitly,
+    such as Group Analysis paths that always require ``"POPULATION"``.
 
     Returns tuple: ``(merged_frame, grouping_applied, merge_keys, duplicate_count)``.
     """
@@ -103,7 +110,9 @@ def apply_group_assignments(header_group, grouping_df, *, group_analysis_mode=Fa
         projected_columns.append('GROUP_COLOR')
     merge_projection = deduped_grouping_df[projected_columns]
     merged_group = pd.merge(keyed_header, merge_projection, on=merge_keys, how='left')
-    missing_group_label = 'POPULATION' if group_analysis_mode else 'UNGROUPED'
+    missing_group_label = fallback_group_label
+    if missing_group_label is None:
+        missing_group_label = 'POPULATION' if group_analysis_mode else 'UNGROUPED'
     merged_group['GROUP'] = normalize_group_labels(
         merged_group['GROUP'],
         missing_label=missing_group_label,
