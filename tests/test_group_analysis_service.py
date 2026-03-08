@@ -33,7 +33,10 @@ class TestGroupAnalysisService(unittest.TestCase):
 
         self.assertFalse(result['runnable'])
         self.assertEqual(result['skip_reason']['code'], 'forced_single_reference_scope_mismatch')
-        self.assertIn('single_reference', result['skip_reason']['message'])
+        self.assertEqual(
+            result['skip_reason']['message'],
+            'Single-reference group analysis skipped: grouped rows span multiple references.',
+        )
 
     def test_forced_multi_reference_scope_mismatch_returns_canonical_skip_reason(self):
         grouped_df = pd.DataFrame(
@@ -49,7 +52,10 @@ class TestGroupAnalysisService(unittest.TestCase):
 
         self.assertFalse(result['runnable'])
         self.assertEqual(result['skip_reason']['code'], 'forced_multi_reference_scope_mismatch')
-        self.assertIn('multi_reference', result['skip_reason']['message'])
+        self.assertEqual(
+            result['skip_reason']['message'],
+            'Multi-reference group analysis skipped: grouped rows span only one reference.',
+        )
 
     def test_metric_identity_includes_reference_for_multi_scope(self):
         self.assertEqual(

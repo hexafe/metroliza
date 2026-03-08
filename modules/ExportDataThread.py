@@ -2806,8 +2806,11 @@ class ExportDataThread(QThread):
 
         skip_reason = readiness.get('skip_reason') or payload.get('skip_reason') or {}
         skip_code = str(skip_reason.get('code') or '')
-        if skip_code.startswith('forced_') and skip_code.endswith('_scope_mismatch'):
-            short_message = f'Scope mismatch: requested {requested_scope}, resolved {effective_scope}.'
+        if skip_code in {
+            'forced_single_reference_scope_mismatch',
+            'forced_multi_reference_scope_mismatch',
+        }:
+            short_message = str(skip_reason.get('message') or 'Group Analysis skipped.')
             self._write_group_analysis_message_sheet(group_worksheet, short_message)
         else:
             write_group_analysis_sheet(group_worksheet, payload)
