@@ -352,13 +352,14 @@ Flags should appear in:
 
 `Light` is the main compact statistical report.
 
-For each eligible metric, render:
+For each eligible metric, render a compact metric block in this exact order:
 
 1. metric header,
-2. comparability/spec summary,
-3. per-group descriptive stats table,
-4. pairwise A/B table where allowed,
-5. 1–3 short insights.
+2. descriptive stats table,
+3. pairwise comparison table where allowed,
+4. short insight/comment line.
+
+Avoid debug-style dumps or verbose free-form table stacks. Layout should stay compact and repeatable metric-to-metric.
 
 ### Per-group stats columns
 
@@ -382,12 +383,17 @@ For each eligible metric, render:
 - `Δmean`
 - `adj p`
 - `effect size`
-- `verdict`
-- `flags`
+- `Difference` (`YES` / `NO` only)
+- `Comment` (`DIFFERENCE`, `NO DIFFERENCE`, `DESCRIPTIVE ONLY`, `USE CAUTION`)
+- `Flags`
+
+Raw boolean fields such as `significant` must not appear on user-visible report surfaces.
 
 ## 12.2 Standard
 
 `Standard` includes everything from `Light` plus plots.
+
+`Standard` must keep the same compact per-metric block structure as `Light` for textual/statistical content; plots are additive.
 
 ### Plot rules
 
@@ -408,11 +414,49 @@ Histogram generation must be conservative. Add histograms only when they are mea
 
 If a histogram is skipped because it would be cluttered or low-value, record that in Diagnostics.
 
-## 12.3 No user-facing Full mode
+## 12.3 User-facing rounding policy
+
+All user-visible numeric rendering must follow these defaults:
+
+- Descriptive stats (`mean`, `std`, `median`, `IQR`, `min`, `max`): **3 decimals**.
+- Capability indices (`Cp`, `Cpk`, `Cpk+`, `Cpk-`): **3 decimals**.
+- Effect size: **3 decimals**.
+- Adjusted p-values: **4 decimals**.
+
+Spec normalization comparison basis remains numeric normalization to **3 decimals** (section 9.2).
+
+## 12.4 User-facing spec-status labels
+
+Internal spec statuses must be mapped to readable labels anywhere users see status values:
+
+- `EXACT_MATCH` → `Exact match`
+- `LIMIT_MISMATCH` → `Limits differ`
+- `NOM_MISMATCH` → `Nominal differs`
+- `INVALID_SPEC` (or missing status) → `Spec missing / Invalid spec`
+
+## 12.5 No user-facing Full mode
 
 Do not expose any `Full` report level to end users.
 
 The old “everything in one place” design is explicitly rejected.
+
+## 12.6 Conditional formatting requirements
+
+Minimum required conditional-formatting rules:
+
+1. Pairwise `Difference` + `Comment`
+   - `Difference = YES` and `Comment = DIFFERENCE`: emphasize as actionable difference.
+   - `Difference = NO` and `Comment = NO DIFFERENCE`: neutral styling.
+   - `Comment = DESCRIPTIVE ONLY` or `USE CAUTION`: caution styling.
+2. Spec status labels
+   - `Exact match`: positive/neutral success styling.
+   - `Limits differ`, `Nominal differs`, `Spec missing / Invalid spec`: warning styling.
+3. Flags
+   - `LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`: warning/caution styling with clear precedence when multiple flags appear.
+4. Diagnostics inclusion fields
+   - `Included in Light` and `Included in Standard` values `YES`/`NO` must have distinct visual states.
+5. Optional restrained numeric threshold highlighting
+   - If implemented, keep thresholds conservative and avoid noisy heatmap behavior that harms readability.
 
 ---
 
@@ -444,6 +488,18 @@ Diagnostics must include:
 - warning summary,
 - histogram skips,
 - **Possible unmatched metrics across references**.
+
+Diagnostics must include a user-readable per-metric table with at least these columns:
+
+- `Metric`
+- `Groups`
+- `Spec status`
+- `Pairwise comparisons`
+- `Included in Light`
+- `Included in Standard`
+- `Comment`
+
+Diagnostics entries must explicitly include skip/exclusion rationale and unmatched-metric notes where applicable.
 
 Diagnostics must be compact and readable, not a dump of raw internals.
 
@@ -872,3 +928,5 @@ This specification intentionally favors:
 - transparent limitations over silent assumptions.
 
 The design should support real industrial troubleshooting, supplier comparison, and production issue triage without forcing full reporting standardization up front.
+
+Readability and conditional formatting are in current implementation scope and must be treated as required behavior, not deferred polish.
