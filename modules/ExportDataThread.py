@@ -2772,14 +2772,19 @@ class ExportDataThread(QThread):
         if not groups:
             return {}
 
-        group_labels = [str(entry.get('group') or '') for entry in groups]
-        grouped_values = [
-            pd.to_numeric(pd.Series(entry.get('values') or []), errors='coerce').dropna().to_numpy(dtype=float)
-            for entry in groups
-        ]
-        grouped_values = [values for values in grouped_values if values.size > 0]
-        if not grouped_values:
+        grouped_entries = []
+        for entry in groups:
+            label = str(entry.get('group') or '')
+            values = pd.to_numeric(pd.Series(entry.get('values') or []), errors='coerce').to_numpy(dtype=float)
+            finite_values = values[np.isfinite(values)]
+            grouped_entries.append((label, finite_values))
+
+        filtered_entries = [(label, values) for (label, values) in grouped_entries if values.size > 0]
+        if not filtered_entries:
             return {}
+
+        group_labels = [label for (label, _) in filtered_entries]
+        grouped_values = [values for (_, values) in filtered_entries]
 
         spec_limits = chart_payload.get('spec_limits') or {}
         fig, ax = plt.subplots(figsize=(6.2, 3.2))
@@ -2787,10 +2792,13 @@ class ExportDataThread(QThread):
             if plot_key == 'violin':
                 if _HAS_SEABORN:
                     sns.violinplot(data=grouped_values, inner='quartile', cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
+                    ax.set_xticks(range(len(group_labels)))
+                    ax.set_xticklabels(group_labels)
                 else:
-                    ax.violinplot(grouped_values, showmeans=False, showmedians=True, showextrema=False)
-                ax.set_xticks(range(len(group_labels)))
-                ax.set_xticklabels(group_labels)
+                    positions = range(1, len(group_labels) + 1)
+                    ax.violinplot(grouped_values, showmeans=False, showmedians=True, showextrema=False, positions=positions)
+                    ax.set_xticks(list(positions))
+                    ax.set_xticklabels(group_labels)
                 ax.set_title(f"{metric_row.get('metric')} - Violin")
             elif plot_key == 'histogram':
                 all_values = np.concatenate(grouped_values)
