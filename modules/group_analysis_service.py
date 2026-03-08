@@ -152,6 +152,179 @@ def compute_group_descriptive_stats(grouped_values):
     return rows
 
 
+def _build_group_flags(row, spec_payload):
+    """Return deterministic quality flags for a group descriptive row."""
+    flags = []
+    if int(row.get('n') or 0) < 3:
+        flags.append('low_n')
+
+    std_value = row.get('std')
+    if std_value is not None and float(std_value) == 0.0:
+        flags.append('zero_variance')
+
+    lsl = spec_payload.get('lsl')
+    usl = spec_payload.get('usl')
+    mean_value = row.get('mean')
+    if mean_value is not None and lsl is not None and usl is not None and not (lsl <= mean_value <= usl):
+        flags.append('mean_outside_limits')
+
+    if row.get('cp') is None and row.get('capability') is None:
+        flags.append('capability_unavailable')
+
+    return '; '.join(flags) if flags else 'none'
+
+
+def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capability):
+    """Build final per-group rows with expanded statistics and capability columns."""
+    base_rows = compute_group_descriptive_stats(grouped_values)
+    output = []
+    for row in base_rows:
+        values = np.asarray(grouped_values.get(row['group'], []), dtype=float)
+        values = values[np.isfinite(values)]
+        q1, median, q3 = np.percentile(values, [25, 50, 75]) if values.size else (None, None, None)
+        iqr = (float(q3) - float(q1)) if q1 is not None and q3 is not None else None
+        capability = (
+            compute_capability_payload(values, spec_payload)
+            if allow_capability
+            else {'cp': None, 'capability': None, 'capability_type': None}
+        )
+
+        output_row = {
+            'group': row.get('group'),
+            'n': row.get('n'),
+            'mean': row.get('mean'),
+            'std': row.get('std'),
+            'median': float(median) if median is not None else None,
+            'iqr': iqr,
+            'min': row.get('min'),
+            'max': row.get('max'),
+            'cp': capability.get('cp'),
+            'capability': capability.get('capability'),
+            'capability_type': capability.get('capability_type'),
+        }
+        output_row['flags'] = _build_group_flags(output_row, spec_payload)
+        output.append(output_row)
+    return output
+
+
+def build_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correction_method='holm'):
+    """Build enriched pairwise A/B rows for worksheet output."""
+    raw_rows = compute_pairwise_rows(
+        metric_identity,
+        grouped_values,
+        alpha=alpha,
+        correction_method=correction_method,
+    )
+
+    means = {
+        group_name: float(np.mean(np.asarray(values, dtype=float)))
+        for group_name, values in grouped_values.items()
+        if np.asarray(values, dtype=float).size
+    }
+
+    output = []
+    for row in raw_rows:
+        group_a = row.get('group_a')
+        group_b = row.get('group_b')
+        delta_mean = None
+        if group_a in means and group_b in means:
+            delta_mean = means[group_a] - means[group_b]
+
+        adj_p = row.get('adjusted_p_value')
+        significant = bool(row.get('significant'))
+        verdict = 'different' if significant else 'no_evidence_of_difference'
+        flags = []
+        if adj_p is None:
+            flags.append('missing_adjusted_p')
+        if row.get('effect_size') is None:
+            flags.append('missing_effect_size')
+
+        output.append(
+            {
+                'group_a': group_a,
+                'group_b': group_b,
+                'delta_mean': delta_mean,
+                'adjusted_p_value': adj_p,
+                'effect_size': row.get('effect_size'),
+                'verdict': verdict,
+                'flags': '; '.join(flags) if flags else 'none',
+                'metric': metric_identity,
+                'p_value': row.get('p_value'),
+                'test_used': row.get('test_used'),
+                'significant': significant,
+            }
+        )
+    return output
+
+
+def build_comparability_summary(spec_status, analysis_policy):
+    """Build comparability/spec summary block for metric section rendering."""
+    interpretation_by_status = {
+        'EXACT_MATCH': 'Specs are aligned across groups; direct capability and pairwise interpretation is valid.',
+        'LIMIT_MISMATCH': 'Nominals align but limits differ; compare central tendency carefully across groups.',
+        'NOM_MISMATCH': 'Nominals differ across groups; avoid direct between-group interpretation.',
+        'INVALID_SPEC': 'One or more spec values are invalid/missing; capability is limited or unavailable.',
+    }
+    limitations = []
+    if not analysis_policy.get('allow_pairwise'):
+        limitations.append('pairwise disabled')
+    if not analysis_policy.get('allow_capability'):
+        limitations.append('capability disabled')
+
+    return {
+        'status': spec_status,
+        'interpretation_limits': '; '.join(limitations) if limitations else 'none',
+        'summary': interpretation_by_status.get(spec_status, 'Spec comparability could not be determined.'),
+    }
+
+
+def build_metric_insights(metric_row):
+    """Generate deterministic 1-3 line insight block for a metric."""
+    desc_rows = metric_row.get('descriptive_stats', [])
+    pairwise_rows = metric_row.get('pairwise_rows', [])
+    comparability = metric_row.get('comparability_summary', {})
+
+    lines = [
+        (
+            f"Comparability={comparability.get('status')} "
+            f"(limits: {comparability.get('interpretation_limits', 'none')})."
+        )
+    ]
+
+    if desc_rows:
+        sorted_by_mean = sorted(
+            [row for row in desc_rows if row.get('mean') is not None],
+            key=lambda row: row['mean'],
+        )
+        if sorted_by_mean:
+            low = sorted_by_mean[0]
+            high = sorted_by_mean[-1]
+            lines.append(
+                (
+                    f"Mean range spans {low.get('group')} ({low.get('mean'):.4g}) to "
+                    f"{high.get('group')} ({high.get('mean'):.4g})."
+                )
+            )
+
+    if pairwise_rows:
+        best = sorted(
+            pairwise_rows,
+            key=lambda row: (row.get('adjusted_p_value') is None, row.get('adjusted_p_value') or float('inf')),
+        )[0]
+        lines.append(
+            (
+                f"Strongest pairwise signal: {best.get('group_a')} vs {best.get('group_b')} "
+                f"(adj p={best.get('adjusted_p_value')}, verdict={best.get('verdict')})."
+            )
+        )
+    elif metric_row.get('analysis_policy', {}).get('allow_pairwise'):
+        lines.append('Pairwise enabled but no valid A/B rows were produced.')
+    else:
+        lines.append('Pairwise interpretation is disabled for this metric.')
+
+    return lines[:3]
+
+
 def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correction_method='holm'):
     """Build pairwise comparison rows for a single metric."""
     config = ComparisonStatsConfig(alpha=alpha, correction_method=correction_method)
@@ -398,7 +571,11 @@ def build_group_analysis_payload(
             skipped_metrics.append({'metric': metric_identity, 'reason': spec_status.lower()})
             continue
 
-        descriptive_stats = compute_group_descriptive_stats(grouped_values)
+        descriptive_stats = build_group_descriptive_rows(
+            grouped_values,
+            spec_payload=spec_payload,
+            allow_capability=policy['allow_capability'],
+        )
         all_metric_values = np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
         capability = (
             compute_capability_payload(all_metric_values, spec_payload)
@@ -414,7 +591,7 @@ def build_group_analysis_payload(
             }
         )
         pairwise_rows = (
-            compute_pairwise_rows(
+            build_pairwise_rows(
                 metric_identity,
                 grouped_values,
                 alpha=alpha,
@@ -423,6 +600,8 @@ def build_group_analysis_payload(
             if policy['allow_pairwise']
             else []
         )
+
+        comparability_summary = build_comparability_summary(spec_status, policy)
 
         metrics.append(
             {
@@ -435,8 +614,10 @@ def build_group_analysis_payload(
                 'spec_status': spec_status,
                 'analysis_policy': policy,
                 'capability': capability,
+                'comparability_summary': comparability_summary,
             }
         )
+        metrics[-1]['insights'] = build_metric_insights(metrics[-1])
 
     diagnostics = build_group_analysis_diagnostics_payload(
         effective_scope=effective_scope,
