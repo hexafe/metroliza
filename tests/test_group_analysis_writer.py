@@ -29,7 +29,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                     'metric': 'M1',
                     'reference': 'R1',
                     'group_count': 2,
-                    'spec_status': 'complete',
+                    'spec_status': 'EXACT_MATCH',
                     'comparability_summary': {
                         'status': 'EXACT_MATCH',
                         'interpretation_limits': 'none',
@@ -88,6 +88,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Group Analysis', values)
         self.assertIn('Metric: M1', values)
         self.assertIn('Descriptive stats', values)
+        self.assertIn('Spec status', values)
+        self.assertIn('Exact match', values)
         self.assertIn('Pairwise comparisons', values)
         self.assertIn('Comment', values)
         self.assertIn('adj p-value', values)
@@ -129,7 +131,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                     'metric': 'M1',
                     'reference': 'R1',
                     'group_count': 2,
-                    'spec_status': 'complete',
+                    'spec_status': 'EXACT_MATCH',
                     'pairwise_rows': [{'group_a': 'A', 'group_b': 'B'}],
                 }
             ],
@@ -146,9 +148,12 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('standard', values)
         self.assertIn('ran', values)
         self.assertIn('Metric coverage', values)
-        self.assertIn('Included', values)
-        self.assertIn('Inclusion rationale', values)
-        self.assertIn('Exclusion rationale', values)
+        self.assertIn('Groups', values)
+        self.assertIn('Spec status', values)
+        self.assertIn('Pairwise comparisons', values)
+        self.assertIn('Included in Light', values)
+        self.assertIn('Included in Standard', values)
+        self.assertIn('Comment', values)
         self.assertIn('M2', values)
         self.assertIn('M1: pairwise disabled', values)
         self.assertIn('nom_mismatch=1', values)
