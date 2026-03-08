@@ -115,6 +115,37 @@ def fetch_characteristic_aliases(
     ]
 
 
+def fetch_all_characteristic_aliases(
+    db_path: str,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> list[dict[str, str | None]]:
+    """Fetch all alias mappings ordered for deterministic UI rendering."""
+    query = '''
+        SELECT alias_name, canonical_name, scope_type, scope_value
+        FROM CHARACTERISTIC_ALIASES
+        ORDER BY alias_name COLLATE NOCASE ASC,
+                 scope_type ASC,
+                 scope_value COLLATE NOCASE ASC,
+                 id ASC
+    '''
+    rows = execute_with_retry(
+        db_path,
+        query,
+        params=(),
+        connection=connection,
+    )
+    return [
+        {
+            'alias_name': row[0],
+            'canonical_name': row[1],
+            'scope_type': row[2],
+            'scope_value': row[3],
+        }
+        for row in rows
+    ]
+
+
 def resolve_characteristic_alias(
     metric_name: str,
     reference: str | None,
