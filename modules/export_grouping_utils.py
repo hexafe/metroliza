@@ -7,6 +7,23 @@ _GROUP_KEY_COMPONENTS = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUM
 _GROUPING_OPTIONAL_COLUMNS = ['REPORT_ID', 'REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER', 'GROUP_COLOR']
 
 
+def normalize_group_labels(series, *, missing_label='UNGROUPED', normalize_blank=False):
+    """Return normalized group labels for export workflows.
+
+    Args:
+        series: Input group label series.
+        missing_label: Label used to fill missing/invalid entries.
+        normalize_blank: When True, blank/whitespace labels are treated as
+            missing and replaced with ``missing_label``.
+    """
+    normalized = series.fillna(missing_label).astype(str)
+    if not normalize_blank:
+        return normalized
+
+    cleaned = normalized.str.strip()
+    return cleaned.mask(cleaned == '', missing_label)
+
+
 def add_group_key(df):
     """Return a copy of ``df`` with a deterministic ``GROUP_KEY`` identity column when possible."""
     if not all(column in df.columns for column in _GROUP_KEY_COMPONENTS):
@@ -65,7 +82,7 @@ def resolve_group_merge_keys(header_group, grouping_df):
     return None
 
 
-def apply_group_assignments(header_group, grouping_df):
+def apply_group_assignments(header_group, grouping_df, *, group_analysis_mode=False):
     """Merge grouping assignments into measurement rows.
 
     Returns tuple: ``(merged_frame, grouping_applied, merge_keys, duplicate_count)``.
@@ -86,5 +103,10 @@ def apply_group_assignments(header_group, grouping_df):
         projected_columns.append('GROUP_COLOR')
     merge_projection = deduped_grouping_df[projected_columns]
     merged_group = pd.merge(keyed_header, merge_projection, on=merge_keys, how='left')
-    merged_group['GROUP'] = merged_group['GROUP'].fillna('UNGROUPED')
+    missing_group_label = 'POPULATION' if group_analysis_mode else 'UNGROUPED'
+    merged_group['GROUP'] = normalize_group_labels(
+        merged_group['GROUP'],
+        missing_label=missing_group_label,
+        normalize_blank=group_analysis_mode,
+    )
     return merged_group, True, merge_keys, duplicate_count
