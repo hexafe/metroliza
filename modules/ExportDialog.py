@@ -334,6 +334,33 @@ class ExportDialog(QDialog):
             self.sort_measurements_combobox.setCurrentText("Date")
             self.sort_measurements_label.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
             self.sort_measurements_combobox.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
+
+            self.group_analysis_level_label = QLabel("Group analysis level:")
+            self.group_analysis_level_combobox = QComboBox()
+            self.group_analysis_level_combobox.addItem("Off")
+            self.group_analysis_level_combobox.addItem("Light")
+            self.group_analysis_level_combobox.addItem("Standard")
+            self.group_analysis_level_label.setToolTip(
+                "Controls workbook-level Group Analysis output.\n"
+                "Off: disabled.\n"
+                "Light: compact statistical report + Diagnostics.\n"
+                "Standard: Light plus additional supported plots."
+            )
+            self.group_analysis_level_combobox.setToolTip(self.group_analysis_level_label.toolTip())
+            self.group_analysis_level_combobox.currentTextChanged.connect(lambda _: self._update_group_analysis_scope_enabled_state())
+
+            self.group_analysis_scope_label = QLabel("Group analysis scope:")
+            self.group_analysis_scope_combobox = QComboBox()
+            self.group_analysis_scope_combobox.addItem("Auto")
+            self.group_analysis_scope_combobox.addItem("Single-reference")
+            self.group_analysis_scope_combobox.addItem("Multi-reference")
+            self.group_analysis_scope_label.setToolTip(
+                "Choose how Group Analysis resolves references.\n"
+                "Auto uses filtered grouped rows.\n"
+                "Single-reference and Multi-reference force scope checks."
+            )
+            self.group_analysis_scope_combobox.setToolTip(self.group_analysis_scope_label.toolTip())
+            self._update_group_analysis_scope_enabled_state()
             
             # Add textbox to set min samplesize for violin plot
             self.violin_plot_min_samplesize_label = QLabel("Min samplesize to generate violin plot instead of scatter: ")
@@ -434,6 +461,13 @@ class ExportDialog(QDialog):
             report_profile_layout.addWidget(self.sort_measurements_label, 5, 0)
             report_profile_layout.addWidget(self.sort_measurements_combobox, 5, 1)
 
+            group_analysis_layout = QGridLayout()
+            group_analysis_layout.setContentsMargins(0, 0, 0, 0)
+            group_analysis_layout.addWidget(self.group_analysis_level_label, 0, 0)
+            group_analysis_layout.addWidget(self.group_analysis_level_combobox, 0, 1)
+            group_analysis_layout.addWidget(self.group_analysis_scope_label, 1, 0)
+            group_analysis_layout.addWidget(self.group_analysis_scope_combobox, 1, 1)
+
             action_layout = QVBoxLayout()
             action_layout.setContentsMargins(0, 0, 0, 0)
             action_layout.addWidget(self.export_button)
@@ -441,6 +475,7 @@ class ExportDialog(QDialog):
             self.layout.addWidget(build_section_widget("Source / target files", source_target_layout))
             self.layout.addWidget(build_section_widget("Data scope", data_scope_layout))
             self.layout.addWidget(build_section_widget("Report profile", report_profile_layout))
+            self.layout.addWidget(build_section_widget("Group analysis", group_analysis_layout))
             self.layout.addWidget(build_section_widget("Advanced options", self.advanced_options_container.layout()))
             self.layout.addWidget(build_section_widget("Primary action", action_layout))
 
@@ -453,7 +488,9 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.preset_combobox, self.include_google_sheets_checkbox)
             self.setTabOrder(self.include_google_sheets_checkbox, self.export_type_combobox)
             self.setTabOrder(self.export_type_combobox, self.sort_measurements_combobox)
-            self.setTabOrder(self.sort_measurements_combobox, self.violin_plot_min_samplesize)
+            self.setTabOrder(self.sort_measurements_combobox, self.group_analysis_level_combobox)
+            self.setTabOrder(self.group_analysis_level_combobox, self.group_analysis_scope_combobox)
+            self.setTabOrder(self.group_analysis_scope_combobox, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
             self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
             self.setTabOrder(self.hide_ok_results_checkbox, self.export_button)
@@ -648,6 +685,8 @@ class ExportDialog(QDialog):
                 hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
                 filter_query=self.filter_query,
                 grouping_df=self.df_for_grouping,
+                group_analysis_level=self._selected_group_analysis_level(),
+                group_analysis_scope=self._selected_group_analysis_scope(),
             )
 
             # Normalize user-visible values after validation/coercion.
@@ -733,3 +772,23 @@ class ExportDialog(QDialog):
         if self.include_google_sheets_checkbox.isChecked():
             return 'google_sheets_drive_convert'
         return 'excel_xlsx'
+
+    def _selected_group_analysis_level(self):
+        combobox = getattr(self, "group_analysis_level_combobox", None)
+        if combobox is None:
+            return "off"
+        return combobox.currentText().strip().lower()
+
+    def _selected_group_analysis_scope(self):
+        combobox = getattr(self, "group_analysis_scope_combobox", None)
+        if combobox is None:
+            return "auto"
+        return combobox.currentText().strip().lower()
+
+    def _update_group_analysis_scope_enabled_state(self):
+        level = self._selected_group_analysis_level()
+        enabled = level != "off"
+        if hasattr(self, "group_analysis_scope_combobox"):
+            self.group_analysis_scope_combobox.setEnabled(enabled)
+        if hasattr(self, "group_analysis_scope_label"):
+            self.group_analysis_scope_label.setEnabled(enabled)
