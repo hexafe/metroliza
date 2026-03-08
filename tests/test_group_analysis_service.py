@@ -92,6 +92,29 @@ class TestGroupAnalysisService(unittest.TestCase):
 
         self.assertEqual(payload['metric_rows'][0]['metric'], 'REF DIA')
 
+
+    def test_build_payload_keeps_metric_identity_when_no_alias_mapping_exists(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-2', 'REF-2', 'REF-2', 'REF-2'],
+                'HEADER - AX': ['CYL - Y'] * 4,
+                'GROUP': ['A', 'A', 'B', 'B'],
+                'MEAS': [5.0, 5.1, 5.2, 5.3],
+                'LSL': [4.0] * 4,
+                'NOMINAL': [5.0] * 4,
+                'USL': [6.0] * 4,
+            }
+        )
+
+        payload = build_group_analysis_payload(
+            grouped_df,
+            requested_scope='single_reference',
+            analysis_level='light',
+            alias_db_path=None,
+        )
+
+        self.assertEqual(payload['metric_rows'][0]['metric'], 'CYL - Y')
+
     @patch('modules.group_analysis_service.compute_pairwise_rows')
     def test_build_pairwise_rows_emits_difference_and_standardized_comment(self, mock_compute_pairwise_rows):
         mock_compute_pairwise_rows.return_value = [
