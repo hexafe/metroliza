@@ -97,6 +97,15 @@ from modules.export_grouping_utils import (
     prepare_grouping_dataframe as _prepare_grouping_dataframe,
     resolve_group_merge_keys as _resolve_group_merge_keys,
 )
+from modules.group_analysis_service import (
+    build_group_analysis_payload,
+    evaluate_group_analysis_readiness,
+    resolve_group_analysis_scope,
+)
+from modules.group_analysis_writer import (
+    write_group_analysis_diagnostics_sheet,
+    write_group_analysis_sheet,
+)
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
 from modules.export_sheet_writer import (
     build_measurement_block_plan as _build_measurement_block_plan,
@@ -1789,6 +1798,8 @@ class ExportDataThread(QThread):
         self.allow_non_essential_chart_skipping = validated_request.options.allow_non_essential_chart_skipping
         self.chart_worker_count = validated_request.options.chart_worker_count
         self.chart_worker_queue_size = validated_request.options.chart_worker_queue_size
+        self.group_analysis_level = validated_request.options.group_analysis_level
+        self.group_analysis_scope = validated_request.options.group_analysis_scope
         self.export_canceled = False
         self._cancel_signal_emitted = False
         self._prepared_grouping_df = None
@@ -2323,6 +2334,10 @@ class ExportDataThread(QThread):
                     self.export_filtered_data(excel_writer),
                     self._emit_stage_progress('filtered_sheet_write', 1.0),
                 ),
+                lambda: (
+                    self.update_label.emit(build_three_line_status("Building group analysis...", "Writing Group Analysis and Diagnostics worksheets", "ETA --")),
+                    self._write_group_analysis_outputs(excel_writer),
+                ),
             ],
             should_cancel=self._check_canceled,
         )
@@ -2744,6 +2759,62 @@ class ExportDataThread(QThread):
         except Exception as e:
             self.log_and_exit(e)
             raise
+
+    def _write_group_analysis_message_sheet(self, worksheet, message):
+        worksheet.write(0, 0, 'Group Analysis')
+        worksheet.write(1, 0, str(message or 'Group Analysis skipped.'))
+        worksheet.freeze_panes(1, 0)
+
+    def _write_group_analysis_outputs(self, excel_writer):
+        mode = str(self.group_analysis_level or 'off').strip().lower()
+        if mode == 'off':
+            return
+
+        if mode not in {'light', 'standard'}:
+            logger.warning('Unknown group analysis level %r; skipping Group Analysis output.', mode)
+            return
+
+        backend = self._active_backend or self.get_export_backend()
+        workbook = backend.get_workbook(excel_writer)
+        used_sheet_names = backend.list_sheet_names(excel_writer)
+
+        grouped_export_df = self._build_export_filtered_dataframe()
+        grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
+        grouped_export_df, _ = self._apply_group_assignments(
+            grouped_export_df,
+            self.prepared_grouping_df,
+            group_analysis_mode=True,
+            fallback_group_label='POPULATION',
+        )
+
+        requested_scope = str(self.group_analysis_scope or 'auto').strip().lower()
+        reference_count = int(grouped_export_df.get('REFERENCE', pd.Series(dtype=object)).dropna().nunique())
+        effective_scope = resolve_group_analysis_scope(requested_scope, reference_count)
+        readiness = evaluate_group_analysis_readiness(
+            grouped_export_df,
+            requested_scope=requested_scope,
+        )
+        payload = build_group_analysis_payload(
+            grouped_export_df,
+            requested_scope=requested_scope,
+        )
+
+        group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)
+        group_worksheet = workbook.add_worksheet(group_sheet_name)
+        self._record_exported_sheet_name(group_sheet_name)
+
+        skip_reason = readiness.get('skip_reason') or payload.get('skip_reason') or {}
+        skip_code = str(skip_reason.get('code') or '')
+        if skip_code.startswith('forced_') and skip_code.endswith('_scope_mismatch'):
+            short_message = f'Scope mismatch: requested {requested_scope}, resolved {effective_scope}.'
+            self._write_group_analysis_message_sheet(group_worksheet, short_message)
+        else:
+            write_group_analysis_sheet(group_worksheet, payload)
+
+        diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
+        diagnostics_worksheet = workbook.add_worksheet(diagnostics_sheet_name)
+        self._record_exported_sheet_name(diagnostics_sheet_name)
+        write_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
 
     def _write_group_comparison_sheet(self, workbook, used_sheet_names):
         grouped_export_df = self._build_export_filtered_dataframe()
