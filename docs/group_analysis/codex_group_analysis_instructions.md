@@ -193,9 +193,9 @@ Optional mirror:
 
 #### Current cycle status note
 
-- **Implemented in this cycle:** roadmap/closeout documentation alignment and mandatory status-block format.
-- **Deferred (not implemented):** metric alias mapping and fuzzy metric-name matching are out of scope unless separately approved.
-- **Next implementation step:** execute Step 2 (contracts + export request plumbing) and add backward-compatibility validation/tests.
+- **Implemented in this cycle:** contracts/UI/request plumbing, service/writer baseline, and export integration for Off/Light/Standard with diagnostics and scope-mismatch handling.
+- **Deferred (not implemented):** full Standard chart insertion and full flag-semantics parity (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`), plus long-term alias/fuzzy metric matching.
+- **Next implementation step:** complete flag-semantics parity in service + writer with explicit tests before the final docs closeout PR.
 
 
 ---

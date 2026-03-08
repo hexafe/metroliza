@@ -798,18 +798,21 @@ Suggested location:
 
 #### Implemented in this cycle
 
-- Added roadmap and closeout requirements for incremental delivery via PRs, including a mandatory final documentation status update.
-- Clarified the final-cycle closeout format so implementation completion can be tracked consistently across Codex runs.
+- Contracts, request validation/plumbing, and ExportDialog controls for `group_analysis_level` + `group_analysis_scope` were shipped.
+- Export integration shipped for Off/Light/Standard, including forced-scope mismatch handling and deterministic skip messaging.
+- New Group Analysis service/writer path is active with baseline unit/integration coverage.
+- Core comparability taxonomy (`EXACT_MATCH`, `LIMIT_MISMATCH`, `NOM_MISMATCH`, `INVALID_SPEC`) and level-aware inclusion policy are implemented.
+- Diagnostics sheet generation is implemented and always emitted when Group Analysis is enabled.
 
-#### Not implemented (deferred)
+#### Deferred / not implemented in this cycle
 
-- Metric alias mapping across references remains out of scope for this cycle unless separately approved.
-- Metric-name fuzzy matching / heuristic similarity matching remains out of scope for this cycle unless separately approved.
-- Any enterprise-wide canonical metric-name standardization remains deferred to a later phase.
+- Full Standard-mode plot insertion remains incomplete; current workbook output still includes reserved plot-slot placeholders for future chart insertion.
+- Final flag semantics parity with the spec remains incomplete (not all required user-facing flag thresholds/vocabulary are fully aligned end-to-end).
+- Metric alias mapping / fuzzy matching / enterprise canonicalization remain intentionally deferred.
 
 #### Next implementation step
 
-- Execute **PR 1 — Contracts and request plumbing** by adding and validating `group_analysis_level` and `group_analysis_scope` in `modules/contracts.py` and `modules/export_dialog_service.py`, with backward-compatibility tests.
+- Implement **flag-semantics parity** in `modules/group_analysis_service.py` + `modules/group_analysis_writer.py` (including tests) so emitted flags and worksheet formatting match the spec contract (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`) deterministically.
 
 ---
 
