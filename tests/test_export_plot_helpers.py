@@ -51,6 +51,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (  # noqa: E402
+    ExportDataThread,
     build_histogram_annotation_specs,
     build_histogram_mean_line_style,
     compute_histogram_annotation_rows,
@@ -1926,6 +1927,35 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         plt.close(fig_seaborn)
         plt.close(fig_matplotlib)
+
+    def test_group_analysis_plot_asset_filters_labels_with_empty_groups_after_coercion(self):
+        metric_row = {
+            'metric': 'M1',
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.0, 2.0]},
+                    {'group': 'DropMe', 'values': ['bad', None, np.inf]},
+                    {'group': 'C', 'values': [3.0]},
+                ],
+            },
+        }
+
+        captured_axes = []
+
+        def _stub_violinplot(*, data, ax, **_kwargs):
+            captured_axes.append(ax)
+
+        seaborn_stub = types.SimpleNamespace(violinplot=_stub_violinplot)
+        with mock.patch('modules.ExportDataThread._HAS_SEABORN', True), mock.patch('modules.ExportDataThread.sns', seaborn_stub, create=True), mock.patch('modules.ExportDataThread.plt.close'):
+            asset = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'violin')
+
+        self.assertIn('image_data', asset)
+        self.assertEqual(len(captured_axes), 1)
+
+        ax = captured_axes[0]
+        labels = [tick.get_text() for tick in ax.get_xticklabels()]
+        self.assertEqual(labels, ['A', 'C'])
+        self.assertEqual(len(labels), 2)
 
 
     def test_render_tolerance_band_adds_horizontal_patch(self):
