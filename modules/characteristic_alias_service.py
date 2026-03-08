@@ -13,7 +13,7 @@ CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
             created_at TEXT NULL,
             updated_at TEXT NULL
         )''',
-    'CREATE INDEX IF NOT EXISTS idx_characteristic_alias_scope_lookup ON CHARACTERISTIC_ALIASES(alias_name, scope_type, scope_value)',
+    'CREATE INDEX IF NOT EXISTS characteristic_alias_scope_lookup ON CHARACTERISTIC_ALIASES(alias_name, scope_type, scope_value)',
 )
 
 

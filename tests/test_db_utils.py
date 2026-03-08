@@ -310,7 +310,7 @@ class TestDbUtils(unittest.TestCase):
             "PRAGMA index_list('CHARACTERISTIC_ALIASES')",
         )
         index_names = {row[1] for row in indexes}
-        self.assertIn('idx_characteristic_alias_scope_lookup', index_names)
+        self.assertIn('characteristic_alias_scope_lookup', index_names)
 
 
 if __name__ == '__main__':
