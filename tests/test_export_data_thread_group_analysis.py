@@ -4,6 +4,7 @@ import types
 import unittest
 import zipfile
 import xml.etree.ElementTree as ET
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -50,6 +51,7 @@ class _DummyLogger:
 custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules.setdefault('modules.CustomLogger', custom_logger_stub)
 from modules.ExportDataThread import ExportDataThread  # noqa: E402
+import modules.ExportDataThread as export_data_thread_module  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 
 
@@ -209,6 +211,59 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             with zipfile.ZipFile(out_path, 'r') as workbook_zip:
                 media_files = sorted(name for name in workbook_zip.namelist() if name.startswith('xl/media/'))
             self.assertGreaterEqual(len(media_files), 2)
+
+    def test_group_analysis_violin_uses_horizontal_spec_lines_with_annotations(self):
+        metric_row = {
+            'metric': 'M1',
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.01, 1.02, 1.03]},
+                    {'group': 'B', 'values': [1.00, 1.01, 1.02]},
+                ],
+                'spec_limits': {'lsl': 0.95, 'nominal': 1.00, 'usl': 1.05},
+            },
+        }
+
+        fig = MagicMock()
+        ax = MagicMock()
+        with (
+            patch.object(export_data_thread_module, '_HAS_SEABORN', False),
+            patch('modules.ExportDataThread.plt.subplots', return_value=(fig, ax)),
+            patch('modules.ExportDataThread.plt.close'),
+        ):
+            result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'violin')
+
+        self.assertIn('image_data', result)
+        self.assertEqual(ax.axhline.call_count, 3)
+        ax.axvline.assert_not_called()
+        annotation_texts = [kwargs.get('text', args[0] if args else '') for args, kwargs in ax.annotate.call_args_list]
+        self.assertIn('USL=1.050', annotation_texts)
+        self.assertIn('Nominal=1.000', annotation_texts)
+        self.assertIn('LSL=0.950', annotation_texts)
+
+    def test_group_analysis_histogram_keeps_vertical_spec_lines(self):
+        metric_row = {
+            'metric': 'M1',
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.01, 1.02, 1.03]},
+                    {'group': 'B', 'values': [1.00, 1.01, 1.02]},
+                ],
+                'spec_limits': {'lsl': 0.95, 'nominal': 1.00, 'usl': 1.05},
+            },
+        }
+
+        fig = MagicMock()
+        ax = MagicMock()
+        with (
+            patch('modules.ExportDataThread.plt.subplots', return_value=(fig, ax)),
+            patch('modules.ExportDataThread.plt.close'),
+        ):
+            result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram')
+
+        self.assertIn('image_data', result)
+        self.assertEqual(ax.axvline.call_count, 3)
+        ax.axhline.assert_not_called()
 
 
 if __name__ == '__main__':
