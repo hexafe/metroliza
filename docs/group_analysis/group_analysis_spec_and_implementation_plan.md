@@ -807,12 +807,11 @@ Suggested location:
 #### Deferred / not implemented in this cycle
 
 - Full Standard-mode plot insertion remains incomplete; current workbook output still includes reserved plot-slot placeholders for future chart insertion.
-- Final flag semantics parity with the spec remains incomplete (not all required user-facing flag thresholds/vocabulary are fully aligned end-to-end).
 - Metric alias mapping / fuzzy matching / enterprise canonicalization remain intentionally deferred.
 
 #### Next implementation step
 
-- Implement **flag-semantics parity** in `modules/group_analysis_service.py` + `modules/group_analysis_writer.py` (including tests) so emitted flags and worksheet formatting match the spec contract (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`) deterministically.
+- Implement **Standard plot insertion** in `modules/group_analysis_writer.py` (and integration plumbing/tests as needed) so eligible Standard metrics render real charts instead of reserved placeholders while preserving deterministic diagnostics skip reasons.
 
 ---
 
