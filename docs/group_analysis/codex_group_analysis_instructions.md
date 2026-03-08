@@ -193,9 +193,9 @@ Optional mirror:
 
 #### Current cycle status note
 
-- **Implemented in this cycle:** contracts/UI/request plumbing, service/writer baseline, and export integration for Off/Light/Standard with diagnostics and scope-mismatch handling.
-- **Deferred (not implemented):** full Standard chart insertion and full flag-semantics parity (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`), plus long-term alias/fuzzy metric matching.
-- **Next implementation step:** complete flag-semantics parity in service + writer with explicit tests before the final docs closeout PR.
+- **Implemented in this cycle:** contracts/UI/request plumbing, service/writer baseline, export integration for Off/Light/Standard with diagnostics and scope-mismatch handling, and spec-aligned flag semantics (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`) with tests.
+- **Deferred (not implemented):** full Standard chart insertion, plus long-term alias/fuzzy metric matching.
+- **Next implementation step:** implement Standard-mode chart insertion for eligible metrics, then run a final docs/todo closeout PR.
 
 
 ---
