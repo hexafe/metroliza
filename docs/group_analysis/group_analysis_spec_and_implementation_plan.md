@@ -74,13 +74,13 @@ The rebuild must:
 
 The following are intentionally out of scope for this iteration:
 
-- alias mapping or canonical standardization of metric names across references,
+- canonical IDs/ontology-driven standardization and automatic/fuzzy matching of metric names across references,
 - user-facing `Full` mode,
 - optional Diagnostics,
 - heuristic matching of “similar” metric names,
 - forced enterprise-wide reporting standardization.
 
-Metric-name standardization is explicitly deferred to a later phase after the app is adopted and real reporting inconsistencies are observed in production use.
+Automated matching and enterprise ontology standardization are explicitly deferred to a later phase after the app is adopted and real reporting inconsistencies are observed in production use. Manual alias mapping is in scope for Characteristic Alias Mapping v1.
 
 ---
 
@@ -218,9 +218,61 @@ For this iteration, metric identity is defined as:
 - preferred: `HEADER - AX`
 - fallback: `HEADER`
 
-No alias mapping or fuzzy matching should be introduced.
+Characteristic Alias Mapping v1 may supply deterministic manual aliases during identity resolution. Fuzzy or automatic matching should not be introduced.
 
-### 9.2 Normalized spec comparison
+### 9.2 Characteristic Alias Mapping v1
+
+Characteristic Alias Mapping v1 introduces a deterministic manual mapping layer that can reconcile known characteristic-name variants across references without introducing auto-matching behavior.
+
+Purpose:
+
+- allow controlled manual alignment of known naming variants that otherwise split comparable metrics,
+- keep matching deterministic and auditable,
+- improve multi-reference comparability while preserving explicit diagnostics.
+
+V1 boundaries:
+
+- manual mapping only,
+- no canonical ID system,
+- no ontology/enterprise taxonomy modeling,
+- no fuzzy/automatic matching or suggestion engine in this phase.
+
+Storage model (`characteristic_alias_map` in the same SQLite DB):
+
+- persist mappings in a `characteristic_alias_map` table in the existing application SQLite database,
+- each mapping stores source identity, mapped identity, scope, and audit metadata (for example created/updated timestamps),
+- writes must be idempotent for the same key tuple to keep behavior deterministic across runs.
+
+Scope model:
+
+- `global`: applies across all references unless a more specific mapping exists,
+- `reference`: applies only to a specific reference context and can override the global mapping.
+
+Resolution order:
+
+1. reference-scoped mapping (when present),
+2. global-scoped mapping,
+3. original metric identity (`HEADER - AX`, fallback `HEADER`) when no mapping exists.
+
+UI entry point:
+
+- action label: `Map Characteristics`,
+- opens a dialog titled `Characteristic Mapping`.
+
+Integration point in pipeline:
+
+- apply alias mapping after base metric identity build,
+- before grouping/comparison eligibility and cross-reference comparability classification.
+
+Future roadmap beyond v1:
+
+- bulk mapping actions,
+- import/export mapping files,
+- suggestion engine for candidate aliases,
+- canonical IDs/ontology integration,
+- balloon-aware mapping support.
+
+### 9.3 Normalized spec comparison
 
 The following values must be compared numerically, not as strings:
 
@@ -240,7 +292,7 @@ This avoids false mismatches such as:
 - `0.0`
 - `0.000`
 
-### 9.3 Spec status categories
+### 9.4 Spec status categories
 
 Each metric must be classified into one of the following:
 
@@ -785,7 +837,7 @@ In the final PR of this roadmap, update documentation with a short release-statu
 1. **Implemented in this cycle**
    - bullet list of completed roadmap PRs and shipped behavior.
 2. **Not implemented (deferred)**
-   - bullet list of explicitly deferred items (for example, metric alias/fuzzy matching).
+   - bullet list of explicitly deferred items (for example, suggestion engine/canonical ID work beyond manual alias mapping v1).
 3. **Next implementation step**
    - one concrete next step with target module(s) and test scope.
 
@@ -807,11 +859,12 @@ Suggested location:
 
 #### Deferred / not implemented in this cycle
 
-- Metric alias mapping / fuzzy matching / enterprise canonicalization remain intentionally deferred.
+- Characteristic Alias Mapping v1 (manual mapping, SQLite-backed, deterministic scope resolution) remains pending implementation.
+- Suggestion engine, fuzzy/automatic matching, canonical IDs/ontology integration, and balloon-aware mapping remain deferred beyond v1.
 
 #### Next implementation step
 
-- Implement **metric alias/canonical mapping strategy** in `modules/group_analysis_service.py` (with coordinated diagnostics/writer updates and tests) so multi-reference analysis can optionally reconcile known naming variants while preserving deterministic comparability reporting.
+- Implement **Characteristic Alias Mapping v1** across `modules/group_analysis_service.py`, export/UI integration points, and persistence wiring so manual mappings from `characteristic_alias_map` resolve in order (`reference` > `global` > original identity) with coordinated diagnostics and tests.
 
 ---
 

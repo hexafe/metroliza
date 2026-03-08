@@ -34,7 +34,7 @@ Codex must follow these rules exactly:
 - Do **not** introduce a user-facing `Full` mode.
 - Do **not** make Diagnostics optional.
 - Do **not** couple Group Analysis to the existing `Extended plots` export preset.
-- Do **not** invent alias mapping or fuzzy matching for metric names.
+- Do **not** invent fuzzy/automatic alias matching for metric names; Characteristic Alias Mapping v1 is manual-only.
 - Do **not** treat `POPULATION` as a hidden technical group; treat it like any other group.
 - Do **not** use `UNGROUPED` semantics in Group Analysis.
 - Do **not** silently compare raw `MEAS` across metrics with nominal mismatch.
@@ -194,8 +194,8 @@ Optional mirror:
 #### Current cycle status note
 
 - **Implemented in this cycle:** contracts/UI/request plumbing, service/writer baseline, export integration for Off/Light/Standard with diagnostics and scope-mismatch handling, spec-aligned flag semantics (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`) with tests, and Standard-mode chart insertion for eligible metrics.
-- **Deferred (not implemented):** long-term alias/fuzzy/canonical metric matching across references.
-- **Next implementation step:** design and implement a deterministic alias/canonical metric mapping strategy in `modules/group_analysis_service.py` (plus diagnostics/writer test coverage) for multi-reference datasets.
+- **Deferred (not implemented):** suggestion engine, fuzzy/automatic matching, canonical IDs/ontology integration, and balloon-aware mapping support.
+- **Next implementation step:** implement Characteristic Alias Mapping v1 (manual-only) with `characteristic_alias_map` persistence, scoped resolution (`reference` > `global` > original identity), and service/diagnostics/writer test coverage for multi-reference datasets.
 
 
 ---
