@@ -66,6 +66,11 @@ class ExportOptions:
             charts under bottleneck optimization.
         chart_worker_count: Worker process/thread count, minimum of ``1``.
         chart_worker_queue_size: Queue size for chart workers, minimum of ``1``.
+        group_analysis_level: Workbook-level Group Analysis mode. Supported
+            values are ``"off"``, ``"light"``, and ``"standard"``.
+        group_analysis_scope: Requested Group Analysis scope. Supported values
+            are ``"auto"``, ``"single_reference"``, and
+            ``"multi_reference"``.
 
     Usage notes:
         ``validate_export_options`` returns a normalized copy with sanitized
@@ -84,6 +89,8 @@ class ExportOptions:
     allow_non_essential_chart_skipping: bool = False
     chart_worker_count: int = 2
     chart_worker_queue_size: int = 4
+    group_analysis_level: str = "off"
+    group_analysis_scope: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -181,6 +188,20 @@ _ALLOWED_EXPORT_TARGETS = {"excel_xlsx", "google_sheets_drive_convert"}
 _ALLOWED_BACKEND_TARGETS = {"excel", "google"}
 _BACKEND_TARGET_ALIASES = {"google_sheets": "google", "googlesheets": "google"}
 _SAMPLE_SORT_ALIASES = {"sample", "sample #", "sample number", "part #", "part number"}
+_GROUP_ANALYSIS_LEVEL_ALIASES = {
+    "off": "off",
+    "light": "light",
+    "standard": "standard",
+}
+_GROUP_ANALYSIS_SCOPE_ALIASES = {
+    "auto": "auto",
+    "single-reference": "single_reference",
+    "single_reference": "single_reference",
+    "single reference": "single_reference",
+    "multi-reference": "multi_reference",
+    "multi_reference": "multi_reference",
+    "multi reference": "multi_reference",
+}
 
 
 def validate_paths(paths: AppPaths) -> AppPaths:
@@ -312,6 +333,25 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
     summary_scale = max(0, int(getattr(options, "summary_plot_scale", ExportOptions.summary_plot_scale)))
     worker_count = max(1, int(getattr(options, "chart_worker_count", ExportOptions.chart_worker_count)))
     worker_queue_size = max(1, int(getattr(options, "chart_worker_queue_size", ExportOptions.chart_worker_queue_size)))
+    group_analysis_level = _normalize_required_str(
+        getattr(options, "group_analysis_level", ExportOptions.group_analysis_level),
+        "group_analysis_level",
+    )
+    group_analysis_level = _GROUP_ANALYSIS_LEVEL_ALIASES.get(group_analysis_level)
+    if group_analysis_level is None:
+        raise ValueError(
+            f"Unsupported group analysis level '{getattr(options, 'group_analysis_level', None)}'."
+        )
+
+    group_analysis_scope = _normalize_required_str(
+        getattr(options, "group_analysis_scope", ExportOptions.group_analysis_scope),
+        "group_analysis_scope",
+    )
+    group_analysis_scope = _GROUP_ANALYSIS_SCOPE_ALIASES.get(group_analysis_scope)
+    if group_analysis_scope is None:
+        raise ValueError(
+            f"Unsupported group analysis scope '{getattr(options, 'group_analysis_scope', None)}'."
+        )
 
     return ExportOptions(
         preset=preset,
@@ -332,6 +372,8 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
         ),
         chart_worker_count=worker_count,
         chart_worker_queue_size=worker_queue_size,
+        group_analysis_level=group_analysis_level,
+        group_analysis_scope=group_analysis_scope,
     )
 
 
