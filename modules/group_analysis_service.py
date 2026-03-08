@@ -166,6 +166,32 @@ def normalize_metric_identity(metric_name, reference=None, *, scope='single_refe
     return normalized_metric
 
 
+def _build_canonical_metric_series(frame):
+    """Build canonical metric identities preferring HEADER-AX over HEADER-only labels."""
+    index = getattr(frame, 'index', None)
+
+    header_ax = pd.Series('', index=index, dtype=object)
+    if 'HEADER - AX' in frame.columns:
+        header_ax = frame['HEADER - AX'].fillna('').astype(str).str.strip()
+
+    header = pd.Series('', index=index, dtype=object)
+    if 'HEADER' in frame.columns:
+        header = frame['HEADER'].fillna('').astype(str).str.strip()
+
+    axis = pd.Series('', index=index, dtype=object)
+    if 'AX' in frame.columns:
+        axis = frame['AX'].fillna('').astype(str).str.strip()
+
+    composed = pd.Series('', index=index, dtype=object)
+    has_header_and_axis = (header != '') & (axis != '')
+    composed.loc[has_header_and_axis] = header.loc[has_header_and_axis] + ' - ' + axis.loc[has_header_and_axis]
+    composed.loc[(composed == '') & (header != '')] = header.loc[(composed == '') & (header != '')]
+
+    canonical = header_ax.copy()
+    canonical.loc[canonical == ''] = composed.loc[canonical == '']
+    return canonical
+
+
 def normalize_spec_limits(lsl, nominal, usl, *, precision=3):
     """Normalize spec values to rounded numeric payload fields with explicit nulls."""
 
@@ -789,6 +815,24 @@ def _normalize_grouped_working_df(grouped_df):
         working['GROUP'] = 'POPULATION'
     working['GROUP'] = normalize_group_labels(working['GROUP'], missing_label='POPULATION', normalize_blank=True)
     working['MEAS'] = pd.to_numeric(working.get('MEAS'), errors='coerce')
+
+    working['__canonical_metric__'] = _build_canonical_metric_series(working)
+
+    if 'NOMINAL' not in working.columns and 'NOM' in working.columns:
+        working['NOMINAL'] = pd.to_numeric(working.get('NOM'), errors='coerce')
+    elif 'NOMINAL' in working.columns:
+        working['NOMINAL'] = pd.to_numeric(working.get('NOMINAL'), errors='coerce')
+
+    if 'USL' not in working.columns and {'NOM', '+TOL'}.issubset(set(working.columns)):
+        working['USL'] = pd.to_numeric(working.get('NOM'), errors='coerce') + pd.to_numeric(working.get('+TOL'), errors='coerce')
+    elif 'USL' in working.columns:
+        working['USL'] = pd.to_numeric(working.get('USL'), errors='coerce')
+
+    if 'LSL' not in working.columns and {'NOM', '-TOL'}.issubset(set(working.columns)):
+        working['LSL'] = pd.to_numeric(working.get('NOM'), errors='coerce') + pd.to_numeric(working.get('-TOL'), errors='coerce')
+    elif 'LSL' in working.columns:
+        working['LSL'] = pd.to_numeric(working.get('LSL'), errors='coerce')
+
     return working.dropna(subset=['MEAS'])
 
 
@@ -842,7 +886,7 @@ def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eli
             'skip_reason': build_group_analysis_skip_reason('insufficient_groups', group_count=group_count),
         }
 
-    metric_column = 'HEADER - AX' if 'HEADER - AX' in working.columns else 'HEADER'
+    metric_column = '__canonical_metric__'
     if metric_column in working.columns:
         metric_series = working[metric_column].fillna('').astype(str).str.strip()
         if eligible_metrics is not None:
@@ -920,7 +964,7 @@ def build_group_analysis_payload(
         }
 
     working = _normalize_grouped_working_df(grouped_df)
-    metric_column = 'HEADER - AX' if 'HEADER - AX' in working.columns else 'HEADER'
+    metric_column = '__canonical_metric__'
     reference_column = 'REFERENCE' if 'REFERENCE' in working.columns else None
     spec_columns = {
         'lsl': 'LSL' if 'LSL' in working.columns else None,

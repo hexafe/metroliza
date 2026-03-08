@@ -384,5 +384,57 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertTrue(any('M2' in str(row.get('metric')) for row in diagnostics['metric_diagnostics_rows']))
 
 
+    def test_axis_metric_uses_canonical_identity_and_derived_spec_columns(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1', 'R1', 'R1', 'R1'],
+                'HEADER': ['AA-C11', 'AA-C11', 'AA-C11', 'AA-C11'],
+                'AX': ['TP', 'TP', 'TP', 'TP'],
+                'GROUP': ['G1', 'G1', 'G2', 'G2'],
+                'MEAS': [0.10, 0.12, 0.09, 0.11],
+                'NOM': [0.0, 0.0, 0.0, 0.0],
+                '+TOL': [0.5, 0.5, 0.5, 0.5],
+                '-TOL': [0.0, 0.0, 0.0, 0.0],
+            }
+        )
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='standard')
+
+        self.assertEqual(payload['status'], 'ready')
+        self.assertEqual(len(payload['metric_rows']), 1)
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['metric'], 'AA-C11 - TP')
+        self.assertEqual(metric['spec_status'], 'EXACT_MATCH')
+        self.assertEqual(metric['spec_status_label'], 'Exact match')
+        self.assertEqual(metric['spec'], {'lsl': 0.0, 'nominal': 0.0, 'usl': 0.5})
+
+        diagnostics_row = payload['diagnostics']['metric_diagnostics_rows'][0]
+        self.assertEqual(diagnostics_row['metric'], 'AA-C11 - TP')
+        self.assertEqual(diagnostics_row['spec_status'], 'EXACT_MATCH')
+        self.assertEqual(diagnostics_row['included_in_light'], 'YES')
+        self.assertEqual(diagnostics_row['included_in_standard'], 'YES')
+
+    def test_header_only_identity_would_merge_axes_but_canonical_identity_keeps_them_separate(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER': ['AA-C11'] * 8,
+                'AX': ['TP', 'TP', 'TP', 'TP', 'SP', 'SP', 'SP', 'SP'],
+                'GROUP': ['G1', 'G1', 'G2', 'G2', 'G1', 'G1', 'G2', 'G2'],
+                'MEAS': [0.10, 0.11, 0.09, 0.12, 0.20, 0.22, 0.19, 0.21],
+                'NOM': [0.0] * 8,
+                '+TOL': [0.5, 0.5, 0.5, 0.5, 0.8, 0.8, 0.8, 0.8],
+                '-TOL': [0.0] * 8,
+            }
+        )
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='standard')
+
+        metric_names = sorted(row['metric'] for row in payload['metric_rows'])
+        self.assertEqual(metric_names, ['AA-C11 - SP', 'AA-C11 - TP'])
+        self.assertEqual(payload['diagnostics']['metric_count'], 2)
+        self.assertEqual(payload['diagnostics']['status_counts']['EXACT_MATCH'], 2)
+
+
 if __name__ == '__main__':
     unittest.main()
