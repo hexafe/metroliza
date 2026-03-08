@@ -494,6 +494,131 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertIn(scenario['expected_code'], diagnostics_values)
                 self.assertIn(scenario['expected_message'], diagnostics_values)
 
+
+    def test_group_analysis_scope_mismatch_uses_payload_readiness_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+            out_path = str(Path(temp_dir) / 'export.xlsx')
+
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
+            )
+
+            request = ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file=out_path),
+                options=ExportOptions(
+                    generate_summary_sheet=False,
+                    group_analysis_level='light',
+                    group_analysis_scope='multi_reference',
+                ),
+            )
+            thread = ExportDataThread(request)
+
+            module = __import__('modules.ExportDataThread', fromlist=['evaluate_group_analysis_readiness'])
+            previous_readiness = getattr(module, 'evaluate_group_analysis_readiness', None)
+            module.evaluate_group_analysis_readiness = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError('Legacy readiness path should not be called from ExportDataThread.')
+            )
+            try:
+                completed = thread.get_export_backend().run(thread)
+            finally:
+                if previous_readiness is None:
+                    delattr(module, 'evaluate_group_analysis_readiness')
+                else:
+                    module.evaluate_group_analysis_readiness = previous_readiness
+
+            self.assertTrue(completed)
+            diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
+            self.assertIn('forced_multi_reference_scope_mismatch', diagnostics_values)
+            self.assertIn('Multi-reference group analysis skipped: grouped rows span only one reference.', diagnostics_values)
+
+    def test_group_analysis_runnable_path_uses_payload_readiness_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+            out_path = str(Path(temp_dir) / 'export.xlsx')
+
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
+            )
+
+            rows = [
+                (1, 'part_1.pdf', '2024-01-01', '1', 'A', 10.10, 0.10),
+                (2, 'part_2.pdf', '2024-01-02', '2', 'A', 10.12, 0.12),
+                (3, 'part_3.pdf', '2024-01-03', '3', 'A', 10.08, 0.08),
+                (4, 'part_4.pdf', '2024-01-04', '4', 'B', 10.42, 0.42),
+                (5, 'part_5.pdf', '2024-01-05', '5', 'B', 10.39, 0.39),
+                (6, 'part_6.pdf', '2024-01-06', '6', 'B', 10.41, 0.41),
+            ]
+            for report_id, filename, report_date, sample_number, _group, meas, dev in rows:
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO REPORTS (ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?, ?)',
+                    (report_id, 'REF-1', '/fake/reports', filename, report_date, sample_number),
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (report_id, 'X', 10.0, 0.5, -0.5, 0.0, meas, dev, 0, 'FEATURE_1'),
+                )
+
+            grouping_df = pd.DataFrame(
+                [
+                    {
+                        'REFERENCE': 'REF-1',
+                        'FILELOC': '/fake/reports',
+                        'FILENAME': filename,
+                        'DATE': report_date,
+                        'SAMPLE_NUMBER': sample_number,
+                        'GROUP': group,
+                    }
+                    for _report_id, filename, report_date, sample_number, group, _meas, _dev in rows
+                ]
+            )
+            request = ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file=out_path),
+                options=ExportOptions(generate_summary_sheet=False, group_analysis_level='light'),
+                grouping_df=grouping_df,
+            )
+            thread = ExportDataThread(request)
+
+            module = __import__('modules.ExportDataThread', fromlist=['evaluate_group_analysis_readiness'])
+            previous_readiness = getattr(module, 'evaluate_group_analysis_readiness', None)
+            module.evaluate_group_analysis_readiness = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError('Legacy readiness path should not be called from ExportDataThread.')
+            )
+            try:
+                completed = thread.get_export_backend().run(thread)
+            finally:
+                if previous_readiness is None:
+                    delattr(module, 'evaluate_group_analysis_readiness')
+                else:
+                    module.evaluate_group_analysis_readiness = previous_readiness
+
+            self.assertTrue(completed)
+            diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
+            self.assertIn('ran', diagnostics_values)
+            self.assertIn('single_reference', diagnostics_values)
+
     def test_group_analysis_independent_from_extended_plots_toggle(self):
         for summary_enabled in (False, True):
             with self.subTest(generate_summary_sheet=summary_enabled), tempfile.TemporaryDirectory() as temp_dir:

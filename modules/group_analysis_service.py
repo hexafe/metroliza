@@ -912,6 +912,7 @@ def build_group_analysis_payload(
         return {
             'status': 'skipped',
             'analysis_level': normalized_level,
+            'readiness': readiness,
             'effective_scope': effective_scope,
             'skip_reason': readiness['skip_reason'],
             'metric_rows': [],
@@ -1060,6 +1061,7 @@ def build_group_analysis_payload(
     return {
         'status': 'ready',
         'analysis_level': normalized_level,
+        'readiness': readiness,
         'effective_scope': effective_scope,
         'skip_reason': None,
         'metric_rows': metrics,
