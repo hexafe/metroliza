@@ -175,6 +175,23 @@ After implementation:
 - summarize the final behavior,
 - list trade-offs and follow-up opportunities.
 
+### Step 10 — Final PR closeout status update (mandatory)
+
+In the last PR for the roadmap cycle, update Group Analysis docs with a compact status block that clearly states:
+
+- what has been implemented in this cycle,
+- what is explicitly deferred/not implemented,
+- what the next implementation step is (single concrete target).
+
+Preferred location:
+
+- `docs/group_analysis/group_analysis_spec_and_implementation_plan.md` under a dedicated status subsection.
+
+Optional mirror:
+
+- add a short summary note in this instructions file for future Codex runs.
+
+
 ---
 
 ## 4. How Codex should structure its output in each step

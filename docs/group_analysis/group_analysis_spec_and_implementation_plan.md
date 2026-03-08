@@ -645,6 +645,99 @@ If practical, leave it in place temporarily but stop using it.
 - docstrings and code comments,
 - remove dead references to the legacy comparison sheet where safe.
 
+## 17.1 Incremental PR roadmap for next-step implementation
+
+Use the phases above as the execution order, but ship in small PRs with explicit scope.
+
+### PR 1 — Contracts and request plumbing
+
+- `modules/contracts.py`
+- `modules/export_dialog_service.py`
+- tests for option normalization and backward compatibility
+
+Deliverable:
+
+- validated request contains `group_analysis_level` and `group_analysis_scope`.
+
+### PR 2 — Export dialog controls
+
+- `modules/ExportDialog.py`
+- UI behavior tests (where available)
+
+Deliverable:
+
+- Group Analysis section with level/scope controls,
+- scope disabled when level is off,
+- no Diagnostics checkbox.
+
+### PR 3 — Group normalization and scope/minimum-condition helpers
+
+- `modules/export_grouping_utils.py`
+- scope helpers in `modules/group_analysis_service.py` (or equivalent helper module)
+- unit tests for `POPULATION` fallback and scope resolution
+
+Deliverable:
+
+- missing groups normalized to `POPULATION`,
+- deterministic scope resolution,
+- skip reasons for non-runnable analysis.
+
+### PR 4 — Core Group Analysis service payload
+
+- `modules/group_analysis_service.py`
+- unit tests for metric identity, spec status, capability, flags, diagnostics payload
+
+Deliverable:
+
+- pure/mostly-pure payload assembly for Light/Standard eligibility and Diagnostics.
+
+### PR 5 — Worksheet writer
+
+- `modules/group_analysis_writer.py`
+- writer-focused tests/snapshots if present in repo style
+
+Deliverable:
+
+- `Group Analysis` (Light + Standard sections),
+- mandatory `Diagnostics` rendering,
+- compact readable layout.
+
+### PR 6 — Export pipeline integration
+
+- `modules/ExportDataThread.py`
+- integration tests for off/light/standard, scope mismatch messages, independence from `Extended plots`
+
+Deliverable:
+
+- end-to-end wiring into export without changing normal export behavior when Group Analysis is off.
+
+### PR 7 — Final stabilization and documentation closeout
+
+- remaining tests/cleanup,
+- remove safe dead paths to legacy writer,
+- update Group Analysis documentation status.
+
+Deliverable:
+
+- implementation complete and documented,
+- clear follow-up queue for deferred items.
+
+### Required closeout update for the last PR
+
+In the final PR of this roadmap, update documentation with a short release-status block that includes:
+
+1. **Implemented in this cycle**
+   - bullet list of completed roadmap PRs and shipped behavior.
+2. **Not implemented (deferred)**
+   - bullet list of explicitly deferred items (for example, metric alias/fuzzy matching).
+3. **Next implementation step**
+   - one concrete next step with target module(s) and test scope.
+
+Suggested location:
+
+- append a "Status after implementation cycle" subsection in this document,
+- optionally mirror a short summary in `docs/group_analysis/codex_group_analysis_instructions.md`.
+
 ---
 
 ## 18. Test plan
