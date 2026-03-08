@@ -6,6 +6,8 @@ from pathlib import Path
 CI_WORKFLOW_PATH = Path('.github/workflows/ci.yml')
 CI_POLICY_PATH = Path('docs/ci-policy.md')
 RC_CHECKLIST_PATH = Path('docs/release_checks/release_candidate_checklist.md')
+RELEASE_STATUS_PATH = Path('docs/release_checks/release_status.md')
+OPEN_TESTING_RUNBOOK_PATH = Path('docs/release_checks/open_testing_runbook.md')
 
 
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
@@ -43,6 +45,16 @@ def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
     )
 
 
+def test_ci_workflow_keeps_manual_smoke_inputs_opt_in_by_default() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+
+    assert 'run_packaging_smoke:' in workflow
+    assert 'description: "Set to 1 to run manual packaging smoke build"' in workflow
+    assert 'run_google_conversion_smoke:' in workflow
+    assert 'description: "Set to 1 to run release-only Google conversion smoke check"' in workflow
+    assert workflow.count('default: "0"') >= 2
+
+
 def test_ci_policy_keeps_manual_smoke_lane_semantics_explicit() -> None:
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
 
@@ -50,3 +62,23 @@ def test_ci_policy_keeps_manual_smoke_lane_semantics_explicit() -> None:
     assert '| Packaging smoke build (release-only) | `packaging-smoke` |' in ci_policy
     assert '| Google conversion smoke (release-only) | `google-conversion-smoke` |' in ci_policy
     assert '**Non-blocking** for regular PRs and pushes' in ci_policy
+
+
+def test_release_status_and_runbook_keep_gate_semantics_aligned() -> None:
+    release_status = RELEASE_STATUS_PATH.read_text(encoding='utf-8')
+    open_testing_runbook = OPEN_TESTING_RUNBOOK_PATH.read_text(encoding='utf-8')
+
+    assert '**PR-blocking CI gates** are defined in [`../ci-policy.md`](../ci-policy.md)' in release_status
+    assert (
+        '**Release-blocking manual evidence gates** are defined in '
+        '[`release_candidate_checklist.md`](./release_candidate_checklist.md)'
+    ) in release_status
+    assert (
+        'Optional/manual workflow-dispatch lanes (`packaging-smoke`, `google-conversion-smoke`) are non-blocking '
+        'for normal PR CI'
+    ) in release_status
+
+    assert (
+        'optional manual smoke evidence collection (`packaging-smoke`, `google-conversion-smoke`)'
+        in open_testing_runbook
+    )
