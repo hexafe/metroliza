@@ -26,6 +26,23 @@ Audit the repo against the implementation plan, then define the next PR sequence
    - Update implementation status sections to reflect true shipped state.
    - Record one concrete next step after Standard plots land.
 
+## PR 1 acceptance criteria (single source of truth)
+
+- [ ] **Standard inserts real plots for eligible metrics.**
+  - Reserved plot-slot placeholder text is removed/replaced for eligible Standard metrics.
+- [ ] **Ineligible plots remain explicitly documented via deterministic skip reason.**
+  - Diagnostics continues to record why each skipped/ineligible Standard plot was not rendered (including histogram/violin omissions where applicable).
+- [ ] **Light/Off behavior unchanged.**
+  - `Light` output remains compact stats + diagnostics only.
+  - `Off` continues to skip Group Analysis generation.
+
+## PR 1 testable outcomes
+
+- [ ] In a `Standard` run with at least one eligible metric, workbook output contains real chart objects for those eligible metrics (no placeholder-only slot text for those metrics).
+- [ ] In a `Standard` run containing known ineligible metrics, Diagnostics includes deterministic, human-readable skip reasons for each skipped plot path.
+- [ ] `Light` runs do not add Standard plot artifacts and continue to generate expected non-plot Group Analysis output.
+- [ ] `Off` runs continue to avoid Group Analysis sheets/output and preserve normal export behavior.
+
 ## Proposed PR sequence
 
 ### PR 1 — Standard plot insertion (code)
