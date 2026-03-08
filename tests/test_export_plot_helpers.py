@@ -200,7 +200,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
-    def test_render_histogram_grouped_mode_uses_secondary_y_axis_and_group_legend(self):
+    def test_render_histogram_ignores_grouped_mode_for_summary_histograms(self):
         histogram_frame = pd.DataFrame(
             {
                 'GROUP': ['A'] * 8 + ['B'] * 6,
@@ -212,16 +212,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         try:
             meta = render_histogram(ax, histogram_frame, group_column='GROUP')
 
-            self.assertTrue(meta['is_grouped'])
-            self.assertEqual(meta['group_labels'], ['A', 'B'])
-            self.assertEqual(len(fig.axes), 2)
-            secondary_axis = fig.axes[1]
-            self.assertIn('Count (B)', secondary_axis.get_ylabel())
-
-            legend = ax.get_legend()
-            self.assertIsNotNone(legend)
-            legend_labels = [text.get_text() for text in legend.get_texts()]
-            self.assertEqual(legend_labels, ['A', 'B'])
+            self.assertFalse(meta['is_grouped'])
+            self.assertEqual(meta['group_labels'], [])
+            self.assertEqual(len(fig.axes), 1)
+            self.assertIsNone(ax.get_legend())
         finally:
             plt.close(fig)
 
@@ -2007,6 +2001,36 @@ class TestExportPlotHelpers(unittest.TestCase):
         labels = [tick.get_text() for tick in ax.get_xticklabels()]
         self.assertEqual(labels, ['A', 'C'])
         self.assertEqual(len(labels), 2)
+
+    def test_group_analysis_histogram_asset_includes_multi_group_legend(self):
+        metric_row = {
+            'metric': 'M2',
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.0, 1.1, 1.2]},
+                    {'group': 'B', 'values': [1.3, 1.4, 1.5]},
+                    {'group': 'C', 'values': [1.6, 1.7, 1.8]},
+                ],
+            },
+        }
+
+        captured_axes = []
+        original_subplots = plt.subplots
+
+        def _capture_subplots(*args, **kwargs):
+            fig, ax = original_subplots(*args, **kwargs)
+            captured_axes.append(ax)
+            return fig, ax
+
+        with mock.patch('modules.ExportDataThread.plt.subplots', side_effect=_capture_subplots):
+            asset = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram')
+
+        self.assertIn('image_data', asset)
+        self.assertEqual(len(captured_axes), 1)
+        legend = captured_axes[0].get_legend()
+        self.assertIsNotNone(legend)
+        labels = [text.get_text() for text in legend.get_texts()]
+        self.assertEqual(labels, ['A', 'B', 'C'])
 
 
     def test_render_tolerance_band_adds_horizontal_patch(self):
