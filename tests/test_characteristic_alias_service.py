@@ -79,6 +79,14 @@ class TestCharacteristicAliasService(unittest.TestCase):
             'UNKNOWN-METRIC',
         )
 
+
+    def test_resolve_returns_original_when_alias_table_is_missing(self):
+        db_path = f"{self.temp_dir.name}/no_alias_schema.sqlite"
+        self.assertEqual(
+            resolve_characteristic_alias('M1 - X', 'REF-001', db_path),
+            'M1 - X',
+        )
+
     def test_upsert_updates_existing_scope_row_and_delete_removes_it(self):
         upsert_characteristic_alias(
             self.db_path,
