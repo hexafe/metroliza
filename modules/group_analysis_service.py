@@ -29,6 +29,15 @@ _SPEC_STATUS_LABELS = {
     'INVALID_SPEC': 'Spec missing / Invalid spec.',
 }
 
+_PLOT_SKIP_REASON_MESSAGES = {
+    'standard_only': 'Standard-level plotting is disabled for Light mode.',
+    'metric_excluded': 'Metric is excluded from Standard analysis by comparability policy.',
+    'insufficient_groups': 'At least 2 groups with numeric data are required.',
+    'low_group_samples': 'At least 3 numeric samples per group are required for violin plots.',
+    'low_total_samples': 'At least 6 total numeric samples are required for histogram plots.',
+    'eligible': 'Eligible',
+}
+
 
 def get_spec_status_label(spec_status):
     """Return user-facing spec status label for worksheets."""
@@ -75,6 +84,43 @@ def build_diagnostics_comment(*, include_metric, allow_pairwise, allow_capabilit
     if not allow_capability:
         return f'Analyzed with caution: {status_label}; capability metrics are disabled.'
     return f'Analyzed: {status_label}; pairwise and capability checks enabled.'
+
+
+def _plot_skip_reason_message(reason):
+    normalized = str(reason or '').strip().lower()
+    return _PLOT_SKIP_REASON_MESSAGES.get(normalized, normalized.replace('_', ' '))
+
+
+def _build_metric_plot_eligibility(*, grouped_values, analysis_level, include_metric):
+    """Return conservative plot-eligibility metadata for worksheet layout and diagnostics."""
+    normalized_level = str(analysis_level or 'light').strip().lower()
+    if normalized_level != 'standard':
+        return {
+            'violin': {'eligible': False, 'skip_reason': 'standard_only'},
+            'histogram': {'eligible': False, 'skip_reason': 'standard_only'},
+        }
+
+    if not include_metric:
+        return {
+            'violin': {'eligible': False, 'skip_reason': 'metric_excluded'},
+            'histogram': {'eligible': False, 'skip_reason': 'metric_excluded'},
+        }
+
+    finite_counts = [int(np.isfinite(np.asarray(values, dtype=float)).sum()) for values in grouped_values.values()]
+    populated_counts = [count for count in finite_counts if count > 0]
+    if len(populated_counts) < 2:
+        return {
+            'violin': {'eligible': False, 'skip_reason': 'insufficient_groups'},
+            'histogram': {'eligible': False, 'skip_reason': 'insufficient_groups'},
+        }
+
+    violin_skip_reason = '' if all(count >= 3 for count in populated_counts) else 'low_group_samples'
+    histogram_skip_reason = '' if sum(populated_counts) >= 6 else 'low_total_samples'
+
+    return {
+        'violin': {'eligible': violin_skip_reason == '', 'skip_reason': violin_skip_reason},
+        'histogram': {'eligible': histogram_skip_reason == '', 'skip_reason': histogram_skip_reason},
+    }
 
 
 def _round_display_value(value, *, precision=3):
@@ -669,17 +715,35 @@ def _build_warning_summary(metric_rows, skipped_metrics):
     }
 
 
-def _build_histogram_skip_summary(*, analysis_level, skipped_metrics):
+def _build_histogram_skip_summary(*, analysis_level, metric_rows, skipped_metrics):
     normalized_level = str(analysis_level or 'light').strip().lower()
+    if normalized_level != 'standard':
+        return {
+            'applies': False,
+            'count': 0,
+            'reason_counts': {},
+        }
+
     reason_counts = {}
+    total_count = 0
+
+    for metric_row in metric_rows:
+        histogram_meta = ((metric_row.get('plot_eligibility') or {}).get('histogram') or {})
+        if bool(histogram_meta.get('eligible')):
+            continue
+        reason = str(histogram_meta.get('skip_reason') or 'unknown')
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        total_count += 1
+
     for skipped in skipped_metrics:
         reason = str(skipped.get('reason') or 'unknown')
         reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        total_count += 1
 
     return {
-        'applies': normalized_level == 'standard',
-        'count': len(skipped_metrics) if normalized_level == 'standard' else 0,
-        'reason_counts': dict(sorted(reason_counts.items())) if normalized_level == 'standard' else {},
+        'applies': True,
+        'count': total_count,
+        'reason_counts': dict(sorted(reason_counts.items())),
     }
 
 
@@ -847,6 +911,7 @@ def build_group_analysis_payload(
         )
         return {
             'status': 'skipped',
+            'analysis_level': normalized_level,
             'effective_scope': effective_scope,
             'skip_reason': readiness['skip_reason'],
             'metric_rows': [],
@@ -936,6 +1001,24 @@ def build_group_analysis_payload(
         )
 
         comparability_summary = build_comparability_summary(spec_status, policy)
+        plot_eligibility = _build_metric_plot_eligibility(
+            grouped_values=grouped_values,
+            analysis_level=normalized_level,
+            include_metric=policy.get('include_metric', True),
+        )
+
+        diagnostics_comment = build_diagnostics_comment(
+            include_metric=policy.get('include_metric', True),
+            allow_pairwise=policy.get('allow_pairwise', False),
+            allow_capability=policy.get('allow_capability', False),
+            spec_status=spec_status,
+            pairwise_rows_count=len(pairwise_rows),
+        )
+        histogram_meta = plot_eligibility.get('histogram') or {}
+        if normalized_level == 'standard' and not bool(histogram_meta.get('eligible')):
+            diagnostics_comment = (
+                f"{diagnostics_comment} Histogram omitted: {_plot_skip_reason_message(histogram_meta.get('skip_reason'))}."
+            )
 
         metrics.append(
             {
@@ -950,13 +1033,8 @@ def build_group_analysis_payload(
                 'analysis_policy': policy,
                 'capability': capability,
                 'comparability_summary': comparability_summary,
-                'diagnostics_comment': build_diagnostics_comment(
-                    include_metric=policy.get('include_metric', True),
-                    allow_pairwise=policy.get('allow_pairwise', False),
-                    allow_capability=policy.get('allow_capability', False),
-                    spec_status=spec_status,
-                    pairwise_rows_count=len(pairwise_rows),
-                ),
+                'plot_eligibility': plot_eligibility,
+                'diagnostics_comment': diagnostics_comment,
             }
         )
         metrics[-1]['insights'] = build_metric_insights(metrics[-1])
@@ -973,6 +1051,7 @@ def build_group_analysis_payload(
         warning_summary=_build_warning_summary(metrics, skipped_metrics),
         histogram_skip_summary=_build_histogram_skip_summary(
             analysis_level=normalized_level,
+            metric_rows=metrics,
             skipped_metrics=skipped_metrics,
         ),
         unmatched_metrics_summary=unmatched_metrics_summary,
@@ -980,6 +1059,7 @@ def build_group_analysis_payload(
 
     return {
         'status': 'ready',
+        'analysis_level': normalized_level,
         'effective_scope': effective_scope,
         'skip_reason': None,
         'metric_rows': metrics,

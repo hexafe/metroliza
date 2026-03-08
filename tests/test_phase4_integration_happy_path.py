@@ -374,31 +374,30 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                     db_path,
                     'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
                 )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                    ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
-                )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                    ('REF-1', '/fake/reports', 'part_2.pdf', '2024-01-02', '2'),
-                )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
-                )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (2, 'X', 10.0, 0.5, -0.5, 0.0, 10.4, 0.4, 0, 'FEATURE_1'),
-                )
+                report_rows = [
+                    (1, 'part_1.pdf', '2024-01-01', '1', 'A', 10.10, 0.10),
+                    (2, 'part_2.pdf', '2024-01-02', '2', 'A', 10.12, 0.12),
+                    (3, 'part_3.pdf', '2024-01-03', '3', 'A', 10.08, 0.08),
+                    (4, 'part_4.pdf', '2024-01-04', '4', 'B', 10.42, 0.42),
+                    (5, 'part_5.pdf', '2024-01-05', '5', 'B', 10.39, 0.39),
+                    (6, 'part_6.pdf', '2024-01-06', '6', 'B', 10.41, 0.41),
+                ]
+                for report_id, filename, report_date, sample_number, _group, meas, dev in report_rows:
+                    execute_with_retry(
+                        db_path,
+                        'INSERT INTO REPORTS (ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?, ?)',
+                        (report_id, 'REF-1', '/fake/reports', filename, report_date, sample_number),
+                    )
+                    execute_with_retry(
+                        db_path,
+                        'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (report_id, 'X', 10.0, 0.5, -0.5, 0.0, meas, dev, 0, 'FEATURE_1'),
+                    )
 
                 grouping_df = pd.DataFrame(
                     [
-                        {'REPORT_ID': 1, 'GROUP': 'A'},
-                        {'REPORT_ID': 2, 'GROUP': 'B'},
+                        {'REPORT_ID': report_id, 'GROUP': group}
+                        for report_id, _filename, _report_date, _sample_number, group, _meas, _dev in report_rows
                     ]
                 )
                 request = ExportRequest(
@@ -421,6 +420,13 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertTrue(any(status in diagnostics_values for status in ('ran', 'skipped')))
                 self.assertIn('Warning summary', diagnostics_values)
                 self.assertIn('Histogram skip summary', diagnostics_values)
+                self.assertIn('Reasons', diagnostics_values)
+                if level == 'standard':
+                    self.assertIn('Applies', diagnostics_values)
+                    self.assertIn('1', diagnostics_values)
+                else:
+                    self.assertIn('Applies', diagnostics_values)
+                    self.assertIn('0', diagnostics_values)
                 self.assertIn('Possible unmatched metrics across references', diagnostics_values)
 
     def test_group_analysis_scope_mismatch_writes_exact_message_and_diagnostics(self):
