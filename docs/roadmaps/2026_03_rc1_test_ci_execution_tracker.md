@@ -198,6 +198,23 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 
 ## 10. Progress Log
 
+- 2026-03-08 — **TCI-007 in-progress follow-up increment completed (cross-doc gate-semantics contract checks).**
+  - Work completed:
+    - Expanded `tests/test_ci_policy_sync.py` with drift-resistant checks covering workflow-dispatch smoke inputs defaulting to opt-in (`default: "0"`) for both manual lanes.
+    - Added policy-sync assertions that `release_status.md` and `open_testing_runbook.md` preserve PR-blocking vs release-blocking semantics and optional smoke evidence framing.
+    - Re-verified coverage visibility and manual-smoke contract checks continue to pass as a single guardrail module.
+  - Changed files:
+    - `tests/test_ci_policy_sync.py`
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `python -m pytest tests/test_ci_policy_sync.py -q`
+  - Docs reviewed/updated:
+    - Reviewed: `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`, `docs/release_checks/release_status.md`, `docs/release_checks/open_testing_runbook.md`, `.github/workflows/ci.yml`, this tracker.
+    - **docs update required and applied**: tracker updated to capture this additional TCI-007 governance-support increment; no wording changes required in policy/runbook/status docs because they are already aligned.
+  - New/remaining risks:
+    - Coverage fail-under threshold decision remains pending completion of the 2-4 week observation window and explicit go/no-go entry from release/test maintainers.
+
+
 
 - 2026-03-08 — **TCI-007 in-progress follow-up increment completed (manual smoke semantics contract coverage)**.
   - Work completed:
