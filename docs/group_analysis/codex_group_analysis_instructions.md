@@ -191,6 +191,12 @@ Optional mirror:
 
 - add a short summary note in this instructions file for future Codex runs.
 
+#### Current cycle status note
+
+- **Implemented in this cycle:** roadmap/closeout documentation alignment and mandatory status-block format.
+- **Deferred (not implemented):** metric alias mapping and fuzzy metric-name matching are out of scope unless separately approved.
+- **Next implementation step:** execute Step 2 (contracts + export request plumbing) and add backward-compatibility validation/tests.
+
 
 ---
 

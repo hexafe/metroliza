@@ -738,6 +738,23 @@ Suggested location:
 - append a "Status after implementation cycle" subsection in this document,
 - optionally mirror a short summary in `docs/group_analysis/codex_group_analysis_instructions.md`.
 
+### 17.2 Status after implementation cycle
+
+#### Implemented in this cycle
+
+- Added roadmap and closeout requirements for incremental delivery via PRs, including a mandatory final documentation status update.
+- Clarified the final-cycle closeout format so implementation completion can be tracked consistently across Codex runs.
+
+#### Not implemented (deferred)
+
+- Metric alias mapping across references remains out of scope for this cycle unless separately approved.
+- Metric-name fuzzy matching / heuristic similarity matching remains out of scope for this cycle unless separately approved.
+- Any enterprise-wide canonical metric-name standardization remains deferred to a later phase.
+
+#### Next implementation step
+
+- Execute **PR 1 — Contracts and request plumbing** by adding and validating `group_analysis_level` and `group_analysis_scope` in `modules/contracts.py` and `modules/export_dialog_service.py`, with backward-compatibility tests.
+
 ---
 
 ## 18. Test plan
