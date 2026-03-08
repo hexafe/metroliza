@@ -2797,6 +2797,7 @@ class ExportDataThread(QThread):
         payload = build_group_analysis_payload(
             grouped_export_df,
             requested_scope=requested_scope,
+            analysis_level=mode,
         )
 
         group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)

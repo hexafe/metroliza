@@ -21,6 +21,8 @@ _SKIP_REASON_MESSAGES = {
     'no_eligible_metrics': 'Group Analysis skipped: no eligible metrics are available.',
 }
 
+_SPEC_STATUSES = ('EXACT_MATCH', 'LIMIT_MISMATCH', 'NOM_MISMATCH', 'INVALID_SPEC')
+
 
 def resolve_group_analysis_scope(requested_scope, reference_count):
     """Resolve effective Group Analysis scope from user selection and reference count."""
@@ -74,15 +76,59 @@ def classify_spec_status(spec_payload):
     nominal = spec_payload.get('nominal')
     usl = spec_payload.get('usl')
 
-    if lsl is None and nominal is None and usl is None:
-        return 'missing'
     if lsl is None or nominal is None or usl is None:
-        return 'partial'
+        return 'INVALID_SPEC'
     if lsl > usl:
-        return 'invalid_bounds'
+        return 'INVALID_SPEC'
     if not (lsl <= nominal <= usl):
-        return 'nominal_outside_bounds'
-    return 'complete'
+        return 'INVALID_SPEC'
+    return 'EXACT_MATCH'
+
+
+def classify_metric_spec_status(metric_rows_df, spec_columns):
+    """Classify a metric's cross-row spec comparability status."""
+    normalized_specs = []
+    for _, row in metric_rows_df.iterrows():
+        normalized_specs.append(
+            normalize_spec_limits(
+                row[spec_columns['lsl']] if spec_columns['lsl'] else None,
+                row[spec_columns['nominal']] if spec_columns['nominal'] else None,
+                row[spec_columns['usl']] if spec_columns['usl'] else None,
+            )
+        )
+
+    if not normalized_specs:
+        return 'INVALID_SPEC', {'lsl': None, 'nominal': None, 'usl': None}
+
+    if any(classify_spec_status(spec) == 'INVALID_SPEC' for spec in normalized_specs):
+        return 'INVALID_SPEC', normalized_specs[0]
+
+    unique_nominals = {spec['nominal'] for spec in normalized_specs}
+    unique_limits = {(spec['lsl'], spec['usl']) for spec in normalized_specs}
+    canonical_spec = normalized_specs[0]
+
+    if len(unique_nominals) > 1:
+        return 'NOM_MISMATCH', canonical_spec
+    if len(unique_limits) > 1:
+        return 'LIMIT_MISMATCH', canonical_spec
+    return 'EXACT_MATCH', canonical_spec
+
+
+def _resolve_analysis_policy(spec_status, analysis_level):
+    """Resolve level-aware comparability behavior for a metric."""
+    normalized_level = str(analysis_level or 'light').strip().lower()
+    if normalized_level == 'standard':
+        return {
+            'include_metric': spec_status == 'EXACT_MATCH',
+            'allow_pairwise': spec_status == 'EXACT_MATCH',
+            'allow_capability': spec_status == 'EXACT_MATCH',
+        }
+
+    return {
+        'include_metric': True,
+        'allow_pairwise': spec_status in {'EXACT_MATCH', 'LIMIT_MISMATCH'},
+        'allow_capability': spec_status == 'EXACT_MATCH',
+    }
 
 
 def compute_group_descriptive_stats(grouped_values):
@@ -148,6 +194,8 @@ def compute_capability_payload(values, spec_payload):
     status = 'ok' if cp_value is not None or cpk_value is not None else 'not_applicable'
     return {
         'cp': cp_value,
+        'capability': cpk_value,
+        'capability_type': 'Cpk',
         'cpk': cpk_value,
         'status': status,
         'sigma': sigma,
@@ -165,12 +213,19 @@ def build_group_analysis_diagnostics_payload(
     skip_reason=None,
 ):
     """Build diagnostics payload for worksheet rendering and debugging."""
+    status_counts = {status: 0 for status in _SPEC_STATUSES}
+    for row in metric_rows:
+        status = str(row.get('spec_status') or '').upper()
+        if status in status_counts:
+            status_counts[status] += 1
+
     return {
         'requested_scope': str(requested_scope or 'auto').strip().lower(),
         'effective_scope': effective_scope,
         'reference_count': int(reference_count),
         'metric_count': len(metric_rows),
         'skipped_metric_count': len(skipped_metrics),
+        'status_counts': status_counts,
         'skip_reason': skip_reason,
         'metrics': metric_rows,
         'skipped_metrics': skipped_metrics,
@@ -267,6 +322,7 @@ def build_group_analysis_payload(
     eligible_metrics=None,
     alpha=0.05,
     correction_method='holm',
+    analysis_level='light',
 ):
     """Assemble metric-level Group Analysis payload for writer modules."""
     if not isinstance(grouped_df, pd.DataFrame):
@@ -336,21 +392,36 @@ def build_group_analysis_payload(
             skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups'})
             continue
 
-        spec_payload = normalize_spec_limits(
-            metric_rows_df[spec_columns['lsl']].iloc[0] if spec_columns['lsl'] else None,
-            metric_rows_df[spec_columns['nominal']].iloc[0] if spec_columns['nominal'] else None,
-            metric_rows_df[spec_columns['usl']].iloc[0] if spec_columns['usl'] else None,
-        )
-        spec_status = classify_spec_status(spec_payload)
+        spec_status, spec_payload = classify_metric_spec_status(metric_rows_df, spec_columns)
+        policy = _resolve_analysis_policy(spec_status, analysis_level)
+        if not policy['include_metric']:
+            skipped_metrics.append({'metric': metric_identity, 'reason': spec_status.lower()})
+            continue
 
         descriptive_stats = compute_group_descriptive_stats(grouped_values)
         all_metric_values = np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
-        capability = compute_capability_payload(all_metric_values, spec_payload)
-        pairwise_rows = compute_pairwise_rows(
-            metric_identity,
-            grouped_values,
-            alpha=alpha,
-            correction_method=correction_method,
+        capability = (
+            compute_capability_payload(all_metric_values, spec_payload)
+            if policy['allow_capability']
+            else {
+                'cp': None,
+                'capability': None,
+                'capability_type': None,
+                'cpk': None,
+                'status': 'not_applicable',
+                'sigma': float(np.std(all_metric_values, ddof=1)) if all_metric_values.size > 1 else 0.0,
+                'mean': float(np.mean(all_metric_values)) if all_metric_values.size else None,
+            }
+        )
+        pairwise_rows = (
+            compute_pairwise_rows(
+                metric_identity,
+                grouped_values,
+                alpha=alpha,
+                correction_method=correction_method,
+            )
+            if policy['allow_pairwise']
+            else []
         )
 
         metrics.append(
@@ -362,6 +433,7 @@ def build_group_analysis_payload(
                 'pairwise_rows': pairwise_rows,
                 'spec': spec_payload,
                 'spec_status': spec_status,
+                'analysis_policy': policy,
                 'capability': capability,
             }
         )
