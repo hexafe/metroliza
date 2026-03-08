@@ -127,7 +127,7 @@ def _apply_spec_status_and_flag_formats(worksheet, bounds):
     _apply_conditional(worksheet, first, standard_col, last, standard_col, _style_rule(formats, 'no', type='text', criteria='containing', value='NO'))
 
 
-def _write_metric_section(worksheet, row, metric_row):
+def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
     row = _write_section_title(worksheet, row, f"Metric: {metric_row.get('metric', 'Unknown')}")
 
     spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
@@ -193,11 +193,36 @@ def _write_metric_section(worksheet, row, metric_row):
     worksheet.write(row, 0, 'Comment')
     worksheet.write(row, 1, concise_line)
     row += 1
+
+    plot_eligibility = metric_row.get('plot_eligibility') or {}
+    analysis_level = str(metric_row.get('analysis_level') or '').strip().lower()
+    if analysis_level == 'standard':
+        metric_assets = {}
+        if isinstance(plot_assets, dict):
+            metric_assets = (plot_assets.get('metrics') or {}).get(metric_row.get('metric'), {}) or {}
+        row += SECTION_GAP
+        row = _write_section_title(worksheet, row, 'Standard plot slots')
+        plot_rows = [
+            {
+                'Plot': 'Violin',
+                'Eligible': 'YES' if bool((plot_eligibility.get('violin') or {}).get('eligible')) else 'NO',
+                'Skip reason': (plot_eligibility.get('violin') or {}).get('skip_reason') or 'none',
+                'Reserved block': str(metric_assets.get('violin') or 'Reserved (future chart insertion)'),
+            },
+            {
+                'Plot': 'Histogram',
+                'Eligible': 'YES' if bool((plot_eligibility.get('histogram') or {}).get('eligible')) else 'NO',
+                'Skip reason': (plot_eligibility.get('histogram') or {}).get('skip_reason') or 'none',
+                'Reserved block': str(metric_assets.get('histogram') or 'Reserved (future chart insertion)'),
+            },
+        ]
+        row = _write_table(worksheet, row, ['Plot', 'Eligible', 'Skip reason', 'Reserved block'], plot_rows)
+
     row += SECTION_GAP
     return row
 
 
-def write_group_analysis_sheet(worksheet, payload):
+def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
     """Write compact metric-level Group Analysis output into a worksheet."""
     row = 0
     row = _write_section_title(worksheet, row, 'Group Analysis')
@@ -211,8 +236,11 @@ def write_group_analysis_sheet(worksheet, payload):
     row = _write_table(worksheet, row, ['Field', 'Value'], summary_rows)
     row += SECTION_GAP
 
+    normalized_level = str(payload.get('analysis_level') or 'light').strip().lower()
     for metric_row in payload.get('metric_rows', []):
-        row = _write_metric_section(worksheet, row, metric_row)
+        metric_with_level = dict(metric_row)
+        metric_with_level['analysis_level'] = normalized_level
+        row = _write_metric_section(worksheet, row, metric_with_level, plot_assets=plot_assets)
 
     worksheet.freeze_panes(1, 0)
 

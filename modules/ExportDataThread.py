@@ -2810,7 +2810,16 @@ class ExportDataThread(QThread):
             short_message = str(skip_reason.get('message') or 'Group Analysis skipped.')
             self._write_group_analysis_message_sheet(group_worksheet, short_message)
         else:
-            write_group_analysis_sheet(group_worksheet, payload)
+            plot_assets = {
+                'metrics': {
+                    metric_row.get('metric'): {
+                        'violin': 'Reserved (standard-only plot insertion point)',
+                        'histogram': 'Reserved (standard-only plot insertion point)',
+                    }
+                    for metric_row in payload.get('metric_rows', [])
+                }
+            }
+            write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
 
         diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
         diagnostics_worksheet = workbook.add_worksheet(diagnostics_sheet_name)

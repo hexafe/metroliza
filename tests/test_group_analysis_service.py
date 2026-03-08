@@ -332,6 +332,33 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(skipped_row['included_in_standard'], 'NO')
         self.assertIn('Skipped in Standard', skipped_row['comment'])
 
+    def test_standard_level_includes_histogram_skip_reason_for_included_metrics(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1', 'R1', 'R1', 'R1'],
+                'HEADER - AX': ['M1', 'M1', 'M1', 'M1'],
+                'GROUP': ['A', 'A', 'B', 'B'],
+                'MEAS': [10.0, 10.2, 9.7, 9.6],
+                'LSL': [9.0, 9.0, 9.0, 9.0],
+                'NOMINAL': [10.0, 10.0, 10.0, 10.0],
+                'USL': [11.0, 11.0, 11.0, 11.0],
+            }
+        )
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='standard')
+
+        self.assertEqual(payload['status'], 'ready')
+        self.assertEqual(payload['analysis_level'], 'standard')
+        self.assertEqual(len(payload['metric_rows']), 1)
+        metric = payload['metric_rows'][0]
+        self.assertFalse(metric['plot_eligibility']['violin']['eligible'])
+        self.assertEqual(metric['plot_eligibility']['violin']['skip_reason'], 'low_group_samples')
+        self.assertFalse(metric['plot_eligibility']['histogram']['eligible'])
+        self.assertEqual(metric['plot_eligibility']['histogram']['skip_reason'], 'low_total_samples')
+        self.assertIn('Histogram omitted', metric['diagnostics_comment'])
+        self.assertEqual(payload['diagnostics']['histogram_skip_summary']['count'], 1)
+        self.assertEqual(payload['diagnostics']['histogram_skip_summary']['reason_counts'], {'low_total_samples': 1})
+
     def test_diagnostics_include_warning_and_unmatched_reference_summaries(self):
         grouped_df = pd.DataFrame(
             {

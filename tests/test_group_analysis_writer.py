@@ -38,6 +38,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         worksheet = FakeWorksheet()
         payload = {
             'status': 'ready',
+            'analysis_level': 'standard',
             'effective_scope': 'single_reference',
             'metric_rows': [
                 {
@@ -92,6 +93,10 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'comment': 'USE CAUTION',
                         }
                     ],
+                    'plot_eligibility': {
+                        'violin': {'eligible': True, 'skip_reason': ''},
+                        'histogram': {'eligible': False, 'skip_reason': 'low_total_samples'},
+                    },
                     'insights': ['Line 1', 'Line 2'],
                 }
             ],
@@ -112,6 +117,10 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Difference', values)
         self.assertIn('YES', values)
         self.assertIn('USE CAUTION', values)
+        self.assertIn('Standard plot slots', values)
+        self.assertIn('Violin', values)
+        self.assertIn('Histogram', values)
+        self.assertIn('low_total_samples', values)
         text_values = [str(value).upper() for value in values]
         self.assertNotIn('TRUE', text_values)
         self.assertNotIn('FALSE', text_values)
