@@ -23,6 +23,7 @@ class FakeWorksheet:
         self.book = FakeWorkbook()
         self.conditional_formats = []
         self.images = []
+        self.charts = []
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
@@ -35,6 +36,9 @@ class FakeWorksheet:
 
     def insert_image(self, row, col, path, options=None):
         self.images.append((row, col, path, dict(options or {})))
+
+    def insert_chart(self, row, col, chart):
+        self.charts.append((row, col, chart))
 
 
 class TestGroupAnalysisWriter(unittest.TestCase):
@@ -288,6 +292,11 @@ class TestGroupAnalysisWriter(unittest.TestCase):
 
         inserted_paths = [entry[2] for entry in worksheet.images]
         self.assertEqual(inserted_paths, ['violin.png', 'histogram.png'])
+        self.assertEqual(len(worksheet.charts), 0)
+
+        values = [value for _, _, value in worksheet.writes]
+        self.assertGreaterEqual(values.count('INSERTED'), 2)
+        self.assertGreaterEqual(values.count('Chart inserted'), 2)
 
         m2_metric_row = next(
             row
@@ -299,6 +308,44 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         values = [value for _, _, value in worksheet.writes]
         self.assertIn('asset_missing', values)
         self.assertIn('low_group_samples', values)
+
+    def test_standard_level_ineligible_plots_emit_explicit_skip_reasons(self):
+        worksheet = FakeWorksheet()
+        payload = {
+            'status': 'ready',
+            'analysis_level': 'standard',
+            'effective_scope': 'single_reference',
+            'metric_rows': [
+                {
+                    'metric': 'M1',
+                    'group_count': 2,
+                    'spec_status': 'EXACT_MATCH',
+                    'descriptive_stats': [],
+                    'pairwise_rows': [],
+                    'insights': ['M1 insight'],
+                    'plot_eligibility': {
+                        'violin': {'eligible': False, 'skip_reason': 'low_group_samples'},
+                        'histogram': {'eligible': False, 'skip_reason': 'low_total_samples'},
+                    },
+                }
+            ],
+        }
+
+        write_group_analysis_sheet(worksheet, payload, plot_assets={'metrics': {'M1': {}}})
+
+        self.assertEqual(worksheet.images, [])
+        self.assertEqual(worksheet.charts, [])
+
+        plot_rows = {
+            label: (status, detail)
+            for row, col, label in worksheet.writes
+            if col == 0 and label in {'Violin', 'Histogram'}
+            for _, status_col, status in [next(w for w in worksheet.writes if w[0] == row and w[1] == 1)]
+            for _, detail_col, detail in [next(w for w in worksheet.writes if w[0] == row and w[1] == 2)]
+            if status_col == 1 and detail_col == 2
+        }
+        self.assertEqual(plot_rows['Violin'], ('SKIPPED', 'low_group_samples'))
+        self.assertEqual(plot_rows['Histogram'], ('SKIPPED', 'low_total_samples'))
 
 
 if __name__ == '__main__':
