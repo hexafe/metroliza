@@ -193,9 +193,9 @@ Optional mirror:
 
 #### Current cycle status note
 
-- **Implemented in this cycle:** contracts/UI/request plumbing, service/writer baseline, export integration for Off/Light/Standard with diagnostics and scope-mismatch handling, and spec-aligned flag semantics (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`) with tests.
-- **Deferred (not implemented):** full Standard chart insertion, plus long-term alias/fuzzy metric matching.
-- **Next implementation step:** implement Standard-mode chart insertion for eligible metrics, then run a final docs/todo closeout PR.
+- **Implemented in this cycle:** contracts/UI/request plumbing, service/writer baseline, export integration for Off/Light/Standard with diagnostics and scope-mismatch handling, spec-aligned flag semantics (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`) with tests, and Standard-mode chart insertion for eligible metrics.
+- **Deferred (not implemented):** long-term alias/fuzzy/canonical metric matching across references.
+- **Next implementation step:** design and implement a deterministic alias/canonical metric mapping strategy in `modules/group_analysis_service.py` (plus diagnostics/writer test coverage) for multi-reference datasets.
 
 
 ---

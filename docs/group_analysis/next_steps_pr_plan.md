@@ -13,57 +13,37 @@ Audit the repo against the implementation plan, then define the next PR sequence
 | Export integration | Off/Light/Standard flow, scope mismatch messaging, diagnostics always written | Implemented in `ExportDataThread` + integration coverage | ✅ Done |
 | Service/writer architecture | New service + writer path active, legacy writer not extended | Implemented (`group_analysis_service.py`, `group_analysis_writer.py`) | ✅ Done |
 | Flag semantics parity | `LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?` end-to-end | Implemented in service + writer conditional formatting + tests | ✅ Done |
-| Standard plots | Standard should insert real eligible plots (not placeholders) | **Not complete**: still writes reserved plot-slot text/placeholders | ❌ Open |
-| Final docs closeout | Status + next-step wording reflects shipped behavior | Needs refresh now that flags are complete | ⚠️ Needs update |
+| Standard plots | Standard should insert real eligible plots (not placeholders) | Implemented with real chart insertion for eligible metrics | ✅ Done |
+| Final docs closeout | Status + next-step wording reflects shipped behavior | Updated to match shipped behavior and post-cycle follow-up | ✅ Done |
 
 ## Remaining scope (active TODO only)
 
-1. **Standard plot delivery beyond placeholders**
-   - Replace reserved plot-slot text with real chart insertion for eligible Standard metrics.
-   - Keep deterministic eligibility and diagnostics skip reasons.
-
-2. **Final documentation and TODO closeout (last PR)**
+1. **Final documentation and TODO closeout (this PR)**
    - Update implementation status sections to reflect true shipped state.
-   - Record one concrete next step after Standard plots land.
+   - Record one concrete post-plot next step.
 
-## PR 1 acceptance criteria (single source of truth)
+2. **Post-cycle functional follow-up**
+   - Define an alias/canonical metric mapping approach for multi-reference comparisons.
+   - Preserve deterministic diagnostics and explicit comparability labeling when aliases are applied.
 
-- [ ] **Standard inserts real plots for eligible metrics.**
-  - Reserved plot-slot placeholder text is removed/replaced for eligible Standard metrics.
-- [ ] **Ineligible plots remain explicitly documented via deterministic skip reason.**
-  - Diagnostics continues to record why each skipped/ineligible Standard plot was not rendered (including histogram/violin omissions where applicable).
-- [ ] **Light/Off behavior unchanged.**
-  - `Light` output remains compact stats + diagnostics only.
-  - `Off` continues to skip Group Analysis generation.
+## PR acceptance criteria (single source of truth)
 
-## PR 1 testable outcomes
+- [ ] **Docs status mirrors shipped behavior.**
+  - Standard chart insertion is marked implemented (not deferred).
+- [ ] **Deferred scope is explicit and accurate.**
+  - Alias/fuzzy/canonical metric matching remains clearly listed as deferred.
+- [ ] **One concrete next follow-up is captured.**
+  - Next item identifies a specific post-cycle target and module/test direction.
 
-- [ ] In a `Standard` run with at least one eligible metric, workbook output contains real chart objects for those eligible metrics (no placeholder-only slot text for those metrics).
-- [ ] In a `Standard` run containing known ineligible metrics, Diagnostics includes deterministic, human-readable skip reasons for each skipped plot path.
-- [ ] `Light` runs do not add Standard plot artifacts and continue to generate expected non-plot Group Analysis output.
-- [ ] `Off` runs continue to avoid Group Analysis sheets/output and preserve normal export behavior.
+## PR testable outcomes
+
+- [ ] `group_analysis_spec_and_implementation_plan.md` “Status after implementation cycle” lists Standard plot insertion under implemented items and keeps only true deferred items.
+- [ ] `next_steps_pr_plan.md` checklist marks Standard plot PR complete and identifies the next concrete follow-up item.
+- [ ] `codex_group_analysis_instructions.md` current-cycle status note mirrors shipped behavior and the same next step.
 
 ## Proposed PR sequence
 
-### PR 1 — Standard plot insertion (code)
-
-**Target files**
-- `modules/group_analysis_writer.py`
-- `modules/ExportDataThread.py` (if plot assets/plumbing need extension)
-- `modules/group_analysis_service.py` (only if payload metadata needs extension)
-- tests in:
-  - `tests/test_group_analysis_writer.py`
-  - `tests/test_group_analysis_service.py`
-  - `tests/test_export_data_thread_group_analysis.py`
-
-**Definition of done**
-- Standard mode inserts real charts for eligible metrics.
-- Histogram/violin skips remain deterministic and visible in diagnostics.
-- Light mode and non-Group-Analysis export behavior remain unchanged.
-
----
-
-### PR 2 — Docs/todo closeout (must be last PR)
+### PR 1 — Docs/todo closeout (this PR)
 
 **Target files**
 - `docs/group_analysis/group_analysis_spec_and_implementation_plan.md`
@@ -72,14 +52,15 @@ Audit the repo against the implementation plan, then define the next PR sequence
 
 **Definition of done**
 - Docs clearly separate implemented vs deferred work.
-- TODO checklist reflects only post-plot remaining work.
-- One concrete next implementation step is recorded.
+- Standard plot completion is reflected across status/checklist sections.
+- One concrete post-cycle next step is recorded.
 
 ## TODO checklist
 
-- [ ] PR 1: deliver Standard plot insertion beyond placeholders.
-- [ ] PR 2 (last PR): update plan/status/todo docs to match shipped behavior.
+- [x] PR 1: deliver Standard plot insertion beyond placeholders.
+- [x] PR 2 (last PR): update plan/status/todo docs to match shipped behavior.
+- [ ] Next follow-up: design and implement alias/canonical metric matching strategy for multi-reference analysis.
 
 ## Sequencing rationale
 
-The largest functional gap is Standard chart insertion. Close that first in code, then run a final documentation/todo PR so the roadmap reflects the true end-of-cycle state.
+Standard chart insertion is now closed; this docs closeout aligns roadmap/status text with shipped behavior and leaves a single concrete follow-up (alias/canonical metric matching) for the next implementation cycle.
