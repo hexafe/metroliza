@@ -2804,6 +2804,48 @@ class ExportDataThread(QThread):
                     ax.violinplot(grouped_values, showmeans=False, showmedians=True, showextrema=False, positions=positions)
                     ax.set_xticks(list(positions))
                     ax.set_xticklabels(group_labels)
+
+                nominal_value = spec_limits.get('nominal')
+                lsl_value = spec_limits.get('lsl')
+                usl_value = spec_limits.get('usl')
+                render_spec_reference_lines(
+                    ax,
+                    nominal_value,
+                    lsl_value,
+                    usl_value,
+                    orientation='horizontal',
+                    include_nominal=nominal_value is not None,
+                )
+
+                annotation_transform = mtransforms.blended_transform_factory(ax.transAxes, ax.transData)
+                annotation_specs = (
+                    ('USL', usl_value, SUMMARY_PLOT_PALETTE['spec_limit'], (6, 8)),
+                    ('Nominal', nominal_value, SUMMARY_PLOT_PALETTE['annotation_emphasis'], (6, 0)),
+                    ('LSL', lsl_value, SUMMARY_PLOT_PALETTE['spec_limit'], (6, -8)),
+                )
+                annotation_box = {
+                    'boxstyle': 'round,pad=0.16',
+                    'fc': 'white',
+                    'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                    'alpha': 0.82,
+                    'linewidth': 0.6,
+                }
+                for label, limit_value, color, offset in annotation_specs:
+                    if limit_value is None:
+                        continue
+                    ax.annotate(
+                        f"{label}={float(limit_value):.3f}",
+                        xy=(1.0, float(limit_value)),
+                        xycoords=annotation_transform,
+                        textcoords='offset points',
+                        xytext=offset,
+                        ha='left',
+                        va='center',
+                        color=color,
+                        fontsize=7.0,
+                        bbox=annotation_box,
+                        clip_on=False,
+                    )
                 ax.set_title(f"{metric_row.get('metric')} - Violin")
             elif plot_key == 'histogram':
                 all_values = np.concatenate(grouped_values)
@@ -2825,18 +2867,19 @@ class ExportDataThread(QThread):
                         label=label,
                     )
                 ax.legend(loc='upper left', frameon=True, fontsize=7.0)
+
+                for limit_key, style in (
+                    ('lsl', {'linestyle': '--', 'color': '#B45309'}),
+                    ('nominal', {'linestyle': ':', 'color': '#0F766E'}),
+                    ('usl', {'linestyle': '--', 'color': '#B45309'}),
+                ):
+                    limit_value = spec_limits.get(limit_key)
+                    if limit_value is not None:
+                        ax.axvline(float(limit_value), linewidth=1.0, alpha=0.9, **style)
+
                 ax.set_title(f"{metric_row.get('metric')} - Histogram")
             else:
                 return {}
-
-            for limit_key, style in (
-                ('lsl', {'linestyle': '--', 'color': '#B45309'}),
-                ('nominal', {'linestyle': ':', 'color': '#0F766E'}),
-                ('usl', {'linestyle': '--', 'color': '#B45309'}),
-            ):
-                limit_value = spec_limits.get(limit_key)
-                if limit_value is not None:
-                    ax.axvline(float(limit_value), linewidth=1.0, alpha=0.9, **style)
 
             ax.grid(axis='y', alpha=0.25)
             fig.tight_layout()
