@@ -3,6 +3,10 @@ import tempfile
 import types
 import unittest
 import zipfile
+import xml.etree.ElementTree as ET
+
+import pandas as pd
+
 from pathlib import Path
 
 from modules.db import execute_with_retry  # noqa: E402
@@ -54,6 +58,64 @@ sys.modules['modules.CMMReportParser'] = cmm_parser_stub
 from modules.ExportDataThread import ExportDataThread, build_export_dataframe, execute_export_query  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 from modules.ParseReportsThread import parse_new_reports  # noqa: E402
+
+
+def _xlsx_sheet_names(xlsx_path):
+    with zipfile.ZipFile(xlsx_path, 'r') as workbook_zip:
+        workbook_xml = ET.fromstring(workbook_zip.read('xl/workbook.xml'))
+    ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    return [sheet.attrib.get('name') for sheet in workbook_xml.findall('x:sheets/x:sheet', ns)]
+
+
+def _xlsx_sheet_text_values(xlsx_path, target_sheet_name):
+    ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    ns_rel = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+
+    with zipfile.ZipFile(xlsx_path, 'r') as workbook_zip:
+        workbook_xml = ET.fromstring(workbook_zip.read('xl/workbook.xml'))
+        workbook_rels = ET.fromstring(workbook_zip.read('xl/_rels/workbook.xml.rels'))
+
+        shared_strings = []
+        if 'xl/sharedStrings.xml' in workbook_zip.namelist():
+            sst = ET.fromstring(workbook_zip.read('xl/sharedStrings.xml'))
+            for si in sst.findall('x:si', ns_main):
+                text_parts = [node.text or '' for node in si.findall('.//x:t', ns_main)]
+                shared_strings.append(''.join(text_parts))
+
+        rel_map = {rel.attrib['Id']: rel.attrib['Target'] for rel in workbook_rels.findall('r:Relationship', ns_rel)}
+        sheet_path = None
+        for sheet in workbook_xml.findall('x:sheets/x:sheet', ns_main):
+            if sheet.attrib.get('name') != target_sheet_name:
+                continue
+            rel_id = sheet.attrib.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+            target = rel_map.get(rel_id, '')
+            sheet_path = f"xl/{target}" if not target.startswith('xl/') else target
+            break
+
+        if not sheet_path:
+            return []
+
+        sheet_xml = ET.fromstring(workbook_zip.read(sheet_path))
+        values = []
+        for cell in sheet_xml.findall('.//x:c', ns_main):
+            cell_type = cell.attrib.get('t')
+            if cell_type == 's':
+                idx_node = cell.find('x:v', ns_main)
+                if idx_node is not None and idx_node.text and idx_node.text.isdigit():
+                    idx = int(idx_node.text)
+                    if 0 <= idx < len(shared_strings):
+                        values.append(shared_strings[idx])
+            elif cell_type == 'inlineStr':
+                text_node = cell.find('x:is/x:t', ns_main)
+                if text_node is not None and text_node.text is not None:
+                    values.append(text_node.text)
+            else:
+                value_node = cell.find('x:v', ns_main)
+                if value_node is not None and value_node.text is not None:
+                    values.append(value_node.text)
+
+        return values
+
 
 
 class _FakeParser:
@@ -260,6 +322,199 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 any('<v>10.1</v>' in sheet_xml and '<v>10.2</v>' in sheet_xml for sheet_xml in sheet_xml_candidates),
                 msg='Expected exported measurement values were not found in worksheet XML payload.',
             )
+
+
+    def test_group_analysis_level_off_emits_no_group_analysis_sheets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+            out_path = str(Path(temp_dir) / 'export.xlsx')
+
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
+            )
+
+            request = ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file=out_path),
+                options=ExportOptions(generate_summary_sheet=False, group_analysis_level='off'),
+            )
+            thread = ExportDataThread(request)
+            completed = thread.get_export_backend().run(thread)
+
+            self.assertTrue(completed)
+            sheet_names = _xlsx_sheet_names(out_path)
+            self.assertNotIn('Group Analysis', sheet_names)
+            self.assertNotIn('Diagnostics', sheet_names)
+
+    def test_group_analysis_light_and_standard_emit_analysis_and_diagnostics(self):
+        for level in ('light', 'standard'):
+            with self.subTest(level=level), tempfile.TemporaryDirectory() as temp_dir:
+                db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+                out_path = str(Path(temp_dir) / f'export_{level}.xlsx')
+
+                execute_with_retry(
+                    db_path,
+                    'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
+                )
+                execute_with_retry(
+                    db_path,
+                    'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                    ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                    ('REF-1', '/fake/reports', 'part_2.pdf', '2024-01-02', '2'),
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (2, 'X', 10.0, 0.5, -0.5, 0.0, 10.4, 0.4, 0, 'FEATURE_1'),
+                )
+
+                grouping_df = pd.DataFrame(
+                    [
+                        {'REPORT_ID': 1, 'GROUP': 'A'},
+                        {'REPORT_ID': 2, 'GROUP': 'B'},
+                    ]
+                )
+                request = ExportRequest(
+                    paths=AppPaths(db_file=db_path, excel_file=out_path),
+                    options=ExportOptions(generate_summary_sheet=False, group_analysis_level=level),
+                    grouping_df=grouping_df,
+                )
+                thread = ExportDataThread(request)
+                completed = thread.get_export_backend().run(thread)
+
+                self.assertTrue(completed)
+                sheet_names = _xlsx_sheet_names(out_path)
+                self.assertIn('Group Analysis', sheet_names)
+                self.assertIn('Diagnostics', sheet_names)
+
+    def test_group_analysis_scope_mismatch_writes_message_and_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+            out_path = str(Path(temp_dir) / 'export.xlsx')
+
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                ('REF-1', '/fake/reports', 'part_2.pdf', '2024-01-02', '2'),
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
+            )
+            execute_with_retry(
+                db_path,
+                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (2, 'X', 10.0, 0.5, -0.5, 0.0, 10.2, 0.2, 0, 'FEATURE_1'),
+            )
+
+            request = ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file=out_path),
+                options=ExportOptions(
+                    generate_summary_sheet=False,
+                    group_analysis_level='light',
+                    group_analysis_scope='multi_reference',
+                ),
+            )
+            thread = ExportDataThread(request)
+            completed = thread.get_export_backend().run(thread)
+
+            self.assertTrue(completed)
+            sheet_names = _xlsx_sheet_names(out_path)
+            self.assertIn('Group Analysis', sheet_names)
+            self.assertIn('Diagnostics', sheet_names)
+            values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+            self.assertTrue(any('Scope mismatch:' in value for value in values))
+
+    def test_group_analysis_independent_from_extended_plots_toggle(self):
+        for summary_enabled in (False, True):
+            with self.subTest(generate_summary_sheet=summary_enabled), tempfile.TemporaryDirectory() as temp_dir:
+                db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+                out_path = str(Path(temp_dir) / 'export.xlsx')
+
+                execute_with_retry(
+                    db_path,
+                    'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
+                )
+                execute_with_retry(
+                    db_path,
+                    'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                    ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                    ('REF-1', '/fake/reports', 'part_2.pdf', '2024-01-02', '2'),
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (2, 'X', 10.0, 0.5, -0.5, 0.0, 10.2, 0.2, 0, 'FEATURE_1'),
+                )
+
+                request = ExportRequest(
+                    paths=AppPaths(db_file=db_path, excel_file=out_path),
+                    options=ExportOptions(
+                        generate_summary_sheet=summary_enabled,
+                        group_analysis_level='off',
+                    ),
+                )
+                thread = ExportDataThread(request)
+                completed = thread.get_export_backend().run(thread)
+
+                self.assertTrue(completed)
+                sheet_names = _xlsx_sheet_names(out_path)
+                self.assertNotIn('Group Analysis', sheet_names)
+                self.assertNotIn('Diagnostics', sheet_names)
 
 
 if __name__ == '__main__':
