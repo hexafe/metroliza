@@ -22,6 +22,59 @@ _SKIP_REASON_MESSAGES = {
 }
 
 _SPEC_STATUSES = ('EXACT_MATCH', 'LIMIT_MISMATCH', 'NOM_MISMATCH', 'INVALID_SPEC')
+_SPEC_STATUS_LABELS = {
+    'EXACT_MATCH': 'Exact match',
+    'LIMIT_MISMATCH': 'Limits differ',
+    'NOM_MISMATCH': 'Nominal differs',
+    'INVALID_SPEC': 'Spec missing / Invalid spec.',
+}
+
+
+def get_spec_status_label(spec_status):
+    """Return user-facing spec status label for worksheets."""
+    status = str(spec_status or '').strip().upper()
+    return _SPEC_STATUS_LABELS.get(status, _SPEC_STATUS_LABELS['INVALID_SPEC'])
+
+
+def _normalize_spec_status_key(value):
+    status = str(value or '').strip().upper()
+    return status if status in _SPEC_STATUS_LABELS else 'INVALID_SPEC'
+
+
+def _status_to_skip_reason(status):
+    mapping = {
+        'EXACT_MATCH': '',
+        'LIMIT_MISMATCH': 'limit_mismatch',
+        'NOM_MISMATCH': 'nom_mismatch',
+        'INVALID_SPEC': 'invalid_spec',
+    }
+    return mapping.get(_normalize_spec_status_key(status), 'invalid_spec')
+
+
+def build_diagnostics_comment(*, include_metric, allow_pairwise, allow_capability, spec_status, pairwise_rows_count=0, skipped_reason=None):
+    """Return explanatory diagnostics comment for analyzed or skipped metrics."""
+    if skipped_reason:
+        reason = str(skipped_reason).strip().lower()
+        if reason == 'insufficient_groups':
+            return 'Skipped: fewer than 2 groups have numeric data.'
+        if reason == 'nom_mismatch':
+            return 'Skipped in Standard: nominal values differ across groups.'
+        if reason == 'limit_mismatch':
+            return 'Skipped in Standard: specification limits differ across groups.'
+        if reason == 'invalid_spec':
+            return 'Skipped in Standard: spec missing / invalid.'
+        return f'Skipped: {reason.replace("_", " ")}.'
+
+    status_label = get_spec_status_label(spec_status)
+    if not include_metric:
+        return f'Skipped by policy for status: {status_label}.'
+    if not allow_pairwise:
+        return 'Descriptive-only: pairwise comparisons disabled by spec comparability policy.'
+    if pairwise_rows_count == 0:
+        return f'Analyzed: {status_label}; pairwise enabled but no valid group pairs produced results.'
+    if not allow_capability:
+        return f'Analyzed with caution: {status_label}; capability metrics are disabled.'
+    return f'Analyzed: {status_label}; pairwise and capability checks enabled.'
 
 
 def _round_display_value(value, *, precision=3):
@@ -527,6 +580,55 @@ def build_group_analysis_diagnostics_payload(
         if status in status_counts:
             status_counts[status] += 1
 
+    diagnostics_metric_rows = []
+    for metric_row in metric_rows:
+        spec_status = _normalize_spec_status_key(metric_row.get('spec_status'))
+        policy = metric_row.get('analysis_policy') or {}
+        diagnostics_metric_rows.append(
+            {
+                'metric': metric_row.get('metric'),
+                'groups': metric_row.get('group_count'),
+                'spec_status': spec_status,
+                'spec_status_label': get_spec_status_label(spec_status),
+                'pairwise_comparisons': len(metric_row.get('pairwise_rows', []) or []),
+                'included_in_light': 'YES' if _resolve_analysis_policy(spec_status, 'light').get('include_metric') else 'NO',
+                'included_in_standard': 'YES' if _resolve_analysis_policy(spec_status, 'standard').get('include_metric') else 'NO',
+                'comment': metric_row.get('diagnostics_comment')
+                or build_diagnostics_comment(
+                    include_metric=policy.get('include_metric', True),
+                    allow_pairwise=policy.get('allow_pairwise', False),
+                    allow_capability=policy.get('allow_capability', False),
+                    spec_status=spec_status,
+                    pairwise_rows_count=len(metric_row.get('pairwise_rows', []) or []),
+                ),
+            }
+        )
+
+    for skipped in skipped_metrics:
+        reason = str(skipped.get('reason') or '').strip().lower()
+        if reason in {'nom_mismatch', 'limit_mismatch', 'invalid_spec'}:
+            spec_status = _normalize_spec_status_key(reason)
+        else:
+            spec_status = 'INVALID_SPEC'
+        diagnostics_metric_rows.append(
+            {
+                'metric': skipped.get('metric'),
+                'groups': skipped.get('group_count'),
+                'spec_status': spec_status,
+                'spec_status_label': get_spec_status_label(spec_status),
+                'pairwise_comparisons': 0,
+                'included_in_light': 'NO' if reason == 'insufficient_groups' else ('YES' if _resolve_analysis_policy(spec_status, 'light').get('include_metric') else 'NO'),
+                'included_in_standard': 'NO',
+                'comment': build_diagnostics_comment(
+                    include_metric=False,
+                    allow_pairwise=False,
+                    allow_capability=False,
+                    spec_status=spec_status,
+                    skipped_reason=reason or _status_to_skip_reason(spec_status),
+                ),
+            }
+        )
+
     return {
         'requested_scope': str(requested_scope or 'auto').strip().lower(),
         'requested_level': str(requested_level or 'light').strip().lower(),
@@ -543,6 +645,7 @@ def build_group_analysis_diagnostics_payload(
         'skip_reason': skip_reason,
         'metrics': metric_rows,
         'skipped_metrics': skipped_metrics,
+        'metric_diagnostics_rows': diagnostics_metric_rows,
     }
 
 
@@ -793,7 +896,7 @@ def build_group_analysis_payload(
         }
         populated_groups = [name for name, values in grouped_values.items() if np.isfinite(values).sum() > 0]
         if len(populated_groups) < 2:
-            skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups'})
+            skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups', 'group_count': len(populated_groups)})
             continue
 
         spec_status, spec_payload = classify_metric_spec_status(metric_rows_df, spec_columns)
@@ -843,9 +946,17 @@ def build_group_analysis_payload(
                 'pairwise_rows': pairwise_rows,
                 'spec': spec_payload,
                 'spec_status': spec_status,
+                'spec_status_label': get_spec_status_label(spec_status),
                 'analysis_policy': policy,
                 'capability': capability,
                 'comparability_summary': comparability_summary,
+                'diagnostics_comment': build_diagnostics_comment(
+                    include_metric=policy.get('include_metric', True),
+                    allow_pairwise=policy.get('allow_pairwise', False),
+                    allow_capability=policy.get('allow_capability', False),
+                    spec_status=spec_status,
+                    pairwise_rows_count=len(pairwise_rows),
+                ),
             }
         )
         metrics[-1]['insights'] = build_metric_insights(metrics[-1])

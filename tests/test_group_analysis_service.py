@@ -9,6 +9,7 @@ from modules.group_analysis_service import (
     classify_spec_status,
     classify_metric_spec_status,
     compute_capability_payload,
+    get_spec_status_label,
     normalize_metric_identity,
     normalize_spec_limits,
     evaluate_group_analysis_readiness,
@@ -134,6 +135,14 @@ class TestGroupAnalysisService(unittest.TestCase):
             'REF-A :: DIA - X',
         )
         self.assertEqual(normalize_metric_identity('DIA - X', 'REF-A', scope='single_reference'), 'DIA - X')
+
+
+    def test_get_spec_status_label_maps_internal_codes_to_user_facing_values(self):
+        self.assertEqual(get_spec_status_label('EXACT_MATCH'), 'Exact match')
+        self.assertEqual(get_spec_status_label('LIMIT_MISMATCH'), 'Limits differ')
+        self.assertEqual(get_spec_status_label('NOM_MISMATCH'), 'Nominal differs')
+        self.assertEqual(get_spec_status_label('INVALID_SPEC'), 'Spec missing / Invalid spec.')
+        self.assertEqual(get_spec_status_label(None), 'Spec missing / Invalid spec.')
 
     def test_spec_normalization_and_status_classification(self):
         spec = normalize_spec_limits('1.23456', 2, '3.4567')
@@ -287,6 +296,11 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(payload['diagnostics']['warning_summary']['count'], 0)
         self.assertEqual(payload['diagnostics']['histogram_skip_summary']['applies'], False)
         self.assertEqual(payload['diagnostics']['unmatched_metrics_summary']['count'], 0)
+        diagnostics_row = payload['diagnostics']['metric_diagnostics_rows'][0]
+        self.assertEqual(diagnostics_row['spec_status_label'], 'Exact match')
+        self.assertEqual(diagnostics_row['included_in_light'], 'YES')
+        self.assertEqual(diagnostics_row['included_in_standard'], 'YES')
+        self.assertIn('Analyzed', diagnostics_row['comment'])
 
     def test_standard_level_skips_non_exact_match_metrics(self):
         grouped_df = pd.DataFrame(
@@ -312,6 +326,11 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(payload['diagnostics']['histogram_skip_summary']['applies'], True)
         self.assertEqual(payload['diagnostics']['histogram_skip_summary']['count'], 1)
         self.assertEqual(payload['diagnostics']['histogram_skip_summary']['reason_counts'], {'nom_mismatch': 1})
+        skipped_row = payload['diagnostics']['metric_diagnostics_rows'][0]
+        self.assertEqual(skipped_row['spec_status_label'], 'Nominal differs')
+        self.assertEqual(skipped_row['included_in_light'], 'YES')
+        self.assertEqual(skipped_row['included_in_standard'], 'NO')
+        self.assertIn('Skipped in Standard', skipped_row['comment'])
 
     def test_diagnostics_include_warning_and_unmatched_reference_summaries(self):
         grouped_df = pd.DataFrame(
@@ -335,6 +354,7 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(diagnostics['unmatched_metrics_summary']['count'], 1)
         self.assertEqual(diagnostics['unmatched_metrics_summary']['metrics'][0]['metric'], 'M2')
         self.assertEqual(diagnostics['unmatched_metrics_summary']['metrics'][0]['missing_references'], ['R2'])
+        self.assertTrue(any('M2' in str(row.get('metric')) for row in diagnostics['metric_diagnostics_rows']))
 
 
 if __name__ == '__main__':

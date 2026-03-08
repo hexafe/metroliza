@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from modules.group_analysis_service import get_spec_status_label
 
 SECTION_GAP = 1
 
@@ -28,6 +29,15 @@ def _write_table(worksheet, row, headers, rows):
 
 def _write_metric_section(worksheet, row, metric_row):
     row = _write_section_title(worksheet, row, f"Metric: {metric_row.get('metric', 'Unknown')}")
+
+    spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
+    metric_meta_rows = [
+        {'Field': 'Groups', 'Value': metric_row.get('group_count')},
+        {'Field': 'Spec status', 'Value': spec_status_label},
+        {'Field': 'Comment', 'Value': metric_row.get('diagnostics_comment') or (metric_row.get('comparability_summary') or {}).get('summary')},
+    ]
+    row = _write_table(worksheet, row, ['Field', 'Value'], metric_meta_rows)
+    row += SECTION_GAP
 
     row = _write_section_title(worksheet, row, 'Descriptive stats')
     desc_rows = [
@@ -190,42 +200,56 @@ def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
     row = _write_section_title(worksheet, row, 'Metric coverage')
     coverage_rows = [
         {
-            'Metric': entry.get('metric'),
-            'Included': 'Yes',
-            'Reference': entry.get('reference'),
-            'Group count': entry.get('group_count'),
-            'Spec status': entry.get('spec_status'),
-            'Pairwise rows': len(entry.get('pairwise_rows', [])),
-            'Inclusion rationale': 'Analyzed',
-            'Exclusion rationale': '',
+            'Metric': entry.get('Metric', entry.get('metric')),
+            'Groups': entry.get('Groups', entry.get('groups', entry.get('group_count'))),
+            'Spec status': entry.get('Spec status', entry.get('spec_status_label') or get_spec_status_label(entry.get('spec_status'))),
+            'Pairwise comparisons': entry.get(
+                'Pairwise comparisons',
+                entry.get('pairwise_comparisons', len(entry.get('pairwise_rows', []) or [])),
+            ),
+            'Included in Light': entry.get('Included in Light', entry.get('included_in_light', 'NO')),
+            'Included in Standard': entry.get('Included in Standard', entry.get('included_in_standard', 'NO')),
+            'Comment': entry.get('Comment', entry.get('comment', entry.get('diagnostics_comment') or 'Analyzed')),
         }
-        for entry in diagnostics_payload.get('metrics', [])
+        for entry in (diagnostics_payload.get('metric_diagnostics_rows') or [])
     ]
-    coverage_rows.extend(
-        {
-            'Metric': entry.get('metric'),
-            'Included': 'No',
-            'Reference': '',
-            'Group count': '',
-            'Spec status': '',
-            'Pairwise rows': '',
-            'Inclusion rationale': '',
-            'Exclusion rationale': entry.get('reason'),
-        }
-        for entry in diagnostics_payload.get('skipped_metrics', [])
-    )
+    if not coverage_rows:
+        coverage_rows = [
+            {
+                'Metric': entry.get('metric'),
+                'Groups': entry.get('group_count'),
+                'Spec status': entry.get('spec_status_label') or get_spec_status_label(entry.get('spec_status')),
+                'Pairwise comparisons': len(entry.get('pairwise_rows', []) or []),
+                'Included in Light': 'YES',
+                'Included in Standard': 'YES' if str(entry.get('spec_status') or '').upper() == 'EXACT_MATCH' else 'NO',
+                'Comment': entry.get('diagnostics_comment') or 'Analyzed',
+            }
+            for entry in diagnostics_payload.get('metrics', [])
+        ]
+        coverage_rows.extend(
+            {
+                'Metric': entry.get('metric'),
+                'Groups': entry.get('group_count'),
+                'Spec status': get_spec_status_label(entry.get('reason')),
+                'Pairwise comparisons': 0,
+                'Included in Light': 'NO',
+                'Included in Standard': 'NO',
+                'Comment': f"Skipped: {entry.get('reason')}",
+            }
+            for entry in diagnostics_payload.get('skipped_metrics', [])
+        )
+
     row = _write_table(
         worksheet,
         row,
         [
             'Metric',
-            'Included',
-            'Reference',
-            'Group count',
+            'Groups',
             'Spec status',
-            'Pairwise rows',
-            'Inclusion rationale',
-            'Exclusion rationale',
+            'Pairwise comparisons',
+            'Included in Light',
+            'Included in Standard',
+            'Comment',
         ],
         coverage_rows,
     )
