@@ -90,14 +90,39 @@ Bring the current Group Analysis implementation to full spec alignment with `doc
 **Changes**
 
 - Make rendering explicitly mode-aware (`light` vs `standard`).
-- Add per-metric comparability/spec summary and concise insight block.
+- Enforce compact per-metric block layout contract:
+  - metric header,
+  - descriptive stats table,
+  - pairwise comparison table,
+  - short insight/comment line.
+- Add per-metric comparability/spec summary and concise insight/comment text.
+- Enforce user-visible pairwise wording contract:
+  - `Difference` column with `YES`/`NO` only,
+  - remove raw boolean `significant` from user-visible output,
+  - `Comment` column values such as `DIFFERENCE` / `NO DIFFERENCE` / `DESCRIPTIVE ONLY` / `USE CAUTION`.
+- Enforce user-facing rounding contract:
+  - descriptive stats: 3 decimals,
+  - capability indices: 3 decimals,
+  - effect size: 3 decimals,
+  - adjusted p-values: 4 decimals.
+- Enforce spec-status label mapping for user-visible surfaces:
+  - `EXACT_MATCH` → `Exact match`
+  - `LIMIT_MISMATCH` → `Limits differ`
+  - `NOM_MISMATCH` → `Nominal differs`
+  - `INVALID_SPEC` or missing → `Spec missing / Invalid spec`.
 - Add conservative histogram gating + explicit diagnostics entries for omitted histograms.
 - Expand diagnostics fields to required metadata and mismatch/skip summaries, including potentially unmatched metrics across references.
+- Add required diagnostics per-metric columns:
+  - `Metric`, `Groups`, `Spec status`, `Pairwise comparisons`,
+  - `Included in Light`, `Included in Standard`, `Comment`.
+- Include explicit skip/exclusion rationale and unmatched-metric notes.
+- Implement conditional formatting as in-scope behavior (not polish), including minimum rules for pairwise Difference/Comment, spec status, flags, diagnostics YES/NO inclusion, and restrained optional numeric threshold highlighting.
 
 **Definition of done**
 
 - Light/Standard sheet shapes are consistent and readable.
 - Diagnostics always render required fields when Group Analysis is enabled.
+- Writer/integration tests assert layout contract, rounding, pairwise wording contract, spec-status label mapping, and conditional-formatting rule presence/behavior.
 
 ---
 
@@ -131,7 +156,7 @@ Bring the current Group Analysis implementation to full spec alignment with `doc
 
 **Changes**
 
-- Finalize test matrix: off/light/standard, scope resolution, mismatch classes, capability modes, flags, diagnostics details.
+- Finalize test matrix: off/light/standard, scope resolution, mismatch classes, capability modes, flags, diagnostics details, compact block layout contract, rounding contract, pairwise wording contract, and conditional-formatting checks.
 - Remove safe dead references to legacy comparison flow where no longer needed.
 - Update final status block with:
   - implemented in cycle,
@@ -142,12 +167,13 @@ Bring the current Group Analysis implementation to full spec alignment with `doc
 
 - Test suite passes for touched Group Analysis paths.
 - Documentation status is updated and auditable.
+- Readability + conditional formatting requirements are explicitly tracked as delivered scope (not deferred polish).
 
 ## PR-by-PR verification checklist
 
 - PR A: service unit tests for taxonomy + eligibility.
 - PR B: service unit tests for capability + flags.
-- PR C: writer/integration tests for worksheet + diagnostics output.
+- PR C: writer/integration tests for worksheet + diagnostics output, including block layout, rounding, wording contract, diagnostics columns, and conditional-formatting checks.
 - PR D: integration tests for scope mismatch/skip messaging and non-regression.
 - PR E: full targeted regression pass for Group Analysis paths and docs closeout check.
 
@@ -155,10 +181,14 @@ Bring the current Group Analysis implementation to full spec alignment with `doc
 
 - [ ] PR A: finalize spec taxonomy + eligibility logic.
 - [ ] PR B: finalize capability modes + flags.
-- [ ] PR C: finalize writer parity + diagnostics contract.
+- [ ] PR C: finalize writer parity + diagnostics + rounding/wording/conditional-formatting contracts.
 - [ ] PR D: finalize skip/scope message-path exactness in export integration.
 - [ ] PR E: finalize stabilization, cleanup, and docs status closeout.
 
 ## Suggested order rationale
 
 Lock service semantics first (A/B), then rendering contract (C), then integration exactness (D), then stabilization/docs closeout (E). This sequencing minimizes regression blast radius and keeps each PR reviewable.
+
+## Explicit in-scope implementation note
+
+Readability and conditional formatting are current-scope deliverables for this PR plan; they are not deferred UI polish.
