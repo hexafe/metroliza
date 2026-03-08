@@ -13,6 +13,10 @@ from pathlib import Path
 import pandas
 
 from modules.CustomLogger import CustomLogger
+from modules.characteristic_alias_service import (
+    ensure_characteristic_alias_schema,
+    ensure_characteristic_alias_table,
+)
 from modules.cmm_native_parser import parse_blocks_with_backend_and_telemetry
 from modules.cmm_parsing import add_tolerances_to_blocks
 from modules.db import execute_with_retry, run_transaction_with_retry
@@ -230,6 +234,13 @@ class CMMReportParser:
         """
 
         try:
+            ensure_characteristic_alias_schema(
+                self.database,
+                connection=self.connection,
+                retries=4,
+                retry_delay_s=1,
+            )
+
             """
             Checks if the opened file is already present in the database and performs appropriate actions.
             If the 'REPORTS' table does not exist in the database, it creates the table and imports the data.
@@ -542,6 +553,8 @@ class CMMReportParser:
                                     DATE TEXT,
                                     SAMPLE_NUMBER TEXT
                                 )''')
+
+                ensure_characteristic_alias_table(transaction_cursor)
 
                 ensure_schema_indexes(transaction_cursor)
 
