@@ -81,7 +81,37 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         self.assertEqual(prepared['GROUP_COLOR'].iloc[0], '#FDE2E4')
 
 
-    def test_apply_group_assignments_uses_population_fallback_for_group_analysis_mode(self):
+    def test_apply_group_assignments_uses_ungrouped_fallback_by_default(self):
+        header_group = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'],
+                'FILELOC': ['/a'],
+                'FILENAME': ['one.pdf'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'MEAS': [1.0],
+            }
+        )
+        grouping_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'],
+                'FILELOC': ['/a'],
+                'FILENAME': ['one.pdf'],
+                'DATE': ['2024-01-01'],
+                'SAMPLE_NUMBER': ['1'],
+                'GROUP': [None],
+            }
+        )
+        grouping_df = prepare_grouping_dataframe(grouping_df)
+
+        merged, applied, _, _ = apply_group_assignments(header_group, grouping_df)
+
+        self.assertTrue(applied)
+        self.assertEqual(merged['GROUP'].tolist(), ['UNGROUPED'])
+
+
+    def test_apply_group_assignments_group_analysis_path_uses_population_fallback(self):
+        thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
         header_group = pd.DataFrame(
             {
                 'REFERENCE': ['R1'],
@@ -104,7 +134,12 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         )
         grouping_df = prepare_grouping_dataframe(grouping_df)
 
-        merged, applied, _, _ = apply_group_assignments(header_group, grouping_df, group_analysis_mode=True)
+        merged, applied = thread._apply_group_assignments(
+            header_group,
+            grouping_df,
+            group_analysis_mode=True,
+            fallback_group_label='POPULATION',
+        )
 
         self.assertTrue(applied)
         self.assertEqual(merged['GROUP'].tolist(), ['POPULATION'])

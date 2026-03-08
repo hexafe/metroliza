@@ -2246,8 +2246,13 @@ class ExportDataThread(QThread):
         logger.warning(message)
         self.update_label.emit(build_three_line_status("Building measurement sheets...", "Grouping data contains duplicate keys; using latest assignment.", "ETA --"))
 
-    def _apply_group_assignments(self, header_group, grouping_df):
-        merged_group, grouping_applied, merge_keys, duplicate_count = _apply_group_assignments(header_group, grouping_df)
+    def _apply_group_assignments(self, header_group, grouping_df, *, group_analysis_mode=False, fallback_group_label=None):
+        merged_group, grouping_applied, merge_keys, duplicate_count = _apply_group_assignments(
+            header_group,
+            grouping_df,
+            group_analysis_mode=group_analysis_mode,
+            fallback_group_label=fallback_group_label,
+        )
         if grouping_applied and duplicate_count:
             self._warn_duplicate_group_assignments(grouping_df, merge_keys)
         return merged_group, grouping_applied
@@ -2743,7 +2748,12 @@ class ExportDataThread(QThread):
     def _write_group_comparison_sheet(self, workbook, used_sheet_names):
         grouped_export_df = self._build_export_filtered_dataframe()
         grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
-        grouped_export_df, _ = self._apply_group_assignments(grouped_export_df, self.prepared_grouping_df)
+        grouped_export_df, _ = self._apply_group_assignments(
+            grouped_export_df,
+            self.prepared_grouping_df,
+            group_analysis_mode=True,
+            fallback_group_label='POPULATION',
+        )
 
         sheet_name = unique_sheet_name('Group Comparison', used_sheet_names)
         worksheet = workbook.add_worksheet(sheet_name)
