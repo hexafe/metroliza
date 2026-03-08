@@ -88,6 +88,21 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         self.assertEqual(payload['pairwise_rows'][0]['Metric'], 'REF DIA')
 
+
+    def test_prepare_payload_keeps_original_metric_when_no_alias_mapping_exists(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-2', 'REF-2', 'REF-2', 'REF-2'],
+                'HEADER - AX': ['CYL - Y'] * 4,
+                'MEAS': [5.0, 5.1, 5.2, 5.3],
+                'GROUP': ['A', 'A', 'B', 'B'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df, alias_db_path=None)
+
+        self.assertEqual(payload['pairwise_rows'][0]['Metric'], 'CYL - Y')
+
     def test_writer_renders_expected_sections_and_layout(self):
         grouped_df = pd.DataFrame(
             {
