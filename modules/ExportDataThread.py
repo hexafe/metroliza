@@ -2877,6 +2877,7 @@ class ExportDataThread(QThread):
             grouped_export_df,
             requested_scope=requested_scope,
             analysis_level=mode,
+            alias_db_path=self.db_file,
         )
 
         group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)
@@ -2915,7 +2916,7 @@ class ExportDataThread(QThread):
         worksheet = workbook.add_worksheet(sheet_name)
         self._record_exported_sheet_name(sheet_name)
 
-        payload = prepare_group_comparison_payload(grouped_export_df)
+        payload = prepare_group_comparison_payload(grouped_export_df, alias_db_path=self.db_file)
         write_group_comparison_sheet(worksheet, payload)
 
     def export_filtered_data(self, excel_writer):

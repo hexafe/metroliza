@@ -19,6 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.export_grouping_utils import normalize_group_labels
 from modules.stats_utils import safe_process_capability
@@ -254,6 +255,31 @@ def _build_canonical_metric_series(frame):
     canonical = header_ax.copy()
     canonical.loc[canonical == ''] = composed.loc[canonical == '']
     return canonical
+
+
+def _resolve_canonical_metric_aliases(frame, canonical_metric_series, *, alias_db_path=None):
+    """Resolve canonical metric identities with reference-aware alias mappings."""
+    if alias_db_path is None:
+        return canonical_metric_series
+
+    resolved_metric_series = canonical_metric_series.fillna('').astype(str).str.strip().copy()
+    reference_series = None
+    if 'REFERENCE' in frame.columns:
+        reference_series = frame['REFERENCE'].fillna('').astype(str).str.strip()
+
+    for row_index, metric_name in resolved_metric_series.items():
+        if not metric_name:
+            continue
+        reference_value = None
+        if reference_series is not None:
+            reference_value = reference_series.get(row_index) or None
+        resolved_metric_series.at[row_index] = resolve_characteristic_alias(
+            metric_name,
+            reference_value,
+            alias_db_path,
+        )
+
+    return resolved_metric_series
 
 
 def normalize_spec_limits(lsl, nominal, usl, *, precision=3):
@@ -870,14 +896,19 @@ def _build_unmatched_metrics_summary(metric_frame, *, metric_column, reference_c
     return {'count': len(unmatched_metrics), 'metrics': unmatched_metrics}
 
 
-def _normalize_grouped_working_df(grouped_df):
+def _normalize_grouped_working_df(grouped_df, *, alias_db_path=None):
     working = grouped_df.copy()
     if 'GROUP' not in working.columns:
         working['GROUP'] = 'POPULATION'
     working['GROUP'] = normalize_group_labels(working['GROUP'], missing_label='POPULATION', normalize_blank=True)
     working['MEAS'] = pd.to_numeric(working.get('MEAS'), errors='coerce')
 
-    working['__canonical_metric__'] = _build_canonical_metric_series(working)
+    canonical_metric_series = _build_canonical_metric_series(working)
+    working['__canonical_metric__'] = _resolve_canonical_metric_aliases(
+        working,
+        canonical_metric_series,
+        alias_db_path=alias_db_path,
+    )
 
     if 'NOMINAL' not in working.columns and 'NOM' in working.columns:
         working['NOMINAL'] = pd.to_numeric(working.get('NOM'), errors='coerce')
@@ -897,7 +928,7 @@ def _normalize_grouped_working_df(grouped_df):
     return working.dropna(subset=['MEAS'])
 
 
-def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eligible_metrics=None):
+def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eligible_metrics=None, alias_db_path=None):
     """Check minimum runnable conditions and return skip metadata when unmet."""
     if not isinstance(grouped_df, pd.DataFrame):
         grouped_df = pd.DataFrame()
@@ -930,7 +961,7 @@ def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eli
             ),
         }
 
-    working = _normalize_grouped_working_df(grouped_df)
+    working = _normalize_grouped_working_df(grouped_df, alias_db_path=alias_db_path)
 
     if working.empty:
         return {
@@ -979,6 +1010,7 @@ def build_group_analysis_payload(
     alpha=0.05,
     correction_method='holm',
     analysis_level='light',
+    alias_db_path=None,
 ):
     """Assemble metric-level Group Analysis payload for writer modules."""
     if not isinstance(grouped_df, pd.DataFrame):
@@ -988,6 +1020,7 @@ def build_group_analysis_payload(
         grouped_df,
         requested_scope=requested_scope,
         eligible_metrics=eligible_metrics,
+        alias_db_path=alias_db_path,
     )
     reference_count = int(grouped_df.get('REFERENCE', pd.Series(dtype=object)).dropna().nunique())
     effective_scope = readiness['effective_scope']
@@ -1024,7 +1057,7 @@ def build_group_analysis_payload(
             'diagnostics': diagnostics,
         }
 
-    working = _normalize_grouped_working_df(grouped_df)
+    working = _normalize_grouped_working_df(grouped_df, alias_db_path=alias_db_path)
     metric_column = '__canonical_metric__'
     reference_column = 'REFERENCE' if 'REFERENCE' in working.columns else None
     spec_columns = {
