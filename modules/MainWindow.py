@@ -7,6 +7,7 @@ from modules.about_window import AboutWindow
 from modules.release_notes_dialog import ReleaseNotesDialog
 from modules.custom_logger import CustomLogger
 from modules.csv_summary_dialog import CSVSummaryDialog
+from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
 from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray
 from PyQt6.QtGui import QIcon, QPixmap, QAction
@@ -56,6 +57,7 @@ class MainWindow(QMainWindow):
         self.modifydb_button = QPushButton("Launch Modify Database")
         self.export_button = QPushButton("Launch Export")
         self.csv_summary_button = QPushButton("CSV Summary")
+        self.map_characteristics_button = QPushButton("Map Characteristics")
         self.setup_button_tooltips()
 
         # Set up menu items
@@ -86,6 +88,7 @@ class MainWindow(QMainWindow):
         self.modifydb_button.setToolTip("Use Modify Database module to modify Reference, Part number or Header in database")
         self.export_button.setToolTip("Use Export module to filter, set and export data from database to Excel file")
         self.csv_summary_button.setToolTip("Use CSV module to automatically create charts from CSV data")
+        self.map_characteristics_button.setToolTip("Map characteristic aliases to canonical names by scope")
 
     def setup_menu_actions(self):
         """Set up the menu actions for the main window."""
@@ -102,10 +105,12 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.modifydb_button, 1, 0)
         self.layout.addWidget(self.export_button, 2, 0)
         self.layout.addWidget(self.csv_summary_button, 3, 0)
+        self.layout.addWidget(self.map_characteristics_button, 4, 0)
         self.parse_button.clicked.connect(self.launch_parsing_dialog)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
         self.csv_summary_button.clicked.connect(self.launch_csv_summary_dialog)
+        self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
 
     def launch_parsing_dialog(self):
         """Launch the parsing dialog and close the other dialogs if they are open."""
@@ -175,6 +180,13 @@ class MainWindow(QMainWindow):
             csv_summary_window = CSVSummaryDialog(self)
             csv_summary_window.exec()
             pass
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def launch_characteristic_mapping_dialog(self):
+        try:
+            characteristic_mapping_dialog = CharacteristicMappingDialog(self, self.db_file)
+            characteristic_mapping_dialog.exec()
         except Exception as e:
             self.log_and_exit(e)
 

@@ -4,6 +4,7 @@ import unittest
 from modules.characteristic_alias_service import (
     delete_characteristic_alias,
     ensure_characteristic_alias_schema,
+    fetch_all_characteristic_aliases,
     fetch_characteristic_aliases,
     normalize_alias_scope,
     resolve_characteristic_alias,
@@ -107,6 +108,40 @@ class TestCharacteristicAliasService(unittest.TestCase):
         self.assertEqual(
             resolve_characteristic_alias('DIA - X', 'REF-101', self.db_path),
             'DIA - X',
+        )
+
+    def test_fetch_all_characteristic_aliases_returns_deterministic_rows(self):
+        upsert_characteristic_alias(
+            self.db_path,
+            alias_name='B-ALIAS',
+            canonical_name='CANON-B',
+            scope_type='global',
+        )
+        upsert_characteristic_alias(
+            self.db_path,
+            alias_name='A-ALIAS',
+            canonical_name='CANON-A1',
+            scope_type='reference',
+            scope_value='REF-2',
+        )
+        upsert_characteristic_alias(
+            self.db_path,
+            alias_name='A-ALIAS',
+            canonical_name='CANON-A0',
+            scope_type='global',
+        )
+
+        fetched = fetch_all_characteristic_aliases(self.db_path)
+        self.assertEqual(
+            [
+                (row['alias_name'], row['canonical_name'], row['scope_type'], row['scope_value'])
+                for row in fetched
+            ],
+            [
+                ('A-ALIAS', 'CANON-A0', 'global', None),
+                ('A-ALIAS', 'CANON-A1', 'reference', 'REF-2'),
+                ('B-ALIAS', 'CANON-B', 'global', None),
+            ],
         )
 
 
