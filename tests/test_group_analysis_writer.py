@@ -73,8 +73,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'delta_mean': 0.4,
                             'adjusted_p_value': 0.03,
                             'effect_size': 0.7,
-                            'verdict': 'different',
-                            'flags': 'none',
+                            'difference': 'YES',
+                            'comment': 'DIFFERENCE',
                         }
                     ],
                     'insights': ['Line 1', 'Line 2'],
@@ -91,7 +91,13 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Pairwise comparisons', values)
         self.assertIn('Comment', values)
         self.assertIn('adj p-value', values)
+        self.assertIn('Delta mean', values)
         self.assertIn('Difference', values)
+        self.assertIn('YES', values)
+        self.assertIn('DIFFERENCE', values)
+        text_values = [str(value).upper() for value in values]
+        self.assertNotIn('TRUE', text_values)
+        self.assertNotIn('FALSE', text_values)
         self.assertEqual(worksheet.frozen, (1, 0))
 
     def test_group_analysis_diagnostics_sheet_smoke(self):

@@ -63,20 +63,16 @@ def _write_metric_section(worksheet, row, metric_row):
             'adj p-value': entry.get('adjusted_p_value'),
             'effect size': entry.get('effect_size'),
             'test': entry.get('test_used'),
-            'Difference': entry.get('delta_mean'),
-            'Comment': '; '.join(
-                token
-                for token in [entry.get('verdict'), entry.get('flags') if entry.get('flags') not in (None, 'none') else None]
-                if token
-            )
-            or 'none',
+            'Delta mean': entry.get('delta_mean'),
+            'Difference': entry.get('difference'),
+            'Comment': entry.get('comment'),
         }
         for entry in metric_row.get('pairwise_rows', [])
     ]
     row = _write_table(
         worksheet,
         row,
-        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Difference', 'Comment'],
+        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'Difference', 'Comment'],
         pairwise_rows,
     )
     row += SECTION_GAP
