@@ -1,4 +1,18 @@
-"""Helpers for workbook-level Group Analysis payload construction."""
+"""Helpers for workbook-level Group Analysis payload construction.
+
+Metric payload rows emitted by :func:`build_group_analysis_payload` include an
+optional ``chart_payload`` object intended for worksheet writers that render
+embedded chart images.
+
+``chart_payload`` keys:
+* ``groups``: ordered list of ``{'group': str, 'values': list[float]}``
+  containing finite numeric MEAS values per group.
+* ``all_values``: flattened finite numeric values across all groups.
+* ``spec_limits``: normalized ``{'lsl': float|None, 'nominal': float|None,
+  'usl': float|None}`` limits for chart overlays.
+
+These fields are additive and optional so existing consumers can ignore them.
+"""
 
 from __future__ import annotations
 
@@ -164,6 +178,28 @@ def _round_display_value(value, *, precision=3):
 def _round_display_value_adj_p(value):
     """Round adjusted p-values for display payloads."""
     return _round_display_value(value, precision=4)
+
+
+def _build_metric_chart_payload(*, grouped_values, spec_payload):
+    """Build optional chart-render payload from grouped numeric vectors."""
+    groups = []
+    all_values = []
+    for group_name in sorted(grouped_values):
+        arr = np.asarray(grouped_values[group_name], dtype=float)
+        arr = arr[np.isfinite(arr)]
+        group_values = arr.astype(float).tolist()
+        groups.append({'group': group_name, 'values': group_values})
+        all_values.extend(group_values)
+
+    return {
+        'groups': groups,
+        'all_values': [float(value) for value in all_values],
+        'spec_limits': {
+            'lsl': spec_payload.get('lsl'),
+            'nominal': spec_payload.get('nominal'),
+            'usl': spec_payload.get('usl'),
+        },
+    }
 
 
 def resolve_group_analysis_scope(requested_scope, reference_count):
@@ -1108,6 +1144,10 @@ def build_group_analysis_payload(
                 'capability': capability,
                 'comparability_summary': comparability_summary,
                 'plot_eligibility': plot_eligibility,
+                'chart_payload': _build_metric_chart_payload(
+                    grouped_values=grouped_values,
+                    spec_payload=spec_payload,
+                ),
                 'diagnostics_comment': diagnostics_comment,
                 'metric_flags': metric_level_flags,
             }

@@ -2761,6 +2761,87 @@ class ExportDataThread(QThread):
         worksheet.write(1, 0, str(message or 'Group Analysis skipped.'))
         worksheet.freeze_panes(1, 0)
 
+    @staticmethod
+    def _render_group_analysis_plot_asset(metric_row, plot_key):
+        """Build an in-memory chart asset for Group Analysis worksheet insertion."""
+        chart_payload = metric_row.get('chart_payload') if isinstance(metric_row, dict) else None
+        if not isinstance(chart_payload, dict):
+            return {}
+
+        groups = chart_payload.get('groups') or []
+        if not groups:
+            return {}
+
+        group_labels = [str(entry.get('group') or '') for entry in groups]
+        grouped_values = [
+            pd.to_numeric(pd.Series(entry.get('values') or []), errors='coerce').dropna().to_numpy(dtype=float)
+            for entry in groups
+        ]
+        grouped_values = [values for values in grouped_values if values.size > 0]
+        if not grouped_values:
+            return {}
+
+        spec_limits = chart_payload.get('spec_limits') or {}
+        fig, ax = plt.subplots(figsize=(6.2, 3.2))
+        try:
+            if plot_key == 'violin':
+                if _HAS_SEABORN:
+                    sns.violinplot(data=grouped_values, inner='quartile', cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
+                else:
+                    ax.violinplot(grouped_values, showmeans=False, showmedians=True, showextrema=False)
+                ax.set_xticks(range(len(group_labels)))
+                ax.set_xticklabels(group_labels)
+                ax.set_title(f"{metric_row.get('metric')} - Violin")
+            elif plot_key == 'histogram':
+                all_values = np.concatenate(grouped_values)
+                ax.hist(all_values, bins='auto', color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='black', alpha=0.7)
+                ax.set_title(f"{metric_row.get('metric')} - Histogram")
+            else:
+                return {}
+
+            for limit_key, style in (
+                ('lsl', {'linestyle': '--', 'color': '#B45309'}),
+                ('nominal', {'linestyle': ':', 'color': '#0F766E'}),
+                ('usl', {'linestyle': '--', 'color': '#B45309'}),
+            ):
+                limit_value = spec_limits.get(limit_key)
+                if limit_value is not None:
+                    ax.axvline(float(limit_value), linewidth=1.0, alpha=0.9, **style)
+
+            ax.grid(axis='y', alpha=0.25)
+            fig.tight_layout()
+            image_data = BytesIO()
+            fig.savefig(image_data, format='png', dpi=120)
+            image_data.seek(0)
+            return {'image_data': image_data, 'row_span': 16}
+        except Exception:
+            logger.debug('Failed to render group-analysis %s plot for %r', plot_key, metric_row.get('metric'), exc_info=True)
+            return {}
+        finally:
+            plt.close(fig)
+
+    def _build_group_analysis_plot_assets(self, payload, *, mode):
+        """Prepare optional chart assets keyed by metric for worksheet insertion."""
+        if str(mode or '').strip().lower() != 'standard':
+            return {'metrics': {}}
+
+        metrics_assets = {}
+        for metric_row in payload.get('metric_rows', []):
+            metric_name = metric_row.get('metric')
+            if not metric_name:
+                continue
+            eligibility = metric_row.get('plot_eligibility') or {}
+            per_metric_assets = {}
+            for plot_key in ('violin', 'histogram'):
+                plot_meta = eligibility.get(plot_key) or {}
+                if bool(plot_meta.get('eligible')):
+                    per_metric_assets[plot_key] = self._render_group_analysis_plot_asset(metric_row, plot_key)
+                else:
+                    per_metric_assets[plot_key] = {}
+            metrics_assets[metric_name] = per_metric_assets
+
+        return {'metrics': metrics_assets}
+
     def _write_group_analysis_outputs(self, excel_writer):
         mode = str(self.group_analysis_level or 'off').strip().lower()
         if mode == 'off':
@@ -2804,15 +2885,7 @@ class ExportDataThread(QThread):
             short_message = str(skip_reason.get('message') or 'Group Analysis skipped.')
             self._write_group_analysis_message_sheet(group_worksheet, short_message)
         else:
-            plot_assets = {
-                'metrics': {
-                    metric_row.get('metric'): {
-                        'violin': 'Reserved (standard-only plot insertion point)',
-                        'histogram': 'Reserved (standard-only plot insertion point)',
-                    }
-                    for metric_row in payload.get('metric_rows', [])
-                }
-            }
+            plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode)
             write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
 
         diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
