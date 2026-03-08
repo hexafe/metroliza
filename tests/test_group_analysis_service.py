@@ -1,8 +1,10 @@
 import unittest
 from unittest.mock import patch
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 
+from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
 from modules.group_analysis_service import (
     build_group_analysis_payload,
     build_pairwise_rows,
@@ -18,6 +20,78 @@ from modules.group_analysis_service import (
 
 
 class TestGroupAnalysisService(unittest.TestCase):
+    def test_build_payload_resolves_reference_scoped_metric_aliases(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-1', 'REF-1', 'REF-1'],
+                'HEADER - AX': ['DIA - X'] * 4,
+                'GROUP': ['A', 'A', 'B', 'B'],
+                'MEAS': [10.0, 10.2, 9.8, 9.9],
+                'LSL': [9.0] * 4,
+                'NOMINAL': [10.0] * 4,
+                'USL': [11.0] * 4,
+            }
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='DIAMETER - X',
+                scope_type='reference',
+                scope_value='REF-1',
+            )
+
+            payload = build_group_analysis_payload(
+                grouped_df,
+                requested_scope='single_reference',
+                analysis_level='light',
+                alias_db_path=db_path,
+            )
+
+        self.assertEqual(payload['metric_rows'][0]['metric'], 'DIAMETER - X')
+
+    def test_build_payload_prefers_reference_alias_over_global_alias(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-1', 'REF-1', 'REF-1'],
+                'HEADER - AX': ['DIA - X'] * 4,
+                'GROUP': ['A', 'A', 'B', 'B'],
+                'MEAS': [10.0, 10.2, 9.8, 9.9],
+                'LSL': [9.0] * 4,
+                'NOMINAL': [10.0] * 4,
+                'USL': [11.0] * 4,
+            }
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='GLOBAL DIA',
+                scope_type='global',
+            )
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='REF DIA',
+                scope_type='reference',
+                scope_value='REF-1',
+            )
+
+            payload = build_group_analysis_payload(
+                grouped_df,
+                requested_scope='single_reference',
+                analysis_level='light',
+                alias_db_path=db_path,
+            )
+
+        self.assertEqual(payload['metric_rows'][0]['metric'], 'REF DIA')
+
     @patch('modules.group_analysis_service.compute_pairwise_rows')
     def test_build_pairwise_rows_emits_difference_and_standardized_comment(self, mock_compute_pairwise_rows):
         mock_compute_pairwise_rows.return_value = [

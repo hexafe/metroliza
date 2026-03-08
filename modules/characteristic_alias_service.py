@@ -164,12 +164,18 @@ def resolve_characteristic_alias(
     if not normalized_metric_name:
         return str(metric_name or '')
 
-    aliases = fetch_characteristic_aliases(
-        db_path,
-        normalized_metric_name,
-        reference=reference,
-        connection=connection,
-    )
+    try:
+        aliases = fetch_characteristic_aliases(
+            db_path,
+            normalized_metric_name,
+            reference=reference,
+            connection=connection,
+        )
+    except sqlite3.OperationalError as exc:
+        if 'no such table: CHARACTERISTIC_ALIASES' in str(exc):
+            return normalized_metric_name
+        raise
+
     if aliases:
         return str(aliases[0].get('canonical_name') or normalized_metric_name)
     return normalized_metric_name
