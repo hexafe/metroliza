@@ -7,24 +7,124 @@ from modules.group_analysis_service import get_spec_status_label
 SECTION_GAP = 1
 
 
+def _get_workbook(worksheet):
+    return getattr(worksheet, 'book', None) or getattr(worksheet, 'workbook', None)
+
+
+def _build_formats(worksheet):
+    """Create reusable worksheet formats when a workbook is available."""
+    workbook = _get_workbook(worksheet)
+    if workbook is None or not hasattr(workbook, 'add_format'):
+        return {}
+
+    cached = getattr(worksheet, '_group_analysis_formats', None)
+    if cached is not None:
+        return cached
+
+    formats = {
+        'positive': workbook.add_format({'bg_color': '#E6F4EA', 'font_color': '#1E4620'}),
+        'neutral': workbook.add_format({'bg_color': '#EEF2F7', 'font_color': '#334155'}),
+        'warning': workbook.add_format({'bg_color': '#FFF4CC', 'font_color': '#7A4E00'}),
+        'strong_warning': workbook.add_format({'bg_color': '#FDE2E1', 'font_color': '#8B1C13', 'bold': True}),
+        'muted': workbook.add_format({'bg_color': '#F7F7F7', 'font_color': '#8A8F98'}),
+        'yes': workbook.add_format({'bg_color': '#E8F3FF', 'font_color': '#0B4F8C', 'bold': True}),
+        'no': workbook.add_format({'bg_color': '#F3F4F6', 'font_color': '#6B7280'}),
+    }
+    setattr(worksheet, '_group_analysis_formats', formats)
+    return formats
+
+
+def _style_rule(formats, key, **extra):
+    rule = dict(extra)
+    if key in formats:
+        rule['format'] = formats[key]
+    return rule
+
+
+def _apply_conditional(worksheet, first_row, first_col, last_row, last_col, rule):
+    if first_row > last_row or first_col > last_col or not hasattr(worksheet, 'conditional_format'):
+        return
+    worksheet.conditional_format(first_row, first_col, last_row, last_col, rule)
+
+
 def _write_section_title(worksheet, row, title):
     worksheet.write(row, 0, title)
     return row + 1
 
 
 def _write_table(worksheet, row, headers, rows):
+    row, _ = _write_table_with_bounds(worksheet, row, headers, rows)
+    return row
+
+
+def _write_table_with_bounds(worksheet, row, headers, rows):
+    header_row = row
     for col, header in enumerate(headers):
         worksheet.write(row, col, header)
     row += 1
     if not rows:
         worksheet.write(row, 0, '(no rows)')
-        return row + 1
+        return row + 1, {'header_row': header_row, 'first_data_row': row, 'last_data_row': row, 'headers': headers}
 
+    first_data_row = row
     for entry in rows:
         for col, header in enumerate(headers):
             worksheet.write(row, col, entry.get(header))
         row += 1
-    return row
+    return row, {'header_row': header_row, 'first_data_row': first_data_row, 'last_data_row': row - 1, 'headers': headers}
+
+
+def _apply_metric_pairwise_formats(worksheet, bounds):
+    headers = bounds['headers']
+    first = bounds['first_data_row']
+    last = bounds['last_data_row']
+    if first > last:
+        return
+    formats = _build_formats(worksheet)
+
+    difference_col = headers.index('Difference')
+    comment_col = headers.index('Comment')
+    pvalue_col = headers.index('adj p-value')
+    effect_col = headers.index('effect size')
+
+    _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'strong_warning', type='text', criteria='containing', value='YES'))
+    _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'neutral', type='text', criteria='containing', value='NO'))
+    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='USE CAUTION'))
+    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='DESCRIPTIVE ONLY'))
+
+    # Restrained emphasis for clearly significant p-values and very large effects.
+    _apply_conditional(worksheet, first, pvalue_col, last, pvalue_col, _style_rule(formats, 'positive', type='cell', criteria='<', value=0.01))
+    _apply_conditional(worksheet, first, effect_col, last, effect_col, _style_rule(formats, 'positive', type='cell', criteria='>=', value=1.0))
+
+
+def _apply_spec_status_and_flag_formats(worksheet, bounds):
+    headers = bounds['headers']
+    first = bounds['first_data_row']
+    last = bounds['last_data_row']
+    if first > last:
+        return
+    formats = _build_formats(worksheet)
+
+    spec_col = headers.index('Spec status')
+    comment_col = headers.index('Comment')
+
+    _apply_conditional(worksheet, first, spec_col, last, spec_col, _style_rule(formats, 'positive', type='text', criteria='containing', value='Exact match'))
+    _apply_conditional(worksheet, first, spec_col, last, spec_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='Limits differ'))
+    _apply_conditional(worksheet, first, spec_col, last, spec_col, _style_rule(formats, 'strong_warning', type='text', criteria='containing', value='Nominal differs'))
+    _apply_conditional(worksheet, first, spec_col, last, spec_col, _style_rule(formats, 'muted', type='text', criteria='containing', value='Spec missing'))
+    _apply_conditional(worksheet, first, spec_col, last, spec_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='Invalid spec'))
+
+    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='LOW N'))
+    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='IMBALANCED N'))
+    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='SPEC?'))
+    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'strong_warning', type='text', criteria='containing', value='SEVERELY IMBALANCED N'))
+
+    light_col = headers.index('Included in Light')
+    standard_col = headers.index('Included in Standard')
+    _apply_conditional(worksheet, first, light_col, last, light_col, _style_rule(formats, 'yes', type='text', criteria='containing', value='YES'))
+    _apply_conditional(worksheet, first, light_col, last, light_col, _style_rule(formats, 'no', type='text', criteria='containing', value='NO'))
+    _apply_conditional(worksheet, first, standard_col, last, standard_col, _style_rule(formats, 'yes', type='text', criteria='containing', value='YES'))
+    _apply_conditional(worksheet, first, standard_col, last, standard_col, _style_rule(formats, 'no', type='text', criteria='containing', value='NO'))
 
 
 def _write_metric_section(worksheet, row, metric_row):
@@ -79,12 +179,13 @@ def _write_metric_section(worksheet, row, metric_row):
         }
         for entry in metric_row.get('pairwise_rows', [])
     ]
-    row = _write_table(
+    row, pairwise_bounds = _write_table_with_bounds(
         worksheet,
         row,
         ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'Difference', 'Comment'],
         pairwise_rows,
     )
+    _apply_metric_pairwise_formats(worksheet, pairwise_bounds)
     row += SECTION_GAP
 
     insights = metric_row.get('insights', [])
@@ -239,7 +340,7 @@ def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
             for entry in diagnostics_payload.get('skipped_metrics', [])
         )
 
-    row = _write_table(
+    row, coverage_bounds = _write_table_with_bounds(
         worksheet,
         row,
         [
@@ -253,6 +354,7 @@ def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
         ],
         coverage_rows,
     )
+    _apply_spec_status_and_flag_formats(worksheet, coverage_bounds)
 
     row += SECTION_GAP
 
