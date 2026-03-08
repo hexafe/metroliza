@@ -100,7 +100,6 @@ from modules.export_grouping_utils import (
 from modules.group_analysis_service import (
     build_group_analysis_payload,
     evaluate_group_analysis_readiness,
-    resolve_group_analysis_scope,
 )
 from modules.group_analysis_writer import (
     write_group_analysis_diagnostics_sheet,
@@ -2788,8 +2787,6 @@ class ExportDataThread(QThread):
         )
 
         requested_scope = str(self.group_analysis_scope or 'auto').strip().lower()
-        reference_count = int(grouped_export_df.get('REFERENCE', pd.Series(dtype=object)).dropna().nunique())
-        effective_scope = resolve_group_analysis_scope(requested_scope, reference_count)
         readiness = evaluate_group_analysis_readiness(
             grouped_export_df,
             requested_scope=requested_scope,
@@ -2806,8 +2803,11 @@ class ExportDataThread(QThread):
 
         skip_reason = readiness.get('skip_reason') or payload.get('skip_reason') or {}
         skip_code = str(skip_reason.get('code') or '')
-        if skip_code.startswith('forced_') and skip_code.endswith('_scope_mismatch'):
-            short_message = f'Scope mismatch: requested {requested_scope}, resolved {effective_scope}.'
+        if skip_code in {
+            'forced_single_reference_scope_mismatch',
+            'forced_multi_reference_scope_mismatch',
+        }:
+            short_message = str(skip_reason.get('message') or 'Group Analysis skipped.')
             self._write_group_analysis_message_sheet(group_worksheet, short_message)
         else:
             write_group_analysis_sheet(group_worksheet, payload)

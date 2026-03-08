@@ -414,57 +414,70 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertIn('Group Analysis', sheet_names)
                 self.assertIn('Diagnostics', sheet_names)
 
-    def test_group_analysis_scope_mismatch_writes_message_and_diagnostics(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = str(Path(temp_dir) / 'metroliza.sqlite')
-            out_path = str(Path(temp_dir) / 'export.xlsx')
+    def test_group_analysis_scope_mismatch_writes_exact_message_and_diagnostics(self):
+        scenarios = [
+            {
+                'references': [('REF-1', 'part_1.pdf', '1'), ('REF-1', 'part_2.pdf', '2')],
+                'scope': 'multi_reference',
+                'expected_code': 'forced_multi_reference_scope_mismatch',
+                'expected_message': 'Multi-reference group analysis skipped: grouped rows span only one reference.',
+            },
+            {
+                'references': [('REF-1', 'part_1.pdf', '1'), ('REF-2', 'part_2.pdf', '2')],
+                'scope': 'single_reference',
+                'expected_code': 'forced_single_reference_scope_mismatch',
+                'expected_message': 'Single-reference group analysis skipped: grouped rows span multiple references.',
+            },
+        ]
 
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                ('REF-1', '/fake/reports', 'part_2.pdf', '2024-01-02', '2'),
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (2, 'X', 10.0, 0.5, -0.5, 0.0, 10.2, 0.2, 0, 'FEATURE_1'),
-            )
+        for scenario in scenarios:
+            with self.subTest(scope=scenario['scope']), tempfile.TemporaryDirectory() as temp_dir:
+                db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+                out_path = str(Path(temp_dir) / 'export.xlsx')
 
-            request = ExportRequest(
-                paths=AppPaths(db_file=db_path, excel_file=out_path),
-                options=ExportOptions(
-                    generate_summary_sheet=False,
-                    group_analysis_level='light',
-                    group_analysis_scope='multi_reference',
-                ),
-            )
-            thread = ExportDataThread(request)
-            completed = thread.get_export_backend().run(thread)
+                execute_with_retry(
+                    db_path,
+                    'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
+                )
+                execute_with_retry(
+                    db_path,
+                    'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
+                )
 
-            self.assertTrue(completed)
-            sheet_names = _xlsx_sheet_names(out_path)
-            self.assertIn('Group Analysis', sheet_names)
-            self.assertIn('Diagnostics', sheet_names)
-            values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
-            self.assertTrue(any('Scope mismatch:' in value for value in values))
+                for index, (reference, filename, sample_number) in enumerate(scenario['references'], start=1):
+                    execute_with_retry(
+                        db_path,
+                        'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
+                        (reference, '/fake/reports', filename, f'2024-01-0{index}', sample_number),
+                    )
+                    execute_with_retry(
+                        db_path,
+                        'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (index, 'X', 10.0, 0.5, -0.5, 0.0, 10.0 + (0.1 * index), 0.1 * index, 0, 'FEATURE_1'),
+                    )
+
+                request = ExportRequest(
+                    paths=AppPaths(db_file=db_path, excel_file=out_path),
+                    options=ExportOptions(
+                        generate_summary_sheet=False,
+                        group_analysis_level='light',
+                        group_analysis_scope=scenario['scope'],
+                    ),
+                )
+                thread = ExportDataThread(request)
+                completed = thread.get_export_backend().run(thread)
+
+                self.assertTrue(completed)
+                sheet_names = _xlsx_sheet_names(out_path)
+                self.assertIn('Group Analysis', sheet_names)
+                self.assertIn('Diagnostics', sheet_names)
+
+                analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+                self.assertIn(scenario['expected_message'], analysis_values)
+
+                diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
+                self.assertIn(scenario['expected_code'], diagnostics_values)
+                self.assertIn(scenario['expected_message'], diagnostics_values)
 
     def test_group_analysis_independent_from_extended_plots_toggle(self):
         for summary_enabled in (False, True):

@@ -11,10 +11,10 @@ from modules.stats_utils import safe_process_capability
 
 _SKIP_REASON_MESSAGES = {
     'forced_single_reference_scope_mismatch': (
-        'Group Analysis skipped: scope is single_reference but export contains multiple references.'
+        'Single-reference group analysis skipped: grouped rows span multiple references.'
     ),
     'forced_multi_reference_scope_mismatch': (
-        'Group Analysis skipped: scope is multi_reference but export does not contain multiple references.'
+        'Multi-reference group analysis skipped: grouped rows span only one reference.'
     ),
     'insufficient_groups': 'Group Analysis skipped: at least 2 groups are required.',
     'missing_numeric_meas': 'Group Analysis skipped: no numeric MEAS values are available.',
