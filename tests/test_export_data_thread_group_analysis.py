@@ -12,7 +12,7 @@ from pathlib import Path
 from modules.db import execute_with_retry  # noqa: E402
 
 
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
+qtcore_stub = sys.modules.get('PyQt6.QtCore') or types.ModuleType('PyQt6.QtCore')
 
 
 class _DummyThread:
@@ -34,9 +34,9 @@ def _dummy_signal(*args, **kwargs):
     return _Signal()
 
 
-qtcore_stub.QCoreApplication = _DummyCoreApp
-qtcore_stub.QThread = _DummyThread
-qtcore_stub.pyqtSignal = _dummy_signal
+qtcore_stub.QCoreApplication = getattr(qtcore_stub, 'QCoreApplication', _DummyCoreApp)
+qtcore_stub.QThread = getattr(qtcore_stub, 'QThread', _DummyThread)
+qtcore_stub.pyqtSignal = getattr(qtcore_stub, 'pyqtSignal', _dummy_signal)
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
 custom_logger_stub = types.ModuleType('modules.CustomLogger')
@@ -48,12 +48,7 @@ class _DummyLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.CustomLogger'] = custom_logger_stub
-
-cmm_parser_stub = types.ModuleType('modules.CMMReportParser')
-cmm_parser_stub.CMMReportParser = object
-sys.modules['modules.CMMReportParser'] = cmm_parser_stub
-
+sys.modules.setdefault('modules.CustomLogger', custom_logger_stub)
 from modules.ExportDataThread import ExportDataThread  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 
