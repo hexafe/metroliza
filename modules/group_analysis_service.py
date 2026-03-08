@@ -207,7 +207,23 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
     return output
 
 
-def build_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correction_method='holm'):
+def _resolve_pairwise_comment(*, pairwise_eligible, significant, flags):
+    """Return standardized pairwise comment vocabulary for worksheet consumers."""
+    if not pairwise_eligible:
+        return 'DESCRIPTIVE ONLY'
+    if flags and flags != 'none':
+        return 'USE CAUTION'
+    return 'DIFFERENCE' if significant else 'NO DIFFERENCE'
+
+
+def build_pairwise_rows(
+    metric_identity,
+    grouped_values,
+    *,
+    alpha=0.05,
+    correction_method='holm',
+    pairwise_eligible=True,
+):
     """Build enriched pairwise A/B rows for worksheet output."""
     raw_rows = compute_pairwise_rows(
         metric_identity,
@@ -232,12 +248,18 @@ def build_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correcti
 
         adj_p = row.get('adjusted_p_value')
         significant = bool(row.get('significant'))
-        verdict = 'different' if significant else 'no_evidence_of_difference'
         flags = []
         if adj_p is None:
             flags.append('missing_adjusted_p')
         if row.get('effect_size') is None:
             flags.append('missing_effect_size')
+        flags_text = '; '.join(flags) if flags else 'none'
+        difference = 'YES' if pairwise_eligible and significant else 'NO'
+        comment = _resolve_pairwise_comment(
+            pairwise_eligible=pairwise_eligible,
+            significant=significant,
+            flags=flags_text,
+        )
 
         output.append(
             {
@@ -246,12 +268,12 @@ def build_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correcti
                 'delta_mean': delta_mean,
                 'adjusted_p_value': adj_p,
                 'effect_size': row.get('effect_size'),
-                'verdict': verdict,
-                'flags': '; '.join(flags) if flags else 'none',
+                'difference': difference,
+                'comment': comment,
+                'flags': flags_text,
                 'metric': metric_identity,
                 'p_value': row.get('p_value'),
                 'test_used': row.get('test_used'),
-                'significant': significant,
             }
         )
     return output
@@ -314,7 +336,7 @@ def build_metric_insights(metric_row):
         lines.append(
             (
                 f"Strongest pairwise signal: {best.get('group_a')} vs {best.get('group_b')} "
-                f"(adj p={best.get('adjusted_p_value')}, verdict={best.get('verdict')})."
+                f"(adj p={best.get('adjusted_p_value')}, comment={best.get('comment')})."
             )
         )
     elif metric_row.get('analysis_policy', {}).get('allow_pairwise'):

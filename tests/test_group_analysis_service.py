@@ -1,9 +1,11 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
 from modules.group_analysis_service import (
     build_group_analysis_payload,
+    build_pairwise_rows,
     classify_spec_status,
     classify_metric_spec_status,
     compute_capability_payload,
@@ -15,6 +17,71 @@ from modules.group_analysis_service import (
 
 
 class TestGroupAnalysisService(unittest.TestCase):
+    @patch('modules.group_analysis_service.compute_pairwise_rows')
+    def test_build_pairwise_rows_emits_difference_and_standardized_comment(self, mock_compute_pairwise_rows):
+        mock_compute_pairwise_rows.return_value = [
+            {
+                'group_a': 'A',
+                'group_b': 'B',
+                'adjusted_p_value': 0.01,
+                'effect_size': 0.8,
+                'p_value': 0.01,
+                'test_used': 'welch_t',
+                'significant': True,
+            },
+            {
+                'group_a': 'A',
+                'group_b': 'C',
+                'adjusted_p_value': 0.4,
+                'effect_size': 0.1,
+                'p_value': 0.4,
+                'test_used': 'welch_t',
+                'significant': False,
+            },
+            {
+                'group_a': 'B',
+                'group_b': 'C',
+                'adjusted_p_value': None,
+                'effect_size': None,
+                'p_value': None,
+                'test_used': 'welch_t',
+                'significant': True,
+            },
+        ]
+
+        rows = build_pairwise_rows(
+            'M1',
+            {'A': [10.0, 10.1], 'B': [9.7, 9.8], 'C': [9.9, 10.0]},
+            pairwise_eligible=True,
+        )
+
+        self.assertEqual(rows[0]['difference'], 'YES')
+        self.assertEqual(rows[0]['comment'], 'DIFFERENCE')
+        self.assertEqual(rows[1]['difference'], 'NO')
+        self.assertEqual(rows[1]['comment'], 'NO DIFFERENCE')
+        self.assertEqual(rows[2]['difference'], 'YES')
+        self.assertEqual(rows[2]['comment'], 'USE CAUTION')
+        self.assertNotIn('significant', rows[0])
+
+    @patch('modules.group_analysis_service.compute_pairwise_rows')
+    def test_build_pairwise_rows_marks_descriptive_only_when_pairwise_is_ineligible(self, mock_compute_pairwise_rows):
+        mock_compute_pairwise_rows.return_value = [
+            {
+                'group_a': 'A',
+                'group_b': 'B',
+                'adjusted_p_value': 0.01,
+                'effect_size': 0.8,
+                'p_value': 0.01,
+                'test_used': 'welch_t',
+                'significant': True,
+            }
+        ]
+
+        rows = build_pairwise_rows('M1', {'A': [10.0], 'B': [9.0]}, pairwise_eligible=False)
+
+        self.assertEqual(rows[0]['difference'], 'NO')
+        self.assertEqual(rows[0]['comment'], 'DESCRIPTIVE ONLY')
+
     def test_auto_scope_resolution_uses_reference_cardinality(self):
         self.assertEqual(resolve_group_analysis_scope('auto', 1), 'single_reference')
         self.assertEqual(resolve_group_analysis_scope('auto', 2), 'multi_reference')
@@ -177,7 +244,9 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIn('iqr', metric['descriptive_stats'][0])
         self.assertIn('flags', metric['descriptive_stats'][0])
         self.assertIn('delta_mean', metric['pairwise_rows'][0])
-        self.assertIn('verdict', metric['pairwise_rows'][0])
+        self.assertIn('difference', metric['pairwise_rows'][0])
+        self.assertIn('comment', metric['pairwise_rows'][0])
+        self.assertNotIn('significant', metric['pairwise_rows'][0])
         self.assertEqual(payload['diagnostics']['metric_count'], 1)
         self.assertEqual(payload['diagnostics']['status_counts']['EXACT_MATCH'], 1)
         self.assertEqual(payload['diagnostics']['requested_level'], 'light')
