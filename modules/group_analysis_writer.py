@@ -61,6 +61,7 @@ def _build_formats(worksheet):
         'muted': workbook.add_format({'bg_color': '#F7F7F7', 'font_color': '#8A8F98'}),
         'yes': workbook.add_format({'bg_color': '#E8F3FF', 'font_color': '#0B4F8C', 'bold': True}),
         'no': workbook.add_format({'bg_color': '#F3F4F6', 'font_color': '#6B7280'}),
+        'delta_mean_fixed_3': workbook.add_format({'num_format': '0.000'}),
     }
     setattr(worksheet, '_group_analysis_formats', formats)
     return formats
@@ -119,6 +120,7 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
     flags_col = headers.index('Flags') if 'Flags' in headers else None
     pvalue_col = headers.index('adj p-value')
     effect_col = headers.index('effect size')
+    delta_mean_col = headers.index('Delta mean') if 'Delta mean' in headers else None
 
     _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'strong_warning', type='text', criteria='containing', value='YES'))
     _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'neutral', type='text', criteria='containing', value='NO'))
@@ -134,6 +136,16 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
     # Restrained emphasis for clearly significant p-values and very large effects.
     _apply_conditional(worksheet, first, pvalue_col, last, pvalue_col, _style_rule(formats, 'positive', type='cell', criteria='<', value=0.01))
     _apply_conditional(worksheet, first, effect_col, last, effect_col, _style_rule(formats, 'positive', type='cell', criteria='>=', value=1.0))
+
+    if delta_mean_col is not None:
+        _apply_conditional(
+            worksheet,
+            first,
+            delta_mean_col,
+            last,
+            delta_mean_col,
+            _style_rule(formats, 'delta_mean_fixed_3', type='no_blanks'),
+        )
 
 
 def _apply_spec_status_and_flag_formats(worksheet, bounds):

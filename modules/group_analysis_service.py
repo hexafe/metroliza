@@ -458,7 +458,7 @@ def build_pairwise_rows(
         group_b = row.get('group_b')
         delta_mean = None
         if group_a in means and group_b in means:
-            delta_mean = means[group_a] - means[group_b]
+            delta_mean = _round_display_value(means[group_a] - means[group_b], precision=3)
 
         adj_p = row.get('adjusted_p_value')
         significant = bool(row.get('significant'))
