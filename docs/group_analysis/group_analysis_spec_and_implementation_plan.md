@@ -803,15 +803,15 @@ Suggested location:
 - New Group Analysis service/writer path is active with baseline unit/integration coverage.
 - Core comparability taxonomy (`EXACT_MATCH`, `LIMIT_MISMATCH`, `NOM_MISMATCH`, `INVALID_SPEC`) and level-aware inclusion policy are implemented.
 - Diagnostics sheet generation is implemented and always emitted when Group Analysis is enabled.
+- Standard-mode plot insertion for eligible metrics is implemented in workbook output (with deterministic diagnostics for skipped/ineligible plot paths).
 
 #### Deferred / not implemented in this cycle
 
-- Full Standard-mode plot insertion remains incomplete; current workbook output still includes reserved plot-slot placeholders for future chart insertion.
 - Metric alias mapping / fuzzy matching / enterprise canonicalization remain intentionally deferred.
 
 #### Next implementation step
 
-- Implement **Standard plot insertion** in `modules/group_analysis_writer.py` (and integration plumbing/tests as needed) so eligible Standard metrics render real charts instead of reserved placeholders while preserving deterministic diagnostics skip reasons.
+- Implement **metric alias/canonical mapping strategy** in `modules/group_analysis_service.py` (with coordinated diagnostics/writer updates and tests) so multi-reference analysis can optionally reconcile known naming variants while preserving deterministic comparability reporting.
 
 ---
 
