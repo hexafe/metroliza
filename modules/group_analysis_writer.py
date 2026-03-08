@@ -29,26 +29,6 @@ def _write_table(worksheet, row, headers, rows):
 def _write_metric_section(worksheet, row, metric_row):
     row = _write_section_title(worksheet, row, f"Metric: {metric_row.get('metric', 'Unknown')}")
 
-    comparability = metric_row.get('comparability_summary', {})
-    comparability_rows = [
-        {'Field': 'Status', 'Value': comparability.get('status', metric_row.get('spec_status'))},
-        {'Field': 'Interpretation limits', 'Value': comparability.get('interpretation_limits', 'none')},
-        {'Field': 'Summary', 'Value': comparability.get('summary')},
-    ]
-    row = _write_section_title(worksheet, row, 'Comparability / spec summary')
-    row = _write_table(worksheet, row, ['Field', 'Value'], comparability_rows)
-    row += SECTION_GAP
-
-    metadata_rows = [
-        {'Field': 'Reference', 'Value': metric_row.get('reference')},
-        {'Field': 'Group count', 'Value': metric_row.get('group_count')},
-        {'Field': 'Spec status', 'Value': metric_row.get('spec_status')},
-        {'Field': 'Cp', 'Value': metric_row.get('capability', {}).get('cp')},
-        {'Field': 'Cpk', 'Value': metric_row.get('capability', {}).get('cpk')},
-    ]
-    row = _write_table(worksheet, row, ['Field', 'Value'], metadata_rows)
-    row += SECTION_GAP
-
     row = _write_section_title(worksheet, row, 'Descriptive stats')
     desc_rows = [
         {
@@ -80,25 +60,32 @@ def _write_metric_section(worksheet, row, metric_row):
         {
             'Group A': entry.get('group_a'),
             'Group B': entry.get('group_b'),
-            'Δmean': entry.get('delta_mean'),
-            'adj p': entry.get('adjusted_p_value'),
+            'adj p-value': entry.get('adjusted_p_value'),
             'effect size': entry.get('effect_size'),
-            'verdict': entry.get('verdict'),
-            'flags': entry.get('flags'),
+            'test': entry.get('test_used'),
+            'Difference': entry.get('delta_mean'),
+            'Comment': '; '.join(
+                token
+                for token in [entry.get('verdict'), entry.get('flags') if entry.get('flags') not in (None, 'none') else None]
+                if token
+            )
+            or 'none',
         }
         for entry in metric_row.get('pairwise_rows', [])
     ]
     row = _write_table(
         worksheet,
         row,
-        ['Group A', 'Group B', 'Δmean', 'adj p', 'effect size', 'verdict', 'flags'],
+        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Difference', 'Comment'],
         pairwise_rows,
     )
     row += SECTION_GAP
 
-    row = _write_section_title(worksheet, row, 'Insights')
-    insight_rows = [{'Insight': line} for line in metric_row.get('insights', [])]
-    row = _write_table(worksheet, row, ['Insight'], insight_rows)
+    insights = metric_row.get('insights', [])
+    concise_line = insights[0] if insights else 'No insight available.'
+    worksheet.write(row, 0, 'Comment')
+    worksheet.write(row, 1, concise_line)
+    row += 1
     row += SECTION_GAP
     return row
 
@@ -204,21 +191,49 @@ def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
     row = _write_table(worksheet, row, ['Field', 'Value'], unmatched_rows)
     row += SECTION_GAP
 
-    row = _write_section_title(worksheet, row, 'Analyzed metrics')
-    analyzed_rows = [
+    row = _write_section_title(worksheet, row, 'Metric coverage')
+    coverage_rows = [
         {
-            'metric': entry.get('metric'),
-            'reference': entry.get('reference'),
-            'groups': entry.get('group_count'),
-            'spec_status': entry.get('spec_status'),
-            'pairwise_rows': len(entry.get('pairwise_rows', [])),
+            'Metric': entry.get('metric'),
+            'Included': 'Yes',
+            'Reference': entry.get('reference'),
+            'Group count': entry.get('group_count'),
+            'Spec status': entry.get('spec_status'),
+            'Pairwise rows': len(entry.get('pairwise_rows', [])),
+            'Inclusion rationale': 'Analyzed',
+            'Exclusion rationale': '',
         }
         for entry in diagnostics_payload.get('metrics', [])
     ]
-    row = _write_table(worksheet, row, ['metric', 'reference', 'groups', 'spec_status', 'pairwise_rows'], analyzed_rows)
-    row += SECTION_GAP
+    coverage_rows.extend(
+        {
+            'Metric': entry.get('metric'),
+            'Included': 'No',
+            'Reference': '',
+            'Group count': '',
+            'Spec status': '',
+            'Pairwise rows': '',
+            'Inclusion rationale': '',
+            'Exclusion rationale': entry.get('reason'),
+        }
+        for entry in diagnostics_payload.get('skipped_metrics', [])
+    )
+    row = _write_table(
+        worksheet,
+        row,
+        [
+            'Metric',
+            'Included',
+            'Reference',
+            'Group count',
+            'Spec status',
+            'Pairwise rows',
+            'Inclusion rationale',
+            'Exclusion rationale',
+        ],
+        coverage_rows,
+    )
 
-    row = _write_section_title(worksheet, row, 'Skipped metrics')
-    row = _write_table(worksheet, row, ['metric', 'reason'], diagnostics_payload.get('skipped_metrics', []))
+    row += SECTION_GAP
 
     worksheet.freeze_panes(1, 0)
