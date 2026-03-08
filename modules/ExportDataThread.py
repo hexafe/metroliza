@@ -1215,122 +1215,35 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
 
     bin_count = max(3, bins)
 
-    grouped_histogram_labels = []
-    if isinstance(group_column, str) and group_column and isinstance(header_group, pd.DataFrame):
-        grouped_labels, grouped_values, _ = build_violin_payload_vectorized(
-            header_group,
-            group_column,
-            min_samplesize=1,
-        )
-        grouped_payload = [
-            (label, np.asarray(series, dtype=float))
-            for label, series in zip(grouped_labels, grouped_values)
-            if np.asarray(series, dtype=float).size > 0
-        ]
-        if len(grouped_payload) >= 2:
-            first_group, second_group = grouped_payload[0], grouped_payload[1]
-            grouped_histogram_labels = [first_group[0], second_group[0]]
-
-            histogram_colors = [
-                SUMMARY_PLOT_PALETTE['distribution_base'],
-                SUMMARY_PLOT_PALETTE['distribution_foreground'],
-            ]
-            histogram_alphas = [0.64, 0.48]
-            bin_edges = np.linspace(x_min_base, x_max_base, bin_count + 1)
-
-            if _HAS_SEABORN:
-                sns.histplot(
-                    x=first_group[1],
-                    bins=bin_edges,
-                    stat='count',
-                    alpha=histogram_alphas[0],
-                    color=histogram_colors[0],
-                    edgecolor=(1.0, 1.0, 1.0, 0.72),
-                    linewidth=0.5,
-                    ax=ax,
-                )
-            else:
-                ax.hist(
-                    first_group[1],
-                    bins=bin_edges,
-                    density=False,
-                    alpha=histogram_alphas[0],
-                    color=histogram_colors[0],
-                    edgecolor=(1.0, 1.0, 1.0, 0.72),
-                    linewidth=0.5,
-                )
-
-            secondary_axis = ax.twinx()
-            if _HAS_SEABORN:
-                sns.histplot(
-                    x=second_group[1],
-                    bins=bin_edges,
-                    stat='count',
-                    alpha=histogram_alphas[1],
-                    color=histogram_colors[1],
-                    edgecolor=(1.0, 1.0, 1.0, 0.72),
-                    linewidth=0.5,
-                    ax=secondary_axis,
-                )
-            else:
-                secondary_axis.hist(
-                    second_group[1],
-                    bins=bin_edges,
-                    density=False,
-                    alpha=histogram_alphas[1],
-                    color=histogram_colors[1],
-                    edgecolor=(1.0, 1.0, 1.0, 0.72),
-                    linewidth=0.5,
-                )
-
-            secondary_axis.set_ylabel(f"Count ({second_group[0]})", color=histogram_colors[1])
-            secondary_axis.tick_params(axis='y', colors=histogram_colors[1])
-
-            ax.set_ylabel(f"Count ({first_group[0]})", color=histogram_colors[0])
-            ax.tick_params(axis='y', colors=histogram_colors[0])
-
-            legend_handles = [
-                Patch(facecolor=histogram_colors[0], edgecolor='none', alpha=histogram_alphas[0], label=first_group[0]),
-                Patch(facecolor=histogram_colors[1], edgecolor='none', alpha=histogram_alphas[1], label=second_group[0]),
-            ]
-            ax.legend(handles=legend_handles, loc='upper left', frameon=True, fontsize=7.0)
-
-            enforce_minimum_histogram_bar_width(ax)
-            enforce_minimum_histogram_bar_width(secondary_axis)
-            lock_histogram_y_axis_to_bar_heights(ax)
-            lock_histogram_y_axis_to_bar_heights(secondary_axis)
-
-    if not grouped_histogram_labels:
-        if _HAS_SEABORN:
-            sns.histplot(
+    if _HAS_SEABORN:
+        sns.histplot(
             x=histogram_values,
             bins=bin_count,
-                stat='count',
-                alpha=0.72,
-                color=SUMMARY_PLOT_PALETTE['distribution_base'],
-                edgecolor=(1.0, 1.0, 1.0, 0.72),
-                linewidth=0.5,
-                ax=ax,
-            )
-        else:
-            ax.hist(
-                histogram_values,
-                bins=bin_count,
-                density=False,
-                alpha=0.72,
-                color=SUMMARY_PLOT_PALETTE['distribution_base'],
-                edgecolor=(1.0, 1.0, 1.0, 0.72),
-                linewidth=0.5,
-            )
+            stat='count',
+            alpha=0.72,
+            color=SUMMARY_PLOT_PALETTE['distribution_base'],
+            edgecolor=(1.0, 1.0, 1.0, 0.72),
+            linewidth=0.5,
+            ax=ax,
+        )
+    else:
+        ax.hist(
+            histogram_values,
+            bins=bin_count,
+            density=False,
+            alpha=0.72,
+            color=SUMMARY_PLOT_PALETTE['distribution_base'],
+            edgecolor=(1.0, 1.0, 1.0, 0.72),
+            linewidth=0.5,
+        )
 
     ax.set_xlim(x_min_base - x_padding, x_max_base + x_padding)
-    if not grouped_histogram_labels:
-        enforce_minimum_histogram_bar_width(ax)
-        lock_histogram_y_axis_to_bar_heights(ax)
+    enforce_minimum_histogram_bar_width(ax)
+    lock_histogram_y_axis_to_bar_heights(ax)
 
     return {
-        'is_grouped': bool(grouped_histogram_labels),
-        'group_labels': grouped_histogram_labels,
+        'is_grouped': False,
+        'group_labels': [],
     }
 
 
@@ -2894,7 +2807,24 @@ class ExportDataThread(QThread):
                 ax.set_title(f"{metric_row.get('metric')} - Violin")
             elif plot_key == 'histogram':
                 all_values = np.concatenate(grouped_values)
-                ax.hist(all_values, bins='auto', color=SUMMARY_PLOT_PALETTE['distribution_base'], edgecolor='black', alpha=0.7)
+                bin_edges = np.histogram_bin_edges(all_values, bins='auto')
+                histogram_palette = [
+                    SUMMARY_PLOT_PALETTE['distribution_base'],
+                    SUMMARY_PLOT_PALETTE['distribution_foreground'],
+                    SUMMARY_PLOT_PALETTE['density_line'],
+                    SUMMARY_PLOT_PALETTE['spec_limit'],
+                    SUMMARY_PLOT_PALETTE['sigma_band'],
+                ]
+                for index, (label, values) in enumerate(zip(group_labels, grouped_values)):
+                    ax.hist(
+                        values,
+                        bins=bin_edges,
+                        edgecolor='black',
+                        alpha=0.42,
+                        color=histogram_palette[index % len(histogram_palette)],
+                        label=label,
+                    )
+                ax.legend(loc='upper left', frameon=True, fontsize=7.0)
                 ax.set_title(f"{metric_row.get('metric')} - Histogram")
             else:
                 return {}

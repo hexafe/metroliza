@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
+    QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -126,6 +127,11 @@ class CharacteristicMappingDialog(QDialog):
 
         self.db_file = db_file
 
+        self.db_label = QLabel('Database file:')
+        self.db_path_input = QLineEdit(str(db_file or ''))
+        self.db_path_input.setReadOnly(True)
+        self.select_db_button = QPushButton('Browse DB')
+
         self.alias_table = QTableWidget(0, len(self.TABLE_HEADERS), self)
         self.alias_table.setHorizontalHeaderLabels(self.TABLE_HEADERS)
         self.alias_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -144,7 +150,13 @@ class CharacteristicMappingDialog(QDialog):
         button_row.addStretch()
         button_row.addWidget(self.close_button)
 
+        db_row = QHBoxLayout()
+        db_row.addWidget(self.db_label)
+        db_row.addWidget(self.db_path_input, 1)
+        db_row.addWidget(self.select_db_button)
+
         layout = QVBoxLayout(self)
+        layout.addLayout(db_row)
         layout.addWidget(self.alias_table)
         layout.addLayout(button_row)
 
@@ -152,12 +164,29 @@ class CharacteristicMappingDialog(QDialog):
         self.edit_button.clicked.connect(self.edit_mapping)
         self.delete_button.clicked.connect(self.delete_mapping)
         self.close_button.clicked.connect(self.accept)
+        self.select_db_button.clicked.connect(self.select_db_file)
 
+        self.load_aliases()
+
+    def select_db_file(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            'Select a database file',
+            str(self.db_file or ''),
+            'SQLite database (*.db *.sqlite *.sqlite3);;All files (*)',
+        )
+        if not filename:
+            return
+
+        self.db_file = filename
+        self.db_path_input.setText(filename)
+        if self.parent() is not None and hasattr(self.parent(), 'set_db_file'):
+            self.parent().set_db_file(filename)
         self.load_aliases()
 
     def load_aliases(self):
         if not self.db_file:
-            QMessageBox.warning(self, 'Missing database', 'Database file is not configured.')
+            self.alias_table.setRowCount(0)
             return
 
         try:
