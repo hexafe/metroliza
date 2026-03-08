@@ -239,6 +239,20 @@ def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
     row = _write_table(worksheet, row, ['Field', 'Value'], metadata_rows)
     row += SECTION_GAP
 
+    status_counts = diagnostics_payload.get('status_counts', {}) or {}
+    spec_status_keys = ['EXACT_MATCH', 'LIMIT_MISMATCH', 'NOM_MISMATCH', 'INVALID_SPEC']
+    row = _write_section_title(worksheet, row, 'Spec status counts')
+    status_count_rows = [
+        {
+            'Status key': status_key,
+            'Status': get_spec_status_label(status_key),
+            'Count': status_counts.get(status_key, 0),
+        }
+        for status_key in spec_status_keys
+    ]
+    row = _write_table(worksheet, row, ['Status key', 'Status', 'Count'], status_count_rows)
+    row += SECTION_GAP
+
     warning_summary = diagnostics_payload.get('warning_summary', {})
     row = _write_section_title(worksheet, row, 'Warning summary')
     warning_rows = [

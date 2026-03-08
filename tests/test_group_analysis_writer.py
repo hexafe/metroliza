@@ -142,6 +142,10 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                 'messages': ['M1: pairwise disabled'],
                 'skip_reason_counts': {'nom_mismatch': 1},
             },
+            'status_counts': {
+                'EXACT_MATCH': 3,
+                'LIMIT_MISMATCH': 2,
+            },
             'histogram_skip_summary': {'applies': True, 'count': 1, 'reason_counts': {'nom_mismatch': 1}},
             'unmatched_metrics_summary': {
                 'count': 1,
@@ -166,6 +170,38 @@ class TestGroupAnalysisWriter(unittest.TestCase):
 
         values = [value for _, _, value in worksheet.writes]
         self.assertIn('Group Analysis Diagnostics', values)
+        self.assertIn('Spec status counts', values)
+        self.assertIn('Status key', values)
+        self.assertIn('Status', values)
+        self.assertIn('Count', values)
+        self.assertIn('EXACT_MATCH', values)
+        self.assertIn('LIMIT_MISMATCH', values)
+        self.assertIn('NOM_MISMATCH', values)
+        self.assertIn('INVALID_SPEC', values)
+        self.assertIn('Exact match', values)
+        self.assertIn('Limits differ', values)
+        self.assertIn('Nominal differs', values)
+        self.assertIn('Spec missing / Invalid spec.', values)
+        self.assertIn(3, values)
+        self.assertIn(2, values)
+        status_count_by_key = {
+            key_value: next(
+                value
+                for write_row, write_col, value in worksheet.writes
+                if write_row == row and write_col == 2
+            )
+            for row, col, key_value in worksheet.writes
+            if col == 0 and key_value in {'EXACT_MATCH', 'LIMIT_MISMATCH', 'NOM_MISMATCH', 'INVALID_SPEC'}
+        }
+        self.assertEqual(
+            status_count_by_key,
+            {
+                'EXACT_MATCH': 3,
+                'LIMIT_MISMATCH': 2,
+                'NOM_MISMATCH': 0,
+                'INVALID_SPEC': 0,
+            },
+        )
         self.assertIn('Warning summary', values)
         self.assertIn('Histogram skip summary', values)
         self.assertIn('Possible unmatched metrics across references', values)
