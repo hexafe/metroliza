@@ -24,6 +24,21 @@ _SKIP_REASON_MESSAGES = {
 _SPEC_STATUSES = ('EXACT_MATCH', 'LIMIT_MISMATCH', 'NOM_MISMATCH', 'INVALID_SPEC')
 
 
+def _round_display_value(value, *, precision=3):
+    """Round numeric values for display payloads while preserving nulls."""
+    if value is None:
+        return None
+    parsed = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
+    if pd.isna(parsed):
+        return None
+    return round(float(parsed), precision)
+
+
+def _round_display_value_adj_p(value):
+    """Round adjusted p-values for display payloads."""
+    return _round_display_value(value, precision=4)
+
+
 def resolve_group_analysis_scope(requested_scope, reference_count):
     """Resolve effective Group Analysis scope from user selection and reference count."""
     normalized_scope = str(requested_scope or 'auto').strip().lower()
@@ -189,7 +204,7 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
             else {'cp': None, 'capability': None, 'capability_type': None}
         )
 
-        output_row = {
+        raw_output_row = {
             'group': row.get('group'),
             'n': row.get('n'),
             'mean': row.get('mean'),
@@ -202,7 +217,22 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
             'capability': capability.get('capability'),
             'capability_type': capability.get('capability_type'),
         }
-        output_row['flags'] = _build_group_flags(output_row, spec_payload)
+        raw_output_row['flags'] = _build_group_flags(raw_output_row, spec_payload)
+
+        output_row = {
+            'group': raw_output_row.get('group'),
+            'n': raw_output_row.get('n'),
+            'mean': _round_display_value(raw_output_row.get('mean')),
+            'std': _round_display_value(raw_output_row.get('std')),
+            'median': _round_display_value(raw_output_row.get('median')),
+            'iqr': _round_display_value(raw_output_row.get('iqr')),
+            'min': _round_display_value(raw_output_row.get('min')),
+            'max': _round_display_value(raw_output_row.get('max')),
+            'cp': _round_display_value(raw_output_row.get('cp')),
+            'capability': _round_display_value(raw_output_row.get('capability')),
+            'capability_type': raw_output_row.get('capability_type'),
+            'flags': raw_output_row.get('flags'),
+        }
         output.append(output_row)
     return output
 
@@ -266,8 +296,8 @@ def build_pairwise_rows(
                 'group_a': group_a,
                 'group_b': group_b,
                 'delta_mean': delta_mean,
-                'adjusted_p_value': adj_p,
-                'effect_size': row.get('effect_size'),
+                'adjusted_p_value': _round_display_value_adj_p(adj_p),
+                'effect_size': _round_display_value(row.get('effect_size')),
                 'difference': difference,
                 'comment': comment,
                 'flags': flags_text,

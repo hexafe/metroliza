@@ -23,8 +23,8 @@ class TestGroupAnalysisService(unittest.TestCase):
             {
                 'group_a': 'A',
                 'group_b': 'B',
-                'adjusted_p_value': 0.01,
-                'effect_size': 0.8,
+                'adjusted_p_value': 0.012345,
+                'effect_size': 0.81234,
                 'p_value': 0.01,
                 'test_used': 'welch_t',
                 'significant': True,
@@ -32,8 +32,8 @@ class TestGroupAnalysisService(unittest.TestCase):
             {
                 'group_a': 'A',
                 'group_b': 'C',
-                'adjusted_p_value': 0.4,
-                'effect_size': 0.1,
+                'adjusted_p_value': 0.456789,
+                'effect_size': 0.12345,
                 'p_value': 0.4,
                 'test_used': 'welch_t',
                 'significant': False,
@@ -57,8 +57,12 @@ class TestGroupAnalysisService(unittest.TestCase):
 
         self.assertEqual(rows[0]['difference'], 'YES')
         self.assertEqual(rows[0]['comment'], 'DIFFERENCE')
+        self.assertEqual(rows[0]['adjusted_p_value'], 0.0123)
+        self.assertEqual(rows[0]['effect_size'], 0.812)
         self.assertEqual(rows[1]['difference'], 'NO')
         self.assertEqual(rows[1]['comment'], 'NO DIFFERENCE')
+        self.assertEqual(rows[1]['adjusted_p_value'], 0.4568)
+        self.assertEqual(rows[1]['effect_size'], 0.123)
         self.assertEqual(rows[2]['difference'], 'YES')
         self.assertEqual(rows[2]['comment'], 'USE CAUTION')
         self.assertNotIn('significant', rows[0])
@@ -69,8 +73,8 @@ class TestGroupAnalysisService(unittest.TestCase):
             {
                 'group_a': 'A',
                 'group_b': 'B',
-                'adjusted_p_value': 0.01,
-                'effect_size': 0.8,
+                'adjusted_p_value': 0.012345,
+                'effect_size': 0.81234,
                 'p_value': 0.01,
                 'test_used': 'welch_t',
                 'significant': True,
@@ -134,9 +138,28 @@ class TestGroupAnalysisService(unittest.TestCase):
     def test_spec_normalization_and_status_classification(self):
         spec = normalize_spec_limits('1.23456', 2, '3.4567')
         self.assertEqual(spec, {'lsl': 1.235, 'nominal': 2.0, 'usl': 3.457})
+        self.assertIsInstance(spec['lsl'], float)
         self.assertEqual(classify_spec_status(spec), 'EXACT_MATCH')
         self.assertEqual(classify_spec_status({'lsl': None, 'nominal': None, 'usl': None}), 'INVALID_SPEC')
         self.assertEqual(classify_spec_status({'lsl': 1.0, 'nominal': None, 'usl': 3.0}), 'INVALID_SPEC')
+
+    def test_spec_status_comparison_uses_numeric_3_decimal_normalization(self):
+        metric_rows_df = pd.DataFrame(
+            {
+                'LSL': [1.0004, 1.00049],
+                'NOMINAL': [2.0004, 2.00049],
+                'USL': [3.0004, 3.00049],
+            }
+        )
+
+        status, canonical = classify_metric_spec_status(
+            metric_rows_df,
+            {'lsl': 'LSL', 'nominal': 'NOMINAL', 'usl': 'USL'},
+        )
+
+        self.assertEqual(status, 'EXACT_MATCH')
+        self.assertEqual(canonical, {'lsl': 1.0, 'nominal': 2.0, 'usl': 3.0})
+        self.assertTrue(all(isinstance(value, float) for value in canonical.values()))
 
     def test_classify_metric_spec_status_detects_mismatch_types(self):
         metric_rows_df = pd.DataFrame(
@@ -247,6 +270,15 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIn('difference', metric['pairwise_rows'][0])
         self.assertIn('comment', metric['pairwise_rows'][0])
         self.assertNotIn('significant', metric['pairwise_rows'][0])
+        self.assertAlmostEqual(metric['descriptive_stats'][0]['mean'], round(metric['descriptive_stats'][0]['mean'], 3))
+        self.assertAlmostEqual(
+            metric['pairwise_rows'][0]['effect_size'],
+            round(metric['pairwise_rows'][0]['effect_size'], 3),
+        )
+        self.assertAlmostEqual(
+            metric['pairwise_rows'][0]['adjusted_p_value'],
+            round(metric['pairwise_rows'][0]['adjusted_p_value'], 4),
+        )
         self.assertEqual(payload['diagnostics']['metric_count'], 1)
         self.assertEqual(payload['diagnostics']['status_counts']['EXACT_MATCH'], 1)
         self.assertEqual(payload['diagnostics']['requested_level'], 'light')
