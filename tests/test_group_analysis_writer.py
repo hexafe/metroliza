@@ -22,6 +22,7 @@ class FakeWorksheet:
         self.frozen = None
         self.book = FakeWorkbook()
         self.conditional_formats = []
+        self.images = []
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
@@ -31,6 +32,9 @@ class FakeWorksheet:
 
     def conditional_format(self, first_row, first_col, last_row, last_col, options):
         self.conditional_formats.append((first_row, first_col, last_row, last_col, dict(options)))
+
+    def insert_image(self, row, col, path, options=None):
+        self.images.append((row, col, path, dict(options or {})))
 
 
 class TestGroupAnalysisWriter(unittest.TestCase):
@@ -237,6 +241,64 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertTrue(any(r[1] == 4 and r[4].get('value') == 'YES' for r in coverage_rules))
         self.assertTrue(any(r[1] == 5 and r[4].get('value') == 'NO' for r in coverage_rules))
         self.assertTrue(any(r[1] == 2 and r[4].get('value') == 'Spec missing' for r in coverage_rules))
+
+    def test_standard_level_inserts_images_for_eligible_plots_and_keeps_row_progression(self):
+        worksheet = FakeWorksheet()
+        payload = {
+            'status': 'ready',
+            'analysis_level': 'standard',
+            'effective_scope': 'single_reference',
+            'metric_rows': [
+                {
+                    'metric': 'M1',
+                    'group_count': 2,
+                    'spec_status': 'EXACT_MATCH',
+                    'descriptive_stats': [],
+                    'pairwise_rows': [],
+                    'insights': ['M1 insight'],
+                    'plot_eligibility': {
+                        'violin': {'eligible': True, 'skip_reason': ''},
+                        'histogram': {'eligible': True, 'skip_reason': ''},
+                    },
+                },
+                {
+                    'metric': 'M2',
+                    'group_count': 2,
+                    'spec_status': 'EXACT_MATCH',
+                    'descriptive_stats': [],
+                    'pairwise_rows': [],
+                    'insights': ['M2 insight'],
+                    'plot_eligibility': {
+                        'violin': {'eligible': False, 'skip_reason': 'low_group_samples'},
+                        'histogram': {'eligible': True, 'skip_reason': ''},
+                    },
+                },
+            ],
+        }
+        plot_assets = {
+            'metrics': {
+                'M1': {
+                    'violin': {'path': 'violin.png', 'row_span': 4},
+                    'histogram': {'path': 'histogram.png', 'row_span': 3},
+                }
+            }
+        }
+
+        write_group_analysis_sheet(worksheet, payload, plot_assets=plot_assets)
+
+        inserted_paths = [entry[2] for entry in worksheet.images]
+        self.assertEqual(inserted_paths, ['violin.png', 'histogram.png'])
+
+        m2_metric_row = next(
+            row
+            for row, col, value in worksheet.writes
+            if col == 0 and value == 'Metric: M2'
+        )
+        self.assertGreaterEqual(m2_metric_row, 30)
+
+        values = [value for _, _, value in worksheet.writes]
+        self.assertIn('asset_missing', values)
+        self.assertIn('low_group_samples', values)
 
 
 if __name__ == '__main__':

@@ -5,6 +5,38 @@ from __future__ import annotations
 from modules.group_analysis_service import get_spec_status_label
 
 SECTION_GAP = 1
+DEFAULT_PLOT_ROW_SPAN = 16
+
+
+def _resolve_metric_plot_assets(plot_assets, metric_name):
+    if not isinstance(plot_assets, dict):
+        return {}
+    metric_assets = (plot_assets.get('metrics') or {}).get(metric_name)
+    return metric_assets if isinstance(metric_assets, dict) else {}
+
+
+def _insert_plot_image(worksheet, row, asset):
+    if not hasattr(worksheet, 'insert_image'):
+        return False
+
+    options = {}
+    image_ref = ''
+    if isinstance(asset, dict):
+        if asset.get('path'):
+            image_ref = str(asset.get('path'))
+        image_data = asset.get('image_data')
+        if image_data is not None:
+            options['image_data'] = image_data
+        if asset.get('x_scale') is not None:
+            options['x_scale'] = asset.get('x_scale')
+        if asset.get('y_scale') is not None:
+            options['y_scale'] = asset.get('y_scale')
+
+    if not image_ref and 'image_data' not in options:
+        return False
+
+    worksheet.insert_image(row, 1, image_ref, options)
+    return True
 
 
 def _get_workbook(worksheet):
@@ -205,26 +237,41 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
     plot_eligibility = metric_row.get('plot_eligibility') or {}
     analysis_level = str(metric_row.get('analysis_level') or '').strip().lower()
     if analysis_level == 'standard':
-        metric_assets = {}
-        if isinstance(plot_assets, dict):
-            metric_assets = (plot_assets.get('metrics') or {}).get(metric_row.get('metric'), {}) or {}
+        metric_assets = _resolve_metric_plot_assets(plot_assets, metric_row.get('metric'))
         row += SECTION_GAP
         row = _write_section_title(worksheet, row, 'Standard plot slots')
-        plot_rows = [
-            {
-                'Plot': 'Violin',
-                'Eligible': 'YES' if bool((plot_eligibility.get('violin') or {}).get('eligible')) else 'NO',
-                'Skip reason': (plot_eligibility.get('violin') or {}).get('skip_reason') or 'none',
-                'Reserved block': str(metric_assets.get('violin') or 'Reserved (future chart insertion)'),
-            },
-            {
-                'Plot': 'Histogram',
-                'Eligible': 'YES' if bool((plot_eligibility.get('histogram') or {}).get('eligible')) else 'NO',
-                'Skip reason': (plot_eligibility.get('histogram') or {}).get('skip_reason') or 'none',
-                'Reserved block': str(metric_assets.get('histogram') or 'Reserved (future chart insertion)'),
-            },
-        ]
-        row = _write_table(worksheet, row, ['Plot', 'Eligible', 'Skip reason', 'Reserved block'], plot_rows)
+        worksheet.write(row, 0, 'Plot')
+        worksheet.write(row, 1, 'Status')
+        worksheet.write(row, 2, 'Detail')
+        row += 1
+
+        for plot_key, plot_label in (('violin', 'Violin'), ('histogram', 'Histogram')):
+            eligibility = plot_eligibility.get(plot_key) or {}
+            eligible = bool(eligibility.get('eligible'))
+            skip_reason = str(eligibility.get('skip_reason') or 'ineligible')
+            asset = metric_assets.get(plot_key)
+
+            if not eligible:
+                worksheet.write(row, 0, plot_label)
+                worksheet.write(row, 1, 'SKIPPED')
+                worksheet.write(row, 2, skip_reason)
+                row += 1
+                continue
+
+            inserted = _insert_plot_image(worksheet, row + 1, asset)
+            if inserted:
+                worksheet.write(row, 0, plot_label)
+                worksheet.write(row, 1, 'INSERTED')
+                worksheet.write(row, 2, 'Chart inserted')
+                row_span = DEFAULT_PLOT_ROW_SPAN
+                if isinstance(asset, dict) and isinstance(asset.get('row_span'), int) and asset.get('row_span') > 0:
+                    row_span = int(asset.get('row_span'))
+                row += 1 + row_span
+            else:
+                worksheet.write(row, 0, plot_label)
+                worksheet.write(row, 1, 'SKIPPED')
+                worksheet.write(row, 2, 'asset_missing')
+                row += 1
 
     row += SECTION_GAP
     return row
