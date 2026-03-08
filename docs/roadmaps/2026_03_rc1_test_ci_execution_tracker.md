@@ -94,6 +94,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 | TCI-004 | completed | `todo` -> `in_progress` -> `completed` |
 | TCI-005 | completed | `todo` -> `in_progress` -> `completed` |
 | TCI-006 | completed | `todo` -> `in_progress` -> `completed` |
+| TCI-007 | in_progress | `deferred` -> `in_progress` -> `completed` |
 
 ### TCI-001 - Audit current tests, CI, and release-validation coverage
 - Status: completed
@@ -181,7 +182,38 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
   - Any checklist/status matrices map each gate type to an owner/evidence source without contradiction.
   - Tracker and section 15 stay synchronized on next-step intent and lifecycle status transitions.
 
+### TCI-007 - Coverage threshold governance follow-up and drift-resistant evidence contract checks
+- Status: in_progress
+- Phase: Phase 1 - Audit and visibility
+- Priority: high
+- Why: Coverage threshold gating is intentionally deferred, so the evidence pipeline must stay stable while the observation window matures.
+- Target files: `tests/test_ci_policy_sync.py`, `.github/workflows/ci.yml`, `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`, this tracker
+- Tests/checks: `python -m pytest tests/test_ci_policy_sync.py -q`
+- Docs review: `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`, tracker
+- Risk notes: string-level contract checks can become brittle if wording changes without semantic change; keep assertions focused on governance-critical tokens.
+- Definition of done:
+  - Automated test guards key coverage-visibility contract points across CI workflow and policy docs.
+  - Tracker logs this as TCI-007 observation-window support work, not a threshold-go/no-go decision.
+  - Section 15 remains explicit that final threshold decision is still pending 2-4 week evidence collection.
+
 ## 10. Progress Log
+
+
+- 2026-03-08 — **TCI-007 in-progress follow-up increment completed**.
+  - Work completed:
+    - Added a new policy-sync regression test module (`tests/test_ci_policy_sync.py`) to guard the coverage visibility contract while threshold governance remains deferred.
+    - Verified CI workflow still includes required coverage evidence outputs (`--cov-report=term`, `--cov-report=xml:coverage.xml`, and `unit-test-coverage` artifact pathing).
+    - Verified docs remain aligned with non-blocking coverage semantics and RC evidence wording.
+  - Changed files:
+    - `tests/test_ci_policy_sync.py`
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `python -m pytest tests/test_ci_policy_sync.py -q`
+  - Docs reviewed/updated:
+    - Reviewed: `docs/ci-policy.md`, `docs/release_checks/release_candidate_checklist.md`, this tracker.
+    - **docs update required and applied**: tracker updated with TCI-007 lifecycle state and implementation evidence; policy/checklist text already aligned and required no textual change.
+  - New/remaining risks:
+    - Final fail-under threshold go/no-go decision is still pending completion of the 2-4 week observation window evidence collection.
 
 
 - 2026-03-07 — **TCI-006 completed**.
