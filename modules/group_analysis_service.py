@@ -348,31 +348,108 @@ def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correc
 
 def compute_capability_payload(values, spec_payload):
     """Compute capability payload in a deterministic and nullable structure."""
+
+    def _not_applicable_payload(*, status, sigma=None, mean_value=None, capability_mode=None):
+        return {
+            'cp': None,
+            'capability': None,
+            'capability_type': None,
+            'cpk': None,
+            'status': status,
+            'sigma': sigma,
+            'mean': mean_value,
+            'capability_mode': capability_mode,
+        }
+
     arr = np.asarray(values, dtype=float)
     arr = arr[np.isfinite(arr)]
     if arr.size == 0:
-        return {'cp': None, 'cpk': None, 'status': 'insufficient_data'}
+        return _not_applicable_payload(status='insufficient_data')
 
     sigma = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
     mean_value = float(np.mean(arr))
-    cp, cpk = safe_process_capability(
-        spec_payload.get('nominal'),
-        spec_payload.get('usl'),
-        spec_payload.get('lsl'),
-        sigma,
-        mean_value,
-    )
-    cp_value = None if cp == 'N/A' else cp
-    cpk_value = None if cpk == 'N/A' else cpk
+
+    lsl = spec_payload.get('lsl')
+    usl = spec_payload.get('usl')
+    nominal = spec_payload.get('nominal')
+
+    has_lsl = lsl is not None
+    has_usl = usl is not None
+
+    if has_lsl and has_usl:
+        capability_mode = 'bilateral'
+    elif has_usl:
+        capability_mode = 'upper_only'
+    elif has_lsl:
+        capability_mode = 'lower_only'
+    else:
+        capability_mode = 'unusable'
+
+    if capability_mode == 'unusable':
+        return _not_applicable_payload(
+            status='not_applicable',
+            sigma=sigma,
+            mean_value=mean_value,
+            capability_mode=capability_mode,
+        )
+
+    if has_lsl and has_usl and lsl > usl:
+        return _not_applicable_payload(
+            status='not_applicable',
+            sigma=sigma,
+            mean_value=mean_value,
+            capability_mode=capability_mode,
+        )
+
+    if sigma <= 0:
+        return _not_applicable_payload(
+            status='not_applicable',
+            sigma=sigma,
+            mean_value=mean_value,
+            capability_mode=capability_mode,
+        )
+
+    if capability_mode == 'bilateral':
+        cp, cpk = safe_process_capability(
+            nominal,
+            usl,
+            lsl,
+            sigma,
+            mean_value,
+        )
+        cp_value = None if cp == 'N/A' else cp
+        cpk_value = None if cpk == 'N/A' else cpk
+        capability_type = 'Cpk'
+    elif capability_mode == 'upper_only':
+        cp_value = None
+        cpk_value = (usl - mean_value) / (3.0 * sigma)
+        capability_type = 'Cpk+'
+    else:
+        cp_value = None
+        cpk_value = (mean_value - lsl) / (3.0 * sigma)
+        capability_type = 'Cpk-'
+
+    if cpk_value is None:
+        return _not_applicable_payload(
+            status='not_applicable',
+            sigma=sigma,
+            mean_value=mean_value,
+            capability_mode=capability_mode,
+        )
+
+    capability_value = float(cpk_value)
+    cpk_value = float(cpk_value)
     status = 'ok' if cp_value is not None or cpk_value is not None else 'not_applicable'
+
     return {
         'cp': cp_value,
-        'capability': cpk_value,
-        'capability_type': 'Cpk',
+        'capability': capability_value,
+        'capability_type': capability_type,
         'cpk': cpk_value,
         'status': status,
         'sigma': sigma,
         'mean': mean_value,
+        'capability_mode': capability_mode,
     }
 
 

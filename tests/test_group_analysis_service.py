@@ -94,6 +94,54 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIsNone(payload['capability'])
         self.assertIsNone(payload['cpk'])
 
+    def test_capability_payload_bilateral_mode_returns_cp_and_cpk(self):
+        payload = compute_capability_payload([9.9, 10.0, 10.1, 10.2], {'lsl': 9.0, 'nominal': 10.0, 'usl': 11.0})
+
+        self.assertEqual(payload['status'], 'ok')
+        self.assertEqual(payload['capability_mode'], 'bilateral')
+        self.assertEqual(payload['capability_type'], 'Cpk')
+        self.assertIsNotNone(payload['cp'])
+        self.assertIsNotNone(payload['capability'])
+        self.assertIsNotNone(payload['cpk'])
+
+    def test_capability_payload_upper_only_mode_returns_cpk_plus(self):
+        payload = compute_capability_payload([9.9, 10.0, 10.1, 10.2], {'lsl': None, 'nominal': 10.0, 'usl': 11.0})
+
+        self.assertEqual(payload['status'], 'ok')
+        self.assertEqual(payload['capability_mode'], 'upper_only')
+        self.assertEqual(payload['capability_type'], 'Cpk+')
+        self.assertIsNone(payload['cp'])
+        self.assertIsNotNone(payload['capability'])
+        self.assertEqual(payload['capability'], payload['cpk'])
+
+    def test_capability_payload_lower_only_mode_returns_cpk_minus(self):
+        payload = compute_capability_payload([9.9, 10.0, 10.1, 10.2], {'lsl': 9.0, 'nominal': 10.0, 'usl': None})
+
+        self.assertEqual(payload['status'], 'ok')
+        self.assertEqual(payload['capability_mode'], 'lower_only')
+        self.assertEqual(payload['capability_type'], 'Cpk-')
+        self.assertIsNone(payload['cp'])
+        self.assertIsNotNone(payload['capability'])
+        self.assertEqual(payload['capability'], payload['cpk'])
+
+    def test_capability_payload_forces_not_applicable_for_non_positive_sigma(self):
+        payload = compute_capability_payload([1.0, 1.0, 1.0], {'lsl': 0.0, 'nominal': 1.0, 'usl': 2.0})
+
+        self.assertEqual(payload['status'], 'not_applicable')
+        self.assertEqual(payload['capability_mode'], 'bilateral')
+        self.assertIsNone(payload['cp'])
+        self.assertIsNone(payload['capability'])
+        self.assertIsNone(payload['cpk'])
+
+    def test_capability_payload_forces_not_applicable_for_invalid_limit_order(self):
+        payload = compute_capability_payload([1.0, 1.1, 1.2], {'lsl': 3.0, 'nominal': 2.0, 'usl': 1.0})
+
+        self.assertEqual(payload['status'], 'not_applicable')
+        self.assertEqual(payload['capability_mode'], 'bilateral')
+        self.assertIsNone(payload['cp'])
+        self.assertIsNone(payload['capability'])
+        self.assertIsNone(payload['cpk'])
+
     def test_build_payload_includes_descriptive_pairwise_and_diagnostics(self):
         grouped_df = pd.DataFrame(
             {
