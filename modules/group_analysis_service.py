@@ -38,6 +38,34 @@ _PLOT_SKIP_REASON_MESSAGES = {
     'eligible': 'Eligible',
 }
 
+_FLAG_LOW_N = 'LOW N'
+_FLAG_IMBALANCED_N = 'IMBALANCED N'
+_FLAG_SEVERELY_IMBALANCED_N = 'SEVERELY IMBALANCED N'
+_FLAG_SPEC_QUESTION = 'SPEC?'
+
+
+def _join_flags(flags):
+    ordered_unique = []
+    for flag in (_FLAG_LOW_N, _FLAG_SEVERELY_IMBALANCED_N, _FLAG_IMBALANCED_N, _FLAG_SPEC_QUESTION):
+        if flag in flags and flag not in ordered_unique:
+            ordered_unique.append(flag)
+    return '; '.join(ordered_unique) if ordered_unique else 'none'
+
+
+def _build_metric_level_flags(group_counts, *, spec_status):
+    flags = []
+    positive_counts = [int(count) for count in group_counts if int(count) > 0]
+    if len(positive_counts) >= 2:
+        ratio = max(positive_counts) / min(positive_counts)
+        if ratio >= 3.0:
+            flags.append(_FLAG_SEVERELY_IMBALANCED_N)
+        elif ratio >= 2.0:
+            flags.append(_FLAG_IMBALANCED_N)
+
+    if str(spec_status or '').strip().upper() != 'EXACT_MATCH':
+        flags.append(_FLAG_SPEC_QUESTION)
+    return flags
+
 
 def get_spec_status_label(spec_status):
     """Return user-facing spec status label for worksheets."""
@@ -292,32 +320,20 @@ def compute_group_descriptive_stats(grouped_values):
     return rows
 
 
-def _build_group_flags(row, spec_payload):
-    """Return deterministic quality flags for a group descriptive row."""
+def _build_group_flags(row, metric_flags):
+    """Return spec-aligned quality flags for a group descriptive row."""
     flags = []
-    if int(row.get('n') or 0) < 3:
-        flags.append('low_n')
-
-    std_value = row.get('std')
-    if std_value is not None and float(std_value) == 0.0:
-        flags.append('zero_variance')
-
-    lsl = spec_payload.get('lsl')
-    usl = spec_payload.get('usl')
-    mean_value = row.get('mean')
-    if mean_value is not None and lsl is not None and usl is not None and not (lsl <= mean_value <= usl):
-        flags.append('mean_outside_limits')
-
-    if row.get('cp') is None and row.get('capability') is None:
-        flags.append('capability_unavailable')
-
-    return '; '.join(flags) if flags else 'none'
+    if int(row.get('n') or 0) < 5:
+        flags.append(_FLAG_LOW_N)
+    flags.extend(metric_flags)
+    return _join_flags(flags)
 
 
-def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capability):
+def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capability, spec_status='EXACT_MATCH'):
     """Build final per-group rows with expanded statistics and capability columns."""
     base_rows = compute_group_descriptive_stats(grouped_values)
     output = []
+    metric_flags = _build_metric_level_flags([row.get('n', 0) for row in base_rows], spec_status=spec_status)
     for row in base_rows:
         values = np.asarray(grouped_values.get(row['group'], []), dtype=float)
         values = values[np.isfinite(values)]
@@ -342,7 +358,7 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
             'capability': capability.get('capability'),
             'capability_type': capability.get('capability_type'),
         }
-        raw_output_row['flags'] = _build_group_flags(raw_output_row, spec_payload)
+        raw_output_row['flags'] = _build_group_flags(raw_output_row, metric_flags)
 
         output_row = {
             'group': raw_output_row.get('group'),
@@ -378,6 +394,7 @@ def build_pairwise_rows(
     alpha=0.05,
     correction_method='holm',
     pairwise_eligible=True,
+    spec_status='EXACT_MATCH',
 ):
     """Build enriched pairwise A/B rows for worksheet output."""
     raw_rows = compute_pairwise_rows(
@@ -393,6 +410,12 @@ def build_pairwise_rows(
         if np.asarray(values, dtype=float).size
     }
 
+    counts_by_group = {
+        group_name: int(np.isfinite(np.asarray(values, dtype=float)).sum())
+        for group_name, values in grouped_values.items()
+    }
+    metric_flags = _build_metric_level_flags(counts_by_group.values(), spec_status=spec_status)
+
     output = []
     for row in raw_rows:
         group_a = row.get('group_a')
@@ -404,11 +427,10 @@ def build_pairwise_rows(
         adj_p = row.get('adjusted_p_value')
         significant = bool(row.get('significant'))
         flags = []
-        if adj_p is None:
-            flags.append('missing_adjusted_p')
-        if row.get('effect_size') is None:
-            flags.append('missing_effect_size')
-        flags_text = '; '.join(flags) if flags else 'none'
+        if int(counts_by_group.get(group_a, 0)) < 5 or int(counts_by_group.get(group_b, 0)) < 5:
+            flags.append(_FLAG_LOW_N)
+        flags.extend(metric_flags)
+        flags_text = _join_flags(flags)
         difference = 'YES' if pairwise_eligible and significant else 'NO'
         comment = _resolve_pairwise_comment(
             pairwise_eligible=pairwise_eligible,
@@ -729,6 +751,9 @@ def _build_warning_summary(metric_rows, skipped_metrics):
         interpretation_limits = str(metric_row.get('comparability_summary', {}).get('interpretation_limits') or 'none')
         if interpretation_limits != 'none':
             warning_messages.append(f"{metric_row.get('metric')}: {interpretation_limits}")
+        metric_flags = str(metric_row.get('metric_flags') or 'none')
+        if metric_flags != 'none':
+            warning_messages.append(f"{metric_row.get('metric')}: {metric_flags}")
 
     for skipped in sorted(skipped_metrics, key=lambda row: str(row.get('metric') or '')):
         reason = str(skipped.get('reason') or 'unknown')
@@ -1019,6 +1044,7 @@ def build_group_analysis_payload(
             grouped_values,
             spec_payload=spec_payload,
             allow_capability=policy['allow_capability'],
+            spec_status=spec_status,
         )
         all_metric_values = np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
         capability = (
@@ -1040,10 +1066,13 @@ def build_group_analysis_payload(
                 grouped_values,
                 alpha=alpha,
                 correction_method=correction_method,
+                spec_status=spec_status,
             )
             if policy['allow_pairwise']
             else []
         )
+
+        metric_level_flags = _join_flags(_build_metric_level_flags((row.get('n', 0) for row in descriptive_stats), spec_status=spec_status))
 
         comparability_summary = build_comparability_summary(spec_status, policy)
         plot_eligibility = _build_metric_plot_eligibility(
@@ -1080,6 +1109,7 @@ def build_group_analysis_payload(
                 'comparability_summary': comparability_summary,
                 'plot_eligibility': plot_eligibility,
                 'diagnostics_comment': diagnostics_comment,
+                'metric_flags': metric_level_flags,
             }
         )
         metrics[-1]['insights'] = build_metric_insights(metrics[-1])
