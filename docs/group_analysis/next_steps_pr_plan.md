@@ -23,21 +23,21 @@ Audit the repo against the implementation plan, then define the next PR sequence
    - Record one concrete post-plot next step.
 
 2. **Post-cycle functional follow-up**
-   - Define an alias/canonical metric mapping approach for multi-reference comparisons.
-   - Preserve deterministic diagnostics and explicit comparability labeling when aliases are applied.
+   - Implement dedicated **Characteristic Alias Mapping v1** for multi-reference comparisons.
+   - Keep v1 manual-only (no canonical IDs/ontology/auto-matching) while preserving deterministic diagnostics and comparability labeling.
 
 ## PR acceptance criteria (single source of truth)
 
 - [ ] **Docs status mirrors shipped behavior.**
   - Standard chart insertion is marked implemented (not deferred).
 - [ ] **Deferred scope is explicit and accurate.**
-  - Alias/fuzzy/canonical metric matching remains clearly listed as deferred.
+  - Manual Characteristic Alias Mapping v1 is identified as the next delivery, while suggestion engine/fuzzy/canonical-ID work remains deferred.
 - [ ] **One concrete next follow-up is captured.**
   - Next item identifies a specific post-cycle target and module/test direction.
 
 ## PR testable outcomes
 
-- [ ] `group_analysis_spec_and_implementation_plan.md` “Status after implementation cycle” lists Standard plot insertion under implemented items and keeps only true deferred items.
+- [ ] `group_analysis_spec_and_implementation_plan.md` includes a dedicated “Characteristic Alias Mapping v1” section and updated status/deferred wording.
 - [ ] `next_steps_pr_plan.md` checklist marks Standard plot PR complete and identifies the next concrete follow-up item.
 - [ ] `codex_group_analysis_instructions.md` current-cycle status note mirrors shipped behavior and the same next step.
 
@@ -59,8 +59,8 @@ Audit the repo against the implementation plan, then define the next PR sequence
 
 - [x] PR 1: deliver Standard plot insertion beyond placeholders.
 - [x] PR 2 (last PR): update plan/status/todo docs to match shipped behavior.
-- [ ] Next follow-up: design and implement alias/canonical metric matching strategy for multi-reference analysis.
+- [ ] Next follow-up: implement Characteristic Alias Mapping v1 (manual mappings table, scoped resolution, and pipeline integration).
 
 ## Sequencing rationale
 
-Standard chart insertion is now closed; this docs closeout aligns roadmap/status text with shipped behavior and leaves a single concrete follow-up (alias/canonical metric matching) for the next implementation cycle.
+Standard chart insertion is now closed; this docs closeout aligns roadmap/status text with shipped behavior and leaves a single concrete follow-up (Characteristic Alias Mapping v1) for the next implementation cycle.
