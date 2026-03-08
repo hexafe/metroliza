@@ -97,10 +97,25 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         worksheet = FakeWorksheet()
         payload = {
             'requested_scope': 'auto',
+            'requested_level': 'standard',
+            'execution_status': 'ran',
             'effective_scope': 'single_reference',
             'reference_count': 1,
+            'group_count': 2,
             'metric_count': 1,
             'skipped_metric_count': 1,
+            'warning_summary': {
+                'count': 2,
+                'messages': ['M1: pairwise disabled'],
+                'skip_reason_counts': {'nom_mismatch': 1},
+            },
+            'histogram_skip_summary': {'applies': True, 'count': 1, 'reason_counts': {'nom_mismatch': 1}},
+            'unmatched_metrics_summary': {
+                'count': 1,
+                'metrics': [
+                    {'metric': 'M2', 'present_references': ['R1'], 'missing_references': ['R2']},
+                ],
+            },
             'skip_reason': None,
             'metrics': [
                 {
@@ -118,9 +133,16 @@ class TestGroupAnalysisWriter(unittest.TestCase):
 
         values = [value for _, _, value in worksheet.writes]
         self.assertIn('Group Analysis Diagnostics', values)
+        self.assertIn('Warning summary', values)
+        self.assertIn('Histogram skip summary', values)
+        self.assertIn('Possible unmatched metrics across references', values)
+        self.assertIn('standard', values)
+        self.assertIn('ran', values)
         self.assertIn('Analyzed metrics', values)
         self.assertIn('Skipped metrics', values)
         self.assertIn('M2', values)
+        self.assertIn('M1: pairwise disabled', values)
+        self.assertIn('nom_mismatch=1', values)
         self.assertEqual(worksheet.frozen, (1, 0))
 
 

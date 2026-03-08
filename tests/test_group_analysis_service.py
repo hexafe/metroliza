@@ -180,6 +180,12 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIn('verdict', metric['pairwise_rows'][0])
         self.assertEqual(payload['diagnostics']['metric_count'], 1)
         self.assertEqual(payload['diagnostics']['status_counts']['EXACT_MATCH'], 1)
+        self.assertEqual(payload['diagnostics']['requested_level'], 'light')
+        self.assertEqual(payload['diagnostics']['execution_status'], 'ran')
+        self.assertEqual(payload['diagnostics']['group_count'], 2)
+        self.assertEqual(payload['diagnostics']['warning_summary']['count'], 0)
+        self.assertEqual(payload['diagnostics']['histogram_skip_summary']['applies'], False)
+        self.assertEqual(payload['diagnostics']['unmatched_metrics_summary']['count'], 0)
 
     def test_standard_level_skips_non_exact_match_metrics(self):
         grouped_df = pd.DataFrame(
@@ -200,6 +206,34 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(len(payload['metric_rows']), 0)
         self.assertEqual(payload['diagnostics']['skipped_metric_count'], 1)
         self.assertEqual(payload['diagnostics']['status_counts']['EXACT_MATCH'], 0)
+        self.assertEqual(payload['diagnostics']['requested_level'], 'standard')
+        self.assertEqual(payload['diagnostics']['execution_status'], 'ran')
+        self.assertEqual(payload['diagnostics']['histogram_skip_summary']['applies'], True)
+        self.assertEqual(payload['diagnostics']['histogram_skip_summary']['count'], 1)
+        self.assertEqual(payload['diagnostics']['histogram_skip_summary']['reason_counts'], {'nom_mismatch': 1})
+
+    def test_diagnostics_include_warning_and_unmatched_reference_summaries(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1', 'R1', 'R1', 'R2', 'R2'],
+                'HEADER - AX': ['M1', 'M1', 'M2', 'M1', 'M1'],
+                'GROUP': ['A', 'B', 'A', 'A', 'B'],
+                'MEAS': [10.0, 10.2, 9.5, 10.1, 10.3],
+                'LSL': [9.0, 9.1, 9.0, 9.0, 9.0],
+                'NOMINAL': [10.0, 10.0, 10.0, 10.0, 10.0],
+                'USL': [11.0, 11.0, 11.0, 11.0, 11.0],
+            }
+        )
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+        diagnostics = payload['diagnostics']
+
+        self.assertEqual(diagnostics['warning_summary']['count'], 2)
+        self.assertEqual(len(diagnostics['warning_summary']['messages']), 1)
+        self.assertEqual(diagnostics['warning_summary']['skip_reason_counts'], {'insufficient_groups': 1})
+        self.assertEqual(diagnostics['unmatched_metrics_summary']['count'], 1)
+        self.assertEqual(diagnostics['unmatched_metrics_summary']['metrics'][0]['metric'], 'M2')
+        self.assertEqual(diagnostics['unmatched_metrics_summary']['metrics'][0]['missing_references'], ['R2'])
 
 
 if __name__ == '__main__':
