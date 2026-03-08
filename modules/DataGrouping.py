@@ -210,6 +210,7 @@ class DataGrouping(QDialog):
             
             # Connect the itemSelectionChanged signal of the "REFERENCE" list to the on_reference_selection_changed method
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
+            self.reference_list.itemDoubleClicked.connect(self.on_reference_item_double_clicked)
             
             # Connect the itemSelectionChanged signal of the "GROUPS" list to the on_group_selection_changed method
             self.groups_list.itemSelectionChanged.connect(self.on_group_selection_changed)
@@ -606,6 +607,16 @@ class DataGrouping(QDialog):
             self.create_group_button.setEnabled(selected_part or bool(selected_reference))
         except Exception as e:
             self.log_and_exit(e)
+
+    def on_reference_item_double_clicked(self, item):
+        """Open create-group flow prefilled with the double-clicked reference."""
+
+        try:
+            if item is None:
+                return
+            self.create_group(initial_group_name=item.text())
+        except Exception as e:
+            self.log_and_exit(e)
     
     def on_group_selection_changed(self):
         """Handle `on_group_selection_changed` for `DataGrouping`.
@@ -662,7 +673,7 @@ class DataGrouping(QDialog):
         except Exception as e:
             self.log_and_exit(e)
             
-    def create_group(self):
+    def create_group(self, initial_group_name=""):
         """Handle `create_group` for `DataGrouping`.
 
         Args:
@@ -688,7 +699,13 @@ class DataGrouping(QDialog):
                         'GROUP_KEY',
                     ].dropna().unique().tolist()
 
-            new_group_name, ok_pressed = QInputDialog.getText(self, "New group", "Enter group name:")
+            default_name = (initial_group_name or "").strip()
+            new_group_name, ok_pressed = QInputDialog.getText(
+                self,
+                "New group",
+                "Enter group name:",
+                text=default_name,
+            )
             new_group_name = (new_group_name or "").strip()
 
             if ok_pressed and target_group_keys and new_group_name:
@@ -775,54 +792,58 @@ class DataGrouping(QDialog):
             preferred_reference_name=self._selected_reference_name(),
         )
 
+    @staticmethod
+    def _list_or_viewport_has_focus(list_widget):
+        if list_widget is None:
+            return False
+        if hasattr(list_widget, "hasFocus") and list_widget.hasFocus():
+            return True
+        if hasattr(list_widget, "viewport") and list_widget.viewport() is not None:
+            return bool(list_widget.viewport().hasFocus())
+        return False
+
     def keyPressEvent(self, event):
-        """Handle Delete/Backspace in the selected-group parts list."""
+        """Handle keyboard shortcuts for list-driven grouping workflows."""
 
         try:
             pressed_key = event.key() if event is not None and hasattr(event, "key") else None
-            is_delete_shortcut = pressed_key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
-            if is_delete_shortcut:
-                if (
-                    self.part_list is not None
-                    and (
-                        self.part_list.hasFocus()
-                        or (
-                            hasattr(self.part_list, "viewport")
-                            and self.part_list.viewport() is not None
-                            and self.part_list.viewport().hasFocus()
-                        )
-                    )
-                ):
+            key_enum = getattr(Qt, "Key", None)
+            delete_keys = tuple(
+                key
+                for key in (
+                    getattr(key_enum, "Key_Delete", None),
+                    getattr(key_enum, "Key_Backspace", None),
+                )
+                if key is not None
+            )
+            enter_keys = tuple(
+                key
+                for key in (
+                    getattr(key_enum, "Key_Return", None),
+                    getattr(key_enum, "Key_Enter", None),
+                )
+                if key is not None
+            )
+
+            if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.reference_list):
+                selected_reference = self._selected_reference_name()
+                if selected_reference:
+                    self.create_group(initial_group_name=selected_reference)
+                    event.accept()
+                    return
+
+            if pressed_key in delete_keys:
+                if self._list_or_viewport_has_focus(self.part_list):
                     self._delete_selected_parts_from_part_list()
                     event.accept()
                     return
 
-                if (
-                    self.part_group_list is not None
-                    and (
-                        self.part_group_list.hasFocus()
-                        or (
-                            hasattr(self.part_group_list, "viewport")
-                            and self.part_group_list.viewport() is not None
-                            and self.part_group_list.viewport().hasFocus()
-                        )
-                    )
-                ):
+                if self._list_or_viewport_has_focus(self.part_group_list):
                     self._delete_selected_parts_from_group()
                     event.accept()
                     return
 
-                if (
-                    self.groups_list is not None
-                    and (
-                        self.groups_list.hasFocus()
-                        or (
-                            hasattr(self.groups_list, "viewport")
-                            and self.groups_list.viewport() is not None
-                            and self.groups_list.viewport().hasFocus()
-                        )
-                    )
-                ):
+                if self._list_or_viewport_has_focus(self.groups_list):
                     self.delete_group()
                     event.accept()
                     return

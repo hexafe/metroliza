@@ -520,6 +520,34 @@ class TestDataGroupingCreateGroupSelectionPriority(unittest.TestCase):
 
         self.assertTrue((dialog.df['GROUP'] == 'POPULATION').all())
 
+    def test_create_group_prefills_dialog_with_initial_group_name(self):
+        from unittest.mock import patch
+
+        dialog = self._base_dialog()
+        dialog.part_list = _FakeListWidget([])
+        dialog.part_list.selectedItems = lambda: []
+
+        input_dialog_cls = DataGrouping.create_group.__globals__['QInputDialog']
+        with patch.object(input_dialog_cls, 'getText', return_value=('REF-1', False), create=True) as mocked_get_text:
+            dialog.create_group(initial_group_name='REF-1')
+
+        self.assertEqual(mocked_get_text.call_args.kwargs.get('text'), 'REF-1')
+
+
+class TestDataGroupingReferenceDoubleClick(unittest.TestCase):
+    def test_reference_double_click_opens_create_group_with_reference_name(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        captured = {'initial_group_name': None}
+
+        def _capture_create_group(initial_group_name=''):
+            captured['initial_group_name'] = initial_group_name
+
+        dialog.create_group = _capture_create_group
+
+        dialog.on_reference_item_double_clicked(_FakeListItem(text='REF-42'))
+
+        self.assertEqual(captured['initial_group_name'], 'REF-42')
+
 
 class TestDataGroupingSelectionRetention(unittest.TestCase):
     def test_populate_list_widgets_prefers_existing_group_name(self):
