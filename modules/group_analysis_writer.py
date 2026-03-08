@@ -29,6 +29,16 @@ def _write_table(worksheet, row, headers, rows):
 def _write_metric_section(worksheet, row, metric_row):
     row = _write_section_title(worksheet, row, f"Metric: {metric_row.get('metric', 'Unknown')}")
 
+    comparability = metric_row.get('comparability_summary', {})
+    comparability_rows = [
+        {'Field': 'Status', 'Value': comparability.get('status', metric_row.get('spec_status'))},
+        {'Field': 'Interpretation limits', 'Value': comparability.get('interpretation_limits', 'none')},
+        {'Field': 'Summary', 'Value': comparability.get('summary')},
+    ]
+    row = _write_section_title(worksheet, row, 'Comparability / spec summary')
+    row = _write_table(worksheet, row, ['Field', 'Value'], comparability_rows)
+    row += SECTION_GAP
+
     metadata_rows = [
         {'Field': 'Reference', 'Value': metric_row.get('reference')},
         {'Field': 'Group count', 'Value': metric_row.get('group_count')},
@@ -46,12 +56,23 @@ def _write_metric_section(worksheet, row, metric_row):
             'n': entry.get('n'),
             'mean': entry.get('mean'),
             'std': entry.get('std'),
+            'median': entry.get('median'),
+            'IQR': entry.get('iqr'),
             'min': entry.get('min'),
             'max': entry.get('max'),
+            'Cp': entry.get('cp'),
+            'Capability': entry.get('capability'),
+            'Capability type': entry.get('capability_type'),
+            'Flags': entry.get('flags'),
         }
         for entry in metric_row.get('descriptive_stats', [])
     ]
-    row = _write_table(worksheet, row, ['Group', 'n', 'mean', 'std', 'min', 'max'], desc_rows)
+    row = _write_table(
+        worksheet,
+        row,
+        ['Group', 'n', 'mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability', 'Capability type', 'Flags'],
+        desc_rows,
+    )
     row += SECTION_GAP
 
     row = _write_section_title(worksheet, row, 'Pairwise comparisons')
@@ -59,19 +80,25 @@ def _write_metric_section(worksheet, row, metric_row):
         {
             'Group A': entry.get('group_a'),
             'Group B': entry.get('group_b'),
-            'adj p-value': entry.get('adjusted_p_value'),
+            'Δmean': entry.get('delta_mean'),
+            'adj p': entry.get('adjusted_p_value'),
             'effect size': entry.get('effect_size'),
-            'test': entry.get('test_used'),
-            'significant': entry.get('significant'),
+            'verdict': entry.get('verdict'),
+            'flags': entry.get('flags'),
         }
         for entry in metric_row.get('pairwise_rows', [])
     ]
     row = _write_table(
         worksheet,
         row,
-        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'significant'],
+        ['Group A', 'Group B', 'Δmean', 'adj p', 'effect size', 'verdict', 'flags'],
         pairwise_rows,
     )
+    row += SECTION_GAP
+
+    row = _write_section_title(worksheet, row, 'Insights')
+    insight_rows = [{'Insight': line} for line in metric_row.get('insights', [])]
+    row = _write_table(worksheet, row, ['Insight'], insight_rows)
     row += SECTION_GAP
     return row
 

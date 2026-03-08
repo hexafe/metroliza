@@ -117,6 +117,13 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(metric['spec_status'], 'EXACT_MATCH')
         self.assertEqual(len(metric['descriptive_stats']), 2)
         self.assertEqual(len(metric['pairwise_rows']), 1)
+        self.assertIn('comparability_summary', metric)
+        self.assertGreaterEqual(len(metric.get('insights', [])), 1)
+        self.assertIn('median', metric['descriptive_stats'][0])
+        self.assertIn('iqr', metric['descriptive_stats'][0])
+        self.assertIn('flags', metric['descriptive_stats'][0])
+        self.assertIn('delta_mean', metric['pairwise_rows'][0])
+        self.assertIn('verdict', metric['pairwise_rows'][0])
         self.assertEqual(payload['diagnostics']['metric_count'], 1)
         self.assertEqual(payload['diagnostics']['status_counts']['EXACT_MATCH'], 1)
 
