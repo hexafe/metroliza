@@ -199,6 +199,23 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 ## 10. Progress Log
 
 
+- 2026-03-08 — **TCI-007 in-progress follow-up increment completed (manual smoke semantics contract coverage)**.
+  - Work completed:
+    - Expanded `tests/test_ci_policy_sync.py` with CI-policy contract assertions for manual smoke lanes (`packaging-smoke`, `google-conversion-smoke`) so workflow gating and non-blocking semantics stay drift-resistant.
+    - Verified `.github/workflows/ci.yml` still gates both manual smoke lanes to `workflow_dispatch` opt-in inputs only.
+    - Verified `docs/ci-policy.md` keeps both manual smoke lanes explicitly classified as non-blocking for regular PR/push CI.
+  - Changed files:
+    - `tests/test_ci_policy_sync.py`
+    - `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md`
+  - Tests/checks run:
+    - `python -m pytest tests/test_ci_policy_sync.py -q`
+  - Docs reviewed/updated:
+    - Reviewed: `docs/ci-policy.md`, `.github/workflows/ci.yml`, this tracker.
+    - **docs update required and applied**: tracker updated with the additional TCI-007 support increment; policy/workflow wording already aligned and required no textual change.
+  - New/remaining risks:
+    - Final fail-under threshold go/no-go decision is still pending completion of the 2-4 week observation window evidence collection.
+
+
 - 2026-03-08 — **TCI-007 in-progress follow-up increment completed**.
   - Work completed:
     - Added a new policy-sync regression test module (`tests/test_ci_policy_sync.py`) to guard the coverage visibility contract while threshold governance remains deferred.

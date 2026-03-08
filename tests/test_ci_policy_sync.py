@@ -29,3 +29,24 @@ def test_docs_remain_aligned_with_coverage_visibility_contract() -> None:
 
     assert 'Coverage visibility output from `unit-tests` is reviewed' in checklist
     assert '`unit-test-coverage` artifact `coverage.xml`' in checklist
+
+
+def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+
+    assert "name: Packaging smoke (manual/opt-in)" in workflow
+    assert "if: github.event_name == 'workflow_dispatch' && inputs.run_packaging_smoke == '1'" in workflow
+    assert "name: Google conversion smoke (manual/opt-in)" in workflow
+    assert (
+        "if: github.event_name == 'workflow_dispatch' && inputs.run_google_conversion_smoke == '1'"
+        in workflow
+    )
+
+
+def test_ci_policy_keeps_manual_smoke_lane_semantics_explicit() -> None:
+    ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+
+    assert 'Optional/manual checks (non-blocking)' in ci_policy
+    assert '| Packaging smoke build (release-only) | `packaging-smoke` |' in ci_policy
+    assert '| Google conversion smoke (release-only) | `google-conversion-smoke` |' in ci_policy
+    assert '**Non-blocking** for regular PRs and pushes' in ci_policy
