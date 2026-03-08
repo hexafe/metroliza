@@ -1,89 +1,87 @@
-# Group Analysis — Next-Step PR Plan (Post-Documentation Audit)
+# Group Analysis — Next-Step PR Plan (Post-Documentation + Code Audit)
 
 ## Goal
 
-Turn the current baseline Group Analysis implementation into full behavior that matches the approved specification in `docs/group_analysis/group_analysis_spec_and_implementation_plan.md`, while keeping exports stable and reviewable through small PRs.
+Bring the current Group Analysis implementation to full spec alignment with `docs/group_analysis/group_analysis_spec_and_implementation_plan.md` using small, low-risk PRs.
 
 ## Constraints
 
 - Keep Group Analysis independent from main export preset behavior (`Extended plots`).
 - Preserve backward compatibility for exports when Group Analysis is `Off`.
-- Keep `POPULATION` as normal group behavior and avoid `UNGROUPED` semantics in Group Analysis paths.
+- Treat `POPULATION` as a normal group and avoid `UNGROUPED` semantics in Group Analysis paths.
 - Do not re-expand the legacy all-in-one Group Comparison writer.
 
 ## Risks
 
-- Service and writer are already integrated, so spec-alignment changes can create regressions in export output shape.
-- Statistical comparability rules (spec status, A/B eligibility, capability) can subtly change user-visible conclusions.
-- Diagnostics expansion may increase worksheet size and break assumptions in existing integration tests.
+- Service/writer are already integrated, so spec-alignment updates can change output shape and break tests.
+- Spec-status and comparability policy changes can alter user-visible conclusions.
+- Diagnostics expansion can increase worksheet size and affect integration test assumptions.
 
-## Repository audit summary
+## Assumptions from this audit
 
-Current code already includes:
-
-- contracts + request plumbing for `group_analysis_level` and `group_analysis_scope`,
-- Export dialog controls,
-- Group Analysis service + writer modules,
-- export-thread integration and basic integration tests.
-
-Remaining work is mainly **spec alignment hardening**, not net-new feature scaffolding.
+- Contracts + request plumbing for `group_analysis_level` and `group_analysis_scope` are already present.
+- Export dialog controls and ExportDataThread wiring are already present.
+- Group Analysis service/writer exist with baseline tests.
+- Remaining work is primarily semantic hardening and report/diagnostics parity with the spec.
 
 ## Proposed PR sequence
 
-### PR A — Spec-status taxonomy and comparability policy alignment
+### PR A — Spec-status taxonomy + comparability policy alignment
 
-**Scope**
+**Files**
 
 - `modules/group_analysis_service.py`
 - `tests/test_group_analysis_service.py`
 
 **Changes**
 
-- Replace current coarse statuses (`complete`, `partial`, `missing`, etc.) with spec statuses:
+- Replace coarse statuses (`complete`, `partial`, `missing`, etc.) with spec statuses:
   - `EXACT_MATCH`
   - `LIMIT_MISMATCH`
   - `NOM_MISMATCH`
   - `INVALID_SPEC`
-- Apply 3-decimal numeric spec normalization and explicit match/mismatch classification logic.
-- Encode Light-vs-Standard eligibility policy per status:
-  - `NOM_MISMATCH`: no raw A/B in Light, skipped in Standard.
-  - `LIMIT_MISMATCH`: warning-allowed in Light, skipped in Standard.
-  - `INVALID_SPEC`: descriptive-only in Light, skipped in Standard.
+- Normalize specs numerically to 3 decimals before comparison.
+- Encode Light/Standard eligibility policy per status:
+  - `NOM_MISMATCH`: descriptive only in Light, skip in Standard.
+  - `LIMIT_MISMATCH`: A/B allowed with warnings in Light, skip in Standard.
+  - `INVALID_SPEC`: descriptive-only in Light, skip in Standard.
 
-**Deliverable**
+**Definition of done**
 
-Deterministic comparability classification matching the spec and enforced in payload assembly.
+- Unit tests cover each status branch and eligibility behavior.
+- Diagnostics payload emits deterministic status counts.
 
 ---
 
-### PR B — Capability/flags semantics completion
+### PR B — Capability + flags semantics completion
 
-**Scope**
+**Files**
 
 - `modules/group_analysis_service.py`
-- unit tests under `tests/`
+- `tests/test_group_analysis_service.py` (and any focused helper tests)
 
 **Changes**
 
-- Implement explicit capability mode outputs:
+- Implement capability mode outputs:
   - bilateral (`Cp`, `Cpk`),
   - upper-only (`Capability type = Cpk+`, `Cp = N/A`),
-  - lower-only representation scaffold (`Cpk-`).
-- Enforce invalid capability as `N/A` for `std <= 0` and unusable specs.
+  - lower-only scaffold (`Cpk-`).
+- Force invalid capability to `N/A` for `std <= 0` and unusable specs.
 - Add required flags:
-  - per-group `LOW N`,
-  - cross-group `IMBALANCED N`, `SEVERELY IMBALANCED N`,
-  - interpretation `SPEC?` when applicable.
+  - per-group: `LOW N`,
+  - cross-group: `IMBALANCED N`, `SEVERELY IMBALANCED N`,
+  - interpretation: `SPEC?`.
 
-**Deliverable**
+**Definition of done**
 
-Capability and flag behavior aligned with Section 10/11 of the spec.
+- Capability rows are deterministic and nullable in the expected format.
+- Flags appear in per-group, pairwise (where relevant), and diagnostics summaries.
 
 ---
 
-### PR C — Writer parity for Light vs Standard and diagnostics completeness
+### PR C — Writer parity (Light vs Standard) + diagnostics completeness
 
-**Scope**
+**Files**
 
 - `modules/group_analysis_writer.py`
 - `modules/group_analysis_service.py`
@@ -91,65 +89,76 @@ Capability and flag behavior aligned with Section 10/11 of the spec.
 
 **Changes**
 
-- Make worksheet rendering explicitly mode-aware (`light` vs `standard`).
-- Add spec-summary and insight blocks per metric section.
-- Add conservative histogram eligibility + explicit diagnostics entries for skipped histograms.
-- Expand diagnostics fields to include required metadata and status counts, including possible unmatched metrics across references.
+- Make rendering explicitly mode-aware (`light` vs `standard`).
+- Add per-metric comparability/spec summary and concise insight block.
+- Add conservative histogram gating + explicit diagnostics entries for omitted histograms.
+- Expand diagnostics fields to required metadata and mismatch/skip summaries, including potentially unmatched metrics across references.
 
-**Deliverable**
+**Definition of done**
 
-Readable report structure with mandatory diagnostics content matching the spec requirements.
+- Light/Standard sheet shapes are consistent and readable.
+- Diagnostics always render required fields when Group Analysis is enabled.
 
 ---
 
-### PR D — ExportDataThread skip/message behavior and scope messaging exactness
+### PR D — Export integration skip-path exactness
 
-**Scope**
+**Files**
 
 - `modules/ExportDataThread.py`
 - integration tests (`tests/test_phase4_integration_happy_path.py` and related)
 
 **Changes**
 
-- Align forced-scope mismatch message-sheet text with spec wording.
-- Ensure skip pathways always propagate consistent message + diagnostics reason payload.
-- Remove duplicate readiness/payload decision drift where possible (single source of truth).
+- Align forced-scope mismatch message text exactly with spec wording.
+- Ensure skip pathways emit consistent message + diagnostics reason payload.
+- Reduce duplicate readiness/payload decision drift (single source of truth where practical).
 
-**Deliverable**
+**Definition of done**
 
-Scope mismatch and minimum-condition skip behavior that is deterministic and spec-conformant.
+- Scope mismatch behavior is deterministic for Auto/Single/Multi.
+- Off/Light/Standard wiring remains backward compatible for non-Group-Analysis exports.
 
 ---
 
-### PR E — Stabilization, legacy cleanup, and docs closeout
+### PR E — Stabilization + docs closeout
 
-**Scope**
+**Files**
 
-- tests + targeted cleanup in modules touched above
+- targeted tests/cleanup in modules above
 - `docs/group_analysis/group_analysis_spec_and_implementation_plan.md`
 - optional mirror in `docs/group_analysis/codex_group_analysis_instructions.md`
 
 **Changes**
 
-- Finish test matrix for off/light/standard, mismatch classes, capability modes, flags, and diagnostics details.
+- Finalize test matrix: off/light/standard, scope resolution, mismatch classes, capability modes, flags, diagnostics details.
 - Remove safe dead references to legacy comparison flow where no longer needed.
-- Update “Status after implementation cycle” block with:
-  - implemented,
-  - deferred,
-  - single concrete next step.
+- Update final status block with:
+  - implemented in cycle,
+  - deferred/not implemented,
+  - one concrete next implementation step.
 
-**Deliverable**
+**Definition of done**
 
-Spec-aligned implementation with auditable documentation closeout.
+- Test suite passes for touched Group Analysis paths.
+- Documentation status is updated and auditable.
 
-## TODO checklist mapped to this plan
+## PR-by-PR verification checklist
+
+- PR A: service unit tests for taxonomy + eligibility.
+- PR B: service unit tests for capability + flags.
+- PR C: writer/integration tests for worksheet + diagnostics output.
+- PR D: integration tests for scope mismatch/skip messaging and non-regression.
+- PR E: full targeted regression pass for Group Analysis paths and docs closeout check.
+
+## TODO checklist
 
 - [ ] PR A: finalize spec taxonomy + eligibility logic.
 - [ ] PR B: finalize capability modes + flags.
-- [ ] PR C: writer parity and full diagnostics contract.
-- [ ] PR D: exact skip/scope messaging alignment in export integration.
-- [ ] PR E: test hardening, cleanup, docs status closeout.
+- [ ] PR C: finalize writer parity + diagnostics contract.
+- [ ] PR D: finalize skip/scope message-path exactness in export integration.
+- [ ] PR E: finalize stabilization, cleanup, and docs status closeout.
 
-## Suggested execution order rationale
+## Suggested order rationale
 
-This order reduces risk by locking correctness in service semantics before expanding writer output and integration behavior. It also keeps PRs narrowly reviewable: logic first, presentation second, wiring polish third, then cleanup/documentation.
+Lock service semantics first (A/B), then rendering contract (C), then integration exactness (D), then stabilization/docs closeout (E). This sequencing minimizes regression blast radius and keeps each PR reviewable.
