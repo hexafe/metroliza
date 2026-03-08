@@ -130,8 +130,11 @@ def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
 
     metadata_rows = [
         {'Field': 'Requested scope', 'Value': diagnostics_payload.get('requested_scope')},
+        {'Field': 'Requested level', 'Value': diagnostics_payload.get('requested_level')},
+        {'Field': 'Execution status', 'Value': diagnostics_payload.get('execution_status')},
         {'Field': 'Effective scope', 'Value': diagnostics_payload.get('effective_scope')},
         {'Field': 'Reference count', 'Value': diagnostics_payload.get('reference_count')},
+        {'Field': 'Group count', 'Value': diagnostics_payload.get('group_count')},
         {'Field': 'Metric count', 'Value': diagnostics_payload.get('metric_count')},
         {'Field': 'Skipped metric count', 'Value': diagnostics_payload.get('skipped_metric_count')},
     ]
@@ -140,6 +143,65 @@ def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
         metadata_rows.append({'Field': 'Skip reason code', 'Value': skip_reason.get('code')})
         metadata_rows.append({'Field': 'Skip reason', 'Value': skip_reason.get('message')})
     row = _write_table(worksheet, row, ['Field', 'Value'], metadata_rows)
+    row += SECTION_GAP
+
+    warning_summary = diagnostics_payload.get('warning_summary', {})
+    row = _write_section_title(worksheet, row, 'Warning summary')
+    warning_rows = [
+        {'Field': 'Warning count', 'Value': warning_summary.get('count', 0)},
+        {'Field': 'Messages', 'Value': '; '.join(warning_summary.get('messages', [])) or 'none'},
+        {
+            'Field': 'Skip reason counts',
+            'Value': '; '.join(
+                f"{reason}={count}"
+                for reason, count in sorted((warning_summary.get('skip_reason_counts') or {}).items())
+            )
+            or 'none',
+        },
+    ]
+    row = _write_table(worksheet, row, ['Field', 'Value'], warning_rows)
+    row += SECTION_GAP
+
+    histogram_skip_summary = diagnostics_payload.get('histogram_skip_summary', {})
+    row = _write_section_title(worksheet, row, 'Histogram skip summary')
+    histogram_rows = [
+        {'Field': 'Applies', 'Value': histogram_skip_summary.get('applies', False)},
+        {'Field': 'Count', 'Value': histogram_skip_summary.get('count', 0)},
+        {
+            'Field': 'Reasons',
+            'Value': '; '.join(
+                f"{reason}={count}"
+                for reason, count in sorted((histogram_skip_summary.get('reason_counts') or {}).items())
+            )
+            or 'none',
+        },
+    ]
+    row = _write_table(worksheet, row, ['Field', 'Value'], histogram_rows)
+    row += SECTION_GAP
+
+    unmatched_metrics_summary = diagnostics_payload.get('unmatched_metrics_summary', {})
+    row = _write_section_title(worksheet, row, 'Possible unmatched metrics across references')
+    unmatched_rows = [
+        {'Field': 'Count', 'Value': unmatched_metrics_summary.get('count', 0)},
+    ]
+    metrics = unmatched_metrics_summary.get('metrics', []) or []
+    if metrics:
+        unmatched_rows.append(
+            {
+                'Field': 'Metrics',
+                'Value': '; '.join(
+                    (
+                        f"{entry.get('metric')}: "
+                        f"present=[{', '.join(entry.get('present_references', []))}] "
+                        f"missing=[{', '.join(entry.get('missing_references', []))}]"
+                    )
+                    for entry in metrics
+                ),
+            }
+        )
+    else:
+        unmatched_rows.append({'Field': 'Metrics', 'Value': 'none'})
+    row = _write_table(worksheet, row, ['Field', 'Value'], unmatched_rows)
     row += SECTION_GAP
 
     row = _write_section_title(worksheet, row, 'Analyzed metrics')

@@ -414,6 +414,15 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertIn('Group Analysis', sheet_names)
                 self.assertIn('Diagnostics', sheet_names)
 
+                diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
+                self.assertIn('Requested level', diagnostics_values)
+                self.assertIn(level, diagnostics_values)
+                self.assertIn('Execution status', diagnostics_values)
+                self.assertTrue(any(status in diagnostics_values for status in ('ran', 'skipped')))
+                self.assertIn('Warning summary', diagnostics_values)
+                self.assertIn('Histogram skip summary', diagnostics_values)
+                self.assertIn('Possible unmatched metrics across references', diagnostics_values)
+
     def test_group_analysis_scope_mismatch_writes_exact_message_and_diagnostics(self):
         scenarios = [
             {

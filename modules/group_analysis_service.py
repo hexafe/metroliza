@@ -457,9 +457,15 @@ def build_group_analysis_diagnostics_payload(
     *,
     effective_scope,
     requested_scope,
+    requested_level,
+    execution_status,
     reference_count,
+    group_count,
     metric_rows,
     skipped_metrics,
+    warning_summary,
+    histogram_skip_summary,
+    unmatched_metrics_summary,
     skip_reason=None,
 ):
     """Build diagnostics payload for worksheet rendering and debugging."""
@@ -471,15 +477,91 @@ def build_group_analysis_diagnostics_payload(
 
     return {
         'requested_scope': str(requested_scope or 'auto').strip().lower(),
+        'requested_level': str(requested_level or 'light').strip().lower(),
+        'execution_status': str(execution_status or 'skipped').strip().lower(),
         'effective_scope': effective_scope,
         'reference_count': int(reference_count),
+        'group_count': int(group_count),
         'metric_count': len(metric_rows),
         'skipped_metric_count': len(skipped_metrics),
         'status_counts': status_counts,
+        'warning_summary': warning_summary,
+        'histogram_skip_summary': histogram_skip_summary,
+        'unmatched_metrics_summary': unmatched_metrics_summary,
         'skip_reason': skip_reason,
         'metrics': metric_rows,
         'skipped_metrics': skipped_metrics,
     }
+
+
+def _build_warning_summary(metric_rows, skipped_metrics):
+    warning_messages = []
+    warning_counts = {}
+
+    for metric_row in sorted(metric_rows, key=lambda row: str(row.get('metric') or '')):
+        interpretation_limits = str(metric_row.get('comparability_summary', {}).get('interpretation_limits') or 'none')
+        if interpretation_limits != 'none':
+            warning_messages.append(f"{metric_row.get('metric')}: {interpretation_limits}")
+
+    for skipped in sorted(skipped_metrics, key=lambda row: str(row.get('metric') or '')):
+        reason = str(skipped.get('reason') or 'unknown')
+        warning_counts[reason] = warning_counts.get(reason, 0) + 1
+
+    return {
+        'count': len(warning_messages) + len(skipped_metrics),
+        'messages': warning_messages,
+        'skip_reason_counts': dict(sorted(warning_counts.items())),
+    }
+
+
+def _build_histogram_skip_summary(*, analysis_level, skipped_metrics):
+    normalized_level = str(analysis_level or 'light').strip().lower()
+    reason_counts = {}
+    for skipped in skipped_metrics:
+        reason = str(skipped.get('reason') or 'unknown')
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+    return {
+        'applies': normalized_level == 'standard',
+        'count': len(skipped_metrics) if normalized_level == 'standard' else 0,
+        'reason_counts': dict(sorted(reason_counts.items())) if normalized_level == 'standard' else {},
+    }
+
+
+def _build_unmatched_metrics_summary(metric_frame, *, metric_column, reference_column):
+    if reference_column is None or reference_column not in metric_frame.columns:
+        return {'count': 0, 'metrics': []}
+
+    expected_references = sorted(
+        {
+            str(reference).strip()
+            for reference in metric_frame[reference_column].dropna().astype(str)
+            if str(reference).strip()
+        }
+    )
+    if not expected_references:
+        return {'count': 0, 'metrics': []}
+
+    unmatched_metrics = []
+    for metric_name, metric_subset in metric_frame.groupby(metric_column, sort=True):
+        present_references = sorted(
+            {
+                str(reference).strip()
+                for reference in metric_subset[reference_column].dropna().astype(str)
+                if str(reference).strip()
+            }
+        )
+        missing_references = [reference for reference in expected_references if reference not in present_references]
+        if missing_references:
+            unmatched_metrics.append(
+                {
+                    'metric': str(metric_name),
+                    'present_references': present_references,
+                    'missing_references': missing_references,
+                }
+            )
+
+    return {'count': len(unmatched_metrics), 'metrics': unmatched_metrics}
 
 
 def _normalize_grouped_working_df(grouped_df):
@@ -585,14 +667,27 @@ def build_group_analysis_payload(
     )
     reference_count = int(grouped_df.get('REFERENCE', pd.Series(dtype=object)).dropna().nunique())
     effective_scope = readiness['effective_scope']
+    normalized_level = str(analysis_level or 'light').strip().lower()
+
+    if isinstance(grouped_df, pd.DataFrame) and 'GROUP' in grouped_df.columns:
+        grouped_series = normalize_group_labels(grouped_df['GROUP'], missing_label='POPULATION', normalize_blank=True)
+        group_count = int(grouped_series.dropna().nunique())
+    else:
+        group_count = 0
 
     if not readiness['runnable']:
         diagnostics = build_group_analysis_diagnostics_payload(
             effective_scope=effective_scope,
             requested_scope=requested_scope,
+            requested_level=normalized_level,
+            execution_status='skipped',
             reference_count=reference_count,
+            group_count=group_count,
             metric_rows=[],
             skipped_metrics=[],
+            warning_summary={'count': 0, 'messages': [], 'skip_reason_counts': {}},
+            histogram_skip_summary={'applies': normalized_level == 'standard', 'count': 0, 'reason_counts': {}},
+            unmatched_metrics_summary={'count': 0, 'metrics': []},
             skip_reason=readiness['skip_reason'],
         )
         return {
@@ -621,6 +716,13 @@ def build_group_analysis_payload(
     if eligible_metrics is not None:
         allowed = {str(value).strip() for value in eligible_metrics if str(value).strip()}
         metric_frame = metric_frame[metric_frame[metric_column].isin(allowed)]
+
+    group_count = int(metric_frame.get('GROUP', pd.Series(dtype=object)).dropna().nunique())
+    unmatched_metrics_summary = _build_unmatched_metrics_summary(
+        metric_frame,
+        metric_column=metric_column,
+        reference_column=reference_column,
+    )
 
     grouping_columns = [metric_column]
     if effective_scope == 'multi_reference' and reference_column is not None:
@@ -699,9 +801,18 @@ def build_group_analysis_payload(
     diagnostics = build_group_analysis_diagnostics_payload(
         effective_scope=effective_scope,
         requested_scope=requested_scope,
+        requested_level=normalized_level,
+        execution_status='ran',
         reference_count=reference_count,
+        group_count=group_count,
         metric_rows=metrics,
         skipped_metrics=skipped_metrics,
+        warning_summary=_build_warning_summary(metrics, skipped_metrics),
+        histogram_skip_summary=_build_histogram_skip_summary(
+            analysis_level=normalized_level,
+            skipped_metrics=skipped_metrics,
+        ),
+        unmatched_metrics_summary=unmatched_metrics_summary,
     )
 
     return {
