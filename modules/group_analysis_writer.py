@@ -84,6 +84,7 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
 
     difference_col = headers.index('Difference')
     comment_col = headers.index('Comment')
+    flags_col = headers.index('Flags') if 'Flags' in headers else None
     pvalue_col = headers.index('adj p-value')
     effect_col = headers.index('effect size')
 
@@ -91,6 +92,12 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
     _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'neutral', type='text', criteria='containing', value='NO'))
     _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='USE CAUTION'))
     _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='DESCRIPTIVE ONLY'))
+
+    if flags_col is not None:
+        _apply_conditional(worksheet, first, flags_col, last, flags_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='LOW N'))
+        _apply_conditional(worksheet, first, flags_col, last, flags_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='IMBALANCED N'))
+        _apply_conditional(worksheet, first, flags_col, last, flags_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='SPEC?'))
+        _apply_conditional(worksheet, first, flags_col, last, flags_col, _style_rule(formats, 'strong_warning', type='text', criteria='containing', value='SEVERELY IMBALANCED N'))
 
     # Restrained emphasis for clearly significant p-values and very large effects.
     _apply_conditional(worksheet, first, pvalue_col, last, pvalue_col, _style_rule(formats, 'positive', type='cell', criteria='<', value=0.01))
@@ -176,13 +183,14 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
             'Delta mean': entry.get('delta_mean'),
             'Difference': entry.get('difference'),
             'Comment': entry.get('comment'),
+            'Flags': entry.get('flags'),
         }
         for entry in metric_row.get('pairwise_rows', [])
     ]
     row, pairwise_bounds = _write_table_with_bounds(
         worksheet,
         row,
-        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'Difference', 'Comment'],
+        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'Difference', 'Comment', 'Flags'],
         pairwise_rows,
     )
     _apply_metric_pairwise_formats(worksheet, pairwise_bounds)

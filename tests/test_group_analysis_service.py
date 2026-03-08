@@ -52,7 +52,7 @@ class TestGroupAnalysisService(unittest.TestCase):
 
         rows = build_pairwise_rows(
             'M1',
-            {'A': [10.0, 10.1], 'B': [9.7, 9.8], 'C': [9.9, 10.0]},
+            {'A': [10.0, 10.1, 10.2, 10.3, 10.4], 'B': [9.7, 9.8, 9.9, 10.0, 10.1], 'C': [9.9, 10.0, 10.1, 10.2, 10.3]},
             pairwise_eligible=True,
         )
 
@@ -65,7 +65,7 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(rows[1]['adjusted_p_value'], 0.4568)
         self.assertEqual(rows[1]['effect_size'], 0.123)
         self.assertEqual(rows[2]['difference'], 'YES')
-        self.assertEqual(rows[2]['comment'], 'USE CAUTION')
+        self.assertEqual(rows[2]['comment'], 'DIFFERENCE')
         self.assertNotIn('significant', rows[0])
 
     @patch('modules.group_analysis_service.compute_pairwise_rows')
@@ -86,6 +86,44 @@ class TestGroupAnalysisService(unittest.TestCase):
 
         self.assertEqual(rows[0]['difference'], 'NO')
         self.assertEqual(rows[0]['comment'], 'DESCRIPTIVE ONLY')
+
+
+    def test_build_group_flags_use_spec_threshold_vocabulary(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 20,
+                'HEADER - AX': ['M1'] * 20,
+                'GROUP': ['A'] * 4 + ['B'] * 12 + ['C'] * 4,
+                'MEAS': [10.0 + 0.01 * i for i in range(20)],
+                'LSL': [9.0] * 20,
+                'NOMINAL': [10.0] * 20,
+                'USL': [11.0] * 20,
+            }
+        )
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+        metric = payload['metric_rows'][0]
+        self.assertTrue(all('LOW N' in row['flags'] for row in metric['descriptive_stats'] if row['group'] in {'A', 'C'}))
+        self.assertTrue(any('SEVERELY IMBALANCED N' in row['flags'] for row in metric['descriptive_stats']))
+
+    def test_pairwise_flags_include_spec_question_for_spec_mismatch_light(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 10,
+                'HEADER - AX': ['M1'] * 10,
+                'GROUP': ['A'] * 5 + ['B'] * 5,
+                'MEAS': [10.0, 10.1, 9.9, 10.2, 9.8, 9.4, 9.5, 9.6, 9.7, 9.8],
+                'LSL': [9.0] * 10,
+                'NOMINAL': [10.0] * 5 + [10.2] * 5,
+                'USL': [11.0] * 10,
+            }
+        )
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['spec_status'], 'NOM_MISMATCH')
+        self.assertEqual(len(metric['pairwise_rows']), 0)
+        self.assertTrue(all('SPEC?' in row['flags'] for row in metric['descriptive_stats']))
 
     def test_auto_scope_resolution_uses_reference_cardinality(self):
         self.assertEqual(resolve_group_analysis_scope('auto', 1), 'single_reference')
@@ -375,8 +413,8 @@ class TestGroupAnalysisService(unittest.TestCase):
         payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
         diagnostics = payload['diagnostics']
 
-        self.assertEqual(diagnostics['warning_summary']['count'], 2)
-        self.assertEqual(len(diagnostics['warning_summary']['messages']), 1)
+        self.assertEqual(diagnostics['warning_summary']['count'], 3)
+        self.assertEqual(len(diagnostics['warning_summary']['messages']), 2)
         self.assertEqual(diagnostics['warning_summary']['skip_reason_counts'], {'insufficient_groups': 1})
         self.assertEqual(diagnostics['unmatched_metrics_summary']['count'], 1)
         self.assertEqual(diagnostics['unmatched_metrics_summary']['metrics'][0]['metric'], 'M2')

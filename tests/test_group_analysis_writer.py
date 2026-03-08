@@ -91,6 +91,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'effect_size': 0.7,
                             'difference': 'YES',
                             'comment': 'USE CAUTION',
+                            'flags': 'LOW N; IMBALANCED N',
                         }
                     ],
                     'plot_eligibility': {
@@ -117,6 +118,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Difference', values)
         self.assertIn('YES', values)
         self.assertIn('USE CAUTION', values)
+        self.assertIn('Flags', values)
+        self.assertIn('LOW N; IMBALANCED N', values)
         self.assertIn('Standard plot slots', values)
         self.assertIn('Violin', values)
         self.assertIn('Histogram', values)
@@ -129,11 +132,12 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         pairwise_rules = [
             rule
             for rule in worksheet.conditional_formats
-            if rule[1] in {2, 3, 6, 7}
+            if rule[1] in {2, 3, 6, 7, 8}
         ]
-        self.assertGreaterEqual(len(pairwise_rules), 6)
+        self.assertGreaterEqual(len(pairwise_rules), 10)
         self.assertTrue(any(r[4].get('criteria') == 'containing' and r[4].get('value') == 'YES' for r in pairwise_rules))
         self.assertTrue(any(r[4].get('criteria') == '<' and r[4].get('value') == 0.01 for r in pairwise_rules))
+        self.assertTrue(any(r[4].get('criteria') == 'containing' and r[4].get('value') == 'LOW N' for r in pairwise_rules))
 
     def test_group_analysis_diagnostics_sheet_smoke(self):
         worksheet = FakeWorksheet()
