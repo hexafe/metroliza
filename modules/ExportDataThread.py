@@ -100,7 +100,6 @@ from modules.export_grouping_utils import (
 from modules.group_analysis_service import (
     build_group_analysis_payload,
     evaluate_group_analysis_readiness,
-    resolve_group_analysis_scope,
 )
 from modules.group_analysis_writer import (
     write_group_analysis_diagnostics_sheet,
@@ -2788,8 +2787,6 @@ class ExportDataThread(QThread):
         )
 
         requested_scope = str(self.group_analysis_scope or 'auto').strip().lower()
-        reference_count = int(grouped_export_df.get('REFERENCE', pd.Series(dtype=object)).dropna().nunique())
-        effective_scope = resolve_group_analysis_scope(requested_scope, reference_count)
         readiness = evaluate_group_analysis_readiness(
             grouped_export_df,
             requested_scope=requested_scope,
