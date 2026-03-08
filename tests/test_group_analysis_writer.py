@@ -87,10 +87,11 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         values = [value for _, _, value in worksheet.writes]
         self.assertIn('Group Analysis', values)
         self.assertIn('Metric: M1', values)
-        self.assertIn('Comparability / spec summary', values)
         self.assertIn('Descriptive stats', values)
         self.assertIn('Pairwise comparisons', values)
-        self.assertIn('Insights', values)
+        self.assertIn('Comment', values)
+        self.assertIn('adj p-value', values)
+        self.assertIn('Difference', values)
         self.assertEqual(worksheet.frozen, (1, 0))
 
     def test_group_analysis_diagnostics_sheet_smoke(self):
@@ -138,8 +139,10 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Possible unmatched metrics across references', values)
         self.assertIn('standard', values)
         self.assertIn('ran', values)
-        self.assertIn('Analyzed metrics', values)
-        self.assertIn('Skipped metrics', values)
+        self.assertIn('Metric coverage', values)
+        self.assertIn('Included', values)
+        self.assertIn('Inclusion rationale', values)
+        self.assertIn('Exclusion rationale', values)
         self.assertIn('M2', values)
         self.assertIn('M1: pairwise disabled', values)
         self.assertIn('nom_mismatch=1', values)
