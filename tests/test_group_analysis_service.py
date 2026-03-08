@@ -69,6 +69,28 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertNotIn('significant', rows[0])
 
     @patch('modules.group_analysis_service.compute_pairwise_rows')
+    def test_build_pairwise_rows_rounds_delta_mean_to_three_decimals(self, mock_compute_pairwise_rows):
+        mock_compute_pairwise_rows.return_value = [
+            {
+                'group_a': 'A',
+                'group_b': 'B',
+                'adjusted_p_value': 0.5,
+                'effect_size': 0.2,
+                'p_value': 0.5,
+                'test_used': 'welch_t',
+                'significant': False,
+            }
+        ]
+
+        rows = build_pairwise_rows(
+            'M1',
+            {'A': [1.0], 'B': [2.0 / 3.0]},
+            pairwise_eligible=True,
+        )
+
+        self.assertEqual(rows[0]['delta_mean'], 0.333)
+
+    @patch('modules.group_analysis_service.compute_pairwise_rows')
     def test_build_pairwise_rows_marks_descriptive_only_when_pairwise_is_ineligible(self, mock_compute_pairwise_rows):
         mock_compute_pairwise_rows.return_value = [
             {

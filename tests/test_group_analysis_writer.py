@@ -146,6 +146,13 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertTrue(any(r[4].get('criteria') == 'containing' and r[4].get('value') == 'YES' for r in pairwise_rules))
         self.assertTrue(any(r[4].get('criteria') == '<' and r[4].get('value') == 0.01 for r in pairwise_rules))
         self.assertTrue(any(r[4].get('criteria') == 'containing' and r[4].get('value') == 'LOW N' for r in pairwise_rules))
+        delta_mean_rules = [
+            rule
+            for rule in worksheet.conditional_formats
+            if rule[1] == 5 and rule[3] == 5 and rule[4].get('type') == 'no_blanks'
+        ]
+        self.assertTrue(delta_mean_rules)
+        self.assertEqual(delta_mean_rules[0][4].get('format', {}).get('props', {}).get('num_format'), '0.000')
 
     def test_group_analysis_diagnostics_sheet_smoke(self):
         worksheet = FakeWorksheet()
