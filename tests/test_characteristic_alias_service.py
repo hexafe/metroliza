@@ -290,23 +290,37 @@ class TestCharacteristicAliasService(unittest.TestCase):
         self.assertEqual(resolve_characteristic_alias('AX-BOM', 'REF', self.db_path), 'CANON-BOM')
 
 
-    def test_import_csv_reports_all_row_validation_errors_with_row_numbers(self):
+    def test_import_csv_reports_structured_row_validation_errors(self):
         csv_path = f"{self.temp_dir.name}/invalid_aliases.csv"
         with open(csv_path, 'w', newline='', encoding='utf-8') as csv_file:
             writer = csv.DictWriter(csv_file, fieldnames=['alias_name', 'canonical_name', 'scope_type', 'scope_value'])
             writer.writeheader()
             writer.writerow({'alias_name': '', 'canonical_name': 'CAN-1', 'scope_type': 'global', 'scope_value': ''})
             writer.writerow({'alias_name': 'AX-2', 'canonical_name': '', 'scope_type': 'global', 'scope_value': ''})
+            writer.writerow({'alias_name': 'AX-3', 'canonical_name': 'CAN-3', 'scope_type': 'local', 'scope_value': ''})
             writer.writerow({'alias_name': 'AX-3', 'canonical_name': 'CAN-3', 'scope_type': 'reference', 'scope_value': ''})
+            writer.writerow({'alias_name': 'AX-4', 'canonical_name': 'CAN-4A', 'scope_type': 'global', 'scope_value': ''})
+            writer.writerow({'alias_name': 'AX-4', 'canonical_name': 'CAN-4B', 'scope_type': 'global', 'scope_value': ''})
 
         with self.assertRaises(CharacteristicAliasImportValidationError) as ctx:
             import_characteristic_aliases_csv(self.db_path, csv_path)
 
         error = ctx.exception
-        self.assertEqual(len(error.row_errors), 3)
+        self.assertEqual(error.total_rows_processed, 6)
+        self.assertEqual(len(error.row_errors), 5)
         self.assertIn('alias_name is required at row 2', error.row_errors[0])
         self.assertIn('canonical_name is required at row 3', error.row_errors[1])
-        self.assertIn('scope_value is required for reference scope at row 4', error.row_errors[2])
+        self.assertIn('scope_type must be one of: global, reference at row 4', error.row_errors[2])
+        self.assertIn('scope_value is required for reference scope at row 5', error.row_errors[3])
+        self.assertIn('duplicate alias/scope key for "AX-4" (global) at row 7; first seen at row 6', error.row_errors[4])
+
+        self.assertEqual(len(error.row_error_details), 5)
+        self.assertEqual(error.row_error_details[0]['code'], 'missing_alias_name')
+        self.assertEqual(error.row_error_details[0]['category'], 'missing_required_field')
+        self.assertEqual(error.row_error_details[1]['code'], 'missing_canonical_name')
+        self.assertEqual(error.row_error_details[2]['code'], 'invalid_scope_type')
+        self.assertEqual(error.row_error_details[3]['code'], 'reference_scope_requires_scope_value')
+        self.assertEqual(error.row_error_details[4]['code'], 'duplicate_key_collision')
 
     def test_import_csv_requires_expected_headers(self):
         csv_path = f"{self.temp_dir.name}/bad_aliases.csv"
