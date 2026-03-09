@@ -1,3 +1,4 @@
+import csv
 import tempfile
 import unittest
 from sqlite3 import connect
@@ -7,9 +8,12 @@ from modules.characteristic_alias_service import (
     ensure_characteristic_alias_schema,
     fetch_all_characteristic_aliases,
     fetch_characteristic_aliases,
+    import_characteristic_aliases_csv,
     normalize_alias_scope,
     resolve_characteristic_alias,
     upsert_characteristic_alias,
+    upsert_characteristic_aliases_bulk,
+    export_characteristic_aliases_csv,
 )
 
 

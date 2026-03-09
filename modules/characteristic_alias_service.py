@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import sqlite3
 
 from modules.db import execute_with_retry
@@ -179,6 +180,174 @@ def resolve_characteristic_alias(
     if aliases:
         return str(aliases[0].get('canonical_name') or normalized_metric_name)
     return normalized_metric_name
+
+
+def _normalize_alias_mapping_payload(payload: dict[str, str | None], *, row_number: int | None = None) -> dict[str, str | None]:
+    """Validate and normalize one mapping payload for batch workflows."""
+    alias_name = str(payload.get('alias_name') or '').strip()
+    canonical_name = str(payload.get('canonical_name') or '').strip()
+    scope_type = str(payload.get('scope_type') or '').strip().lower()
+    scope_value = str(payload.get('scope_value') or '').strip() or None
+
+    if not alias_name:
+        suffix = f' at row {row_number}' if row_number is not None else ''
+        raise ValueError(f'alias_name is required{suffix}')
+
+    if not canonical_name:
+        suffix = f' at row {row_number}' if row_number is not None else ''
+        raise ValueError(f'canonical_name is required{suffix}')
+
+    try:
+        normalized_scope_type, normalized_scope_value = normalize_alias_scope(scope_type, scope_value)
+    except ValueError as exc:
+        suffix = f' at row {row_number}' if row_number is not None else ''
+        raise ValueError(f'{exc}{suffix}') from exc
+
+    return {
+        'alias_name': alias_name,
+        'canonical_name': canonical_name,
+        'scope_type': normalized_scope_type,
+        'scope_value': normalized_scope_value,
+    }
+
+
+def upsert_characteristic_aliases_bulk(
+    db_path: str,
+    mappings: list[dict[str, str | None]],
+    *,
+    connection: sqlite3.Connection | None = None,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> int:
+    """Validate and upsert many alias mappings in one transaction."""
+    normalized_rows = [
+        _normalize_alias_mapping_payload(mapping, row_number=index + 1)
+        for index, mapping in enumerate(mappings)
+    ]
+    if not normalized_rows:
+        return 0
+
+    def operation(cursor) -> int:
+        ensure_characteristic_alias_table(cursor)
+        for row in normalized_rows:
+            cursor.execute(
+                '''
+                SELECT id
+                FROM CHARACTERISTIC_ALIASES
+                WHERE alias_name = ? AND scope_type = ?
+                  AND (
+                    (scope_value IS NULL AND ? IS NULL)
+                    OR scope_value = ?
+                  )
+                ORDER BY id ASC
+                LIMIT 1
+                ''',
+                (
+                    row['alias_name'],
+                    row['scope_type'],
+                    row['scope_value'],
+                    row['scope_value'],
+                ),
+            )
+            existing_row = cursor.fetchone()
+            if existing_row is None:
+                cursor.execute(
+                    '''
+                    INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value)
+                    VALUES (?, ?, ?, ?)
+                    ''',
+                    (
+                        row['alias_name'],
+                        row['canonical_name'],
+                        row['scope_type'],
+                        row['scope_value'],
+                    ),
+                )
+            else:
+                cursor.execute(
+                    '''
+                    UPDATE CHARACTERISTIC_ALIASES
+                    SET canonical_name = ?, scope_type = ?, scope_value = ?
+                    WHERE id = ?
+                    ''',
+                    (
+                        row['canonical_name'],
+                        row['scope_type'],
+                        row['scope_value'],
+                        existing_row[0],
+                    ),
+                )
+        return len(normalized_rows)
+
+    return run_transaction_with_retry(
+        db_path,
+        operation,
+        connection=connection,
+        retries=retries,
+        retry_delay_s=retry_delay_s,
+    )
+
+
+def export_characteristic_aliases_csv(
+    db_path: str,
+    destination_path: str,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> int:
+    """Export all alias mappings to a CSV file."""
+    rows = fetch_all_characteristic_aliases(db_path, connection=connection)
+    with open(destination_path, 'w', newline='', encoding='utf-8') as csv_file:
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=['alias_name', 'canonical_name', 'scope_type', 'scope_value'],
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    'alias_name': row.get('alias_name') or '',
+                    'canonical_name': row.get('canonical_name') or '',
+                    'scope_type': row.get('scope_type') or '',
+                    'scope_value': row.get('scope_value') or '',
+                }
+            )
+    return len(rows)
+
+
+def import_characteristic_aliases_csv(
+    db_path: str,
+    source_path: str,
+    *,
+    connection: sqlite3.Connection | None = None,
+    retries: int = 2,
+    retry_delay_s: float = 0.05,
+) -> int:
+    """Import alias mappings from CSV and upsert them as a batch."""
+    with open(source_path, newline='', encoding='utf-8') as csv_file:
+        reader = csv.DictReader(csv_file)
+        required_headers = {'alias_name', 'canonical_name', 'scope_type', 'scope_value'}
+        headers = set(reader.fieldnames or [])
+        if not required_headers.issubset(headers):
+            missing = ', '.join(sorted(required_headers - headers))
+            raise ValueError(f'CSV is missing required columns: {missing}')
+
+        rows = [
+            {
+                'alias_name': row.get('alias_name'),
+                'canonical_name': row.get('canonical_name'),
+                'scope_type': row.get('scope_type'),
+                'scope_value': row.get('scope_value'),
+            }
+            for row in reader
+        ]
+
+    return upsert_characteristic_aliases_bulk(
+        db_path,
+        rows,
+        connection=connection,
+        retries=retries,
+        retry_delay_s=retry_delay_s,
+    )
 
 
 def upsert_characteristic_alias(

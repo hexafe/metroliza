@@ -21,7 +21,9 @@ from PyQt6.QtWidgets import (
 from modules.characteristic_alias_service import (
     delete_characteristic_alias,
     ensure_characteristic_alias_schema,
+    export_characteristic_aliases_csv,
     fetch_all_characteristic_aliases,
+    import_characteristic_aliases_csv,
     normalize_alias_scope,
     upsert_characteristic_alias,
 )
@@ -141,12 +143,16 @@ class CharacteristicMappingDialog(QDialog):
         self.add_button = QPushButton('Add')
         self.edit_button = QPushButton('Edit')
         self.delete_button = QPushButton('Delete')
+        self.import_button = QPushButton('Import CSV')
+        self.export_button = QPushButton('Export CSV')
         self.close_button = QPushButton('Close')
 
         button_row = QHBoxLayout()
         button_row.addWidget(self.add_button)
         button_row.addWidget(self.edit_button)
         button_row.addWidget(self.delete_button)
+        button_row.addWidget(self.import_button)
+        button_row.addWidget(self.export_button)
         button_row.addStretch()
         button_row.addWidget(self.close_button)
 
@@ -163,6 +169,8 @@ class CharacteristicMappingDialog(QDialog):
         self.add_button.clicked.connect(self.add_mapping)
         self.edit_button.clicked.connect(self.edit_mapping)
         self.delete_button.clicked.connect(self.delete_mapping)
+        self.import_button.clicked.connect(self.import_mappings)
+        self.export_button.clicked.connect(self.export_mappings)
         self.close_button.clicked.connect(self.accept)
         self.select_db_button.clicked.connect(self.select_db_file)
 
@@ -312,3 +320,40 @@ class CharacteristicMappingDialog(QDialog):
         except Exception as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Delete error', f'Could not delete mapping: {exc}')
+
+    def import_mappings(self):
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            'Import characteristic mappings',
+            str(self.db_file or ''),
+            'CSV files (*.csv);;All files (*)',
+        )
+        if not filename:
+            return
+
+        try:
+            ensure_characteristic_alias_schema(self.db_file)
+            imported_count = import_characteristic_aliases_csv(self.db_file, filename)
+            self.load_aliases()
+            QMessageBox.information(self, 'Import complete', f'Imported {imported_count} mapping row(s).')
+        except Exception as exc:
+            CustomLogger(exc, reraise=False)
+            QMessageBox.critical(self, 'Import error', f'Could not import mappings: {exc}')
+
+    def export_mappings(self):
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            'Export characteristic mappings',
+            'characteristic_aliases.csv',
+            'CSV files (*.csv);;All files (*)',
+        )
+        if not filename:
+            return
+
+        try:
+            ensure_characteristic_alias_schema(self.db_file)
+            exported_count = export_characteristic_aliases_csv(self.db_file, filename)
+            QMessageBox.information(self, 'Export complete', f'Exported {exported_count} mapping row(s).')
+        except Exception as exc:
+            CustomLogger(exc, reraise=False)
+            QMessageBox.critical(self, 'Export error', f'Could not export mappings: {exc}')
