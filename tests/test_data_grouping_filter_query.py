@@ -144,6 +144,83 @@ class TestDataGroupingColorAssignments(unittest.TestCase):
         self.assertEqual(dialog.df['GROUP_COLOR'].iloc[0], '#FDE2E4')
 
 
+class _ColorCaptureItem:
+    def __init__(self):
+        self.background = None
+        self.foreground = None
+
+    def setBackground(self, value):
+        self.background = value
+
+    def setForeground(self, value):
+        self.foreground = value
+
+
+class _PaletteHighlightColor:
+    def __init__(self, value):
+        self._value = value
+
+    def isValid(self):
+        return True
+
+    def name(self):
+        return self._value
+
+
+class _PaletteHighlightRole:
+    def __init__(self, value):
+        self._value = value
+
+    def color(self):
+        return _PaletteHighlightColor(self._value)
+
+
+class _ListPalette:
+    def __init__(self, value):
+        self._value = value
+
+    def highlight(self):
+        return _PaletteHighlightRole(self._value)
+
+
+class _ThemeListWidget:
+    def __init__(self, highlight='#0A0B0C'):
+        self._highlight = highlight
+        self.stylesheet = ''
+
+    def palette(self):
+        return _ListPalette(self._highlight)
+
+    def setStyleSheet(self, value):
+        self.stylesheet = value
+
+
+class TestDataGroupingSelectionStyling(unittest.TestCase):
+    def test_apply_item_color_only_sets_background_for_non_selected_theme_blending(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.default_group_color = '#FFFFFF'
+        item = _ColorCaptureItem()
+
+        dialog._apply_item_color(item, '#AABBCC')
+
+        self.assertIsNotNone(item.background)
+        self.assertIsNone(item.foreground)
+
+    def test_apply_list_theme_styles_sets_selection_rules_for_all_lists(self):
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.reference_list = _ThemeListWidget('#112233')
+        dialog.part_list = _ThemeListWidget('#112233')
+        dialog.groups_list = _ThemeListWidget('#112233')
+        dialog.part_group_list = _ThemeListWidget('#112233')
+
+        dialog._apply_list_theme_styles()
+
+        for list_widget in (dialog.reference_list, dialog.part_list, dialog.groups_list, dialog.part_group_list):
+            self.assertIn('QListWidget::item:selected', list_widget.stylesheet)
+            self.assertIn('QListWidget::item:!selected', list_widget.stylesheet)
+            self.assertIn('background-color: #112233', list_widget.stylesheet)
+
+
 if __name__ == '__main__':
     unittest.main()
 

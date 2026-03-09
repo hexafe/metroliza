@@ -385,7 +385,33 @@ class DataGrouping(QDialog):
         if not color.isValid():
             color = QColor(self.default_group_color)
         item.setBackground(QBrush(color))
-        item.setForeground(QBrush(QColor(self._ideal_text_color(color.name()))))
+
+    def _apply_list_theme_styles(self):
+        highlight_name = "#308CC6"
+        for list_widget in (
+            getattr(self, 'reference_list', None),
+            getattr(self, 'part_list', None),
+            getattr(self, 'groups_list', None),
+            getattr(self, 'part_group_list', None),
+        ):
+            if list_widget is None or not hasattr(list_widget, 'setStyleSheet'):
+                continue
+
+            palette = list_widget.palette() if hasattr(list_widget, 'palette') else None
+            highlight_color = palette.highlight().color() if palette is not None and hasattr(palette, 'highlight') else None
+            if highlight_color is not None and hasattr(highlight_color, 'isValid') and highlight_color.isValid():
+                highlight_name = highlight_color.name()
+
+            selected_text_color = self._ideal_text_color(highlight_name)
+            list_widget.setStyleSheet(
+                "QListWidget::item:selected {"
+                f" background-color: {highlight_name};"
+                f" color: {selected_text_color};"
+                " }"
+                " QListWidget::item:!selected {"
+                " background-color: transparent;"
+                " }"
+            )
 
     def _compute_group_key_for_df(self, df):
         try:
@@ -414,6 +440,8 @@ class DataGrouping(QDialog):
         rows_df = self.df if not selected_reference else self.df[self.df['REFERENCE'] == selected_reference]
         rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
 
+        self._apply_list_theme_styles()
+
         self.part_list.clear()
         for row in rows_df.itertuples(index=False):
             item = QListWidgetItem(self._part_display_label(row))
@@ -424,6 +452,8 @@ class DataGrouping(QDialog):
     def _populate_part_group_list(self, selected_group=None):
         rows_df = self.df if not selected_group else self.df[self.df['GROUP'] == selected_group]
         rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
+
+        self._apply_list_theme_styles()
 
         self.part_group_list.clear()
         for row in rows_df.itertuples(index=False):
@@ -496,6 +526,7 @@ class DataGrouping(QDialog):
         """
 
         try:
+            self._apply_list_theme_styles()
             unique_references = list(map(str, self.df["REFERENCE"].unique()))
             self._ensure_group_color_integrity()
             unique_groups = self.df["GROUP"].unique()
