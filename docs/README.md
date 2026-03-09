@@ -8,6 +8,7 @@ This directory contains active operational and maintenance documentation.
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
+- Grouping dialog color policy uses shared semantic tokens from `modules/ui_theme_tokens.py` (base row background, selected-row colors, default group color, and generated group palette) so dialogs stay visually consistent across light/dark themes.
 - `roadmaps/2026_03_rc1_test_ci_execution_tracker.md` — active RC1 test/CI audit and incremental execution tracker.
 
 ### Active release-check docs (`docs/release_checks/`)

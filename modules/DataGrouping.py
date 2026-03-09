@@ -7,6 +7,7 @@ store, apply, and clear reference/part grouping assignments.
 from modules.CustomLogger import CustomLogger
 from modules.db import read_sql_dataframe
 from modules.list_selection_utils import ListSelectionUtils
+from modules import ui_theme_tokens
 from PyQt6.QtCore import Qt
 import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtGui import QColor, QBrush
@@ -40,17 +41,9 @@ class DataGrouping(QDialog):
         self.default_group = "POPULATION"
         self.default_group_color = self._resolve_default_group_color()
         self.group_color_column = "GROUP_COLOR"
-        self.group_palette = [
-            "#FDE2E4",
-            "#E2ECE9",
-            "#E8E8FF",
-            "#FFF1E6",
-            "#E3F2FD",
-            "#E7F6E7",
-            "#F9E2FF",
-            "#FFF9C4",
-        ]
-        self.group_palette = self._palette_for_current_theme(self.group_palette)
+        self.group_palette = ui_theme_tokens.themed_group_palette(
+            dark_mode=self._is_dark_mode_base(self.default_group_color)
+        )
         self._group_display_to_name = {}
         self._list_selection_utils = ListSelectionUtils()
 
@@ -337,52 +330,29 @@ class DataGrouping(QDialog):
 
     @staticmethod
     def _ideal_text_color(background_hex):
-        color = QColor(background_hex)
-        if not color.isValid():
-            return '#000000'
-        luminance = ((0.299 * color.red()) + (0.587 * color.green()) + (0.114 * color.blue())) / 255
-        return '#000000' if luminance > 0.6 else '#FFFFFF'
+        return ui_theme_tokens.ideal_text_color(background_hex)
 
     @staticmethod
     def _resolve_default_group_color_from_base(base_hex, fallback_hex='#FFFFFF'):
-        if not isinstance(base_hex, str) or not base_hex.strip():
-            return fallback_hex.upper()
-        base = QColor(base_hex)
-        if base.isValid():
-            return base.name().upper()
-        return fallback_hex.upper()
+        return ui_theme_tokens.resolve_base_row_background(base_hex or fallback_hex)
 
     @staticmethod
     def _is_dark_mode_base(base_hex):
-        return DataGrouping._ideal_text_color(base_hex) == '#FFFFFF'
+        return ui_theme_tokens.is_dark_mode_base(base_hex)
 
     @staticmethod
     def _clamp_group_color_for_theme(color_hex, dark_mode=False):
-        color = QColor(color_hex)
-        if not color.isValid():
-            return color_hex
-        if not dark_mode:
-            return color.name().upper()
-
-        red, green, blue = color.red(), color.green(), color.blue()
-        gray = (red + green + blue) / 3
-
-        def _channel(value):
-            saturated = gray + ((value - gray) * 1.25)
-            darkened = int(saturated * 0.7)
-            return max(70, min(185, darkened))
-
-        return f"#{_channel(red):02X}{_channel(green):02X}{_channel(blue):02X}"
+        return ui_theme_tokens.clamp_group_color_for_theme(color_hex, dark_mode=dark_mode)
 
     def _palette_for_current_theme(self, base_palette):
         dark_mode = self._is_dark_mode_base(self.default_group_color)
-        return [self._clamp_group_color_for_theme(color, dark_mode=dark_mode) for color in base_palette]
+        return ui_theme_tokens.themed_group_palette(base_palette=base_palette, dark_mode=dark_mode)
 
     def _resolve_default_group_color(self):
         palette = self.palette() if hasattr(self, 'palette') else None
         base = palette.base().color() if palette is not None and hasattr(palette, 'base') else None
         base_hex = base.name() if base is not None and hasattr(base, 'isValid') and base.isValid() else None
-        return self._resolve_default_group_color_from_base(base_hex)
+        return ui_theme_tokens.resolve_base_row_background(base_hex)
 
     def _next_group_color(self):
         used = set(
@@ -396,9 +366,8 @@ class DataGrouping(QDialog):
                 return color
 
         seed = len(used)
-        hue = (seed * 47) % 360
-        generated = QColor.fromHsl(int(hue), 110, 225)
-        return generated.name().upper()
+        dark_mode = self._is_dark_mode_base(self.default_group_color)
+        return ui_theme_tokens.generate_group_color(seed, dark_mode=dark_mode)
 
     def _ensure_group_color_integrity(self):
         if self.group_color_column not in self.df.columns:
@@ -420,7 +389,8 @@ class DataGrouping(QDialog):
         color = getattr(row, self.group_color_column, self.default_group_color)
         if pd.isna(color) or not str(color).strip():
             return self.default_group_color
-        return str(color)
+        dark_mode = self._is_dark_mode_base(self.default_group_color)
+        return ui_theme_tokens.normalize_group_display_color(str(color), dark_mode=dark_mode, fallback=self.default_group_color)
 
     def _apply_item_color(self, item, color_hex):
         color = QColor(color_hex)
@@ -431,7 +401,7 @@ class DataGrouping(QDialog):
         item.setForeground(QBrush(QColor(self._ideal_text_color(resolved_background))))
 
     def _apply_list_theme_styles(self):
-        highlight_name = "#308CC6"
+        highlight_name = ui_theme_tokens.SELECTED_ROW_BACKGROUND_FALLBACK
         for list_widget in (
             getattr(self, 'reference_list', None),
             getattr(self, 'part_list', None),
@@ -446,7 +416,8 @@ class DataGrouping(QDialog):
             if highlight_color is not None and hasattr(highlight_color, 'isValid') and highlight_color.isValid():
                 highlight_name = highlight_color.name()
 
-            selected_text_color = self._ideal_text_color(highlight_name)
+            highlight_name = ui_theme_tokens.selected_row_background_override(highlight_name)
+            selected_text_color = ui_theme_tokens.selected_text_color(highlight_name)
             list_widget.setStyleSheet(
                 "QListWidget::item:selected {"
                 f" background-color: {highlight_name};"
