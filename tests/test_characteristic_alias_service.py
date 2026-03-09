@@ -1,3 +1,4 @@
+import csv
 import tempfile
 import unittest
 from sqlite3 import connect
@@ -5,11 +6,14 @@ from sqlite3 import connect
 from modules.characteristic_alias_service import (
     delete_characteristic_alias,
     ensure_characteristic_alias_schema,
+    export_characteristic_aliases_csv,
     fetch_all_characteristic_aliases,
     fetch_characteristic_aliases,
+    import_characteristic_aliases_csv,
     normalize_alias_scope,
     resolve_characteristic_alias,
     upsert_characteristic_alias,
+    upsert_characteristic_aliases_bulk,
 )
 
 
@@ -127,18 +131,9 @@ class TestCharacteristicAliasService(unittest.TestCase):
         self.assertEqual([row['canonical_name'] for row in fetched], ['REF-CANON', 'GLOBAL-CANON'])
         self.assertEqual(fetched[1]['scope_value'], None)
 
-        self.assertEqual(
-            resolve_characteristic_alias('M1 - X', 'REF-001', self.db_path),
-            'REF-CANON',
-        )
-        self.assertEqual(
-            resolve_characteristic_alias('M1 - X', 'REF-002', self.db_path),
-            'GLOBAL-CANON',
-        )
-        self.assertEqual(
-            resolve_characteristic_alias('UNKNOWN-METRIC', 'REF-001', self.db_path),
-            'UNKNOWN-METRIC',
-        )
+        self.assertEqual(resolve_characteristic_alias('M1 - X', 'REF-001', self.db_path), 'REF-CANON')
+        self.assertEqual(resolve_characteristic_alias('M1 - X', 'REF-002', self.db_path), 'GLOBAL-CANON')
+        self.assertEqual(resolve_characteristic_alias('UNKNOWN-METRIC', 'REF-001', self.db_path), 'UNKNOWN-METRIC')
 
     def test_resolver_uses_global_when_reference_scoped_entry_is_missing(self):
         upsert_characteristic_alias(
@@ -148,24 +143,14 @@ class TestCharacteristicAliasService(unittest.TestCase):
             scope_type='global',
         )
 
-        self.assertEqual(
-            resolve_characteristic_alias('M2 - X', 'REF-NOT-MAPPED', self.db_path),
-            'GLOBAL-M2',
-        )
+        self.assertEqual(resolve_characteristic_alias('M2 - X', 'REF-NOT-MAPPED', self.db_path), 'GLOBAL-M2')
 
     def test_resolver_falls_back_to_original_metric_when_no_mapping_exists(self):
-        self.assertEqual(
-            resolve_characteristic_alias('NO-MAPPING', 'REF-100', self.db_path),
-            'NO-MAPPING',
-        )
-
+        self.assertEqual(resolve_characteristic_alias('NO-MAPPING', 'REF-100', self.db_path), 'NO-MAPPING')
 
     def test_resolve_returns_original_when_alias_table_is_missing(self):
         db_path = f"{self.temp_dir.name}/no_alias_schema.sqlite"
-        self.assertEqual(
-            resolve_characteristic_alias('M1 - X', 'REF-001', db_path),
-            'M1 - X',
-        )
+        self.assertEqual(resolve_characteristic_alias('M1 - X', 'REF-001', db_path), 'M1 - X')
 
     def test_upsert_updates_existing_scope_row_and_delete_removes_it(self):
         upsert_characteristic_alias(
@@ -193,10 +178,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
             scope_value='REF-101',
         )
         self.assertEqual(deleted_count, 1)
-        self.assertEqual(
-            resolve_characteristic_alias('DIA - X', 'REF-101', self.db_path),
-            'DIA - X',
-        )
+        self.assertEqual(resolve_characteristic_alias('DIA - X', 'REF-101', self.db_path), 'DIA - X')
 
     def test_fetch_all_characteristic_aliases_returns_deterministic_rows(self):
         upsert_characteristic_alias(
@@ -221,16 +203,100 @@ class TestCharacteristicAliasService(unittest.TestCase):
 
         fetched = fetch_all_characteristic_aliases(self.db_path)
         self.assertEqual(
-            [
-                (row['alias_name'], row['canonical_name'], row['scope_type'], row['scope_value'])
-                for row in fetched
-            ],
+            [(row['alias_name'], row['canonical_name'], row['scope_type'], row['scope_value']) for row in fetched],
             [
                 ('A-ALIAS', 'CANON-A0', 'global', None),
                 ('A-ALIAS', 'CANON-A1', 'reference', 'REF-2'),
                 ('B-ALIAS', 'CANON-B', 'global', None),
             ],
         )
+
+    def test_bulk_upsert_is_atomic_when_validation_fails(self):
+        upsert_characteristic_alias(
+            self.db_path,
+            alias_name='EXISTING',
+            canonical_name='CANON-EXISTING',
+            scope_type='global',
+        )
+
+        with self.assertRaisesRegex(ValueError, 'alias_name is required at row 2'):
+            upsert_characteristic_aliases_bulk(
+                self.db_path,
+                [
+                    {'alias_name': 'A1', 'canonical_name': 'C1', 'scope_type': 'global', 'scope_value': None},
+                    {'alias_name': ' ', 'canonical_name': 'C2', 'scope_type': 'global', 'scope_value': None},
+                ],
+            )
+
+        fetched = fetch_all_characteristic_aliases(self.db_path)
+        self.assertEqual(len(fetched), 1)
+        self.assertEqual(fetched[0]['alias_name'], 'EXISTING')
+
+    def test_export_and_import_csv_round_trip(self):
+        upsert_characteristic_alias(
+            self.db_path,
+            alias_name='DIA - X',
+            canonical_name='DIAMETER - X',
+            scope_type='global',
+        )
+        upsert_characteristic_alias(
+            self.db_path,
+            alias_name='DIA - X',
+            canonical_name='DIAMETER - X REF',
+            scope_type='reference',
+            scope_value='REF-1',
+        )
+
+        csv_path = f"{self.temp_dir.name}/aliases.csv"
+        exported_count = export_characteristic_aliases_csv(self.db_path, csv_path)
+        self.assertEqual(exported_count, 2)
+
+        with open(csv_path, newline='', encoding='utf-8') as csv_file:
+            rows = list(csv.DictReader(csv_file))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(set(rows[0].keys()), {'alias_name', 'canonical_name', 'scope_type', 'scope_value'})
+
+        imported_db_path = f"{self.temp_dir.name}/aliases_imported.sqlite"
+        ensure_characteristic_alias_schema(imported_db_path)
+        imported_count = import_characteristic_aliases_csv(imported_db_path, csv_path)
+        self.assertEqual(imported_count, 2)
+
+        imported_rows = fetch_all_characteristic_aliases(imported_db_path)
+        self.assertEqual(
+            [(row['alias_name'], row['canonical_name'], row['scope_type'], row['scope_value']) for row in imported_rows],
+            [
+                ('DIA - X', 'DIAMETER - X', 'global', None),
+                ('DIA - X', 'DIAMETER - X REF', 'reference', 'REF-1'),
+            ],
+        )
+
+    def test_import_csv_handles_utf8_bom_header(self):
+        csv_path = f"{self.temp_dir.name}/bom_aliases.csv"
+        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=['alias_name', 'canonical_name', 'scope_type', 'scope_value'])
+            writer.writeheader()
+            writer.writerow(
+                {
+                    'alias_name': 'AX-BOM',
+                    'canonical_name': 'CANON-BOM',
+                    'scope_type': 'global',
+                    'scope_value': '',
+                }
+            )
+
+        imported_count = import_characteristic_aliases_csv(self.db_path, csv_path)
+        self.assertEqual(imported_count, 1)
+        self.assertEqual(resolve_characteristic_alias('AX-BOM', 'REF', self.db_path), 'CANON-BOM')
+
+    def test_import_csv_requires_expected_headers(self):
+        csv_path = f"{self.temp_dir.name}/bad_aliases.csv"
+        with open(csv_path, 'w', newline='', encoding='utf-8') as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=['alias_name', 'canonical_name'])
+            writer.writeheader()
+            writer.writerow({'alias_name': 'A1', 'canonical_name': 'C1'})
+
+        with self.assertRaisesRegex(ValueError, 'CSV is missing required columns'):
+            import_characteristic_aliases_csv(self.db_path, csv_path)
 
 
 if __name__ == '__main__':
