@@ -1951,7 +1951,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertIn('fallback_message', thread.completion_metadata)
             self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
             stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
-            self.assertIn(f'Google export stage: fallback (', stages[-1])
+            self.assertIn('Google export stage: fallback (', stages[-1])
             self.assertIn(f'Google export failed; using local .xlsx fallback: {out_file}', stages[-1])
 
     def test_google_target_final_fallback_is_non_crashing_and_emits_fallback_stage(self):
@@ -1996,7 +1996,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertIn('fallback_message', thread.completion_metadata)
             self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
             stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
-            self.assertIn(f'Google export stage: fallback (', stages[-1])
+            self.assertIn('Google export stage: fallback (', stages[-1])
             self.assertIn(f'Google export failed; using local .xlsx fallback: {out_file}', stages[-1])
 
     def test_google_target_run_keeps_xlsx_fallback_and_conversion_warnings(self):
