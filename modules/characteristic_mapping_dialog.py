@@ -332,6 +332,67 @@ class CharacteristicMappingDialog(QDialog):
         QMessageBox.warning(self, 'Database required', 'Please select a database file first.')
         return False
 
+    def _build_import_validation_summary(self, error: CharacteristicAliasImportValidationError, *, preview_limit: int = 10):
+        details = list(error.row_error_details or [])
+        if not details:
+            details = [
+                {
+                    'row_number': None,
+                    'field': 'unknown',
+                    'code': 'validation_error',
+                    'category': 'validation_error',
+                    'remediation_hint': 'Review the CSV row and correct invalid values.',
+                    'message': row_error,
+                }
+                for row_error in error.row_errors
+            ]
+
+        grouped_categories: dict[str, int] = {}
+        for entry in details:
+            category = str(entry.get('category') or 'validation_error')
+            grouped_categories[category] = grouped_categories.get(category, 0) + 1
+
+        processed = error.total_rows_processed
+        if processed <= 0:
+            processed = len({entry.get('row_number') for entry in details if entry.get('row_number') is not None})
+        invalid_rows = len({entry.get('row_number') for entry in details if entry.get('row_number') is not None}) or len(details)
+        valid_rows = max(0, processed - invalid_rows)
+
+        summary_lines = [
+            'Could not import mappings due to CSV validation errors.',
+            f'Total rows processed: {processed}',
+            f'Valid rows: {valid_rows}',
+            f'Invalid rows: {invalid_rows}',
+            'Error categories:',
+        ]
+        for category in sorted(grouped_categories):
+            summary_lines.append(f'  - {category}: {grouped_categories[category]}')
+
+        summary_lines.append('')
+        summary_lines.append(f'First {min(preview_limit, len(details))} row issue(s):')
+        for entry in details[:preview_limit]:
+            summary_lines.append(
+                f"- Row {entry.get('row_number')} [{entry.get('field')}] ({entry.get('code')}): "
+                f"{entry.get('message')} Fix: {entry.get('remediation_hint')}"
+            )
+
+        detail_lines = [
+            'CSV Validation Report',
+            f'Total rows processed: {processed}',
+            f'Valid rows: {valid_rows}',
+            f'Invalid rows: {invalid_rows}',
+            '',
+        ]
+        for index, entry in enumerate(details, start=1):
+            detail_lines.append(
+                f"{index}. row={entry.get('row_number')} field={entry.get('field')} code={entry.get('code')} "
+                f"category={entry.get('category')} message={entry.get('message')} remediation={entry.get('remediation_hint')}"
+            )
+
+        summary_lines.append('')
+        summary_lines.append('Open Details to copy the full validation report.')
+        return '\n'.join(summary_lines), '\n'.join(detail_lines)
+
     def import_mappings(self):
         if not self._ensure_db_file_selected():
             return
@@ -352,16 +413,14 @@ class CharacteristicMappingDialog(QDialog):
             QMessageBox.information(self, 'Import complete', f'Imported {imported_count} mapping row(s).')
         except CharacteristicAliasImportValidationError as exc:
             CustomLogger(exc, reraise=False)
-            details = '\n'.join(exc.row_errors[:10])
-            if len(exc.row_errors) > 10:
-                details = f"{details}\n...and {len(exc.row_errors) - 10} more row issue(s)."
-            QMessageBox.critical(
-                self,
-                'Import error',
-                'Could not import mappings due to CSV validation errors.\n'
-                'Please correct the listed rows and re-import.\n\n'
-                f'{details}',
-            )
+            message, full_report = self._build_import_validation_summary(exc, preview_limit=10)
+            details_box = QMessageBox(self)
+            details_box.setIcon(QMessageBox.Icon.Critical)
+            details_box.setWindowTitle('Import error')
+            details_box.setText(message)
+            details_box.setDetailedText(full_report)
+            details_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            details_box.exec()
         except Exception as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Import error', f'Could not import mappings: {exc}')

@@ -117,7 +117,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 dialog.close()
 
 
-    def test_import_mappings_shows_row_level_remediation_for_validation_errors(self):
+    def test_import_mappings_shows_summary_and_detailed_remediation_for_validation_errors(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = f'{tmpdir}/aliases.sqlite'
             csv_path = f'{tmpdir}/import_aliases.csv'
@@ -133,18 +133,48 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                         'scope_value is required for reference scope at row 3',
                     ],
                     summary='CSV import failed validation. Fix the row issues below and retry.',
+                    row_error_details=[
+                        {
+                            'row_number': 2,
+                            'field': 'alias_name',
+                            'code': 'missing_alias_name',
+                            'category': 'missing_required_field',
+                            'remediation_hint': 'Provide a non-empty alias_name value.',
+                            'message': 'alias_name is required at row 2',
+                        },
+                        {
+                            'row_number': 3,
+                            'field': 'scope_value',
+                            'code': 'reference_scope_requires_scope_value',
+                            'category': 'scope_requirements',
+                            'remediation_hint': 'Set scope_value for reference-scoped aliases.',
+                            'message': 'scope_value is required for reference scope at row 3',
+                        },
+                    ],
+                    total_rows_processed=4,
                 )
                 with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
                     with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=validation_error):
-                        with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                        with patch('modules.characteristic_mapping_dialog.QMessageBox.exec', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
                             dialog.import_mappings()
 
                 self.assertTrue(critical_mock.called)
-                self.assertEqual(critical_mock.call_args[0][1], 'Import error')
-                message = critical_mock.call_args[0][2]
-                self.assertIn('Please correct the listed rows and re-import.', message)
-                self.assertIn('alias_name is required at row 2', message)
-                self.assertIn('scope_value is required for reference scope at row 3', message)
+                active_box = dialog.findChild(QMessageBox)
+                self.assertIsNotNone(active_box)
+                self.assertEqual(active_box.windowTitle(), 'Import error')
+                message = active_box.text()
+                self.assertIn('Total rows processed: 4', message)
+                self.assertIn('Valid rows: 2', message)
+                self.assertIn('Invalid rows: 2', message)
+                self.assertIn('Error categories:', message)
+                self.assertIn('missing_required_field: 1', message)
+                self.assertIn('scope_requirements: 1', message)
+                self.assertIn('Fix: Provide a non-empty alias_name value.', message)
+                self.assertIn('Fix: Set scope_value for reference-scoped aliases.', message)
+                detailed = active_box.detailedText()
+                self.assertIn('CSV Validation Report', detailed)
+                self.assertIn('code=missing_alias_name', detailed)
+                self.assertIn('code=reference_scope_requires_scope_value', detailed)
             finally:
                 dialog.close()
 

@@ -28,14 +28,119 @@ CSV_ALIAS_HEADERS = ('alias_name', 'canonical_name', 'scope_type', 'scope_value'
 class CharacteristicAliasImportValidationError(ValueError):
     """Raised when CSV import validation fails for one or more rows."""
 
-    def __init__(self, row_errors: list[str], *, summary: str | None = None):
+    def __init__(
+        self,
+        row_errors: list[str],
+        *,
+        summary: str | None = None,
+        row_error_details: list[dict[str, str | int | None]] | None = None,
+        total_rows_processed: int = 0,
+    ):
         self.row_errors = [str(error or '').strip() for error in (row_errors or []) if str(error or '').strip()]
+        self.row_error_details = list(row_error_details or [])
+        self.total_rows_processed = int(total_rows_processed or 0)
+        self.invalid_rows = len(self.row_error_details) or len(self.row_errors)
+        self.valid_rows = max(0, self.total_rows_processed - self.invalid_rows)
         if summary is None:
             summary = 'CSV import contains invalid mapping rows.'
+        self.summary = str(summary)
         message_lines = [str(summary)]
         if self.row_errors:
             message_lines.extend(self.row_errors)
         super().__init__('\n'.join(message_lines))
+
+
+def _build_validation_issue(
+    *,
+    row_number: int,
+    field: str,
+    code: str,
+    category: str,
+    remediation_hint: str,
+    message: str,
+) -> dict[str, str | int]:
+    return {
+        'row_number': row_number,
+        'field': field,
+        'code': code,
+        'category': category,
+        'remediation_hint': remediation_hint,
+        'message': message,
+    }
+
+
+def _validate_alias_mapping_payload(
+    payload: dict[str, str | None],
+    *,
+    row_number: int,
+) -> tuple[dict[str, str | None] | None, list[dict[str, str | int]]]:
+    """Validate/normalize one payload and return structured issues."""
+    alias_name = str(payload.get('alias_name') or '').strip()
+    canonical_name = str(payload.get('canonical_name') or '').strip()
+    scope_type = str(payload.get('scope_type') or '').strip().lower()
+    scope_value = str(payload.get('scope_value') or '').strip() or None
+
+    issues: list[dict[str, str | int]] = []
+    if not alias_name:
+        issues.append(
+            _build_validation_issue(
+                row_number=row_number,
+                field='alias_name',
+                code='missing_alias_name',
+                category='missing_required_field',
+                remediation_hint='Provide a non-empty alias_name value.',
+                message=f'alias_name is required at row {row_number}',
+            )
+        )
+
+    if not canonical_name:
+        issues.append(
+            _build_validation_issue(
+                row_number=row_number,
+                field='canonical_name',
+                code='missing_canonical_name',
+                category='missing_required_field',
+                remediation_hint='Provide the canonical_name to map this alias to.',
+                message=f'canonical_name is required at row {row_number}',
+            )
+        )
+
+    if scope_type not in {'global', 'reference'}:
+        issues.append(
+            _build_validation_issue(
+                row_number=row_number,
+                field='scope_type',
+                code='invalid_scope_type',
+                category='invalid_value',
+                remediation_hint="Use scope_type 'global' or 'reference'.",
+                message=f'scope_type must be one of: global, reference at row {row_number}',
+            )
+        )
+    elif scope_type == 'reference' and not scope_value:
+        issues.append(
+            _build_validation_issue(
+                row_number=row_number,
+                field='scope_value',
+                code='reference_scope_requires_scope_value',
+                category='scope_requirements',
+                remediation_hint='Set scope_value for reference-scoped aliases.',
+                message=f'scope_value is required for reference scope at row {row_number}',
+            )
+        )
+
+    if issues:
+        return None, issues
+
+    normalized_scope_type, normalized_scope_value = normalize_alias_scope(scope_type, scope_value)
+    return (
+        {
+            'alias_name': alias_name,
+            'canonical_name': canonical_name,
+            'scope_type': normalized_scope_type,
+            'scope_value': normalized_scope_value,
+        },
+        [],
+    )
 
 
 def ensure_characteristic_alias_table(cursor) -> None:
@@ -351,7 +456,8 @@ def import_characteristic_aliases_csv(
             raise ValueError(f'CSV is missing required columns: {missing}')
 
         rows = []
-        row_errors: list[str] = []
+        row_error_details: list[dict[str, str | int | None]] = []
+        seen_keys: dict[tuple[str, str, str | None], int] = {}
         for index, row in enumerate(reader, start=2):
             normalized_row = {str(key or '').strip(): value for key, value in row.items()}
             payload = {
@@ -360,16 +466,45 @@ def import_characteristic_aliases_csv(
                 'scope_type': normalized_row.get('scope_type'),
                 'scope_value': normalized_row.get('scope_value'),
             }
-            try:
-                _normalize_alias_mapping_payload(payload, row_number=index)
-            except ValueError as exc:
-                row_errors.append(str(exc))
-            rows.append(payload)
+            normalized_payload, issues = _validate_alias_mapping_payload(payload, row_number=index)
+            if issues:
+                row_error_details.extend(issues)
+                continue
 
-    if row_errors:
+            key = (
+                str(normalized_payload.get('alias_name') or ''),
+                str(normalized_payload.get('scope_type') or ''),
+                normalized_payload.get('scope_value'),
+            )
+            existing_row_number = seen_keys.get(key)
+            if existing_row_number is not None:
+                alias_name, scope_type, scope_value = key
+                scope_suffix = f'/{scope_value}' if scope_value else ''
+                row_error_details.append(
+                    _build_validation_issue(
+                        row_number=index,
+                        field='alias_name',
+                        code='duplicate_key_collision',
+                        category='duplicate_collision',
+                        remediation_hint='Remove or merge duplicate alias rows with the same alias_name + scope.',
+                        message=(
+                            f'duplicate alias/scope key for "{alias_name}" ({scope_type}{scope_suffix}) '
+                            f'at row {index}; first seen at row {existing_row_number}'
+                        ),
+                    )
+                )
+                continue
+
+            seen_keys[key] = index
+            rows.append(normalized_payload)
+
+    if row_error_details:
+        row_errors = [str(detail.get('message') or '').strip() for detail in row_error_details if detail.get('message')]
         raise CharacteristicAliasImportValidationError(
             row_errors,
             summary='CSV import failed validation. Fix the row issues below and retry.',
+            row_error_details=row_error_details,
+            total_rows_processed=(len(rows) + len({int(detail['row_number']) for detail in row_error_details})),
         )
 
     return upsert_characteristic_aliases_bulk(
