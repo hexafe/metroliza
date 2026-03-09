@@ -1,13 +1,15 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
 
 try:
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QMessageBox
     from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
 except ImportError as exc:  # pragma: no cover - environment-dependent import
     QApplication = None
+    QMessageBox = None
     CharacteristicMappingDialog = None
     PYQT_IMPORT_ERROR = exc
 else:
@@ -42,6 +44,19 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
             self.assertEqual(dialog.alias_table.item(0, 1).text(), 'DIAMETER - X')
             self.assertEqual(dialog.alias_table.item(0, 2).text(), 'reference')
             self.assertEqual(dialog.alias_table.item(0, 3).text(), 'REF-1')
+            dialog.close()
+
+    def test_import_export_require_selected_db_file(self):
+        dialog = CharacteristicMappingDialog(parent=None, db_file='')
+        try:
+            with patch.object(QMessageBox, 'warning', return_value=QMessageBox.StandardButton.Ok) as warn_mock:
+                dialog.import_mappings()
+                self.assertTrue(warn_mock.called)
+
+            with patch.object(QMessageBox, 'warning', return_value=QMessageBox.StandardButton.Ok) as warn_mock:
+                dialog.export_mappings()
+                self.assertTrue(warn_mock.called)
+        finally:
             dialog.close()
 
 

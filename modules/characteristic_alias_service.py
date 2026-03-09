@@ -22,6 +22,8 @@ CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
     'CREATE INDEX IF NOT EXISTS characteristic_alias_scope_lookup ON CHARACTERISTIC_ALIASES(alias_name, scope_type, scope_value)',
 )
 
+CSV_ALIAS_HEADERS = ('alias_name', 'canonical_name', 'scope_type', 'scope_value')
+
 
 def ensure_characteristic_alias_table(cursor) -> None:
     """Create characteristic alias table/indexes in a migration-safe way."""
@@ -297,10 +299,7 @@ def export_characteristic_aliases_csv(
     """Export all alias mappings to a CSV file."""
     rows = fetch_all_characteristic_aliases(db_path, connection=connection)
     with open(destination_path, 'w', newline='', encoding='utf-8') as csv_file:
-        writer = csv.DictWriter(
-            csv_file,
-            fieldnames=['alias_name', 'canonical_name', 'scope_type', 'scope_value'],
-        )
+        writer = csv.DictWriter(csv_file, fieldnames=list(CSV_ALIAS_HEADERS))
         writer.writeheader()
         for row in rows:
             writer.writerow(
@@ -314,6 +313,11 @@ def export_characteristic_aliases_csv(
     return len(rows)
 
 
+def _normalized_csv_headers(fieldnames: list[str] | None) -> list[str]:
+    """Return normalized CSV headers suitable for dictionary lookups."""
+    return [str(name or '').strip() for name in (fieldnames or [])]
+
+
 def import_characteristic_aliases_csv(
     db_path: str,
     source_path: str,
@@ -323,23 +327,27 @@ def import_characteristic_aliases_csv(
     retry_delay_s: float = 0.05,
 ) -> int:
     """Import alias mappings from CSV and upsert them as a batch."""
-    with open(source_path, newline='', encoding='utf-8') as csv_file:
+    with open(source_path, newline='', encoding='utf-8-sig') as csv_file:
         reader = csv.DictReader(csv_file)
-        required_headers = {'alias_name', 'canonical_name', 'scope_type', 'scope_value'}
+        reader.fieldnames = _normalized_csv_headers(reader.fieldnames)
+
+        required_headers = set(CSV_ALIAS_HEADERS)
         headers = set(reader.fieldnames or [])
         if not required_headers.issubset(headers):
             missing = ', '.join(sorted(required_headers - headers))
             raise ValueError(f'CSV is missing required columns: {missing}')
 
-        rows = [
-            {
-                'alias_name': row.get('alias_name'),
-                'canonical_name': row.get('canonical_name'),
-                'scope_type': row.get('scope_type'),
-                'scope_value': row.get('scope_value'),
-            }
-            for row in reader
-        ]
+        rows = []
+        for row in reader:
+            normalized_row = {str(key or '').strip(): value for key, value in row.items()}
+            rows.append(
+                {
+                    'alias_name': normalized_row.get('alias_name'),
+                    'canonical_name': normalized_row.get('canonical_name'),
+                    'scope_type': normalized_row.get('scope_type'),
+                    'scope_value': normalized_row.get('scope_value'),
+                }
+            )
 
     return upsert_characteristic_aliases_bulk(
         db_path,

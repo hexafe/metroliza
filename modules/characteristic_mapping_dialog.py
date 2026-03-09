@@ -30,6 +30,10 @@ from modules.characteristic_alias_service import (
 from modules.custom_logger import CustomLogger
 
 
+def _has_selected_db_file(db_file: str) -> bool:
+    return bool(str(db_file or '').strip())
+
+
 class CharacteristicAliasEditorDialog(QDialog):
     """Simple editor used by Add/Edit actions for characteristic aliases."""
 
@@ -321,7 +325,16 @@ class CharacteristicMappingDialog(QDialog):
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Delete error', f'Could not delete mapping: {exc}')
 
+    def _ensure_db_file_selected(self) -> bool:
+        if _has_selected_db_file(self.db_file):
+            return True
+        QMessageBox.warning(self, 'Database required', 'Please select a database file first.')
+        return False
+
     def import_mappings(self):
+        if not self._ensure_db_file_selected():
+            return
+
         filename, _ = QFileDialog.getOpenFileName(
             self,
             'Import characteristic mappings',
@@ -341,6 +354,9 @@ class CharacteristicMappingDialog(QDialog):
             QMessageBox.critical(self, 'Import error', f'Could not import mappings: {exc}')
 
     def export_mappings(self):
+        if not self._ensure_db_file_selected():
+            return
+
         filename, _ = QFileDialog.getSaveFileName(
             self,
             'Export characteristic mappings',
