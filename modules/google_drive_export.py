@@ -715,9 +715,10 @@ def upload_and_convert_workbook(
 
     _raise_if_canceled()
     _raise_if_timed_out("auth")
+    stage_started_at["auth"] = time.monotonic()
     access_token = _ensure_access_token(_resolve_credentials_path(credentials_path), Path(token_path))
+    _raise_if_timed_out("auth")
     _raise_if_canceled()
-    _raise_if_timed_out("folder")
     stage_started_at["folder"] = time.monotonic()
     reports_folder_id = _ensure_reports_folder(access_token)
     _raise_if_canceled()

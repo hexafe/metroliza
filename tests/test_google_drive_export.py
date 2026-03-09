@@ -384,6 +384,53 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             self.assertLessEqual(attempts["count"], 1)
 
+    def test_upload_and_convert_workbook_does_not_time_out_folder_before_folder_stage_starts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            monotonic_values = iter([0, 0, 5, 10, 10.01, 10.01, 10.01, 10.01, 10.01])
+
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export._ensure_reports_folder", return_value="folder-123"
+            ), patch(
+                "modules.google_drive_export.urllib.request.urlopen",
+                return_value=_FakeResponse({"id": "abc123", "webViewLink": "https://drive.google.com/file/d/abc123/view"}),
+            ), patch(
+                "modules.google_drive_export.time.monotonic",
+                side_effect=lambda: next(monotonic_values),
+            ):
+                result = upload_and_convert_workbook(
+                    str(excel_path),
+                    max_retries=1,
+                    stage_timeout_seconds={"folder": 0.05},
+                )
+
+            self.assertEqual("abc123", result.file_id)
+
+    def test_upload_and_convert_workbook_raises_auth_stage_timeout_after_slow_token_ensure(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            monotonic_values = iter([0, 0, 0.1, 2.5])
+
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export._ensure_reports_folder", return_value="folder-123"
+            ) as ensure_folder, patch(
+                "modules.google_drive_export.time.monotonic",
+                side_effect=lambda: next(monotonic_values),
+            ):
+                with self.assertRaises(GoogleDriveTimeoutError) as exc:
+                    upload_and_convert_workbook(
+                        str(excel_path),
+                        max_retries=1,
+                        stage_timeout_seconds={"auth": 1.0},
+                    )
+
+            self.assertIn("during auth", str(exc.exception))
+            ensure_folder.assert_not_called()
+
 
     def test_oauth_scopes_include_drive_only(self):
         self.assertEqual((GOOGLE_DRIVE_SCOPE,), GOOGLE_OAUTH_SCOPES)
