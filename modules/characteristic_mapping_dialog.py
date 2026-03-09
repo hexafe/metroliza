@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from modules.characteristic_alias_service import (
+    CharacteristicAliasImportValidationError,
     delete_characteristic_alias,
     ensure_characteristic_alias_schema,
     export_characteristic_aliases_csv,
@@ -349,6 +350,18 @@ class CharacteristicMappingDialog(QDialog):
             imported_count = import_characteristic_aliases_csv(self.db_file, filename)
             self.load_aliases()
             QMessageBox.information(self, 'Import complete', f'Imported {imported_count} mapping row(s).')
+        except CharacteristicAliasImportValidationError as exc:
+            CustomLogger(exc, reraise=False)
+            details = '\n'.join(exc.row_errors[:10])
+            if len(exc.row_errors) > 10:
+                details = f"{details}\n...and {len(exc.row_errors) - 10} more row issue(s)."
+            QMessageBox.critical(
+                self,
+                'Import error',
+                'Could not import mappings due to CSV validation errors.\n'
+                'Please correct the listed rows and re-import.\n\n'
+                f'{details}',
+            )
         except Exception as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Import error', f'Could not import mappings: {exc}')

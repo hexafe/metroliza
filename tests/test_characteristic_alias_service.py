@@ -4,6 +4,7 @@ import unittest
 from sqlite3 import connect
 
 from modules.characteristic_alias_service import (
+    CharacteristicAliasImportValidationError,
     delete_characteristic_alias,
     ensure_characteristic_alias_schema,
     export_characteristic_aliases_csv,
@@ -287,6 +288,25 @@ class TestCharacteristicAliasService(unittest.TestCase):
         imported_count = import_characteristic_aliases_csv(self.db_path, csv_path)
         self.assertEqual(imported_count, 1)
         self.assertEqual(resolve_characteristic_alias('AX-BOM', 'REF', self.db_path), 'CANON-BOM')
+
+
+    def test_import_csv_reports_all_row_validation_errors_with_row_numbers(self):
+        csv_path = f"{self.temp_dir.name}/invalid_aliases.csv"
+        with open(csv_path, 'w', newline='', encoding='utf-8') as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=['alias_name', 'canonical_name', 'scope_type', 'scope_value'])
+            writer.writeheader()
+            writer.writerow({'alias_name': '', 'canonical_name': 'CAN-1', 'scope_type': 'global', 'scope_value': ''})
+            writer.writerow({'alias_name': 'AX-2', 'canonical_name': '', 'scope_type': 'global', 'scope_value': ''})
+            writer.writerow({'alias_name': 'AX-3', 'canonical_name': 'CAN-3', 'scope_type': 'reference', 'scope_value': ''})
+
+        with self.assertRaises(CharacteristicAliasImportValidationError) as ctx:
+            import_characteristic_aliases_csv(self.db_path, csv_path)
+
+        error = ctx.exception
+        self.assertEqual(len(error.row_errors), 3)
+        self.assertIn('alias_name is required at row 2', error.row_errors[0])
+        self.assertIn('canonical_name is required at row 3', error.row_errors[1])
+        self.assertIn('scope_value is required for reference scope at row 4', error.row_errors[2])
 
     def test_import_csv_requires_expected_headers(self):
         csv_path = f"{self.temp_dir.name}/bad_aliases.csv"

@@ -2,7 +2,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
+from modules.characteristic_alias_service import (
+    CharacteristicAliasImportValidationError,
+    ensure_characteristic_alias_schema,
+    upsert_characteristic_alias,
+)
 
 try:
     from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -109,6 +113,38 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 self.assertGreaterEqual(len(lines), 2)
                 self.assertEqual(lines[0], 'alias_name,canonical_name,scope_type,scope_value')
                 self.assertIn('DIA,DIAMETER,global,', lines)
+            finally:
+                dialog.close()
+
+
+    def test_import_mappings_shows_row_level_remediation_for_validation_errors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            csv_path = f'{tmpdir}/import_aliases.csv'
+            ensure_characteristic_alias_schema(db_path)
+            with open(csv_path, 'w', encoding='utf-8', newline='') as csv_file:
+                csv_file.write('alias_name,canonical_name,scope_type,scope_value\n')
+
+            dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+            try:
+                validation_error = CharacteristicAliasImportValidationError(
+                    [
+                        'alias_name is required at row 2',
+                        'scope_value is required for reference scope at row 3',
+                    ],
+                    summary='CSV import failed validation. Fix the row issues below and retry.',
+                )
+                with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
+                    with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=validation_error):
+                        with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                            dialog.import_mappings()
+
+                self.assertTrue(critical_mock.called)
+                self.assertEqual(critical_mock.call_args[0][1], 'Import error')
+                message = critical_mock.call_args[0][2]
+                self.assertIn('Please correct the listed rows and re-import.', message)
+                self.assertIn('alias_name is required at row 2', message)
+                self.assertIn('scope_value is required for reference scope at row 3', message)
             finally:
                 dialog.close()
 
