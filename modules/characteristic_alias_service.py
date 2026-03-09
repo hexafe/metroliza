@@ -25,6 +25,19 @@ CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
 CSV_ALIAS_HEADERS = ('alias_name', 'canonical_name', 'scope_type', 'scope_value')
 
 
+class CharacteristicAliasImportValidationError(ValueError):
+    """Raised when CSV import validation fails for one or more rows."""
+
+    def __init__(self, row_errors: list[str], *, summary: str | None = None):
+        self.row_errors = [str(error or '').strip() for error in (row_errors or []) if str(error or '').strip()]
+        if summary is None:
+            summary = 'CSV import contains invalid mapping rows.'
+        message_lines = [str(summary)]
+        if self.row_errors:
+            message_lines.extend(self.row_errors)
+        super().__init__('\n'.join(message_lines))
+
+
 def ensure_characteristic_alias_table(cursor) -> None:
     """Create characteristic alias table/indexes in a migration-safe way."""
     for statement in CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS:
@@ -338,16 +351,26 @@ def import_characteristic_aliases_csv(
             raise ValueError(f'CSV is missing required columns: {missing}')
 
         rows = []
-        for row in reader:
+        row_errors: list[str] = []
+        for index, row in enumerate(reader, start=2):
             normalized_row = {str(key or '').strip(): value for key, value in row.items()}
-            rows.append(
-                {
-                    'alias_name': normalized_row.get('alias_name'),
-                    'canonical_name': normalized_row.get('canonical_name'),
-                    'scope_type': normalized_row.get('scope_type'),
-                    'scope_value': normalized_row.get('scope_value'),
-                }
-            )
+            payload = {
+                'alias_name': normalized_row.get('alias_name'),
+                'canonical_name': normalized_row.get('canonical_name'),
+                'scope_type': normalized_row.get('scope_type'),
+                'scope_value': normalized_row.get('scope_value'),
+            }
+            try:
+                _normalize_alias_mapping_payload(payload, row_number=index)
+            except ValueError as exc:
+                row_errors.append(str(exc))
+            rows.append(payload)
+
+    if row_errors:
+        raise CharacteristicAliasImportValidationError(
+            row_errors,
+            summary='CSV import failed validation. Fix the row issues below and retry.',
+        )
 
     return upsert_characteristic_aliases_bulk(
         db_path,
