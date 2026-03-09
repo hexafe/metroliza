@@ -38,7 +38,7 @@ class DataGrouping(QDialog):
         self.db_file = db_file
         self.df = None
         self.default_group = "POPULATION"
-        self.default_group_color = "#FFFFFF"
+        self.default_group_color = self._resolve_default_group_color()
         self.group_color_column = "GROUP_COLOR"
         self.group_palette = [
             "#FDE2E4",
@@ -50,6 +50,7 @@ class DataGrouping(QDialog):
             "#F9E2FF",
             "#FFF9C4",
         ]
+        self.group_palette = self._palette_for_current_theme(self.group_palette)
         self._group_display_to_name = {}
         self._list_selection_utils = ListSelectionUtils()
 
@@ -342,6 +343,47 @@ class DataGrouping(QDialog):
         luminance = ((0.299 * color.red()) + (0.587 * color.green()) + (0.114 * color.blue())) / 255
         return '#000000' if luminance > 0.6 else '#FFFFFF'
 
+    @staticmethod
+    def _resolve_default_group_color_from_base(base_hex, fallback_hex='#FFFFFF'):
+        if not isinstance(base_hex, str) or not base_hex.strip():
+            return fallback_hex.upper()
+        base = QColor(base_hex)
+        if base.isValid():
+            return base.name().upper()
+        return fallback_hex.upper()
+
+    @staticmethod
+    def _is_dark_mode_base(base_hex):
+        return DataGrouping._ideal_text_color(base_hex) == '#FFFFFF'
+
+    @staticmethod
+    def _clamp_group_color_for_theme(color_hex, dark_mode=False):
+        color = QColor(color_hex)
+        if not color.isValid():
+            return color_hex
+        if not dark_mode:
+            return color.name().upper()
+
+        red, green, blue = color.red(), color.green(), color.blue()
+        gray = (red + green + blue) / 3
+
+        def _channel(value):
+            saturated = gray + ((value - gray) * 1.25)
+            darkened = int(saturated * 0.7)
+            return max(70, min(185, darkened))
+
+        return f"#{_channel(red):02X}{_channel(green):02X}{_channel(blue):02X}"
+
+    def _palette_for_current_theme(self, base_palette):
+        dark_mode = self._is_dark_mode_base(self.default_group_color)
+        return [self._clamp_group_color_for_theme(color, dark_mode=dark_mode) for color in base_palette]
+
+    def _resolve_default_group_color(self):
+        palette = self.palette() if hasattr(self, 'palette') else None
+        base = palette.base().color() if palette is not None and hasattr(palette, 'base') else None
+        base_hex = base.name() if base is not None and hasattr(base, 'isValid') and base.isValid() else None
+        return self._resolve_default_group_color_from_base(base_hex)
+
     def _next_group_color(self):
         used = set(
             self.df.loc[self.df['GROUP'] != self.default_group, self.group_color_column]
@@ -384,7 +426,9 @@ class DataGrouping(QDialog):
         color = QColor(color_hex)
         if not color.isValid():
             color = QColor(self.default_group_color)
+        resolved_background = color.name().upper()
         item.setBackground(QBrush(color))
+        item.setForeground(QBrush(QColor(self._ideal_text_color(resolved_background))))
 
     def _apply_list_theme_styles(self):
         highlight_name = "#308CC6"

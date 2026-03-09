@@ -113,16 +113,23 @@ class TestDataGroupingColorAssignments(unittest.TestCase):
         dialog.df = df.copy()
         return dialog
 
-    def test_default_group_remains_white(self):
+    def test_default_group_uses_theme_base_color(self):
         dialog = self._dialog_with_df(pd.DataFrame({'GROUP': ['POPULATION'], 'GROUP_COLOR': [None]}))
+        dialog.default_group_color = '#111111'
         dialog._ensure_group_color_integrity()
-        self.assertEqual(dialog.df['GROUP_COLOR'].iloc[0], '#FFFFFF')
+        self.assertEqual(dialog.df['GROUP_COLOR'].iloc[0], '#111111')
 
+    def test_default_group_non_theme_color_is_corrected(self):
+        dialog = self._dialog_with_df(pd.DataFrame({'GROUP': ['POPULATION'], 'GROUP_COLOR': [None]}))
+        dialog.default_group_color = '#222222'
+        dialog._ensure_group_color_integrity()
+        self.assertEqual(dialog.df['GROUP_COLOR'].iloc[0], '#222222')
 
-    def test_default_group_non_white_color_is_corrected(self):
+    def test_default_group_overrides_non_theme_color(self):
         dialog = self._dialog_with_df(pd.DataFrame({'GROUP': ['POPULATION'], 'GROUP_COLOR': ['#CCCCCC']}))
+        dialog.default_group_color = '#333333'
         dialog._ensure_group_color_integrity()
-        self.assertEqual(dialog.df['GROUP_COLOR'].iloc[0], '#FFFFFF')
+        self.assertEqual(dialog.df['GROUP_COLOR'].iloc[0], '#333333')
     def test_new_groups_receive_distinct_colors(self):
         dialog = self._dialog_with_df(pd.DataFrame({'GROUP': ['POPULATION', 'A', 'B'], 'GROUP_COLOR': ['#FFFFFF', None, None]}))
         dialog._ensure_group_color_integrity()
@@ -204,7 +211,7 @@ class TestDataGroupingSelectionStyling(unittest.TestCase):
         dialog._apply_item_color(item, '#AABBCC')
 
         self.assertIsNotNone(item.background)
-        self.assertIsNone(item.foreground)
+        self.assertIsNotNone(item.foreground)
 
     def test_apply_list_theme_styles_sets_selection_rules_for_all_lists(self):
         dialog = DataGrouping.__new__(DataGrouping)
@@ -219,6 +226,30 @@ class TestDataGroupingSelectionStyling(unittest.TestCase):
             self.assertIn('QListWidget::item:selected', list_widget.stylesheet)
             self.assertIn('QListWidget::item:!selected', list_widget.stylesheet)
             self.assertIn('background-color: #112233', list_widget.stylesheet)
+
+
+class TestDataGroupingThemeColorResolution(unittest.TestCase):
+    def test_resolve_default_group_color_prefers_base(self):
+        resolved = DataGrouping._resolve_default_group_color_from_base('#0D0D0D')
+        self.assertEqual(resolved, '#0D0D0D')
+
+    def test_resolve_default_group_color_fallback_is_white(self):
+        resolved = DataGrouping._resolve_default_group_color_from_base(None)
+        self.assertEqual(resolved, '#FFFFFF')
+
+    def test_dark_mode_detection(self):
+        self.assertTrue(DataGrouping._is_dark_mode_base('#111111'))
+        self.assertFalse(DataGrouping._is_dark_mode_base('#F2F2F2'))
+
+    def test_clamp_group_color_preserves_light_theme_palette(self):
+        source = '#FDE2E4'
+        self.assertEqual(DataGrouping._clamp_group_color_for_theme(source, dark_mode=False), source)
+
+    def test_clamp_group_color_adjusts_dark_theme_palette(self):
+        source = '#FDE2E4'
+        clamped = DataGrouping._clamp_group_color_for_theme(source, dark_mode=True)
+        self.assertTrue(clamped.startswith('#'))
+        self.assertNotEqual(clamped, source)
 
 
 if __name__ == '__main__':
