@@ -23,23 +23,23 @@ Audit the repo against the implementation plan, then define the next PR sequence
    - Record one concrete post-plot next step.
 
 2. **Post-cycle functional follow-up**
-   - Add maintainability improvements for Characteristic Alias Mapping v1: bulk import/export workflow and batch-validation coverage.
+   - Improve Characteristic Alias Mapping v1 CSV import UX with clearer conflict reporting (row-level error summaries and actionable remediation guidance).
    - Keep mapping deterministic/manual-only (no canonical IDs/ontology/auto-matching) while preserving diagnostics and comparability labeling.
 
 ## PR acceptance criteria (single source of truth)
 
-- [ ] **Docs status mirrors shipped behavior.**
+- [x] **Docs status mirrors shipped behavior.**
   - Standard chart insertion is marked implemented (not deferred).
 - [x] **Deferred scope is explicit and accurate.**
   - Characteristic Alias Mapping v1 is shipped; suggestion engine/fuzzy/canonical-ID work remains deferred.
 - [x] **One concrete next follow-up is captured.**
-  - Next item identifies bulk alias import/export and batch-validation coverage as a specific post-cycle target.
+  - Next item identifies advanced CSV conflict-report UX for manual alias import as a specific post-cycle target.
 
 ## PR testable outcomes
 
-- [ ] `group_analysis_spec_and_implementation_plan.md` includes a dedicated “Characteristic Alias Mapping v1” section and updated status/deferred wording.
-- [x] `next_steps_pr_plan.md` checklist marks Standard plot + Characteristic Alias Mapping v1 complete and identifies the next concrete follow-up item.
-- [ ] `codex_group_analysis_instructions.md` current-cycle status note mirrors shipped behavior and the same next step.
+- [x] `group_analysis_spec_and_implementation_plan.md` includes a dedicated “Characteristic Alias Mapping v1” section and updated status/deferred wording.
+- [x] `next_steps_pr_plan.md` checklist marks Standard plot + Characteristic Alias Mapping v1 scope (including bulk import/export with batch validation) complete and identifies the next concrete follow-up item.
+- [x] `codex_group_analysis_instructions.md` current-cycle status note mirrors shipped behavior and the same next step.
 
 ## Proposed PR sequence
 
@@ -60,8 +60,9 @@ Audit the repo against the implementation plan, then define the next PR sequence
 - [x] PR 1: deliver Standard plot insertion beyond placeholders.
 - [x] PR 2 (last PR): update plan/status/todo docs to match shipped behavior.
 - [x] Next follow-up delivered: implement Characteristic Alias Mapping v1 (manual mappings table, scoped resolution, and pipeline integration).
-- [ ] Next follow-up: add bulk alias mapping import/export with batch-validation tests.
+- [x] Next follow-up delivered: add bulk alias mapping import/export with batch-validation tests.
+- [ ] Next follow-up: advanced conflict-report UX for manual alias CSV import (clear row-level remediation guidance).
 
 ## Sequencing rationale
 
-Standard chart insertion and Characteristic Alias Mapping v1 are now closed; this docs closeout aligns roadmap/status text with shipped behavior and leaves a single concrete follow-up (bulk alias mapping import/export + batch validation) for the next implementation cycle.
+Standard chart insertion and Characteristic Alias Mapping v1 are now closed, including bulk alias mapping import/export and batch-validation coverage; this docs closeout aligns roadmap/status text with shipped behavior and leaves a single concrete follow-up focused on advanced CSV conflict-report UX while keeping mapping deterministic/manual-only.
