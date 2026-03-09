@@ -408,6 +408,29 @@ class TestGoogleDriveExport(unittest.TestCase):
 
             self.assertEqual("abc123", result.file_id)
 
+
+    def test_upload_and_convert_workbook_prioritizes_cancellation_over_post_auth_timeout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_path = Path(tmpdir) / "report.xlsx"
+            excel_path.write_bytes(b"excel-content")
+
+            monotonic_values = iter([0, 0, 0.1, 2.5])
+
+            with patch("modules.google_drive_export._ensure_access_token", return_value="token"), patch(
+                "modules.google_drive_export._ensure_reports_folder", return_value="folder-123"
+            ) as ensure_folder, patch(
+                "modules.google_drive_export.time.monotonic",
+                side_effect=lambda: next(monotonic_values),
+            ):
+                with self.assertRaises(GoogleDriveCanceledError):
+                    upload_and_convert_workbook(
+                        str(excel_path),
+                        max_retries=1,
+                        should_cancel=lambda: True,
+                        stage_timeout_seconds={"auth": 1.0},
+                    )
+
+            ensure_folder.assert_not_called()
     def test_upload_and_convert_workbook_raises_auth_stage_timeout_after_slow_token_ensure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             excel_path = Path(tmpdir) / "report.xlsx"
