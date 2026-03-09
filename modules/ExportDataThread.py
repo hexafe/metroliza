@@ -3452,12 +3452,14 @@ class ExportDataThread(QThread):
                     )
 
                     table_render_data = build_histogram_table_render_data(table_data)
+                    table_bbox_x = 1.03
+                    table_bbox_width = min(0.56, histogram_table_layout['table_bbox_width'] + 0.06)
                     ax_table = plt.table(
                         cellText=table_render_data,
                         colLabels=['Statistic', 'Value'],
                         cellLoc='center',
                         loc='right',
-                        bbox=[1, 0.06, histogram_table_layout['table_bbox_width'], 0.94],
+                        bbox=[table_bbox_x, 0.06, table_bbox_width, 0.94],
                     )
                     ax_table.auto_set_font_size(False)
                     ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
@@ -3478,7 +3480,7 @@ class ExportDataThread(QThread):
                         cellText=[[normality_note]],
                         cellLoc='center',
                         loc='right',
-                        bbox=[1, -0.17, histogram_table_layout['table_bbox_width'], 0.15],
+                        bbox=[table_bbox_x, -0.17, table_bbox_width, 0.15],
                     )
                     normality_table.auto_set_font_size(False)
                     normality_table.set_fontsize(histogram_font_sizes['table_fontsize'])
