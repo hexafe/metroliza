@@ -859,12 +859,11 @@ Suggested location:
 
 #### Deferred / not implemented in this cycle
 
-- Characteristic Alias Mapping v1 (manual mapping, SQLite-backed, deterministic scope resolution) remains pending implementation.
 - Suggestion engine, fuzzy/automatic matching, canonical IDs/ontology integration, and balloon-aware mapping remain deferred beyond v1.
 
 #### Next implementation step
 
-- Implement **Characteristic Alias Mapping v1** across `modules/group_analysis_service.py`, export/UI integration points, and persistence wiring so manual mappings from `characteristic_alias_map` resolve in order (`reference` > `global` > original identity) with coordinated diagnostics and tests.
+- Add Characteristic Alias Mapping v1 follow-up tooling for maintainability: bulk import/export support in `modules/characteristic_mapping_dialog.py` and corresponding service-level validation tests in `tests/test_characteristic_alias_service.py`.
 
 ---
 

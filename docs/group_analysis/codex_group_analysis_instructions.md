@@ -193,9 +193,9 @@ Optional mirror:
 
 #### Current cycle status note
 
-- **Implemented in this cycle:** contracts/UI/request plumbing, service/writer baseline, export integration for Off/Light/Standard with diagnostics and scope-mismatch handling, spec-aligned flag semantics (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`) with tests, and Standard-mode chart insertion for eligible metrics.
+- **Implemented in this cycle:** contracts/UI/request plumbing, service/writer baseline, export integration for Off/Light/Standard with diagnostics and scope-mismatch handling, spec-aligned flag semantics (`LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?`) with tests, Standard-mode chart insertion for eligible metrics, and Characteristic Alias Mapping v1 (manual-only) with deterministic scope resolution (`reference` > `global` > original identity) wired through service/export paths.
 - **Deferred (not implemented):** suggestion engine, fuzzy/automatic matching, canonical IDs/ontology integration, and balloon-aware mapping support.
-- **Next implementation step:** implement Characteristic Alias Mapping v1 (manual-only) with `characteristic_alias_map` persistence, scoped resolution (`reference` > `global` > original identity), and service/diagnostics/writer test coverage for multi-reference datasets.
+- **Next implementation step:** add bulk alias mapping import/export workflow in the Characteristic Mapping dialog plus focused service-level validation tests for batch operations.
 
 
 ---
