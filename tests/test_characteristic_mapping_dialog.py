@@ -59,6 +59,97 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
         finally:
             dialog.close()
 
+    def test_import_mappings_success_refreshes_table_and_shows_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            csv_path = f'{tmpdir}/import_aliases.csv'
+            ensure_characteristic_alias_schema(db_path)
+
+            with open(csv_path, 'w', encoding='utf-8', newline='') as csv_file:
+                csv_file.write('alias_name,canonical_name,scope_type,scope_value\n')
+                csv_file.write('LEN,LENGTH,global,\n')
+                csv_file.write('DIA,DIAMETER,reference,REF-42\n')
+
+            dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+            try:
+                self.assertEqual(dialog.alias_table.rowCount(), 0)
+
+                with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
+                    with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
+                        dialog.import_mappings()
+
+                info_mock.assert_called_once_with(dialog, 'Import complete', 'Imported 2 mapping row(s).')
+                self.assertEqual(dialog.alias_table.rowCount(), 2)
+            finally:
+                dialog.close()
+
+    def test_export_mappings_success_creates_csv_and_shows_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            output_path = f'{tmpdir}/export_aliases.csv'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA',
+                canonical_name='DIAMETER',
+                scope_type='global',
+                scope_value=None,
+            )
+
+            dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+            try:
+                with patch('modules.characteristic_mapping_dialog.QFileDialog.getSaveFileName', return_value=(output_path, 'CSV files (*.csv)')):
+                    with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
+                        dialog.export_mappings()
+
+                info_mock.assert_called_once_with(dialog, 'Export complete', 'Exported 1 mapping row(s).')
+                with open(output_path, 'r', encoding='utf-8') as exported_file:
+                    lines = exported_file.read().splitlines()
+
+                self.assertGreaterEqual(len(lines), 2)
+                self.assertEqual(lines[0], 'alias_name,canonical_name,scope_type,scope_value')
+                self.assertIn('DIA,DIAMETER,global,', lines)
+            finally:
+                dialog.close()
+
+    def test_import_mappings_shows_critical_message_on_exception(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            csv_path = f'{tmpdir}/import_aliases.csv'
+            ensure_characteristic_alias_schema(db_path)
+            with open(csv_path, 'w', encoding='utf-8', newline='') as csv_file:
+                csv_file.write('alias_name,canonical_name,scope_type,scope_value\n')
+
+            dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+            try:
+                with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
+                    with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=RuntimeError('boom')):
+                        with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                            dialog.import_mappings()
+
+                self.assertTrue(critical_mock.called)
+                self.assertEqual(critical_mock.call_args[0][1], 'Import error')
+            finally:
+                dialog.close()
+
+    def test_export_mappings_shows_critical_message_on_exception(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            output_path = f'{tmpdir}/export_aliases.csv'
+            ensure_characteristic_alias_schema(db_path)
+
+            dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+            try:
+                with patch('modules.characteristic_mapping_dialog.QFileDialog.getSaveFileName', return_value=(output_path, 'CSV files (*.csv)')):
+                    with patch('modules.characteristic_mapping_dialog.export_characteristic_aliases_csv', side_effect=RuntimeError('boom')):
+                        with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                            dialog.export_mappings()
+
+                self.assertTrue(critical_mock.called)
+                self.assertEqual(critical_mock.call_args[0][1], 'Export error')
+            finally:
+                dialog.close()
+
 
 if __name__ == '__main__':
     unittest.main()
