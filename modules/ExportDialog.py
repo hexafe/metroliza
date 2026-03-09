@@ -177,6 +177,7 @@ class ExportDialog(QDialog):
         self.grouping_window = None
         self.export_thread = None
         self.export_error_message = None
+        self._cancel_requested = False
         self.config_path = Path.home() / '.metroliza' / '.export_dialog_config.json'
         self.config = self._load_dialog_config()
 
@@ -694,6 +695,7 @@ class ExportDialog(QDialog):
             self.summary_plot_scale.setText(str(export_request.options.summary_plot_scale))
 
             # Start the exporting thread with validated options
+            self._cancel_requested = False
             self.export_thread = ExportDataThread(export_request=export_request)
             self.export_thread.update_label.connect(self.loading_label.setText)
             self.export_thread.update_progress.connect(self.loading_bar.setValue)
@@ -704,18 +706,31 @@ class ExportDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+
+    def _set_loading_cancel_enabled(self, enabled):
+        if not hasattr(self, 'loading_dialog') or self.loading_dialog is None:
+            return
+        for button in self.loading_dialog.findChildren(QPushButton):
+            if button.text().strip().lower() == 'cancel':
+                button.setEnabled(bool(enabled))
+
     def stop_exporting(self):
         """Request cooperative cancelation and keep UI responsive while waiting."""
         try:
-            # Request cooperative cancellation and return immediately to avoid blocking the UI thread
             if self.export_thread is not None and self.export_thread.isRunning():
+                if self._cancel_requested:
+                    return
+                self._cancel_requested = True
+                self._set_loading_cancel_enabled(False)
                 self.export_thread.stop_exporting()
-                self.loading_label.setText(build_three_line_status("Canceling export...", "Waiting for export thread to stop", "ETA --"))
+                self.loading_label.setText(build_three_line_status("Cancel requested...", "Waiting for export thread to confirm cancellation", "ETA --"))
                 return
 
-            QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
+            QMessageBox.information(self, "Export canceled", "Cancel confirmed. Data exporting has been canceled")
             self.loading_dialog.reject()
             self.export_button.setEnabled(True)
+            self._cancel_requested = False
+            self._set_loading_cancel_enabled(True)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -728,9 +743,11 @@ class ExportDialog(QDialog):
     def on_export_canceled(self):
         """Handle explicit worker cancelation and restore dialog state."""
         try:
-            QMessageBox.information(self, "Export canceled", "Data exporting has been canceled")
+            QMessageBox.information(self, "Export canceled", "Cancel confirmed. Data exporting has been canceled")
             self.loading_dialog.reject()
             self.export_button.setEnabled(True)
+            self._cancel_requested = False
+            self._set_loading_cancel_enabled(True)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -758,6 +775,8 @@ class ExportDialog(QDialog):
 
             # Close the loading dialog
             self.loading_dialog.accept()
+            self._cancel_requested = False
+            self._set_loading_cancel_enabled(True)
         except Exception as e:
             self.log_and_exit(e)
         finally:

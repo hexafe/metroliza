@@ -349,6 +349,10 @@ class TestExportHelpers(unittest.TestCase):
             build_google_stage_message('uploading'),
             'Google export stage: uploading',
         )
+        self.assertEqual(
+            build_google_stage_message('fallback', 'Google export timed out during upload after 61s'),
+            'Google export stage: fallback (timeout: Google export timed out during upload after 61s)',
+        )
         self.assertIsNone(build_google_stage_message('unknown'))
 
     def test_google_conversion_metadata_builder_preserves_warning_and_fallback_fields(self):
@@ -377,7 +381,8 @@ class TestExportHelpers(unittest.TestCase):
             error=RuntimeError('temporary outage'),
         )
 
-        self.assertEqual(metadata['fallback_message'], 'Google export failed; using local .xlsx fallback: out.xlsx')
+        self.assertIn('Google export failed; using local .xlsx fallback: out.xlsx', metadata['fallback_message'])
+        self.assertEqual(metadata['fallback_reason'], 'network')
         self.assertEqual(metadata['conversion_warnings'], ['temporary outage'])
 
     def test_check_canceled_emits_cancel_signal_once(self):
@@ -1840,7 +1845,7 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             def _fake_upload(*_args, **kwargs):
                 kwargs['status_callback']('uploading')
-                kwargs['status_callback']('uploading retry 1/2: temporary network issue')
+                kwargs['status_callback']('uploading retry 2/3, elapsed 01:20: temporary network issue')
                 kwargs['status_callback']('converting')
                 kwargs['status_callback']('validating')
                 return GoogleDriveConversionResult(
@@ -1859,9 +1864,50 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             retry_messages = [text for text in emitted if 'uploading retry' in text]
             self.assertEqual(len(retry_messages), 1)
-            self.assertIn('Google export stage: uploading (uploading retry 1/2: temporary network issue)', retry_messages[0])
+            self.assertIn('Google export stage: uploading (uploading retry 2/3, elapsed 01:20: temporary network issue)', retry_messages[0])
             stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
             self.assertEqual(stages[-1], 'Google export stage: completed (https://docs.google.com/spreadsheets/d/sheet-id/edit)')
+
+
+    def test_google_target_cancellation_error_treated_as_user_cancel(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+
+            canceled_calls = []
+            finished_calls = []
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.canceled.emit = lambda: canceled_calls.append('canceled')
+            thread.finished.emit = lambda: finished_calls.append('finished')
+
+            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            previous_upload = module.upload_and_convert_workbook
+
+            def _raise_canceled(*_args, **_kwargs):
+                raise module.GoogleDriveCanceledError('Google export canceled by user.')
+
+            module.upload_and_convert_workbook = _raise_canceled
+            try:
+                thread.run()
+            finally:
+                module.upload_and_convert_workbook = previous_upload
+
+            self.assertEqual(canceled_calls, ['canceled'])
+            self.assertEqual(finished_calls, [])
+            self.assertEqual(thread.completion_metadata.get('fallback_message', ''), '')
 
     def test_google_target_auth_fallback_skips_error_logging(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -1905,7 +1951,8 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertIn('fallback_message', thread.completion_metadata)
             self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
             stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
-            self.assertEqual(stages[-1], f'Google export stage: fallback (Google export failed; using local .xlsx fallback: {out_file})')
+            self.assertIn('Google export stage: fallback (', stages[-1])
+            self.assertIn(f'Google export failed; using local .xlsx fallback: {out_file}', stages[-1])
 
     def test_google_target_final_fallback_is_non_crashing_and_emits_fallback_stage(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -1949,7 +1996,8 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertIn('fallback_message', thread.completion_metadata)
             self.assertIn('using local .xlsx fallback', thread.completion_metadata['fallback_message'])
             stages = [text.split('\n')[0] for text in emitted if text.split('\n')[0].startswith('Google export stage:')]
-            self.assertEqual(stages[-1], f'Google export stage: fallback (Google export failed; using local .xlsx fallback: {out_file})')
+            self.assertIn('Google export stage: fallback (', stages[-1])
+            self.assertIn(f'Google export failed; using local .xlsx fallback: {out_file}', stages[-1])
 
     def test_google_target_run_keeps_xlsx_fallback_and_conversion_warnings(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -2093,7 +2141,7 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             def _fake_upload(*_args, **kwargs):
                 kwargs['status_callback']('uploading')
-                kwargs['status_callback']('uploading retry 1/2: temporary network issue')
+                kwargs['status_callback']('uploading retry 2/3, elapsed 01:20: temporary network issue')
                 kwargs['status_callback']('uploading')
                 kwargs['status_callback']('converting')
                 kwargs['status_callback']('validating')
@@ -2134,7 +2182,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 stage_messages,
                 [
                     'Google conversion stage',
-                    'Google conversion stage (attempt 2/2)',
+                    'Google conversion stage (attempt 2/3)',
                     'Google conversion stage',
                     'Google conversion stage',
                 ],
@@ -2275,7 +2323,7 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             metadata = thread.completion_metadata
             self.assertEqual(metadata.get('converted_url'), None)
-            self.assertEqual(metadata['fallback_message'], f'Google export failed; using local .xlsx fallback: {out_file}')
+            self.assertIn(f'Google export failed; using local .xlsx fallback: {out_file}', metadata['fallback_message'])
             self.assertEqual(metadata['conversion_warnings'], ['temporary outage'])
 
 

@@ -37,7 +37,12 @@ import modules.custom_logger as custom_logger
 from modules.db import execute_select_with_columns, read_sql_dataframe, sqlite_connection_scope
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
-from modules.google_drive_export import GoogleDriveAuthError, GoogleDriveExportError, upload_and_convert_workbook
+from modules.google_drive_export import (
+    GoogleDriveAuthError,
+    GoogleDriveCanceledError,
+    GoogleDriveExportError,
+    upload_and_convert_workbook,
+)
 from modules.export_google_result_utils import (
     build_google_conversion_metadata,
     build_google_fallback_metadata,
@@ -2472,7 +2477,7 @@ class ExportDataThread(QThread):
                         _log_google_conversion_stage("validating")
                         return
                     if stage_message.startswith("uploading retry"):
-                        retry_match = re.match(r"^uploading retry\s+(\d+)/(\d+)", stage_message)
+                        retry_match = re.match(r"^uploading retry\s+(\d+)/(\d+),\s+elapsed\s+\d{2}:\d{2}", stage_message)
                         if retry_match:
                             try:
                                 stage_attempt_totals["uploading"] = int(retry_match.group(2))
@@ -2485,6 +2490,7 @@ class ExportDataThread(QThread):
                     self.excel_file,
                     expected_sheet_names=self._build_expected_sheet_names(),
                     status_callback=_stage_callback,
+                    should_cancel=lambda: self.export_canceled,
                 )
 
                 self.completion_metadata.update(build_google_conversion_metadata(conversion))
@@ -2523,6 +2529,10 @@ class ExportDataThread(QThread):
             self._log_export_stage("Export completed successfully", stage="completed")
             self.finished.emit()
             QCoreApplication.processEvents()
+        except GoogleDriveCanceledError:
+            self.export_canceled = True
+            self._check_canceled()
+            return
         except GoogleDriveExportError as e:
             if self.export_target == "google_sheets_drive_convert":
                 self.completion_metadata.update(build_google_fallback_metadata(excel_file=self.excel_file, error=e))

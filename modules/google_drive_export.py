@@ -68,6 +68,14 @@ class GoogleDriveResponseError(GoogleDriveExportError):
     """Unexpected response payload shape or non-retryable API failure."""
 
 
+
+class GoogleDriveCanceledError(GoogleDriveExportError):
+    """Google export canceled cooperatively by caller/UI."""
+
+
+class GoogleDriveTimeoutError(GoogleDriveTransientError):
+    """Google export exceeded configured timeout budget."""
+
 def _build_google_log_extra(*, file_ref="", error=None, outcome="") -> dict[str, str]:
     return build_google_conversion_log_extra(
         file_ref=file_ref,
@@ -635,6 +643,9 @@ def upload_and_convert_workbook(
     max_retries: int = 3,
     retry_delay_seconds: float = 1.0,
     status_callback=None,
+    should_cancel=None,
+    overall_timeout_seconds: float | None = None,
+    stage_timeout_seconds: dict[str, float] | None = None,
 ) -> GoogleDriveConversionResult:
     """Upload a local workbook to Drive and convert it into Google Sheets.
 
@@ -647,6 +658,11 @@ def upload_and_convert_workbook(
         retry_delay_seconds: Fixed delay between retry attempts.
         status_callback: Optional callback receiving lifecycle messages such as
             `uploading`, retry notices, `converting`, and `validating`.
+        should_cancel: Optional callback returning truthy when cooperative cancel
+            should stop export.
+        overall_timeout_seconds: Optional timeout budget for full conversion call.
+        stage_timeout_seconds: Optional per-stage timeout budgets. Supported keys:
+            `auth`, `folder`, and `upload`.
 
     Returns:
         Fully populated conversion result including Drive URL and local fallback.
@@ -672,8 +688,40 @@ def upload_and_convert_workbook(
     if not excel_file.exists():
         raise GoogleDriveResponseError(f"Excel export file not found: {excel_path}")
 
+    started_at = time.monotonic()
+    stage_started_at = {
+        "auth": started_at,
+        "folder": started_at,
+        "upload": started_at,
+    }
+    stage_timeout_seconds = stage_timeout_seconds or {}
+
+    def _raise_if_canceled():
+        if callable(should_cancel) and should_cancel():
+            raise GoogleDriveCanceledError("Google export canceled by user.")
+
+    def _raise_if_timed_out(stage_name: str):
+        now = time.monotonic()
+        if overall_timeout_seconds is not None and (now - started_at) > float(overall_timeout_seconds):
+            raise GoogleDriveTimeoutError(
+                f"Google export timed out after {int(now - started_at)}s (overall budget {overall_timeout_seconds}s)."
+            )
+        stage_budget = stage_timeout_seconds.get(stage_name)
+        if stage_budget is not None and (now - stage_started_at[stage_name]) > float(stage_budget):
+            raise GoogleDriveTimeoutError(
+                f"Google export timed out during {stage_name} after {int(now - stage_started_at[stage_name])}s "
+                f"(stage budget {stage_budget}s)."
+            )
+
+    _raise_if_canceled()
+    _raise_if_timed_out("auth")
     access_token = _ensure_access_token(_resolve_credentials_path(credentials_path), Path(token_path))
+    _raise_if_canceled()
+    _raise_if_timed_out("folder")
+    stage_started_at["folder"] = time.monotonic()
     reports_folder_id = _ensure_reports_folder(access_token)
+    _raise_if_canceled()
+    _raise_if_timed_out("folder")
 
     excel_mime = mimetypes.guess_type(excel_file.name)[0] or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     metadata = {
@@ -704,22 +752,31 @@ def upload_and_convert_workbook(
     payload: dict[str, Any] | None = None
     if callable(status_callback):
         status_callback("uploading")
+    stage_started_at["upload"] = time.monotonic()
 
     for attempt in range(1, max_retries + 1):
+        _raise_if_canceled()
+        _raise_if_timed_out("upload")
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 payload = json.loads(response.read().decode("utf-8"))
+            _raise_if_canceled()
+            _raise_if_timed_out("upload")
             break
         except urllib.error.HTTPError as exc:
             body_text = exc.read().decode("utf-8", errors="replace")
             mapped = map_google_http_error(exc.code, body_text)
             if isinstance(mapped, (GoogleDriveTransientError, GoogleDriveQuotaError)) and attempt < max_retries:
                 if callable(status_callback):
-                    status_callback(f"uploading retry {attempt}/{max_retries - 1}: {mapped}")
+                    elapsed_seconds = int(time.monotonic() - stage_started_at["upload"])
+                    mm, ss = divmod(elapsed_seconds, 60)
+                    status_callback(f"uploading retry {attempt + 1}/{max_retries}, elapsed {mm:02d}:{ss:02d}: {mapped}")
                 logger.warning(
                     "Google upload retry after HTTP error",
                     extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="retry"),
                 )
+                _raise_if_canceled()
+                _raise_if_timed_out("upload")
                 time.sleep(retry_delay_seconds)
                 continue
             logger.error(
@@ -731,11 +788,15 @@ def upload_and_convert_workbook(
             mapped = map_google_network_error("Google Drive upload failed", exc)
             if attempt < max_retries:
                 if callable(status_callback):
-                    status_callback(f"uploading retry {attempt}/{max_retries - 1}: {mapped}")
+                    elapsed_seconds = int(time.monotonic() - stage_started_at["upload"])
+                    mm, ss = divmod(elapsed_seconds, 60)
+                    status_callback(f"uploading retry {attempt + 1}/{max_retries}, elapsed {mm:02d}:{ss:02d}: {mapped}")
                 logger.warning(
                     "Google upload retry after network error",
                     extra=_build_google_log_extra(file_ref=str(excel_file), error=mapped, outcome="retry"),
                 )
+                _raise_if_canceled()
+                _raise_if_timed_out("upload")
                 time.sleep(retry_delay_seconds)
                 continue
             logger.error(
