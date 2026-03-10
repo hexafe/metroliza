@@ -1,8 +1,10 @@
-# Group Analysis — Audit and PR Plan (Current Repo vs Spec)
+# Group Analysis — Audit and PR Plan (Historical Closeout)
 
-## Goal
+Closed on 2026-03-10 (commit range: group-analysis implementation cycle through repository HEAD at archival).
 
-Audit the repo against the implementation plan, then define the next PR sequence with a **docs/todo closeout as the last PR**.
+## Goal (archived)
+
+This document records the completed audit of the repo against the implementation plan and captures closure evidence for the completed docs/todo closeout.
 
 ## Current-state audit (spec vs repo)
 
@@ -14,55 +16,61 @@ Audit the repo against the implementation plan, then define the next PR sequence
 | Service/writer architecture | New service + writer path active, legacy writer not extended | Implemented (`group_analysis_service.py`, `group_analysis_writer.py`) | ✅ Done |
 | Flag semantics parity | `LOW N`, `IMBALANCED N`, `SEVERELY IMBALANCED N`, `SPEC?` end-to-end | Implemented in service + writer conditional formatting + tests | ✅ Done |
 | Standard plots | Standard should insert real eligible plots (not placeholders) | Implemented with real chart insertion for eligible metrics | ✅ Done |
-| Final docs closeout | Status + next-step wording reflects shipped behavior | Updated to match shipped behavior and post-cycle follow-up | ✅ Done |
+| Final docs closeout | Status + next-step wording reflects shipped behavior | Completed with post-cycle backlog separation | ✅ Done |
 
-## Remaining scope (active TODO only)
+## Historical closure evidence
 
-1. **Final documentation and TODO closeout (this PR)**
-   - Update implementation status sections to reflect true shipped state.
-   - Record one concrete post-plot next step.
+1. **Documentation and TODO closeout completed**
+   - Implementation status sections were updated to reflect shipped behavior.
+   - Post-cycle follow-up items were moved out of in-flight plan language.
 
-2. **Post-cycle functional follow-up**
-   - Improve Characteristic Alias Mapping v1 CSV import UX with clearer conflict reporting (row-level error summaries and actionable remediation guidance).
-   - Keep mapping deterministic/manual-only (no canonical IDs/ontology/auto-matching) while preserving diagnostics and comparability labeling.
+2. **Post-cycle follow-up candidates recorded at cycle close**
+   - Characteristic Alias Mapping v1 CSV import UX improvement was captured for later planning (clearer conflict reporting with row-level summaries and actionable remediation guidance).
+   - Deterministic/manual mapping constraints were preserved (no canonical IDs/ontology/auto-matching), alongside diagnostics and comparability labeling.
 
-## PR acceptance criteria (single source of truth)
+## Closeout acceptance criteria (historical source of truth)
 
-- [x] **Docs status mirrors shipped behavior.**
-  - Standard chart insertion is marked implemented (not deferred).
-- [x] **Deferred scope is explicit and accurate.**
-  - Characteristic Alias Mapping v1 is shipped; suggestion engine/fuzzy/canonical-ID work remains deferred.
-- [x] **One concrete next follow-up is captured.**
-  - Next item identifies advanced CSV conflict-report UX for manual alias import as a specific post-cycle target.
+- [x] **Docs status mirrored shipped behavior at closeout.**
+  - Standard chart insertion was recorded as implemented (not deferred).
+- [x] **Deferred scope was explicit and accurate at closeout.**
+  - Characteristic Alias Mapping v1 was shipped; suggestion engine/fuzzy/canonical-ID work remained deferred.
+- [x] **A concrete post-cycle follow-up was captured during closeout.**
+  - The archived next item identified advanced CSV conflict-report UX for manual alias import as a specific later target.
 
-## PR testable outcomes
+## Closeout testable outcomes (archived)
 
-- [x] `group_analysis_spec_and_implementation_plan.md` includes a dedicated “Characteristic Alias Mapping v1” section and updated status/deferred wording.
-- [x] `next_steps_pr_plan.md` checklist marks Standard plot + Characteristic Alias Mapping v1 scope (including bulk import/export with batch validation) complete and identifies the next concrete follow-up item.
-- [x] `codex_group_analysis_instructions.md` current-cycle status note mirrors shipped behavior and the same next step.
+- [x] `group_analysis_spec_and_implementation_plan.md` included a dedicated “Characteristic Alias Mapping v1” section and updated status/deferred wording.
+- [x] `next_steps_pr_plan.md` marked Standard plot + Characteristic Alias Mapping v1 scope (including bulk import/export with batch validation) complete and retained one concrete backlog follow-up.
+- [x] `codex_group_analysis_instructions.md` status notes mirrored shipped behavior and aligned with the same backlog direction.
 
-## Proposed PR sequence
+## Historical PR sequence record
 
-### PR 1 — Docs/todo closeout (this PR)
+### PR 1 — Docs/todo closeout (completed)
 
 **Target files**
 - `docs/group_analysis/group_analysis_spec_and_implementation_plan.md`
 - `docs/group_analysis/codex_group_analysis_instructions.md`
 - `docs/group_analysis/next_steps_pr_plan.md`
 
-**Definition of done**
-- Docs clearly separate implemented vs deferred work.
-- Standard plot completion is reflected across status/checklist sections.
-- One concrete post-cycle next step is recorded.
+**Definition of done (met)**
+- Docs separated implemented vs deferred work.
+- Standard plot completion was reflected across status/checklist sections.
+- A concrete post-cycle follow-up was recorded.
 
-## TODO checklist
+## TODO checklist (historical closure evidence)
 
-- [x] PR 1: deliver Standard plot insertion beyond placeholders.
-- [x] PR 2 (last PR): update plan/status/todo docs to match shipped behavior.
-- [x] Next follow-up delivered: implement Characteristic Alias Mapping v1 (manual mappings table, scoped resolution, and pipeline integration).
-- [x] Next follow-up delivered: add bulk alias mapping import/export with batch-validation tests.
-- [x] Next follow-up delivered: advanced conflict-report UX for manual alias CSV import (conflict-first summaries plus saveable remediation CSV report).
+- [x] PR 1: delivered Standard plot insertion beyond placeholders.
+- [x] PR 2 (last PR): updated plan/status/todo docs to match shipped behavior.
+- [x] Follow-up delivered: implemented Characteristic Alias Mapping v1 (manual mappings table, scoped resolution, and pipeline integration).
+- [x] Follow-up delivered: added bulk alias mapping import/export with batch-validation tests.
+- [x] Follow-up delivered: advanced conflict-report UX for manual alias CSV import (conflict-first summaries plus saveable remediation CSV report).
 
-## Sequencing rationale
+## Post-cycle follow-up backlog
 
-Standard chart insertion and Characteristic Alias Mapping v1 are now closed, including bulk alias mapping import/export, conflict-first validation summaries, and saveable remediation CSV reporting while keeping mapping deterministic/manual-only.
+- Consider additional UX polish for alias CSV conflict workflows only if needed by future planning cycles.
+
+## Sequencing rationale (archived)
+
+Standard chart insertion and Characteristic Alias Mapping v1 were closed, including bulk alias mapping import/export, conflict-first validation summaries, and saveable remediation CSV reporting while keeping mapping deterministic/manual-only.
+
+Active planning location: no active implementation plan in this file.
