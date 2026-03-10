@@ -50,6 +50,31 @@ class CharacteristicAliasImportValidationError(ValueError):
         super().__init__('\n'.join(message_lines))
 
 
+class CharacteristicAliasCsvSchemaError(ValueError):
+    """Raised when CSV headers do not match the expected alias import schema."""
+
+    def __init__(
+        self,
+        *,
+        required_columns: tuple[str, ...],
+        detected_columns: tuple[str, ...],
+        expected_header_example: str,
+    ):
+        self.required_columns = tuple(required_columns)
+        self.detected_columns = tuple(detected_columns)
+        self.expected_header_example = str(expected_header_example)
+        self.correction_guidance = (
+            'Correct the CSV header row to exactly match this order: '
+            f'{self.expected_header_example}'
+        )
+        super().__init__(
+            'CSV header/schema mismatch. '
+            f'Required columns: {", ".join(self.required_columns)}. '
+            f'Detected columns: {", ".join(self.detected_columns) if self.detected_columns else "(none)"}. '
+            f'{self.correction_guidance}'
+        )
+
+
 def _build_validation_issue(
     *,
     row_number: int,
@@ -449,11 +474,13 @@ def import_characteristic_aliases_csv(
         reader = csv.DictReader(csv_file)
         reader.fieldnames = _normalized_csv_headers(reader.fieldnames)
 
-        required_headers = set(CSV_ALIAS_HEADERS)
-        headers = set(reader.fieldnames or [])
-        if not required_headers.issubset(headers):
-            missing = ', '.join(sorted(required_headers - headers))
-            raise ValueError(f'CSV is missing required columns: {missing}')
+        detected_headers = tuple(reader.fieldnames or [])
+        if detected_headers != CSV_ALIAS_HEADERS:
+            raise CharacteristicAliasCsvSchemaError(
+                required_columns=CSV_ALIAS_HEADERS,
+                detected_columns=detected_headers,
+                expected_header_example=','.join(CSV_ALIAS_HEADERS),
+            )
 
         rows = []
         row_error_details: list[dict[str, str | int | None]] = []

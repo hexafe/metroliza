@@ -4,6 +4,7 @@ import unittest
 from sqlite3 import connect
 
 from modules.characteristic_alias_service import (
+    CharacteristicAliasCsvSchemaError,
     CharacteristicAliasImportValidationError,
     delete_characteristic_alias,
     ensure_characteristic_alias_schema,
@@ -329,8 +330,14 @@ class TestCharacteristicAliasService(unittest.TestCase):
             writer.writeheader()
             writer.writerow({'alias_name': 'A1', 'canonical_name': 'C1'})
 
-        with self.assertRaisesRegex(ValueError, 'CSV is missing required columns'):
+        with self.assertRaises(CharacteristicAliasCsvSchemaError) as ctx:
             import_characteristic_aliases_csv(self.db_path, csv_path)
+
+        error = ctx.exception
+        self.assertEqual(error.required_columns, ('alias_name', 'canonical_name', 'scope_type', 'scope_value'))
+        self.assertEqual(error.detected_columns, ('alias_name', 'canonical_name'))
+        self.assertEqual(error.expected_header_example, 'alias_name,canonical_name,scope_type,scope_value')
+        self.assertIn('exactly match this order', error.correction_guidance)
 
 
 if __name__ == '__main__':
