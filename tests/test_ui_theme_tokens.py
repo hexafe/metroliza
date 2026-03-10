@@ -19,6 +19,12 @@ class TestUiThemeTokens(unittest.TestCase):
         self.assertEqual(ui_theme_tokens.generate_group_color(8, dark_mode=False), '#EEDBD4')
         self.assertEqual(ui_theme_tokens.generate_group_color(8, dark_mode=True), '#A99892')
 
+    def test_selected_row_background_override_softens_aggressive_highlight(self):
+        self.assertEqual(ui_theme_tokens.selected_row_background_override('#112233'), '#3B6B9B')
+
+    def test_selected_row_background_override_fallback_is_less_aggressive(self):
+        self.assertEqual(ui_theme_tokens.selected_row_background_override(None), '#5E88AD')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -3,7 +3,7 @@
 import colorsys
 
 BASE_ROW_BACKGROUND_FALLBACK = "#FFFFFF"
-SELECTED_ROW_BACKGROUND_FALLBACK = "#308CC6"
+SELECTED_ROW_BACKGROUND_FALLBACK = "#5E88AD"
 DEFAULT_GROUP_COLOR = BASE_ROW_BACKGROUND_FALLBACK
 BASE_GROUP_PALETTE = (
     "#FDE2E4",
@@ -62,7 +62,13 @@ def resolve_base_row_background(base_hex=None):
 
 
 def selected_row_background_override(highlight_hex=None):
-    return normalize_hex_color(highlight_hex, fallback=SELECTED_ROW_BACKGROUND_FALLBACK)
+    normalized = normalize_hex_color(highlight_hex, fallback=SELECTED_ROW_BACKGROUND_FALLBACK)
+    red, green, blue = _parse_hex_color(normalized)
+    hue, lightness, saturation = colorsys.rgb_to_hls(red / 255.0, green / 255.0, blue / 255.0)
+    softened_lightness = min(0.62, max(0.42, lightness))
+    softened_saturation = min(saturation, 0.45)
+    soft_red, soft_green, soft_blue = colorsys.hls_to_rgb(hue, softened_lightness, softened_saturation)
+    return _to_hex(round(soft_red * 255), round(soft_green * 255), round(soft_blue * 255))
 
 
 def selected_text_color(selected_background_hex):
