@@ -108,6 +108,10 @@ class DataGrouping(QDialog):
             self.part_group_list = QListWidget()
             self.part_group_list.setSelectionMode(self._multi_selection_mode())
 
+            self.grouping_status_label = QLabel()
+            self.grouping_status_label.setWordWrap(True)
+            self.grouping_status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
             # Create separate QLineEdit widgets for searching in each list widget
             self.reference_search_input = QLineEdit()
             self.reference_search_input.setPlaceholderText("Search REFERENCE...")
@@ -119,17 +123,20 @@ class DataGrouping(QDialog):
             self.part_group_search_input.setPlaceholderText("Search PART IN SELECTED GROUP...")
             
             # Create buttons
-            self.create_group_button = QPushButton("Create/add to group")
+            self.create_group_button = QPushButton("Add to group")
             self.create_group_button.setDisabled(True)
-            self.rename_group_button = QPushButton("Rename selected group")
+            self.rename_group_button = QPushButton("Rename group")
             self.rename_group_button.setDisabled(True)
-            self.remove_from_group_button = QPushButton("Remove from selected group")
+            self.remove_from_group_button = QPushButton("Remove from group")
             self.remove_from_group_button.setDisabled(True)
-            self.delete_group_button = QPushButton("Delete selected group")
+            self.delete_group_button = QPushButton("Delete group")
             self.delete_group_button.setDisabled(True)
             
-            self.use_grouping_button = QPushButton("Use grouping")
-            self.dont_use_grouping_button = QPushButton("Do not use grouping")
+            self.use_grouping_button = QPushButton("Save grouping")
+            self.dont_use_grouping_button = QPushButton("Discard changes")
+
+            self.part_group_label.setText("Parts in selected group")
+            self._update_grouping_status_panel()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -179,6 +186,7 @@ class DataGrouping(QDialog):
 
             self.layout.addWidget(self.use_grouping_button, 8, 0, 1, 2)
             self.layout.addWidget(self.dont_use_grouping_button, 8, 2, 1, 2)
+            self.layout.addWidget(self.grouping_status_label, 9, 0, 1, 4)
 
             self.show()
         except Exception as e:
@@ -586,8 +594,26 @@ class DataGrouping(QDialog):
                 self.groups_list.setCurrentRow(preferred_group_index)
             selected_group = self._selected_group_name()
             self._populate_part_group_list(selected_group)
+            self._update_grouping_status_panel()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _update_grouping_status_panel(self):
+        references_count = 0
+        parts_count = 0
+        groups_count = 0
+
+        if isinstance(self.df, pd.DataFrame) and not self.df.empty:
+            references_count = int(self.df['REFERENCE'].nunique()) if 'REFERENCE' in self.df.columns else 0
+            parts_count = int(self.df['GROUP_KEY'].nunique()) if 'GROUP_KEY' in self.df.columns else 0
+            groups_count = int(self.df['GROUP'].nunique()) if 'GROUP' in self.df.columns else 0
+
+        self.grouping_status_label.setText(
+            "Grouping help\n"
+            f"• Default group: {self.default_group}\n"
+            "• If no parts are selected, Add to group applies to all parts under the selected reference.\n"
+            f"• Current counts — References: {references_count}, Parts: {parts_count}, Groups: {groups_count}"
+        )
 
     def search_list_widgets(self, list_widget, search_text):
         """Handle `search_list_widgets` for `DataGrouping`.
