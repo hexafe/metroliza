@@ -42,12 +42,12 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
 
             dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
 
-            self.assertEqual(dialog.windowTitle(), 'Characteristic Mapping')
+            self.assertEqual(dialog.windowTitle(), 'Characteristic Name Matching')
             self.assertEqual(dialog.db_path_input.text(), db_path)
             self.assertEqual(dialog.alias_table.rowCount(), 1)
             self.assertEqual(dialog.alias_table.item(0, 0).text(), 'DIA - X')
             self.assertEqual(dialog.alias_table.item(0, 1).text(), 'DIAMETER - X')
-            self.assertEqual(dialog.alias_table.item(0, 2).text(), 'reference')
+            self.assertEqual(dialog.alias_table.item(0, 2).text(), 'One reference only')
             self.assertEqual(dialog.alias_table.item(0, 3).text(), 'REF-1')
             dialog.close()
 

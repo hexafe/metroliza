@@ -9,8 +9,11 @@ from modules.db import execute_with_retry
 from modules.db import run_transaction_with_retry
 
 
+CHARACTERISTIC_ALIAS_TABLE = 'CHARACTERISTIC_ALIASES'
+
+
 CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
-    '''CREATE TABLE IF NOT EXISTS CHARACTERISTIC_ALIASES (
+    f'''CREATE TABLE IF NOT EXISTS {CHARACTERISTIC_ALIAS_TABLE} (
             id INTEGER PRIMARY KEY,
             alias_name TEXT NOT NULL,
             canonical_name TEXT NOT NULL,
@@ -19,7 +22,7 @@ CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
             created_at TEXT NULL,
             updated_at TEXT NULL
         )''',
-    'CREATE INDEX IF NOT EXISTS characteristic_alias_scope_lookup ON CHARACTERISTIC_ALIASES(alias_name, scope_type, scope_value)',
+    f'CREATE INDEX IF NOT EXISTS characteristic_alias_scope_lookup ON {CHARACTERISTIC_ALIAS_TABLE}(alias_name, scope_type, scope_value)',
 )
 
 CSV_ALIAS_HEADERS = ('alias_name', 'canonical_name', 'scope_type', 'scope_value')
@@ -174,6 +177,8 @@ def ensure_characteristic_alias_table(cursor) -> None:
         cursor.execute(statement)
 
 
+
+
 def ensure_characteristic_alias_schema(
     db_path: str,
     *,
@@ -214,6 +219,11 @@ def normalize_alias_scope(scope_type: str, scope_value: str | None) -> tuple[str
         return normalized_scope_type, None
 
     return normalized_scope_type, normalized_scope_value
+
+
+def normalize_scope_type(scope_type: str, scope_value: str | None) -> tuple[str, str | None]:
+    """Compatibility helper for alias scope normalization."""
+    return normalize_alias_scope(scope_type, scope_value)
 
 
 def fetch_characteristic_aliases(
