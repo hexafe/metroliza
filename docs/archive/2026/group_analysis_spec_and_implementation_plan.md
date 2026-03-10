@@ -1,6 +1,6 @@
 # Group Analysis Rebuild — Specification and Implementation Plan
 
-**Suggested repo path:** `docs/group_analysis_spec_and_implementation_plan.md`
+**Archived repo path:** `docs/archive/2026/group_analysis_spec_and_implementation_plan.md`
 
 ## 1. Purpose
 
@@ -845,7 +845,7 @@ In the final PR of this roadmap, update documentation with a short release-statu
 Suggested location:
 
 - append a "Status after implementation cycle" subsection in this document,
-- optionally mirror a short summary in `docs/group_analysis/codex_group_analysis_instructions.md`.
+- optionally mirror a short summary in `docs/archive/2026/group_analysis_codex_implementation_instructions.md`.
 
 ### 17.2 Status after implementation cycle
 

@@ -40,17 +40,17 @@ This document records the completed audit of the repo against the implementation
 ## Closeout testable outcomes (archived)
 
 - [x] `group_analysis_spec_and_implementation_plan.md` included a dedicated “Characteristic Alias Mapping v1” section and updated status/deferred wording.
-- [x] `next_steps_pr_plan.md` marked Standard plot + Characteristic Alias Mapping v1 scope (including bulk import/export with batch validation) complete and retained one concrete backlog follow-up.
-- [x] `codex_group_analysis_instructions.md` status notes mirrored shipped behavior and aligned with the same backlog direction.
+- [x] `group_analysis_next_steps_pr_plan.md` marked Standard plot + Characteristic Alias Mapping v1 scope (including bulk import/export with batch validation) complete and retained one concrete backlog follow-up.
+- [x] `group_analysis_codex_implementation_instructions.md` status notes mirrored shipped behavior and aligned with the same backlog direction.
 
 ## Historical PR sequence record
 
 ### PR 1 — Docs/todo closeout (completed)
 
 **Target files**
-- `docs/group_analysis/group_analysis_spec_and_implementation_plan.md`
-- `docs/group_analysis/codex_group_analysis_instructions.md`
-- `docs/group_analysis/next_steps_pr_plan.md`
+- `docs/archive/2026/group_analysis_spec_and_implementation_plan.md`
+- `docs/archive/2026/group_analysis_codex_implementation_instructions.md`
+- `docs/archive/2026/group_analysis_next_steps_pr_plan.md`
 
 **Definition of done (met)**
 - Docs separated implemented vs deferred work.
