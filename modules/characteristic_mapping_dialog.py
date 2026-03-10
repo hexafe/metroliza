@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -34,10 +36,61 @@ from modules.custom_logger import CustomLogger
 
 ALL_REFERENCES_LABEL = 'All references'
 ONE_REFERENCE_LABEL = 'One reference only'
+REMEDIATION_REPORT_HEADERS = ('row_number', 'field', 'code', 'category', 'message', 'remediation_hint')
 
 
 def _has_selected_db_file(db_file: str) -> bool:
     return bool(str(db_file or '').strip())
+
+
+def _issue_sort_key(issue: dict[str, str | int | None]) -> tuple[int, int, str, str, str]:
+    category = str(issue.get('category') or 'validation_error')
+    severity_rank = 0 if category == 'duplicate_collision' else 1
+    row_number = issue.get('row_number')
+    if row_number is None:
+        normalized_row = 10**9
+    else:
+        normalized_row = int(row_number)
+    return (
+        normalized_row,
+        severity_rank,
+        category,
+        str(issue.get('code') or ''),
+        str(issue.get('field') or ''),
+    )
+
+
+def build_remediation_report_rows(
+    row_error_details: list[dict[str, str | int | None]],
+) -> list[dict[str, str | int | None]]:
+    """Convert validation issues to deterministic remediation CSV rows."""
+    rows = []
+    for entry in sorted(list(row_error_details or []), key=_issue_sort_key):
+        rows.append(
+            {
+                'row_number': entry.get('row_number'),
+                'field': entry.get('field'),
+                'code': entry.get('code'),
+                'category': entry.get('category'),
+                'message': entry.get('message'),
+                'remediation_hint': entry.get('remediation_hint'),
+            }
+        )
+    return rows
+
+
+def export_remediation_report_csv(
+    destination_path: str,
+    row_error_details: list[dict[str, str | int | None]],
+) -> int:
+    """Write remediation rows to CSV and return number of data rows exported."""
+    rows = build_remediation_report_rows(row_error_details)
+    with open(destination_path, 'w', newline='', encoding='utf-8') as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=list(REMEDIATION_REPORT_HEADERS))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({header: row.get(header) or '' for header in REMEDIATION_REPORT_HEADERS})
+    return len(rows)
 
 
 class CharacteristicAliasEditorDialog(QDialog):
@@ -476,6 +529,10 @@ class CharacteristicMappingDialog(QDialog):
                 for row_error in error.row_errors
             ]
 
+        details = sorted(details, key=_issue_sort_key)
+        duplicate_conflicts = [entry for entry in details if str(entry.get('category') or '') == 'duplicate_collision']
+        other_issues = [entry for entry in details if str(entry.get('category') or '') != 'duplicate_collision']
+
         grouped_categories: dict[str, int] = {}
         for entry in details:
             category = str(entry.get('category') or 'validation_error')
@@ -498,8 +555,15 @@ class CharacteristicMappingDialog(QDialog):
             summary_lines.append(f'  - {category}: {grouped_categories[category]}')
 
         summary_lines.append('')
-        summary_lines.append(f'First {min(preview_limit, len(details))} row issue(s):')
-        for entry in details[:preview_limit]:
+        summary_lines.append('What to fix first:')
+        if duplicate_conflicts:
+            summary_lines.append('  1) Remove duplicate alias/scope key rows to keep imports atomic and deterministic.')
+            summary_lines.append('  2) For each duplicate key, choose one scope strategy: global or reference-only.')
+        summary_lines.append('  3) Fix missing/invalid field values listed below and retry import.')
+
+        summary_lines.append('')
+        summary_lines.append(f'First {min(preview_limit, len(details))} row issue(s) (conflicts first):')
+        for entry in (duplicate_conflicts + other_issues)[:preview_limit]:
             summary_lines.append(
                 f"- Row {entry.get('row_number')} [{entry.get('field')}] ({entry.get('code')}): "
                 f"{entry.get('message')} Fix: {entry.get('remediation_hint')}"
@@ -512,9 +576,20 @@ class CharacteristicMappingDialog(QDialog):
             f'Invalid rows: {invalid_rows}',
             '',
         ]
-        for index, entry in enumerate(details, start=1):
+        detail_lines.append('Conflict-first sections:')
+        if duplicate_conflicts:
+            detail_lines.append('duplicate_collision:')
+            for index, entry in enumerate(duplicate_conflicts, start=1):
+                detail_lines.append(
+                    f"  {index}. row={entry.get('row_number')} field={entry.get('field')} code={entry.get('code')} "
+                    f"category={entry.get('category')} message={entry.get('message')} remediation={entry.get('remediation_hint')}"
+                )
+            detail_lines.append('')
+
+        detail_lines.append('other_validation_issues:')
+        for index, entry in enumerate(other_issues, start=1):
             detail_lines.append(
-                f"{index}. row={entry.get('row_number')} field={entry.get('field')} code={entry.get('code')} "
+                f"  {index}. row={entry.get('row_number')} field={entry.get('field')} code={entry.get('code')} "
                 f"category={entry.get('category')} message={entry.get('message')} remediation={entry.get('remediation_hint')}"
             )
 
@@ -550,6 +625,30 @@ class CharacteristicMappingDialog(QDialog):
             details_box.setDetailedText(full_report)
             details_box.setStandardButtons(QMessageBox.StandardButton.Ok)
             details_box.exec()
+
+            if exc.row_error_details:
+                save_response = QMessageBox.question(
+                    self,
+                    'Save remediation report',
+                    'Save a remediation CSV report for these row issues?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if save_response == QMessageBox.StandardButton.Yes:
+                    suggested_name = 'characteristic_alias_import_remediation.csv'
+                    report_path, _ = QFileDialog.getSaveFileName(
+                        self,
+                        'Save remediation report',
+                        suggested_name,
+                        'CSV files (*.csv);;All files (*)',
+                    )
+                    if report_path:
+                        exported_rows = export_remediation_report_csv(report_path, exc.row_error_details)
+                        QMessageBox.information(
+                            self,
+                            'Report saved',
+                            f'Saved remediation report with {exported_rows} row issue(s).',
+                        )
         except CharacteristicAliasCsvSchemaError as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(

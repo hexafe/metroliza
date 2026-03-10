@@ -322,6 +322,10 @@ class TestCharacteristicAliasService(unittest.TestCase):
         self.assertEqual(error.row_error_details[2]['code'], 'invalid_scope_type')
         self.assertEqual(error.row_error_details[3]['code'], 'reference_scope_requires_scope_value')
         self.assertEqual(error.row_error_details[4]['code'], 'duplicate_key_collision')
+        self.assertEqual(error.row_error_details[4]['field'], 'alias_name')
+        self.assertEqual(error.row_error_details[4]['category'], 'duplicate_collision')
+        self.assertEqual(error.row_error_details[4]['row_number'], 7)
+        self.assertIn('Remove or merge duplicate alias rows', error.row_error_details[4]['remediation_hint'])
 
     def test_import_csv_requires_expected_headers(self):
         csv_path = f"{self.temp_dir.name}/bad_aliases.csv"
