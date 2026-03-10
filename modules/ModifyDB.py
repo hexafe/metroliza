@@ -28,7 +28,7 @@ class ModifyDB(QDialog):
 
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
-        self.setWindowTitle("Modify database")
+        self.setWindowTitle("Rename saved values")
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 640, 480)
@@ -72,30 +72,40 @@ class ModifyDB(QDialog):
             self.reference_table.setSelectionMode(self._multi_selection_mode())
             self.reference_table.setSelectionBehavior(self._select_rows_behavior())
             self.reference_table.setColumnCount(1)
-            self.reference_table.setHorizontalHeaderLabels(["REFERENCE"])
+            self.reference_table.setHorizontalHeaderLabels(["Reference"])
             self.reference_table.setColumnWidth(0, 200)
 
             self.part_number_table = QTableWidget()
             self.part_number_table.setSelectionMode(self._multi_selection_mode())
             self.part_number_table.setSelectionBehavior(self._select_rows_behavior())
             self.part_number_table.setColumnCount(1)
-            self.part_number_table.setHorizontalHeaderLabels(["SAMPLE NUMBER"])
+            self.part_number_table.setHorizontalHeaderLabels(["Sample number"])
             self.part_number_table.setColumnWidth(0, 200)
 
             self.header_table = QTableWidget()
             self.header_table.setSelectionMode(self._multi_selection_mode())
             self.header_table.setSelectionBehavior(self._select_rows_behavior())
             self.header_table.setColumnCount(1)
-            self.header_table.setHorizontalHeaderLabels(["HEADER"])
+            self.header_table.setHorizontalHeaderLabels(["Header"])
             self.header_table.setColumnWidth(0, 200)
 
+            helper_text = (
+                "Rename values in Reference, Sample number, or Header. "
+                "Select multiple rows in one table and press Enter to rename them at once. "
+                "You will review and confirm all detected changes before they are applied."
+            )
+            label_cls = getattr(QtWidgets, "QLabel", None)
+            self.helper_text_label = label_cls(helper_text) if label_cls is not None else None
+            if self.helper_text_label is not None and hasattr(self.helper_text_label, "setWordWrap"):
+                self.helper_text_label.setWordWrap(True)
+
             # Create buttons for Select DB file, Apply changes, Undo, and Cancel
-            self.select_db_button = QPushButton("Select DB file")
-            self.apply_button = QPushButton("Apply changes")
+            self.select_db_button = QPushButton("Choose database file")
+            self.apply_button = QPushButton("Review and apply changes")
             if not self.db_file:
                 self.apply_button.setEnabled(False)
             self.undo_button = QPushButton("Undo last change")
-            self.cancel_button = QPushButton("Cancel")
+            self.cancel_button = QPushButton("Close")
         except Exception as e:
             self.log_and_exit(e)
 
@@ -107,10 +117,12 @@ class ModifyDB(QDialog):
             layout.addWidget(self.reference_table, 0, 0)
             layout.addWidget(self.part_number_table, 0, 1)
             layout.addWidget(self.header_table, 0, 2)
-            layout.addWidget(self.select_db_button, 1, 0, 1, 3)
-            layout.addWidget(self.apply_button, 2, 0, 1, 1)
-            # layout.addWidget(self.undo_button, 2, 1, 1, 1) #to be re-added after undo functionality correction
-            layout.addWidget(self.cancel_button, 2, 2, 1, 1)
+            if self.helper_text_label is not None:
+                layout.addWidget(self.helper_text_label, 1, 0, 1, 3)
+            layout.addWidget(self.select_db_button, 2, 0, 1, 3)
+            layout.addWidget(self.apply_button, 3, 0, 1, 1)
+            # layout.addWidget(self.undo_button, 3, 1, 1, 1) #to be re-added after undo functionality correction
+            layout.addWidget(self.cancel_button, 3, 2, 1, 1)
 
             self.show()
         except Exception as e:
