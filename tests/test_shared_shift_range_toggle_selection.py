@@ -125,6 +125,7 @@ def _install_qt_stubs():
     qtwidgets.QDialog = _FakeDialog
     qtwidgets.QDateEdit = _FakeWidget
     qtwidgets.QGridLayout = _FakeWidget
+    qtwidgets.QHBoxLayout = _FakeWidget
     qtwidgets.QLabel = _FakeWidget
     qtwidgets.QLineEdit = _FakeWidget
     qtwidgets.QListWidget = _FakeListWidget

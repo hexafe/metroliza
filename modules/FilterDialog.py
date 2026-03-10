@@ -5,6 +5,7 @@ from modules import ui_theme_tokens
 from PyQt6.QtCore import QDate, Qt
 import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtWidgets import(
+    QHBoxLayout,
     QDateEdit,
     QDialog,
     QGridLayout,
@@ -64,8 +65,7 @@ class FilterDialog(QDialog):
             self.header_label = QLabel("HEADER:")
             self.header_list = QListWidget()
             self.header_list.setSelectionMode(self._multi_selection_mode())
-            self.all_headers_list = QListWidget()
-            self.all_headers_list.setSelectionMode(self._multi_selection_mode())
+            self._all_headers = []
             
             self.selected_headers_label = QLabel("SELECTED HEADERS:")
             self.selected_headers_list = QListWidget()
@@ -83,11 +83,18 @@ class FilterDialog(QDialog):
             self.date_to_calendar.setDate(QDate.currentDate())
             self.date_to_calendar.setMinimumWidth(100)
 
-            # Set the default selection for list widgets as "SELECT ALL"
-            self.ax_list.addItem("SELECT ALL")
-            self.reference_list.addItem("SELECT ALL")
-            self.header_list.addItem("SELECT ALL")
-            self.all_headers_list.addItem("SELECT ALL")
+            self.ax_select_all_button = QPushButton("Select all")
+            self.ax_clear_selection_button = QPushButton("Clear")
+            self.reference_select_all_button = QPushButton("Select all")
+            self.reference_clear_selection_button = QPushButton("Clear")
+            self.header_select_all_button = QPushButton("Select all")
+            self.header_clear_selection_button = QPushButton("Clear")
+
+            self.selection_help_label = QLabel(
+                "List filters are combined with AND. Empty or complete list selection means all values. "
+                "Date range is always applied."
+            )
+            self.selection_help_label.setWordWrap(True)
 
             # Create separate QLineEdit widgets for searching in each list widget
             self.ax_search_input = QLineEdit()
@@ -111,26 +118,44 @@ class FilterDialog(QDialog):
     def arrange_layout(self):
         try:
             self.layout = QGridLayout(self)
+
+            ax_controls_layout = QHBoxLayout()
+            ax_controls_layout.addWidget(self.ax_select_all_button)
+            ax_controls_layout.addWidget(self.ax_clear_selection_button)
+
+            reference_controls_layout = QHBoxLayout()
+            reference_controls_layout.addWidget(self.reference_select_all_button)
+            reference_controls_layout.addWidget(self.reference_clear_selection_button)
+
+            header_controls_layout = QHBoxLayout()
+            header_controls_layout.addWidget(self.header_select_all_button)
+            header_controls_layout.addWidget(self.header_clear_selection_button)
+
             self.layout.addWidget(self.ax_label, 0, 0)
             self.layout.addWidget(self.ax_search_input, 1, 0)
-            self.layout.addWidget(self.ax_list, 2, 0)
+            self.layout.addLayout(ax_controls_layout, 2, 0)
+            self.layout.addWidget(self.ax_list, 3, 0)
 
             self.layout.addWidget(self.reference_label, 0, 1)
             self.layout.addWidget(self.reference_search_input, 1, 1)
-            self.layout.addWidget(self.reference_list, 2, 1)
+            self.layout.addLayout(reference_controls_layout, 2, 1)
+            self.layout.addWidget(self.reference_list, 3, 1)
 
             self.layout.addWidget(self.header_label, 0, 2)
             self.layout.addWidget(self.header_search_input, 1, 2)
-            self.layout.addWidget(self.header_list, 2, 2)
+            self.layout.addLayout(header_controls_layout, 2, 2)
+            self.layout.addWidget(self.header_list, 3, 2)
 
             self.layout.addWidget(self.selected_headers_label, 0, 3)
-            self.layout.addWidget(self.selected_headers_list, 2, 3)
+            self.layout.addWidget(self.selected_headers_list, 3, 3)
 
-            self.layout.addWidget(self.date_from_label, 3, 0)
-            self.layout.addWidget(self.date_from_calendar, 3, 1)
+            self.layout.addWidget(self.selection_help_label, 4, 0, 1, 4)
 
-            self.layout.addWidget(self.date_to_label, 4, 0)
-            self.layout.addWidget(self.date_to_calendar, 4, 1)
+            self.layout.addWidget(self.date_from_label, 5, 0)
+            self.layout.addWidget(self.date_from_calendar, 5, 1)
+
+            self.layout.addWidget(self.date_to_label, 6, 0)
+            self.layout.addWidget(self.date_to_calendar, 6, 1)
 
             for row in range(self.layout.rowCount()):
                 for column in range(self.layout.columnCount()):
@@ -140,9 +165,9 @@ class FilterDialog(QDialog):
                         if widget is not None:
                             widget.setFixedWidth(150) if column == 0 else widget.setFixedWidth(150)
 
-            self.layout.addWidget(self.select_beginning_button, 3, 2)
-            self.layout.addWidget(self.select_today_button, 4, 2)
-            self.layout.addWidget(self.apply_button, 6, 0, 1, 3)
+            self.layout.addWidget(self.select_beginning_button, 5, 2)
+            self.layout.addWidget(self.select_today_button, 6, 2)
+            self.layout.addWidget(self.apply_button, 8, 0, 1, 3)
 
             self.show()
         except Exception as e:
@@ -165,6 +190,12 @@ class FilterDialog(QDialog):
             self.select_today_button.clicked.connect(self.select_today_as_date_to)
             self.select_beginning_button.clicked.connect(self.select_beginning_of_time)
             self.apply_button.clicked.connect(self.apply_filters)
+            self.ax_select_all_button.clicked.connect(lambda: self._select_all(self.ax_list))
+            self.ax_clear_selection_button.clicked.connect(lambda: self._clear_selection(self.ax_list))
+            self.reference_select_all_button.clicked.connect(lambda: self._select_all(self.reference_list))
+            self.reference_clear_selection_button.clicked.connect(lambda: self._clear_selection(self.reference_list))
+            self.header_select_all_button.clicked.connect(lambda: self._select_all(self.header_list))
+            self.header_clear_selection_button.clicked.connect(lambda: self._clear_selection(self.header_list))
         except Exception as e:
             self.log_and_exit(e)
 
@@ -213,6 +244,23 @@ class FilterDialog(QDialog):
         self.update_selected_headers()
         return True
 
+    @staticmethod
+    def _is_all_or_empty_selection(selected_count, total_count):
+        return total_count == 0 or selected_count == 0 or selected_count == total_count
+
+    def _select_all(self, list_widget):
+        if list_widget is None:
+            return
+
+        for row in range(list_widget.count()):
+            item = list_widget.item(row)
+            if item is not None and not item.isHidden():
+                item.setSelected(True)
+
+    def _clear_selection(self, list_widget):
+        if list_widget is not None:
+            list_widget.clearSelection()
+
     def keyPressEvent(self, event):
         try:
             pressed_key = event.key() if event is not None and hasattr(event, "key") else None
@@ -244,11 +292,9 @@ class FilterDialog(QDialog):
                 self.ax_list.addItem(item)
 
             header_values = execute_with_retry(self.db_file, "SELECT DISTINCT HEADER FROM MEASUREMENTS;")
-            for value in header_values:
-                header_item = QListWidgetItem(value[0])
-                all_headers_item = QListWidgetItem(value[0])
-                self.header_list.addItem(header_item)
-                self.all_headers_list.addItem(all_headers_item)
+            self._all_headers = [value[0] for value in header_values if value[0] is not None]
+            for header_value in self._all_headers:
+                self.header_list.addItem(QListWidgetItem(header_value))
 
             reference_values = execute_with_retry(self.db_file, "SELECT DISTINCT REFERENCE FROM REPORTS;")
             for value in reference_values:
@@ -268,9 +314,14 @@ class FilterDialog(QDialog):
     def on_reference_selection_changed(self):
         try:
             selected_references = [item.text() for item in self.reference_list.selectedItems()]
+            selected_headers = {item.text() for item in self.header_list.selectedItems()}
             self.header_list.clear()
 
-            if selected_references and "SELECT ALL" not in selected_references:
+            all_reference_count = self.reference_list.count()
+            selected_reference_count = len(selected_references)
+            should_show_all_headers = self._is_all_or_empty_selection(selected_reference_count, all_reference_count)
+
+            if not should_show_all_headers:
                 reference_values = "','".join(selected_references)
                 query = f"""
                     SELECT DISTINCT HEADER FROM MEASUREMENTS 
@@ -280,11 +331,15 @@ class FilterDialog(QDialog):
                 header_values = execute_with_retry(self.db_file, query)
                 for value in header_values:
                     item = QListWidgetItem(value[0])
+                    item.setSelected(value[0] in selected_headers)
                     self.header_list.addItem(item)
             else:
-                for row in range(self.all_headers_list.count()):
-                    item = self.all_headers_list.item(row)
-                    self.header_list.addItem(item.text())
+                for header_value in self._all_headers:
+                    item = QListWidgetItem(header_value)
+                    item.setSelected(header_value in selected_headers)
+                    self.header_list.addItem(item)
+
+            self.update_selected_headers()
         except Exception as e:
             self.log_and_exit(e)
                 
@@ -341,15 +396,15 @@ class FilterDialog(QDialog):
                 WHERE 1=1
                 """
 
-            if ax_selected_items and "SELECT ALL" not in ax_selected_items:
+            if not self._is_all_or_empty_selection(len(ax_selected_items), self.ax_list.count()):
                 ax_values = "','".join(ax_selected_items)
                 query += f" AND MEASUREMENTS.AX IN ('{ax_values}')"
 
-            if header_selected_items and "SELECT ALL" not in header_selected_items:
+            if not self._is_all_or_empty_selection(len(header_selected_items), self.header_list.count()):
                 header_values = "','".join(header_selected_items)
                 query += f" AND MEASUREMENTS.HEADER IN ('{header_values}')"
 
-            if reference_selected_items and "SELECT ALL" not in reference_selected_items:
+            if not self._is_all_or_empty_selection(len(reference_selected_items), self.reference_list.count()):
                 reference_values = "','".join(reference_selected_items)
                 query += f" AND REPORTS.REFERENCE IN ('{reference_values}')"
 
