@@ -1,10 +1,10 @@
 # Codex Instructions — Implement Group Analysis Rebuild Step by Step
 
-**Suggested repo path:** `docs/codex_group_analysis_instructions.md`
+**Archived repo path:** `docs/archive/2026/group_analysis_codex_implementation_instructions.md`
 
 This document tells Codex how to implement the Group Analysis rebuild using the repository plan in:
 
-- `docs/group_analysis_spec_and_implementation_plan.md`
+- `docs/archive/2026/group_analysis_spec_and_implementation_plan.md`
 
 The goal is to let Codex work in small, reviewable steps while staying aligned with the approved specification.
 
@@ -12,7 +12,7 @@ The goal is to let Codex work in small, reviewable steps while staying aligned w
 
 ## 1. Core instructions for Codex
 
-Use `docs/group_analysis_spec_and_implementation_plan.md` as the source of truth.
+Use `docs/archive/2026/group_analysis_spec_and_implementation_plan.md` as the source of truth.
 
 Before changing code:
 
@@ -49,7 +49,7 @@ Codex should implement the feature in the following order.
 
 Read and inspect:
 
-- `docs/group_analysis_spec_and_implementation_plan.md`
+- `docs/archive/2026/group_analysis_spec_and_implementation_plan.md`
 - `modules/DataGrouping.py`
 - `modules/ExportDialog.py`
 - `modules/export_dialog_service.py`
@@ -185,7 +185,7 @@ In the last PR for the roadmap cycle, update Group Analysis docs with a compact 
 
 Preferred location:
 
-- `docs/group_analysis/group_analysis_spec_and_implementation_plan.md` under a dedicated status subsection.
+- `docs/archive/2026/group_analysis_spec_and_implementation_plan.md` under a dedicated status subsection.
 
 Optional mirror:
 
@@ -225,7 +225,7 @@ The user can drive Codex in small increments with prompts like these.
 ### Prompt A — Planning only
 
 ```text
-Read docs/group_analysis_spec_and_implementation_plan.md and inspect the current repository files relevant to Group Analysis.
+Read docs/archive/2026/group_analysis_spec_and_implementation_plan.md and inspect the current repository files relevant to Group Analysis.
 Summarize the implementation plan in repo-specific terms and create a TODO checklist aligned with the phases in the spec.
 Do not change code yet.
 ```
@@ -233,7 +233,7 @@ Do not change code yet.
 ### Prompt B — Contracts and UI only
 
 ```text
-Implement only Step 2 and Step 3 from docs/codex_group_analysis_instructions.md.
+Implement only Step 2 and Step 3 from docs/archive/2026/group_analysis_codex_implementation_instructions.md.
 Update contracts, export request plumbing, and ExportDialog UI for Group Analysis.
 Do not implement service, writer, or ExportDataThread integration yet.
 At the end, summarize what changed and what remains.
@@ -242,8 +242,8 @@ At the end, summarize what changed and what remains.
 ### Prompt C — Service layer only
 
 ```text
-Implement only Step 5 from docs/codex_group_analysis_instructions.md.
-Create the new Group Analysis service layer based strictly on docs/group_analysis_spec_and_implementation_plan.md.
+Implement only Step 5 from docs/archive/2026/group_analysis_codex_implementation_instructions.md.
+Create the new Group Analysis service layer based strictly on docs/archive/2026/group_analysis_spec_and_implementation_plan.md.
 Do not integrate it into ExportDataThread yet.
 Add or update tests for the new helper logic if practical.
 ```
@@ -251,7 +251,7 @@ Add or update tests for the new helper logic if practical.
 ### Prompt D — Writer only
 
 ```text
-Implement only Step 6 from docs/codex_group_analysis_instructions.md.
+Implement only Step 6 from docs/archive/2026/group_analysis_codex_implementation_instructions.md.
 Create the new worksheet writer for Group Analysis and Diagnostics.
 Keep it independent from the legacy all-in-one writer.
 Do not wire it into export flow yet.
@@ -260,7 +260,7 @@ Do not wire it into export flow yet.
 ### Prompt E — Export integration only
 
 ```text
-Implement only Step 7 from docs/codex_group_analysis_instructions.md.
+Implement only Step 7 from docs/archive/2026/group_analysis_codex_implementation_instructions.md.
 Wire the new Group Analysis service and writer into ExportDataThread.
 Preserve normal export behavior when Group Analysis is off.
 At the end, summarize the integration points and remaining test gaps.
@@ -269,7 +269,7 @@ At the end, summarize the integration points and remaining test gaps.
 ### Prompt F — Tests and final review
 
 ```text
-Implement only Step 8 and Step 9 from docs/codex_group_analysis_instructions.md.
+Implement only Step 8 and Step 9 from docs/archive/2026/group_analysis_codex_implementation_instructions.md.
 Add or update tests, review touched docs/comments/docstrings, and provide a final implementation summary with trade-offs and follow-up suggestions.
 ```
 
@@ -280,11 +280,11 @@ Add or update tests, review touched docs/comments/docstrings, and provide a fina
 If the user prefers a single starting prompt that first creates the planning artifacts before implementation, use this:
 
 ```text
-Start by reading docs/group_analysis_spec_and_implementation_plan.md.
+Start by reading docs/archive/2026/group_analysis_spec_and_implementation_plan.md.
 Inspect the current repository state for all files relevant to Group Analysis.
 As your first action, produce or update repository documentation as needed so there is a clear implementation plan and TODO checklist aligned with that spec.
 Do not start coding until that planning step is complete and summarized.
-After that, proceed step by step according to docs/codex_group_analysis_instructions.md, beginning with contracts and export request plumbing.
+After that, proceed step by step according to docs/archive/2026/group_analysis_codex_implementation_instructions.md, beginning with contracts and export request plumbing.
 At each step, summarize what changed, what remains, and any deviations or risks.
 Do not patch the legacy all-in-one Group Comparison sheet into another bloated design.
 ```
