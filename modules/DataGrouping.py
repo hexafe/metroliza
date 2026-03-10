@@ -423,9 +423,6 @@ class DataGrouping(QDialog):
                 f" background-color: {highlight_name};"
                 f" color: {selected_text_color};"
                 " }"
-                " QListWidget::item:!selected {"
-                " background-color: transparent;"
-                " }"
             )
 
     def _compute_group_key_for_df(self, df):
