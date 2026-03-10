@@ -232,12 +232,12 @@ class ExportDialog(QDialog):
             self.select_db_label.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
             self.select_db_button.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
 
-            self.select_filter_label = QLabel("Select filters (optional): not applied")
+            self.select_filter_label = QLabel("Filters: none")
             self.filter_button = QPushButton("Filter")
             self.filter_button.clicked.connect(self.open_filter_window)
             self.filter_button.setToolTip("Use this button to filter data from the database")
             
-            self.select_group_label = QLabel("Group data (optional): not applied")
+            self.select_group_label = QLabel("Grouping: none")
             self.group_button = QPushButton("Group")
             self.group_button.clicked.connect(self.open_grouping_window)
             self.group_button.setToolTip("Use this button to group data")
@@ -389,19 +389,40 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
             self.summary_plot_scale.textChanged.connect(self.validate_plot_scale_input)
             
-            # Add a QCheckBox for "Hide OK results?"
-            self.hide_ok_results_checkbox = QCheckBox("Hide OK results?")
+            # Hide passing columns in measurement sheets
+            self.hide_ok_results_checkbox = QCheckBox("Hide passing (OK) columns in measurement sheets")
             self.hide_ok_results_checkbox.setChecked(False)
-            self.hide_ok_results_checkbox.setToolTip("When enabled, only OK results will be visible (columns with OK results will be hidden, not deleted)")
+            self.hide_ok_results_checkbox.setToolTip(
+                "When enabled, measurement-sheet columns where all values are within tolerance "
+                "are hidden (data remains in the workbook)."
+            )
+
+            self.scope_help_label = QLabel(
+                "Choose which rows are included in the export using optional filters and grouping."
+            )
+            self.scope_help_label.setWordWrap(True)
+            self.scope_help_label.setStyleSheet("color: #666;")
+
+            self.destination_help_label = QLabel(
+                "Select the input database and local Excel destination. Optional Google Sheets conversion can also be enabled."
+            )
+            self.destination_help_label.setWordWrap(True)
+            self.destination_help_label.setStyleSheet("color: #666;")
+
+            self.advanced_options_help_label = QLabel(
+                "Tune output profile, chart settings, and workbook formatting options."
+            )
+            self.advanced_options_help_label.setWordWrap(True)
+            self.advanced_options_help_label.setStyleSheet("color: #666;")
             
-            self.advanced_options_container = QWidget()
-            advanced_options_layout = QVBoxLayout(self.advanced_options_container)
-            advanced_options_layout.setContentsMargins(0, 0, 0, 0)
-            advanced_options_layout.addWidget(self.violin_plot_min_samplesize_label)
-            advanced_options_layout.addWidget(self.violin_plot_min_samplesize)
-            advanced_options_layout.addWidget(self.summary_plot_scale_label)
-            advanced_options_layout.addWidget(self.summary_plot_scale)
-            advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
+            self.advanced_options_layout = QVBoxLayout()
+            self.advanced_options_layout.setContentsMargins(0, 0, 0, 0)
+            self.advanced_options_layout.setSpacing(6)
+            self.advanced_options_layout.addWidget(self.violin_plot_min_samplesize_label)
+            self.advanced_options_layout.addWidget(self.violin_plot_min_samplesize)
+            self.advanced_options_layout.addWidget(self.summary_plot_scale_label)
+            self.advanced_options_layout.addWidget(self.summary_plot_scale)
+            self.advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
 
             self.apply_selected_preset()
         except Exception as e:
@@ -411,13 +432,13 @@ class ExportDialog(QDialog):
         try:
             """Initialize the layout"""
             self.layout = QVBoxLayout()
-            self.layout.setSpacing(10)
+            self.layout.setSpacing(12)
 
             def build_section_widget(title, content_layout):
                 section_widget = QWidget()
                 section_layout = QVBoxLayout(section_widget)
                 section_layout.setContentsMargins(0, 0, 0, 0)
-                section_layout.setSpacing(4)
+                section_layout.setSpacing(6)
 
                 section_title = QLabel(title)
                 section_title.setStyleSheet("font-weight: bold;")
@@ -428,56 +449,65 @@ class ExportDialog(QDialog):
                 section_layout.addWidget(content_widget)
                 return section_widget
 
-            source_target_layout = QGridLayout()
-            source_target_layout.setContentsMargins(0, 0, 0, 0)
-            source_target_layout.addWidget(self.select_db_label, 0, 0)
-            source_target_layout.addWidget(self.database_text_label, 1, 0)
-            source_target_layout.addWidget(self.select_db_button, 2, 0)
-            source_target_layout.addWidget(self.select_excel_label, 3, 0)
-            source_target_layout.addWidget(self.excel_file_text_label, 4, 0)
-            source_target_layout.addWidget(self.select_excel_button, 5, 0)
+            scope_layout = QGridLayout()
+            scope_layout.setContentsMargins(0, 0, 0, 0)
+            scope_layout.setVerticalSpacing(6)
+            scope_layout.addWidget(self.scope_help_label, 0, 0, 1, 2)
+            scope_layout.addWidget(self.select_filter_label, 1, 0)
+            scope_layout.addWidget(self.filter_button, 1, 1)
+            scope_layout.addWidget(self.select_group_label, 2, 0)
+            scope_layout.addWidget(self.group_button, 2, 1)
 
-            data_scope_layout = QGridLayout()
-            data_scope_layout.setContentsMargins(0, 0, 0, 0)
-            data_scope_layout.addWidget(self.select_filter_label, 0, 0)
-            data_scope_layout.addWidget(self.filter_button, 1, 0)
-            data_scope_layout.addWidget(self.select_group_label, 2, 0)
-            data_scope_layout.addWidget(self.group_button, 3, 0)
+            destination_layout = QGridLayout()
+            destination_layout.setContentsMargins(0, 0, 0, 0)
+            destination_layout.setVerticalSpacing(6)
+            destination_layout.addWidget(self.destination_help_label, 0, 0, 1, 2)
+            destination_layout.addWidget(self.select_db_label, 1, 0)
+            destination_layout.addWidget(self.select_db_button, 1, 1)
+            destination_layout.addWidget(self.database_text_label, 2, 0, 1, 2)
+            destination_layout.addWidget(self.select_excel_label, 3, 0)
+            destination_layout.addWidget(self.select_excel_button, 3, 1)
+            destination_layout.addWidget(self.excel_file_text_label, 4, 0, 1, 2)
+            destination_layout.addWidget(self.export_target_label, 5, 0)
+            destination_layout.addWidget(self.include_google_sheets_checkbox, 5, 1)
+            destination_layout.addWidget(self.google_sheets_note_label, 6, 0, 1, 2)
 
             report_profile_layout = QGridLayout()
             report_profile_layout.setContentsMargins(0, 0, 0, 0)
-            report_profile_layout.addWidget(self.preset_label, 0, 0)
+            report_profile_layout.setVerticalSpacing(6)
+            report_profile_layout.addWidget(self.advanced_options_help_label, 0, 0, 1, 2)
+            report_profile_layout.addWidget(self.preset_label, 1, 0)
             preset_selector_layout = QHBoxLayout()
             preset_selector_layout.setContentsMargins(0, 0, 0, 0)
             preset_selector_layout.addWidget(self.preset_combobox)
-            report_profile_layout.addLayout(preset_selector_layout, 0, 1)
+            report_profile_layout.addLayout(preset_selector_layout, 1, 1)
+            report_profile_layout.addWidget(self.export_type_label, 2, 0)
+            report_profile_layout.addWidget(self.export_type_combobox, 2, 1)
+            report_profile_layout.addWidget(self.sort_measurements_label, 3, 0)
+            report_profile_layout.addWidget(self.sort_measurements_combobox, 3, 1)
 
-            report_profile_layout.addWidget(self.export_target_label, 2, 0)
-            report_profile_layout.addWidget(self.include_google_sheets_checkbox, 2, 1)
-            report_profile_layout.addWidget(self.google_sheets_note_label, 3, 1)
-
-            report_profile_layout.addWidget(self.export_type_label, 4, 0)
-            report_profile_layout.addWidget(self.export_type_combobox, 4, 1)
-
-            report_profile_layout.addWidget(self.sort_measurements_label, 5, 0)
-            report_profile_layout.addWidget(self.sort_measurements_combobox, 5, 1)
+            advanced_layout = QVBoxLayout()
+            advanced_layout.setContentsMargins(0, 0, 0, 0)
+            advanced_layout.setSpacing(8)
+            advanced_layout.addLayout(report_profile_layout)
 
             group_analysis_layout = QGridLayout()
             group_analysis_layout.setContentsMargins(0, 0, 0, 0)
+            group_analysis_layout.setVerticalSpacing(6)
             group_analysis_layout.addWidget(self.group_analysis_level_label, 0, 0)
             group_analysis_layout.addWidget(self.group_analysis_level_combobox, 0, 1)
             group_analysis_layout.addWidget(self.group_analysis_scope_label, 1, 0)
             group_analysis_layout.addWidget(self.group_analysis_scope_combobox, 1, 1)
+            advanced_layout.addLayout(group_analysis_layout)
+            advanced_layout.addLayout(self.advanced_options_layout)
 
             action_layout = QVBoxLayout()
             action_layout.setContentsMargins(0, 0, 0, 0)
             action_layout.addWidget(self.export_button)
 
-            self.layout.addWidget(build_section_widget("Source / target files", source_target_layout))
-            self.layout.addWidget(build_section_widget("Data scope", data_scope_layout))
-            self.layout.addWidget(build_section_widget("Report profile", report_profile_layout))
-            self.layout.addWidget(build_section_widget("Group analysis", group_analysis_layout))
-            self.layout.addWidget(build_section_widget("Advanced options", self.advanced_options_container.layout()))
+            self.layout.addWidget(build_section_widget("Scope", scope_layout))
+            self.layout.addWidget(build_section_widget("Destination", destination_layout))
+            self.layout.addWidget(build_section_widget("Advanced options", advanced_layout))
             self.layout.addWidget(build_section_widget("Primary action", action_layout))
 
             self.setLayout(self.layout)
@@ -609,7 +639,7 @@ class ExportDialog(QDialog):
     def set_filter_applied(self):
         try:
             # Update filter label in export window
-            self.select_filter_label.setText("Select filters (optional): applied")
+            self.select_filter_label.setText("Filters: applied")
         except Exception as e:
             self.log_and_exit(e)
     
@@ -617,9 +647,9 @@ class ExportDialog(QDialog):
         try:
             # Update filter label in export window
             if applied:
-                self.select_group_label.setText("Group data (optional): applied")
+                self.select_group_label.setText("Grouping: applied")
             else:
-                self.select_group_label.setText("Group data (optional): not applied")
+                self.select_group_label.setText("Grouping: none")
         except Exception as e:
             self.log_and_exit(e)
 
