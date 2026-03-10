@@ -45,7 +45,7 @@ class CharacteristicAliasImportValidationError(ValueError):
         self.invalid_rows = len(self.row_error_details) or len(self.row_errors)
         self.valid_rows = max(0, self.total_rows_processed - self.invalid_rows)
         if summary is None:
-            summary = 'CSV import contains invalid mapping rows.'
+            summary = 'CSV import contains invalid name match rows.'
         self.summary = str(summary)
         message_lines = [str(summary)]
         if self.row_errors:
@@ -117,7 +117,7 @@ def _validate_alias_mapping_payload(
                 code='missing_alias_name',
                 category='missing_required_field',
                 remediation_hint='Provide a non-empty alias_name value.',
-                message=f'alias_name is required at row {row_number}',
+                message=f'Name match is required at row {row_number}',
             )
         )
 
@@ -128,8 +128,8 @@ def _validate_alias_mapping_payload(
                 field='canonical_name',
                 code='missing_canonical_name',
                 category='missing_required_field',
-                remediation_hint='Provide the canonical_name to map this alias to.',
-                message=f'canonical_name is required at row {row_number}',
+                remediation_hint='Provide the common name for this name match.',
+                message=f'Common name is required at row {row_number}',
             )
         )
 
@@ -140,8 +140,8 @@ def _validate_alias_mapping_payload(
                 field='scope_type',
                 code='invalid_scope_type',
                 category='invalid_value',
-                remediation_hint="Use scope_type 'global' or 'reference'.",
-                message=f'scope_type must be one of: global, reference at row {row_number}',
+                remediation_hint="Use apply to value 'global' or 'reference'.",
+                message=f'Apply to must be one of: global, reference at row {row_number}',
             )
         )
     elif scope_type == 'reference' and not scope_value:
@@ -151,8 +151,8 @@ def _validate_alias_mapping_payload(
                 field='scope_value',
                 code='reference_scope_requires_scope_value',
                 category='scope_requirements',
-                remediation_hint='Set scope_value for reference-scoped aliases.',
-                message=f'scope_value is required for reference scope at row {row_number}',
+                remediation_hint='Set the reference value when apply to is reference.',
+                message=f'Reference is required when apply to is reference at row {row_number}',
             )
         )
 
@@ -213,7 +213,7 @@ def normalize_alias_scope(scope_type: str, scope_value: str | None) -> tuple[str
 
     normalized_scope_value = str(scope_value or '').strip() or None
     if normalized_scope_type == 'reference' and not normalized_scope_value:
-        raise ValueError('scope_value is required for reference scope')
+        raise ValueError('Reference is required when apply to is reference')
 
     if normalized_scope_type == 'global':
         return normalized_scope_type, None
@@ -350,7 +350,7 @@ def _normalize_alias_mapping_payload(payload: dict[str, str | None], *, row_numb
 
     if not canonical_name:
         suffix = f' at row {row_number}' if row_number is not None else ''
-        raise ValueError(f'canonical_name is required{suffix}')
+        raise ValueError(f'Common name is required{suffix}')
 
     try:
         normalized_scope_type, normalized_scope_value = normalize_alias_scope(scope_type, scope_value)
@@ -523,9 +523,9 @@ def import_characteristic_aliases_csv(
                         field='alias_name',
                         code='duplicate_key_collision',
                         category='duplicate_collision',
-                        remediation_hint='Remove or merge duplicate alias rows with the same alias_name + scope.',
+                        remediation_hint='Remove or merge duplicate name match rows with the same alias_name + apply to key.',
                         message=(
-                            f'duplicate alias/scope key for "{alias_name}" ({scope_type}{scope_suffix}) '
+                            f'duplicate name match/apply to key for "{alias_name}" ({scope_type}{scope_suffix}) '
                             f'at row {index}; first seen at row {existing_row_number}'
                         ),
                     )
@@ -539,7 +539,7 @@ def import_characteristic_aliases_csv(
         row_errors = [str(detail.get('message') or '').strip() for detail in row_error_details if detail.get('message')]
         raise CharacteristicAliasImportValidationError(
             row_errors,
-            summary='CSV import failed validation. Fix the row issues below and retry.',
+            summary='CSV import failed validation. Fix the name match row issues below and retry.',
             row_error_details=row_error_details,
             total_rows_processed=(len(rows) + len({int(detail['row_number']) for detail in row_error_details})),
         )
@@ -571,7 +571,7 @@ def upsert_characteristic_alias(
 
     normalized_canonical_name = str(canonical_name or '').strip()
     if not normalized_canonical_name:
-        raise ValueError('canonical_name is required')
+        raise ValueError('Common name is required')
 
     normalized_scope_type, normalized_scope_value = normalize_alias_scope(scope_type, scope_value)
 

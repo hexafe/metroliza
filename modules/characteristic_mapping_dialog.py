@@ -124,10 +124,10 @@ class CharacteristicAliasEditorDialog(QDialog):
         layout = QGridLayout(self)
 
         row = 0
-        layout.addWidget(QLabel('Name found in report'), row, 0)
+        layout.addWidget(QLabel('Name match'), row, 0)
         layout.addWidget(self.alias_input, row, 1)
         row += 1
-        alias_help = QLabel('Enter the characteristic name exactly as it appears in the report.')
+        alias_help = QLabel('Enter the name match exactly as it appears in the report.')
         alias_help.setWordWrap(True)
         layout.addWidget(alias_help, row, 0, 1, 2)
 
@@ -144,8 +144,8 @@ class CharacteristicAliasEditorDialog(QDialog):
         layout.addWidget(self.apply_to_combo, row, 1)
         row += 1
         apply_help = QLabel(
-            'Choose “All references” if this name should always mean the same characteristic. '
-            'Choose “One reference only” if this match is valid only for one specific reference.'
+            'Choose “All references” if this name match should always map to the same common name. '
+            'Choose “One reference only” if this name match is valid only for one specific reference.'
         )
         apply_help.setWordWrap(True)
         layout.addWidget(apply_help, row, 0, 1, 2)
@@ -155,14 +155,14 @@ class CharacteristicAliasEditorDialog(QDialog):
         layout.addWidget(self.reference_label, row, 0)
         layout.addWidget(self.reference_input, row, 1)
         row += 1
-        self.reference_help = QLabel('This match will only be used for the selected reference.')
+        self.reference_help = QLabel('This name match will only be used for the selected reference.')
         self.reference_help.setWordWrap(True)
         layout.addWidget(self.reference_help, row, 0, 1, 2)
 
         row += 1
         example_help = QLabel(
             'Example:\nIf one report uses “TP GAP” and another uses “AA-C11 - TP”, '
-            'you can set “TP GAP” to be treated as “AA-C11 - TP”.'
+            'you can set the name match “TP GAP” to common name “AA-C11 - TP”.'
         )
         example_help.setWordWrap(True)
         layout.addWidget(example_help, row, 0, 1, 2)
@@ -206,7 +206,7 @@ class CharacteristicAliasEditorDialog(QDialog):
         scope_value = str(self.reference_input.text() or '').strip() or None
 
         if not alias_name:
-            QMessageBox.warning(self, 'Validation error', 'Please enter the name found in the report.')
+            QMessageBox.warning(self, 'Validation error', 'Please enter a name match.')
             return
 
         if not common_name:
@@ -252,7 +252,7 @@ class CharacteristicMappingDialog(QDialog):
         self.db_file = db_file
 
         self.subtitle_label = QLabel(
-            'Use this tool when the same characteristic appears under different names in different reports or references.'
+            'Use this tool to map each name match to a common name, then choose apply to as all references or one reference only.'
         )
         self.subtitle_label.setWordWrap(True)
 
@@ -261,10 +261,10 @@ class CharacteristicMappingDialog(QDialog):
         self.db_path_input.setReadOnly(True)
         self.select_db_button = QPushButton('Browse DB')
 
-        self.table_title_label = QLabel('Saved name matches')
+        self.table_title_label = QLabel('Saved name match entries')
         self.empty_state_label = QLabel(
             'No name matches have been added yet.\n'
-            'Add a match if the same characteristic appears under different names in your reports.'
+            'Add a name match and common name, then choose apply to and reference as needed.'
         )
         self.empty_state_label.setWordWrap(True)
 
@@ -358,7 +358,7 @@ class CharacteristicMappingDialog(QDialog):
             alias_rows = fetch_all_characteristic_aliases(self.db_file)
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Load error', f'Could not load name matches: {exc}')
+            QMessageBox.critical(self, 'Load error', f'Could not load name match entries: {exc}')
             return
 
         self.alias_table.setRowCount(len(alias_rows))
@@ -412,7 +412,11 @@ class CharacteristicMappingDialog(QDialog):
                 and (row.get('scope_value') or None) == (payload.get('scope_value') or None)
                 for row in existing
             ):
-                QMessageBox.warning(self, 'Validation error', 'This name match already exists.')
+                QMessageBox.warning(
+                    self,
+                    'Validation error',
+                    'This name match already exists for the selected apply to/reference combination.',
+                )
                 return
 
             upsert_characteristic_alias(
@@ -425,7 +429,7 @@ class CharacteristicMappingDialog(QDialog):
             self.load_aliases()
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Save error', f'Could not save name match: {exc}')
+            QMessageBox.critical(self, 'Save error', f'Could not save name match entry: {exc}')
 
     def edit_mapping(self):
         selected = self._selected_mapping()
@@ -454,7 +458,11 @@ class CharacteristicMappingDialog(QDialog):
                 )
                 for row in existing
             ):
-                QMessageBox.warning(self, 'Validation error', 'This name match already exists.')
+                QMessageBox.warning(
+                    self,
+                    'Validation error',
+                    'This name match already exists for the selected apply to/reference combination.',
+                )
                 return
 
             upsert_characteristic_alias(
@@ -478,7 +486,7 @@ class CharacteristicMappingDialog(QDialog):
             self.load_aliases()
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Save error', f'Could not update name match: {exc}')
+            QMessageBox.critical(self, 'Save error', f'Could not update name match entry: {exc}')
 
     def delete_mapping(self):
         selected = self._selected_mapping()
@@ -489,7 +497,7 @@ class CharacteristicMappingDialog(QDialog):
             self,
             'Delete name match',
             'Are you sure you want to delete this name match?\n\n'
-            'This will stop treating the selected report name as the chosen common name.',
+            'This will stop applying the selected name match to the chosen common name/reference.',
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -506,7 +514,7 @@ class CharacteristicMappingDialog(QDialog):
             self.load_aliases()
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Delete error', f'Could not delete name match: {exc}')
+            QMessageBox.critical(self, 'Delete error', f'Could not delete name match entry: {exc}')
 
     def _ensure_db_file_selected(self) -> bool:
         if _has_selected_db_file(self.db_file):
@@ -545,7 +553,7 @@ class CharacteristicMappingDialog(QDialog):
         valid_rows = max(0, processed - invalid_rows)
 
         summary_lines = [
-            'Could not import mappings due to CSV validation errors.',
+            'Could not import name match entries due to CSV validation errors.',
             f'Total rows processed: {processed}',
             f'Valid rows: {valid_rows}',
             f'Invalid rows: {invalid_rows}',
@@ -557,8 +565,8 @@ class CharacteristicMappingDialog(QDialog):
         summary_lines.append('')
         summary_lines.append('What to fix first:')
         if duplicate_conflicts:
-            summary_lines.append('  1) Remove duplicate alias/scope key rows to keep imports atomic and deterministic.')
-            summary_lines.append('  2) For each duplicate key, choose one scope strategy: global or reference-only.')
+            summary_lines.append('  1) Remove duplicate name match/apply to key rows to keep imports atomic and deterministic.')
+            summary_lines.append('  2) For each duplicate key, choose one apply to strategy: all references or one reference only.')
         summary_lines.append('  3) Fix missing/invalid field values listed below and retry import.')
 
         summary_lines.append('')
@@ -603,7 +611,7 @@ class CharacteristicMappingDialog(QDialog):
 
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            'Import name matches',
+            'Import name match entries',
             str(self.db_file or ''),
             'CSV files (*.csv);;All files (*)',
         )
@@ -614,7 +622,7 @@ class CharacteristicMappingDialog(QDialog):
             ensure_characteristic_alias_schema(self.db_file)
             imported_count = import_characteristic_aliases_csv(self.db_file, filename)
             self.load_aliases()
-            QMessageBox.information(self, 'Import complete', f'Imported {imported_count} mapping row(s).')
+            QMessageBox.information(self, 'Import complete', f'Imported {imported_count} name match row(s).')
         except CharacteristicAliasImportValidationError as exc:
             CustomLogger(exc, reraise=False)
             message, full_report = self._build_import_validation_summary(exc, preview_limit=10)
@@ -630,7 +638,7 @@ class CharacteristicMappingDialog(QDialog):
                 save_response = QMessageBox.question(
                     self,
                     'Save remediation report',
-                    'Save a remediation CSV report for these row issues?',
+                    'Save a remediation CSV report for these name match row issues?',
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.Yes,
                 )
@@ -647,14 +655,14 @@ class CharacteristicMappingDialog(QDialog):
                         QMessageBox.information(
                             self,
                             'Report saved',
-                            f'Saved remediation report with {exported_rows} row issue(s).',
+                            f'Saved remediation report with {exported_rows} name match row issue(s).',
                         )
         except CharacteristicAliasCsvSchemaError as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(
                 self,
                 'Import error',
-                'Could not import mappings because the CSV header row does not match the expected schema.\n\n'
+                'Could not import name match entries because the CSV header row does not match the expected schema.\n\n'
                 f"Required columns: {', '.join(exc.required_columns)}\n"
                 f"Detected columns: {', '.join(exc.detected_columns) if exc.detected_columns else '(none)'}\n\n"
                 'Use this exact header line (same names and order):\n'
@@ -662,7 +670,7 @@ class CharacteristicMappingDialog(QDialog):
             )
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Import error', f'Could not import mappings: {exc}')
+            QMessageBox.critical(self, 'Import error', f'Could not import name match entries: {exc}')
 
     def export_mappings(self):
         if not self._ensure_db_file_selected():
@@ -670,7 +678,7 @@ class CharacteristicMappingDialog(QDialog):
 
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            'Export name matches',
+            'Export name match entries',
             'characteristic_aliases.csv',
             'CSV files (*.csv);;All files (*)',
         )
@@ -680,7 +688,7 @@ class CharacteristicMappingDialog(QDialog):
         try:
             ensure_characteristic_alias_schema(self.db_file)
             exported_count = export_characteristic_aliases_csv(self.db_file, filename)
-            QMessageBox.information(self, 'Export complete', f'Exported {exported_count} mapping row(s).')
+            QMessageBox.information(self, 'Export complete', f'Exported {exported_count} name match row(s).')
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Export error', f'Could not export mappings: {exc}')
+            QMessageBox.critical(self, 'Export error', f'Could not export name match entries: {exc}')

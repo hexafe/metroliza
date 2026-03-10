@@ -33,7 +33,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'scope_type must be one of'):
             normalize_alias_scope('local', 'x')
 
-        with self.assertRaisesRegex(ValueError, 'scope_value is required'):
+        with self.assertRaisesRegex(ValueError, 'Reference is required when apply to is reference'):
             normalize_alias_scope('reference', None)
 
     def test_ensure_schema_is_idempotent_and_preserves_existing_rows(self):
@@ -83,7 +83,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
                 scope_type='global',
             )
 
-        with self.assertRaisesRegex(ValueError, 'canonical_name is required'):
+        with self.assertRaisesRegex(ValueError, 'Common name is required'):
             upsert_characteristic_alias(
                 self.db_path,
                 alias_name='AX-1',
@@ -92,7 +92,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
             )
 
     def test_validation_reference_scope_requires_scope_value_global_does_not(self):
-        with self.assertRaisesRegex(ValueError, 'scope_value is required for reference scope'):
+        with self.assertRaisesRegex(ValueError, 'Reference is required when apply to is reference'):
             upsert_characteristic_alias(
                 self.db_path,
                 alias_name='AX-2',
@@ -309,11 +309,11 @@ class TestCharacteristicAliasService(unittest.TestCase):
         error = ctx.exception
         self.assertEqual(error.total_rows_processed, 6)
         self.assertEqual(len(error.row_errors), 5)
-        self.assertIn('alias_name is required at row 2', error.row_errors[0])
-        self.assertIn('canonical_name is required at row 3', error.row_errors[1])
-        self.assertIn('scope_type must be one of: global, reference at row 4', error.row_errors[2])
-        self.assertIn('scope_value is required for reference scope at row 5', error.row_errors[3])
-        self.assertIn('duplicate alias/scope key for "AX-4" (global) at row 7; first seen at row 6', error.row_errors[4])
+        self.assertIn('Name match is required at row 2', error.row_errors[0])
+        self.assertIn('Common name is required at row 3', error.row_errors[1])
+        self.assertIn('Apply to must be one of: global, reference at row 4', error.row_errors[2])
+        self.assertIn('Reference is required when apply to is reference at row 5', error.row_errors[3])
+        self.assertIn('duplicate name match/apply to key for "AX-4" (global) at row 7; first seen at row 6', error.row_errors[4])
 
         self.assertEqual(len(error.row_error_details), 5)
         self.assertEqual(error.row_error_details[0]['code'], 'missing_alias_name')
@@ -325,7 +325,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
         self.assertEqual(error.row_error_details[4]['field'], 'alias_name')
         self.assertEqual(error.row_error_details[4]['category'], 'duplicate_collision')
         self.assertEqual(error.row_error_details[4]['row_number'], 7)
-        self.assertIn('Remove or merge duplicate alias rows', error.row_error_details[4]['remediation_hint'])
+        self.assertIn('Remove or merge duplicate name match rows', error.row_error_details[4]['remediation_hint'])
 
     def test_import_csv_requires_expected_headers(self):
         csv_path = f"{self.temp_dir.name}/bad_aliases.csv"
