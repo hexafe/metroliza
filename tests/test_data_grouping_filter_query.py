@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+import re
 
 from collections import namedtuple
 
@@ -224,8 +225,11 @@ class TestDataGroupingSelectionStyling(unittest.TestCase):
 
         for list_widget in (dialog.reference_list, dialog.part_list, dialog.groups_list, dialog.part_group_list):
             self.assertIn('QListWidget::item:selected', list_widget.stylesheet)
-            self.assertNotIn('QListWidget::item:!selected', list_widget.stylesheet)
             self.assertIn('background-color: #112233', list_widget.stylesheet)
+            self.assertNotRegex(
+                list_widget.stylesheet,
+                re.compile(r'QListWidget::item(?!:selected)[^{]*\{[^}]*background-color', re.IGNORECASE),
+            )
 
 
 class TestDataGroupingThemeColorResolution(unittest.TestCase):
