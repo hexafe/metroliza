@@ -3,7 +3,6 @@
 from PyQt6.QtWidgets import (
     QDialog,
     QGridLayout,
-    QLabel,
     QTableWidget,
     QTableWidgetItem,
     QPushButton,
@@ -90,12 +89,15 @@ class ModifyDB(QDialog):
             self.header_table.setHorizontalHeaderLabels(["Header"])
             self.header_table.setColumnWidth(0, 200)
 
-            self.helper_text_label = QLabel(
+            helper_text = (
                 "Rename values in Reference, Sample number, or Header. "
                 "Select multiple rows in one table and press Enter to rename them at once. "
                 "You will review and confirm all detected changes before they are applied."
             )
-            self.helper_text_label.setWordWrap(True)
+            label_cls = getattr(QtWidgets, "QLabel", None)
+            self.helper_text_label = label_cls(helper_text) if label_cls is not None else None
+            if self.helper_text_label is not None and hasattr(self.helper_text_label, "setWordWrap"):
+                self.helper_text_label.setWordWrap(True)
 
             # Create buttons for Select DB file, Apply changes, Undo, and Cancel
             self.select_db_button = QPushButton("Choose database file")
@@ -115,7 +117,8 @@ class ModifyDB(QDialog):
             layout.addWidget(self.reference_table, 0, 0)
             layout.addWidget(self.part_number_table, 0, 1)
             layout.addWidget(self.header_table, 0, 2)
-            layout.addWidget(self.helper_text_label, 1, 0, 1, 3)
+            if self.helper_text_label is not None:
+                layout.addWidget(self.helper_text_label, 1, 0, 1, 3)
             layout.addWidget(self.select_db_button, 2, 0, 1, 3)
             layout.addWidget(self.apply_button, 3, 0, 1, 1)
             # layout.addWidget(self.undo_button, 3, 1, 1, 1) #to be re-added after undo functionality correction
