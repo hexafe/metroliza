@@ -12,11 +12,16 @@ from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
+    QFrame,
     QGridLayout,
+    QGroupBox,
+    QLabel,
     QMainWindow,
     QPushButton,
+    QVBoxLayout,
     QWidget,
 )
+from modules import ui_theme_tokens
 
 
 class MainWindow(QMainWindow):
@@ -53,11 +58,16 @@ class MainWindow(QMainWindow):
         self.db_file = None
 
         # Initialize and set up buttons with tooltips
-        self.parse_button = QPushButton("Launch Parsing")
-        self.modifydb_button = QPushButton("Launch Modify Database")
-        self.export_button = QPushButton("Launch Export")
-        self.csv_summary_button = QPushButton("CSV Summary")
-        self.map_characteristics_button = QPushButton("Match Characteristic Names")
+        self.parse_button = QPushButton("Ingest Reports")
+        self.modifydb_button = QPushButton("Manage Database Records")
+        self.export_button = QPushButton("Export to Excel")
+        self.csv_summary_button = QPushButton("Build CSV Summary Charts")
+        self.map_characteristics_button = QPushButton("Map Characteristic Names")
+
+        self.heading_label = QLabel("Process reports from intake to export")
+        self.subheading_label = QLabel("Start by ingesting PDF reports, then manage data and export results.")
+        self.status_label = QLabel()
+        self.readiness_label = QLabel()
         self.setup_button_tooltips()
 
         # Set up menu items
@@ -84,11 +94,11 @@ class MainWindow(QMainWindow):
 
     def setup_button_tooltips(self):
         """Set up the tooltips for the buttons."""
-        self.parse_button.setToolTip("Use Parsing module to get data from PDF reports into database for further export to Excel")
-        self.modifydb_button.setToolTip("Use Modify Database module to modify Reference, Part number or Header in database")
-        self.export_button.setToolTip("Use Export module to filter, set and export data from database to Excel file")
-        self.csv_summary_button.setToolTip("Use CSV module to automatically create charts from CSV data")
-        self.map_characteristics_button.setToolTip("Tell the app which different characteristic names should be treated as the same characteristic.")
+        self.parse_button.setToolTip("Import PDF reports into the working database.")
+        self.modifydb_button.setToolTip("Edit references, part numbers, and headers in the database.")
+        self.export_button.setToolTip("Filter and export selected data from the database to Excel.")
+        self.csv_summary_button.setToolTip("Generate summary charts from CSV input files.")
+        self.map_characteristics_button.setToolTip("Define equivalent characteristic names used across sources.")
 
     def setup_menu_actions(self):
         """Set up the menu actions for the main window."""
@@ -101,16 +111,68 @@ class MainWindow(QMainWindow):
 
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""
-        self.layout.addWidget(self.parse_button, 0, 0)
-        self.layout.addWidget(self.modifydb_button, 1, 0)
-        self.layout.addWidget(self.export_button, 2, 0)
-        self.layout.addWidget(self.csv_summary_button, 3, 0)
-        self.layout.addWidget(self.map_characteristics_button, 4, 0)
+        main_container = QFrame()
+        main_container_layout = QVBoxLayout(main_container)
+        main_container_layout.setContentsMargins(12, 12, 12, 12)
+        main_container_layout.setSpacing(10)
+
+        self.heading_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.subheading_label.setWordWrap(True)
+        self.subheading_label.setStyleSheet("color: #555;")
+        main_container_layout.addWidget(self.heading_label)
+        main_container_layout.addWidget(self.subheading_label)
+
+        main_container_layout.addWidget(self._build_context_panel())
+        main_container_layout.addWidget(self._build_action_group("Ingest", [self.parse_button], 0))
+        main_container_layout.addWidget(self._build_action_group("Manage", [self.modifydb_button, self.map_characteristics_button], 1))
+        main_container_layout.addWidget(self._build_action_group("Export", [self.export_button], 2))
+        main_container_layout.addWidget(self._build_action_group("Tools", [self.csv_summary_button], 3))
+        main_container_layout.addStretch()
+
+        self.layout.addWidget(main_container, 0, 0)
+
+        self.update_context_status()
         self.parse_button.clicked.connect(self.launch_parsing_dialog)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
         self.csv_summary_button.clicked.connect(self.launch_csv_summary_dialog)
         self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
+
+    def _build_context_panel(self):
+        panel = QGroupBox("Context")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(10, 10, 10, 10)
+        panel_layout.setSpacing(4)
+        self.status_label.setWordWrap(True)
+        self.readiness_label.setWordWrap(True)
+        self.readiness_label.setStyleSheet("color: #555;")
+        panel_layout.addWidget(self.status_label)
+        panel_layout.addWidget(self.readiness_label)
+        return panel
+
+    def _build_action_group(self, title, buttons, palette_index):
+        color = ui_theme_tokens.BASE_GROUP_PALETTE[palette_index % len(ui_theme_tokens.BASE_GROUP_PALETTE)]
+        group = QGroupBox(title)
+        group.setStyleSheet(f"QGroupBox {{ background-color: {color}; border: 1px solid #D0D0D0; border-radius: 6px; margin-top: 8px; padding-top: 6px; }}")
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(10, 10, 10, 10)
+        group_layout.setSpacing(6)
+        for button in buttons:
+            group_layout.addWidget(button)
+        return group
+
+    def update_context_status(self):
+        if self.db_file:
+            self.status_label.setText(f"Database: {self.db_file}")
+        else:
+            self.status_label.setText("Database: Not selected yet")
+
+        if self.db_file and self.directory:
+            self.readiness_label.setText("Ready: ingest, manage, and export workflows are available.")
+        elif self.db_file:
+            self.readiness_label.setText("Hint: set a source directory before ingesting reports.")
+        else:
+            self.readiness_label.setText("Hint: choose or create a database in a workflow dialog to get started.")
 
     def launch_parsing_dialog(self):
         """Launch the parsing dialog and close the other dialogs if they are open."""
@@ -193,12 +255,14 @@ class MainWindow(QMainWindow):
     def set_db_file(self, db_file):
         try:
             self.db_file = db_file
+            self.update_context_status()
         except Exception as e:
             self.log_and_exit(e)
 
     def set_directory(self, directory):
         try:
             self.directory = directory
+            self.update_context_status()
         except Exception as e:
             self.log_and_exit(e)
 
