@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
         self.modifydb_button = QPushButton("Manage Database Records")
         self.export_button = QPushButton("Export to Excel")
         self.csv_summary_button = QPushButton("Build CSV Summary Charts")
-        self.map_characteristics_button = QPushButton("Map Characteristic Names")
+        self.map_characteristics_button = QPushButton("Manage Name Matches")
 
         self.heading_label = QLabel("Process reports from intake to export")
         self.subheading_label = QLabel("Start by ingesting PDF reports, then manage data and export results.")
@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
         self.modifydb_button.setToolTip("Edit references, part numbers, and headers in the database.")
         self.export_button.setToolTip("Filter and export selected data from the database to Excel.")
         self.csv_summary_button.setToolTip("Generate summary charts from CSV input files.")
-        self.map_characteristics_button.setToolTip("Define equivalent characteristic names used across sources.")
+        self.map_characteristics_button.setToolTip("Create and manage name match to common name mappings by apply to and reference.")
 
     def setup_menu_actions(self):
         """Set up the menu actions for the main window."""

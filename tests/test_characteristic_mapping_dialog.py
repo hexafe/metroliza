@@ -86,7 +86,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                     with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
                         dialog.import_mappings()
 
-                info_mock.assert_called_once_with(dialog, 'Import complete', 'Imported 2 mapping row(s).')
+                info_mock.assert_called_once_with(dialog, 'Import complete', 'Imported 2 name match row(s).')
                 self.assertEqual(dialog.alias_table.rowCount(), 2)
             finally:
                 dialog.close()
@@ -110,7 +110,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                     with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
                         dialog.export_mappings()
 
-                info_mock.assert_called_once_with(dialog, 'Export complete', 'Exported 1 mapping row(s).')
+                info_mock.assert_called_once_with(dialog, 'Export complete', 'Exported 1 name match row(s).')
                 with open(output_path, 'r', encoding='utf-8') as exported_file:
                     lines = exported_file.read().splitlines()
 
@@ -133,9 +133,9 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
             try:
                 validation_error = CharacteristicAliasImportValidationError(
                     [
-                        'duplicate alias/scope key for "AX" (global) at row 2; first seen at row 1',
+                        'duplicate name match/apply to key for "AX" (global) at row 2; first seen at row 1',
                         'alias_name is required at row 2',
-                        'scope_value is required for reference scope at row 3',
+                        'Reference is required when apply to is reference at row 3',
                     ],
                     summary='CSV import failed validation. Fix the row issues below and retry.',
                     row_error_details=[
@@ -144,8 +144,8 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                             'field': 'alias_name',
                             'code': 'duplicate_key_collision',
                             'category': 'duplicate_collision',
-                            'remediation_hint': 'Remove or merge duplicate alias rows with the same alias_name + scope.',
-                            'message': 'duplicate alias/scope key for "AX" (global) at row 2; first seen at row 1',
+                            'remediation_hint': 'Remove or merge duplicate name match rows with the same alias_name + apply to key.',
+                            'message': 'duplicate name match/apply to key for "AX" (global) at row 2; first seen at row 1',
                         },
                         {
                             'row_number': 2,
@@ -160,8 +160,8 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                             'field': 'scope_value',
                             'code': 'reference_scope_requires_scope_value',
                             'category': 'scope_requirements',
-                            'remediation_hint': 'Set scope_value for reference-scoped aliases.',
-                            'message': 'scope_value is required for reference scope at row 3',
+                            'remediation_hint': 'Set the reference value when apply to is reference.',
+                            'message': 'Reference is required when apply to is reference at row 3',
                         },
                     ],
                     total_rows_processed=5,
@@ -177,7 +177,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 self.assertEqual(active_box.windowTitle(), 'Import error')
                 message = active_box.text()
                 self.assertIn('What to fix first:', message)
-                self.assertIn('Remove duplicate alias/scope key rows', message)
+                self.assertIn('Remove duplicate name match/apply to key rows', message)
                 self.assertIn('Total rows processed: 5', message)
                 self.assertIn('Valid rows: 3', message)
                 self.assertIn('Invalid rows: 2', message)
@@ -186,7 +186,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 self.assertIn('missing_required_field: 1', message)
                 self.assertIn('scope_requirements: 1', message)
                 self.assertIn('Fix: Provide a non-empty alias_name value.', message)
-                self.assertIn('Fix: Set scope_value for reference-scoped aliases.', message)
+                self.assertIn('Fix: Set the reference value when apply to is reference.', message)
                 detailed = active_box.detailedText()
                 self.assertIn('CSV Validation Report', detailed)
                 self.assertIn('Conflict-first sections:', detailed)
@@ -206,24 +206,24 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                     'field': 'scope_value',
                     'code': 'reference_scope_requires_scope_value',
                     'category': 'scope_requirements',
-                    'message': 'scope_value is required for reference scope at row 8',
-                    'remediation_hint': 'Set scope_value for reference-scoped aliases.',
+                    'message': 'Reference is required when apply to is reference at row 8',
+                    'remediation_hint': 'Set the reference value when apply to is reference.',
                 },
                 {
                     'row_number': 5,
                     'field': 'alias_name',
                     'code': 'duplicate_key_collision',
                     'category': 'duplicate_collision',
-                    'message': 'duplicate alias/scope key for "AX" (global) at row 5; first seen at row 4',
-                    'remediation_hint': 'Remove or merge duplicate alias rows with the same alias_name + scope.',
+                    'message': 'duplicate name match/apply to key for "AX" (global) at row 5; first seen at row 4',
+                    'remediation_hint': 'Remove or merge duplicate name match rows with the same alias_name + apply to key.',
                 },
                 {
                     'row_number': 5,
                     'field': 'canonical_name',
                     'code': 'missing_canonical_name',
                     'category': 'missing_required_field',
-                    'message': 'canonical_name is required at row 5',
-                    'remediation_hint': 'Provide the canonical_name to map this alias to.',
+                    'message': 'Common name is required at row 5',
+                    'remediation_hint': 'Provide the common name for this name match.',
                 },
             ]
         )
@@ -244,7 +244,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
             dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
             try:
                 validation_error = CharacteristicAliasImportValidationError(
-                    ['duplicate alias/scope key for "AX" (global) at row 3; first seen at row 2'],
+                    ['duplicate name match/apply to key for "AX" (global) at row 3; first seen at row 2'],
                     summary='CSV import failed validation. Fix the row issues below and retry.',
                     row_error_details=[
                         {
@@ -252,8 +252,8 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                             'field': 'alias_name',
                             'code': 'duplicate_key_collision',
                             'category': 'duplicate_collision',
-                            'remediation_hint': 'Remove or merge duplicate alias rows with the same alias_name + scope.',
-                            'message': 'duplicate alias/scope key for "AX" (global) at row 3; first seen at row 2',
+                            'remediation_hint': 'Remove or merge duplicate name match rows with the same alias_name + apply to key.',
+                            'message': 'duplicate name match/apply to key for "AX" (global) at row 3; first seen at row 2',
                         }
                     ],
                     total_rows_processed=2,
@@ -267,11 +267,11 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                                     with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
                                         dialog.import_mappings()
 
-                info_mock.assert_called_once_with(dialog, 'Report saved', 'Saved remediation report with 1 row issue(s).')
+                info_mock.assert_called_once_with(dialog, 'Report saved', 'Saved remediation report with 1 name match row issue(s).')
                 with open(report_path, 'r', encoding='utf-8') as report_file:
                     lines = report_file.read().splitlines()
                 self.assertEqual(lines[0], 'row_number,field,code,category,message,remediation_hint')
-                self.assertIn('3,alias_name,duplicate_key_collision,duplicate_collision,"duplicate alias/scope key for ""AX"" (global) at row 3; first seen at row 2",Remove or merge duplicate alias rows with the same alias_name + scope.', lines)
+                self.assertIn('3,alias_name,duplicate_key_collision,duplicate_collision,"duplicate name match/apply to key for ""AX"" (global) at row 3; first seen at row 2",Remove or merge duplicate name match rows with the same alias_name + apply to key.', lines)
             finally:
                 dialog.close()
 
@@ -321,7 +321,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 self.assertIn('Required columns: alias_name, canonical_name, scope_type, scope_value', message)
                 self.assertIn('Detected columns: alias_name, canonical_name', message)
                 self.assertIn('alias_name,canonical_name,scope_type,scope_value', message)
-                self.assertNotIn('Could not import mappings: ', message)
+                self.assertNotIn('Could not import name match entries: ', message)
             finally:
                 dialog.close()
 
