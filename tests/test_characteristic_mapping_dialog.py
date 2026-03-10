@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from modules.characteristic_alias_service import (
+    CharacteristicAliasCsvSchemaError,
     CharacteristicAliasImportValidationError,
     ensure_characteristic_alias_schema,
     upsert_characteristic_alias,
@@ -195,6 +196,36 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
 
                 self.assertTrue(critical_mock.called)
                 self.assertEqual(critical_mock.call_args[0][1], 'Import error')
+            finally:
+                dialog.close()
+
+    def test_import_mappings_shows_schema_specific_remediation_message(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            csv_path = f'{tmpdir}/import_aliases.csv'
+            ensure_characteristic_alias_schema(db_path)
+            with open(csv_path, 'w', encoding='utf-8', newline='') as csv_file:
+                csv_file.write('alias_name,canonical_name\n')
+
+            dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+            try:
+                schema_error = CharacteristicAliasCsvSchemaError(
+                    required_columns=('alias_name', 'canonical_name', 'scope_type', 'scope_value'),
+                    detected_columns=('alias_name', 'canonical_name'),
+                    expected_header_example='alias_name,canonical_name,scope_type,scope_value',
+                )
+                with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
+                    with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=schema_error):
+                        with patch.object(QMessageBox, 'critical', return_value=QMessageBox.StandardButton.Ok) as critical_mock:
+                            dialog.import_mappings()
+
+                self.assertTrue(critical_mock.called)
+                message = critical_mock.call_args[0][2]
+                self.assertIn('header row does not match the expected schema', message)
+                self.assertIn('Required columns: alias_name, canonical_name, scope_type, scope_value', message)
+                self.assertIn('Detected columns: alias_name, canonical_name', message)
+                self.assertIn('alias_name,canonical_name,scope_type,scope_value', message)
+                self.assertNotIn('Could not import mappings: ', message)
             finally:
                 dialog.close()
 

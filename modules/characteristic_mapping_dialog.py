@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from modules.characteristic_alias_service import (
+    CharacteristicAliasCsvSchemaError,
     CharacteristicAliasImportValidationError,
     delete_characteristic_alias,
     ensure_characteristic_alias_schema,
@@ -421,6 +422,17 @@ class CharacteristicMappingDialog(QDialog):
             details_box.setDetailedText(full_report)
             details_box.setStandardButtons(QMessageBox.StandardButton.Ok)
             details_box.exec()
+        except CharacteristicAliasCsvSchemaError as exc:
+            CustomLogger(exc, reraise=False)
+            QMessageBox.critical(
+                self,
+                'Import error',
+                'Could not import mappings because the CSV header row does not match the expected schema.\n\n'
+                f"Required columns: {', '.join(exc.required_columns)}\n"
+                f"Detected columns: {', '.join(exc.detected_columns) if exc.detected_columns else '(none)'}\n\n"
+                'Use this exact header line (same names and order):\n'
+                'alias_name,canonical_name,scope_type,scope_value',
+            )
         except Exception as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Import error', f'Could not import mappings: {exc}')
