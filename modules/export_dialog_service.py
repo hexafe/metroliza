@@ -5,7 +5,17 @@ from modules.export_preset_utils import build_export_options_for_preset
 from pathlib import Path
 
 
-def build_export_options_payload(selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results):
+def build_export_options_payload(
+    selected_preset,
+    export_type,
+    export_target,
+    sorting_parameter,
+    violin_input,
+    summary_scale_input,
+    hide_ok_results,
+    group_analysis_level="off",
+    group_analysis_scope="auto",
+):
     """Build a validated export-options payload from UI field values."""
     preset_options = build_export_options_for_preset(selected_preset)
     return ExportOptions(
@@ -17,10 +27,12 @@ def build_export_options_payload(selected_preset, export_type, export_target, so
         summary_plot_scale=int(summary_scale_input if summary_scale_input not in (None, "") else preset_options['summary_plot_scale']),
         hide_ok_results=bool(hide_ok_results),
         generate_summary_sheet=bool(preset_options['generate_summary_sheet']),
+        group_analysis_level=group_analysis_level,
+        group_analysis_scope=group_analysis_scope,
     )
 
 
-def build_validated_export_request(*, db_file, excel_file, selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, filter_query, grouping_df):
+def build_validated_export_request(*, db_file, excel_file, selected_preset, export_type, export_target, sorting_parameter, violin_input, summary_scale_input, hide_ok_results, filter_query, grouping_df, group_analysis_level="off", group_analysis_scope="auto"):
     """Build and validate ``ExportRequest`` from raw dialog selections."""
     options = validate_export_options(
         build_export_options_payload(
@@ -31,6 +43,8 @@ def build_validated_export_request(*, db_file, excel_file, selected_preset, expo
             violin_input=violin_input,
             summary_scale_input=summary_scale_input,
             hide_ok_results=hide_ok_results,
+            group_analysis_level=group_analysis_level,
+            group_analysis_scope=group_analysis_scope,
         )
     )
 

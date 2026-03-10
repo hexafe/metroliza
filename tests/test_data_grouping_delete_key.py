@@ -15,6 +15,8 @@ class _FakeSignal:
 class _FakeQtKey:
     Key_Delete = 16777223
     Key_Backspace = 16777219
+    Key_Return = 16777220
+    Key_Enter = 16777221
     Key_A = 65
 
 
@@ -79,6 +81,7 @@ class _FakeListWidget:
         self._has_focus = False
         self._viewport_has_focus = False
         self._viewport = _FakeViewport(self)
+        self._current_index = 0
         self.itemPressed = _FakeSignal()
         self.itemSelectionChanged = _FakeSignal()
 
@@ -92,6 +95,14 @@ class _FakeListWidget:
 
     def selectedItems(self):
         return [item for item in self._items if item.isSelected()]
+
+
+    def currentItem(self):
+        if not self._items:
+            return None
+        if self._current_index < 0 or self._current_index >= len(self._items):
+            return None
+        return self._items[self._current_index]
 
     def setFocus(self):
         self._has_focus = True
@@ -207,7 +218,8 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
         dialog.part_list.addItem(_FakeItem("A", user_data="A"))
         dialog.part_list.addItem(_FakeItem("B", user_data="B"))
         dialog.part_list.addItem(_FakeItem("C", user_data="C"))
-        dialog.reference_list = types.SimpleNamespace(currentItem=lambda: types.SimpleNamespace(text=lambda: "REF1"))
+        dialog.reference_list = _FakeListWidget()
+        dialog.reference_list.addItem(_FakeItem("REF1"))
         dialog.groups_list = types.SimpleNamespace()
         dialog._selected_group_name = lambda: "CUSTOM"
         dialog.remove_from_group_button = _FakeButton()
@@ -387,6 +399,69 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             self.assertEqual(reassigned["GROUP"], "POPULATION")
             self.assertEqual(reassigned["GROUP_COLOR"], "#FFFFFF")
             self.assertEqual(untouched["GROUP"], "CUSTOM")
+
+
+    def test_enter_key_on_reference_list_opens_create_group_with_reference_prefill(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = types.ModuleType("modules.db")
+        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
+            dialog = self._build_dialog(data_grouping_module)
+            dialog.reference_list.setViewportFocus()
+
+            captured = {"value": None}
+            dialog.create_group = lambda initial_group_name="": captured.__setitem__("value", initial_group_name)
+
+            event = _FakeKeyEvent(_FakeQtKey.Key_Return)
+            data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
+
+            self.assertTrue(event.accepted)
+            self.assertEqual(captured["value"], "REF1")
+
+    def test_enter_key_outside_reference_list_does_not_open_create_group(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = types.ModuleType("modules.db")
+        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
+            dialog = self._build_dialog(data_grouping_module)
+            dialog.part_list.setFocus()
+
+            captured = {"count": 0}
+            dialog.create_group = lambda initial_group_name="": captured.__setitem__("count", captured["count"] + 1)
+
+            event = _FakeKeyEvent(_FakeQtKey.Key_Return)
+            data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
+
+            self.assertFalse(event.accepted)
+            self.assertEqual(captured["count"], 0)
 
 
 if __name__ == "__main__":

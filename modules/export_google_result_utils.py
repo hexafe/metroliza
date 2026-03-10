@@ -19,8 +19,19 @@ def build_google_stage_message(stage: str, detail: str = "") -> str | None:
     base = _GOOGLE_STAGE_LABELS.get(stage)
     if not base:
         return None
-    if detail:
-        return f"{base} ({detail})"
+
+    normalized_detail = str(detail).strip()
+    if stage == "fallback" and normalized_detail:
+        lowered = normalized_detail.lower()
+        if "timed out" in lowered or "timeout" in lowered:
+            normalized_detail = f"timeout: {normalized_detail}"
+        elif "auth" in lowered or "token" in lowered or "permission" in lowered:
+            normalized_detail = f"authentication: {normalized_detail}"
+        elif "network" in lowered or "tempor" in lowered or "unreachable" in lowered:
+            normalized_detail = f"network: {normalized_detail}"
+
+    if normalized_detail:
+        return f"{base} ({normalized_detail})"
     return base
 
 
@@ -41,7 +52,19 @@ def build_google_conversion_metadata(conversion) -> dict:
 def build_google_fallback_metadata(*, excel_file: str, error: Exception) -> dict:
     """Build completion metadata payload for local-xlsx fallback after conversion error."""
 
+    error_text = str(error).strip()
+    reason = "unknown"
+    lowered = error_text.lower()
+    if "timed out" in lowered or "timeout" in lowered:
+        reason = "timeout"
+    elif "auth" in lowered or "token" in lowered or "permission" in lowered:
+        reason = "authentication"
+    elif "network" in lowered or "tempor" in lowered or "unreachable" in lowered:
+        reason = "network"
+
+    suffix = f" ({reason}: {error_text})" if error_text else ""
     return {
-        "fallback_message": f"Google export failed; using local .xlsx fallback: {excel_file}",
-        "conversion_warnings": [str(error)],
+        "fallback_reason": reason,
+        "fallback_message": f"Google export failed; using local .xlsx fallback: {excel_file}{suffix}",
+        "conversion_warnings": [error_text] if error_text else [],
     }

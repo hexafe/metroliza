@@ -14,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.group_stats_tests import select_group_stat_test
 
@@ -140,7 +141,34 @@ def _summarize_group_sample_sizes(working: pd.DataFrame) -> str:
     return ', '.join(f"{group}:{int(size)}" for group, size in counts.items())
 
 
-def prepare_group_comparison_payload(grouped_df):
+def _resolve_metric_aliases_for_comparison(working: pd.DataFrame, *, alias_db_path=None) -> pd.Series:
+    """Resolve comparison metric keys with reference-scoped alias precedence."""
+    base_metric = working.get('HEADER - AX', working.get('HEADER', 'UNKNOWN')).fillna('UNKNOWN').astype(str)
+    if alias_db_path is None:
+        return base_metric
+
+    resolved_metric = base_metric.copy()
+    reference_series = None
+    if 'REFERENCE' in working.columns:
+        reference_series = working['REFERENCE'].fillna('').astype(str).str.strip()
+
+    for row_index, metric_name in resolved_metric.items():
+        normalized_metric_name = str(metric_name or '').strip()
+        if not normalized_metric_name:
+            continue
+        reference_value = None
+        if reference_series is not None:
+            reference_value = reference_series.get(row_index) or None
+        resolved_metric.at[row_index] = resolve_characteristic_alias(
+            normalized_metric_name,
+            reference_value,
+            alias_db_path,
+        )
+
+    return resolved_metric
+
+
+def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
     """Prepare metadata, summary rows, pairwise rows, matrices, and insights.
 
     Rationale:
@@ -166,7 +194,7 @@ def prepare_group_comparison_payload(grouped_df):
     if 'GROUP' not in working.columns:
         working['GROUP'] = 'UNGROUPED'
     working['GROUP'] = working['GROUP'].fillna('UNGROUPED').astype(str)
-    working['metric_key'] = working.get('HEADER - AX', working.get('HEADER', 'UNKNOWN')).fillna('UNKNOWN').astype(str)
+    working['metric_key'] = _resolve_metric_aliases_for_comparison(working, alias_db_path=alias_db_path)
 
     numeric_meas = pd.to_numeric(working.get('MEAS'), errors='coerce')
     working = working.assign(MEAS=numeric_meas)

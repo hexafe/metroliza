@@ -1,6 +1,7 @@
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_with_retry
 from modules.list_selection_utils import ListSelectionUtils
+from modules import ui_theme_tokens
 from PyQt6.QtCore import QDate, Qt
 import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtWidgets import(
@@ -44,6 +45,7 @@ class FilterDialog(QDialog):
             self.create_widgets()
             self.arrange_layout()
             self.populate_list_widgets()
+            self._apply_list_theme_styles()
             self.connect_signals()
         except Exception as e:
             self.log_and_exit(e)
@@ -165,6 +167,32 @@ class FilterDialog(QDialog):
             self.apply_button.clicked.connect(self.apply_filters)
         except Exception as e:
             self.log_and_exit(e)
+
+
+    def _apply_list_theme_styles(self):
+        highlight_name = ui_theme_tokens.SELECTED_ROW_BACKGROUND_FALLBACK
+        for list_widget in (
+            getattr(self, 'ax_list', None),
+            getattr(self, 'reference_list', None),
+            getattr(self, 'header_list', None),
+            getattr(self, 'selected_headers_list', None),
+        ):
+            if list_widget is None or not hasattr(list_widget, 'setStyleSheet'):
+                continue
+
+            palette = list_widget.palette() if hasattr(list_widget, 'palette') else None
+            highlight_color = palette.highlight().color() if palette is not None and hasattr(palette, 'highlight') else None
+            if highlight_color is not None and hasattr(highlight_color, 'isValid') and highlight_color.isValid():
+                highlight_name = highlight_color.name()
+
+            highlight_name = ui_theme_tokens.selected_row_background_override(highlight_name)
+            selected_text_color = ui_theme_tokens.selected_text_color(highlight_name)
+            list_widget.setStyleSheet(
+                "QListWidget::item:selected {"
+                f" background-color: {highlight_name};"
+                f" color: {selected_text_color};"
+                " }"
+            )
 
     def _connect_shift_range_for_list(self, list_widget):
         self._list_selection_utils.connect_shift_range_behavior(list_widget)

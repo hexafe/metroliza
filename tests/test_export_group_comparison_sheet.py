@@ -1,7 +1,9 @@
 import unittest
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 
+from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
 from modules.export_group_comparison_writer import (
     _build_insights,
     _build_pairwise_group_matrices,
@@ -32,6 +34,75 @@ class FakeWorksheet:
 
 
 class TestExportGroupComparisonSheet(unittest.TestCase):
+    def test_prepare_payload_resolves_metric_aliases_before_grouping(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-1', 'REF-1', 'REF-1'],
+                'HEADER - AX': ['DIA - X'] * 4,
+                'MEAS': [10.0, 10.1, 9.8, 9.9],
+                'GROUP': ['A', 'A', 'B', 'B'],
+            }
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='DIAMETER - X',
+                scope_type='reference',
+                scope_value='REF-1',
+            )
+            payload = prepare_group_comparison_payload(grouped_df, alias_db_path=db_path)
+
+        self.assertEqual(payload['pairwise_rows'][0]['Metric'], 'DIAMETER - X')
+
+    def test_prepare_payload_prefers_reference_alias_over_global_alias(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-1', 'REF-1', 'REF-1'],
+                'HEADER - AX': ['DIA - X'] * 4,
+                'MEAS': [10.0, 10.1, 9.8, 9.9],
+                'GROUP': ['A', 'A', 'B', 'B'],
+            }
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='GLOBAL DIA',
+                scope_type='global',
+            )
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='REF DIA',
+                scope_type='reference',
+                scope_value='REF-1',
+            )
+            payload = prepare_group_comparison_payload(grouped_df, alias_db_path=db_path)
+
+        self.assertEqual(payload['pairwise_rows'][0]['Metric'], 'REF DIA')
+
+
+    def test_prepare_payload_keeps_original_metric_when_no_alias_mapping_exists(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-2', 'REF-2', 'REF-2', 'REF-2'],
+                'HEADER - AX': ['CYL - Y'] * 4,
+                'MEAS': [5.0, 5.1, 5.2, 5.3],
+                'GROUP': ['A', 'A', 'B', 'B'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df, alias_db_path=None)
+
+        self.assertEqual(payload['pairwise_rows'][0]['Metric'], 'CYL - Y')
+
     def test_writer_renders_expected_sections_and_layout(self):
         grouped_df = pd.DataFrame(
             {

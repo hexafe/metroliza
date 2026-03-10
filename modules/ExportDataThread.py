@@ -37,7 +37,12 @@ import modules.custom_logger as custom_logger
 from modules.db import execute_select_with_columns, read_sql_dataframe, sqlite_connection_scope
 from modules.excel_sheet_utils import unique_sheet_name
 from modules.export_backends import ExcelExportBackend
-from modules.google_drive_export import GoogleDriveAuthError, GoogleDriveExportError, upload_and_convert_workbook
+from modules.google_drive_export import (
+    GoogleDriveAuthError,
+    GoogleDriveCanceledError,
+    GoogleDriveExportError,
+    upload_and_convert_workbook,
+)
 from modules.export_google_result_utils import (
     build_google_conversion_metadata,
     build_google_fallback_metadata,
@@ -96,6 +101,11 @@ from modules.export_grouping_utils import (
     keys_have_usable_values as _keys_have_usable_values,
     prepare_grouping_dataframe as _prepare_grouping_dataframe,
     resolve_group_merge_keys as _resolve_group_merge_keys,
+)
+from modules.group_analysis_service import build_group_analysis_payload
+from modules.group_analysis_writer import (
+    write_group_analysis_diagnostics_sheet,
+    write_group_analysis_sheet,
 )
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
 from modules.export_sheet_writer import (
@@ -1122,8 +1132,8 @@ def render_violin(
         ax.set_xticks(positions)
     ax.set_xticklabels(labels)
     if lsl is not None and usl is not None:
-        render_tolerance_band(ax, nom, lsl, usl, one_sided=one_sided)
-        render_spec_reference_lines(ax, nom, lsl, usl, include_nominal=False)
+        render_tolerance_band(ax, nom, lsl, usl, one_sided=one_sided, orientation='horizontal')
+        render_spec_reference_lines(ax, nom, lsl, usl, orientation='horizontal', include_nominal=False)
 
     style = annotate_violin_group_stats(
         ax,
@@ -1159,13 +1169,13 @@ def render_scatter_numeric(ax, x_values, y_values):
     ax.scatter(normalized_x, normalized_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=18)
 
 
-def render_histogram(ax, header_group, *, lsl=None, usl=None):
+def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None):
     """Render a histogram and density overlays for one measurement group."""
 
     normalized_meas = _normalize_plot_axis_values(list(header_group['MEAS']))
     histogram_values = pd.to_numeric(pd.Series(normalized_meas), errors='coerce').dropna().to_numpy(dtype=float)
     if histogram_values.size == 0:
-        return
+        return {'is_grouped': False, 'group_labels': []}
 
     finite_spec_limits = []
     for raw_limit in (lsl, usl):
@@ -1235,6 +1245,11 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None):
     ax.set_xlim(x_min_base - x_padding, x_max_base + x_padding)
     enforce_minimum_histogram_bar_width(ax)
     lock_histogram_y_axis_to_bar_heights(ax)
+
+    return {
+        'is_grouped': False,
+        'group_labels': [],
+    }
 
 
 def lock_histogram_y_axis_to_bar_heights(ax, *, top_padding_ratio=0.08):
@@ -1789,6 +1804,8 @@ class ExportDataThread(QThread):
         self.allow_non_essential_chart_skipping = validated_request.options.allow_non_essential_chart_skipping
         self.chart_worker_count = validated_request.options.chart_worker_count
         self.chart_worker_queue_size = validated_request.options.chart_worker_queue_size
+        self.group_analysis_level = validated_request.options.group_analysis_level
+        self.group_analysis_scope = validated_request.options.group_analysis_scope
         self.export_canceled = False
         self._cancel_signal_emitted = False
         self._prepared_grouping_df = None
@@ -2246,8 +2263,13 @@ class ExportDataThread(QThread):
         logger.warning(message)
         self.update_label.emit(build_three_line_status("Building measurement sheets...", "Grouping data contains duplicate keys; using latest assignment.", "ETA --"))
 
-    def _apply_group_assignments(self, header_group, grouping_df):
-        merged_group, grouping_applied, merge_keys, duplicate_count = _apply_group_assignments(header_group, grouping_df)
+    def _apply_group_assignments(self, header_group, grouping_df, *, group_analysis_mode=False, fallback_group_label=None):
+        merged_group, grouping_applied, merge_keys, duplicate_count = _apply_group_assignments(
+            header_group,
+            grouping_df,
+            group_analysis_mode=group_analysis_mode,
+            fallback_group_label=fallback_group_label,
+        )
         if grouping_applied and duplicate_count:
             self._warn_duplicate_group_assignments(grouping_df, merge_keys)
         return merged_group, grouping_applied
@@ -2317,6 +2339,10 @@ class ExportDataThread(QThread):
                     self._emit_stage_progress('filtered_sheet_write', 0.0),
                     self.export_filtered_data(excel_writer),
                     self._emit_stage_progress('filtered_sheet_write', 1.0),
+                ),
+                lambda: (
+                    self.update_label.emit(build_three_line_status("Building group analysis...", "Writing Group Analysis and Diagnostics worksheets", "ETA --")),
+                    self._write_group_analysis_outputs(excel_writer),
                 ),
             ],
             should_cancel=self._check_canceled,
@@ -2451,7 +2477,7 @@ class ExportDataThread(QThread):
                         _log_google_conversion_stage("validating")
                         return
                     if stage_message.startswith("uploading retry"):
-                        retry_match = re.match(r"^uploading retry\s+(\d+)/(\d+)", stage_message)
+                        retry_match = re.match(r"^uploading retry\s+(\d+)/(\d+),\s+elapsed\s+\d{2}:\d{2}", stage_message)
                         if retry_match:
                             try:
                                 stage_attempt_totals["uploading"] = int(retry_match.group(2))
@@ -2464,6 +2490,7 @@ class ExportDataThread(QThread):
                     self.excel_file,
                     expected_sheet_names=self._build_expected_sheet_names(),
                     status_callback=_stage_callback,
+                    should_cancel=lambda: self.export_canceled,
                 )
 
                 self.completion_metadata.update(build_google_conversion_metadata(conversion))
@@ -2502,6 +2529,10 @@ class ExportDataThread(QThread):
             self._log_export_stage("Export completed successfully", stage="completed")
             self.finished.emit()
             QCoreApplication.processEvents()
+        except GoogleDriveCanceledError:
+            self.export_canceled = True
+            self._check_canceled()
+            return
         except GoogleDriveExportError as e:
             if self.export_target == "google_sheets_drive_convert":
                 self.completion_metadata.update(build_google_fallback_metadata(excel_file=self.excel_file, error=e))
@@ -2740,16 +2771,227 @@ class ExportDataThread(QThread):
             self.log_and_exit(e)
             raise
 
+    def _write_group_analysis_message_sheet(self, worksheet, message):
+        worksheet.write(0, 0, 'Group Analysis')
+        worksheet.write(1, 0, str(message or 'Group Analysis skipped.'))
+        worksheet.freeze_panes(1, 0)
+
+    @staticmethod
+    def _render_group_analysis_plot_asset(metric_row, plot_key):
+        """Build an in-memory chart asset for Group Analysis worksheet insertion."""
+        chart_payload = metric_row.get('chart_payload') if isinstance(metric_row, dict) else None
+        if not isinstance(chart_payload, dict):
+            return {}
+
+        groups = chart_payload.get('groups') or []
+        if not groups:
+            return {}
+
+        grouped_entries = []
+        for entry in groups:
+            label = str(entry.get('group') or '')
+            values = pd.to_numeric(pd.Series(entry.get('values') or []), errors='coerce').to_numpy(dtype=float)
+            finite_values = values[np.isfinite(values)]
+            grouped_entries.append((label, finite_values))
+
+        filtered_entries = [(label, values) for (label, values) in grouped_entries if values.size > 0]
+        if not filtered_entries:
+            return {}
+
+        group_labels = [label for (label, _) in filtered_entries]
+        grouped_values = [values for (_, values) in filtered_entries]
+
+        spec_limits = chart_payload.get('spec_limits') or {}
+        fig, ax = plt.subplots(figsize=(6.2, 3.2))
+        try:
+            if plot_key == 'violin':
+                if _HAS_SEABORN:
+                    sns.violinplot(data=grouped_values, inner='quartile', cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
+                    ax.set_xticks(range(len(group_labels)))
+                    ax.set_xticklabels(group_labels)
+                else:
+                    positions = range(1, len(group_labels) + 1)
+                    ax.violinplot(grouped_values, showmeans=False, showmedians=True, showextrema=False, positions=positions)
+                    ax.set_xticks(list(positions))
+                    ax.set_xticklabels(group_labels)
+
+                nominal_value = spec_limits.get('nominal')
+                lsl_value = spec_limits.get('lsl')
+                usl_value = spec_limits.get('usl')
+                render_spec_reference_lines(
+                    ax,
+                    nominal_value,
+                    lsl_value,
+                    usl_value,
+                    orientation='horizontal',
+                    include_nominal=nominal_value is not None,
+                )
+
+                annotation_transform = mtransforms.blended_transform_factory(ax.transAxes, ax.transData)
+                annotation_specs = (
+                    ('USL', usl_value, SUMMARY_PLOT_PALETTE['spec_limit'], (6, 8)),
+                    ('Nominal', nominal_value, SUMMARY_PLOT_PALETTE['annotation_emphasis'], (6, 0)),
+                    ('LSL', lsl_value, SUMMARY_PLOT_PALETTE['spec_limit'], (6, -8)),
+                )
+                annotation_box = {
+                    'boxstyle': 'round,pad=0.16',
+                    'fc': 'white',
+                    'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                    'alpha': 0.82,
+                    'linewidth': 0.6,
+                }
+                for label, limit_value, color, offset in annotation_specs:
+                    if limit_value is None:
+                        continue
+                    ax.annotate(
+                        f"{label}={float(limit_value):.3f}",
+                        xy=(1.0, float(limit_value)),
+                        xycoords=annotation_transform,
+                        textcoords='offset points',
+                        xytext=offset,
+                        ha='left',
+                        va='center',
+                        color=color,
+                        fontsize=7.0,
+                        bbox=annotation_box,
+                        clip_on=False,
+                    )
+                ax.set_title(f"{metric_row.get('metric')} - Violin")
+            elif plot_key == 'histogram':
+                all_values = np.concatenate(grouped_values)
+                bin_edges = np.histogram_bin_edges(all_values, bins='auto')
+                histogram_palette = [
+                    SUMMARY_PLOT_PALETTE['distribution_base'],
+                    SUMMARY_PLOT_PALETTE['distribution_foreground'],
+                    SUMMARY_PLOT_PALETTE['density_line'],
+                    SUMMARY_PLOT_PALETTE['spec_limit'],
+                    SUMMARY_PLOT_PALETTE['sigma_band'],
+                ]
+                for index, (label, values) in enumerate(zip(group_labels, grouped_values)):
+                    ax.hist(
+                        values,
+                        bins=bin_edges,
+                        edgecolor='black',
+                        alpha=0.42,
+                        color=histogram_palette[index % len(histogram_palette)],
+                        label=label,
+                    )
+                ax.legend(loc='upper left', frameon=True, fontsize=7.0)
+
+                for limit_key, style in (
+                    ('lsl', {'linestyle': '--', 'color': '#B45309'}),
+                    ('nominal', {'linestyle': ':', 'color': '#0F766E'}),
+                    ('usl', {'linestyle': '--', 'color': '#B45309'}),
+                ):
+                    limit_value = spec_limits.get(limit_key)
+                    if limit_value is not None:
+                        ax.axvline(float(limit_value), linewidth=1.0, alpha=0.9, **style)
+
+                ax.set_title(f"{metric_row.get('metric')} - Histogram")
+            else:
+                return {}
+
+            ax.grid(axis='y', alpha=0.25)
+            fig.tight_layout()
+            image_data = BytesIO()
+            fig.savefig(image_data, format='png', dpi=120)
+            image_data.seek(0)
+            return {'image_data': image_data, 'row_span': 16}
+        except Exception:
+            logger.debug('Failed to render group-analysis %s plot for %r', plot_key, metric_row.get('metric'), exc_info=True)
+            return {}
+        finally:
+            plt.close(fig)
+
+    def _build_group_analysis_plot_assets(self, payload, *, mode):
+        """Prepare optional chart assets keyed by metric for worksheet insertion."""
+        if str(mode or '').strip().lower() != 'standard':
+            return {'metrics': {}}
+
+        metrics_assets = {}
+        for metric_row in payload.get('metric_rows', []):
+            metric_name = metric_row.get('metric')
+            if not metric_name:
+                continue
+            eligibility = metric_row.get('plot_eligibility') or {}
+            per_metric_assets = {}
+            for plot_key in ('violin', 'histogram'):
+                plot_meta = eligibility.get(plot_key) or {}
+                if bool(plot_meta.get('eligible')):
+                    per_metric_assets[plot_key] = self._render_group_analysis_plot_asset(metric_row, plot_key)
+                else:
+                    per_metric_assets[plot_key] = {}
+            metrics_assets[metric_name] = per_metric_assets
+
+        return {'metrics': metrics_assets}
+
+    def _write_group_analysis_outputs(self, excel_writer):
+        mode = str(self.group_analysis_level or 'off').strip().lower()
+        if mode == 'off':
+            return
+
+        if mode not in {'light', 'standard'}:
+            logger.warning('Unknown group analysis level %r; skipping Group Analysis output.', mode)
+            return
+
+        backend = self._active_backend or self.get_export_backend()
+        workbook = backend.get_workbook(excel_writer)
+        used_sheet_names = backend.list_sheet_names(excel_writer)
+
+        grouped_export_df = self._build_export_filtered_dataframe()
+        grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
+        grouped_export_df, _ = self._apply_group_assignments(
+            grouped_export_df,
+            self.prepared_grouping_df,
+            group_analysis_mode=True,
+            fallback_group_label='POPULATION',
+        )
+
+        requested_scope = str(self.group_analysis_scope or 'auto').strip().lower()
+        payload = build_group_analysis_payload(
+            grouped_export_df,
+            requested_scope=requested_scope,
+            analysis_level=mode,
+            alias_db_path=self.db_file,
+        )
+
+        group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)
+        group_worksheet = workbook.add_worksheet(group_sheet_name)
+        self._record_exported_sheet_name(group_sheet_name)
+
+        readiness = payload.get('readiness') or {}
+        skip_reason = readiness.get('skip_reason') or payload.get('skip_reason') or {}
+        skip_code = str(skip_reason.get('code') or '')
+        if skip_code in {
+            'forced_single_reference_scope_mismatch',
+            'forced_multi_reference_scope_mismatch',
+        }:
+            short_message = str(skip_reason.get('message') or 'Group Analysis skipped.')
+            self._write_group_analysis_message_sheet(group_worksheet, short_message)
+        else:
+            plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode)
+            write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
+
+        diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
+        diagnostics_worksheet = workbook.add_worksheet(diagnostics_sheet_name)
+        self._record_exported_sheet_name(diagnostics_sheet_name)
+        write_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
+
     def _write_group_comparison_sheet(self, workbook, used_sheet_names):
         grouped_export_df = self._build_export_filtered_dataframe()
         grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
-        grouped_export_df, _ = self._apply_group_assignments(grouped_export_df, self.prepared_grouping_df)
+        grouped_export_df, _ = self._apply_group_assignments(
+            grouped_export_df,
+            self.prepared_grouping_df,
+            group_analysis_mode=True,
+            fallback_group_label='POPULATION',
+        )
 
         sheet_name = unique_sheet_name('Group Comparison', used_sheet_names)
         worksheet = workbook.add_worksheet(sheet_name)
         self._record_exported_sheet_name(sheet_name)
 
-        payload = prepare_group_comparison_payload(grouped_export_df)
+        payload = prepare_group_comparison_payload(grouped_export_df, alias_db_path=self.db_file)
         write_group_comparison_sheet(worksheet, payload)
 
     def export_filtered_data(self, excel_writer):
@@ -3190,7 +3432,13 @@ class ExportDataThread(QThread):
                     histogram_figsize = (6.2, 4)
                     chart_start = time.perf_counter()
                     fig, ax = plt.subplots(figsize=histogram_figsize)
-                    render_histogram(ax, sampled_histogram_group, lsl=LSL, usl=USL)
+                    histogram_render_meta = render_histogram(
+                        ax,
+                        sampled_histogram_group,
+                        lsl=LSL,
+                        usl=USL,
+                        group_column=distribution_key if grouping_applied else None,
+                    )
 
                     histogram_font_sizes = compute_histogram_font_sizes(
                         histogram_figsize,
@@ -3204,12 +3452,14 @@ class ExportDataThread(QThread):
                     )
 
                     table_render_data = build_histogram_table_render_data(table_data)
+                    table_bbox_x = 1.03
+                    table_bbox_width = min(0.56, histogram_table_layout['table_bbox_width'] + 0.06)
                     ax_table = plt.table(
                         cellText=table_render_data,
                         colLabels=['Statistic', 'Value'],
                         cellLoc='center',
                         loc='right',
-                        bbox=[1, 0.06, histogram_table_layout['table_bbox_width'], 0.94],
+                        bbox=[table_bbox_x, 0.06, table_bbox_width, 0.94],
                     )
                     ax_table.auto_set_font_size(False)
                     ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
@@ -3230,7 +3480,7 @@ class ExportDataThread(QThread):
                         cellText=[[normality_note]],
                         cellLoc='center',
                         loc='right',
-                        bbox=[1, -0.17, histogram_table_layout['table_bbox_width'], 0.15],
+                        bbox=[table_bbox_x, -0.17, table_bbox_width, 0.15],
                     )
                     normality_table.auto_set_font_size(False)
                     normality_table.set_fontsize(histogram_font_sizes['table_fontsize'])
@@ -3269,7 +3519,8 @@ class ExportDataThread(QThread):
                     )
                     render_spec_reference_lines(ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
                     ax.set_xlabel('Measurement')
-                    ax.set_ylabel('Count')
+                    if not histogram_render_meta.get('is_grouped'):
+                        ax.set_ylabel('Count')
                     histogram_title_pad = 26
                     ax.set_title(build_wrapped_chart_title(header), pad=histogram_title_pad)
                     apply_minimal_axis_style(ax, grid_axis='y')

@@ -7,6 +7,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
 from modules.export_summary_utils import compute_normality_status
@@ -51,6 +52,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules['modules.CustomLogger'] = custom_logger_stub
 
 from modules.ExportDataThread import (  # noqa: E402
+    ExportDataThread,
     build_histogram_annotation_specs,
     build_histogram_mean_line_style,
     compute_histogram_annotation_rows,
@@ -170,6 +172,50 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertEqual(list(secondary_axis.get_yticks()), [])
             self.assertFalse(secondary_axis.spines['right'].get_visible())
             self.assertEqual(len(secondary_axis.lines), 1)
+        finally:
+            plt.close(fig)
+
+    def test_render_violin_draws_horizontal_spec_reference_lines(self):
+        values = [[-1.89, -1.88, -1.90], [-1.87, -1.86, -1.88]]
+        labels = ['A', 'B']
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            render_violin(ax, values, labels, lsl=-1.90, usl=-1.82)
+
+            horizontal_candidates = []
+            vertical_candidates = []
+            for line in ax.lines:
+                x_data = np.asarray(line.get_xdata(), dtype=float)
+                y_data = np.asarray(line.get_ydata(), dtype=float)
+                if x_data.size < 2 or y_data.size < 2:
+                    continue
+                if np.allclose(y_data, y_data[0], atol=1e-9):
+                    horizontal_candidates.append(line)
+                if np.allclose(x_data, x_data[0], atol=1e-9):
+                    vertical_candidates.append(line)
+
+            self.assertGreaterEqual(len(horizontal_candidates), 2)
+            self.assertEqual(len(vertical_candidates), 0)
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_ignores_grouped_mode_for_summary_histograms(self):
+        histogram_frame = pd.DataFrame(
+            {
+                'GROUP': ['A'] * 8 + ['B'] * 6,
+                'MEAS': [1.01, 1.02, 1.03, 1.04, 1.02, 1.01, 1.05, 1.03, 1.08, 1.09, 1.07, 1.08, 1.10, 1.09],
+            }
+        )
+
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            meta = render_histogram(ax, histogram_frame, group_column='GROUP')
+
+            self.assertFalse(meta['is_grouped'])
+            self.assertEqual(meta['group_labels'], [])
+            self.assertEqual(len(fig.axes), 1)
+            self.assertIsNone(ax.get_legend())
         finally:
             plt.close(fig)
 
@@ -1926,6 +1972,65 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         plt.close(fig_seaborn)
         plt.close(fig_matplotlib)
+
+    def test_group_analysis_plot_asset_filters_labels_with_empty_groups_after_coercion(self):
+        metric_row = {
+            'metric': 'M1',
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.0, 2.0]},
+                    {'group': 'DropMe', 'values': ['bad', None, np.inf]},
+                    {'group': 'C', 'values': [3.0]},
+                ],
+            },
+        }
+
+        captured_axes = []
+
+        def _stub_violinplot(*, data, ax, **_kwargs):
+            captured_axes.append(ax)
+
+        seaborn_stub = types.SimpleNamespace(violinplot=_stub_violinplot)
+        with mock.patch('modules.ExportDataThread._HAS_SEABORN', True), mock.patch('modules.ExportDataThread.sns', seaborn_stub, create=True), mock.patch('modules.ExportDataThread.plt.close'):
+            asset = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'violin')
+
+        self.assertIn('image_data', asset)
+        self.assertEqual(len(captured_axes), 1)
+
+        ax = captured_axes[0]
+        labels = [tick.get_text() for tick in ax.get_xticklabels()]
+        self.assertEqual(labels, ['A', 'C'])
+        self.assertEqual(len(labels), 2)
+
+    def test_group_analysis_histogram_asset_includes_multi_group_legend(self):
+        metric_row = {
+            'metric': 'M2',
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.0, 1.1, 1.2]},
+                    {'group': 'B', 'values': [1.3, 1.4, 1.5]},
+                    {'group': 'C', 'values': [1.6, 1.7, 1.8]},
+                ],
+            },
+        }
+
+        captured_axes = []
+        original_subplots = plt.subplots
+
+        def _capture_subplots(*args, **kwargs):
+            fig, ax = original_subplots(*args, **kwargs)
+            captured_axes.append(ax)
+            return fig, ax
+
+        with mock.patch('modules.ExportDataThread.plt.subplots', side_effect=_capture_subplots):
+            asset = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram')
+
+        self.assertIn('image_data', asset)
+        self.assertEqual(len(captured_axes), 1)
+        legend = captured_axes[0].get_legend()
+        self.assertIsNotNone(legend)
+        labels = [text.get_text() for text in legend.get_texts()]
+        self.assertEqual(labels, ['A', 'B', 'C'])
 
 
     def test_render_tolerance_band_adds_horizontal_patch(self):

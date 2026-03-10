@@ -106,6 +106,24 @@ class TestValidateExportOptions(unittest.TestCase):
         self.assertEqual(options.export_target, 'google_sheets_drive_convert')
         self.assertEqual(options.backend_target, 'google')
 
+    def test_normalizes_group_analysis_options(self):
+        options = validate_export_options(
+            ExportOptions(
+                group_analysis_level='Light',
+                group_analysis_scope='Single-reference',
+            )
+        )
+        self.assertEqual(options.group_analysis_level, 'light')
+        self.assertEqual(options.group_analysis_scope, 'single_reference')
+
+    def test_rejects_unknown_group_analysis_level(self):
+        with self.assertRaises(ValueError):
+            validate_export_options(ExportOptions(group_analysis_level='full'))
+
+    def test_rejects_unknown_group_analysis_scope(self):
+        with self.assertRaises(ValueError):
+            validate_export_options(ExportOptions(group_analysis_scope='local'))
+
 
 class TestValidatePaths(unittest.TestCase):
     def test_accepts_xlsx_target(self):

@@ -7,6 +7,7 @@ store, apply, and clear reference/part grouping assignments.
 from modules.CustomLogger import CustomLogger
 from modules.db import read_sql_dataframe
 from modules.list_selection_utils import ListSelectionUtils
+from modules import ui_theme_tokens
 from PyQt6.QtCore import Qt
 import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtGui import QColor, QBrush
@@ -38,18 +39,11 @@ class DataGrouping(QDialog):
         self.db_file = db_file
         self.df = None
         self.default_group = "POPULATION"
-        self.default_group_color = "#FFFFFF"
+        self.default_group_color = self._resolve_default_group_color()
         self.group_color_column = "GROUP_COLOR"
-        self.group_palette = [
-            "#FDE2E4",
-            "#E2ECE9",
-            "#E8E8FF",
-            "#FFF1E6",
-            "#E3F2FD",
-            "#E7F6E7",
-            "#F9E2FF",
-            "#FFF9C4",
-        ]
+        self.group_palette = ui_theme_tokens.themed_group_palette(
+            dark_mode=self._is_dark_mode_base(self.default_group_color)
+        )
         self._group_display_to_name = {}
         self._list_selection_utils = ListSelectionUtils()
 
@@ -210,6 +204,7 @@ class DataGrouping(QDialog):
             
             # Connect the itemSelectionChanged signal of the "REFERENCE" list to the on_reference_selection_changed method
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
+            self.reference_list.itemDoubleClicked.connect(self.on_reference_item_double_clicked)
             
             # Connect the itemSelectionChanged signal of the "GROUPS" list to the on_group_selection_changed method
             self.groups_list.itemSelectionChanged.connect(self.on_group_selection_changed)
@@ -335,11 +330,29 @@ class DataGrouping(QDialog):
 
     @staticmethod
     def _ideal_text_color(background_hex):
-        color = QColor(background_hex)
-        if not color.isValid():
-            return '#000000'
-        luminance = ((0.299 * color.red()) + (0.587 * color.green()) + (0.114 * color.blue())) / 255
-        return '#000000' if luminance > 0.6 else '#FFFFFF'
+        return ui_theme_tokens.ideal_text_color(background_hex)
+
+    @staticmethod
+    def _resolve_default_group_color_from_base(base_hex, fallback_hex='#FFFFFF'):
+        return ui_theme_tokens.resolve_base_row_background(base_hex or fallback_hex)
+
+    @staticmethod
+    def _is_dark_mode_base(base_hex):
+        return ui_theme_tokens.is_dark_mode_base(base_hex)
+
+    @staticmethod
+    def _clamp_group_color_for_theme(color_hex, dark_mode=False):
+        return ui_theme_tokens.clamp_group_color_for_theme(color_hex, dark_mode=dark_mode)
+
+    def _palette_for_current_theme(self, base_palette):
+        dark_mode = self._is_dark_mode_base(self.default_group_color)
+        return ui_theme_tokens.themed_group_palette(base_palette=base_palette, dark_mode=dark_mode)
+
+    def _resolve_default_group_color(self):
+        palette = self.palette() if hasattr(self, 'palette') else None
+        base = palette.base().color() if palette is not None and hasattr(palette, 'base') else None
+        base_hex = base.name() if base is not None and hasattr(base, 'isValid') and base.isValid() else None
+        return ui_theme_tokens.resolve_base_row_background(base_hex)
 
     def _next_group_color(self):
         used = set(
@@ -353,9 +366,8 @@ class DataGrouping(QDialog):
                 return color
 
         seed = len(used)
-        hue = (seed * 47) % 360
-        generated = QColor.fromHsl(int(hue), 110, 225)
-        return generated.name().upper()
+        dark_mode = self._is_dark_mode_base(self.default_group_color)
+        return ui_theme_tokens.generate_group_color(seed, dark_mode=dark_mode)
 
     def _ensure_group_color_integrity(self):
         if self.group_color_column not in self.df.columns:
@@ -377,14 +389,41 @@ class DataGrouping(QDialog):
         color = getattr(row, self.group_color_column, self.default_group_color)
         if pd.isna(color) or not str(color).strip():
             return self.default_group_color
-        return str(color)
+        dark_mode = self._is_dark_mode_base(self.default_group_color)
+        return ui_theme_tokens.normalize_group_display_color(str(color), dark_mode=dark_mode, fallback=self.default_group_color)
 
     def _apply_item_color(self, item, color_hex):
         color = QColor(color_hex)
         if not color.isValid():
             color = QColor(self.default_group_color)
+        resolved_background = color.name().upper()
         item.setBackground(QBrush(color))
-        item.setForeground(QBrush(QColor(self._ideal_text_color(color.name()))))
+        item.setForeground(QBrush(QColor(self._ideal_text_color(resolved_background))))
+
+    def _apply_list_theme_styles(self):
+        highlight_name = ui_theme_tokens.SELECTED_ROW_BACKGROUND_FALLBACK
+        for list_widget in (
+            getattr(self, 'reference_list', None),
+            getattr(self, 'part_list', None),
+            getattr(self, 'groups_list', None),
+            getattr(self, 'part_group_list', None),
+        ):
+            if list_widget is None or not hasattr(list_widget, 'setStyleSheet'):
+                continue
+
+            palette = list_widget.palette() if hasattr(list_widget, 'palette') else None
+            highlight_color = palette.highlight().color() if palette is not None and hasattr(palette, 'highlight') else None
+            if highlight_color is not None and hasattr(highlight_color, 'isValid') and highlight_color.isValid():
+                highlight_name = highlight_color.name()
+
+            highlight_name = ui_theme_tokens.selected_row_background_override(highlight_name)
+            selected_text_color = ui_theme_tokens.selected_text_color(highlight_name)
+            list_widget.setStyleSheet(
+                "QListWidget::item:selected {"
+                f" background-color: {highlight_name};"
+                f" color: {selected_text_color};"
+                " }"
+            )
 
     def _compute_group_key_for_df(self, df):
         try:
@@ -413,6 +452,8 @@ class DataGrouping(QDialog):
         rows_df = self.df if not selected_reference else self.df[self.df['REFERENCE'] == selected_reference]
         rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
 
+        self._apply_list_theme_styles()
+
         self.part_list.clear()
         for row in rows_df.itertuples(index=False):
             item = QListWidgetItem(self._part_display_label(row))
@@ -423,6 +464,8 @@ class DataGrouping(QDialog):
     def _populate_part_group_list(self, selected_group=None):
         rows_df = self.df if not selected_group else self.df[self.df['GROUP'] == selected_group]
         rows_df = rows_df.drop_duplicates(subset=['GROUP_KEY'])
+
+        self._apply_list_theme_styles()
 
         self.part_group_list.clear()
         for row in rows_df.itertuples(index=False):
@@ -495,6 +538,7 @@ class DataGrouping(QDialog):
         """
 
         try:
+            self._apply_list_theme_styles()
             unique_references = list(map(str, self.df["REFERENCE"].unique()))
             self._ensure_group_color_integrity()
             unique_groups = self.df["GROUP"].unique()
@@ -606,6 +650,16 @@ class DataGrouping(QDialog):
             self.create_group_button.setEnabled(selected_part or bool(selected_reference))
         except Exception as e:
             self.log_and_exit(e)
+
+    def on_reference_item_double_clicked(self, item):
+        """Open create-group flow prefilled with the double-clicked reference."""
+
+        try:
+            if item is None:
+                return
+            self.create_group(initial_group_name=item.text())
+        except Exception as e:
+            self.log_and_exit(e)
     
     def on_group_selection_changed(self):
         """Handle `on_group_selection_changed` for `DataGrouping`.
@@ -662,7 +716,7 @@ class DataGrouping(QDialog):
         except Exception as e:
             self.log_and_exit(e)
             
-    def create_group(self):
+    def create_group(self, initial_group_name=""):
         """Handle `create_group` for `DataGrouping`.
 
         Args:
@@ -688,7 +742,13 @@ class DataGrouping(QDialog):
                         'GROUP_KEY',
                     ].dropna().unique().tolist()
 
-            new_group_name, ok_pressed = QInputDialog.getText(self, "New group", "Enter group name:")
+            default_name = (initial_group_name or "").strip()
+            new_group_name, ok_pressed = QInputDialog.getText(
+                self,
+                "New group",
+                "Enter group name:",
+                text=default_name,
+            )
             new_group_name = (new_group_name or "").strip()
 
             if ok_pressed and target_group_keys and new_group_name:
@@ -775,54 +835,58 @@ class DataGrouping(QDialog):
             preferred_reference_name=self._selected_reference_name(),
         )
 
+    @staticmethod
+    def _list_or_viewport_has_focus(list_widget):
+        if list_widget is None:
+            return False
+        if hasattr(list_widget, "hasFocus") and list_widget.hasFocus():
+            return True
+        if hasattr(list_widget, "viewport") and list_widget.viewport() is not None:
+            return bool(list_widget.viewport().hasFocus())
+        return False
+
     def keyPressEvent(self, event):
-        """Handle Delete/Backspace in the selected-group parts list."""
+        """Handle keyboard shortcuts for list-driven grouping workflows."""
 
         try:
             pressed_key = event.key() if event is not None and hasattr(event, "key") else None
-            is_delete_shortcut = pressed_key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
-            if is_delete_shortcut:
-                if (
-                    self.part_list is not None
-                    and (
-                        self.part_list.hasFocus()
-                        or (
-                            hasattr(self.part_list, "viewport")
-                            and self.part_list.viewport() is not None
-                            and self.part_list.viewport().hasFocus()
-                        )
-                    )
-                ):
+            key_enum = getattr(Qt, "Key", None)
+            delete_keys = tuple(
+                key
+                for key in (
+                    getattr(key_enum, "Key_Delete", None),
+                    getattr(key_enum, "Key_Backspace", None),
+                )
+                if key is not None
+            )
+            enter_keys = tuple(
+                key
+                for key in (
+                    getattr(key_enum, "Key_Return", None),
+                    getattr(key_enum, "Key_Enter", None),
+                )
+                if key is not None
+            )
+
+            if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.reference_list):
+                selected_reference = self._selected_reference_name()
+                if selected_reference:
+                    self.create_group(initial_group_name=selected_reference)
+                    event.accept()
+                    return
+
+            if pressed_key in delete_keys:
+                if self._list_or_viewport_has_focus(self.part_list):
                     self._delete_selected_parts_from_part_list()
                     event.accept()
                     return
 
-                if (
-                    self.part_group_list is not None
-                    and (
-                        self.part_group_list.hasFocus()
-                        or (
-                            hasattr(self.part_group_list, "viewport")
-                            and self.part_group_list.viewport() is not None
-                            and self.part_group_list.viewport().hasFocus()
-                        )
-                    )
-                ):
+                if self._list_or_viewport_has_focus(self.part_group_list):
                     self._delete_selected_parts_from_group()
                     event.accept()
                     return
 
-                if (
-                    self.groups_list is not None
-                    and (
-                        self.groups_list.hasFocus()
-                        or (
-                            hasattr(self.groups_list, "viewport")
-                            and self.groups_list.viewport() is not None
-                            and self.groups_list.viewport().hasFocus()
-                        )
-                    )
-                ):
+                if self._list_or_viewport_has_focus(self.groups_list):
                     self.delete_group()
                     event.accept()
                     return

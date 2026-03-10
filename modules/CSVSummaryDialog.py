@@ -39,6 +39,7 @@ from modules.csv_summary_utils import (
     save_csv_summary_presets,
 )
 from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules import ui_theme_tokens
 
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,25 @@ class FilterDialog(QDialog):
         self.setLayout(main_layout)
 
         # Select the default filter initially
+        self._apply_list_theme_styles()
         self.select_default_filter()
+
+    def _apply_list_theme_styles(self):
+        highlight_name = ui_theme_tokens.SELECTED_ROW_BACKGROUND_FALLBACK
+        for list_widget in (self.index_list_widget, self.data_list_widget):
+            palette = list_widget.palette() if hasattr(list_widget, 'palette') else None
+            highlight_color = palette.highlight().color() if palette is not None and hasattr(palette, 'highlight') else None
+            if highlight_color is not None and hasattr(highlight_color, 'isValid') and highlight_color.isValid():
+                highlight_name = highlight_color.name()
+
+            highlight_name = ui_theme_tokens.selected_row_background_override(highlight_name)
+            selected_text_color = ui_theme_tokens.selected_text_color(highlight_name)
+            list_widget.setStyleSheet(
+                "QListWidget::item:selected {"
+                f" background-color: {highlight_name};"
+                f" color: {selected_text_color};"
+                " }"
+            )
 
     def select_default_filter(self):
         # Select the first item in INDEX list as default

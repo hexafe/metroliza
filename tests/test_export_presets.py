@@ -577,6 +577,8 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
             hide_ok_results=True,
             filter_query='SELECT * FROM T',
             grouping_df=None,
+            group_analysis_level='Standard',
+            group_analysis_scope='Multi-reference',
         )
 
         expected_options = validate_export_options(
@@ -588,6 +590,8 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
                 violin_input='1',
                 summary_scale_input='-4',
                 hide_ok_results=True,
+                group_analysis_level='Standard',
+                group_analysis_scope='Multi-reference',
             )
         )
 
@@ -598,6 +602,8 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
         self.assertEqual(request.options.summary_plot_scale, 0)
         self.assertEqual(request.filter_query, 'SELECT * FROM T')
         self.assertIsNone(request.grouping_df)
+        self.assertEqual(request.options.group_analysis_level, 'standard')
+        self.assertEqual(request.options.group_analysis_scope, 'multi_reference')
 
 
 class TestExportDialogThreadStartupContract(unittest.TestCase):

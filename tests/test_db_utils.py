@@ -16,6 +16,7 @@ from modules.db import (
     read_sql_dataframe,
     run_transaction_with_retry,
 )
+from modules.characteristic_alias_service import ensure_characteristic_alias_schema
 
 
 class TestDbUtils(unittest.TestCase):
@@ -276,11 +277,40 @@ class TestDbUtils(unittest.TestCase):
 
             self.assertFalse(writer_thread.is_alive(), 'Writer thread should complete after lock release')
             self.assertEqual(errors, [])
+
+            rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
+            self.assertEqual(rows, [('alpha',), ('beta',), ('overlap-write',)])
         finally:
             lock_conn.close()
 
-        rows = execute_with_retry(self.db_path, 'SELECT name FROM sample ORDER BY id')
-        self.assertEqual(rows, [('alpha',), ('beta',), ('overlap-write',)])
+    def test_ensure_characteristic_alias_schema_is_idempotent(self):
+        ensure_characteristic_alias_schema(self.db_path)
+        ensure_characteristic_alias_schema(self.db_path)
+
+        columns = execute_with_retry(
+            self.db_path,
+            'PRAGMA table_info(CHARACTERISTIC_ALIASES)',
+        )
+        column_names = [row[1] for row in columns]
+        self.assertEqual(
+            column_names,
+            [
+                'id',
+                'alias_name',
+                'canonical_name',
+                'scope_type',
+                'scope_value',
+                'created_at',
+                'updated_at',
+            ],
+        )
+
+        indexes = execute_with_retry(
+            self.db_path,
+            "PRAGMA index_list('CHARACTERISTIC_ALIASES')",
+        )
+        index_names = {row[1] for row in indexes}
+        self.assertIn('characteristic_alias_scope_lookup', index_names)
 
 
 if __name__ == '__main__':
