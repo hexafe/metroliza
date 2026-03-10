@@ -61,8 +61,8 @@ Audit the repo against the implementation plan, then define the next PR sequence
 - [x] PR 2 (last PR): update plan/status/todo docs to match shipped behavior.
 - [x] Next follow-up delivered: implement Characteristic Alias Mapping v1 (manual mappings table, scoped resolution, and pipeline integration).
 - [x] Next follow-up delivered: add bulk alias mapping import/export with batch-validation tests.
-- [ ] Next follow-up: advanced conflict-report UX for manual alias CSV import (clear row-level remediation guidance).
+- [x] Next follow-up delivered: advanced conflict-report UX for manual alias CSV import (conflict-first summaries plus saveable remediation CSV report).
 
 ## Sequencing rationale
 
-Standard chart insertion and Characteristic Alias Mapping v1 are now closed, including bulk alias mapping import/export and batch-validation coverage; this docs closeout aligns roadmap/status text with shipped behavior and leaves a single concrete follow-up focused on advanced CSV conflict-report UX while keeping mapping deterministic/manual-only.
+Standard chart insertion and Characteristic Alias Mapping v1 are now closed, including bulk alias mapping import/export, conflict-first validation summaries, and saveable remediation CSV reporting while keeping mapping deterministic/manual-only.

@@ -11,7 +11,10 @@ from modules.characteristic_alias_service import (
 
 try:
     from PyQt6.QtWidgets import QApplication, QMessageBox
-    from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
+    from modules.characteristic_mapping_dialog import (
+        CharacteristicMappingDialog,
+        build_remediation_report_rows,
+    )
 except ImportError as exc:  # pragma: no cover - environment-dependent import
     QApplication = None
     QMessageBox = None
@@ -130,11 +133,20 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
             try:
                 validation_error = CharacteristicAliasImportValidationError(
                     [
+                        'duplicate alias/scope key for "AX" (global) at row 2; first seen at row 1',
                         'alias_name is required at row 2',
                         'scope_value is required for reference scope at row 3',
                     ],
                     summary='CSV import failed validation. Fix the row issues below and retry.',
                     row_error_details=[
+                        {
+                            'row_number': 2,
+                            'field': 'alias_name',
+                            'code': 'duplicate_key_collision',
+                            'category': 'duplicate_collision',
+                            'remediation_hint': 'Remove or merge duplicate alias rows with the same alias_name + scope.',
+                            'message': 'duplicate alias/scope key for "AX" (global) at row 2; first seen at row 1',
+                        },
                         {
                             'row_number': 2,
                             'field': 'alias_name',
@@ -152,7 +164,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                             'message': 'scope_value is required for reference scope at row 3',
                         },
                     ],
-                    total_rows_processed=4,
+                    total_rows_processed=5,
                 )
                 with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
                     with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=validation_error):
@@ -164,18 +176,102 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 self.assertIsNotNone(active_box)
                 self.assertEqual(active_box.windowTitle(), 'Import error')
                 message = active_box.text()
-                self.assertIn('Total rows processed: 4', message)
-                self.assertIn('Valid rows: 2', message)
+                self.assertIn('What to fix first:', message)
+                self.assertIn('Remove duplicate alias/scope key rows', message)
+                self.assertIn('Total rows processed: 5', message)
+                self.assertIn('Valid rows: 3', message)
                 self.assertIn('Invalid rows: 2', message)
                 self.assertIn('Error categories:', message)
+                self.assertIn('duplicate_collision: 1', message)
                 self.assertIn('missing_required_field: 1', message)
                 self.assertIn('scope_requirements: 1', message)
                 self.assertIn('Fix: Provide a non-empty alias_name value.', message)
                 self.assertIn('Fix: Set scope_value for reference-scoped aliases.', message)
                 detailed = active_box.detailedText()
                 self.assertIn('CSV Validation Report', detailed)
+                self.assertIn('Conflict-first sections:', detailed)
+                self.assertIn('duplicate_collision:', detailed)
+                self.assertIn('other_validation_issues:', detailed)
+                self.assertIn('code=duplicate_key_collision', detailed)
                 self.assertIn('code=missing_alias_name', detailed)
                 self.assertIn('code=reference_scope_requires_scope_value', detailed)
+            finally:
+                dialog.close()
+
+    def test_build_remediation_report_rows_sorts_by_row_then_category(self):
+        rows = build_remediation_report_rows(
+            [
+                {
+                    'row_number': 8,
+                    'field': 'scope_value',
+                    'code': 'reference_scope_requires_scope_value',
+                    'category': 'scope_requirements',
+                    'message': 'scope_value is required for reference scope at row 8',
+                    'remediation_hint': 'Set scope_value for reference-scoped aliases.',
+                },
+                {
+                    'row_number': 5,
+                    'field': 'alias_name',
+                    'code': 'duplicate_key_collision',
+                    'category': 'duplicate_collision',
+                    'message': 'duplicate alias/scope key for "AX" (global) at row 5; first seen at row 4',
+                    'remediation_hint': 'Remove or merge duplicate alias rows with the same alias_name + scope.',
+                },
+                {
+                    'row_number': 5,
+                    'field': 'canonical_name',
+                    'code': 'missing_canonical_name',
+                    'category': 'missing_required_field',
+                    'message': 'canonical_name is required at row 5',
+                    'remediation_hint': 'Provide the canonical_name to map this alias to.',
+                },
+            ]
+        )
+
+        self.assertEqual(rows[0]['code'], 'duplicate_key_collision')
+        self.assertEqual(rows[1]['code'], 'missing_canonical_name')
+        self.assertEqual(rows[2]['code'], 'reference_scope_requires_scope_value')
+
+    def test_import_mappings_offers_and_saves_remediation_report_csv(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            csv_path = f'{tmpdir}/import_aliases.csv'
+            report_path = f'{tmpdir}/remediation_report.csv'
+            ensure_characteristic_alias_schema(db_path)
+            with open(csv_path, 'w', encoding='utf-8', newline='') as csv_file:
+                csv_file.write('alias_name,canonical_name,scope_type,scope_value\n')
+
+            dialog = CharacteristicMappingDialog(parent=None, db_file=db_path)
+            try:
+                validation_error = CharacteristicAliasImportValidationError(
+                    ['duplicate alias/scope key for "AX" (global) at row 3; first seen at row 2'],
+                    summary='CSV import failed validation. Fix the row issues below and retry.',
+                    row_error_details=[
+                        {
+                            'row_number': 3,
+                            'field': 'alias_name',
+                            'code': 'duplicate_key_collision',
+                            'category': 'duplicate_collision',
+                            'remediation_hint': 'Remove or merge duplicate alias rows with the same alias_name + scope.',
+                            'message': 'duplicate alias/scope key for "AX" (global) at row 3; first seen at row 2',
+                        }
+                    ],
+                    total_rows_processed=2,
+                )
+
+                with patch('modules.characteristic_mapping_dialog.QFileDialog.getOpenFileName', return_value=(csv_path, 'CSV files (*.csv)')):
+                    with patch('modules.characteristic_mapping_dialog.import_characteristic_aliases_csv', side_effect=validation_error):
+                        with patch('modules.characteristic_mapping_dialog.QMessageBox.exec', return_value=QMessageBox.StandardButton.Ok):
+                            with patch.object(QMessageBox, 'question', return_value=QMessageBox.StandardButton.Yes):
+                                with patch('modules.characteristic_mapping_dialog.QFileDialog.getSaveFileName', return_value=(report_path, 'CSV files (*.csv)')):
+                                    with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
+                                        dialog.import_mappings()
+
+                info_mock.assert_called_once_with(dialog, 'Report saved', 'Saved remediation report with 1 row issue(s).')
+                with open(report_path, 'r', encoding='utf-8') as report_file:
+                    lines = report_file.read().splitlines()
+                self.assertEqual(lines[0], 'row_number,field,code,category,message,remediation_hint')
+                self.assertIn('3,alias_name,duplicate_key_collision,duplicate_collision,"duplicate alias/scope key for ""AX"" (global) at row 3; first seen at row 2",Remove or merge duplicate alias rows with the same alias_name + scope.', lines)
             finally:
                 dialog.close()
 
