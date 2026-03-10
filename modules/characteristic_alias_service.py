@@ -9,8 +9,11 @@ from modules.db import execute_with_retry
 from modules.db import run_transaction_with_retry
 
 
+CHARACTERISTIC_ALIAS_TABLE = 'characteristic_alias_map'
+
+
 CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
-    '''CREATE TABLE IF NOT EXISTS CHARACTERISTIC_ALIASES (
+    f'''CREATE TABLE IF NOT EXISTS {CHARACTERISTIC_ALIAS_TABLE} (
             id INTEGER PRIMARY KEY,
             alias_name TEXT NOT NULL,
             canonical_name TEXT NOT NULL,
@@ -19,7 +22,7 @@ CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
             created_at TEXT NULL,
             updated_at TEXT NULL
         )''',
-    'CREATE INDEX IF NOT EXISTS characteristic_alias_scope_lookup ON CHARACTERISTIC_ALIASES(alias_name, scope_type, scope_value)',
+    f'CREATE INDEX IF NOT EXISTS characteristic_alias_scope_lookup ON {CHARACTERISTIC_ALIAS_TABLE}(alias_name, scope_type, scope_value)',
 )
 
 CSV_ALIAS_HEADERS = ('alias_name', 'canonical_name', 'scope_type', 'scope_value')
@@ -42,6 +45,26 @@ def ensure_characteristic_alias_table(cursor) -> None:
     """Create characteristic alias table/indexes in a migration-safe way."""
     for statement in CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS:
         cursor.execute(statement)
+
+    cursor.execute(
+        f"SELECT name FROM sqlite_master WHERE type='table' AND UPPER(name) = 'CHARACTERISTIC_ALIASES'"
+    )
+    legacy_table = cursor.fetchone()
+    if legacy_table is None:
+        return
+
+    cursor.execute(f'SELECT COUNT(*) FROM {CHARACTERISTIC_ALIAS_TABLE}')
+    row_count = int((cursor.fetchone() or [0])[0] or 0)
+    if row_count:
+        return
+
+    cursor.execute(
+        f'''
+        INSERT INTO {CHARACTERISTIC_ALIAS_TABLE}(alias_name, canonical_name, scope_type, scope_value, created_at, updated_at)
+        SELECT alias_name, canonical_name, scope_type, scope_value, created_at, updated_at
+        FROM {legacy_table[0]}
+        '''
+    )
 
 
 def ensure_characteristic_alias_schema(
@@ -86,6 +109,11 @@ def normalize_alias_scope(scope_type: str, scope_value: str | None) -> tuple[str
     return normalized_scope_type, normalized_scope_value
 
 
+def normalize_scope_type(scope_type: str, scope_value: str | None) -> tuple[str, str | None]:
+    """Compatibility helper for alias scope normalization."""
+    return normalize_alias_scope(scope_type, scope_value)
+
+
 def fetch_characteristic_aliases(
     db_path: str,
     alias_name: str,
@@ -100,7 +128,7 @@ def fetch_characteristic_aliases(
 
     query = '''
         SELECT alias_name, canonical_name, scope_type, scope_value
-        FROM CHARACTERISTIC_ALIASES
+        FROM characteristic_alias_map
         WHERE alias_name = ?
           AND (
             (scope_type = 'reference' AND scope_value = ?)
@@ -139,7 +167,7 @@ def fetch_all_characteristic_aliases(
     """Fetch all alias mappings ordered for deterministic UI rendering."""
     query = '''
         SELECT alias_name, canonical_name, scope_type, scope_value
-        FROM CHARACTERISTIC_ALIASES
+        FROM characteristic_alias_map
         ORDER BY alias_name COLLATE NOCASE ASC,
                  scope_type ASC,
                  scope_value COLLATE NOCASE ASC,
@@ -188,7 +216,7 @@ def resolve_characteristic_alias(
             connection=connection,
         )
     except sqlite3.OperationalError as exc:
-        if 'no such table: CHARACTERISTIC_ALIASES' in str(exc):
+        if f'no such table: {CHARACTERISTIC_ALIAS_TABLE}' in str(exc):
             return normalized_metric_name
         raise
 
@@ -248,7 +276,7 @@ def upsert_characteristic_aliases_bulk(
             cursor.execute(
                 '''
                 SELECT id
-                FROM CHARACTERISTIC_ALIASES
+                FROM characteristic_alias_map
                 WHERE alias_name = ? AND scope_type = ?
                   AND (
                     (scope_value IS NULL AND ? IS NULL)
@@ -268,7 +296,7 @@ def upsert_characteristic_aliases_bulk(
             if existing_row is None:
                 cursor.execute(
                     '''
-                    INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value)
+                    INSERT INTO characteristic_alias_map(alias_name, canonical_name, scope_type, scope_value)
                     VALUES (?, ?, ?, ?)
                     ''',
                     (
@@ -281,7 +309,7 @@ def upsert_characteristic_aliases_bulk(
             else:
                 cursor.execute(
                     '''
-                    UPDATE CHARACTERISTIC_ALIASES
+                    UPDATE characteristic_alias_map
                     SET canonical_name = ?, scope_type = ?, scope_value = ?
                     WHERE id = ?
                     ''',
@@ -407,7 +435,7 @@ def upsert_characteristic_alias(
         cursor.execute(
             '''
             SELECT id
-            FROM CHARACTERISTIC_ALIASES
+            FROM characteristic_alias_map
             WHERE alias_name = ? AND scope_type = ?
               AND (
                 (scope_value IS NULL AND ? IS NULL)
@@ -428,7 +456,7 @@ def upsert_characteristic_alias(
         if row is None:
             cursor.execute(
                 '''
-                INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value)
+                INSERT INTO characteristic_alias_map(alias_name, canonical_name, scope_type, scope_value)
                 VALUES (?, ?, ?, ?)
                 ''',
                 (
@@ -442,7 +470,7 @@ def upsert_characteristic_alias(
 
         cursor.execute(
             '''
-            UPDATE CHARACTERISTIC_ALIASES
+            UPDATE characteristic_alias_map
             SET canonical_name = ?,
                 scope_type = ?,
                 scope_value = ?
@@ -485,7 +513,7 @@ def delete_characteristic_alias(
     def operation(cursor) -> int:
         cursor.execute(
             '''
-            DELETE FROM CHARACTERISTIC_ALIASES
+            DELETE FROM characteristic_alias_map
             WHERE alias_name = ? AND scope_type = ?
               AND (
                 (scope_value IS NULL AND ? IS NULL)

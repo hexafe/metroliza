@@ -57,7 +57,7 @@ class MainWindow(QMainWindow):
         self.modifydb_button = QPushButton("Launch Modify Database")
         self.export_button = QPushButton("Launch Export")
         self.csv_summary_button = QPushButton("CSV Summary")
-        self.map_characteristics_button = QPushButton("Map Characteristics")
+        self.map_characteristics_button = QPushButton("Match Characteristic Names")
         self.setup_button_tooltips()
 
         # Set up menu items
@@ -88,7 +88,7 @@ class MainWindow(QMainWindow):
         self.modifydb_button.setToolTip("Use Modify Database module to modify Reference, Part number or Header in database")
         self.export_button.setToolTip("Use Export module to filter, set and export data from database to Excel file")
         self.csv_summary_button.setToolTip("Use CSV module to automatically create charts from CSV data")
-        self.map_characteristics_button.setToolTip("Map characteristic aliases to canonical names by scope")
+        self.map_characteristics_button.setToolTip("Tell the app which different characteristic names should be treated as the same characteristic.")
 
     def setup_menu_actions(self):
         """Set up the menu actions for the main window."""

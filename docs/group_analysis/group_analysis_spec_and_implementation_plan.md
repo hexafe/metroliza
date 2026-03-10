@@ -256,8 +256,9 @@ Resolution order:
 
 UI entry point:
 
-- action label: `Map Characteristics`,
-- opens a dialog titled `Characteristic Mapping`.
+- action label: `Match Characteristic Names`,
+- entry-point tooltip: `Tell the app which different characteristic names should be treated as the same characteristic.`,
+- opens a separate dialog titled `Characteristic Name Matching`.
 
 Integration point in pipeline:
 

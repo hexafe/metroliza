@@ -52,7 +52,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
         self.assertEqual(fetched[0]['alias_name'], 'AX-1')
 
         with connect(self.db_path) as connection:
-            index_rows = connection.execute("PRAGMA index_list('CHARACTERISTIC_ALIASES')").fetchall()
+            index_rows = connection.execute("PRAGMA index_list('characteristic_alias_map')").fetchall()
         self.assertTrue(any('characteristic_alias_scope_lookup' in row[1] for row in index_rows))
 
     def test_ensure_schema_is_migration_safe_on_existing_database(self):
@@ -67,11 +67,11 @@ class TestCharacteristicAliasService(unittest.TestCase):
         with connect(legacy_db_path) as connection:
             legacy_rows = connection.execute('SELECT value FROM LEGACY_TABLE').fetchall()
             alias_table_row = connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='CHARACTERISTIC_ALIASES'"
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='characteristic_alias_map'"
             ).fetchone()
 
         self.assertEqual(legacy_rows, [('legacy-row',)])
-        self.assertEqual(alias_table_row, ('CHARACTERISTIC_ALIASES',))
+        self.assertEqual(alias_table_row, ('characteristic_alias_map',))
 
     def test_upsert_validates_required_fields(self):
         with self.assertRaisesRegex(ValueError, 'alias_name is required'):
