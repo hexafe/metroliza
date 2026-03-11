@@ -98,7 +98,7 @@ class CharacteristicAliasEditorDialog(QDialog):
 
     def __init__(self, parent=None, *, initial_values=None):
         super().__init__(parent)
-        self.setWindowTitle('Edit name match' if initial_values else 'Add new name match')
+        self.setWindowTitle('Edit report name mapping' if initial_values else 'Add new report name mapping')
 
         self.alias_input = QLineEdit()
         self.alias_input.setPlaceholderText('e.g. TP GAP')
@@ -124,10 +124,10 @@ class CharacteristicAliasEditorDialog(QDialog):
         layout = QGridLayout(self)
 
         row = 0
-        layout.addWidget(QLabel('Name match'), row, 0)
+        layout.addWidget(QLabel('Name found in report'), row, 0)
         layout.addWidget(self.alias_input, row, 1)
         row += 1
-        alias_help = QLabel('Enter the name match exactly as it appears in the report.')
+        alias_help = QLabel('Enter the name exactly as it appears in the report.')
         alias_help.setWordWrap(True)
         layout.addWidget(alias_help, row, 0, 1, 2)
 
@@ -144,8 +144,9 @@ class CharacteristicAliasEditorDialog(QDialog):
         layout.addWidget(self.apply_to_combo, row, 1)
         row += 1
         apply_help = QLabel(
-            'Choose “All references” if this name match should always map to the same common name. '
-            'Choose “One reference only” if this name match is valid only for one specific reference.'
+            'Use “All references” when the same characteristic may appear under different names across reports, '
+            'and this report name should always map to the same common name. '
+            'Use “One reference only” when this report name should map only for a specific reference.'
         )
         apply_help.setWordWrap(True)
         layout.addWidget(apply_help, row, 0, 1, 2)
@@ -155,21 +156,22 @@ class CharacteristicAliasEditorDialog(QDialog):
         layout.addWidget(self.reference_label, row, 0)
         layout.addWidget(self.reference_input, row, 1)
         row += 1
-        self.reference_help = QLabel('This name match will only be used for the selected reference.')
+        self.reference_help = QLabel('This report name will only be used for the selected reference.')
         self.reference_help.setWordWrap(True)
         layout.addWidget(self.reference_help, row, 0, 1, 2)
 
         row += 1
         example_help = QLabel(
-            'Example:\nIf one report uses “TP GAP” and another uses “AA-C11 - TP”, '
-            'you can set the name match “TP GAP” to common name “AA-C11 - TP”.'
+            'Example:\nThe same characteristic can appear under different names. '
+            'If one report uses “TP GAP” and another uses “AA-C11 - TP”, '
+            'map “TP GAP” to the common name “AA-C11 - TP”.'
         )
         example_help.setWordWrap(True)
         layout.addWidget(example_help, row, 0, 1, 2)
 
         row += 1
         self.button_box_layout = QHBoxLayout()
-        self.save_button = QPushButton('Save match')
+        self.save_button = QPushButton('Save mapping')
         self.clear_button = QPushButton('Clear')
         self.cancel_button = QPushButton('Cancel')
         self.button_box_layout.addWidget(self.save_button)
@@ -206,7 +208,7 @@ class CharacteristicAliasEditorDialog(QDialog):
         scope_value = str(self.reference_input.text() or '').strip() or None
 
         if not alias_name:
-            QMessageBox.warning(self, 'Validation error', 'Please enter a name match.')
+            QMessageBox.warning(self, 'Validation error', 'Please enter the name found in the report.')
             return
 
         if not common_name:
@@ -239,7 +241,7 @@ class CharacteristicAliasEditorDialog(QDialog):
 class CharacteristicMappingDialog(QDialog):
     """Manage report-name-to-common-name mappings."""
 
-    TABLE_HEADERS = ['Original name', 'Use this common name', 'Apply to', 'Reference']
+    TABLE_HEADERS = ['Name found in report', 'Use this common name', 'Apply to', 'Reference']
 
     def __init__(self, parent=None, db_file=''):
         super().__init__(parent)
@@ -252,7 +254,8 @@ class CharacteristicMappingDialog(QDialog):
         self.db_file = db_file
 
         self.subtitle_label = QLabel(
-            'Use this tool to map each name match to a common name, then choose apply to as all references or one reference only.'
+            'Use this tool when the same characteristic appears under different names in reports. '
+            'Map each report name to a common name, then choose whether the mapping applies to all references or one reference only.'
         )
         self.subtitle_label.setWordWrap(True)
 
@@ -261,10 +264,10 @@ class CharacteristicMappingDialog(QDialog):
         self.db_path_input.setReadOnly(True)
         self.select_db_button = QPushButton('Browse DB')
 
-        self.table_title_label = QLabel('Saved name match entries')
+        self.table_title_label = QLabel('Saved report name mappings')
         self.empty_state_label = QLabel(
-            'No name matches have been added yet.\n'
-            'Add a name match and common name, then choose apply to and reference as needed.'
+            'No report name mappings have been added yet.\n'
+            'Add a name found in report and a common name, then choose Apply to and Reference as needed.'
         )
         self.empty_state_label.setWordWrap(True)
 
@@ -358,7 +361,7 @@ class CharacteristicMappingDialog(QDialog):
             alias_rows = fetch_all_characteristic_aliases(self.db_file)
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Load error', f'Could not load name match entries: {exc}')
+            QMessageBox.critical(self, 'Load error', f'Could not load report name mappings: {exc}')
             return
 
         self.alias_table.setRowCount(len(alias_rows))
@@ -415,7 +418,7 @@ class CharacteristicMappingDialog(QDialog):
                 QMessageBox.warning(
                     self,
                     'Validation error',
-                    'This name match already exists for the selected apply to/reference combination.',
+                    'This name found in the report already exists for the selected Apply to/Reference combination.',
                 )
                 return
 
@@ -429,7 +432,7 @@ class CharacteristicMappingDialog(QDialog):
             self.load_aliases()
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Save error', f'Could not save name match entry: {exc}')
+            QMessageBox.critical(self, 'Save error', f'Could not save report name mapping: {exc}')
 
     def edit_mapping(self):
         selected = self._selected_mapping()
@@ -461,7 +464,7 @@ class CharacteristicMappingDialog(QDialog):
                 QMessageBox.warning(
                     self,
                     'Validation error',
-                    'This name match already exists for the selected apply to/reference combination.',
+                    'This name found in the report already exists for the selected Apply to/Reference combination.',
                 )
                 return
 
@@ -486,7 +489,7 @@ class CharacteristicMappingDialog(QDialog):
             self.load_aliases()
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Save error', f'Could not update name match entry: {exc}')
+            QMessageBox.critical(self, 'Save error', f'Could not update report name mapping: {exc}')
 
     def delete_mapping(self):
         selected = self._selected_mapping()
@@ -495,9 +498,9 @@ class CharacteristicMappingDialog(QDialog):
 
         confirmation = QMessageBox.question(
             self,
-            'Delete name match',
-            'Are you sure you want to delete this name match?\n\n'
-            'This will stop applying the selected name match to the chosen common name/reference.',
+            'Delete report name mapping',
+            'Are you sure you want to delete this report name mapping?\n\n'
+            'This will stop treating the selected report name as the chosen common name.',
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -514,7 +517,7 @@ class CharacteristicMappingDialog(QDialog):
             self.load_aliases()
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Delete error', f'Could not delete name match entry: {exc}')
+            QMessageBox.critical(self, 'Delete error', f'Could not delete report name mapping: {exc}')
 
     def _ensure_db_file_selected(self) -> bool:
         if _has_selected_db_file(self.db_file):
@@ -553,7 +556,7 @@ class CharacteristicMappingDialog(QDialog):
         valid_rows = max(0, processed - invalid_rows)
 
         summary_lines = [
-            'Could not import name match entries due to CSV validation errors.',
+            'Could not import report name mappings due to CSV validation errors.',
             f'Total rows processed: {processed}',
             f'Valid rows: {valid_rows}',
             f'Invalid rows: {invalid_rows}',
@@ -565,7 +568,7 @@ class CharacteristicMappingDialog(QDialog):
         summary_lines.append('')
         summary_lines.append('What to fix first:')
         if duplicate_conflicts:
-            summary_lines.append('  1) Remove duplicate name match/apply to key rows to keep imports atomic and deterministic.')
+            summary_lines.append('  1) Remove duplicate report name/apply to key rows to keep imports atomic and deterministic.')
             summary_lines.append('  2) For each duplicate key, choose one apply to strategy: all references or one reference only.')
         summary_lines.append('  3) Fix missing/invalid field values listed below and retry import.')
 
@@ -611,7 +614,7 @@ class CharacteristicMappingDialog(QDialog):
 
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            'Import name match entries',
+            'Import report name mappings',
             str(self.db_file or ''),
             'CSV files (*.csv);;All files (*)',
         )
@@ -622,7 +625,7 @@ class CharacteristicMappingDialog(QDialog):
             ensure_characteristic_alias_schema(self.db_file)
             imported_count = import_characteristic_aliases_csv(self.db_file, filename)
             self.load_aliases()
-            QMessageBox.information(self, 'Import complete', f'Imported {imported_count} name match row(s).')
+            QMessageBox.information(self, 'Import complete', f'Imported {imported_count} report name mapping row(s).')
         except CharacteristicAliasImportValidationError as exc:
             CustomLogger(exc, reraise=False)
             message, full_report = self._build_import_validation_summary(exc, preview_limit=10)
@@ -638,7 +641,7 @@ class CharacteristicMappingDialog(QDialog):
                 save_response = QMessageBox.question(
                     self,
                     'Save remediation report',
-                    'Save a remediation CSV report for these name match row issues?',
+                    'Save a remediation CSV report for these report name mapping row issues?',
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.Yes,
                 )
@@ -655,14 +658,14 @@ class CharacteristicMappingDialog(QDialog):
                         QMessageBox.information(
                             self,
                             'Report saved',
-                            f'Saved remediation report with {exported_rows} name match row issue(s).',
+                            f'Saved remediation report with {exported_rows} report name mapping row issue(s).',
                         )
         except CharacteristicAliasCsvSchemaError as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(
                 self,
                 'Import error',
-                'Could not import name match entries because the CSV header row does not match the expected schema.\n\n'
+                'Could not import report name mappings because the CSV header row does not match the expected schema.\n\n'
                 f"Required columns: {', '.join(exc.required_columns)}\n"
                 f"Detected columns: {', '.join(exc.detected_columns) if exc.detected_columns else '(none)'}\n\n"
                 'Use this exact header line (same names and order):\n'
@@ -670,7 +673,7 @@ class CharacteristicMappingDialog(QDialog):
             )
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Import error', f'Could not import name match entries: {exc}')
+            QMessageBox.critical(self, 'Import error', f'Could not import report name mappings: {exc}')
 
     def export_mappings(self):
         if not self._ensure_db_file_selected():
@@ -678,7 +681,7 @@ class CharacteristicMappingDialog(QDialog):
 
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            'Export name match entries',
+            'Export report name mappings',
             'characteristic_aliases.csv',
             'CSV files (*.csv);;All files (*)',
         )
@@ -688,7 +691,7 @@ class CharacteristicMappingDialog(QDialog):
         try:
             ensure_characteristic_alias_schema(self.db_file)
             exported_count = export_characteristic_aliases_csv(self.db_file, filename)
-            QMessageBox.information(self, 'Export complete', f'Exported {exported_count} name match row(s).')
+            QMessageBox.information(self, 'Export complete', f'Exported {exported_count} report name mapping row(s).')
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Export error', f'Could not export name match entries: {exc}')
+            QMessageBox.critical(self, 'Export error', f'Could not export report name mappings: {exc}')

@@ -86,7 +86,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                     with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
                         dialog.import_mappings()
 
-                info_mock.assert_called_once_with(dialog, 'Import complete', 'Imported 2 name match row(s).')
+                info_mock.assert_called_once_with(dialog, 'Import complete', 'Imported 2 report name mapping row(s).')
                 self.assertEqual(dialog.alias_table.rowCount(), 2)
             finally:
                 dialog.close()
@@ -110,7 +110,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                     with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
                         dialog.export_mappings()
 
-                info_mock.assert_called_once_with(dialog, 'Export complete', 'Exported 1 name match row(s).')
+                info_mock.assert_called_once_with(dialog, 'Export complete', 'Exported 1 report name mapping row(s).')
                 with open(output_path, 'r', encoding='utf-8') as exported_file:
                     lines = exported_file.read().splitlines()
 
@@ -177,7 +177,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 self.assertEqual(active_box.windowTitle(), 'Import error')
                 message = active_box.text()
                 self.assertIn('What to fix first:', message)
-                self.assertIn('Remove duplicate name match/apply to key rows', message)
+                self.assertIn('Remove duplicate report name/apply to key rows', message)
                 self.assertIn('Total rows processed: 5', message)
                 self.assertIn('Valid rows: 3', message)
                 self.assertIn('Invalid rows: 2', message)
@@ -267,7 +267,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                                     with patch.object(QMessageBox, 'information', return_value=QMessageBox.StandardButton.Ok) as info_mock:
                                         dialog.import_mappings()
 
-                info_mock.assert_called_once_with(dialog, 'Report saved', 'Saved remediation report with 1 name match row issue(s).')
+                info_mock.assert_called_once_with(dialog, 'Report saved', 'Saved remediation report with 1 report name mapping row issue(s).')
                 with open(report_path, 'r', encoding='utf-8') as report_file:
                     lines = report_file.read().splitlines()
                 self.assertEqual(lines[0], 'row_number,field,code,category,message,remediation_hint')
@@ -321,7 +321,7 @@ class TestCharacteristicMappingDialog(unittest.TestCase):
                 self.assertIn('Required columns: alias_name, canonical_name, scope_type, scope_value', message)
                 self.assertIn('Detected columns: alias_name, canonical_name', message)
                 self.assertIn('alias_name,canonical_name,scope_type,scope_value', message)
-                self.assertNotIn('Could not import name match entries: ', message)
+                self.assertNotIn('Could not import report name mappings: ', message)
             finally:
                 dialog.close()
 
