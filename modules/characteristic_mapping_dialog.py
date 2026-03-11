@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -273,10 +274,10 @@ class CharacteristicMappingDialog(QDialog):
         self.db_path_input.setReadOnly(True)
         self.select_db_button = QPushButton('Browse DB')
 
-        self.table_title_label = QLabel('Saved report name mappings')
+        self.table_title_label = QLabel('Match Characteristic Names')
         self.empty_state_label = QLabel(
-            'No report name mappings have been added yet.\n'
-            'Add a name found in report and a common name, then choose Apply to and Reference as needed.'
+            'No saved characteristic name matches yet.\n'
+            'Use the Characteristic Name Matching form to add a Name found in report and Use this common name.'
         )
         self.empty_state_label.setWordWrap(True)
 
@@ -287,34 +288,114 @@ class CharacteristicMappingDialog(QDialog):
         self.alias_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.alias_table.itemSelectionChanged.connect(self._sync_selection_actions)
 
-        self.add_button = QPushButton('Add match')
         self.edit_button = QPushButton('Edit selected')
         self.delete_button = QPushButton('Delete selected')
         self.import_button = QPushButton('Import CSV')
         self.export_button = QPushButton('Export CSV')
         self.close_button = QPushButton('Close')
 
+        self.form_title_label = QLabel('Characteristic Name Matching')
+        self.form_helper_label = QLabel(
+            'Add or edit a mapping from Original name / Name found in report to Use this common name, '
+            'then choose Apply to / Reference.'
+        )
+        self.form_helper_label.setWordWrap(True)
+
+        self.alias_label = QLabel('Original name / Name found in report')
+        self.alias_input = QLineEdit()
+        self.alias_input.setPlaceholderText('e.g. TP GAP')
+        self.common_name_label = QLabel('Use this common name')
+        self.common_name_input = QLineEdit()
+        self.common_name_input.setPlaceholderText('e.g. AA-C11 - TP')
+        self.apply_to_label = QLabel('Apply to')
+        self.apply_to_combo = QComboBox()
+        self.apply_to_combo.addItems([ALL_REFERENCES_LABEL, ONE_REFERENCE_LABEL])
+        self.reference_label = QLabel('Reference')
+        self.reference_input = QLineEdit()
+        self.reference_input.setPlaceholderText('Select reference')
+
+        self.example_panel = QFrame()
+        self.example_panel.setFrameShape(QFrame.Shape.StyledPanel)
+        example_layout = QVBoxLayout(self.example_panel)
+        example_layout.setContentsMargins(10, 10, 10, 10)
+        self.example_title = QLabel('Example')
+        self.example_text = QLabel(
+            'The same characteristic can appear under different names. '
+            'If one report uses “TP GAP” and another uses “AA-C11 - TP”, '
+            'map “TP GAP” to the common name “AA-C11 - TP”.\n\n'
+            'Use “All references” when this mapping always applies. '
+            'Use “One reference only” when the mapping is specific to one Reference.'
+        )
+        self.example_text.setWordWrap(True)
+        example_layout.addWidget(self.example_title)
+        example_layout.addWidget(self.example_text)
+
+        self.save_button = QPushButton('Save mapping')
+        self.clear_button = QPushButton('Clear form')
+
         self.subtitle_label.setStyleSheet(ui_theme_tokens.typography_style('body', ui_theme_tokens.COLOR_TEXT_MUTED))
         self.table_title_label.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
         self.empty_state_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
+        self.form_title_label.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        self.form_helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
+        self.example_title.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        self.example_text.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_MUTED))
         self.db_path_input.setStyleSheet(ui_theme_tokens.input_style())
+        self.alias_input.setStyleSheet(ui_theme_tokens.input_style())
+        self.common_name_input.setStyleSheet(ui_theme_tokens.input_style())
+        self.apply_to_combo.setStyleSheet(ui_theme_tokens.input_style())
+        self.reference_input.setStyleSheet(ui_theme_tokens.input_style())
         self.alias_table.setStyleSheet(ui_theme_tokens.table_style(cell_padding=ui_theme_tokens.SPACE_8))
+        self.example_panel.setStyleSheet(
+            f'QFrame {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED}; '
+            f'border: 1px solid {ui_theme_tokens.COLOR_BORDER_MUTED}; border-radius: {ui_theme_tokens.RADIUS_8}px; }}'
+        )
         self.select_db_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
-        self.add_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
-        self.edit_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
         self.delete_button.setStyleSheet(ui_theme_tokens.button_style('danger'))
-        self.import_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
-        self.export_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
-        self.close_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self._apply_button_hierarchy_styles(
+            primary_buttons=[self.save_button],
+            secondary_buttons=[self.edit_button, self.import_button, self.export_button],
+            quiet_buttons=[self.clear_button, self.close_button],
+        )
 
         button_row = QHBoxLayout()
-        button_row.addWidget(self.add_button)
         button_row.addWidget(self.edit_button)
         button_row.addWidget(self.delete_button)
         button_row.addWidget(self.import_button)
         button_row.addWidget(self.export_button)
-        button_row.addStretch()
-        button_row.addWidget(self.close_button)
+
+        form_layout = QGridLayout()
+        form_layout.addWidget(self.alias_label, 0, 0)
+        form_layout.addWidget(self.alias_input, 0, 1)
+        form_layout.addWidget(self.common_name_label, 1, 0)
+        form_layout.addWidget(self.common_name_input, 1, 1)
+        form_layout.addWidget(self.apply_to_label, 2, 0)
+        form_layout.addWidget(self.apply_to_combo, 2, 1)
+        form_layout.addWidget(self.reference_label, 3, 0)
+        form_layout.addWidget(self.reference_input, 3, 1)
+
+        form_button_row = QHBoxLayout()
+        form_button_row.addWidget(self.save_button)
+        form_button_row.addWidget(self.clear_button)
+        form_button_row.addStretch()
+        form_button_row.addWidget(self.close_button)
+
+        left_pane = QVBoxLayout()
+        left_pane.addWidget(self.table_title_label)
+        left_pane.addWidget(self.empty_state_label)
+        left_pane.addWidget(self.alias_table, 1)
+        left_pane.addLayout(button_row)
+
+        right_pane = QVBoxLayout()
+        right_pane.addWidget(self.form_title_label)
+        right_pane.addWidget(self.form_helper_label)
+        right_pane.addLayout(form_layout)
+        right_pane.addWidget(self.example_panel)
+        right_pane.addLayout(form_button_row)
+
+        content_row = QHBoxLayout()
+        content_row.addLayout(left_pane, 2)
+        content_row.addLayout(right_pane, 1)
 
         db_row = QHBoxLayout()
         db_row.addWidget(self.db_label)
@@ -324,21 +405,37 @@ class CharacteristicMappingDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self.subtitle_label)
         layout.addLayout(db_row)
-        layout.addWidget(self.table_title_label)
-        layout.addWidget(self.empty_state_label)
-        layout.addWidget(self.alias_table)
-        layout.addLayout(button_row)
+        layout.addLayout(content_row)
 
-        self.add_button.clicked.connect(self.add_mapping)
+        self._editing_original_key = None
         self.edit_button.clicked.connect(self.edit_mapping)
         self.delete_button.clicked.connect(self.delete_mapping)
         self.import_button.clicked.connect(self.import_mappings)
         self.export_button.clicked.connect(self.export_mappings)
         self.close_button.clicked.connect(self.accept)
+        self.save_button.clicked.connect(self.save_mapping)
+        self.clear_button.clicked.connect(self.clear_form)
+        self.apply_to_combo.currentTextChanged.connect(self._sync_scope_value_state)
         self.select_db_button.clicked.connect(self.select_db_file)
 
         self.load_aliases()
+        self._sync_scope_value_state(self.apply_to_combo.currentText())
         self._sync_selection_actions()
+
+    def _apply_button_hierarchy_styles(self, *, primary_buttons, secondary_buttons, quiet_buttons):
+        for button in primary_buttons:
+            button.setStyleSheet(ui_theme_tokens.button_style('primary'))
+        for button in secondary_buttons:
+            button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        for button in quiet_buttons:
+            button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
+
+    def _sync_scope_value_state(self, selected_scope):
+        is_reference_scope = str(selected_scope or '').strip() == ONE_REFERENCE_LABEL
+        self.reference_label.setVisible(is_reference_scope)
+        self.reference_input.setVisible(is_reference_scope)
+        if not is_reference_scope:
+            self.reference_input.clear()
 
     def _scope_display_values(self, scope_type, scope_value):
         if str(scope_type or '').strip().lower() == 'reference':
@@ -354,6 +451,13 @@ class CharacteristicMappingDialog(QDialog):
         has_selection = self._selected_mapping() is not None
         self.edit_button.setEnabled(has_selection)
         self.delete_button.setEnabled(has_selection)
+
+    def clear_form(self):
+        self.alias_input.clear()
+        self.common_name_input.clear()
+        self.apply_to_combo.setCurrentText(ALL_REFERENCES_LABEL)
+        self.reference_input.clear()
+        self._editing_original_key = None
 
     def select_db_file(self):
         filename, _ = QFileDialog.getOpenFileName(
@@ -419,56 +523,58 @@ class CharacteristicMappingDialog(QDialog):
             'scope_value': scope_value,
         }
 
-    def add_mapping(self):
-        editor = CharacteristicAliasEditorDialog(self)
-        if editor.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        payload = editor.result_payload
-        if payload is None:
-            return
-
-        try:
-            ensure_characteristic_alias_schema(self.db_file)
-            existing = fetch_all_characteristic_aliases(self.db_file)
-            if any(
-                row['alias_name'] == payload['alias_name']
-                and row['scope_type'] == payload['scope_type']
-                and (row.get('scope_value') or None) == (payload.get('scope_value') or None)
-                for row in existing
-            ):
-                QMessageBox.warning(
-                    self,
-                    'Validation error',
-                    'This name found in the report already exists for the selected Apply to/Reference combination.',
-                )
-                return
-
-            upsert_characteristic_alias(
-                self.db_file,
-                alias_name=payload['alias_name'],
-                canonical_name=payload['canonical_name'],
-                scope_type=payload['scope_type'],
-                scope_value=payload['scope_value'],
-            )
-            self.load_aliases()
-        except Exception as exc:
-            CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Save error', f'Could not save report name mapping: {exc}')
-
     def edit_mapping(self):
         selected = self._selected_mapping()
         if selected is None:
             return
+        self.alias_input.setText(selected['alias_name'])
+        self.common_name_input.setText(selected['canonical_name'])
+        if selected['scope_type'] == 'reference':
+            self.apply_to_combo.setCurrentText(ONE_REFERENCE_LABEL)
+            self.reference_input.setText(str(selected['scope_value'] or ''))
+        else:
+            self.apply_to_combo.setCurrentText(ALL_REFERENCES_LABEL)
+            self.reference_input.clear()
+        self._editing_original_key = {
+            'alias_name': selected['alias_name'],
+            'scope_type': selected['scope_type'],
+            'scope_value': selected['scope_value'],
+        }
 
-        editor = CharacteristicAliasEditorDialog(self, initial_values=selected)
-        if editor.exec() != QDialog.DialogCode.Accepted:
+    def save_mapping(self):
+        if not self._ensure_db_file_selected():
             return
 
-        payload = editor.result_payload
-        if payload is None:
+        alias_name = str(self.alias_input.text() or '').strip()
+        common_name = str(self.common_name_input.text() or '').strip()
+        selected_scope = str(self.apply_to_combo.currentText() or '').strip()
+        scope_type = 'reference' if selected_scope == ONE_REFERENCE_LABEL else 'global'
+        scope_value = str(self.reference_input.text() or '').strip() or None
+
+        if not alias_name:
+            QMessageBox.warning(self, 'Validation error', 'Please enter the name found in the report.')
+            return
+        if not common_name:
+            QMessageBox.warning(self, 'Validation error', 'Please enter the common name to use.')
+            return
+        if scope_type == 'reference' and not scope_value:
+            QMessageBox.warning(self, 'Validation error', 'Please select a reference.')
             return
 
+        try:
+            normalize_scope_type(scope_type, scope_value)
+        except ValueError as exc:
+            QMessageBox.warning(self, 'Validation error', str(exc))
+            return
+
+        payload = {
+            'alias_name': alias_name,
+            'canonical_name': common_name,
+            'scope_type': scope_type,
+            'scope_value': scope_value,
+        }
+
+        original_key = self._editing_original_key
         try:
             ensure_characteristic_alias_schema(self.db_file)
             existing = fetch_all_characteristic_aliases(self.db_file)
@@ -477,9 +583,10 @@ class CharacteristicMappingDialog(QDialog):
                 and row['scope_type'] == payload['scope_type']
                 and (row.get('scope_value') or None) == (payload.get('scope_value') or None)
                 and not (
-                    row['alias_name'] == selected['alias_name']
-                    and row['scope_type'] == selected['scope_type']
-                    and (row.get('scope_value') or None) == (selected.get('scope_value') or None)
+                    original_key is not None
+                    and row['alias_name'] == original_key['alias_name']
+                    and row['scope_type'] == original_key['scope_type']
+                    and (row.get('scope_value') or None) == (original_key.get('scope_value') or None)
                 )
                 for row in existing
             ):
@@ -498,20 +605,24 @@ class CharacteristicMappingDialog(QDialog):
                 scope_value=payload['scope_value'],
             )
             if (
-                selected['alias_name'] != payload['alias_name']
-                or selected['scope_type'] != payload['scope_type']
-                or (selected['scope_value'] or None) != (payload['scope_value'] or None)
+                original_key is not None
+                and (
+                    original_key['alias_name'] != payload['alias_name']
+                    or original_key['scope_type'] != payload['scope_type']
+                    or (original_key['scope_value'] or None) != (payload['scope_value'] or None)
+                )
             ):
                 delete_characteristic_alias(
                     self.db_file,
-                    alias_name=selected['alias_name'],
-                    scope_type=selected['scope_type'],
-                    scope_value=selected['scope_value'],
+                    alias_name=original_key['alias_name'],
+                    scope_type=original_key['scope_type'],
+                    scope_value=original_key['scope_value'],
                 )
             self.load_aliases()
+            self.clear_form()
         except Exception as exc:
             CustomLogger(exc, reraise=False)
-            QMessageBox.critical(self, 'Save error', f'Could not update report name mapping: {exc}')
+            QMessageBox.critical(self, 'Save error', f'Could not save report name mapping: {exc}')
 
     def delete_mapping(self):
         selected = self._selected_mapping()
