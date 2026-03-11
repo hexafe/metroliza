@@ -1,6 +1,12 @@
 # UI Revamp Implementation Plan
 
-This plan defines phased execution order, dependencies, priority tags per screen, and acceptance criteria.
+This plan defined phased execution order, dependencies, priority tags per screen, and acceptance criteria.
+
+## Initiative Status
+
+**Overall status:** Completed.
+
+Each phase below includes completion notes reflecting delivered outcomes and acceptance criteria closure.
 
 ## Priority Definitions
 
@@ -22,6 +28,7 @@ This plan defines phased execution order, dependencies, priority tags per screen
   - New user can identify the first task in under 10 seconds without external guidance.
   - Primary workflow entry points are visually distinct from secondary utilities.
   - Global layout template (header/content/footer/status) is finalized and reusable.
+- **Completion notes:** Completed. A shared shell pattern now anchors first-load guidance, primary CTAs, and global status behavior used by subsequent screens.
 
 ## Phase 2 — Characteristic Mapping
 
@@ -35,6 +42,7 @@ This plan defines phased execution order, dependencies, priority tags per screen
   - Operator can complete a typical mapping scenario with no unclear field names.
   - Validation messages identify both the problem and the next corrective step.
   - Mapping completion/coverage state is visible without opening secondary dialogs.
+- **Completion notes:** Completed. Mapping workflows now use clearer labels, contextual helper text, and inline validation with corrective guidance.
 
 ## Phase 3 — Export
 
@@ -48,6 +56,7 @@ This plan defines phased execution order, dependencies, priority tags per screen
   - Users understand whether export is ready before pressing the main action.
   - Export options are grouped logically with sensible defaults.
   - Completion state includes output location/summary and visible error resolution hints.
+- **Completion notes:** Completed. Export readiness, option grouping, and post-export summaries were aligned to reduce ambiguity and recovery time.
 
 ## Phase 4 — Grouping
 
@@ -61,6 +70,7 @@ This plan defines phased execution order, dependencies, priority tags per screen
   - Users can predict grouping results from preview text/UI before applying.
   - High-risk actions have clear confirmation wording and recovery path.
   - Table/list interactions preserve selection and context across edits.
+- **Completion notes:** Completed. Grouping operations now have clearer previews, safer confirmation language, and improved multi-step interaction continuity.
 
 ## Phase 5 — Filter
 
@@ -74,6 +84,7 @@ This plan defines phased execution order, dependencies, priority tags per screen
   - Active filters are always visible with one-click remove/reset.
   - Compound filtering behavior is predictable and documented inline.
   - Empty/no-result states explain why data is absent and what to try next.
+- **Completion notes:** Completed. Active filter visibility, composition behavior, and empty-state guidance were made explicit and consistent.
 
 ## Phase 6 — Modify DB
 
@@ -87,6 +98,7 @@ This plan defines phased execution order, dependencies, priority tags per screen
   - Risky operations surface impact scope before execution.
   - Confirmation dialogs require deliberate acknowledgment for destructive actions.
   - Success/failure outcomes include actionable follow-up steps.
+- **Completion notes:** Completed. DB-modification flows now communicate risk scope clearly and require deliberate confirmation for destructive actions.
 
 ## Phase 7 — Global Consistency Pass
 
@@ -100,6 +112,7 @@ This plan defines phased execution order, dependencies, priority tags per screen
   - Shared components exhibit identical behavior in equivalent contexts.
   - Terminology is consistent for the same concept across the full app.
   - Accessibility and keyboard navigation pass is complete for all revised screens.
+- **Completion notes:** Completed. Cross-screen language, component behavior, and interaction patterns were normalized as a final quality pass.
 
 ## Phase 8 — Docs Update
 
@@ -113,6 +126,7 @@ This plan defines phased execution order, dependencies, priority tags per screen
   - All workflow docs reflect current labels and navigation paths.
   - Removed/renamed controls are explicitly mapped in release notes or migration docs.
   - Team handoff docs include known caveats and support guidance.
+- **Completion notes:** Completed. Documentation was reconciled against final UI behavior and prepared for historical archival.
 
 ## Phase 9 — Archive Step
 
@@ -126,3 +140,4 @@ This plan defines phased execution order, dependencies, priority tags per screen
   - Outdated planning artifacts are moved to archive with clear timestamps.
   - Active docs link only to current, authoritative resources.
   - Archive index is updated for discoverability.
+- **Completion notes:** Completed. UI revamp planning artifacts were moved to the yearly archive index with active-document links updated accordingly.
