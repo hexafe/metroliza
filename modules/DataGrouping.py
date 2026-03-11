@@ -92,21 +92,24 @@ class DataGrouping(QDialog):
 
         try:
             # Create labels and list widgets for each column to be filtered
-            self.reference_label = QLabel("REFERENCE:")
+            self.reference_label = QLabel("Reference")
             self.reference_list = QListWidget()
 
-            self.part_label = QLabel("PART #:")
+            self.part_label = QLabel("Part number")
             self.part_list = QListWidget()
             self.part_list.setSelectionMode(self._multi_selection_mode())
             self.all_parts_list = QListWidget()
             self.all_parts_list.setSelectionMode(self._multi_selection_mode())
             
-            self.groups_label = QLabel("GROUPS:")
+            self.groups_label = QLabel("Groups")
             self.groups_list = QListWidget()
             
-            self.part_group_label = QLabel("PART IN SELECTED GROUP:")
+            self.part_group_label = QLabel("Parts in selected group")
             self.part_group_list = QListWidget()
             self.part_group_list.setSelectionMode(self._multi_selection_mode())
+
+            self.status_panel_title = QLabel("Grouping status")
+            self.status_panel_title.setStyleSheet("font-weight: 600;")
 
             self.grouping_status_label = QLabel()
             self.grouping_status_label.setWordWrap(True)
@@ -114,13 +117,13 @@ class DataGrouping(QDialog):
 
             # Create separate QLineEdit widgets for searching in each list widget
             self.reference_search_input = QLineEdit()
-            self.reference_search_input.setPlaceholderText("Search REFERENCE...")
+            self.reference_search_input.setPlaceholderText("Search references...")
             self.part_search_input = QLineEdit()
-            self.part_search_input.setPlaceholderText("Search PART #...")
+            self.part_search_input.setPlaceholderText("Search part numbers...")
             self.group_search_input = QLineEdit()
-            self.group_search_input.setPlaceholderText("Search GROUP...")
+            self.group_search_input.setPlaceholderText("Search groups...")
             self.part_group_search_input = QLineEdit()
-            self.part_group_search_input.setPlaceholderText("Search PART IN SELECTED GROUP...")
+            self.part_group_search_input.setPlaceholderText("Search parts in selected group...")
             
             # Create buttons
             self.create_group_button = QPushButton("Add to group")
@@ -134,8 +137,7 @@ class DataGrouping(QDialog):
             
             self.use_grouping_button = QPushButton("Save grouping")
             self.dont_use_grouping_button = QPushButton("Discard changes")
-
-            self.part_group_label.setText("Parts in selected group")
+            self._apply_action_button_styles()
             self._update_grouping_status_panel()
         except Exception as e:
             self.log_and_exit(e)
@@ -154,6 +156,8 @@ class DataGrouping(QDialog):
 
         try:
             self.layout = QGridLayout(self)
+            self.layout.setHorizontalSpacing(12)
+            self.layout.setVerticalSpacing(8)
 
             self.layout.addWidget(self.reference_label, 0, 0)
             self.layout.addWidget(self.reference_search_input, 1, 0)
@@ -186,7 +190,8 @@ class DataGrouping(QDialog):
 
             self.layout.addWidget(self.use_grouping_button, 8, 0, 1, 2)
             self.layout.addWidget(self.dont_use_grouping_button, 8, 2, 1, 2)
-            self.layout.addWidget(self.grouping_status_label, 9, 0, 1, 4)
+            self.layout.addWidget(self.status_panel_title, 9, 0, 1, 4)
+            self.layout.addWidget(self.grouping_status_label, 10, 0, 1, 4)
 
             self.show()
         except Exception as e:
@@ -609,11 +614,25 @@ class DataGrouping(QDialog):
             groups_count = int(self.df['GROUP'].nunique()) if 'GROUP' in self.df.columns else 0
 
         self.grouping_status_label.setText(
-            "Grouping help\n"
-            f"• Default group: {self.default_group}\n"
-            "• If no parts are selected, Add to group applies to all parts under the selected reference.\n"
-            f"• Current counts — References: {references_count}, Parts: {parts_count}, Groups: {groups_count}"
+            "<b>Default group</b><br>"
+            f"{self.default_group}<br><br>"
+            "<b>How Add to group works</b><br>"
+            "If no parts are selected, Add to group applies to all parts under the selected reference.<br><br>"
+            "<b>Current counts</b><br>"
+            f"References: {references_count} &nbsp; • &nbsp; Parts: {parts_count} &nbsp; • &nbsp; Groups: {groups_count}"
         )
+
+    def _apply_action_button_styles(self):
+        primary_style = "padding: 6px 12px; font-weight: 600;"
+        secondary_style = "padding: 6px 12px;"
+        destructive_style = "padding: 6px 12px; font-weight: 600;"
+
+        self.use_grouping_button.setStyleSheet(primary_style)
+        self.create_group_button.setStyleSheet(secondary_style)
+        self.rename_group_button.setStyleSheet(secondary_style)
+        self.remove_from_group_button.setStyleSheet(secondary_style)
+        self.delete_group_button.setStyleSheet(destructive_style)
+        self.dont_use_grouping_button.setStyleSheet(destructive_style)
 
     def search_list_widgets(self, list_widget, search_text):
         """Handle `search_list_widgets` for `DataGrouping`.

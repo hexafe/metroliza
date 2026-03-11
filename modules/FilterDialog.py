@@ -54,30 +54,39 @@ class FilterDialog(QDialog):
     def create_widgets(self):
         try:
             # Create labels and list widgets for each column to be filtered
-            self.ax_label = QLabel("AX:")
+            self.available_values_label = QLabel("Available values")
+            self.available_values_label.setStyleSheet("font-weight: 600;")
+            self.selected_values_label = QLabel("Selected values")
+            self.selected_values_label.setStyleSheet("font-weight: 600;")
+            self.date_range_label = QLabel("Date range")
+            self.date_range_label.setStyleSheet("font-weight: 600;")
+            self.actions_label = QLabel("Actions")
+            self.actions_label.setStyleSheet("font-weight: 600;")
+
+            self.ax_label = QLabel("AX")
             self.ax_list = QListWidget()
             self.ax_list.setSelectionMode(self._multi_selection_mode())
 
-            self.reference_label = QLabel("REFERENCE:")
+            self.reference_label = QLabel("Reference")
             self.reference_list = QListWidget()
             self.reference_list.setSelectionMode(self._multi_selection_mode())
 
-            self.header_label = QLabel("HEADER:")
+            self.header_label = QLabel("Header")
             self.header_list = QListWidget()
             self.header_list.setSelectionMode(self._multi_selection_mode())
             self._all_headers = []
             
-            self.selected_headers_label = QLabel("SELECTED HEADERS:")
+            self.selected_headers_label = QLabel("Selected headers")
             self.selected_headers_list = QListWidget()
             self.selected_headers_list.setSelectionMode(self._multi_selection_mode())
 
-            self.date_from_label = QLabel("MEASUREMENT DATE FROM:")
+            self.date_from_label = QLabel("Measurement date from")
             self.date_from_calendar = QDateEdit(calendarPopup=True)
             self.date_from_calendar.setCalendarPopup(True)
             self.date_from_calendar.setDate(QDate(1970, 1, 1))
             self.date_from_calendar.setMinimumWidth(100)
 
-            self.date_to_label = QLabel("MEASUREMENT DATE TO:")
+            self.date_to_label = QLabel("Measurement date to")
             self.date_to_calendar = QDateEdit(calendarPopup=True)
             self.date_to_calendar.setCalendarPopup(True)
             self.date_to_calendar.setDate(QDate.currentDate())
@@ -91,18 +100,24 @@ class FilterDialog(QDialog):
             self.header_clear_selection_button = QPushButton("Clear")
 
             self.selection_help_label = QLabel(
-                "List filters are combined with AND. Empty or complete list selection means all values. "
-                "Date range is always applied."
+                "Selection logic: values selected within each list are treated as OR, while AX/Reference/Header lists "
+                "are combined using AND. Empty lists are treated as all values."
             )
             self.selection_help_label.setWordWrap(True)
 
+            self.reset_help_label = QLabel(
+                "Reset behavior: Clear removes the selection from the current list. Select all restores every visible "
+                "value in that list."
+            )
+            self.reset_help_label.setWordWrap(True)
+
             # Create separate QLineEdit widgets for searching in each list widget
             self.ax_search_input = QLineEdit()
-            self.ax_search_input.setPlaceholderText("Search AX...")
+            self.ax_search_input.setPlaceholderText("Search AX values...")
             self.reference_search_input = QLineEdit()
-            self.reference_search_input.setPlaceholderText("Search REFERENCE...")
+            self.reference_search_input.setPlaceholderText("Search reference values...")
             self.header_search_input = QLineEdit()
-            self.header_search_input.setPlaceholderText("Search HEADER...")
+            self.header_search_input.setPlaceholderText("Search header values...")
 
             # Create a button to apply the filters
             self.apply_button = QPushButton("Apply filters")
@@ -112,12 +127,16 @@ class FilterDialog(QDialog):
 
             # Create a button to select the beginning of time
             self.select_beginning_button = QPushButton("Select beginning of time")
+
+            self._apply_action_button_styles()
         except Exception as e:
             self.log_and_exit(e)
 
     def arrange_layout(self):
         try:
             self.layout = QGridLayout(self)
+            self.layout.setHorizontalSpacing(12)
+            self.layout.setVerticalSpacing(8)
 
             ax_controls_layout = QHBoxLayout()
             ax_controls_layout.addWidget(self.ax_select_all_button)
@@ -131,31 +150,36 @@ class FilterDialog(QDialog):
             header_controls_layout.addWidget(self.header_select_all_button)
             header_controls_layout.addWidget(self.header_clear_selection_button)
 
-            self.layout.addWidget(self.ax_label, 0, 0)
-            self.layout.addWidget(self.ax_search_input, 1, 0)
-            self.layout.addLayout(ax_controls_layout, 2, 0)
-            self.layout.addWidget(self.ax_list, 3, 0)
+            self.layout.addWidget(self.available_values_label, 0, 0, 1, 3)
+            self.layout.addWidget(self.selected_values_label, 0, 3)
 
-            self.layout.addWidget(self.reference_label, 0, 1)
-            self.layout.addWidget(self.reference_search_input, 1, 1)
-            self.layout.addLayout(reference_controls_layout, 2, 1)
-            self.layout.addWidget(self.reference_list, 3, 1)
+            self.layout.addWidget(self.ax_label, 1, 0)
+            self.layout.addWidget(self.ax_search_input, 2, 0)
+            self.layout.addLayout(ax_controls_layout, 3, 0)
+            self.layout.addWidget(self.ax_list, 4, 0)
 
-            self.layout.addWidget(self.header_label, 0, 2)
-            self.layout.addWidget(self.header_search_input, 1, 2)
-            self.layout.addLayout(header_controls_layout, 2, 2)
-            self.layout.addWidget(self.header_list, 3, 2)
+            self.layout.addWidget(self.reference_label, 1, 1)
+            self.layout.addWidget(self.reference_search_input, 2, 1)
+            self.layout.addLayout(reference_controls_layout, 3, 1)
+            self.layout.addWidget(self.reference_list, 4, 1)
 
-            self.layout.addWidget(self.selected_headers_label, 0, 3)
-            self.layout.addWidget(self.selected_headers_list, 3, 3)
+            self.layout.addWidget(self.header_label, 1, 2)
+            self.layout.addWidget(self.header_search_input, 2, 2)
+            self.layout.addLayout(header_controls_layout, 3, 2)
+            self.layout.addWidget(self.header_list, 4, 2)
 
-            self.layout.addWidget(self.selection_help_label, 4, 0, 1, 4)
+            self.layout.addWidget(self.selected_headers_label, 1, 3)
+            self.layout.addWidget(self.selected_headers_list, 4, 3)
 
-            self.layout.addWidget(self.date_from_label, 5, 0)
-            self.layout.addWidget(self.date_from_calendar, 5, 1)
+            self.layout.addWidget(self.selection_help_label, 5, 0, 1, 4)
+            self.layout.addWidget(self.reset_help_label, 6, 0, 1, 4)
 
-            self.layout.addWidget(self.date_to_label, 6, 0)
-            self.layout.addWidget(self.date_to_calendar, 6, 1)
+            self.layout.addWidget(self.date_range_label, 7, 0, 1, 3)
+            self.layout.addWidget(self.date_from_label, 8, 0)
+            self.layout.addWidget(self.date_from_calendar, 8, 1)
+
+            self.layout.addWidget(self.date_to_label, 9, 0)
+            self.layout.addWidget(self.date_to_calendar, 9, 1)
 
             for row in range(self.layout.rowCount()):
                 for column in range(self.layout.columnCount()):
@@ -165,9 +189,10 @@ class FilterDialog(QDialog):
                         if widget is not None:
                             widget.setFixedWidth(150) if column == 0 else widget.setFixedWidth(150)
 
-            self.layout.addWidget(self.select_beginning_button, 5, 2)
-            self.layout.addWidget(self.select_today_button, 6, 2)
-            self.layout.addWidget(self.apply_button, 8, 0, 1, 3)
+            self.layout.addWidget(self.actions_label, 10, 0, 1, 3)
+            self.layout.addWidget(self.select_beginning_button, 11, 0)
+            self.layout.addWidget(self.select_today_button, 11, 1)
+            self.layout.addWidget(self.apply_button, 11, 2, 1, 2)
 
             self.show()
         except Exception as e:
@@ -224,6 +249,24 @@ class FilterDialog(QDialog):
                 f" color: {selected_text_color};"
                 " }"
             )
+
+    def _apply_action_button_styles(self):
+        primary_style = "padding: 6px 12px; font-weight: 600;"
+        secondary_style = "padding: 6px 12px;"
+
+        self.apply_button.setStyleSheet(primary_style)
+
+        for button in (
+            self.ax_select_all_button,
+            self.ax_clear_selection_button,
+            self.reference_select_all_button,
+            self.reference_clear_selection_button,
+            self.header_select_all_button,
+            self.header_clear_selection_button,
+            self.select_today_button,
+            self.select_beginning_button,
+        ):
+            button.setStyleSheet(secondary_style)
 
     def _connect_shift_range_for_list(self, list_widget):
         self._list_selection_utils.connect_shift_range_behavior(list_widget)
