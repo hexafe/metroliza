@@ -39,8 +39,9 @@ RADIUS_12 = 12
 RADIUS_14 = 14
 
 TYPE_PAGE_TITLE = "font-size: 16px; font-weight: 700;"
-TYPE_SECTION_TITLE = "font-size: 13px; font-weight: 700;"
-TYPE_CARD_TITLE = "font-size: 13px; font-weight: 700;"
+TYPE_DASHBOARD_PAGE_TITLE = "font-size: 23px; font-weight: 600;"
+TYPE_SECTION_TITLE = "font-size: 16px; font-weight: 600;"
+TYPE_CARD_TITLE = "font-size: 16px; font-weight: 600;"
 TYPE_BODY = "font-size: 12px;"
 TYPE_HELPER = "font-size: 11px;"
 TYPE_TABLE = "font-size: 12px;"
@@ -200,6 +201,7 @@ def normalize_group_display_color(color_hex, dark_mode=False, fallback=DEFAULT_G
 def typography_style(preset, color=None):
     presets = {
         'page': TYPE_PAGE_TITLE,
+        'dashboard_page': TYPE_DASHBOARD_PAGE_TITLE,
         'section': TYPE_SECTION_TITLE,
         'card': TYPE_CARD_TITLE,
         'body': TYPE_BODY,
@@ -232,6 +234,41 @@ def button_style(variant='secondary'):
         "QPushButton:pressed {"
         f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['pressed_border']};"
         f" background-color: {colors['pressed_background']};"
+        "}"
+        "QPushButton:disabled {"
+        f" border: {BUTTON_INTERACTION['default_border_width']}px solid {COLOR_BORDER_MUTED};"
+        f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
+        f" color: {COLOR_TEXT_HELPER};"
+        "}"
+    )
+
+
+def card_button_style(variant='secondary'):
+    colors = BUTTON_VARIANTS.get(variant, BUTTON_VARIANTS['secondary'])
+    return (
+        "QPushButton {"
+        f" padding: {SPACE_8}px {SPACE_12}px;"
+        f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['border']};"
+        f" border-radius: {RADIUS_10}px;"
+        f" background-color: {colors['background']};"
+        f" color: {colors['text']};"
+        " text-align: left;"
+        "}"
+        "QPushButton:hover {"
+        f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['hover_border']};"
+        f" background-color: {colors['hover_background']};"
+        "}"
+        "QPushButton:pressed {"
+        f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['pressed_border']};"
+        f" background-color: {colors['pressed_background']};"
+        "}"
+        "QPushButton:focus {"
+        f" border: {BUTTON_INTERACTION['focus_border_width']}px solid {COLOR_FOCUS_RING};"
+        f" background-color: {colors['hover_background']};"
+        "}"
+        "QPushButton:focus-visible {"
+        f" border: {BUTTON_INTERACTION['focus_border_width']}px solid {COLOR_FOCUS_RING};"
+        f" background-color: {colors['hover_background']};"
         "}"
         "QPushButton:disabled {"
         f" border: {BUTTON_INTERACTION['default_border_width']}px solid {COLOR_BORDER_MUTED};"
