@@ -12,3 +12,5 @@ All items below are historical/completed and should not be used as active execut
 - `group_analysis_codex_implementation_instructions.md` — historical completed Group Analysis runbook/instruction sequence used during execution.
 - `group_analysis_next_steps_pr_plan.md` — historical completed closure/audit plan for Group Analysis execution.
 - `ui-revamp/` — historical completed UI revamp planning set (overview, implementation plan, TODO tracker, and screen-by-screen review).
+
+- `ui-revamp-closure-2026-03/` — finalized closure snapshot of the active 2026 UI revamp docs (design system, phase tracker, and TODO evidence).

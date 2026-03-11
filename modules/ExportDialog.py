@@ -233,13 +233,13 @@ class ExportDialog(QDialog):
             self.select_db_label.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
             self.select_db_button.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
 
-            self.select_filter_label = QLabel("Filters: none")
-            self.filter_button = QPushButton("Filter")
+            self.select_filter_label = QLabel("No filters selected")
+            self.filter_button = QPushButton("Set filters")
             self.filter_button.clicked.connect(self.open_filter_window)
             self.filter_button.setToolTip("Use this button to filter data from the database")
             
-            self.select_group_label = QLabel("Grouping: none")
-            self.group_button = QPushButton("Group")
+            self.select_group_label = QLabel("No groups created")
+            self.group_button = QPushButton("Manage groups")
             self.group_button.clicked.connect(self.open_grouping_window)
             self.group_button.setToolTip("Use this button to group data")
 
@@ -249,7 +249,7 @@ class ExportDialog(QDialog):
             self.select_excel_label.setToolTip("Use this button to select the Excel file to which the data will be saved")
             self.select_excel_button.setToolTip("Use this button to select the Excel file to which the data will be saved")
 
-            self.export_button = QPushButton("Export")
+            self.export_button = QPushButton("Export report")
             self.export_button.setDisabled(True)
             self.export_button.clicked.connect(self.show_loading_screen)
             self.export_button.setToolTip("Start exporting")
@@ -529,12 +529,21 @@ class ExportDialog(QDialog):
 
             action_layout = QVBoxLayout()
             action_layout.setContentsMargins(0, 0, 0, 0)
+            action_help_label = QLabel("Export runs with the selected scope and destination. Advanced options are optional.")
+            action_help_label.setWordWrap(True)
+            action_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+            action_layout.addWidget(action_help_label)
             action_layout.addWidget(self.export_button)
 
-            self.layout.addWidget(build_section_widget("Scope", scope_layout))
-            self.layout.addWidget(build_section_widget("Destination", destination_layout))
-            self.layout.addWidget(build_section_widget("Advanced options", advanced_layout))
-            self.layout.addWidget(build_section_widget("Primary action", action_layout))
+            top_row_layout = QGridLayout()
+            top_row_layout.setContentsMargins(0, 0, 0, 0)
+            top_row_layout.setHorizontalSpacing(ui_theme_tokens.SPACE_12)
+            top_row_layout.addWidget(build_section_widget("Scope", scope_layout), 0, 0)
+            top_row_layout.addWidget(build_section_widget("Destination", destination_layout), 0, 1)
+
+            self.layout.addLayout(top_row_layout)
+            self.layout.addWidget(build_section_widget("Advanced options (optional)", advanced_layout))
+            self.layout.addWidget(build_section_widget("Action", action_layout))
 
             self.setLayout(self.layout)
 
@@ -665,7 +674,7 @@ class ExportDialog(QDialog):
     def set_filter_applied(self):
         try:
             # Update filter label in export window
-            self.select_filter_label.setText("Filters: applied")
+            self.select_filter_label.setText("Filters configured")
         except Exception as e:
             self.log_and_exit(e)
     
@@ -673,9 +682,9 @@ class ExportDialog(QDialog):
         try:
             # Update filter label in export window
             if applied:
-                self.select_group_label.setText("Grouping: applied")
+                self.select_group_label.setText("Grouping configured")
             else:
-                self.select_group_label.setText("Grouping: none")
+                self.select_group_label.setText("No groups created")
         except Exception as e:
             self.log_and_exit(e)
 

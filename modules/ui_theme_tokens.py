@@ -38,6 +38,8 @@ RADIUS_10 = 10
 RADIUS_12 = 12
 RADIUS_14 = 14
 
+CONTROL_HEIGHT = 34
+
 TYPE_PAGE_TITLE = "font-size: 16px; font-weight: 700;"
 TYPE_DASHBOARD_PAGE_TITLE = "font-size: 23px; font-weight: 600;"
 TYPE_SECTION_TITLE = "font-size: 16px; font-weight: 600;"
@@ -217,6 +219,7 @@ def button_style(variant='secondary'):
     colors = BUTTON_VARIANTS.get(variant, BUTTON_VARIANTS['secondary'])
     return (
         "QPushButton {"
+        f" min-height: {CONTROL_HEIGHT}px;"
         f" padding: {SPACE_8}px {SPACE_12}px;"
         f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['border']};"
         f" border-radius: {RADIUS_8}px;"
@@ -247,6 +250,7 @@ def card_button_style(variant='secondary'):
     colors = BUTTON_VARIANTS.get(variant, BUTTON_VARIANTS['secondary'])
     return (
         "QPushButton {"
+        f" min-height: {CONTROL_HEIGHT}px;"
         f" padding: {SPACE_8}px {SPACE_12}px;"
         f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['border']};"
         f" border-radius: {RADIUS_10}px;"
@@ -287,6 +291,7 @@ def panel_style(card=False):
 def input_style():
     return (
         "QLineEdit, QComboBox {"
+        f" min-height: {CONTROL_HEIGHT}px;"
         f" padding: {SPACE_8}px;"
         f" border: 1px solid {COLOR_BORDER_DEFAULT};"
         f" border-radius: {RADIUS_8}px;"
@@ -303,6 +308,9 @@ def input_style():
         "QLineEdit:disabled, QComboBox:disabled {"
         f" border: 1px solid {COLOR_BORDER_MUTED};"
         f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
+        f" color: {COLOR_TEXT_HELPER};"
+        "}"
+        "QLineEdit::placeholder {"
         f" color: {COLOR_TEXT_HELPER};"
         "}"
     )
@@ -330,11 +338,11 @@ def table_style(cell_padding=SPACE_8):
         "QHeaderView::section {"
         f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
         f" color: {COLOR_TEXT_PRIMARY};"
-        f" padding: {cell_padding}px;"
+        f" padding: {cell_padding}px {SPACE_12}px;"
         f" border: 1px solid {COLOR_BORDER_MUTED};"
         "}"
         "QTableWidget::item, QListWidget::item {"
-        f" padding: {cell_padding}px;"
+        f" padding: {cell_padding}px {SPACE_12}px;"
         "}"
         "QTableWidget::item:hover {"
         f" background-color: {COLOR_ACCENT_SUBTLE};"
@@ -343,7 +351,7 @@ def table_style(cell_padding=SPACE_8):
         f" background-color: {selected_background};"
         f" color: {selected_text};"
         "}"
-        "QTableWidget::item:focus {"
+        "QTableWidget::item:focus, QListWidget::item:focus {"
         f" border: 1px solid {COLOR_FOCUS_RING};"
         "}"
     )
