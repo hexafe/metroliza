@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +33,8 @@ class TaskCardButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setCheckable(False)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMinimumHeight(124)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         card_layout = QVBoxLayout(self)
         card_layout.setContentsMargins(ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_12)
@@ -50,10 +53,7 @@ class TaskCardButton(QPushButton):
         status_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
         card_layout.addWidget(status_label)
 
-        self.setStyleSheet(
-            ui_theme_tokens.button_style('primary' if primary else 'secondary')
-            + "QPushButton { text-align: left; }"
-        )
+        self.setStyleSheet(ui_theme_tokens.card_button_style('primary' if primary else 'secondary'))
 
 
 class MainWindow(QMainWindow):
@@ -123,6 +123,7 @@ class MainWindow(QMainWindow):
         self.heading_label = QLabel("Metroliza dashboard")
         self.subheading_label = QLabel("Move from report parsing to validated output using focused task cards.")
         self.status_label = QLabel()
+        self.last_export_label = QLabel()
         self.readiness_label = QLabel()
         self.setup_button_tooltips()
 
@@ -168,15 +169,14 @@ class MainWindow(QMainWindow):
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""
         main_container = QFrame()
+        main_container.setStyleSheet(f"QFrame {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_APP}; }}")
         main_container_layout = QVBoxLayout(main_container)
-        main_container_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
-        main_container_layout.setSpacing(ui_theme_tokens.SPACE_12)
+        main_container_layout.setContentsMargins(ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16)
+        main_container_layout.setSpacing(ui_theme_tokens.SPACE_16)
 
         main_container_layout.addWidget(self._build_dashboard_header())
-        main_container_layout.addWidget(self._build_section("Ingest", [self.parse_button]))
-        main_container_layout.addWidget(self._build_section("Review", [self.modifydb_button, self.map_characteristics_button]))
-        main_container_layout.addWidget(self._build_section("Export", [self.export_button]))
-        main_container_layout.addWidget(self._build_section("Tools", [self.csv_summary_button]))
+        main_container_layout.addWidget(self._build_dashboard_card_grid())
+        main_container_layout.addWidget(self._build_footer_row())
         main_container_layout.addStretch()
 
         self.layout.addWidget(main_container, 0, 0)
@@ -190,48 +190,86 @@ class MainWindow(QMainWindow):
 
     def _build_dashboard_header(self):
         panel = QFrame()
-        panel.setStyleSheet(ui_theme_tokens.panel_style(card=False))
+        panel.setStyleSheet(ui_theme_tokens.panel_style(card=True))
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
+        panel_layout.setContentsMargins(ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16)
         panel_layout.setSpacing(ui_theme_tokens.SPACE_8)
-        self.heading_label.setStyleSheet(ui_theme_tokens.typography_style("page", ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        self.heading_label.setStyleSheet(ui_theme_tokens.typography_style("dashboard_page", ui_theme_tokens.COLOR_TEXT_PRIMARY))
         self.subheading_label.setWordWrap(True)
         self.subheading_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_MUTED))
+
+        context_strip = QFrame()
+        context_strip.setStyleSheet(ui_theme_tokens.panel_style(card=False))
+        context_layout = QHBoxLayout(context_strip)
+        context_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8)
+        context_layout.setSpacing(ui_theme_tokens.SPACE_12)
+
         self.status_label.setWordWrap(True)
-        self.readiness_label.setWordWrap(True)
-        self.status_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_SECONDARY))
-        self.readiness_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_HELPER))
+        self.last_export_label.setWordWrap(True)
+        self.status_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        self.last_export_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
+
+        context_layout.addWidget(self.status_label)
+        context_layout.addWidget(self.last_export_label)
+
         panel_layout.addWidget(self.heading_label)
         panel_layout.addWidget(self.subheading_label)
-        panel_layout.addWidget(self.status_label)
-        panel_layout.addWidget(self.readiness_label)
+        panel_layout.addWidget(context_strip)
         return panel
 
-    def _build_section(self, title, cards):
-        section = QFrame()
-        section.setStyleSheet(ui_theme_tokens.panel_style(card=True))
-        section_layout = QVBoxLayout(section)
-        section_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
-        section_layout.setSpacing(ui_theme_tokens.SPACE_8)
+    def _build_dashboard_card_grid(self):
+        card_region = QFrame()
+        card_region_layout = QVBoxLayout(card_region)
+        card_region_layout.setContentsMargins(0, 0, 0, 0)
+        card_region_layout.setSpacing(ui_theme_tokens.SPACE_8)
 
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.setSpacing(ui_theme_tokens.SPACE_8)
-        title_label = QLabel(title)
-        title_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
-        header_row.addWidget(title_label)
-        header_row.addStretch()
+        section_title = QLabel("Workflows")
+        section_title.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        card_region_layout.addWidget(section_title)
 
-        section_layout.addLayout(header_row)
-        for card in cards:
-            section_layout.addWidget(card)
-        return section
+        card_grid = QGridLayout()
+        card_grid.setContentsMargins(0, 0, 0, 0)
+        card_grid.setHorizontalSpacing(ui_theme_tokens.SPACE_12)
+        card_grid.setVerticalSpacing(ui_theme_tokens.SPACE_12)
+
+        cards = [
+            self.parse_button,
+            self.modifydb_button,
+            self.export_button,
+            self.csv_summary_button,
+            self.map_characteristics_button,
+        ]
+        columns = 2
+        for index, card in enumerate(cards):
+            row = index // columns
+            column = index % columns
+            card_grid.addWidget(card, row, column)
+        card_grid.setColumnStretch(0, 1)
+        card_grid.setColumnStretch(1, 1)
+
+        card_region_layout.addLayout(card_grid)
+        return card_region
+
+    def _build_footer_row(self):
+        footer = QFrame()
+        footer.setStyleSheet(ui_theme_tokens.panel_style(card=False))
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8)
+        footer_layout.setSpacing(ui_theme_tokens.SPACE_8)
+
+        self.readiness_label.setWordWrap(True)
+        self.readiness_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+        footer_layout.addWidget(self.readiness_label)
+        footer_layout.addStretch()
+        return footer
 
     def update_context_status(self):
         if self.db_file:
             self.status_label.setText(f"Database: {self.db_file}")
         else:
             self.status_label.setText("Database: Not selected yet")
+
+        self.last_export_label.setText("Last export: Not run yet")
 
         if self.db_file and self.directory:
             self.readiness_label.setText("Ready: ingest, manage, and export workflows are available.")
