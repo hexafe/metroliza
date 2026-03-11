@@ -618,7 +618,8 @@ class DataGrouping(QDialog):
             selected_group = self._selected_group_name()
             self._populate_part_group_list(selected_group)
             self._update_grouping_status_panel()
-            self._refresh_empty_state_labels()
+            if hasattr(self, "reference_list") and hasattr(self, "part_list") and hasattr(self, "groups_list") and hasattr(self, "part_group_list"):
+                self._refresh_empty_state_labels()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -695,7 +696,8 @@ class DataGrouping(QDialog):
                 search_text,
                 canonical_text_getter=lambda item: item.data(Qt.ItemDataRole.UserRole),
             )
-            self._refresh_empty_state_labels()
+            if hasattr(self, "reference_list") and hasattr(self, "part_list") and hasattr(self, "groups_list") and hasattr(self, "part_group_list"):
+                self._refresh_empty_state_labels()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -746,7 +748,8 @@ class DataGrouping(QDialog):
             self._populate_part_list(selected_reference)
             has_part_selection = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else False
             self.create_group_button.setEnabled(bool(selected_reference) or has_part_selection)
-            self._refresh_empty_state_labels()
+            if hasattr(self, "reference_list") and hasattr(self, "part_list") and hasattr(self, "groups_list") and hasattr(self, "part_group_list"):
+                self._refresh_empty_state_labels()
         except Exception as e:
             self.log_and_exit(e)
     
@@ -802,7 +805,8 @@ class DataGrouping(QDialog):
 
             selected_part_group = self.part_group_list.currentItem() is not None
             self.remove_from_group_button.setEnabled(selected_group and not is_default_group and selected_part_group)
-            self._refresh_empty_state_labels()
+            if hasattr(self, "reference_list") and hasattr(self, "part_list") and hasattr(self, "groups_list") and hasattr(self, "part_group_list"):
+                self._refresh_empty_state_labels()
         except Exception as e:
             self.log_and_exit(e)
 

@@ -47,7 +47,7 @@ Implementation must proceed in this order and may not skip dependencies:
 
 Previous completed planning artifacts remain available for historical context at:
 
-- [`docs/archive/2026/ui-revamp/`](../archive/2026/ui-revamp/README.md)
+- [`docs/archive/2026/ui-revamp/`](../ui-revamp/README.md)
 
 
 ## Closure Update

@@ -378,7 +378,8 @@ class FilterDialog(QDialog):
                 self.reference_list.addItem(item)
 
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
-            self._refresh_empty_states()
+            if hasattr(self, "ax_list") and hasattr(self, "reference_list") and hasattr(self, "header_list") and hasattr(self, "selected_headers_list"):
+                self._refresh_empty_states()
             self._update_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
@@ -386,7 +387,8 @@ class FilterDialog(QDialog):
     def search_list_widgets(self, list_widget, search_text):
         try:
             self._list_selection_utils.preserve_selection_during_filter(list_widget, search_text)
-            self._refresh_empty_states()
+            if hasattr(self, "ax_list") and hasattr(self, "reference_list") and hasattr(self, "header_list") and hasattr(self, "selected_headers_list"):
+                self._refresh_empty_states()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -449,7 +451,8 @@ class FilterDialog(QDialog):
                     self.header_list.addItem(item)
 
             self.update_selected_headers()
-            self._refresh_empty_states()
+            if hasattr(self, "ax_list") and hasattr(self, "reference_list") and hasattr(self, "header_list") and hasattr(self, "selected_headers_list"):
+                self._refresh_empty_states()
             self._update_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
@@ -470,7 +473,8 @@ class FilterDialog(QDialog):
             for item in selected_header_items:
                 selected_header_item = QListWidgetItem(item.text())
                 self.selected_headers_list.addItem(selected_header_item)
-            self._refresh_empty_states()
+            if hasattr(self, "ax_list") and hasattr(self, "reference_list") and hasattr(self, "header_list") and hasattr(self, "selected_headers_list"):
+                self._refresh_empty_states()
             self._update_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
