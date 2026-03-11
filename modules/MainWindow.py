@@ -8,6 +8,7 @@ from modules.release_notes_dialog import ReleaseNotesDialog
 from modules.custom_logger import CustomLogger
 from modules.csv_summary_dialog import CSVSummaryDialog
 from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
+from modules import ui_theme_tokens
 from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray, Qt
 from PyQt6.QtGui import QIcon, QPixmap, QAction
@@ -33,59 +34,26 @@ class TaskCardButton(QPushButton):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         card_layout = QVBoxLayout(self)
-        card_layout.setContentsMargins(14, 12, 14, 12)
-        card_layout.setSpacing(4)
+        card_layout.setContentsMargins(ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_12)
+        card_layout.setSpacing(ui_theme_tokens.SPACE_4)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #1f2937;")
+        title_label.setStyleSheet(ui_theme_tokens.typography_style("card", ui_theme_tokens.COLOR_TEXT_SECONDARY))
         card_layout.addWidget(title_label)
 
         description_label = QLabel(description)
         description_label.setWordWrap(True)
-        description_label.setStyleSheet("font-size: 12px; color: #4b5563;")
+        description_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_MUTED))
         card_layout.addWidget(description_label)
 
         status_label = QLabel(status)
-        status_label.setStyleSheet("font-size: 11px; color: #334155;")
+        status_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
         card_layout.addWidget(status_label)
 
-        base_style = """
-        QPushButton {
-            border: 1px solid #cbd5e1;
-            border-radius: 10px;
-            text-align: left;
-            background-color: #ffffff;
-        }
-        QPushButton:hover {
-            border: 1px solid #7c93b3;
-            background-color: #f8fafc;
-        }
-        QPushButton:focus {
-            border: 2px solid #2563eb;
-            background-color: #eff6ff;
-        }
-        QPushButton:pressed {
-            background-color: #e2e8f0;
-        }
-        """
-        primary_style = """
-        QPushButton {
-            border: 1px solid #2563eb;
-            background-color: #eff6ff;
-        }
-        QPushButton:hover {
-            border: 1px solid #1d4ed8;
-            background-color: #dbeafe;
-        }
-        QPushButton:focus {
-            border: 2px solid #1d4ed8;
-            background-color: #dbeafe;
-        }
-        QPushButton:pressed {
-            background-color: #bfdbfe;
-        }
-        """
-        self.setStyleSheet(base_style + (primary_style if primary else ""))
+        self.setStyleSheet(
+            ui_theme_tokens.button_style('primary' if primary else 'secondary')
+            + "QPushButton { text-align: left; }"
+        )
 
 
 class MainWindow(QMainWindow):
@@ -201,8 +169,8 @@ class MainWindow(QMainWindow):
         """Add the buttons to the layout and connect the signals."""
         main_container = QFrame()
         main_container_layout = QVBoxLayout(main_container)
-        main_container_layout.setContentsMargins(12, 12, 12, 12)
-        main_container_layout.setSpacing(10)
+        main_container_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
+        main_container_layout.setSpacing(ui_theme_tokens.SPACE_12)
 
         main_container_layout.addWidget(self._build_dashboard_header())
         main_container_layout.addWidget(self._build_section("Ingest", [self.parse_button]))
@@ -222,17 +190,17 @@ class MainWindow(QMainWindow):
 
     def _build_dashboard_header(self):
         panel = QFrame()
-        panel.setStyleSheet("QFrame { background-color: #f8fafc; border: 1px solid #dbe5f1; border-radius: 10px; }")
+        panel.setStyleSheet(ui_theme_tokens.panel_style(card=False))
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(12, 12, 12, 12)
-        panel_layout.setSpacing(5)
-        self.heading_label.setStyleSheet("font-size: 16px; font-weight: 700; color: #0f172a;")
+        panel_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
+        panel_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        self.heading_label.setStyleSheet(ui_theme_tokens.typography_style("page", ui_theme_tokens.COLOR_TEXT_PRIMARY))
         self.subheading_label.setWordWrap(True)
-        self.subheading_label.setStyleSheet("font-size: 12px; color: #475569;")
+        self.subheading_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_MUTED))
         self.status_label.setWordWrap(True)
         self.readiness_label.setWordWrap(True)
-        self.status_label.setStyleSheet("font-size: 12px; color: #1f2937;")
-        self.readiness_label.setStyleSheet("font-size: 12px; color: #334155;")
+        self.status_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        self.readiness_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_HELPER))
         panel_layout.addWidget(self.heading_label)
         panel_layout.addWidget(self.subheading_label)
         panel_layout.addWidget(self.status_label)
@@ -241,16 +209,16 @@ class MainWindow(QMainWindow):
 
     def _build_section(self, title, cards):
         section = QFrame()
-        section.setStyleSheet("QFrame { border: 1px solid #e2e8f0; border-radius: 10px; background: #ffffff; }")
+        section.setStyleSheet(ui_theme_tokens.panel_style(card=True))
         section_layout = QVBoxLayout(section)
-        section_layout.setContentsMargins(12, 10, 12, 12)
-        section_layout.setSpacing(8)
+        section_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
+        section_layout.setSpacing(ui_theme_tokens.SPACE_8)
 
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.setSpacing(6)
+        header_row.setSpacing(ui_theme_tokens.SPACE_8)
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #0f172a;")
+        title_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
         header_row.addWidget(title_label)
         header_row.addStretch()
 

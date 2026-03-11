@@ -32,6 +32,7 @@ from modules.characteristic_alias_service import (
     upsert_characteristic_alias,
 )
 from modules.custom_logger import CustomLogger
+from modules import ui_theme_tokens
 
 
 ALL_REFERENCES_LABEL = 'All references'
@@ -174,6 +175,14 @@ class CharacteristicAliasEditorDialog(QDialog):
         self.save_button = QPushButton('Save mapping')
         self.clear_button = QPushButton('Clear')
         self.cancel_button = QPushButton('Cancel')
+
+        self.alias_input.setStyleSheet(ui_theme_tokens.input_style())
+        self.common_name_input.setStyleSheet(ui_theme_tokens.input_style())
+        self.apply_to_combo.setStyleSheet(ui_theme_tokens.input_style())
+        self.reference_input.setStyleSheet(ui_theme_tokens.input_style())
+        self.save_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
+        self.clear_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
+        self.cancel_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
         self.button_box_layout.addWidget(self.save_button)
         self.button_box_layout.addWidget(self.clear_button)
         self.button_box_layout.addWidget(self.cancel_button)
@@ -284,6 +293,19 @@ class CharacteristicMappingDialog(QDialog):
         self.import_button = QPushButton('Import CSV')
         self.export_button = QPushButton('Export CSV')
         self.close_button = QPushButton('Close')
+
+        self.subtitle_label.setStyleSheet(ui_theme_tokens.typography_style('body', ui_theme_tokens.COLOR_TEXT_MUTED))
+        self.table_title_label.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        self.empty_state_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
+        self.db_path_input.setStyleSheet(ui_theme_tokens.input_style())
+        self.alias_table.setStyleSheet(ui_theme_tokens.table_style(cell_padding=ui_theme_tokens.SPACE_8))
+        self.select_db_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.add_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
+        self.edit_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.delete_button.setStyleSheet(ui_theme_tokens.button_style('danger'))
+        self.import_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
+        self.export_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
+        self.close_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
 
         button_row = QHBoxLayout()
         button_row.addWidget(self.add_button)
