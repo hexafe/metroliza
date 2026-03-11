@@ -9,19 +9,83 @@ from modules.custom_logger import CustomLogger
 from modules.csv_summary_dialog import CSVSummaryDialog
 from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
 from VersionDate import release_notes
-from PyQt6.QtCore import QByteArray
+from PyQt6.QtCore import QByteArray, Qt
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
+    QHBoxLayout,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QLabel,
     QMainWindow,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
-from modules import ui_theme_tokens
+
+
+class TaskCardButton(QPushButton):
+    """Clickable task card used on the dashboard."""
+
+    def __init__(self, title, description, status, primary=False):
+        super().__init__()
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCheckable(False)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        card_layout = QVBoxLayout(self)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(4)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #1f2937;")
+        card_layout.addWidget(title_label)
+
+        description_label = QLabel(description)
+        description_label.setWordWrap(True)
+        description_label.setStyleSheet("font-size: 12px; color: #4b5563;")
+        card_layout.addWidget(description_label)
+
+        status_label = QLabel(status)
+        status_label.setStyleSheet("font-size: 11px; color: #334155;")
+        card_layout.addWidget(status_label)
+
+        base_style = """
+        QPushButton {
+            border: 1px solid #cbd5e1;
+            border-radius: 10px;
+            text-align: left;
+            background-color: #ffffff;
+        }
+        QPushButton:hover {
+            border: 1px solid #7c93b3;
+            background-color: #f8fafc;
+        }
+        QPushButton:focus {
+            border: 2px solid #2563eb;
+            background-color: #eff6ff;
+        }
+        QPushButton:pressed {
+            background-color: #e2e8f0;
+        }
+        """
+        primary_style = """
+        QPushButton {
+            border: 1px solid #2563eb;
+            background-color: #eff6ff;
+        }
+        QPushButton:hover {
+            border: 1px solid #1d4ed8;
+            background-color: #dbeafe;
+        }
+        QPushButton:focus {
+            border: 2px solid #1d4ed8;
+            background-color: #dbeafe;
+        }
+        QPushButton:pressed {
+            background-color: #bfdbfe;
+        }
+        """
+        self.setStyleSheet(base_style + (primary_style if primary else ""))
 
 
 class MainWindow(QMainWindow):
@@ -57,15 +121,39 @@ class MainWindow(QMainWindow):
         self.directory = None
         self.db_file = None
 
-        # Initialize and set up buttons with tooltips
-        self.parse_button = QPushButton("Ingest Reports")
-        self.modifydb_button = QPushButton("Manage Database Records")
-        self.export_button = QPushButton("Export to Excel")
-        self.csv_summary_button = QPushButton("Build CSV Summary Charts")
-        self.map_characteristics_button = QPushButton("Manage Name Matches")
+        # Initialize and set up dashboard task cards
+        self.parse_button = TaskCardButton(
+            "Parse Reports",
+            "Import and parse incoming PDF reports into your working database.",
+            "Primary action: Start ingestion",
+            primary=True,
+        )
+        self.modifydb_button = TaskCardButton(
+            "Review Data",
+            "Review and update references, part numbers, and report metadata.",
+            "Primary action: Open data review",
+            primary=True,
+        )
+        self.export_button = TaskCardButton(
+            "Export Analysis",
+            "Filter analyzed data and generate an export-ready workbook.",
+            "Primary action: Create export",
+            primary=True,
+        )
+        self.csv_summary_button = TaskCardButton(
+            "CSV Quick Charts",
+            "Create quick visual summaries from CSV files.",
+            "Primary action: Build charts",
+            primary=True,
+        )
+        self.map_characteristics_button = TaskCardButton(
+            "Match Characteristic Names",
+            "Map characteristic names to standardized common names.",
+            "Secondary action: Manage mappings",
+        )
 
-        self.heading_label = QLabel("Process reports from intake to export")
-        self.subheading_label = QLabel("Start by ingesting PDF reports, then manage data and export results.")
+        self.heading_label = QLabel("Metroliza dashboard")
+        self.subheading_label = QLabel("Move from report parsing to validated output using focused task cards.")
         self.status_label = QLabel()
         self.readiness_label = QLabel()
         self.setup_button_tooltips()
@@ -116,17 +204,11 @@ class MainWindow(QMainWindow):
         main_container_layout.setContentsMargins(12, 12, 12, 12)
         main_container_layout.setSpacing(10)
 
-        self.heading_label.setStyleSheet("font-size: 14px; font-weight: bold;")
-        self.subheading_label.setWordWrap(True)
-        self.subheading_label.setStyleSheet("color: #555;")
-        main_container_layout.addWidget(self.heading_label)
-        main_container_layout.addWidget(self.subheading_label)
-
-        main_container_layout.addWidget(self._build_context_panel())
-        main_container_layout.addWidget(self._build_action_group("Ingest", [self.parse_button], 0))
-        main_container_layout.addWidget(self._build_action_group("Manage", [self.modifydb_button, self.map_characteristics_button], 1))
-        main_container_layout.addWidget(self._build_action_group("Export", [self.export_button], 2))
-        main_container_layout.addWidget(self._build_action_group("Tools", [self.csv_summary_button], 3))
+        main_container_layout.addWidget(self._build_dashboard_header())
+        main_container_layout.addWidget(self._build_section("Ingest", [self.parse_button]))
+        main_container_layout.addWidget(self._build_section("Review", [self.modifydb_button, self.map_characteristics_button]))
+        main_container_layout.addWidget(self._build_section("Export", [self.export_button]))
+        main_container_layout.addWidget(self._build_section("Tools", [self.csv_summary_button]))
         main_container_layout.addStretch()
 
         self.layout.addWidget(main_container, 0, 0)
@@ -138,28 +220,44 @@ class MainWindow(QMainWindow):
         self.csv_summary_button.clicked.connect(self.launch_csv_summary_dialog)
         self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
 
-    def _build_context_panel(self):
-        panel = QGroupBox("Context")
+    def _build_dashboard_header(self):
+        panel = QFrame()
+        panel.setStyleSheet("QFrame { background-color: #f8fafc; border: 1px solid #dbe5f1; border-radius: 10px; }")
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(10, 10, 10, 10)
-        panel_layout.setSpacing(4)
+        panel_layout.setContentsMargins(12, 12, 12, 12)
+        panel_layout.setSpacing(5)
+        self.heading_label.setStyleSheet("font-size: 16px; font-weight: 700; color: #0f172a;")
+        self.subheading_label.setWordWrap(True)
+        self.subheading_label.setStyleSheet("font-size: 12px; color: #475569;")
         self.status_label.setWordWrap(True)
         self.readiness_label.setWordWrap(True)
-        self.readiness_label.setStyleSheet("color: #555;")
+        self.status_label.setStyleSheet("font-size: 12px; color: #1f2937;")
+        self.readiness_label.setStyleSheet("font-size: 12px; color: #334155;")
+        panel_layout.addWidget(self.heading_label)
+        panel_layout.addWidget(self.subheading_label)
         panel_layout.addWidget(self.status_label)
         panel_layout.addWidget(self.readiness_label)
         return panel
 
-    def _build_action_group(self, title, buttons, palette_index):
-        color = ui_theme_tokens.BASE_GROUP_PALETTE[palette_index % len(ui_theme_tokens.BASE_GROUP_PALETTE)]
-        group = QGroupBox(title)
-        group.setStyleSheet(f"QGroupBox {{ background-color: {color}; border: 1px solid #D0D0D0; border-radius: 6px; margin-top: 8px; padding-top: 6px; }}")
-        group_layout = QVBoxLayout(group)
-        group_layout.setContentsMargins(10, 10, 10, 10)
-        group_layout.setSpacing(6)
-        for button in buttons:
-            group_layout.addWidget(button)
-        return group
+    def _build_section(self, title, cards):
+        section = QFrame()
+        section.setStyleSheet("QFrame { border: 1px solid #e2e8f0; border-radius: 10px; background: #ffffff; }")
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(12, 10, 12, 12)
+        section_layout.setSpacing(8)
+
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(6)
+        title_label = QLabel(title)
+        title_label.setStyleSheet("font-size: 13px; font-weight: 700; color: #0f172a;")
+        header_row.addWidget(title_label)
+        header_row.addStretch()
+
+        section_layout.addLayout(header_row)
+        for card in cards:
+            section_layout.addWidget(card)
+        return section
 
     def update_context_status(self):
         if self.db_file:
