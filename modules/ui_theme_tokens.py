@@ -6,24 +6,27 @@ BASE_ROW_BACKGROUND_FALLBACK = "#FFFFFF"
 SELECTED_ROW_BACKGROUND_FALLBACK = "#5E88AD"
 DEFAULT_GROUP_COLOR = BASE_ROW_BACKGROUND_FALLBACK
 
-COLOR_BACKGROUND_APP = "#F8FAFC"
+COLOR_BACKGROUND_APP = "#F5F7FA"
 COLOR_BACKGROUND_PANEL = "#FFFFFF"
-COLOR_BACKGROUND_PANEL_MUTED = "#F1F5F9"
-COLOR_TEXT_PRIMARY = "#0F172A"
-COLOR_TEXT_SECONDARY = "#1F2937"
-COLOR_TEXT_MUTED = "#475569"
-COLOR_TEXT_HELPER = "#64748B"
-COLOR_BORDER_DEFAULT = "#CBD5E1"
-COLOR_BORDER_MUTED = "#E2E8F0"
-COLOR_BORDER_STRONG = "#94A3B8"
+COLOR_BACKGROUND_PANEL_MUTED = "#FAFBFC"
+COLOR_TEXT_PRIMARY = "#101828"
+COLOR_TEXT_SECONDARY = "#667085"
+COLOR_TEXT_MUTED = "#98A2B3"
+COLOR_TEXT_HELPER = COLOR_TEXT_MUTED
+COLOR_BORDER_DEFAULT = "#E5E7EB"
+COLOR_BORDER_MUTED = COLOR_BORDER_DEFAULT
+COLOR_BORDER_STRONG = "#D0D5DD"
 COLOR_ACCENT = "#2563EB"
 COLOR_ACCENT_HOVER = "#1D4ED8"
-COLOR_ACCENT_SUBTLE = "#DBEAFE"
+COLOR_ACCENT_SUBTLE = "#EFF6FF"
 COLOR_FOCUS_RING = "#2563EB"
 COLOR_SELECTION = "#5E88AD"
 COLOR_STATUS_SUCCESS = "#059669"
 COLOR_STATUS_WARNING = "#D97706"
 COLOR_STATUS_DANGER = "#DC2626"
+COLOR_STATUS_SUCCESS_BG = "#ECFDF3"
+COLOR_STATUS_WARNING_BG = "#FFFAEB"
+COLOR_STATUS_DANGER_BG = "#FEF3F2"
 
 SPACE_4 = 4
 SPACE_8 = 8
@@ -222,7 +225,7 @@ def button_style(variant='secondary'):
         f" min-height: {CONTROL_HEIGHT}px;"
         f" padding: {SPACE_8}px {SPACE_12}px;"
         f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['border']};"
-        f" border-radius: {RADIUS_8}px;"
+        f" border-radius: {RADIUS_10}px;"
         f" background-color: {colors['background']};"
         f" color: {colors['text']};"
         "}"
@@ -232,6 +235,7 @@ def button_style(variant='secondary'):
         "}"
         "QPushButton:focus {"
         f" border: {BUTTON_INTERACTION['focus_border_width']}px solid {COLOR_FOCUS_RING};"
+        " outline: none;"
         f" background-color: {colors['hover_background']};"
         "}"
         "QPushButton:pressed {"
@@ -253,7 +257,7 @@ def card_button_style(variant='secondary'):
         f" min-height: {CONTROL_HEIGHT}px;"
         f" padding: {SPACE_8}px {SPACE_12}px;"
         f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['border']};"
-        f" border-radius: {RADIUS_10}px;"
+        f" border-radius: {RADIUS_12}px;"
         f" background-color: {colors['background']};"
         f" color: {colors['text']};"
         " text-align: left;"
@@ -268,6 +272,7 @@ def card_button_style(variant='secondary'):
         "}"
         "QPushButton:focus {"
         f" border: {BUTTON_INTERACTION['focus_border_width']}px solid {COLOR_FOCUS_RING};"
+        " outline: none;"
         f" background-color: {colors['hover_background']};"
         "}"
         "QPushButton:focus-visible {"
@@ -283,9 +288,9 @@ def card_button_style(variant='secondary'):
 
 
 def panel_style(card=False):
-    radius = RADIUS_10 if card else RADIUS_12
+    radius = RADIUS_12
     background = COLOR_BACKGROUND_PANEL if card else COLOR_BACKGROUND_PANEL_MUTED
-    return f"QFrame {{ background-color: {background}; border: 1px solid {COLOR_BORDER_MUTED}; border-radius: {radius}px; }}"
+    return f"QFrame {{ background-color: {background}; border: 1px solid {COLOR_BORDER_DEFAULT}; border-radius: {radius}px; }}"
 
 
 def input_style():
@@ -294,7 +299,7 @@ def input_style():
         f" min-height: {CONTROL_HEIGHT}px;"
         f" padding: {SPACE_8}px;"
         f" border: 1px solid {COLOR_BORDER_DEFAULT};"
-        f" border-radius: {RADIUS_8}px;"
+        f" border-radius: {RADIUS_10}px;"
         f" background-color: {COLOR_BACKGROUND_PANEL};"
         f" color: {COLOR_TEXT_SECONDARY};"
         "}"
@@ -303,6 +308,7 @@ def input_style():
         "}"
         "QLineEdit:focus, QComboBox:focus {"
         f" border: 2px solid {COLOR_FOCUS_RING};"
+        " outline: none;"
         f" background-color: {COLOR_ACCENT_SUBTLE};"
         "}"
         "QLineEdit:disabled, QComboBox:disabled {"
