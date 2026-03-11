@@ -55,13 +55,13 @@ class FilterDialog(QDialog):
         try:
             # Create labels and list widgets for each column to be filtered
             self.available_values_label = QLabel("Available values")
-            self.available_values_label.setStyleSheet("font-weight: 600;")
+            self.available_values_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
             self.selected_values_label = QLabel("Selected values")
-            self.selected_values_label.setStyleSheet("font-weight: 600;")
+            self.selected_values_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
             self.date_range_label = QLabel("Date range")
-            self.date_range_label.setStyleSheet("font-weight: 600;")
+            self.date_range_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
             self.actions_label = QLabel("Actions")
-            self.actions_label.setStyleSheet("font-weight: 600;")
+            self.actions_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
 
             self.ax_label = QLabel("AX")
             self.ax_list = QListWidget()
@@ -135,8 +135,8 @@ class FilterDialog(QDialog):
     def arrange_layout(self):
         try:
             self.layout = QGridLayout(self)
-            self.layout.setHorizontalSpacing(12)
-            self.layout.setVerticalSpacing(8)
+            self.layout.setHorizontalSpacing(ui_theme_tokens.SPACE_12)
+            self.layout.setVerticalSpacing(ui_theme_tokens.SPACE_8)
 
             ax_controls_layout = QHBoxLayout()
             ax_controls_layout.addWidget(self.ax_select_all_button)
@@ -226,6 +226,7 @@ class FilterDialog(QDialog):
 
 
     def _apply_list_theme_styles(self):
+        base_style = ui_theme_tokens.table_style(cell_padding=ui_theme_tokens.SPACE_8)
         highlight_name = ui_theme_tokens.SELECTED_ROW_BACKGROUND_FALLBACK
         for list_widget in (
             getattr(self, 'ax_list', None),
@@ -244,17 +245,15 @@ class FilterDialog(QDialog):
             highlight_name = ui_theme_tokens.selected_row_background_override(highlight_name)
             selected_text_color = ui_theme_tokens.selected_text_color(highlight_name)
             list_widget.setStyleSheet(
-                "QListWidget::item:selected {"
+                base_style
+                + "QListWidget::item:selected {"
                 f" background-color: {highlight_name};"
                 f" color: {selected_text_color};"
                 " }"
             )
 
     def _apply_action_button_styles(self):
-        primary_style = "padding: 6px 12px; font-weight: 600;"
-        secondary_style = "padding: 6px 12px;"
-
-        self.apply_button.setStyleSheet(primary_style)
+        self.apply_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
 
         for button in (
             self.ax_select_all_button,
@@ -266,7 +265,14 @@ class FilterDialog(QDialog):
             self.select_today_button,
             self.select_beginning_button,
         ):
-            button.setStyleSheet(secondary_style)
+            button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+
+        for input_widget in (
+            self.ax_search_input,
+            self.reference_search_input,
+            self.header_search_input,
+        ):
+            input_widget.setStyleSheet(ui_theme_tokens.input_style())
 
     def _connect_shift_range_for_list(self, list_widget):
         self._list_selection_utils.connect_shift_range_behavior(list_widget)

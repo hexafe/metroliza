@@ -14,6 +14,7 @@ import PyQt6.QtWidgets as QtWidgets
 import logging
 from modules.CustomLogger import CustomLogger
 from modules.db import execute_select_with_columns, run_transaction_with_retry
+from modules import ui_theme_tokens
 
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ class ModifyDB(QDialog):
             label_cls = getattr(QtWidgets, "QLabel", None)
             self.dialog_title_label = label_cls("Review and Rename Data") if label_cls is not None else None
             if self.dialog_title_label is not None and hasattr(self.dialog_title_label, "setStyleSheet"):
-                self.dialog_title_label.setStyleSheet("font-size: 15px; font-weight: 600;")
+                self.dialog_title_label.setStyleSheet(ui_theme_tokens.typography_style("page", ui_theme_tokens.COLOR_TEXT_PRIMARY))
 
             subtitle_text = (
                 "Review distinct values across Reference, Sample number, and Header, then rename as needed. "
@@ -121,8 +122,8 @@ class ModifyDB(QDialog):
     def arrange_layout(self):
         try:
             layout = QGridLayout(self)
-            layout.setHorizontalSpacing(12)
-            layout.setVerticalSpacing(8)
+            layout.setHorizontalSpacing(ui_theme_tokens.SPACE_12)
+            layout.setVerticalSpacing(ui_theme_tokens.SPACE_8)
 
             # Add table widgets and buttons to the layout
             row_offset = 0
@@ -165,13 +166,15 @@ class ModifyDB(QDialog):
             self.log_and_exit(e)
 
     def _apply_action_button_styles(self):
-        primary_style = "padding: 6px 12px; font-weight: 600;"
-        secondary_style = "padding: 6px 12px;"
+        self.apply_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
+        self.select_db_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.undo_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
+        self.cancel_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
 
-        self.apply_button.setStyleSheet(primary_style)
-        self.select_db_button.setStyleSheet(secondary_style)
-        self.undo_button.setStyleSheet(secondary_style)
-        self.cancel_button.setStyleSheet(secondary_style)
+        table_style = ui_theme_tokens.table_style(cell_padding=ui_theme_tokens.SPACE_8)
+        self.reference_table.setStyleSheet(table_style)
+        self.part_number_table.setStyleSheet(table_style)
+        self.header_table.setStyleSheet(table_style)
 
     def _connect_shift_range_for_table(self, table_widget):
         table_widget.cellPressed.connect(

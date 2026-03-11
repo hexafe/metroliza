@@ -45,6 +45,7 @@ import subprocess
 import sys
 from pathlib import Path
 from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules import ui_theme_tokens
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
@@ -295,7 +296,7 @@ class ExportDialog(QDialog):
             self.google_sheets_note_label = QLabel(
                 "Note: A local .xlsx is always created. Google Sheets conversion is optional and may look slightly different from Excel."
             )
-            self.google_sheets_note_label.setStyleSheet("color: #666;")
+            self.google_sheets_note_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
             self.google_sheets_note_label.setWordWrap(True)
             self.export_target_label.setToolTip(
                 "Excel (.xlsx) is always generated.\n"
@@ -401,19 +402,19 @@ class ExportDialog(QDialog):
                 "Choose which rows are included in the export using optional filters and grouping."
             )
             self.scope_help_label.setWordWrap(True)
-            self.scope_help_label.setStyleSheet("color: #666;")
+            self.scope_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
 
             self.destination_help_label = QLabel(
                 "Select the input database and local Excel destination. Optional Google Sheets conversion can also be enabled."
             )
             self.destination_help_label.setWordWrap(True)
-            self.destination_help_label.setStyleSheet("color: #666;")
+            self.destination_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
 
             self.advanced_options_help_label = QLabel(
                 "Tune output profile, chart settings, and workbook formatting options."
             )
             self.advanced_options_help_label.setWordWrap(True)
-            self.advanced_options_help_label.setStyleSheet("color: #666;")
+            self.advanced_options_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
             
             self.advanced_options_layout = QVBoxLayout()
             self.advanced_options_layout.setContentsMargins(0, 0, 0, 0)
@@ -424,24 +425,49 @@ class ExportDialog(QDialog):
             self.advanced_options_layout.addWidget(self.summary_plot_scale)
             self.advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
 
+            self._apply_shared_theme_styles()
             self.apply_selected_preset()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _apply_shared_theme_styles(self):
+        button_map = {
+            self.export_button: 'primary',
+            self.select_db_button: 'secondary',
+            self.filter_button: 'secondary',
+            self.group_button: 'secondary',
+            self.select_excel_button: 'secondary',
+        }
+        for button, variant in button_map.items():
+            button.setStyleSheet(ui_theme_tokens.button_style(variant))
+
+        input_style = ui_theme_tokens.input_style()
+        for widget in (
+            self.preset_combobox,
+            self.export_type_combobox,
+            self.sort_measurements_combobox,
+            self.group_analysis_level_combobox,
+            self.group_analysis_scope_combobox,
+            self.violin_plot_min_samplesize,
+            self.summary_plot_scale,
+        ):
+            widget.setStyleSheet(input_style)
 
     def init_layout(self):
         try:
             """Initialize the layout"""
             self.layout = QVBoxLayout()
-            self.layout.setSpacing(12)
+            self.layout.setSpacing(ui_theme_tokens.SPACE_12)
 
             def build_section_widget(title, content_layout):
                 section_widget = QWidget()
+                section_widget.setStyleSheet(ui_theme_tokens.panel_style(card=True).replace("QFrame", "QWidget"))
                 section_layout = QVBoxLayout(section_widget)
                 section_layout.setContentsMargins(0, 0, 0, 0)
                 section_layout.setSpacing(6)
 
                 section_title = QLabel(title)
-                section_title.setStyleSheet("font-weight: bold;")
+                section_title.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
                 section_layout.addWidget(section_title)
 
                 content_widget = QWidget()

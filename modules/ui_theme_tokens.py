@@ -1,10 +1,93 @@
-"""Shared semantic UI theme tokens for list/dialog row coloring."""
+"""Shared semantic UI tokens and reusable style builders for dialogs/screens."""
 
 import colorsys
 
 BASE_ROW_BACKGROUND_FALLBACK = "#FFFFFF"
 SELECTED_ROW_BACKGROUND_FALLBACK = "#5E88AD"
 DEFAULT_GROUP_COLOR = BASE_ROW_BACKGROUND_FALLBACK
+
+COLOR_BACKGROUND_APP = "#F8FAFC"
+COLOR_BACKGROUND_PANEL = "#FFFFFF"
+COLOR_BACKGROUND_PANEL_MUTED = "#F1F5F9"
+COLOR_TEXT_PRIMARY = "#0F172A"
+COLOR_TEXT_SECONDARY = "#1F2937"
+COLOR_TEXT_MUTED = "#475569"
+COLOR_TEXT_HELPER = "#64748B"
+COLOR_BORDER_DEFAULT = "#CBD5E1"
+COLOR_BORDER_MUTED = "#E2E8F0"
+COLOR_BORDER_STRONG = "#94A3B8"
+COLOR_ACCENT = "#2563EB"
+COLOR_ACCENT_HOVER = "#1D4ED8"
+COLOR_ACCENT_SUBTLE = "#DBEAFE"
+COLOR_FOCUS_RING = "#2563EB"
+COLOR_SELECTION = "#5E88AD"
+COLOR_STATUS_SUCCESS = "#059669"
+COLOR_STATUS_WARNING = "#D97706"
+COLOR_STATUS_DANGER = "#DC2626"
+
+SPACE_4 = 4
+SPACE_8 = 8
+SPACE_12 = 12
+SPACE_16 = 16
+SPACE_20 = 20
+SPACE_24 = 24
+SPACE_32 = 32
+
+RADIUS_8 = 8
+RADIUS_10 = 10
+RADIUS_12 = 12
+RADIUS_14 = 14
+
+TYPE_PAGE_TITLE = "font-size: 16px; font-weight: 700;"
+TYPE_SECTION_TITLE = "font-size: 13px; font-weight: 700;"
+TYPE_CARD_TITLE = "font-size: 13px; font-weight: 700;"
+TYPE_BODY = "font-size: 12px;"
+TYPE_HELPER = "font-size: 11px;"
+TYPE_TABLE = "font-size: 12px;"
+
+BUTTON_INTERACTION = {
+    'focus_border_width': 2,
+    'default_border_width': 1,
+}
+
+BUTTON_VARIANTS = {
+    'primary': {
+        'text': "#FFFFFF",
+        'background': COLOR_ACCENT,
+        'border': COLOR_ACCENT,
+        'hover_background': COLOR_ACCENT_HOVER,
+        'hover_border': COLOR_ACCENT_HOVER,
+        'pressed_background': "#1E40AF",
+        'pressed_border': "#1E40AF",
+    },
+    'secondary': {
+        'text': COLOR_TEXT_SECONDARY,
+        'background': COLOR_BACKGROUND_PANEL,
+        'border': COLOR_BORDER_DEFAULT,
+        'hover_background': COLOR_BACKGROUND_PANEL_MUTED,
+        'hover_border': COLOR_BORDER_STRONG,
+        'pressed_background': "#E2E8F0",
+        'pressed_border': COLOR_BORDER_STRONG,
+    },
+    'tertiary': {
+        'text': COLOR_TEXT_SECONDARY,
+        'background': COLOR_BACKGROUND_PANEL_MUTED,
+        'border': COLOR_BORDER_MUTED,
+        'hover_background': "#E2E8F0",
+        'hover_border': COLOR_BORDER_DEFAULT,
+        'pressed_background': "#CBD5E1",
+        'pressed_border': COLOR_BORDER_DEFAULT,
+    },
+    'danger': {
+        'text': "#FFFFFF",
+        'background': COLOR_STATUS_DANGER,
+        'border': COLOR_STATUS_DANGER,
+        'hover_background': "#B91C1C",
+        'hover_border': "#B91C1C",
+        'pressed_background': "#991B1B",
+        'pressed_border': "#991B1B",
+    },
+}
 BASE_GROUP_PALETTE = (
     "#FDE2E4",
     "#E2ECE9",
@@ -112,3 +195,118 @@ def generate_group_color(seed, dark_mode=False):
 def normalize_group_display_color(color_hex, dark_mode=False, fallback=DEFAULT_GROUP_COLOR):
     normalized = normalize_hex_color(color_hex, fallback=fallback)
     return clamp_group_color_for_theme(normalized, dark_mode=dark_mode)
+
+
+def typography_style(preset, color=None):
+    presets = {
+        'page': TYPE_PAGE_TITLE,
+        'section': TYPE_SECTION_TITLE,
+        'card': TYPE_CARD_TITLE,
+        'body': TYPE_BODY,
+        'helper': TYPE_HELPER,
+        'table': TYPE_TABLE,
+    }
+    style = presets.get(preset, TYPE_BODY)
+    resolved_color = color if color is not None else COLOR_TEXT_PRIMARY
+    return f"{style} color: {resolved_color};"
+
+
+def button_style(variant='secondary'):
+    colors = BUTTON_VARIANTS.get(variant, BUTTON_VARIANTS['secondary'])
+    return (
+        "QPushButton {"
+        f" padding: {SPACE_8}px {SPACE_12}px;"
+        f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['border']};"
+        f" border-radius: {RADIUS_8}px;"
+        f" background-color: {colors['background']};"
+        f" color: {colors['text']};"
+        "}"
+        "QPushButton:hover {"
+        f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['hover_border']};"
+        f" background-color: {colors['hover_background']};"
+        "}"
+        "QPushButton:focus {"
+        f" border: {BUTTON_INTERACTION['focus_border_width']}px solid {COLOR_FOCUS_RING};"
+        f" background-color: {colors['hover_background']};"
+        "}"
+        "QPushButton:pressed {"
+        f" border: {BUTTON_INTERACTION['default_border_width']}px solid {colors['pressed_border']};"
+        f" background-color: {colors['pressed_background']};"
+        "}"
+        "QPushButton:disabled {"
+        f" border: {BUTTON_INTERACTION['default_border_width']}px solid {COLOR_BORDER_MUTED};"
+        f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
+        f" color: {COLOR_TEXT_HELPER};"
+        "}"
+    )
+
+
+def panel_style(card=False):
+    radius = RADIUS_10 if card else RADIUS_12
+    background = COLOR_BACKGROUND_PANEL if card else COLOR_BACKGROUND_PANEL_MUTED
+    return f"QFrame {{ background-color: {background}; border: 1px solid {COLOR_BORDER_MUTED}; border-radius: {radius}px; }}"
+
+
+def input_style():
+    return (
+        "QLineEdit, QComboBox {"
+        f" padding: {SPACE_8}px;"
+        f" border: 1px solid {COLOR_BORDER_DEFAULT};"
+        f" border-radius: {RADIUS_8}px;"
+        f" background-color: {COLOR_BACKGROUND_PANEL};"
+        f" color: {COLOR_TEXT_SECONDARY};"
+        "}"
+        "QLineEdit:hover, QComboBox:hover {"
+        f" border: 1px solid {COLOR_BORDER_STRONG};"
+        "}"
+        "QLineEdit:focus, QComboBox:focus {"
+        f" border: 2px solid {COLOR_FOCUS_RING};"
+        f" background-color: {COLOR_ACCENT_SUBTLE};"
+        "}"
+        "QLineEdit:disabled, QComboBox:disabled {"
+        f" border: 1px solid {COLOR_BORDER_MUTED};"
+        f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
+        f" color: {COLOR_TEXT_HELPER};"
+        "}"
+    )
+
+
+def invalid_input_style():
+    return (
+        "QLineEdit, QComboBox {"
+        f" border: 2px solid {COLOR_STATUS_DANGER};"
+        f" background-color: #FEF2F2;"
+        "}"
+    )
+
+
+def table_style(cell_padding=SPACE_8):
+    selected_background = selected_row_background_override(COLOR_SELECTION)
+    selected_text = selected_text_color(selected_background)
+    return (
+        "QTableWidget, QListWidget {"
+        f" border: 1px solid {COLOR_BORDER_MUTED};"
+        f" border-radius: {RADIUS_8}px;"
+        f" background-color: {COLOR_BACKGROUND_PANEL};"
+        f" color: {COLOR_TEXT_SECONDARY};"
+        "}"
+        "QHeaderView::section {"
+        f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
+        f" color: {COLOR_TEXT_PRIMARY};"
+        f" padding: {cell_padding}px;"
+        f" border: 1px solid {COLOR_BORDER_MUTED};"
+        "}"
+        "QTableWidget::item, QListWidget::item {"
+        f" padding: {cell_padding}px;"
+        "}"
+        "QTableWidget::item:hover {"
+        f" background-color: {COLOR_ACCENT_SUBTLE};"
+        "}"
+        "QTableWidget::item:selected, QListWidget::item:selected {"
+        f" background-color: {selected_background};"
+        f" color: {selected_text};"
+        "}"
+        "QTableWidget::item:focus {"
+        f" border: 1px solid {COLOR_FOCUS_RING};"
+        "}"
+    )

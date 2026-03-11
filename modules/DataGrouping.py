@@ -109,7 +109,7 @@ class DataGrouping(QDialog):
             self.part_group_list.setSelectionMode(self._multi_selection_mode())
 
             self.status_panel_title = QLabel("Grouping status")
-            self.status_panel_title.setStyleSheet("font-weight: 600;")
+            self.status_panel_title.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
 
             self.grouping_status_label = QLabel()
             self.grouping_status_label.setWordWrap(True)
@@ -156,8 +156,8 @@ class DataGrouping(QDialog):
 
         try:
             self.layout = QGridLayout(self)
-            self.layout.setHorizontalSpacing(12)
-            self.layout.setVerticalSpacing(8)
+            self.layout.setHorizontalSpacing(ui_theme_tokens.SPACE_12)
+            self.layout.setVerticalSpacing(ui_theme_tokens.SPACE_8)
 
             self.layout.addWidget(self.reference_label, 0, 0)
             self.layout.addWidget(self.reference_search_input, 1, 0)
@@ -414,6 +414,7 @@ class DataGrouping(QDialog):
         item.setForeground(QBrush(QColor(self._ideal_text_color(resolved_background))))
 
     def _apply_list_theme_styles(self):
+        base_style = ui_theme_tokens.table_style(cell_padding=ui_theme_tokens.SPACE_8)
         highlight_name = ui_theme_tokens.SELECTED_ROW_BACKGROUND_FALLBACK
         for list_widget in (
             getattr(self, 'reference_list', None),
@@ -432,7 +433,8 @@ class DataGrouping(QDialog):
             highlight_name = ui_theme_tokens.selected_row_background_override(highlight_name)
             selected_text_color = ui_theme_tokens.selected_text_color(highlight_name)
             list_widget.setStyleSheet(
-                "QListWidget::item:selected {"
+                base_style
+                + "QListWidget::item:selected {"
                 f" background-color: {highlight_name};"
                 f" color: {selected_text_color};"
                 " }"
@@ -623,16 +625,30 @@ class DataGrouping(QDialog):
         )
 
     def _apply_action_button_styles(self):
-        primary_style = "padding: 6px 12px; font-weight: 600;"
-        secondary_style = "padding: 6px 12px;"
-        destructive_style = "padding: 6px 12px; font-weight: 600;"
+        self.use_grouping_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
+        self.create_group_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.rename_group_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.remove_from_group_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.delete_group_button.setStyleSheet(ui_theme_tokens.button_style('danger'))
+        self.dont_use_grouping_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
 
-        self.use_grouping_button.setStyleSheet(primary_style)
-        self.create_group_button.setStyleSheet(secondary_style)
-        self.rename_group_button.setStyleSheet(secondary_style)
-        self.remove_from_group_button.setStyleSheet(secondary_style)
-        self.delete_group_button.setStyleSheet(destructive_style)
-        self.dont_use_grouping_button.setStyleSheet(destructive_style)
+        list_style = ui_theme_tokens.table_style(cell_padding=ui_theme_tokens.SPACE_8)
+        for list_widget in (
+            self.reference_list,
+            self.part_list,
+            self.all_parts_list,
+            self.groups_list,
+            self.part_group_list,
+        ):
+            list_widget.setStyleSheet(list_style)
+
+        for input_widget in (
+            self.reference_search_input,
+            self.part_search_input,
+            self.group_search_input,
+            self.part_group_search_input,
+        ):
+            input_widget.setStyleSheet(ui_theme_tokens.input_style())
 
     def search_list_widgets(self, list_widget, search_text):
         """Handle `search_list_widgets` for `DataGrouping`.
