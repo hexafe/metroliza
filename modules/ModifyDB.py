@@ -28,7 +28,7 @@ class ModifyDB(QDialog):
 
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
-        self.setWindowTitle("Rename saved values")
+        self.setWindowTitle("Review and Rename Data")
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 640, 480)
@@ -67,6 +67,19 @@ class ModifyDB(QDialog):
 
     def create_widgets(self):
         try:
+            label_cls = getattr(QtWidgets, "QLabel", None)
+            self.dialog_title_label = label_cls("Review and Rename Data") if label_cls is not None else None
+            if self.dialog_title_label is not None and hasattr(self.dialog_title_label, "setStyleSheet"):
+                self.dialog_title_label.setStyleSheet("font-size: 15px; font-weight: 600;")
+
+            subtitle_text = (
+                "Review distinct values across Reference, Sample number, and Header, then rename as needed. "
+                "You can batch-rename selected rows with Enter and confirm all changes before they are saved."
+            )
+            self.dialog_subtitle_label = label_cls(subtitle_text) if label_cls is not None else None
+            if self.dialog_subtitle_label is not None and hasattr(self.dialog_subtitle_label, "setWordWrap"):
+                self.dialog_subtitle_label.setWordWrap(True)
+
             # Create table widgets for REFERENCE, PART NUMBER, and HEADER
             self.reference_table = QTableWidget()
             self.reference_table.setSelectionMode(self._multi_selection_mode())
@@ -89,12 +102,7 @@ class ModifyDB(QDialog):
             self.header_table.setHorizontalHeaderLabels(["Header"])
             self.header_table.setColumnWidth(0, 200)
 
-            helper_text = (
-                "Rename values in Reference, Sample number, or Header. "
-                "Select multiple rows in one table and press Enter to rename them at once. "
-                "You will review and confirm all detected changes before they are applied."
-            )
-            label_cls = getattr(QtWidgets, "QLabel", None)
+            helper_text = "Tip: Choose a database file first to load values for review."
             self.helper_text_label = label_cls(helper_text) if label_cls is not None else None
             if self.helper_text_label is not None and hasattr(self.helper_text_label, "setWordWrap"):
                 self.helper_text_label.setWordWrap(True)
@@ -106,23 +114,37 @@ class ModifyDB(QDialog):
                 self.apply_button.setEnabled(False)
             self.undo_button = QPushButton("Undo last change")
             self.cancel_button = QPushButton("Close")
+            self._apply_action_button_styles()
         except Exception as e:
             self.log_and_exit(e)
 
     def arrange_layout(self):
         try:
             layout = QGridLayout(self)
+            layout.setHorizontalSpacing(12)
+            layout.setVerticalSpacing(8)
 
             # Add table widgets and buttons to the layout
-            layout.addWidget(self.reference_table, 0, 0)
-            layout.addWidget(self.part_number_table, 0, 1)
-            layout.addWidget(self.header_table, 0, 2)
+            row_offset = 0
+            if self.dialog_title_label is not None:
+                layout.addWidget(self.dialog_title_label, row_offset, 0, 1, 3)
+                row_offset += 1
+            if self.dialog_subtitle_label is not None:
+                layout.addWidget(self.dialog_subtitle_label, row_offset, 0, 1, 3)
+                row_offset += 1
+
+            layout.addWidget(self.reference_table, row_offset, 0)
+            layout.addWidget(self.part_number_table, row_offset, 1)
+            layout.addWidget(self.header_table, row_offset, 2)
+            row_offset += 1
             if self.helper_text_label is not None:
-                layout.addWidget(self.helper_text_label, 1, 0, 1, 3)
-            layout.addWidget(self.select_db_button, 2, 0, 1, 3)
-            layout.addWidget(self.apply_button, 3, 0, 1, 1)
+                layout.addWidget(self.helper_text_label, row_offset, 0, 1, 3)
+                row_offset += 1
+            layout.addWidget(self.select_db_button, row_offset, 0, 1, 3)
+            row_offset += 1
+            layout.addWidget(self.apply_button, row_offset, 0, 1, 1)
             # layout.addWidget(self.undo_button, 3, 1, 1, 1) #to be re-added after undo functionality correction
-            layout.addWidget(self.cancel_button, 3, 2, 1, 1)
+            layout.addWidget(self.cancel_button, row_offset, 2, 1, 1)
 
             self.show()
         except Exception as e:
@@ -141,6 +163,15 @@ class ModifyDB(QDialog):
             self._connect_shift_range_for_table(self.header_table)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _apply_action_button_styles(self):
+        primary_style = "padding: 6px 12px; font-weight: 600;"
+        secondary_style = "padding: 6px 12px;"
+
+        self.apply_button.setStyleSheet(primary_style)
+        self.select_db_button.setStyleSheet(secondary_style)
+        self.undo_button.setStyleSheet(secondary_style)
+        self.cancel_button.setStyleSheet(secondary_style)
 
     def _connect_shift_range_for_table(self, table_widget):
         table_widget.cellPressed.connect(
