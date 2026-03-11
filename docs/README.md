@@ -31,5 +31,5 @@ Supplemental tutorial/playbook docs (how-to guidance that supports, but does not
 Retired planning/temporary docs are under `archive/`.
 
 - Archive entry point: `archive/README.md`
-- UI revamp historical planning set: `archive/2026/ui-revamp/README.md`
+- UI revamp historical planning sets: `archive/2026/ui-revamp/README.md` and `archive/2026/ui-revamp-closure-2026-03/README.md`
 - Year buckets: `archive/YYYY/`

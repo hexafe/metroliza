@@ -79,6 +79,7 @@ class FilterDialog(QDialog):
             self.selected_headers_label = QLabel("Selected headers")
             self.selected_headers_list = QListWidget()
             self.selected_headers_list.setSelectionMode(self._multi_selection_mode())
+            self.selected_headers_empty_label = QLabel("No filters selected")
 
             self.date_from_label = QLabel("Measurement date from")
             self.date_from_calendar = QDateEdit(calendarPopup=True)
@@ -100,16 +101,22 @@ class FilterDialog(QDialog):
             self.header_clear_selection_button = QPushButton("Clear")
 
             self.selection_help_label = QLabel(
-                "Selection logic: values selected within each list are treated as OR, while AX/Reference/Header lists "
-                "are combined using AND. Empty lists are treated as all values."
+                "Available values are on the left. Selected headers are shown on the right for quick review."
             )
             self.selection_help_label.setWordWrap(True)
 
             self.reset_help_label = QLabel(
-                "Reset behavior: Clear removes the selection from the current list. Select all restores every visible "
-                "value in that list."
+                "Selection logic: values selected within a list are OR; AX, Reference, and Header lists combine as AND. "
+                "If a list has no selection, all values from that list are included."
             )
             self.reset_help_label.setWordWrap(True)
+
+            self.filter_summary_label = QLabel("No filters selected. All results will be included.")
+            self.filter_summary_label.setWordWrap(True)
+
+            self.ax_empty_label = QLabel("No results")
+            self.reference_empty_label = QLabel("No results")
+            self.header_empty_label = QLabel("No results")
 
             # Create separate QLineEdit widgets for searching in each list widget
             self.ax_search_input = QLineEdit()
@@ -157,29 +164,34 @@ class FilterDialog(QDialog):
             self.layout.addWidget(self.ax_search_input, 2, 0)
             self.layout.addLayout(ax_controls_layout, 3, 0)
             self.layout.addWidget(self.ax_list, 4, 0)
+            self.layout.addWidget(self.ax_empty_label, 5, 0)
 
             self.layout.addWidget(self.reference_label, 1, 1)
             self.layout.addWidget(self.reference_search_input, 2, 1)
             self.layout.addLayout(reference_controls_layout, 3, 1)
             self.layout.addWidget(self.reference_list, 4, 1)
+            self.layout.addWidget(self.reference_empty_label, 5, 1)
 
             self.layout.addWidget(self.header_label, 1, 2)
             self.layout.addWidget(self.header_search_input, 2, 2)
             self.layout.addLayout(header_controls_layout, 3, 2)
             self.layout.addWidget(self.header_list, 4, 2)
+            self.layout.addWidget(self.header_empty_label, 5, 2)
 
             self.layout.addWidget(self.selected_headers_label, 1, 3)
             self.layout.addWidget(self.selected_headers_list, 4, 3)
+            self.layout.addWidget(self.selected_headers_empty_label, 5, 3)
 
-            self.layout.addWidget(self.selection_help_label, 5, 0, 1, 4)
-            self.layout.addWidget(self.reset_help_label, 6, 0, 1, 4)
+            self.layout.addWidget(self.selection_help_label, 6, 0, 1, 4)
+            self.layout.addWidget(self.reset_help_label, 7, 0, 1, 4)
+            self.layout.addWidget(self.filter_summary_label, 8, 0, 1, 4)
 
-            self.layout.addWidget(self.date_range_label, 7, 0, 1, 3)
-            self.layout.addWidget(self.date_from_label, 8, 0)
-            self.layout.addWidget(self.date_from_calendar, 8, 1)
+            self.layout.addWidget(self.date_range_label, 9, 0, 1, 3)
+            self.layout.addWidget(self.date_from_label, 10, 0)
+            self.layout.addWidget(self.date_from_calendar, 10, 1)
 
-            self.layout.addWidget(self.date_to_label, 9, 0)
-            self.layout.addWidget(self.date_to_calendar, 9, 1)
+            self.layout.addWidget(self.date_to_label, 11, 0)
+            self.layout.addWidget(self.date_to_calendar, 11, 1)
 
             for row in range(self.layout.rowCount()):
                 for column in range(self.layout.columnCount()):
@@ -189,10 +201,10 @@ class FilterDialog(QDialog):
                         if widget is not None:
                             widget.setFixedWidth(150) if column == 0 else widget.setFixedWidth(150)
 
-            self.layout.addWidget(self.actions_label, 10, 0, 1, 3)
-            self.layout.addWidget(self.select_beginning_button, 11, 0)
-            self.layout.addWidget(self.select_today_button, 11, 1)
-            self.layout.addWidget(self.apply_button, 11, 2, 1, 2)
+            self.layout.addWidget(self.actions_label, 12, 0, 1, 3)
+            self.layout.addWidget(self.select_beginning_button, 13, 0)
+            self.layout.addWidget(self.select_today_button, 13, 1)
+            self.layout.addWidget(self.apply_button, 13, 2, 1, 2)
 
             self.show()
         except Exception as e:
@@ -206,6 +218,8 @@ class FilterDialog(QDialog):
             
             # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
             self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
+            self.ax_list.itemSelectionChanged.connect(self._update_filter_summary)
+            self.reference_list.itemSelectionChanged.connect(self._update_filter_summary)
 
             self._connect_shift_range_for_list(self.ax_list)
             self._connect_shift_range_for_list(self.reference_list)
@@ -273,6 +287,19 @@ class FilterDialog(QDialog):
             self.header_search_input,
         ):
             input_widget.setStyleSheet(ui_theme_tokens.input_style())
+
+        self.date_from_calendar.setStyleSheet(ui_theme_tokens.input_style())
+        self.date_to_calendar.setStyleSheet(ui_theme_tokens.input_style())
+        for helper_label in (
+            self.selection_help_label,
+            self.reset_help_label,
+            self.filter_summary_label,
+            self.ax_empty_label,
+            self.reference_empty_label,
+            self.header_empty_label,
+            self.selected_headers_empty_label,
+        ):
+            helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
 
     def _connect_shift_range_for_list(self, list_widget):
         self._list_selection_utils.connect_shift_range_behavior(list_widget)
@@ -351,14 +378,47 @@ class FilterDialog(QDialog):
                 self.reference_list.addItem(item)
 
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
+            self._refresh_empty_states()
+            self._update_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
 
     def search_list_widgets(self, list_widget, search_text):
         try:
             self._list_selection_utils.preserve_selection_during_filter(list_widget, search_text)
+            self._refresh_empty_states()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _refresh_empty_states(self):
+        self._set_list_empty_state(self.ax_list, self.ax_empty_label)
+        self._set_list_empty_state(self.reference_list, self.reference_empty_label)
+        self._set_list_empty_state(self.header_list, self.header_empty_label)
+        self._set_list_empty_state(self.selected_headers_list, self.selected_headers_empty_label, "No filters selected")
+
+    @staticmethod
+    def _set_list_empty_state(list_widget, label_widget, empty_text="No results"):
+        visible_items = sum(1 for row in range(list_widget.count()) if not list_widget.item(row).isHidden())
+        if list_widget.count() == 0:
+            label_widget.setText(empty_text)
+            label_widget.show()
+        elif visible_items == 0:
+            label_widget.setText("No name matches")
+            label_widget.show()
+        else:
+            label_widget.hide()
+
+    def _update_filter_summary(self):
+        ax_count = len(self.ax_list.selectedItems())
+        ref_count = len(self.reference_list.selectedItems())
+        header_count = len(self.header_list.selectedItems())
+        total_selected = ax_count + ref_count + header_count
+        if total_selected == 0:
+            self.filter_summary_label.setText("No filters selected. All results will be included.")
+            return
+        self.filter_summary_label.setText(
+            f"Active filters: AX {ax_count} • Reference {ref_count} • Header {header_count}."
+        )
 
     def on_reference_selection_changed(self):
         try:
@@ -389,6 +449,8 @@ class FilterDialog(QDialog):
                     self.header_list.addItem(item)
 
             self.update_selected_headers()
+            self._refresh_empty_states()
+            self._update_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
                 
@@ -408,6 +470,8 @@ class FilterDialog(QDialog):
             for item in selected_header_items:
                 selected_header_item = QListWidgetItem(item.text())
                 self.selected_headers_list.addItem(selected_header_item)
+            self._refresh_empty_states()
+            self._update_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
 

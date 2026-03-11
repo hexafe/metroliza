@@ -88,6 +88,7 @@ class ModifyDB(QDialog):
             self.reference_table.setColumnCount(1)
             self.reference_table.setHorizontalHeaderLabels(["Reference"])
             self.reference_table.setColumnWidth(0, 200)
+            self.reference_empty_label = label_cls("No results") if label_cls is not None else None
 
             self.part_number_table = QTableWidget()
             self.part_number_table.setSelectionMode(self._multi_selection_mode())
@@ -95,6 +96,7 @@ class ModifyDB(QDialog):
             self.part_number_table.setColumnCount(1)
             self.part_number_table.setHorizontalHeaderLabels(["Sample number"])
             self.part_number_table.setColumnWidth(0, 200)
+            self.part_empty_label = label_cls("No results") if label_cls is not None else None
 
             self.header_table = QTableWidget()
             self.header_table.setSelectionMode(self._multi_selection_mode())
@@ -102,6 +104,7 @@ class ModifyDB(QDialog):
             self.header_table.setColumnCount(1)
             self.header_table.setHorizontalHeaderLabels(["Header"])
             self.header_table.setColumnWidth(0, 200)
+            self.header_empty_label = label_cls("No results") if label_cls is not None else None
 
             helper_text = "Tip: Choose a database file first to load values for review."
             self.helper_text_label = label_cls(helper_text) if label_cls is not None else None
@@ -115,6 +118,7 @@ class ModifyDB(QDialog):
                 self.apply_button.setEnabled(False)
             self.undo_button = QPushButton("Undo last change")
             self.cancel_button = QPushButton("Close")
+            self.table_summary_label = label_cls("No results") if label_cls is not None else None
             self._apply_action_button_styles()
         except Exception as e:
             self.log_and_exit(e)
@@ -138,8 +142,18 @@ class ModifyDB(QDialog):
             layout.addWidget(self.part_number_table, row_offset, 1)
             layout.addWidget(self.header_table, row_offset, 2)
             row_offset += 1
+            if self.reference_empty_label is not None:
+                layout.addWidget(self.reference_empty_label, row_offset, 0)
+            if self.part_empty_label is not None:
+                layout.addWidget(self.part_empty_label, row_offset, 1)
+            if self.header_empty_label is not None:
+                layout.addWidget(self.header_empty_label, row_offset, 2)
+            row_offset += 1
             if self.helper_text_label is not None:
                 layout.addWidget(self.helper_text_label, row_offset, 0, 1, 3)
+                row_offset += 1
+            if self.table_summary_label is not None:
+                layout.addWidget(self.table_summary_label, row_offset, 0, 1, 3)
                 row_offset += 1
             layout.addWidget(self.select_db_button, row_offset, 0, 1, 3)
             row_offset += 1
@@ -175,6 +189,16 @@ class ModifyDB(QDialog):
         self.reference_table.setStyleSheet(table_style)
         self.part_number_table.setStyleSheet(table_style)
         self.header_table.setStyleSheet(table_style)
+
+        for helper_label in (
+            self.helper_text_label,
+            self.table_summary_label,
+            self.reference_empty_label,
+            self.part_empty_label,
+            self.header_empty_label,
+        ):
+            if helper_label is not None and hasattr(helper_label, 'setStyleSheet'):
+                helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
 
     def _connect_shift_range_for_table(self, table_widget):
         table_widget.cellPressed.connect(
@@ -299,6 +323,7 @@ class ModifyDB(QDialog):
                 "SELECT DISTINCT HEADER FROM MEASUREMENTS;",
             )
             self.populate_table(self.header_table, header_values)
+            self._refresh_empty_states()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -310,6 +335,25 @@ class ModifyDB(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, str(value[0]))
             table.setItem(i, 0, item)
             self.undo_data[table][i] = str(value[0])
+
+    def _refresh_empty_states(self):
+        self._set_table_empty_state(self.reference_table, self.reference_empty_label)
+        self._set_table_empty_state(self.part_number_table, self.part_empty_label)
+        self._set_table_empty_state(self.header_table, self.header_empty_label)
+        if self.table_summary_label is not None:
+            self.table_summary_label.setText(
+                f"Loaded rows: Reference {self.reference_table.rowCount()} • Sample number {self.part_number_table.rowCount()} • Header {self.header_table.rowCount()}."
+            )
+
+    @staticmethod
+    def _set_table_empty_state(table_widget, label_widget):
+        if label_widget is None:
+            return
+        if table_widget.rowCount() == 0:
+            label_widget.setText("No results")
+            label_widget.show()
+            return
+        label_widget.hide()
 
     def confirm_and_apply_changes(self):
         """Show pending edits and apply them only after user confirmation."""

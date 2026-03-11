@@ -1,6 +1,6 @@
-# UI Revamp (Active Planning)
+# UI Revamp (Finalized and Archived)
 
-This folder is the **active** planning and execution source for the current UI revamp cycle.
+This folder is the finalized planning and execution record for the completed UI revamp cycle.
 
 ## Canonical Documents
 
@@ -48,3 +48,8 @@ Implementation must proceed in this order and may not skip dependencies:
 Previous completed planning artifacts remain available for historical context at:
 
 - [`docs/archive/2026/ui-revamp/`](../archive/2026/ui-revamp/README.md)
+
+
+## Closure Update
+
+This active set has been finalized after the Export/Grouping/Filter/Modify DB consistency pass and is ready for archive move.

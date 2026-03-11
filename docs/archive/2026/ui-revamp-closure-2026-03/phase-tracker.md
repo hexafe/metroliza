@@ -1,4 +1,4 @@
-# UI Revamp Phase Tracker (Active)
+# UI Revamp Phase Tracker (Final)
 
 Status legend: `Not started` | `In progress` | `Blocked` | `Complete`
 
@@ -6,15 +6,15 @@ Status legend: `Not started` | `In progress` | `Blocked` | `Complete`
 
 | Phase | Name | Status | Depends on |
 |---|---|---|---|
-| 1 | Foundation + shared shell | Not started | — |
-| 2 | Characteristic matching | Not started | Phase 1 |
-| 3 | Export | Not started | Phase 2 |
-| 4 | Grouping | Not started | Phase 1 |
-| 5 | Filter | Not started | Phase 1, Phase 4 |
-| 6 | Modify DB | Not started | Phase 1 |
-| 7 | Global consistency pass | Not started | Phases 1–6 |
-| 8 | Docs alignment + QA evidence | In progress | Phase 7 (can prep in parallel) |
-| 9 | Archive move (closure only) | Not started | Phase 8 |
+| 1 | Foundation + shared shell | Complete | — |
+| 2 | Characteristic matching | Complete | Phase 1 |
+| 3 | Export | Complete | Phase 2 |
+| 4 | Grouping | Complete | Phase 1 |
+| 5 | Filter | Complete | Phase 1, Phase 4 |
+| 6 | Modify DB | Complete | Phase 1 |
+| 7 | Global consistency pass | Complete | Phases 1–6 |
+| 8 | Docs alignment + QA evidence | Complete | Phase 7 (can prep in parallel) |
+| 9 | Archive move (closure only) | Complete | Phase 8 |
 
 ## Phase Details and Exit Criteria
 
@@ -86,5 +86,5 @@ Status legend: `Not started` | `In progress` | `Blocked` | `Complete`
 
 ## Open Risks / Notes
 
-- Current risk: implementation may diverge without explicit token/state mapping checks.
-- Mitigation: enforce phase-level checklist in `todo.md` before marking any phase complete.
+- No open blockers after implementation and consistency sweep.
+- Follow-up: collect additional operator feedback during next release cycle.
