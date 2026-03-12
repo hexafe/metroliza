@@ -28,12 +28,12 @@ from PyQt6.QtWidgets import (
 class TaskCardButton(QPushButton):
     """Clickable task card used on the dashboard."""
 
-    def __init__(self, title, description, status, primary=False):
+    def __init__(self, title, description):
         super().__init__()
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setCheckable(False)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setMinimumHeight(124)
+        self.setMinimumHeight(104)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         card_layout = QVBoxLayout(self)
@@ -45,15 +45,39 @@ class TaskCardButton(QPushButton):
         card_layout.addWidget(title_label)
 
         description_label = QLabel(description)
-        description_label.setWordWrap(True)
+        description_label.setWordWrap(False)
         description_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_MUTED))
         card_layout.addWidget(description_label)
+        card_layout.addStretch()
 
-        status_label = QLabel(status)
-        status_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
-        card_layout.addWidget(status_label)
-
-        self.setStyleSheet(ui_theme_tokens.card_button_style('primary' if primary else 'secondary'))
+        self.setStyleSheet(
+            "QPushButton {"
+            f" min-height: {ui_theme_tokens.CONTROL_HEIGHT}px;"
+            f" padding: {ui_theme_tokens.SPACE_8}px {ui_theme_tokens.SPACE_12}px;"
+            f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
+            f" border-left: 3px solid {ui_theme_tokens.COLOR_ACCENT_SUBTLE};"
+            f" border-radius: {ui_theme_tokens.RADIUS_12}px;"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL};"
+            f" color: {ui_theme_tokens.COLOR_TEXT_SECONDARY};"
+            " text-align: left;"
+            "}"
+            "QPushButton:hover {"
+            f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_STRONG};"
+            f" border-left: 3px solid {ui_theme_tokens.COLOR_ACCENT};"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
+            "}"
+            "QPushButton:pressed {"
+            f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_STRONG};"
+            f" border-left: 3px solid {ui_theme_tokens.COLOR_ACCENT};"
+            f" background-color: {ui_theme_tokens.COLOR_ACCENT_SUBTLE};"
+            "}"
+            "QPushButton:focus {"
+            f" border: 2px solid {ui_theme_tokens.COLOR_FOCUS_RING};"
+            f" border-left: 3px solid {ui_theme_tokens.COLOR_ACCENT};"
+            " outline: none;"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
+            "}"
+        )
 
 
 class MainWindow(QMainWindow):
@@ -72,7 +96,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"Metroliza [{version_label}]")
         else:
             self.setWindowTitle(f"Metroliza [{version_label}] ({days_until_expiration+1} day{'s' if days_until_expiration+1 > 1 else ''} left)")
-        self.setGeometry(100, 100, 300, 150)
+        self.setGeometry(100, 100, 1120, 760)
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.layout = QGridLayout()
@@ -92,39 +116,29 @@ class MainWindow(QMainWindow):
         # Initialize and set up dashboard task cards
         self.parse_button = TaskCardButton(
             "Parse Reports",
-            "Import and parse incoming PDF reports into your working database.",
-            "Primary action: Start ingestion",
-            primary=True,
+            "Import PDF reports into the working database.",
         )
         self.modifydb_button = TaskCardButton(
             "Review Data",
-            "Review and update references, part numbers, and report metadata.",
-            "Primary action: Open data review",
-            primary=True,
+            "Review part numbers, metadata, and references.",
         )
         self.export_button = TaskCardButton(
             "Export Analysis",
-            "Filter analyzed data and generate an export-ready workbook.",
-            "Primary action: Create export",
-            primary=True,
+            "Generate filtered workbook exports for sharing.",
         )
         self.csv_summary_button = TaskCardButton(
             "CSV Quick Charts",
             "Create quick visual summaries from CSV files.",
-            "Primary action: Build charts",
-            primary=True,
         )
         self.map_characteristics_button = TaskCardButton(
             "Match Characteristic Names",
             "Map characteristic names to standardized common names.",
-            "Secondary action: Manage mappings",
         )
 
         self.heading_label = QLabel("Metroliza dashboard")
         self.subheading_label = QLabel("Move from report parsing to validated output using focused task cards.")
         self.status_label = QLabel()
         self.last_export_label = QLabel()
-        self.readiness_label = QLabel()
         self.setup_button_tooltips()
 
         # Set up menu items
@@ -176,7 +190,6 @@ class MainWindow(QMainWindow):
 
         main_container_layout.addWidget(self._build_dashboard_header())
         main_container_layout.addWidget(self._build_dashboard_card_grid())
-        main_container_layout.addWidget(self._build_footer_row())
         main_container_layout.addStretch()
 
         self.layout.addWidget(main_container, 0, 0)
@@ -200,9 +213,9 @@ class MainWindow(QMainWindow):
 
         context_strip = QFrame()
         context_strip.setStyleSheet(ui_theme_tokens.panel_style(card=False))
-        context_layout = QHBoxLayout(context_strip)
+        context_layout = QVBoxLayout(context_strip)
         context_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8)
-        context_layout.setSpacing(ui_theme_tokens.SPACE_12)
+        context_layout.setSpacing(ui_theme_tokens.SPACE_4)
 
         self.status_label.setWordWrap(True)
         self.last_export_label.setWordWrap(True)
@@ -250,19 +263,6 @@ class MainWindow(QMainWindow):
         card_region_layout.addLayout(card_grid)
         return card_region
 
-    def _build_footer_row(self):
-        footer = QFrame()
-        footer.setStyleSheet(ui_theme_tokens.panel_style(card=False))
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8)
-        footer_layout.setSpacing(ui_theme_tokens.SPACE_8)
-
-        self.readiness_label.setWordWrap(True)
-        self.readiness_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
-        footer_layout.addWidget(self.readiness_label)
-        footer_layout.addStretch()
-        return footer
-
     def update_context_status(self):
         if self.db_file:
             self.status_label.setText(f"Database: {self.db_file}")
@@ -270,13 +270,6 @@ class MainWindow(QMainWindow):
             self.status_label.setText("Database: Not selected yet")
 
         self.last_export_label.setText("Last export: Not run yet")
-
-        if self.db_file and self.directory:
-            self.readiness_label.setText("Ready: ingest, manage, and export workflows are available.")
-        elif self.db_file:
-            self.readiness_label.setText("Hint: set a source directory before ingesting reports.")
-        else:
-            self.readiness_label.setText("Hint: choose or create a database in a workflow dialog to get started.")
 
     def launch_parsing_dialog(self):
         """Launch the parsing dialog and close the other dialogs if they are open."""
