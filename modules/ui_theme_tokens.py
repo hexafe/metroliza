@@ -6,27 +6,34 @@ BASE_ROW_BACKGROUND_FALLBACK = "#FFFFFF"
 SELECTED_ROW_BACKGROUND_FALLBACK = "#5E88AD"
 DEFAULT_GROUP_COLOR = BASE_ROW_BACKGROUND_FALLBACK
 
-COLOR_BACKGROUND_APP = "#F5F7FA"
-COLOR_BACKGROUND_PANEL = "#FFFFFF"
-COLOR_BACKGROUND_PANEL_MUTED = "#FAFBFC"
-COLOR_TEXT_PRIMARY = "#101828"
-COLOR_TEXT_SECONDARY = "#667085"
-COLOR_TEXT_MUTED = "#98A2B3"
-COLOR_TEXT_HELPER = COLOR_TEXT_MUTED
-COLOR_BORDER_DEFAULT = "#E5E7EB"
+COLOR_BACKGROUND_APP = "#121417"
+COLOR_BACKGROUND_PANEL = "#1B1F24"
+COLOR_BACKGROUND_PANEL_MUTED = "#232933"
+COLOR_BACKGROUND_PANEL_ELEVATED = "#2A3140"
+COLOR_BACKGROUND_INPUT = "#20262F"
+COLOR_TEXT_PRIMARY = "#F3F4F6"
+COLOR_TEXT_SECONDARY = "#D1D5DB"
+COLOR_TEXT_MUTED = "#9CA3AF"
+COLOR_TEXT_DISABLED = "#6B7280"
+COLOR_TEXT_HELPER = "#AEB8C6"
+COLOR_BORDER_DEFAULT = "#364152"
 COLOR_BORDER_MUTED = COLOR_BORDER_DEFAULT
-COLOR_BORDER_STRONG = "#D0D5DD"
-COLOR_ACCENT = "#2563EB"
-COLOR_ACCENT_HOVER = "#1D4ED8"
-COLOR_ACCENT_SUBTLE = "#EFF6FF"
-COLOR_FOCUS_RING = "#2563EB"
-COLOR_SELECTION = "#5E88AD"
-COLOR_STATUS_SUCCESS = "#059669"
-COLOR_STATUS_WARNING = "#D97706"
-COLOR_STATUS_DANGER = "#DC2626"
-COLOR_STATUS_SUCCESS_BG = "#ECFDF3"
-COLOR_STATUS_WARNING_BG = "#FFFAEB"
-COLOR_STATUS_DANGER_BG = "#FEF3F2"
+COLOR_BORDER_STRONG = "#4B5565"
+COLOR_ACCENT_PRIMARY = "#3B82F6"
+COLOR_ACCENT_HOVER = "#2563EB"
+COLOR_ACCENT_PRESSED = "#1D4ED8"
+COLOR_ACCENT_SUBTLE = "#1E3A8A33"
+COLOR_ACCENT = COLOR_ACCENT_PRIMARY
+COLOR_FOCUS_RING = "#93C5FD"
+COLOR_SELECTION = COLOR_ACCENT_HOVER
+COLOR_STATUS_SUCCESS = "#22C55E"
+COLOR_STATUS_WARNING = "#F59E0B"
+COLOR_STATUS_DANGER = "#EF4444"
+COLOR_STATUS_INFO = "#38BDF8"
+COLOR_STATUS_SUCCESS_BG = "#22C55E26"
+COLOR_STATUS_WARNING_BG = "#F59E0B26"
+COLOR_STATUS_DANGER_BG = "#EF444426"
+COLOR_STATUS_INFO_BG = "#38BDF826"
 
 SPACE_4 = 4
 SPACE_8 = 8
@@ -59,30 +66,30 @@ BUTTON_INTERACTION = {
 BUTTON_VARIANTS = {
     'primary': {
         'text': "#FFFFFF",
-        'background': COLOR_ACCENT,
-        'border': COLOR_ACCENT,
+        'background': COLOR_ACCENT_PRIMARY,
+        'border': COLOR_ACCENT_PRIMARY,
         'hover_background': COLOR_ACCENT_HOVER,
         'hover_border': COLOR_ACCENT_HOVER,
-        'pressed_background': "#1E40AF",
-        'pressed_border': "#1E40AF",
+        'pressed_background': COLOR_ACCENT_PRESSED,
+        'pressed_border': COLOR_ACCENT_PRESSED,
     },
     'secondary': {
         'text': COLOR_TEXT_SECONDARY,
         'background': COLOR_BACKGROUND_PANEL,
         'border': COLOR_BORDER_DEFAULT,
-        'hover_background': COLOR_BACKGROUND_PANEL_MUTED,
-        'hover_border': COLOR_BORDER_STRONG,
-        'pressed_background': "#E2E8F0",
-        'pressed_border': COLOR_BORDER_STRONG,
+        'hover_background': COLOR_BACKGROUND_PANEL_ELEVATED,
+        'hover_border': COLOR_ACCENT_PRIMARY,
+        'pressed_background': COLOR_ACCENT_SUBTLE,
+        'pressed_border': COLOR_ACCENT_HOVER,
     },
     'tertiary': {
         'text': COLOR_TEXT_SECONDARY,
         'background': COLOR_BACKGROUND_PANEL_MUTED,
         'border': COLOR_BORDER_MUTED,
-        'hover_background': "#E2E8F0",
-        'hover_border': COLOR_BORDER_DEFAULT,
-        'pressed_background': "#CBD5E1",
-        'pressed_border': COLOR_BORDER_DEFAULT,
+        'hover_background': COLOR_BACKGROUND_PANEL_ELEVATED,
+        'hover_border': COLOR_ACCENT_HOVER,
+        'pressed_background': COLOR_ACCENT_SUBTLE,
+        'pressed_border': COLOR_ACCENT_PRESSED,
     },
     'danger': {
         'text': "#FFFFFF",
@@ -245,7 +252,7 @@ def button_style(variant='secondary'):
         "QPushButton:disabled {"
         f" border: {BUTTON_INTERACTION['default_border_width']}px solid {COLOR_BORDER_MUTED};"
         f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
-        f" color: {COLOR_TEXT_HELPER};"
+        f" color: {COLOR_TEXT_DISABLED};"
         "}"
     )
 
@@ -282,7 +289,7 @@ def card_button_style(variant='secondary'):
         "QPushButton:disabled {"
         f" border: {BUTTON_INTERACTION['default_border_width']}px solid {COLOR_BORDER_MUTED};"
         f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
-        f" color: {COLOR_TEXT_HELPER};"
+        f" color: {COLOR_TEXT_DISABLED};"
         "}"
     )
 
@@ -300,21 +307,21 @@ def input_style():
         f" padding: {SPACE_8}px;"
         f" border: 1px solid {COLOR_BORDER_DEFAULT};"
         f" border-radius: {RADIUS_10}px;"
-        f" background-color: {COLOR_BACKGROUND_PANEL};"
+        f" background-color: {COLOR_BACKGROUND_INPUT};"
         f" color: {COLOR_TEXT_SECONDARY};"
         "}"
         "QLineEdit:hover, QComboBox:hover {"
-        f" border: 1px solid {COLOR_BORDER_STRONG};"
+        f" border: 1px solid {COLOR_ACCENT_PRIMARY};"
         "}"
         "QLineEdit:focus, QComboBox:focus {"
         f" border: 2px solid {COLOR_FOCUS_RING};"
         " outline: none;"
-        f" background-color: {COLOR_ACCENT_SUBTLE};"
+        f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
         "}"
         "QLineEdit:disabled, QComboBox:disabled {"
         f" border: 1px solid {COLOR_BORDER_MUTED};"
         f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
-        f" color: {COLOR_TEXT_HELPER};"
+        f" color: {COLOR_TEXT_DISABLED};"
         "}"
         "QLineEdit::placeholder {"
         f" color: {COLOR_TEXT_HELPER};"
@@ -326,14 +333,12 @@ def invalid_input_style():
     return (
         "QLineEdit, QComboBox {"
         f" border: 2px solid {COLOR_STATUS_DANGER};"
-        f" background-color: #FEF2F2;"
+        f" background-color: {COLOR_STATUS_DANGER_BG};"
         "}"
     )
 
 
 def table_style(cell_padding=SPACE_8):
-    selected_background = selected_row_background_override(COLOR_SELECTION)
-    selected_text = selected_text_color(selected_background)
     return (
         "QTableWidget, QListWidget {"
         f" border: 1px solid {COLOR_BORDER_MUTED};"
@@ -354,10 +359,10 @@ def table_style(cell_padding=SPACE_8):
         f" background-color: {COLOR_ACCENT_SUBTLE};"
         "}"
         "QTableWidget::item:selected, QListWidget::item:selected {"
-        f" background-color: {selected_background};"
-        f" color: {selected_text};"
+        f" background-color: {COLOR_ACCENT_HOVER};"
+        f" color: {COLOR_TEXT_PRIMARY};"
         "}"
         "QTableWidget::item:focus, QListWidget::item:focus {"
-        f" border: 1px solid {COLOR_FOCUS_RING};"
+        f" border: 1px solid {COLOR_ACCENT_PRIMARY};"
         "}"
     )
