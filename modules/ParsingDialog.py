@@ -4,10 +4,11 @@ from modules.progress_status import build_three_line_status
 from modules.parse_reports_thread import ParseReportsThread
 from modules.custom_logger import CustomLogger
 from PyQt6.QtCore import pyqtSlot
-from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QPushButton
+from PyQt6.QtWidgets import QDialog, QFileDialog, QFrame, QGridLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules import ui_theme_tokens
 import shutil
 
 
@@ -24,6 +25,9 @@ class ParsingDialog(QDialog):
     def __init__(self, parent=None, directory=None, db_file=None):
         super().__init__(parent)
 
+        self.section_spacing = ui_theme_tokens.SPACE_12
+        self.section_content_spacing = ui_theme_tokens.SPACE_8
+
         # Set the window title and geometry
         self.setWindowTitle("Parsing")
         self.setGeometry(100, 100, 300, 150)
@@ -34,12 +38,20 @@ class ParsingDialog(QDialog):
 
         # Initialize the widgets
         self.directory_label = QLabel("Select a source (directory or archive file):")
+        self.directory_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        self.directory_help_label = QLabel("Step 1: Choose the folder with reports or a supported archive to ingest.")
+        self.directory_help_label.setWordWrap(True)
+        self.directory_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
         self.directory_button = QPushButton("Browse")
         self.directory_button.clicked.connect(self.select_directory)
         self.directory_label.setToolTip("Use this button to select a folder with PDF reports or a supported archive directly")
         self.directory_button.setToolTip("Use this button to select a folder with PDF reports or a supported archive directly")
 
         self.database_label = QLabel("Select a database file:")
+        self.database_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        self.database_help_label = QLabel("Step 2: Choose where parsed report data should be stored.")
+        self.database_help_label.setWordWrap(True)
+        self.database_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
         self.database_button = QPushButton("Browse")
         self.database_button.clicked.connect(self.select_database)
         self.database_label.setToolTip("Use this button to select the database to which to save the results from PDF files")
@@ -47,25 +59,23 @@ class ParsingDialog(QDialog):
 
         self.parse_button = QPushButton("Parse reports")
         self.parse_button.clicked.connect(self.show_loading_screen)
-        self.parse_button.setEnabled(False)
+        self.parse_button.setStyleSheet(ui_theme_tokens.button_style("primary"))
+        self.parse_button.setDefault(True)
+        self.parse_button.setAutoDefault(True)
         self.parse_button.setToolTip("Use this button to start reading data from PDF files and writing to the database")
-
-        self.spacer = QLabel(" ")
+        self.action_help_label = QLabel()
+        self.action_help_label.setWordWrap(True)
+        self.action_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
 
         if self.directory:
             self.directory_text_label = QLabel(self.directory)
-            self.database_button.setEnabled(True)
         else:
             self.directory_text_label = QLabel("None selected")
-            self.database_button.setEnabled(False)
 
         if self.db_file:
             self.database_text_label = QLabel(self.db_file)
-            if self.directory:
-                self.parse_button.setEnabled(True)
         else:
             self.database_text_label = QLabel("None selected")
-            self.parse_button.setEnabled(False)
 
         # Initialize thread and flag
         self.parse_thread = None
@@ -73,20 +83,81 @@ class ParsingDialog(QDialog):
         self.parse_error_message = None
 
         # Initialize the layout
-        self.layout = QGridLayout()
-        self.layout.addWidget(self.directory_label, 0, 0)
-        self.layout.addWidget(self.directory_text_label, 1, 0)
-        self.layout.addWidget(self.directory_button, 2, 0, 1, 2)
-        self.layout.addWidget(self.spacer, 3, 0)
-
-        self.layout.addWidget(self.database_label, 4, 0)
-        self.layout.addWidget(self.database_text_label, 5, 0)
-        self.layout.addWidget(self.database_button, 6, 0, 1, 2)
-        self.layout.addWidget(self.spacer, 7, 0)
-
-        self.layout.addWidget(self.parse_button, 8, 0, 1, 2)
+        self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_16,
+        )
+        self.layout.setSpacing(self.section_spacing)
+        self.layout.addWidget(self._build_source_section())
+        self.layout.addWidget(self._build_database_section())
+        self.layout.addWidget(self._build_action_section())
 
         self.setLayout(self.layout)
+        self._refresh_ui_state()
+
+    def _build_source_section(self):
+        section_layout = QGridLayout()
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setVerticalSpacing(self.section_content_spacing)
+        section_layout.addWidget(self.directory_help_label, 0, 0)
+        section_layout.addWidget(self.directory_label, 1, 0)
+        section_layout.addWidget(self.directory_text_label, 2, 0)
+        section_layout.addWidget(self.directory_button, 3, 0)
+        return self._build_section_widget("Source", section_layout)
+
+    def _build_database_section(self):
+        section_layout = QGridLayout()
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setVerticalSpacing(self.section_content_spacing)
+        section_layout.addWidget(self.database_help_label, 0, 0)
+        section_layout.addWidget(self.database_label, 1, 0)
+        section_layout.addWidget(self.database_text_label, 2, 0)
+        section_layout.addWidget(self.database_button, 3, 0)
+        return self._build_section_widget("Database", section_layout)
+
+    def _build_action_section(self):
+        section_layout = QVBoxLayout()
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(self.section_content_spacing)
+        section_layout.addWidget(self.action_help_label)
+        section_layout.addWidget(self.parse_button)
+        return self._build_section_widget("Action", section_layout)
+
+    def _build_section_widget(self, title, content_layout):
+        container = QWidget(self)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(ui_theme_tokens.SPACE_8)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        layout.addWidget(title_label)
+
+        separator = QFrame(container)
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet(f"color: {ui_theme_tokens.COLOR_BORDER_DEFAULT};")
+        layout.addWidget(separator)
+        layout.addLayout(content_layout)
+        return container
+
+    def _refresh_ui_state(self):
+        has_source = bool(self.directory)
+        has_database = bool(self.db_file)
+        self.database_button.setEnabled(has_source)
+        self.parse_button.setEnabled(has_source and has_database)
+
+        if not has_source:
+            self.action_help_label.setText("Step 3: Choose a source first, then choose a database to enable parsing.")
+            self.parse_button.setToolTip("Select a source first")
+        elif not has_database:
+            self.action_help_label.setText("Step 3: Choose a database file to enable parsing.")
+            self.parse_button.setToolTip("Select a database file to enable parsing")
+        else:
+            self.action_help_label.setText("Step 3: Parse reports to ingest data into the selected database.")
+            self.parse_button.setToolTip("Start reading report data and writing it to the selected database")
 
     @pyqtSlot()
     def select_directory(self):
@@ -118,13 +189,8 @@ class ParsingDialog(QDialog):
                 logger.info("Selected parse source: %s", selected_source)
                 self.directory = selected_source
                 self.directory_text_label.setText(selected_source)
-                self.database_button.setEnabled(True)
                 self.parent().set_directory(selected_source)
-
-                if self.db_file and self.directory:
-                    self.parse_button.setEnabled(True)
-                else:
-                    self.parse_button.setEnabled(False)
+                self._refresh_ui_state()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -147,11 +213,7 @@ class ParsingDialog(QDialog):
                 self.db_file = filename
                 self.database_text_label.setText(filename)
                 self.parent().set_db_file(filename)
-
-                if self.db_file and self.directory:
-                    self.parse_button.setEnabled(True)
-                else:
-                    self.parse_button.setEnabled(False)
+                self._refresh_ui_state()
         except Exception as e:
             self.log_and_exit(e)
 
