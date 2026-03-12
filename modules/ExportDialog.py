@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import(
     QVBoxLayout,
     QComboBox,
     QCheckBox,
+    QFrame,
     QHBoxLayout,
     QWidget,
 )
@@ -233,12 +234,12 @@ class ExportDialog(QDialog):
             self.select_db_label.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
             self.select_db_button.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
 
-            self.select_filter_label = QLabel("No filters selected")
+            self.select_filter_label = QLabel("Filters: none")
             self.filter_button = QPushButton("Set filters")
             self.filter_button.clicked.connect(self.open_filter_window)
             self.filter_button.setToolTip("Use this button to filter data from the database")
             
-            self.select_group_label = QLabel("No groups created")
+            self.select_group_label = QLabel("Grouping: none")
             self.group_button = QPushButton("Manage groups")
             self.group_button.clicked.connect(self.open_grouping_window)
             self.group_button.setToolTip("Use this button to group data")
@@ -391,12 +392,16 @@ class ExportDialog(QDialog):
             self.summary_plot_scale.textChanged.connect(self.validate_plot_scale_input)
             
             # Hide passing columns in measurement sheets
-            self.hide_ok_results_checkbox = QCheckBox("Hide passing (OK) columns in measurement sheets")
+            self.hide_ok_results_checkbox = QCheckBox("Hide columns that contain only in-tolerance (OK) results")
             self.hide_ok_results_checkbox.setChecked(False)
             self.hide_ok_results_checkbox.setToolTip(
-                "When enabled, measurement-sheet columns where all values are within tolerance "
-                "are hidden (data remains in the workbook)."
+                "Enable to hide measurement columns where every value passes tolerance (OK).\n"
+                "The data is still kept in the workbook and can be unhidden later."
             )
+
+            self.advanced_details_toggle = QCheckBox("Show formatting details")
+            self.advanced_details_toggle.setChecked(False)
+            self.advanced_details_toggle.setToolTip("Show or hide less-used workbook formatting options.")
 
             self.scope_help_label = QLabel(
                 "Choose which rows are included in the export using optional filters and grouping."
@@ -425,6 +430,14 @@ class ExportDialog(QDialog):
             self.advanced_options_layout.addWidget(self.summary_plot_scale)
             self.advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
 
+            self.advanced_details_widget = QWidget()
+            self.advanced_details_widget.setLayout(self.advanced_options_layout)
+            self.advanced_details_widget.setVisible(False)
+            self.advanced_details_toggle.toggled.connect(self.advanced_details_widget.setVisible)
+
+            self.close_button = QPushButton("Cancel")
+            self.close_button.clicked.connect(self.reject)
+
             self._apply_shared_theme_styles()
             self.apply_selected_preset()
         except Exception as e:
@@ -433,6 +446,7 @@ class ExportDialog(QDialog):
     def _apply_shared_theme_styles(self):
         button_map = {
             self.export_button: 'primary',
+            self.close_button: 'secondary',
             self.select_db_button: 'secondary',
             self.filter_button: 'secondary',
             self.group_button: 'secondary',
@@ -469,15 +483,13 @@ class ExportDialog(QDialog):
                 section_title = QLabel(title)
                 section_title.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
                 section_layout.addWidget(section_title)
-
-                content_widget = QWidget()
-                content_widget.setLayout(content_layout)
-                section_layout.addWidget(content_widget)
+                section_layout.addLayout(content_layout)
                 return section_widget
 
             scope_layout = QGridLayout()
             scope_layout.setContentsMargins(0, 0, 0, 0)
-            scope_layout.setVerticalSpacing(6)
+            scope_layout.setHorizontalSpacing(ui_theme_tokens.SPACE_8)
+            scope_layout.setVerticalSpacing(4)
             scope_layout.addWidget(self.scope_help_label, 0, 0, 1, 2)
             scope_layout.addWidget(self.select_filter_label, 1, 0)
             scope_layout.addWidget(self.filter_button, 1, 1)
@@ -525,15 +537,25 @@ class ExportDialog(QDialog):
             group_analysis_layout.addWidget(self.group_analysis_scope_label, 1, 0)
             group_analysis_layout.addWidget(self.group_analysis_scope_combobox, 1, 1)
             advanced_layout.addLayout(group_analysis_layout)
-            advanced_layout.addLayout(self.advanced_options_layout)
+            divider = QFrame()
+            divider.setFrameShape(QFrame.Shape.HLine)
+            divider.setStyleSheet(f"color: {ui_theme_tokens.COLOR_BORDER_MUTED};")
+            advanced_layout.addWidget(divider)
+            advanced_layout.addWidget(self.advanced_details_toggle)
+            advanced_layout.addWidget(self.advanced_details_widget)
 
             action_layout = QVBoxLayout()
             action_layout.setContentsMargins(0, 0, 0, 0)
-            action_help_label = QLabel("Export runs with the selected scope and destination. Advanced options are optional.")
+            action_help_label = QLabel("Export uses your current scope and destination.")
             action_help_label.setWordWrap(True)
             action_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
             action_layout.addWidget(action_help_label)
-            action_layout.addWidget(self.export_button)
+            action_button_row = QHBoxLayout()
+            action_button_row.setContentsMargins(0, 0, 0, 0)
+            action_button_row.addWidget(self.close_button)
+            action_button_row.addStretch(1)
+            action_button_row.addWidget(self.export_button)
+            action_layout.addLayout(action_button_row)
 
             top_row_layout = QGridLayout()
             top_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -559,7 +581,8 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.group_analysis_scope_combobox, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
             self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
-            self.setTabOrder(self.hide_ok_results_checkbox, self.export_button)
+            self.setTabOrder(self.hide_ok_results_checkbox, self.close_button)
+            self.setTabOrder(self.close_button, self.export_button)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -674,7 +697,7 @@ class ExportDialog(QDialog):
     def set_filter_applied(self):
         try:
             # Update filter label in export window
-            self.select_filter_label.setText("Filters configured")
+            self.select_filter_label.setText("Filters: active")
         except Exception as e:
             self.log_and_exit(e)
     
@@ -682,9 +705,9 @@ class ExportDialog(QDialog):
         try:
             # Update filter label in export window
             if applied:
-                self.select_group_label.setText("Grouping configured")
+                self.select_group_label.setText("Grouping: active")
             else:
-                self.select_group_label.setText("No groups created")
+                self.select_group_label.setText("Grouping: none")
         except Exception as e:
             self.log_and_exit(e)
 
