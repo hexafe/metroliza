@@ -14,3 +14,5 @@ All items below are historical/completed and should not be used as active execut
 - `ui-revamp/` — historical completed UI revamp planning set (overview, implementation plan, TODO tracker, and screen-by-screen review).
 
 - `ui-revamp-closure-2026-03/` — finalized closure snapshot of the active 2026 UI revamp docs (design system, phase tracker, and TODO evidence).
+
+- `ui-revamp-2026-03-12/` — archived completed UI revamp planning cycle with dark-theme decision record, revised iteration checklists, and closure criteria.

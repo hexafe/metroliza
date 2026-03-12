@@ -10,7 +10,6 @@ This directory contains active operational and maintenance documentation.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
 - Grouping dialog color policy uses shared semantic tokens from `modules/ui_theme_tokens.py` (base row background, selected-row colors, default group color, and generated group palette) so dialogs stay visually consistent across light/dark themes.
 - `roadmaps/2026_03_rc1_test_ci_execution_tracker.md` — active RC1 test/CI audit and incremental execution tracker.
-- `ui-revamp/README.md` — active UI revamp planning hub (implementation phases, screen review, TODO tracker, refined design system).
 
 ### Active release-check docs (`docs/release_checks/`)
 
@@ -32,5 +31,5 @@ Supplemental tutorial/playbook docs (how-to guidance that supports, but does not
 Retired planning/temporary docs are under `archive/`.
 
 - Archive entry point: `archive/README.md`
-- UI revamp historical planning sets: `archive/2026/ui-revamp/README.md` and `archive/2026/ui-revamp-closure-2026-03/README.md`
+- UI revamp historical planning sets: `archive/2026/ui-revamp/README.md`, `archive/2026/ui-revamp-closure-2026-03/README.md`, and `archive/2026/ui-revamp-2026-03-12/README.md`
 - Year buckets: `archive/YYYY/`
