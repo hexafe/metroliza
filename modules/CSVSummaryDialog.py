@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QCheckBox,
     QLabel,
-    QWidget,
 )
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
@@ -838,9 +837,8 @@ class CSVSummaryDialog(QDialog):
 
         self.preset_path = Path.home() / '.metroliza' / '.csv_summary_presets.json'
 
-    def _build_section_widget(self, title, content_layout):
-        section_widget = QWidget()
-        section_layout = QVBoxLayout(section_widget)
+    def _build_section_layout(self, title, content_layout):
+        section_layout = QVBoxLayout()
         section_layout.setContentsMargins(0, 0, 0, 0)
         section_layout.setSpacing(ui_theme_tokens.SPACE_4)
 
@@ -849,11 +847,8 @@ class CSVSummaryDialog(QDialog):
             ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY)
         )
         section_layout.addWidget(section_title)
-
-        content_widget = QWidget()
-        content_widget.setLayout(content_layout)
-        section_layout.addWidget(content_widget)
-        return section_widget
+        section_layout.addLayout(content_layout)
+        return section_layout
 
     def _apply_shared_theme_styles(self):
         self.input_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
@@ -913,12 +908,12 @@ class CSVSummaryDialog(QDialog):
         action_layout.setSpacing(ui_theme_tokens.SPACE_8)
         action_layout.addWidget(self.start_button)
 
-        layout.addWidget(self._build_section_widget("Input", input_layout))
-        layout.addWidget(self._build_section_widget("Filters/columns", filters_layout))
-        layout.addWidget(self._build_section_widget("Spec limits", spec_limits_layout))
-        layout.addWidget(self._build_section_widget("Output", output_layout))
-        layout.addWidget(self._build_section_widget("Summary/chart options", summary_options_layout))
-        layout.addWidget(self._build_section_widget("Action", action_layout))
+        layout.addLayout(self._build_section_layout("Input", input_layout))
+        layout.addLayout(self._build_section_layout("Filters/columns", filters_layout))
+        layout.addLayout(self._build_section_layout("Spec limits", spec_limits_layout))
+        layout.addLayout(self._build_section_layout("Output", output_layout))
+        layout.addLayout(self._build_section_layout("Summary/chart options", summary_options_layout))
+        layout.addLayout(self._build_section_layout("Action", action_layout))
 
         self.setLayout(layout)
 
