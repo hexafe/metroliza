@@ -32,20 +32,20 @@ class TaskCardButton(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setCheckable(False)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setMinimumHeight(104)
+        self.setMinimumHeight(112)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         card_layout = QVBoxLayout(self)
-        card_layout.setContentsMargins(ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_12)
-        card_layout.setSpacing(ui_theme_tokens.SPACE_4)
+        card_layout.setContentsMargins(ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_12)
+        card_layout.setSpacing(ui_theme_tokens.SPACE_8)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet(ui_theme_tokens.typography_style("card", ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        title_label.setStyleSheet(ui_theme_tokens.typography_style("card", ui_theme_tokens.COLOR_TEXT_PRIMARY))
         card_layout.addWidget(title_label)
 
         description_label = QLabel(description)
         description_label.setWordWrap(False)
-        description_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_MUTED))
+        description_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
         card_layout.addWidget(description_label)
         card_layout.addStretch()
 
@@ -54,7 +54,6 @@ class TaskCardButton(QPushButton):
             f" min-height: {ui_theme_tokens.CONTROL_HEIGHT}px;"
             f" padding: {ui_theme_tokens.SPACE_8}px {ui_theme_tokens.SPACE_12}px;"
             f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
-            f" border-left: 3px solid {ui_theme_tokens.COLOR_ACCENT_SUBTLE};"
             f" border-radius: {ui_theme_tokens.RADIUS_12}px;"
             f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL};"
             f" color: {ui_theme_tokens.COLOR_TEXT_SECONDARY};"
@@ -62,19 +61,16 @@ class TaskCardButton(QPushButton):
             "}"
             "QPushButton:hover {"
             f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_STRONG};"
-            f" border-left: 3px solid {ui_theme_tokens.COLOR_ACCENT};"
-            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_ELEVATED};"
             "}"
             "QPushButton:pressed {"
-            f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_STRONG};"
-            f" border-left: 3px solid {ui_theme_tokens.COLOR_ACCENT};"
-            f" background-color: {ui_theme_tokens.COLOR_ACCENT_SUBTLE};"
+            f" border: 1px solid {ui_theme_tokens.COLOR_ACCENT_HOVER};"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
             "}"
             "QPushButton:focus {"
             f" border: 2px solid {ui_theme_tokens.COLOR_FOCUS_RING};"
-            f" border-left: 3px solid {ui_theme_tokens.COLOR_ACCENT};"
             " outline: none;"
-            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_ELEVATED};"
             "}"
         )
 
@@ -115,27 +111,27 @@ class MainWindow(QMainWindow):
         # Initialize and set up dashboard task cards
         self.parse_button = TaskCardButton(
             "Parse Reports",
-            "Import PDF reports into the working database.",
+            "Import report PDFs into the current database.",
         )
         self.modifydb_button = TaskCardButton(
             "Review Data",
-            "Review part numbers, metadata, and references.",
+            "Inspect and refine stored records.",
         )
         self.export_button = TaskCardButton(
             "Export Analysis",
-            "Generate filtered workbook exports for sharing.",
+            "Create filtered workbook outputs.",
         )
         self.csv_summary_button = TaskCardButton(
             "CSV Quick Charts",
-            "Create quick visual summaries from CSV files.",
+            "Generate quick summaries from CSV data.",
         )
         self.map_characteristics_button = TaskCardButton(
             "Match Characteristic Names",
-            "Map characteristic names to standardized common names.",
+            "Align raw names to shared terms.",
         )
 
         self.heading_label = QLabel("Metroliza dashboard")
-        self.subheading_label = QLabel("Move from report parsing to validated output using focused task cards.")
+        self.subheading_label = QLabel("Move from report intake to clean, reviewable output.")
         self.status_label = QLabel()
         self.last_export_label = QLabel()
         self.setup_button_tooltips()
@@ -182,10 +178,17 @@ class MainWindow(QMainWindow):
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""
         main_container = QFrame()
-        main_container.setStyleSheet(f"QFrame {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_APP}; }}")
+        self.central_widget.setStyleSheet(
+            f"QWidget {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_APP}; color: {ui_theme_tokens.COLOR_TEXT_SECONDARY}; }}"
+        )
+        main_container.setStyleSheet(
+            "QFrame {"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_APP};"
+            "}"
+        )
         main_container_layout = QVBoxLayout(main_container)
-        main_container_layout.setContentsMargins(ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16)
-        main_container_layout.setSpacing(ui_theme_tokens.SPACE_16)
+        main_container_layout.setContentsMargins(ui_theme_tokens.SPACE_20, ui_theme_tokens.SPACE_20, ui_theme_tokens.SPACE_20, ui_theme_tokens.SPACE_20)
+        main_container_layout.setSpacing(ui_theme_tokens.SPACE_20)
 
         main_container_layout.addWidget(self._build_dashboard_header())
         main_container_layout.addWidget(self._build_dashboard_card_grid())
@@ -202,24 +205,36 @@ class MainWindow(QMainWindow):
 
     def _build_dashboard_header(self):
         panel = QFrame()
-        panel.setStyleSheet(ui_theme_tokens.panel_style(card=True))
+        panel.setStyleSheet(
+            "QFrame {"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL};"
+            f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
+            f" border-radius: {ui_theme_tokens.RADIUS_12}px;"
+            "}"
+        )
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16)
-        panel_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        panel_layout.setContentsMargins(ui_theme_tokens.SPACE_20, ui_theme_tokens.SPACE_20, ui_theme_tokens.SPACE_20, ui_theme_tokens.SPACE_16)
+        panel_layout.setSpacing(ui_theme_tokens.SPACE_12)
         self.heading_label.setStyleSheet(ui_theme_tokens.typography_style("dashboard_page", ui_theme_tokens.COLOR_TEXT_PRIMARY))
         self.subheading_label.setWordWrap(True)
-        self.subheading_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_MUTED))
+        self.subheading_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_SECONDARY))
 
         context_strip = QFrame()
-        context_strip.setStyleSheet(ui_theme_tokens.panel_style(card=False))
+        context_strip.setStyleSheet(
+            "QFrame {"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
+            f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_MUTED};"
+            f" border-radius: {ui_theme_tokens.RADIUS_10}px;"
+            "}"
+        )
         context_layout = QVBoxLayout(context_strip)
-        context_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8)
-        context_layout.setSpacing(ui_theme_tokens.SPACE_4)
+        context_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
+        context_layout.setSpacing(ui_theme_tokens.SPACE_8)
 
         self.status_label.setWordWrap(True)
         self.last_export_label.setWordWrap(True)
-        self.status_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
-        self.last_export_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        self.status_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        self.last_export_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
 
         context_layout.addWidget(self.status_label)
         context_layout.addWidget(self.last_export_label)
@@ -233,7 +248,7 @@ class MainWindow(QMainWindow):
         card_region = QFrame()
         card_region_layout = QVBoxLayout(card_region)
         card_region_layout.setContentsMargins(0, 0, 0, 0)
-        card_region_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        card_region_layout.setSpacing(ui_theme_tokens.SPACE_12)
 
         section_title = QLabel("Workflows")
         section_title.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
@@ -241,8 +256,8 @@ class MainWindow(QMainWindow):
 
         card_grid = QGridLayout()
         card_grid.setContentsMargins(0, 0, 0, 0)
-        card_grid.setHorizontalSpacing(ui_theme_tokens.SPACE_12)
-        card_grid.setVerticalSpacing(ui_theme_tokens.SPACE_12)
+        card_grid.setHorizontalSpacing(ui_theme_tokens.SPACE_16)
+        card_grid.setVerticalSpacing(ui_theme_tokens.SPACE_16)
 
         cards = [
             self.parse_button,
