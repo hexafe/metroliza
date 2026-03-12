@@ -74,8 +74,8 @@ class ModifyDB(QDialog):
                 self.dialog_title_label.setStyleSheet(ui_theme_tokens.typography_style("page", ui_theme_tokens.COLOR_TEXT_PRIMARY))
 
             subtitle_text = (
-                "Review distinct values across Reference, Sample number, and Header, then rename as needed. "
-                "You can batch-rename selected rows with Enter and confirm all changes before they are saved."
+                "Review distinct values across Reference, Sample number, and Header, then rename where needed. "
+                "Press Enter to rename selected rows in bulk before applying changes."
             )
             self.dialog_subtitle_label = label_cls(subtitle_text) if label_cls is not None else None
             if self.dialog_subtitle_label is not None and hasattr(self.dialog_subtitle_label, "setWordWrap"):
@@ -106,14 +106,14 @@ class ModifyDB(QDialog):
             self.header_table.setColumnWidth(0, 200)
             self.header_empty_label = label_cls("No results") if label_cls is not None else None
 
-            helper_text = "Tip: Choose a database file first to load values for review."
+            helper_text = "Choose a database file to load values for review."
             self.helper_text_label = label_cls(helper_text) if label_cls is not None else None
             if self.helper_text_label is not None and hasattr(self.helper_text_label, "setWordWrap"):
                 self.helper_text_label.setWordWrap(True)
 
             # Create buttons for Select DB file, Apply changes, Undo, and Cancel
             self.select_db_button = QPushButton("Choose database file")
-            self.apply_button = QPushButton("Review and apply changes")
+            self.apply_button = QPushButton("Apply renames")
             if not self.db_file:
                 self.apply_button.setEnabled(False)
             self.undo_button = QPushButton("Undo last change")
@@ -183,7 +183,7 @@ class ModifyDB(QDialog):
         self.apply_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
         self.select_db_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
         self.undo_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
-        self.cancel_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.cancel_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
 
         table_style = ui_theme_tokens.table_style(cell_padding=ui_theme_tokens.SPACE_8)
         self.reference_table.setStyleSheet(table_style)
@@ -199,6 +199,9 @@ class ModifyDB(QDialog):
         ):
             if helper_label is not None and hasattr(helper_label, 'setStyleSheet'):
                 helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
+
+        if self.dialog_subtitle_label is not None:
+            self.dialog_subtitle_label.setStyleSheet(ui_theme_tokens.typography_style('body', ui_theme_tokens.COLOR_TEXT_SECONDARY))
 
     def _connect_shift_range_for_table(self, table_widget):
         table_widget.cellPressed.connect(

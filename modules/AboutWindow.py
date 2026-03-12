@@ -6,6 +6,7 @@ import base64
 import VersionDate
 from PyQt6.QtCore import QSize, QTemporaryFile, Qt, QUrl
 from PyQt6.QtGui import QCursor, QDesktopServices, QMovie
+import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtWidgets import QDialog, QLabel, QVBoxLayout
 
 from modules import Base64EncodedFiles, ui_theme_tokens
@@ -67,7 +68,7 @@ class AboutWindow(QDialog):
             ui_theme_tokens.SPACE_24,
             ui_theme_tokens.SPACE_20,
         )
-        _safe_call(self.layout, "setSpacing", ui_theme_tokens.SPACE_8)
+        _safe_call(self.layout, "setSpacing", ui_theme_tokens.SPACE_12)
 
         gif_label = QLabel()
         self._gif_label = gif_label
@@ -91,10 +92,26 @@ class AboutWindow(QDialog):
         self.gif.start()
         self.layout.addWidget(gif_label)
 
+        frame_cls = getattr(QtWidgets, "QFrame", QLabel)
+
+        summary_card = frame_cls()
+        summary_card.setStyleSheet(ui_theme_tokens.panel_style(card=True))
+        summary_layout = QVBoxLayout()
+        _safe_call(summary_card, "setLayout", summary_layout)
+        _safe_call(
+            summary_layout,
+            "setContentsMargins",
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_12,
+        )
+        _safe_call(summary_layout, "setSpacing", ui_theme_tokens.SPACE_8)
+
         title_label = QLabel(f"Metroliza version <b>{VersionDate.VERSION_LABEL}</b>")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
-        self.layout.addWidget(title_label)
+        summary_layout.addWidget(title_label)
 
         if days_until_expiration is not None:
             license_expiration_label = QLabel(
@@ -103,20 +120,36 @@ class AboutWindow(QDialog):
             )
             license_expiration_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             license_expiration_label.setStyleSheet(
-                ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY)
+                ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER)
             )
-            self.layout.addWidget(license_expiration_label)
+            summary_layout.addWidget(license_expiration_label)
 
         author_label = QLabel("By Grzegorz Ozimek")
         author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         author_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_SECONDARY))
         _safe_call(author_label, "setContentsMargins", 0, ui_theme_tokens.SPACE_8, 0, 0)
-        self.layout.addWidget(author_label)
+        summary_layout.addWidget(author_label)
+
+        self.layout.addWidget(summary_card)
+
+        repository_card = frame_cls()
+        repository_card.setStyleSheet(ui_theme_tokens.panel_style(card=True))
+        repository_layout = QVBoxLayout()
+        _safe_call(repository_card, "setLayout", repository_layout)
+        _safe_call(
+            repository_layout,
+            "setContentsMargins",
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_12,
+        )
+        _safe_call(repository_layout, "setSpacing", ui_theme_tokens.SPACE_8)
 
         repository_label = QLabel("Repository")
         repository_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        repository_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
-        self.layout.addWidget(repository_label)
+        repository_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+        repository_layout.addWidget(repository_label)
 
         repository_link = ClickableLabel(
             "Open on GitHub",
@@ -145,7 +178,9 @@ class AboutWindow(QDialog):
             ),
         )
         repository_link.setAlignment(getattr(Qt.AlignmentFlag, "AlignCenter", 0))
-        self.layout.addWidget(repository_link)
+        repository_layout.addWidget(repository_link)
+
+        self.layout.addWidget(repository_card)
 
     def closeEvent(self, event):
         """Remove the temporary GIF file created for QMovie during teardown."""

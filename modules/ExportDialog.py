@@ -402,20 +402,24 @@ class ExportDialog(QDialog):
             self.advanced_details_toggle.setChecked(False)
             self.advanced_details_toggle.setToolTip("Show or hide less-used workbook formatting options.")
 
+            self.advanced_options_toggle = QCheckBox("Show advanced options")
+            self.advanced_options_toggle.setChecked(False)
+            self.advanced_options_toggle.setToolTip("Show or hide optional export profile and analysis controls.")
+
             self.scope_help_label = QLabel(
-                "Choose which rows are included in the export using optional filters and grouping."
+                "Review the current export scope (filters and grouping)."
             )
             self.scope_help_label.setWordWrap(True)
             self.scope_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
 
             self.destination_help_label = QLabel(
-                "Select the input database and local Excel destination. Optional Google Sheets conversion can also be enabled."
+                "Review source/destination files and optional Google Sheets output."
             )
             self.destination_help_label.setWordWrap(True)
             self.destination_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
 
             self.advanced_options_help_label = QLabel(
-                "Tune output profile, chart settings, and workbook formatting options."
+                "Optional settings for profile, chart behavior, and workbook formatting."
             )
             self.advanced_options_help_label.setWordWrap(True)
             self.advanced_options_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
@@ -445,7 +449,7 @@ class ExportDialog(QDialog):
     def _apply_shared_theme_styles(self):
         button_map = {
             self.export_button: 'primary',
-            self.close_button: 'secondary',
+            self.close_button: 'tertiary',
             self.select_db_button: 'secondary',
             self.filter_button: 'secondary',
             self.group_button: 'secondary',
@@ -466,6 +470,15 @@ class ExportDialog(QDialog):
         ):
             widget.setStyleSheet(input_style)
 
+        info_style = ui_theme_tokens.typography_style('body', ui_theme_tokens.COLOR_TEXT_SECONDARY)
+        for label in (
+            self.select_filter_label,
+            self.select_group_label,
+            self.database_text_label,
+            self.excel_file_text_label,
+        ):
+            label.setStyleSheet(info_style)
+
     def init_layout(self):
         try:
             """Initialize the layout"""
@@ -476,8 +489,13 @@ class ExportDialog(QDialog):
                 section_widget = QWidget()
                 section_widget.setStyleSheet(ui_theme_tokens.panel_style(card=True).replace("QFrame", "QWidget"))
                 section_layout = QVBoxLayout(section_widget)
-                section_layout.setContentsMargins(0, 0, 0, 0)
-                section_layout.setSpacing(6)
+                section_layout.setContentsMargins(
+                    ui_theme_tokens.SPACE_12,
+                    ui_theme_tokens.SPACE_12,
+                    ui_theme_tokens.SPACE_12,
+                    ui_theme_tokens.SPACE_12,
+                )
+                section_layout.setSpacing(ui_theme_tokens.SPACE_8)
 
                 section_title = QLabel(title)
                 section_title.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
@@ -512,21 +530,24 @@ class ExportDialog(QDialog):
             report_profile_layout = QGridLayout()
             report_profile_layout.setContentsMargins(0, 0, 0, 0)
             report_profile_layout.setVerticalSpacing(6)
-            report_profile_layout.addWidget(self.advanced_options_help_label, 0, 0, 1, 2)
-            report_profile_layout.addWidget(self.preset_label, 1, 0)
+            report_profile_layout.addWidget(self.preset_label, 0, 0)
             preset_selector_layout = QHBoxLayout()
             preset_selector_layout.setContentsMargins(0, 0, 0, 0)
             preset_selector_layout.addWidget(self.preset_combobox)
-            report_profile_layout.addLayout(preset_selector_layout, 1, 1)
-            report_profile_layout.addWidget(self.export_type_label, 2, 0)
-            report_profile_layout.addWidget(self.export_type_combobox, 2, 1)
-            report_profile_layout.addWidget(self.sort_measurements_label, 3, 0)
-            report_profile_layout.addWidget(self.sort_measurements_combobox, 3, 1)
+            report_profile_layout.addLayout(preset_selector_layout, 0, 1)
+            report_profile_layout.addWidget(self.export_type_label, 1, 0)
+            report_profile_layout.addWidget(self.export_type_combobox, 1, 1)
+            report_profile_layout.addWidget(self.sort_measurements_label, 2, 0)
+            report_profile_layout.addWidget(self.sort_measurements_combobox, 2, 1)
 
             advanced_layout = QVBoxLayout()
             advanced_layout.setContentsMargins(0, 0, 0, 0)
             advanced_layout.setSpacing(8)
-            advanced_layout.addLayout(report_profile_layout)
+
+            advanced_content_layout = QVBoxLayout()
+            advanced_content_layout.setContentsMargins(0, 0, 0, 0)
+            advanced_content_layout.setSpacing(ui_theme_tokens.SPACE_8)
+            advanced_content_layout.addLayout(report_profile_layout)
 
             group_analysis_layout = QGridLayout()
             group_analysis_layout.setContentsMargins(0, 0, 0, 0)
@@ -535,13 +556,22 @@ class ExportDialog(QDialog):
             group_analysis_layout.addWidget(self.group_analysis_level_combobox, 0, 1)
             group_analysis_layout.addWidget(self.group_analysis_scope_label, 1, 0)
             group_analysis_layout.addWidget(self.group_analysis_scope_combobox, 1, 1)
-            advanced_layout.addLayout(group_analysis_layout)
+            advanced_content_layout.addLayout(group_analysis_layout)
             divider = QWidget()
             divider.setFixedHeight(1)
             divider.setStyleSheet(f"background-color: {ui_theme_tokens.COLOR_BORDER_MUTED};")
-            advanced_layout.addWidget(divider)
-            advanced_layout.addWidget(self.advanced_details_toggle)
-            advanced_layout.addWidget(self.advanced_details_widget)
+            advanced_content_layout.addWidget(divider)
+            advanced_content_layout.addWidget(self.advanced_details_toggle)
+            advanced_content_layout.addWidget(self.advanced_details_widget)
+
+            self.advanced_content_widget = QWidget()
+            self.advanced_content_widget.setLayout(advanced_content_layout)
+            self.advanced_content_widget.setVisible(False)
+            self.advanced_options_toggle.toggled.connect(self.advanced_content_widget.setVisible)
+
+            advanced_layout.addWidget(self.advanced_options_help_label)
+            advanced_layout.addWidget(self.advanced_options_toggle)
+            advanced_layout.addWidget(self.advanced_content_widget)
 
             action_layout = QVBoxLayout()
             action_layout.setContentsMargins(0, 0, 0, 0)
@@ -563,7 +593,7 @@ class ExportDialog(QDialog):
             top_row_layout.addWidget(build_section_widget("Destination", destination_layout), 0, 1)
 
             self.layout.addLayout(top_row_layout)
-            self.layout.addWidget(build_section_widget("Advanced options (optional)", advanced_layout))
+            self.layout.addWidget(build_section_widget("Advanced options", advanced_layout))
             self.layout.addWidget(build_section_widget("Action", action_layout))
 
             self.setLayout(self.layout)

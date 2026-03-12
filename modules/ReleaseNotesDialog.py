@@ -1,7 +1,7 @@
 import re
 
 import VersionDate
-from PyQt6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout
+from PyQt6.QtWidgets import QDialog, QFrame, QLabel, QTextBrowser, QVBoxLayout
 
 from modules import ui_theme_tokens
 
@@ -23,7 +23,7 @@ class ReleaseNotesDialog(QDialog):
             self.release_notes_browser.setFrameShape(frame_shape)
         self.release_notes_browser.setStyleSheet(
             "QTextBrowser {"
-            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_APP};"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
             f" color: {ui_theme_tokens.COLOR_TEXT_PRIMARY};"
             f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
             f" border-radius: {ui_theme_tokens.RADIUS_12}px;"
@@ -41,6 +41,24 @@ class ReleaseNotesDialog(QDialog):
             if move_operation is not None:
                 self.release_notes_browser.moveCursor(move_operation)
 
+        header_card = QFrame()
+        header_card.setStyleSheet(ui_theme_tokens.panel_style(card=True))
+        header_layout = QVBoxLayout(header_card)
+        header_layout.setContentsMargins(
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_8,
+        )
+        header_layout.setSpacing(ui_theme_tokens.SPACE_4)
+
+        title_label = QLabel("Release notes")
+        title_label.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        subtitle_label = QLabel("Highlights and fixes by version")
+        subtitle_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        header_layout.addWidget(title_label)
+        header_layout.addWidget(subtitle_label)
+
         layout = QVBoxLayout()
         layout.setContentsMargins(
             ui_theme_tokens.SPACE_16,
@@ -48,7 +66,8 @@ class ReleaseNotesDialog(QDialog):
             ui_theme_tokens.SPACE_16,
             ui_theme_tokens.SPACE_16,
         )
-        layout.setSpacing(ui_theme_tokens.SPACE_8)
+        layout.setSpacing(ui_theme_tokens.SPACE_12)
+        layout.addWidget(header_card)
         layout.addWidget(self.release_notes_browser)
         self.setLayout(layout)
 
@@ -126,6 +145,7 @@ class ReleaseNotesDialog(QDialog):
             f" font-size: 16px;"
             " font-weight: 700;"
             f" margin: 0 0 {ui_theme_tokens.SPACE_12}px 0;"
+            f" color: {ui_theme_tokens.COLOR_TEXT_PRIMARY};"
             "}"
             ".release-card {"
             f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
@@ -138,6 +158,7 @@ class ReleaseNotesDialog(QDialog):
             f" font-size: 14px;"
             " font-weight: 700;"
             f" margin: 0 0 {ui_theme_tokens.SPACE_8}px 0;"
+            f" color: {ui_theme_tokens.COLOR_TEXT_PRIMARY};"
             "}"
             "ul {"
             f" margin: 0 0 {ui_theme_tokens.SPACE_4}px {ui_theme_tokens.SPACE_16}px;"
