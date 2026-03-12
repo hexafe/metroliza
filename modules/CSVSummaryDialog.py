@@ -14,8 +14,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QCheckBox,
     QLabel,
-    QFrame,
-    QWidget,
 )
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
@@ -840,9 +838,7 @@ class CSVSummaryDialog(QDialog):
         self.preset_path = Path.home() / '.metroliza' / '.csv_summary_presets.json'
 
     def _build_section_layout(self, title, content_layout):
-        section_widget = QFrame()
-        section_widget.setStyleSheet(ui_theme_tokens.panel_style(card=True))
-        section_layout = QVBoxLayout(section_widget)
+        section_layout = QVBoxLayout()
         section_layout.setContentsMargins(
             ui_theme_tokens.SPACE_12,
             ui_theme_tokens.SPACE_12,
@@ -856,24 +852,23 @@ class CSVSummaryDialog(QDialog):
         )
         section_layout.addWidget(section_title)
         section_layout.addLayout(content_layout)
-        return section_widget
-
-    def _build_info_panel(self, text_label):
-        panel = QFrame()
-        panel.setStyleSheet(ui_theme_tokens.panel_style(card=False))
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(
-            ui_theme_tokens.SPACE_8,
-            ui_theme_tokens.SPACE_8,
-            ui_theme_tokens.SPACE_8,
-            ui_theme_tokens.SPACE_8,
-        )
-        panel_layout.addWidget(text_label)
-        return panel
+        return section_layout
 
     @staticmethod
-    def _build_divider():
-        divider = QWidget()
+    def _apply_info_panel_style(label):
+        label.setStyleSheet(
+            ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY)
+            + (
+                f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
+                f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
+                f" border-radius: {ui_theme_tokens.RADIUS_10}px;"
+                f" padding: {ui_theme_tokens.SPACE_8}px;"
+            )
+        )
+
+    @staticmethod
+    def _build_divider_label():
+        divider = QLabel("")
         divider.setFixedHeight(1)
         divider.setStyleSheet(f"background-color: {ui_theme_tokens.COLOR_BORDER_MUTED};")
         return divider
@@ -886,15 +881,22 @@ class CSVSummaryDialog(QDialog):
         self.clear_presets_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
         self.start_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
 
-        helper_style = ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY)
         note_style = ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_MUTED)
-        self.input_status_label.setStyleSheet(helper_style)
-        self.output_status_label.setStyleSheet(helper_style)
+        self._apply_info_panel_style(self.input_status_label)
+        self._apply_info_panel_style(self.output_status_label)
         self.input_status_label.setWordWrap(True)
         self.output_status_label.setWordWrap(True)
         self.options_note_label = QLabel("Options affect generated sheets/charts only and do not modify source CSV data.")
         self.options_note_label.setWordWrap(True)
-        self.options_note_label.setStyleSheet(note_style)
+        self.options_note_label.setStyleSheet(
+            note_style
+            + (
+                f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
+                f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
+                f" border-radius: {ui_theme_tokens.RADIUS_10}px;"
+                f" padding: {ui_theme_tokens.SPACE_8}px;"
+            )
+        )
 
     def _init_layout(self):
         layout = QVBoxLayout()
@@ -910,9 +912,9 @@ class CSVSummaryDialog(QDialog):
         input_layout.setContentsMargins(0, 0, 0, 0)
         input_layout.setSpacing(ui_theme_tokens.SPACE_8)
         input_layout.addWidget(self.input_button)
-        input_layout.addWidget(self._build_info_panel(self.input_status_label))
+        input_layout.addWidget(self.input_status_label)
         input_layout.addWidget(self.output_button)
-        input_layout.addWidget(self._build_info_panel(self.output_status_label))
+        input_layout.addWidget(self.output_status_label)
 
         scope_layout = QVBoxLayout()
         scope_layout.setContentsMargins(0, 0, 0, 0)
@@ -926,7 +928,7 @@ class CSVSummaryDialog(QDialog):
         summary_options_layout.setSpacing(ui_theme_tokens.SPACE_8)
         summary_options_layout.addWidget(self.include_extended_plots)
         summary_options_layout.addWidget(self.summary_only_checkbox)
-        summary_options_layout.addWidget(self._build_info_panel(self.options_note_label))
+        summary_options_layout.addWidget(self.options_note_label)
 
         action_layout = QVBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
@@ -937,13 +939,13 @@ class CSVSummaryDialog(QDialog):
         action_layout.addWidget(action_note_label)
         action_layout.addWidget(self.start_button)
 
-        layout.addWidget(self._build_section_layout("Scope", scope_layout))
-        layout.addWidget(self._build_divider())
-        layout.addWidget(self._build_section_layout("Inputs", input_layout))
-        layout.addWidget(self._build_divider())
-        layout.addWidget(self._build_section_layout("Options", summary_options_layout))
-        layout.addWidget(self._build_divider())
-        layout.addWidget(self._build_section_layout("Actions", action_layout))
+        layout.addLayout(self._build_section_layout("Scope", scope_layout))
+        layout.addWidget(self._build_divider_label())
+        layout.addLayout(self._build_section_layout("Inputs", input_layout))
+        layout.addWidget(self._build_divider_label())
+        layout.addLayout(self._build_section_layout("Options", summary_options_layout))
+        layout.addWidget(self._build_divider_label())
+        layout.addLayout(self._build_section_layout("Actions", action_layout))
 
         self.setLayout(layout)
 
