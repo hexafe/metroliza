@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QCheckBox,
     QLabel,
+    QFrame,
+    QWidget,
 )
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
@@ -838,17 +840,43 @@ class CSVSummaryDialog(QDialog):
         self.preset_path = Path.home() / '.metroliza' / '.csv_summary_presets.json'
 
     def _build_section_layout(self, title, content_layout):
-        section_layout = QVBoxLayout()
-        section_layout.setContentsMargins(0, 0, 0, 0)
-        section_layout.setSpacing(ui_theme_tokens.SPACE_4)
-
+        section_widget = QFrame()
+        section_widget.setStyleSheet(ui_theme_tokens.panel_style(card=True))
+        section_layout = QVBoxLayout(section_widget)
+        section_layout.setContentsMargins(
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_12,
+        )
+        section_layout.setSpacing(ui_theme_tokens.SPACE_8)
         section_title = QLabel(title)
         section_title.setStyleSheet(
             ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY)
         )
         section_layout.addWidget(section_title)
         section_layout.addLayout(content_layout)
-        return section_layout
+        return section_widget
+
+    def _build_info_panel(self, text_label):
+        panel = QFrame()
+        panel.setStyleSheet(ui_theme_tokens.panel_style(card=False))
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(
+            ui_theme_tokens.SPACE_8,
+            ui_theme_tokens.SPACE_8,
+            ui_theme_tokens.SPACE_8,
+            ui_theme_tokens.SPACE_8,
+        )
+        panel_layout.addWidget(text_label)
+        return panel
+
+    @staticmethod
+    def _build_divider():
+        divider = QWidget()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet(f"background-color: {ui_theme_tokens.COLOR_BORDER_MUTED};")
+        return divider
 
     def _apply_shared_theme_styles(self):
         self.input_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
@@ -858,11 +886,15 @@ class CSVSummaryDialog(QDialog):
         self.clear_presets_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
         self.start_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
 
-        helper_style = ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER)
+        helper_style = ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY)
+        note_style = ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_MUTED)
         self.input_status_label.setStyleSheet(helper_style)
         self.output_status_label.setStyleSheet(helper_style)
         self.input_status_label.setWordWrap(True)
         self.output_status_label.setWordWrap(True)
+        self.options_note_label = QLabel("Options affect generated sheets/charts only and do not modify source CSV data.")
+        self.options_note_label.setWordWrap(True)
+        self.options_note_label.setStyleSheet(note_style)
 
     def _init_layout(self):
         layout = QVBoxLayout()
@@ -878,42 +910,40 @@ class CSVSummaryDialog(QDialog):
         input_layout.setContentsMargins(0, 0, 0, 0)
         input_layout.setSpacing(ui_theme_tokens.SPACE_8)
         input_layout.addWidget(self.input_button)
-        input_layout.addWidget(self.input_status_label)
+        input_layout.addWidget(self._build_info_panel(self.input_status_label))
+        input_layout.addWidget(self.output_button)
+        input_layout.addWidget(self._build_info_panel(self.output_status_label))
 
-        filters_layout = QVBoxLayout()
-        filters_layout.setContentsMargins(0, 0, 0, 0)
-        filters_layout.setSpacing(ui_theme_tokens.SPACE_8)
-        filters_layout.addWidget(self.filter_button)
-
-        spec_limits_layout = QVBoxLayout()
-        spec_limits_layout.setContentsMargins(0, 0, 0, 0)
-        spec_limits_layout.setSpacing(ui_theme_tokens.SPACE_8)
-        spec_limits_layout.addWidget(self.spec_limits_button)
-        spec_limits_layout.addWidget(self.clear_presets_button)
-
-        output_layout = QVBoxLayout()
-        output_layout.setContentsMargins(0, 0, 0, 0)
-        output_layout.setSpacing(ui_theme_tokens.SPACE_8)
-        output_layout.addWidget(self.output_button)
-        output_layout.addWidget(self.output_status_label)
+        scope_layout = QVBoxLayout()
+        scope_layout.setContentsMargins(0, 0, 0, 0)
+        scope_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        scope_layout.addWidget(self.filter_button)
+        scope_layout.addWidget(self.spec_limits_button)
+        scope_layout.addWidget(self.clear_presets_button)
 
         summary_options_layout = QVBoxLayout()
         summary_options_layout.setContentsMargins(0, 0, 0, 0)
         summary_options_layout.setSpacing(ui_theme_tokens.SPACE_8)
         summary_options_layout.addWidget(self.include_extended_plots)
         summary_options_layout.addWidget(self.summary_only_checkbox)
+        summary_options_layout.addWidget(self._build_info_panel(self.options_note_label))
 
         action_layout = QVBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        action_note_label = QLabel("Generate summary with the selected scope and inputs.")
+        action_note_label.setWordWrap(True)
+        action_note_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_MUTED))
+        action_layout.addWidget(action_note_label)
         action_layout.addWidget(self.start_button)
 
-        layout.addLayout(self._build_section_layout("Input", input_layout))
-        layout.addLayout(self._build_section_layout("Filters/columns", filters_layout))
-        layout.addLayout(self._build_section_layout("Spec limits", spec_limits_layout))
-        layout.addLayout(self._build_section_layout("Output", output_layout))
-        layout.addLayout(self._build_section_layout("Summary/chart options", summary_options_layout))
-        layout.addLayout(self._build_section_layout("Action", action_layout))
+        layout.addWidget(self._build_section_layout("Scope", scope_layout))
+        layout.addWidget(self._build_divider())
+        layout.addWidget(self._build_section_layout("Inputs", input_layout))
+        layout.addWidget(self._build_divider())
+        layout.addWidget(self._build_section_layout("Options", summary_options_layout))
+        layout.addWidget(self._build_divider())
+        layout.addWidget(self._build_section_layout("Actions", action_layout))
 
         self.setLayout(layout)
 
