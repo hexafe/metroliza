@@ -13,7 +13,6 @@ from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray, Qt
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
-    QHBoxLayout,
     QFrame,
     QGridLayout,
     QLabel,
