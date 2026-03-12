@@ -6,7 +6,8 @@ import base64
 import VersionDate
 from PyQt6.QtCore import QSize, QTemporaryFile, Qt, QUrl
 from PyQt6.QtGui import QCursor, QDesktopServices, QMovie
-from PyQt6.QtWidgets import QDialog, QFrame, QLabel, QVBoxLayout
+import PyQt6.QtWidgets as QtWidgets
+from PyQt6.QtWidgets import QDialog, QLabel, QVBoxLayout
 
 from modules import Base64EncodedFiles, ui_theme_tokens
 
@@ -91,16 +92,21 @@ class AboutWindow(QDialog):
         self.gif.start()
         self.layout.addWidget(gif_label)
 
-        summary_card = QFrame()
+        frame_cls = getattr(QtWidgets, "QFrame", QLabel)
+
+        summary_card = frame_cls()
         summary_card.setStyleSheet(ui_theme_tokens.panel_style(card=True))
-        summary_layout = QVBoxLayout(summary_card)
-        summary_layout.setContentsMargins(
+        summary_layout = QVBoxLayout()
+        _safe_call(summary_card, "setLayout", summary_layout)
+        _safe_call(
+            summary_layout,
+            "setContentsMargins",
             ui_theme_tokens.SPACE_16,
             ui_theme_tokens.SPACE_12,
             ui_theme_tokens.SPACE_16,
             ui_theme_tokens.SPACE_12,
         )
-        summary_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        _safe_call(summary_layout, "setSpacing", ui_theme_tokens.SPACE_8)
 
         title_label = QLabel(f"Metroliza version <b>{VersionDate.VERSION_LABEL}</b>")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -126,16 +132,19 @@ class AboutWindow(QDialog):
 
         self.layout.addWidget(summary_card)
 
-        repository_card = QFrame()
+        repository_card = frame_cls()
         repository_card.setStyleSheet(ui_theme_tokens.panel_style(card=True))
-        repository_layout = QVBoxLayout(repository_card)
-        repository_layout.setContentsMargins(
+        repository_layout = QVBoxLayout()
+        _safe_call(repository_card, "setLayout", repository_layout)
+        _safe_call(
+            repository_layout,
+            "setContentsMargins",
             ui_theme_tokens.SPACE_16,
             ui_theme_tokens.SPACE_12,
             ui_theme_tokens.SPACE_16,
             ui_theme_tokens.SPACE_12,
         )
-        repository_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        _safe_call(repository_layout, "setSpacing", ui_theme_tokens.SPACE_8)
 
         repository_label = QLabel("Repository")
         repository_label.setAlignment(Qt.AlignmentFlag.AlignCenter)

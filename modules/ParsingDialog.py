@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
-    QWidget,
 )
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
