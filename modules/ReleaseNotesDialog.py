@@ -1,7 +1,7 @@
 import re
 
 import VersionDate
-from PyQt6.QtWidgets import QDialog, QFrame, QTextBrowser, QVBoxLayout
+from PyQt6.QtWidgets import QDialog, QTextBrowser, QVBoxLayout
 
 from modules import ui_theme_tokens
 
@@ -18,7 +18,9 @@ class ReleaseNotesDialog(QDialog):
         self.release_notes_browser = QTextBrowser()
         self.release_notes_browser.setOpenExternalLinks(True)
         self.release_notes_browser.setReadOnly(True)
-        self.release_notes_browser.setFrameShape(QFrame.Shape.NoFrame)
+        frame_shape = getattr(getattr(self.release_notes_browser, "Shape", None), "NoFrame", 0)
+        if hasattr(self.release_notes_browser, "setFrameShape"):
+            self.release_notes_browser.setFrameShape(frame_shape)
         self.release_notes_browser.setStyleSheet(
             "QTextBrowser {"
             f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_APP};"
@@ -28,9 +30,16 @@ class ReleaseNotesDialog(QDialog):
             f" padding: {ui_theme_tokens.SPACE_12}px;"
             "}"
         )
-        self.release_notes_browser.document().setDefaultStyleSheet(self._release_notes_document_css())
+        document = self.release_notes_browser.document() if hasattr(self.release_notes_browser, "document") else None
+        if document is not None and hasattr(document, "setDefaultStyleSheet"):
+            document.setDefaultStyleSheet(self._release_notes_document_css())
         self.release_notes_browser.setHtml(self._render_release_history(release_notes))
-        self.release_notes_browser.moveCursor(self.release_notes_browser.textCursor().MoveOperation.Start)
+
+        if hasattr(self.release_notes_browser, "textCursor") and hasattr(self.release_notes_browser, "moveCursor"):
+            text_cursor = self.release_notes_browser.textCursor()
+            move_operation = getattr(getattr(text_cursor, "MoveOperation", None), "Start", None)
+            if move_operation is not None:
+                self.release_notes_browser.moveCursor(move_operation)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(

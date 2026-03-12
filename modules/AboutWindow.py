@@ -6,9 +6,15 @@ import base64
 import VersionDate
 from PyQt6.QtCore import QSize, QTemporaryFile, Qt, QUrl
 from PyQt6.QtGui import QCursor, QDesktopServices, QMovie
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout
+from PyQt6.QtWidgets import QDialog, QLabel, QVBoxLayout
 
 from modules import Base64EncodedFiles, ui_theme_tokens
+
+
+def _safe_call(target, method_name, *args):
+    method = getattr(target, method_name, None)
+    if callable(method):
+        method(*args)
 
 
 class ClickableLabel(QLabel):
@@ -50,14 +56,18 @@ class AboutWindow(QDialog):
         self.setWindowTitle("About")
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
-        self.layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-        self.layout.setContentsMargins(
+        align_top = getattr(Qt.AlignmentFlag, "AlignTop", 0)
+        align_hcenter = getattr(Qt.AlignmentFlag, "AlignHCenter", getattr(Qt.AlignmentFlag, "AlignCenter", 0))
+        self.layout.setAlignment(align_top | align_hcenter)
+        _safe_call(
+            self.layout,
+            "setContentsMargins",
             ui_theme_tokens.SPACE_24,
             ui_theme_tokens.SPACE_20,
             ui_theme_tokens.SPACE_24,
             ui_theme_tokens.SPACE_20,
         )
-        self.layout.setSpacing(ui_theme_tokens.SPACE_8)
+        _safe_call(self.layout, "setSpacing", ui_theme_tokens.SPACE_8)
 
         gif_label = QLabel()
         self._gif_label = gif_label
@@ -77,7 +87,7 @@ class AboutWindow(QDialog):
         self.gif.setScaledSize(QSize(184, 184))
         gif_label.setMovie(self.gif)
         gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        gif_label.setContentsMargins(0, 0, 0, ui_theme_tokens.SPACE_8)
+        _safe_call(gif_label, "setContentsMargins", 0, 0, 0, ui_theme_tokens.SPACE_8)
         self.gif.start()
         self.layout.addWidget(gif_label)
 
@@ -100,15 +110,13 @@ class AboutWindow(QDialog):
         author_label = QLabel("By Grzegorz Ozimek")
         author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         author_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_SECONDARY))
-        author_label.setContentsMargins(0, ui_theme_tokens.SPACE_8, 0, 0)
+        _safe_call(author_label, "setContentsMargins", 0, ui_theme_tokens.SPACE_8, 0, 0)
         self.layout.addWidget(author_label)
 
-        repository_row = QHBoxLayout()
-        repository_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        repository_row.setSpacing(ui_theme_tokens.SPACE_8)
-
         repository_label = QLabel("Repository")
+        repository_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         repository_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        self.layout.addWidget(repository_label)
 
         repository_link = ClickableLabel(
             "Open on GitHub",
@@ -136,9 +144,8 @@ class AboutWindow(QDialog):
                 "}"
             ),
         )
-        repository_row.addWidget(repository_label)
-        repository_row.addWidget(repository_link)
-        self.layout.addLayout(repository_row)
+        repository_link.setAlignment(getattr(Qt.AlignmentFlag, "AlignCenter", 0))
+        self.layout.addWidget(repository_link)
 
     def closeEvent(self, event):
         """Remove the temporary GIF file created for QMovie during teardown."""
