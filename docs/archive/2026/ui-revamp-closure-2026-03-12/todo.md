@@ -78,6 +78,14 @@ All planned phases are complete. Remaining unchecked planning items were reconci
 
 **Completion notes:** Documentation was synchronized with final UI labels and flows before archival.
 
+## Final Signoff
+
+- [x] Dark-theme decision outcome documented (graphite/dark-gray baseline retained; pure black rejected).
+- [x] Global consistency pass signoff recorded for tokens, spacing, hierarchy, and interaction states.
+- [x] Archive handoff checklist confirmed complete.
+
+**Signoff notes:** Final closure review confirmed dark-theme rationale and cross-screen consistency standards before archival handoff.
+
 ## Final Cleanup and Archive
 
 - [x] Confirm all revamp acceptance criteria are met per implementation phase.

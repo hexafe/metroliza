@@ -4,6 +4,14 @@ This plan defined phased execution order, dependencies, priority tags per screen
 
 ## Initiative Status
 
+## Closure Checklist (Final)
+
+- [x] All phase acceptance criteria (1–9) met and documented.
+- [x] Dark-theme decision outcome finalized (graphite/dark-gray baseline; no pure black primary surfaces).
+- [x] Consistency-pass signoff completed across tokens, spacing, typography, hierarchy, and interaction states.
+- [x] Documentation and archive index links updated to canonical archived location.
+
+
 **Overall status:** Completed.
 
 Each phase below includes completion notes reflecting delivered outcomes and acceptance criteria closure.
@@ -141,3 +149,7 @@ Each phase below includes completion notes reflecting delivered outcomes and acc
   - Active docs link only to current, authoritative resources.
   - Archive index is updated for discoverability.
 - **Completion notes:** Completed. UI revamp planning artifacts were moved to the yearly archive index with active-document links updated accordingly.
+
+### Final Completion Summary
+
+The UI revamp execution is fully closed. Dark-theme direction was finalized in favor of graphite/dark-gray surfaces for readability and depth separation, and the cross-screen consistency pass received final signoff prior to archival.
