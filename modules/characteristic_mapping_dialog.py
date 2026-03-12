@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QHeaderView,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -251,7 +252,7 @@ class CharacteristicAliasEditorDialog(QDialog):
 class CharacteristicMappingDialog(QDialog):
     """Manage report-name-to-common-name mappings."""
 
-    TABLE_HEADERS = ['Name found in report', 'Use this common name', 'Apply to', 'Reference']
+    TABLE_HEADERS = ['Original name', 'Common name', 'Apply to', 'Reference']
 
     def __init__(self, parent=None, db_file=''):
         super().__init__(parent)
@@ -263,21 +264,20 @@ class CharacteristicMappingDialog(QDialog):
 
         self.db_file = db_file
 
-        self.subtitle_label = QLabel(
-            'Use this tool when the same characteristic appears under different names in reports. '
-            'Map each report name to a common name, then choose whether the mapping applies to all references or one reference only.'
-        )
+        self.title_label = QLabel('Characteristic Name Matching')
+        self.subtitle_label = QLabel('Map report characteristic names to a shared common name.')
         self.subtitle_label.setWordWrap(True)
 
-        self.db_label = QLabel('Database file:')
+        self.db_label = QLabel('Current database')
         self.db_path_input = QLineEdit(str(db_file or ''))
         self.db_path_input.setReadOnly(True)
         self.select_db_button = QPushButton('Browse DB')
 
         self.table_title_label = QLabel('Match Characteristic Names')
+        self.table_helper_label = QLabel('Original name / Common name / Apply to / Reference')
         self.empty_state_label = QLabel(
             'No saved characteristic name matches yet.\n'
-            'Use the Characteristic Name Matching form to add a Name found in report and Use this common name.'
+            'Use the form to add a new name match.'
         )
         self.empty_state_label.setWordWrap(True)
 
@@ -296,18 +296,17 @@ class CharacteristicMappingDialog(QDialog):
 
         self.form_title_label = QLabel('Characteristic Name Matching')
         self.form_helper_label = QLabel(
-            'Add or edit a mapping from Original name / Name found in report to Use this common name, '
-            'then choose Apply to / Reference.'
+            'Name found in report / Use this common name / Where should this match apply?'
         )
         self.form_helper_label.setWordWrap(True)
 
-        self.alias_label = QLabel('Original name / Name found in report')
+        self.alias_label = QLabel('Name found in report')
         self.alias_input = QLineEdit()
         self.alias_input.setPlaceholderText('e.g. TP GAP')
         self.common_name_label = QLabel('Use this common name')
         self.common_name_input = QLineEdit()
         self.common_name_input.setPlaceholderText('e.g. AA-C11 - TP')
-        self.apply_to_label = QLabel('Apply to')
+        self.apply_to_label = QLabel('Where should this match apply?')
         self.apply_to_combo = QComboBox()
         self.apply_to_combo.addItems([ALL_REFERENCES_LABEL, ONE_REFERENCE_LABEL])
         self.reference_label = QLabel('Reference')
@@ -330,11 +329,13 @@ class CharacteristicMappingDialog(QDialog):
         example_layout.addWidget(self.example_title)
         example_layout.addWidget(self.example_text)
 
-        self.save_button = QPushButton('Save mapping')
+        self.save_button = QPushButton('Save match')
         self.clear_button = QPushButton('Clear form')
 
+        self.title_label.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
         self.subtitle_label.setStyleSheet(ui_theme_tokens.typography_style('body', ui_theme_tokens.COLOR_TEXT_MUTED))
         self.table_title_label.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        self.table_helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
         self.empty_state_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
         self.form_title_label.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
         self.form_helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
@@ -347,16 +348,21 @@ class CharacteristicMappingDialog(QDialog):
         self.reference_input.setStyleSheet(ui_theme_tokens.input_style())
         self.alias_table.setStyleSheet(ui_theme_tokens.table_style(cell_padding=ui_theme_tokens.SPACE_8))
         self.example_panel.setStyleSheet(
-            f'QFrame {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED}; '
+            f'QFrame {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL}; '
             f'border: 1px solid {ui_theme_tokens.COLOR_BORDER_MUTED}; border-radius: {ui_theme_tokens.RADIUS_8}px; }}'
         )
         self.select_db_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
-        self.delete_button.setStyleSheet(ui_theme_tokens.button_style('danger'))
         self._apply_button_hierarchy_styles(
             primary_buttons=[self.save_button],
-            secondary_buttons=[self.edit_button, self.import_button, self.export_button],
-            quiet_buttons=[self.clear_button, self.close_button],
+            secondary_buttons=[self.edit_button, self.delete_button],
+            quiet_buttons=[self.import_button, self.export_button, self.clear_button, self.close_button],
         )
+
+        table_header = self.alias_table.horizontalHeader()
+        table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        table_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        table_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
 
         button_row = QHBoxLayout()
         button_row.addWidget(self.edit_button)
@@ -382,6 +388,7 @@ class CharacteristicMappingDialog(QDialog):
 
         left_pane = QVBoxLayout()
         left_pane.addWidget(self.table_title_label)
+        left_pane.addWidget(self.table_helper_label)
         left_pane.addWidget(self.empty_state_label)
         left_pane.addWidget(self.alias_table, 1)
         left_pane.addLayout(button_row)
@@ -394,17 +401,27 @@ class CharacteristicMappingDialog(QDialog):
         right_pane.addLayout(form_button_row)
 
         content_row = QHBoxLayout()
-        content_row.addLayout(left_pane, 2)
-        content_row.addLayout(right_pane, 1)
+        content_row.addLayout(left_pane, 3)
+        content_row.addLayout(right_pane, 2)
 
         db_row = QHBoxLayout()
         db_row.addWidget(self.db_label)
         db_row.addWidget(self.db_path_input, 1)
         db_row.addWidget(self.select_db_button)
 
+        db_panel = QFrame()
+        db_panel.setStyleSheet(
+            f'QFrame {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL}; '
+            f'border: 1px solid {ui_theme_tokens.COLOR_BORDER_MUTED}; border-radius: {ui_theme_tokens.RADIUS_8}px; }}'
+        )
+        db_panel_layout = QVBoxLayout(db_panel)
+        db_panel_layout.setContentsMargins(10, 8, 10, 8)
+        db_panel_layout.addLayout(db_row)
+
         layout = QVBoxLayout(self)
+        layout.addWidget(self.title_label)
         layout.addWidget(self.subtitle_label)
-        layout.addLayout(db_row)
+        layout.addWidget(db_panel)
         layout.addLayout(content_row)
 
         self._editing_original_key = None
