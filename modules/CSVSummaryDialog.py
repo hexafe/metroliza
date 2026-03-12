@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QCheckBox,
+    QLabel,
 )
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
@@ -802,26 +803,20 @@ class CSVSummaryDialog(QDialog):
         self.plot_toggles = {}
         self.summary_only = False
 
-        # Initialize the layout
-        layout = QVBoxLayout()
-
-        # Add the buttons to the layout
+        # Initialize controls
         self.input_button = QPushButton("Select input file (CSV)")
+        self.input_status_label = QLabel("No input file selected")
         self.filter_button = QPushButton("Filter columns (optional)")
         self.spec_limits_button = QPushButton("Set spec limits (optional)")
         self.clear_presets_button = QPushButton("Clear saved presets (optional)")
         self.include_extended_plots = QCheckBox("Include histogram and boxplot charts")
         self.summary_only_checkbox = QCheckBox("Summary-only mode (skip per-column sheets/charts)")
         self.output_button = QPushButton("Select output file (xlsx)")
-        self.start_button = QPushButton("START")  # Add the START button
-        layout.addWidget(self.input_button)
-        layout.addWidget(self.filter_button)
-        layout.addWidget(self.spec_limits_button)
-        layout.addWidget(self.clear_presets_button)
-        layout.addWidget(self.include_extended_plots)
-        layout.addWidget(self.summary_only_checkbox)
-        layout.addWidget(self.output_button)
-        layout.addWidget(self.start_button)  # Add the START button to the layout
+        self.output_status_label = QLabel("No output file selected")
+        self.start_button = QPushButton("Generate summary")
+
+        self._apply_shared_theme_styles()
+        self._init_layout()
 
         # Connect the buttons to their respective functions
         self.input_button.clicked.connect(self.handle_input_button)
@@ -829,21 +824,98 @@ class CSVSummaryDialog(QDialog):
         self.spec_limits_button.clicked.connect(self.handle_spec_limits_button)
         self.clear_presets_button.clicked.connect(self.handle_clear_presets_button)
         self.output_button.clicked.connect(self.handle_output_button)
-        self.start_button.clicked.connect(self.handle_start_button)  # Connect the START button
+        self.start_button.clicked.connect(self.handle_start_button)
 
         self.include_extended_plots.setChecked(True)
         self.summary_only_checkbox.setChecked(False)
 
-        # Initially, disable the FILTER, OUTPUT, and START buttons
+        # Initially, disable dependent controls
         self.filter_button.setEnabled(False)
         self.spec_limits_button.setEnabled(False)
         self.output_button.setEnabled(False)
         self.start_button.setEnabled(False)
 
-        # Set the layout for the dialog
-        self.setLayout(layout)
-
         self.preset_path = Path.home() / '.metroliza' / '.csv_summary_presets.json'
+
+    def _build_section_layout(self, title, content_layout):
+        section_layout = QVBoxLayout()
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(ui_theme_tokens.SPACE_4)
+
+        section_title = QLabel(title)
+        section_title.setStyleSheet(
+            ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY)
+        )
+        section_layout.addWidget(section_title)
+        section_layout.addLayout(content_layout)
+        return section_layout
+
+    def _apply_shared_theme_styles(self):
+        self.input_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.filter_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.spec_limits_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.output_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
+        self.clear_presets_button.setStyleSheet(ui_theme_tokens.button_style('tertiary'))
+        self.start_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
+
+        helper_style = ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER)
+        self.input_status_label.setStyleSheet(helper_style)
+        self.output_status_label.setStyleSheet(helper_style)
+        self.input_status_label.setWordWrap(True)
+        self.output_status_label.setWordWrap(True)
+
+    def _init_layout(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_16,
+        )
+        layout.setSpacing(ui_theme_tokens.SPACE_12)
+
+        input_layout = QVBoxLayout()
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        input_layout.addWidget(self.input_button)
+        input_layout.addWidget(self.input_status_label)
+
+        filters_layout = QVBoxLayout()
+        filters_layout.setContentsMargins(0, 0, 0, 0)
+        filters_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        filters_layout.addWidget(self.filter_button)
+
+        spec_limits_layout = QVBoxLayout()
+        spec_limits_layout.setContentsMargins(0, 0, 0, 0)
+        spec_limits_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        spec_limits_layout.addWidget(self.spec_limits_button)
+        spec_limits_layout.addWidget(self.clear_presets_button)
+
+        output_layout = QVBoxLayout()
+        output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        output_layout.addWidget(self.output_button)
+        output_layout.addWidget(self.output_status_label)
+
+        summary_options_layout = QVBoxLayout()
+        summary_options_layout.setContentsMargins(0, 0, 0, 0)
+        summary_options_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        summary_options_layout.addWidget(self.include_extended_plots)
+        summary_options_layout.addWidget(self.summary_only_checkbox)
+
+        action_layout = QVBoxLayout()
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        action_layout.addWidget(self.start_button)
+
+        layout.addLayout(self._build_section_layout("Input", input_layout))
+        layout.addLayout(self._build_section_layout("Filters/columns", filters_layout))
+        layout.addLayout(self._build_section_layout("Spec limits", spec_limits_layout))
+        layout.addLayout(self._build_section_layout("Output", output_layout))
+        layout.addLayout(self._build_section_layout("Summary/chart options", summary_options_layout))
+        layout.addLayout(self._build_section_layout("Action", action_layout))
+
+        self.setLayout(layout)
 
     def _load_presets(self):
         """Load and migrate saved presets from the persistent config file."""
@@ -897,6 +969,7 @@ class CSVSummaryDialog(QDialog):
                 filename += ".csv"
             logger.info("Selected input CSV file: %s", filename)
             self.input_file = filename
+            self.input_status_label.setText(filename)
             # Enable the FILTER and OUTPUT buttons after the input file is selected
             self.filter_button.setEnabled(True)
             self.spec_limits_button.setEnabled(True)
@@ -915,6 +988,7 @@ class CSVSummaryDialog(QDialog):
                 self.spec_limits_button.setEnabled(False)
                 self.output_button.setEnabled(False)
                 self.start_button.setEnabled(False)
+                self.output_status_label.setText("No output file selected")
                 return
 
             self.column_names = self.data_frame.columns.tolist()
@@ -1013,6 +1087,7 @@ class CSVSummaryDialog(QDialog):
         if filename:
             logger.info("Selected output Excel file: %s", filename)
             self.output_file = filename
+            self.output_status_label.setText(filename)
             # Enable the START button after the output file is selected
             self.start_button.setEnabled(True)
 
