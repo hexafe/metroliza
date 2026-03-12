@@ -34,7 +34,6 @@ from PyQt6.QtWidgets import(
     QVBoxLayout,
     QComboBox,
     QCheckBox,
-    QFrame,
     QHBoxLayout,
     QWidget,
 )
@@ -537,9 +536,9 @@ class ExportDialog(QDialog):
             group_analysis_layout.addWidget(self.group_analysis_scope_label, 1, 0)
             group_analysis_layout.addWidget(self.group_analysis_scope_combobox, 1, 1)
             advanced_layout.addLayout(group_analysis_layout)
-            divider = QFrame()
-            divider.setFrameShape(QFrame.Shape.HLine)
-            divider.setStyleSheet(f"color: {ui_theme_tokens.COLOR_BORDER_MUTED};")
+            divider = QWidget()
+            divider.setFixedHeight(1)
+            divider.setStyleSheet(f"background-color: {ui_theme_tokens.COLOR_BORDER_MUTED};")
             advanced_layout.addWidget(divider)
             advanced_layout.addWidget(self.advanced_details_toggle)
             advanced_layout.addWidget(self.advanced_details_widget)
@@ -797,6 +796,8 @@ class ExportDialog(QDialog):
 
     def _set_loading_cancel_enabled(self, enabled):
         if not hasattr(self, 'loading_dialog') or self.loading_dialog is None:
+            return
+        if not hasattr(self.loading_dialog, 'findChildren'):
             return
         for button in self.loading_dialog.findChildren(QPushButton):
             if button.text().strip().lower() == 'cancel':
