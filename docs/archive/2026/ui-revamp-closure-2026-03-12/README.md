@@ -28,6 +28,14 @@ This folder captures the planning docs for a structured UI revamp across the mai
 
 **Status:** Completed and archived.
 
+### Dark Theme Decision Outcome
+
+The final revamp record confirms the dark theme baseline uses graphite/dark-gray surfaces (instead of pure black) to preserve visual hierarchy and improve long-session readability.
+
+### Consistency-Pass Signoff
+
+Final QA signoff confirmed cross-screen consistency for token usage, spacing, typography, interaction hierarchy, and shared component behavior.
+
 ### Outcomes
 
 - Delivered a consistent main-window shell pattern that improved initial workflow clarity.
@@ -46,7 +54,7 @@ This folder captures the planning docs for a structured UI revamp across the mai
 
 The completed revamp planning set is archived under:
 
-- [`docs/archive/2026/ui-revamp/`](./README.md)
+- [`docs/archive/2026/ui-revamp-closure-2026-03-12/`](./README.md)
 
 ## Scope Guardrail
 
