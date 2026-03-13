@@ -179,12 +179,11 @@ class MainWindow(QMainWindow):
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""
         main_container = QFrame()
-        self.central_widget.setStyleSheet(
-            f"QWidget {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_APP}; color: {ui_theme_tokens.COLOR_TEXT_SECONDARY}; }}"
-        )
+        self.central_widget.setObjectName("mainContentShell")
+        self.central_widget.setStyleSheet(ui_theme_tokens.app_shell_style("QWidget#mainContentShell"))
         main_container.setStyleSheet(
             "QFrame {"
-            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_APP};"
+            " background-color: transparent;"
             "}"
         )
         main_container_layout = QVBoxLayout(main_container)
@@ -257,8 +256,15 @@ class MainWindow(QMainWindow):
 
     def _build_dashboard_card_grid(self):
         card_region = QFrame()
+        card_region.setStyleSheet(
+            "QFrame {"
+            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
+            f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
+            f" border-radius: {ui_theme_tokens.RADIUS_12}px;"
+            "}"
+        )
         card_region_layout = QVBoxLayout(card_region)
-        card_region_layout.setContentsMargins(0, 0, 0, 0)
+        card_region_layout.setContentsMargins(ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16, ui_theme_tokens.SPACE_16)
         card_region_layout.setSpacing(ui_theme_tokens.SPACE_12)
 
         section_title = QLabel("Workflows")
