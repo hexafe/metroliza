@@ -30,6 +30,7 @@ class ModifyDB(QDialog):
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         self.setWindowTitle("Review and Rename Data")
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style())
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 640, 480)

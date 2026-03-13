@@ -14,6 +14,7 @@ class ReleaseNotesDialog(QDialog):
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
         self.setGeometry(100, 100, 680, 460)
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style())
 
         self.release_notes_browser = QTextBrowser()
         self.release_notes_browser.setOpenExternalLinks(True)

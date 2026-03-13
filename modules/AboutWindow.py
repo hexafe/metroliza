@@ -55,6 +55,7 @@ class AboutWindow(QDialog):
         self._gif_label = None
 
         self.setWindowTitle("About")
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style())
         self.layout = QVBoxLayout()
         self.setLayout(self.layout)
         align_top = getattr(Qt.AlignmentFlag, "AlignTop", 0)
@@ -172,7 +173,7 @@ class AboutWindow(QDialog):
                 f" border: 1px solid {ui_theme_tokens.COLOR_ACCENT};"
                 f" border-radius: {ui_theme_tokens.RADIUS_10}px;"
                 f" padding: {ui_theme_tokens.SPACE_4}px {ui_theme_tokens.SPACE_12}px;"
-                " background-color: #DBEAFE;"
+                f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_ELEVATED};"
                 " font-weight: 600;"
                 "}"
             ),
