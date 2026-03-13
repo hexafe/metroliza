@@ -334,6 +334,10 @@ def info_panel_style():
 
 
 def dialog_shell_style(selector='QDialog'):
+    return app_shell_style(selector)
+
+
+def app_shell_style(selector='QWidget'):
     return (
         f"{selector} {{"
         f" background-color: {COLOR_BACKGROUND_APP};"
