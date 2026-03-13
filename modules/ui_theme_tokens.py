@@ -317,6 +317,38 @@ def card_button_style(variant='secondary'):
     )
 
 
+def navigation_button_style():
+    return (
+        "QPushButton {"
+        f" min-height: {CONTROL_HEIGHT}px;"
+        f" padding: {SPACE_8}px {SPACE_12}px;"
+        f" border: 1px solid {COLOR_BORDER_MUTED};"
+        f" border-radius: {RADIUS_10}px;"
+        f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
+        f" color: {COLOR_TEXT_SECONDARY};"
+        " text-align: left;"
+        "}"
+        "QPushButton:hover {"
+        f" border: 1px solid {COLOR_ACCENT_PRIMARY};"
+        f" background-color: {COLOR_SURFACE_HOVER};"
+        "}"
+        "QPushButton:focus {"
+        f" border: 2px solid {COLOR_FOCUS_RING};"
+        " outline: none;"
+        f" background-color: {COLOR_SURFACE_HOVER};"
+        "}"
+        "QPushButton:checked {"
+        f" border: 1px solid {COLOR_ACCENT_HOVER};"
+        f" background-color: {COLOR_SURFACE_ACTIVE};"
+        f" color: {COLOR_TEXT_PRIMARY};"
+        "}"
+        "QPushButton:checked:hover {"
+        f" border: 1px solid {COLOR_ACCENT_PRIMARY};"
+        f" background-color: {COLOR_ACCENT_SUBTLE};"
+        "}"
+    )
+
+
 def panel_style(card=False):
     radius = RADIUS_12
     background = COLOR_BACKGROUND_PANEL if card else COLOR_BACKGROUND_PANEL_MUTED

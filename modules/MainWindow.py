@@ -13,6 +13,7 @@ from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray, Qt
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QGridLayout,
     QLabel,
@@ -49,30 +50,7 @@ class TaskCardButton(QPushButton):
         card_layout.addWidget(description_label)
         card_layout.addStretch()
 
-        self.setStyleSheet(
-            "QPushButton {"
-            f" min-height: {ui_theme_tokens.CONTROL_HEIGHT}px;"
-            f" padding: {ui_theme_tokens.SPACE_8}px {ui_theme_tokens.SPACE_12}px;"
-            f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
-            f" border-radius: {ui_theme_tokens.RADIUS_12}px;"
-            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL};"
-            f" color: {ui_theme_tokens.COLOR_TEXT_SECONDARY};"
-            " text-align: left;"
-            "}"
-            "QPushButton:hover {"
-            f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_STRONG};"
-            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_ELEVATED};"
-            "}"
-            "QPushButton:pressed {"
-            f" border: 1px solid {ui_theme_tokens.COLOR_ACCENT_HOVER};"
-            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
-            "}"
-            "QPushButton:focus {"
-            f" border: 2px solid {ui_theme_tokens.COLOR_FOCUS_RING};"
-            " outline: none;"
-            f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_ELEVATED};"
-            "}"
-        )
+        self.setStyleSheet(ui_theme_tokens.navigation_button_style())
 
 
 class MainWindow(QMainWindow):
@@ -139,6 +117,7 @@ class MainWindow(QMainWindow):
 
         # Set up menu items
         self.setup_menu_actions()
+        self.setup_navigation_actions()
 
         # Add buttons to the layout and connect signals
         self.setup_buttons_layout()
@@ -175,6 +154,28 @@ class MainWindow(QMainWindow):
         self.release_notes_action.clicked.connect(self.open_release_notes_dialog)
         self.about_button.setStyleSheet(ui_theme_tokens.button_style("tertiary"))
         self.release_notes_action.setStyleSheet(ui_theme_tokens.button_style("tertiary"))
+
+    def setup_navigation_actions(self):
+        """Provide in-window quick navigation with clear active/hover/focus states."""
+        self.navigation_group = QButtonGroup(self)
+        self.navigation_group.setExclusive(True)
+
+        self.nav_parse_button = QPushButton("Parse reports")
+        self.nav_review_button = QPushButton("Review data")
+        self.nav_export_button = QPushButton("Export analysis")
+
+        for button in (self.nav_parse_button, self.nav_review_button, self.nav_export_button):
+            button.setCheckable(True)
+            button.setStyleSheet(ui_theme_tokens.navigation_button_style())
+            self.navigation_group.addButton(button)
+
+        self.nav_parse_button.clicked.connect(self.launch_parsing_dialog)
+        self.nav_review_button.clicked.connect(self.launch_modifydb_dialog)
+        self.nav_export_button.clicked.connect(self.launch_export_dialog)
+
+    def _set_active_navigation(self, active_button=None):
+        for button in (self.nav_parse_button, self.nav_review_button, self.nav_export_button):
+            button.setChecked(button is active_button)
 
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""
@@ -248,8 +249,19 @@ class MainWindow(QMainWindow):
         actions_layout.addWidget(self.release_notes_action, 0, 1)
         actions_layout.setColumnStretch(2, 1)
 
+        quick_nav_row = QFrame()
+        quick_nav_layout = QGridLayout(quick_nav_row)
+        quick_nav_layout.setContentsMargins(0, 0, 0, 0)
+        quick_nav_layout.setHorizontalSpacing(ui_theme_tokens.SPACE_8)
+        quick_nav_layout.setVerticalSpacing(0)
+        quick_nav_layout.addWidget(self.nav_parse_button, 0, 0)
+        quick_nav_layout.addWidget(self.nav_review_button, 0, 1)
+        quick_nav_layout.addWidget(self.nav_export_button, 0, 2)
+        quick_nav_layout.setColumnStretch(3, 1)
+
         panel_layout.addWidget(self.heading_label)
         panel_layout.addWidget(self.subheading_label)
+        panel_layout.addWidget(quick_nav_row)
         panel_layout.addWidget(actions_row)
         panel_layout.addWidget(context_strip)
         return panel
@@ -314,6 +326,7 @@ class MainWindow(QMainWindow):
             if not self.parsing_dialog or not self.parsing_dialog.isVisible():
                 self.parsing_dialog = ParsingDialog(self, self.directory, self.db_file)
                 self.parsing_dialog.show()
+            self._set_active_navigation(self.nav_parse_button)
         except Exception as e:
             CustomLogger(e, reraise=False)
             
@@ -330,6 +343,7 @@ class MainWindow(QMainWindow):
                 self.modifydb_dialog.show()
 
             self.modifydb_dialog.raise_()
+            self._set_active_navigation(self.nav_review_button)
             self.modifydb_dialog.activateWindow()
         except Exception as e:
             self.log_and_exit(e)
@@ -347,6 +361,7 @@ class MainWindow(QMainWindow):
                 self.export_dialog.show()
 
             self.export_dialog.raise_()
+            self._set_active_navigation(self.nav_export_button)
             self.export_dialog.activateWindow()
         except Exception as e:
             self.log_and_exit(e)
