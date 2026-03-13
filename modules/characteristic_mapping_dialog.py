@@ -21,6 +21,8 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
 )
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 
 from modules.characteristic_alias_service import (
     CharacteristicAliasCsvSchemaError,
@@ -314,6 +316,14 @@ class CharacteristicMappingDialog(QDialog):
         self.reference_input = QLineEdit()
         self.reference_input.setPlaceholderText('Select reference')
 
+        self.field_labels = [
+            self.db_label,
+            self.alias_label,
+            self.common_name_label,
+            self.apply_to_label,
+            self.reference_label,
+        ]
+
         self.example_panel = QFrame()
         self.example_panel.setFrameShape(QFrame.Shape.StyledPanel)
         example_layout = QVBoxLayout(self.example_panel)
@@ -334,12 +344,14 @@ class CharacteristicMappingDialog(QDialog):
         self.title_label.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
         self.subtitle_label.setStyleSheet(ui_theme_tokens.typography_style('body', ui_theme_tokens.COLOR_TEXT_SECONDARY))
         self.table_title_label.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
-        self.table_helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
-        self.empty_state_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
+        self.table_helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        self.empty_state_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY))
         self.form_title_label.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
-        self.form_helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
+        self.form_helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY))
         self.example_title.setStyleSheet(ui_theme_tokens.typography_style('section', ui_theme_tokens.COLOR_TEXT_PRIMARY))
         self.example_text.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        for label in self.field_labels:
+            label.setStyleSheet(ui_theme_tokens.typography_style('body', ui_theme_tokens.COLOR_TEXT_SECONDARY))
         self.db_path_input.setStyleSheet(ui_theme_tokens.input_style())
         self.alias_input.setStyleSheet(ui_theme_tokens.input_style())
         self.common_name_input.setStyleSheet(ui_theme_tokens.input_style())
@@ -362,12 +374,15 @@ class CharacteristicMappingDialog(QDialog):
         table_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
 
         button_row = QHBoxLayout()
+        button_row.setSpacing(ui_theme_tokens.SPACE_8)
         button_row.addWidget(self.edit_button)
         button_row.addWidget(self.delete_button)
         button_row.addWidget(self.import_button)
         button_row.addWidget(self.export_button)
 
         form_layout = QGridLayout()
+        form_layout.setHorizontalSpacing(ui_theme_tokens.SPACE_12)
+        form_layout.setVerticalSpacing(ui_theme_tokens.SPACE_8)
         form_layout.addWidget(self.alias_label, 0, 0)
         form_layout.addWidget(self.alias_input, 0, 1)
         form_layout.addWidget(self.common_name_label, 1, 0)
@@ -378,19 +393,28 @@ class CharacteristicMappingDialog(QDialog):
         form_layout.addWidget(self.reference_input, 3, 1)
 
         form_button_row = QHBoxLayout()
+        form_button_row.setSpacing(ui_theme_tokens.SPACE_8)
         form_button_row.addWidget(self.save_button)
         form_button_row.addWidget(self.clear_button)
         form_button_row.addStretch()
         form_button_row.addWidget(self.close_button)
 
-        left_pane = QVBoxLayout()
+        left_panel = QFrame()
+        left_panel.setStyleSheet(ui_theme_tokens.panel_style(card=True))
+        left_pane = QVBoxLayout(left_panel)
+        left_pane.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
+        left_pane.setSpacing(ui_theme_tokens.SPACE_8)
         left_pane.addWidget(self.table_title_label)
         left_pane.addWidget(self.table_helper_label)
         left_pane.addWidget(self.empty_state_label)
         left_pane.addWidget(self.alias_table, 1)
         left_pane.addLayout(button_row)
 
-        right_pane = QVBoxLayout()
+        right_panel = QFrame()
+        right_panel.setStyleSheet(ui_theme_tokens.panel_style(card=True))
+        right_pane = QVBoxLayout(right_panel)
+        right_pane.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
+        right_pane.setSpacing(ui_theme_tokens.SPACE_8)
         right_pane.addWidget(self.form_title_label)
         right_pane.addWidget(self.form_helper_label)
         right_pane.addLayout(form_layout)
@@ -399,8 +423,8 @@ class CharacteristicMappingDialog(QDialog):
 
         content_row = QHBoxLayout()
         content_row.setSpacing(ui_theme_tokens.SPACE_12)
-        content_row.addLayout(left_pane, 7)
-        content_row.addLayout(right_pane, 5)
+        content_row.addWidget(left_panel, 7)
+        content_row.addWidget(right_panel, 5)
 
         db_row = QHBoxLayout()
         db_row.addWidget(self.db_label)
@@ -408,16 +432,13 @@ class CharacteristicMappingDialog(QDialog):
         db_row.addWidget(self.select_db_button)
 
         db_panel = QFrame()
-        db_panel.setStyleSheet(ui_theme_tokens.panel_style(card=False))
+        db_panel.setStyleSheet(ui_theme_tokens.panel_style(card=True))
         db_panel_layout = QVBoxLayout(db_panel)
-        db_panel_layout.setContentsMargins(ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_4, ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_4)
+        db_panel_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8)
         db_panel_layout.addLayout(db_row)
 
         header_panel = QFrame()
-        header_panel.setStyleSheet(
-            f'QFrame {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL}; '
-            f'border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT}; border-radius: {ui_theme_tokens.RADIUS_12}px; }}'
-        )
+        header_panel.setStyleSheet(ui_theme_tokens.panel_style(card=True))
         header_layout = QVBoxLayout(header_panel)
         header_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_8)
         header_layout.setSpacing(ui_theme_tokens.SPACE_4)
@@ -524,11 +545,24 @@ class CharacteristicMappingDialog(QDialog):
                 reference_display,
             ]
             for column_index, value in enumerate(values):
-                self.alias_table.setItem(row_index, column_index, QTableWidgetItem(value))
+                table_item = QTableWidgetItem(value)
+                if column_index == 2:
+                    self._style_scope_badge_item(table_item, value)
+                self.alias_table.setItem(row_index, column_index, table_item)
 
         self.empty_state_label.setVisible(len(alias_rows) == 0)
         self.alias_table.resizeColumnsToContents()
         self._sync_selection_actions()
+
+    def _style_scope_badge_item(self, table_item: QTableWidgetItem, scope_text: str):
+        is_reference_scope = str(scope_text or '').strip() == ONE_REFERENCE_LABEL
+        if is_reference_scope:
+            table_item.setBackground(QColor(ui_theme_tokens.COLOR_STATUS_INFO_BG))
+            table_item.setForeground(QColor(ui_theme_tokens.COLOR_STATUS_INFO))
+        else:
+            table_item.setBackground(QColor(ui_theme_tokens.COLOR_ACCENT_SUBTLE))
+            table_item.setForeground(QColor(ui_theme_tokens.COLOR_TEXT_PRIMARY))
+        table_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
     def _selected_mapping(self):
         selected_rows = self.alias_table.selectionModel().selectedRows()
