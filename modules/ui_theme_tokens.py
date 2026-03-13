@@ -1,4 +1,21 @@
-"""Shared semantic UI tokens and reusable style builders for dialogs/screens."""
+"""Shared semantic UI tokens and reusable style builders for dialogs/screens.
+
+Canonical dark graphite palette (design-system naming):
+    color.bg.app: #121417
+    color.bg.surface.primary: #1B1F24
+    color.bg.surface.secondary: #232933
+    color.bg.surface.elevated: #2A3140
+    color.bg.input: #20262F
+    color.text.primary: #F3F4F6
+    color.text.secondary: #D1D5DB
+    color.text.tertiary: #9CA3AF
+    color.border.default: #364152
+    color.border.strong: #4B5565
+    color.accent.primary/hover/pressed: #3B82F6/#2563EB/#1D4ED8
+    color.focus.ring: #93C5FD
+
+Legacy token names are kept as aliases where possible to avoid broad breakage.
+"""
 
 import colorsys
 
@@ -6,29 +23,35 @@ BASE_ROW_BACKGROUND_FALLBACK = "#FFFFFF"
 SELECTED_ROW_BACKGROUND_FALLBACK = "#5E88AD"
 DEFAULT_GROUP_COLOR = BASE_ROW_BACKGROUND_FALLBACK
 
-COLOR_BACKGROUND_APP = "#0B1220"
-COLOR_BACKGROUND_PANEL = "#111827"
-COLOR_BACKGROUND_PANEL_MUTED = "#172033"
-COLOR_BACKGROUND_PANEL_ELEVATED = "#1E293B"
-COLOR_BACKGROUND_INPUT = "#0F172A"
-COLOR_TEXT_PRIMARY = "#F8FAFC"
-COLOR_TEXT_SECONDARY = "#CBD5E1"
-COLOR_TEXT_MUTED = "#94A3B8"
+# Canonical graphite foundation tokens.
+COLOR_BACKGROUND_APP = "#121417"
+COLOR_BACKGROUND_PANEL = "#1B1F24"
+COLOR_BACKGROUND_PANEL_MUTED = "#232933"
+COLOR_BACKGROUND_PANEL_ELEVATED = "#2A3140"
+COLOR_BACKGROUND_INPUT = "#20262F"
+COLOR_TEXT_PRIMARY = "#F3F4F6"
+COLOR_TEXT_SECONDARY = "#D1D5DB"
+COLOR_TEXT_MUTED = "#9CA3AF"
 COLOR_TEXT_DISABLED = "#6B7280"
 COLOR_TEXT_HELPER = COLOR_TEXT_MUTED
-COLOR_BORDER_DEFAULT = "#334155"
+COLOR_BORDER_DEFAULT = "#364152"
 COLOR_BORDER_MUTED = COLOR_BORDER_DEFAULT
-COLOR_BORDER_STRONG = "#475569"
+COLOR_BORDER_STRONG = "#4B5565"
 COLOR_ACCENT_PRIMARY = "#3B82F6"
 COLOR_ACCENT_HOVER = "#2563EB"
 COLOR_ACCENT_PRESSED = "#1D4ED8"
 COLOR_ACCENT_SUBTLE = "#1E3A8A33"
 COLOR_ACCENT = COLOR_ACCENT_PRIMARY
-COLOR_FOCUS_RING = "#60A5FA"
+COLOR_FOCUS_RING = "#93C5FD"
 COLOR_SELECTION = COLOR_ACCENT_HOVER
+COLOR_SURFACE_HOVER = COLOR_BACKGROUND_PANEL_ELEVATED
+COLOR_SURFACE_ACTIVE = COLOR_ACCENT_SUBTLE
+COLOR_TEXT_ON_ACCENT = "#FFFFFF"
 COLOR_STATUS_SUCCESS = "#22C55E"
 COLOR_STATUS_WARNING = "#F59E0B"
 COLOR_STATUS_DANGER = "#EF4444"
+COLOR_STATUS_DANGER_HOVER = "#DC2626"
+COLOR_STATUS_DANGER_PRESSED = "#B91C1C"
 COLOR_STATUS_INFO = "#38BDF8"
 COLOR_STATUS_SUCCESS_BG = "#22C55E26"
 COLOR_STATUS_WARNING_BG = "#F59E0B26"
@@ -65,7 +88,7 @@ BUTTON_INTERACTION = {
 
 BUTTON_VARIANTS = {
     'primary': {
-        'text': "#FFFFFF",
+        'text': COLOR_TEXT_ON_ACCENT,
         'background': COLOR_ACCENT_PRIMARY,
         'border': COLOR_ACCENT_PRIMARY,
         'hover_background': COLOR_ACCENT_HOVER,
@@ -77,28 +100,28 @@ BUTTON_VARIANTS = {
         'text': COLOR_TEXT_SECONDARY,
         'background': COLOR_BACKGROUND_PANEL,
         'border': COLOR_BORDER_DEFAULT,
-        'hover_background': COLOR_BACKGROUND_PANEL_ELEVATED,
+        'hover_background': COLOR_SURFACE_HOVER,
         'hover_border': COLOR_ACCENT_PRIMARY,
-        'pressed_background': COLOR_ACCENT_SUBTLE,
+        'pressed_background': COLOR_SURFACE_ACTIVE,
         'pressed_border': COLOR_ACCENT_HOVER,
     },
     'tertiary': {
         'text': COLOR_TEXT_SECONDARY,
         'background': COLOR_BACKGROUND_PANEL_MUTED,
         'border': COLOR_BORDER_MUTED,
-        'hover_background': COLOR_BACKGROUND_PANEL_ELEVATED,
+        'hover_background': COLOR_SURFACE_HOVER,
         'hover_border': COLOR_ACCENT_HOVER,
-        'pressed_background': COLOR_ACCENT_SUBTLE,
+        'pressed_background': COLOR_SURFACE_ACTIVE,
         'pressed_border': COLOR_ACCENT_PRESSED,
     },
     'danger': {
-        'text': "#FFFFFF",
+        'text': COLOR_TEXT_ON_ACCENT,
         'background': COLOR_STATUS_DANGER,
         'border': COLOR_STATUS_DANGER,
-        'hover_background': "#B91C1C",
-        'hover_border': "#B91C1C",
-        'pressed_background': "#991B1B",
-        'pressed_border': "#991B1B",
+        'hover_background': COLOR_STATUS_DANGER_HOVER,
+        'hover_border': COLOR_STATUS_DANGER_HOVER,
+        'pressed_background': COLOR_STATUS_DANGER_PRESSED,
+        'pressed_border': COLOR_STATUS_DANGER_PRESSED,
     },
 }
 BASE_GROUP_PALETTE = (
