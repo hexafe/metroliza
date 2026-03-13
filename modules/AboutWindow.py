@@ -24,8 +24,14 @@ class ClickableLabel(QLabel):
     def __init__(self, text, link, default_style=None, hover_style=None):
         super().__init__(text)
         self.link = link
-        self._default_style = default_style or "QLabel { color: #2563EB; text-decoration: underline; }"
-        self._hover_style = hover_style or "QLabel { color: #1D4ED8; text-decoration: underline; }"
+        self._default_style = (
+            default_style
+            or f"QLabel {{ color: {ui_theme_tokens.COLOR_ACCENT_PRIMARY}; text-decoration: underline; }}"
+        )
+        self._hover_style = (
+            hover_style
+            or f"QLabel {{ color: {ui_theme_tokens.COLOR_ACCENT_HOVER}; text-decoration: underline; }}"
+        )
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setStyleSheet(self._default_style)
 
