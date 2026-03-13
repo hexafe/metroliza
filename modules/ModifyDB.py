@@ -107,6 +107,10 @@ class ModifyDB(QDialog):
             self.header_table.setColumnWidth(0, 200)
             self.header_empty_label = label_cls("No results") if label_cls is not None else None
 
+            self.reference_section_label = label_cls("Reference") if label_cls is not None else None
+            self.part_number_section_label = label_cls("Sample number") if label_cls is not None else None
+            self.header_section_label = label_cls("Header") if label_cls is not None else None
+
             helper_text = "Choose a database file to load values for review."
             self.helper_text_label = label_cls(helper_text) if label_cls is not None else None
             if self.helper_text_label is not None and hasattr(self.helper_text_label, "setWordWrap"):
@@ -120,9 +124,48 @@ class ModifyDB(QDialog):
             self.undo_button = QPushButton("Undo last change")
             self.cancel_button = QPushButton("Close")
             self.table_summary_label = label_cls("No results") if label_cls is not None else None
+            self.reference_panel = self._build_table_panel(
+                self.reference_section_label,
+                self.reference_table,
+                self.reference_empty_label,
+            )
+            self.part_number_panel = self._build_table_panel(
+                self.part_number_section_label,
+                self.part_number_table,
+                self.part_empty_label,
+            )
+            self.header_panel = self._build_table_panel(
+                self.header_section_label,
+                self.header_table,
+                self.header_empty_label,
+            )
             self._apply_action_button_styles()
         except Exception as e:
             self.log_and_exit(e)
+
+    @staticmethod
+    def _build_table_panel(section_label, table_widget, empty_label):
+        frame_cls = getattr(QtWidgets, 'QFrame', None)
+        widget_cls = getattr(QtWidgets, 'QWidget', None)
+        panel = frame_cls() if frame_cls is not None else (widget_cls() if widget_cls is not None else None)
+        if panel is None:
+            return table_widget
+
+        vbox_layout_cls = getattr(QtWidgets, 'QVBoxLayout', QGridLayout)
+        panel_layout = vbox_layout_cls(panel)
+        panel_layout.setContentsMargins(
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_12,
+            ui_theme_tokens.SPACE_12,
+        )
+        panel_layout.setSpacing(ui_theme_tokens.SPACE_8)
+        if section_label is not None:
+            panel_layout.addWidget(section_label)
+        panel_layout.addWidget(table_widget)
+        if empty_label is not None:
+            panel_layout.addWidget(empty_label)
+        return panel
 
     def arrange_layout(self):
         try:
@@ -139,16 +182,9 @@ class ModifyDB(QDialog):
                 layout.addWidget(self.dialog_subtitle_label, row_offset, 0, 1, 3)
                 row_offset += 1
 
-            layout.addWidget(self.reference_table, row_offset, 0)
-            layout.addWidget(self.part_number_table, row_offset, 1)
-            layout.addWidget(self.header_table, row_offset, 2)
-            row_offset += 1
-            if self.reference_empty_label is not None:
-                layout.addWidget(self.reference_empty_label, row_offset, 0)
-            if self.part_empty_label is not None:
-                layout.addWidget(self.part_empty_label, row_offset, 1)
-            if self.header_empty_label is not None:
-                layout.addWidget(self.header_empty_label, row_offset, 2)
+            layout.addWidget(self.reference_panel, row_offset, 0)
+            layout.addWidget(self.part_number_panel, row_offset, 1)
+            layout.addWidget(self.header_panel, row_offset, 2)
             row_offset += 1
             if self.helper_text_label is not None:
                 layout.addWidget(self.helper_text_label, row_offset, 0, 1, 3)
@@ -156,11 +192,16 @@ class ModifyDB(QDialog):
             if self.table_summary_label is not None:
                 layout.addWidget(self.table_summary_label, row_offset, 0, 1, 3)
                 row_offset += 1
-            layout.addWidget(self.select_db_button, row_offset, 0, 1, 3)
-            row_offset += 1
-            layout.addWidget(self.apply_button, row_offset, 0, 1, 1)
-            # layout.addWidget(self.undo_button, 3, 1, 1, 1) #to be re-added after undo functionality correction
-            layout.addWidget(self.cancel_button, row_offset, 2, 1, 1)
+            hbox_layout_cls = getattr(QtWidgets, "QHBoxLayout", QGridLayout)
+            actions_layout = hbox_layout_cls()
+            actions_layout.setSpacing(ui_theme_tokens.SPACE_8)
+            actions_layout.addWidget(self.select_db_button)
+            if hasattr(actions_layout, "addStretch"):
+                actions_layout.addStretch()
+            actions_layout.addWidget(self.apply_button)
+            # actions_layout.addWidget(self.undo_button) #to be re-added after undo functionality correction
+            actions_layout.addWidget(self.cancel_button)
+            layout.addLayout(actions_layout, row_offset, 0, 1, 3)
 
             self.show()
         except Exception as e:
@@ -191,6 +232,17 @@ class ModifyDB(QDialog):
         self.part_number_table.setStyleSheet(table_style)
         self.header_table.setStyleSheet(table_style)
 
+        for panel in (self.reference_panel, self.part_number_panel, self.header_panel):
+            panel.setStyleSheet(ui_theme_tokens.panel_style(card=True))
+
+        for section_label in (
+            self.reference_section_label,
+            self.part_number_section_label,
+            self.header_section_label,
+        ):
+            if section_label is not None and hasattr(section_label, 'setStyleSheet'):
+                section_label.setStyleSheet(ui_theme_tokens.typography_style('card', ui_theme_tokens.COLOR_TEXT_PRIMARY))
+
         for helper_label in (
             self.helper_text_label,
             self.table_summary_label,
@@ -200,6 +252,13 @@ class ModifyDB(QDialog):
         ):
             if helper_label is not None and hasattr(helper_label, 'setStyleSheet'):
                 helper_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
+
+        for readable_meta_label in (self.helper_text_label, self.reference_empty_label, self.part_empty_label, self.header_empty_label):
+            if readable_meta_label is not None and hasattr(readable_meta_label, 'setStyleSheet'):
+                readable_meta_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY))
+
+        if self.table_summary_label is not None and hasattr(self.table_summary_label, 'setStyleSheet'):
+            self.table_summary_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_MUTED))
 
         if self.dialog_subtitle_label is not None:
             self.dialog_subtitle_label.setStyleSheet(ui_theme_tokens.typography_style('body', ui_theme_tokens.COLOR_TEXT_SECONDARY))
