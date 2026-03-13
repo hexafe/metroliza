@@ -261,6 +261,7 @@ class CharacteristicMappingDialog(QDialog):
             self.setWindowIcon(parent.windowIcon())
         self.setModal(True)
         self.resize(900, 600)
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style())
 
         self.db_file = db_file
 
@@ -345,10 +346,7 @@ class CharacteristicMappingDialog(QDialog):
         self.apply_to_combo.setStyleSheet(ui_theme_tokens.input_style())
         self.reference_input.setStyleSheet(ui_theme_tokens.input_style())
         self.alias_table.setStyleSheet(ui_theme_tokens.table_style(cell_padding=ui_theme_tokens.SPACE_8))
-        self.example_panel.setStyleSheet(
-            f'QFrame {{ background-color: {ui_theme_tokens.COLOR_STATUS_INFO_BG}; '
-            f'border: 1px solid {ui_theme_tokens.COLOR_STATUS_INFO}; border-radius: {ui_theme_tokens.RADIUS_10}px; }}'
-        )
+        self.example_panel.setStyleSheet(ui_theme_tokens.info_panel_style())
         self.select_db_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
         self._apply_button_hierarchy_styles(
             primary_buttons=[self.save_button],
@@ -410,10 +408,7 @@ class CharacteristicMappingDialog(QDialog):
         db_row.addWidget(self.select_db_button)
 
         db_panel = QFrame()
-        db_panel.setStyleSheet(
-            f'QFrame {{ background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED}; '
-            f'border: 1px solid {ui_theme_tokens.COLOR_BORDER_MUTED}; border-radius: {ui_theme_tokens.RADIUS_8}px; }}'
-        )
+        db_panel.setStyleSheet(ui_theme_tokens.panel_style(card=False))
         db_panel_layout = QVBoxLayout(db_panel)
         db_panel_layout.setContentsMargins(ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_4, ui_theme_tokens.SPACE_8, ui_theme_tokens.SPACE_4)
         db_panel_layout.addLayout(db_row)

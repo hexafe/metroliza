@@ -77,6 +77,7 @@ class FilterDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle("Filter Columns")
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style())
         self.setGeometry(200, 200, 500, 150)
 
         self.column_names = column_names
@@ -174,6 +175,7 @@ class SpecLimitsDialog(QDialog):
     def __init__(self, parent, data_columns, existing_limits):
         super().__init__(parent)
         self.setWindowTitle("Column spec limits")
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style())
         self.setGeometry(220, 220, 700, 380)
         self.data_columns = data_columns
 
@@ -790,6 +792,7 @@ class CSVSummaryDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle("CSV Summary")
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style())
         self.setGeometry(200, 200, 300, 150)
 
         self.input_file = ""

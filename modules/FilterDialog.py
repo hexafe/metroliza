@@ -22,6 +22,7 @@ class FilterDialog(QDialog):
         super().__init__(parent)
         
         self.setWindowTitle("Data filtering")
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style())
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
         self.setModal(True)

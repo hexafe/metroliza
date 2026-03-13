@@ -39,6 +39,7 @@ class ParsingDialog(QDialog):
 
         # Set the window title and geometry
         self.setWindowTitle("Parsing")
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style())
         self.setGeometry(100, 100, 300, 150)
 
         # Initialize variables

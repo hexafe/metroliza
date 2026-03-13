@@ -5,16 +5,16 @@ from modules import ui_theme_tokens
 
 class TestUiThemeTokens(unittest.TestCase):
     def test_dark_theme_core_tokens_match_spec(self):
-        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_APP, '#121417')
-        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_PANEL, '#1B1F24')
-        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED, '#232933')
-        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_PANEL_ELEVATED, '#2A3140')
-        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_INPUT, '#20262F')
-        self.assertEqual(ui_theme_tokens.COLOR_BORDER_DEFAULT, '#364152')
-        self.assertEqual(ui_theme_tokens.COLOR_BORDER_STRONG, '#4B5565')
-        self.assertEqual(ui_theme_tokens.COLOR_TEXT_PRIMARY, '#F3F4F6')
-        self.assertEqual(ui_theme_tokens.COLOR_TEXT_SECONDARY, '#D1D5DB')
-        self.assertEqual(ui_theme_tokens.COLOR_TEXT_MUTED, '#9CA3AF')
+        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_APP, '#0B1220')
+        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_PANEL, '#111827')
+        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED, '#172033')
+        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_PANEL_ELEVATED, '#1E293B')
+        self.assertEqual(ui_theme_tokens.COLOR_BACKGROUND_INPUT, '#0F172A')
+        self.assertEqual(ui_theme_tokens.COLOR_BORDER_DEFAULT, '#334155')
+        self.assertEqual(ui_theme_tokens.COLOR_BORDER_STRONG, '#475569')
+        self.assertEqual(ui_theme_tokens.COLOR_TEXT_PRIMARY, '#F8FAFC')
+        self.assertEqual(ui_theme_tokens.COLOR_TEXT_SECONDARY, '#CBD5E1')
+        self.assertEqual(ui_theme_tokens.COLOR_TEXT_MUTED, '#94A3B8')
         self.assertEqual(ui_theme_tokens.COLOR_ACCENT_PRIMARY, '#3B82F6')
         self.assertEqual(ui_theme_tokens.COLOR_ACCENT_HOVER, '#2563EB')
         self.assertEqual(ui_theme_tokens.COLOR_ACCENT_PRESSED, '#1D4ED8')
@@ -23,10 +23,10 @@ class TestUiThemeTokens(unittest.TestCase):
         self.assertEqual(ui_theme_tokens.COLOR_STATUS_WARNING, '#F59E0B')
         self.assertEqual(ui_theme_tokens.COLOR_STATUS_DANGER, '#EF4444')
         self.assertEqual(ui_theme_tokens.COLOR_STATUS_INFO, '#38BDF8')
-        self.assertEqual(ui_theme_tokens.COLOR_FOCUS_RING, '#93C5FD')
+        self.assertEqual(ui_theme_tokens.COLOR_FOCUS_RING, '#60A5FA')
 
     def test_helper_text_is_readable_on_dark_surfaces(self):
-        self.assertEqual(ui_theme_tokens.COLOR_TEXT_HELPER, '#AEB8C6')
+        self.assertEqual(ui_theme_tokens.COLOR_TEXT_HELPER, '#94A3B8')
 
     def test_panel_style_is_static_container_style(self):
         panel_css = ui_theme_tokens.panel_style(card=True)

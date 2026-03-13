@@ -3,6 +3,7 @@ from modules.custom_logger import CustomLogger
 from modules.base64_encoded_files import public_key_b64, encoded_icon
 from modules.logging_utils import ensure_application_logging
 from modules.license_key_manager import LicenseKeyManager
+from modules import ui_theme_tokens
 import VersionDate
 from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QLabel, QVBoxLayout, QHBoxLayout, QPushButton
 from PyQt6.QtCore import QByteArray
@@ -39,6 +40,7 @@ def decode_icon(encoded_icon):
 def show_invalid_license_message(title, message, hardware_id):
     dialog = QDialog()
     dialog.setWindowTitle(title)
+    dialog.setStyleSheet(ui_theme_tokens.dialog_shell_style())
     
     # Set the window icon
     dialog.setWindowIcon(decode_icon(encoded_icon))

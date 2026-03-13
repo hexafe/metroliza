@@ -11,7 +11,7 @@ from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
 from modules import ui_theme_tokens
 from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray, Qt
-from PyQt6.QtGui import QIcon, QPixmap, QAction
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -97,6 +97,7 @@ class MainWindow(QMainWindow):
         self.layout = QGridLayout()
         self.central_widget.setLayout(self.layout)
         self.days_until_expiration = days_until_expiration
+        self.setStyleSheet(ui_theme_tokens.dialog_shell_style("QMainWindow"))
 
         # Set the window icon
         self.setWindowIcon(self.decode_icon(Base64EncodedFiles.encoded_icon))
@@ -167,13 +168,13 @@ class MainWindow(QMainWindow):
         self.map_characteristics_button.setToolTip("Create and manage name match to common name mappings by apply to and reference.")
 
     def setup_menu_actions(self):
-        """Set up the menu actions for the main window."""
-        self.about_button = QAction("About", self)
-        self.about_button.triggered.connect(self.open_about_window)
-        self.release_notes_action = QAction("Release notes", self)
-        self.release_notes_action.triggered.connect(self.open_release_notes_dialog)
-        self.menuBar().addAction(self.about_button)
-        self.menuBar().addAction(self.release_notes_action)
+        """Set up top action buttons inside the dark dashboard shell."""
+        self.about_button = QPushButton("About")
+        self.about_button.clicked.connect(self.open_about_window)
+        self.release_notes_action = QPushButton("Release notes")
+        self.release_notes_action.clicked.connect(self.open_release_notes_dialog)
+        self.about_button.setStyleSheet(ui_theme_tokens.button_style("tertiary"))
+        self.release_notes_action.setStyleSheet(ui_theme_tokens.button_style("tertiary"))
 
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""
@@ -239,8 +240,18 @@ class MainWindow(QMainWindow):
         context_layout.addWidget(self.status_label)
         context_layout.addWidget(self.last_export_label)
 
+        actions_row = QFrame()
+        actions_layout = QGridLayout(actions_row)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setHorizontalSpacing(ui_theme_tokens.SPACE_12)
+        actions_layout.setVerticalSpacing(0)
+        actions_layout.addWidget(self.about_button, 0, 0)
+        actions_layout.addWidget(self.release_notes_action, 0, 1)
+        actions_layout.setColumnStretch(2, 1)
+
         panel_layout.addWidget(self.heading_label)
         panel_layout.addWidget(self.subheading_label)
+        panel_layout.addWidget(actions_row)
         panel_layout.addWidget(context_strip)
         return panel
 
