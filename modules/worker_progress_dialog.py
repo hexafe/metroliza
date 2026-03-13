@@ -7,6 +7,16 @@ import base64
 from modules import Base64EncodedFiles, ui_theme_tokens
 
 
+def set_worker_progress_dialog_cancel_state(loading_dialog, *, enabled, label_text=None):
+    """Update standardized cancel-button state for worker progress dialogs."""
+    cancel_button = getattr(loading_dialog, "cancel_button", None)
+    if cancel_button is None:
+        return
+    cancel_button.setEnabled(bool(enabled))
+    if label_text is not None:
+        cancel_button.setText(label_text)
+
+
 def create_worker_progress_dialog(parent, *, window_title, initial_status_text, on_cancel):
     """Create a standardized progress dialog used by parse/export/csv worker flows."""
     loading_dialog = QDialog(parent, Qt.WindowType.WindowTitleHint)
@@ -39,24 +49,17 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     loading_label.setWordWrap(True)
     loading_label.setFixedWidth(390)
     loading_label.setMinimumHeight((loading_label.fontMetrics().lineSpacing() * 3) + 8)
-    loading_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_SECONDARY))
+    loading_label.setStyleSheet(ui_theme_tokens.typography_style("body", ui_theme_tokens.COLOR_TEXT_PRIMARY))
 
     loading_bar = QProgressBar(loading_dialog)
     loading_bar.setValue(0)
     loading_bar.setFixedSize(390, 20)
     loading_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    loading_bar.setStyleSheet(
-        "QProgressBar {"
-        f" border: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
-        f" border-radius: {ui_theme_tokens.RADIUS_10}px;"
-        f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_INPUT};"
-        f" color: {ui_theme_tokens.COLOR_TEXT_PRIMARY};"
-        " text-align: center;"
-        "}"
-        "QProgressBar::chunk {"
-        f" border-radius: {ui_theme_tokens.RADIUS_10}px;"
-        f" background-color: {ui_theme_tokens.COLOR_ACCENT_PRIMARY};"
-        "}"
+    loading_bar.setStyleSheet(ui_theme_tokens.progress_bar_style())
+
+    loading_dialog.setStyleSheet(
+        ui_theme_tokens.dialog_shell_style()
+        + ui_theme_tokens.modal_surface_style('QDialog')
     )
 
     layout = QVBoxLayout(loading_dialog)
@@ -69,6 +72,7 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     cancel_button = QPushButton("Cancel", loading_dialog)
     cancel_button.setStyleSheet(ui_theme_tokens.button_style("secondary"))
     cancel_button.clicked.connect(on_cancel)
+    loading_dialog.cancel_button = cancel_button
     layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
     return loading_dialog, loading_label, loading_bar, loading_gif

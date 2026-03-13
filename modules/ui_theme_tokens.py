@@ -412,3 +412,37 @@ def table_style(cell_padding=SPACE_8):
         f" border: 1px solid {COLOR_ACCENT_PRIMARY};"
         "}"
     )
+
+
+def modal_surface_style(selector='QFrame'):
+    return (
+        f"{selector} {{"
+        f" background-color: {COLOR_BACKGROUND_PANEL};"
+        f" border: 1px solid {COLOR_BORDER_DEFAULT};"
+        f" border-radius: {RADIUS_12}px;"
+        "}"
+    )
+
+
+def progress_bar_style():
+    return (
+        "QProgressBar {"
+        f" border: 1px solid {COLOR_BORDER_DEFAULT};"
+        f" border-radius: {RADIUS_10}px;"
+        f" background-color: {COLOR_BACKGROUND_INPUT};"
+        f" color: {COLOR_TEXT_PRIMARY};"
+        " text-align: center;"
+        "}"
+        "QProgressBar::chunk {"
+        f" border-radius: {RADIUS_10}px;"
+        f" background-color: {COLOR_ACCENT_PRIMARY};"
+        "}"
+        "QProgressBar:disabled {"
+        f" border: 1px solid {COLOR_BORDER_MUTED};"
+        f" background-color: {COLOR_BACKGROUND_PANEL_MUTED};"
+        f" color: {COLOR_TEXT_DISABLED};"
+        "}"
+        "QProgressBar::chunk:disabled {"
+        f" background-color: {COLOR_BORDER_STRONG};"
+        "}"
+    )
