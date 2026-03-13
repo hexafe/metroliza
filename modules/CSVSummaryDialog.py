@@ -180,8 +180,46 @@ class SpecLimitsDialog(QDialog):
         self.data_columns = data_columns
 
         layout = QVBoxLayout()
+        layout.setContentsMargins(
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_16,
+            ui_theme_tokens.SPACE_16,
+        )
+        layout.setSpacing(ui_theme_tokens.SPACE_12)
+
+        subtitle_label = QLabel("Set NOM/USL/LSL offsets used for CSV summary output.")
+        subtitle_label.setWordWrap(True)
+        subtitle_label.setStyleSheet(ui_theme_tokens.typography_style('body', ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        layout.addWidget(subtitle_label)
+
+        empty_state_label = QLabel("No selected data columns. Add data columns to configure spec limits.")
+        empty_state_label.setWordWrap(True)
+        empty_state_label.setVisible(len(data_columns) == 0)
+        empty_state_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY))
+        layout.addWidget(empty_state_label)
+
         self.table = QTableWidget(len(data_columns), 4, self)
         self.table.setHorizontalHeaderLabels(["Column", "NOM", "USL", "LSL"])
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(True)
+        self.table.setStyleSheet(
+            ui_theme_tokens.table_style()
+            + (
+                "QHeaderView::section {"
+                f" border-top: 0px;"
+                f" border-left: 0px;"
+                f" border-right: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
+                f" border-bottom: 1px solid {ui_theme_tokens.COLOR_BORDER_DEFAULT};"
+                "}"
+                "QTableWidget::item {"
+                f" border-bottom: 1px solid {ui_theme_tokens.COLOR_BORDER_MUTED};"
+                "}"
+                "QTableWidget::item:alternate {"
+                f" background-color: {ui_theme_tokens.COLOR_BACKGROUND_PANEL_MUTED};"
+                "}"
+            )
+        )
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for index in (1, 2, 3):
             self.table.horizontalHeader().setSectionResizeMode(index, QHeaderView.ResizeMode.ResizeToContents)
@@ -196,9 +234,12 @@ class SpecLimitsDialog(QDialog):
         layout.addWidget(self.table)
 
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(ui_theme_tokens.SPACE_8)
         ok_button = QPushButton("OK")
+        ok_button.setStyleSheet(ui_theme_tokens.button_style('primary'))
         ok_button.clicked.connect(self.accept)
         cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet(ui_theme_tokens.button_style('secondary'))
         cancel_button.clicked.connect(self.reject)
         button_layout.addWidget(ok_button)
         button_layout.addWidget(cancel_button)
@@ -842,12 +883,7 @@ class CSVSummaryDialog(QDialog):
 
     def _build_section_layout(self, title, content_layout):
         section_layout = QVBoxLayout()
-        section_layout.setContentsMargins(
-            ui_theme_tokens.SPACE_12,
-            ui_theme_tokens.SPACE_12,
-            ui_theme_tokens.SPACE_12,
-            ui_theme_tokens.SPACE_12,
-        )
+        section_layout.setContentsMargins(ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12, ui_theme_tokens.SPACE_12)
         section_layout.setSpacing(ui_theme_tokens.SPACE_8)
         section_title = QLabel(title)
         section_title.setStyleSheet(
@@ -938,7 +974,7 @@ class CSVSummaryDialog(QDialog):
         action_layout.setSpacing(ui_theme_tokens.SPACE_8)
         action_note_label = QLabel("Generate summary with the selected scope and inputs.")
         action_note_label.setWordWrap(True)
-        action_note_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_MUTED))
+        action_note_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY))
         action_layout.addWidget(action_note_label)
         action_layout.addWidget(self.start_button)
 
