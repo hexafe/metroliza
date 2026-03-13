@@ -127,7 +127,7 @@ class AboutWindow(QDialog):
             )
             license_expiration_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             license_expiration_label.setStyleSheet(
-                ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER)
+                ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY)
             )
             summary_layout.addWidget(license_expiration_label)
 
@@ -155,7 +155,7 @@ class AboutWindow(QDialog):
 
         repository_label = QLabel("Repository")
         repository_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        repository_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+        repository_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
         repository_layout.addWidget(repository_label)
 
         repository_link = ClickableLabel(

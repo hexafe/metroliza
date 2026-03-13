@@ -297,7 +297,7 @@ class ExportDialog(QDialog):
             self.google_sheets_note_label = QLabel(
                 "Note: A local .xlsx is always created. Google Sheets conversion is optional and may look slightly different from Excel."
             )
-            self.google_sheets_note_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+            self.google_sheets_note_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
             self.google_sheets_note_label.setWordWrap(True)
             self.export_target_label.setToolTip(
                 "Excel (.xlsx) is always generated.\n"
@@ -411,23 +411,23 @@ class ExportDialog(QDialog):
                 "Review the current export scope (filters and grouping)."
             )
             self.scope_help_label.setWordWrap(True)
-            self.scope_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+            self.scope_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
 
             self.destination_help_label = QLabel(
                 "Review source/destination files and optional Google Sheets output."
             )
             self.destination_help_label.setWordWrap(True)
-            self.destination_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+            self.destination_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
 
             self.advanced_options_help_label = QLabel(
                 "Optional settings for profile, chart behavior, and workbook formatting."
             )
             self.advanced_options_help_label.setWordWrap(True)
-            self.advanced_options_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+            self.advanced_options_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
             
             self.advanced_options_layout = QVBoxLayout()
             self.advanced_options_layout.setContentsMargins(0, 0, 0, 0)
-            self.advanced_options_layout.setSpacing(6)
+            self.advanced_options_layout.setSpacing(ui_theme_tokens.SPACE_8)
             self.advanced_options_layout.addWidget(self.violin_plot_min_samplesize_label)
             self.advanced_options_layout.addWidget(self.violin_plot_min_samplesize)
             self.advanced_options_layout.addWidget(self.summary_plot_scale_label)
@@ -543,7 +543,7 @@ class ExportDialog(QDialog):
 
             advanced_layout = QVBoxLayout()
             advanced_layout.setContentsMargins(0, 0, 0, 0)
-            advanced_layout.setSpacing(8)
+            advanced_layout.setSpacing(ui_theme_tokens.SPACE_8)
 
             advanced_content_layout = QVBoxLayout()
             advanced_content_layout.setContentsMargins(0, 0, 0, 0)
@@ -552,7 +552,7 @@ class ExportDialog(QDialog):
 
             group_analysis_layout = QGridLayout()
             group_analysis_layout.setContentsMargins(0, 0, 0, 0)
-            group_analysis_layout.setVerticalSpacing(6)
+            group_analysis_layout.setVerticalSpacing(ui_theme_tokens.SPACE_8)
             group_analysis_layout.addWidget(self.group_analysis_level_label, 0, 0)
             group_analysis_layout.addWidget(self.group_analysis_level_combobox, 0, 1)
             group_analysis_layout.addWidget(self.group_analysis_scope_label, 1, 0)
@@ -578,7 +578,7 @@ class ExportDialog(QDialog):
             action_layout.setContentsMargins(0, 0, 0, 0)
             action_help_label = QLabel("Export uses your current scope and destination.")
             action_help_label.setWordWrap(True)
-            action_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+            action_help_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
             action_layout.addWidget(action_help_label)
             action_button_row = QHBoxLayout()
             action_button_row.setContentsMargins(0, 0, 0, 0)

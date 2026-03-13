@@ -75,7 +75,7 @@ class ReleaseNotesDialog(QDialog):
     def _render_release_history(self, raw_release_notes):
         sections = self._parse_release_sections(raw_release_notes)
         if not sections:
-            return "<p>No release notes available.</p>"
+            return "<p class='empty-state'>No release notes available.</p>"
 
         cards = []
         for header, items in sections:
@@ -138,13 +138,12 @@ class ReleaseNotesDialog(QDialog):
     def _release_notes_document_css():
         return (
             "body {"
-            f" font-size: 12px;"
+            f" {ui_theme_tokens.TYPE_BODY}"
             f" color: {ui_theme_tokens.COLOR_TEXT_PRIMARY};"
             f" background: {ui_theme_tokens.COLOR_BACKGROUND_APP};"
             "}"
             "h1 {"
-            f" font-size: 16px;"
-            " font-weight: 700;"
+            f" {ui_theme_tokens.TYPE_PAGE_TITLE}"
             f" margin: 0 0 {ui_theme_tokens.SPACE_12}px 0;"
             f" color: {ui_theme_tokens.COLOR_TEXT_PRIMARY};"
             "}"
@@ -156,8 +155,7 @@ class ReleaseNotesDialog(QDialog):
             f" margin: 0 0 {ui_theme_tokens.SPACE_8}px 0;"
             "}"
             "h2 {"
-            f" font-size: 14px;"
-            " font-weight: 700;"
+            f" {ui_theme_tokens.TYPE_SECTION_TITLE}"
             f" margin: 0 0 {ui_theme_tokens.SPACE_8}px 0;"
             f" color: {ui_theme_tokens.COLOR_TEXT_PRIMARY};"
             "}"
@@ -169,5 +167,10 @@ class ReleaseNotesDialog(QDialog):
             f" margin: 0 0 {ui_theme_tokens.SPACE_4}px 0;"
             f" color: {ui_theme_tokens.COLOR_TEXT_SECONDARY};"
             " line-height: 1.35;"
+            "}"
+            ".empty-state {"
+            f" {ui_theme_tokens.TYPE_HELPER}"
+            f" color: {ui_theme_tokens.COLOR_TEXT_SECONDARY};"
+            f" margin: 0;"
             "}"
         )
