@@ -44,7 +44,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules.worker_progress_dialog import create_worker_progress_dialog, set_worker_progress_dialog_cancel_state
 from modules import ui_theme_tokens
 
 
@@ -828,11 +828,8 @@ class ExportDialog(QDialog):
     def _set_loading_cancel_enabled(self, enabled):
         if not hasattr(self, 'loading_dialog') or self.loading_dialog is None:
             return
-        if not hasattr(self.loading_dialog, 'findChildren'):
-            return
-        for button in self.loading_dialog.findChildren(QPushButton):
-            if button.text().strip().lower() == 'cancel':
-                button.setEnabled(bool(enabled))
+        cancel_label = "Cancel" if enabled else "Canceling..."
+        set_worker_progress_dialog_cancel_state(self.loading_dialog, enabled=enabled, label_text=cancel_label)
 
     def stop_exporting(self):
         """Request cooperative cancelation and keep UI responsive while waiting."""

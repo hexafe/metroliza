@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 )
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
-from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules.worker_progress_dialog import create_worker_progress_dialog, set_worker_progress_dialog_cancel_state
 from modules import ui_theme_tokens
 import shutil
 
@@ -269,8 +269,11 @@ class ParsingDialog(QDialog):
     def stop_parsing(self):
         """Request cooperative parser cancellation without blocking the UI."""
         try:
+            if self.parsing_canceled:
+                return
             # Request cooperative cancellation and return immediately to keep UI responsive
             self.parsing_canceled = True
+            set_worker_progress_dialog_cancel_state(self.loading_dialog, enabled=False, label_text="Canceling...")
             if self.parse_thread is not None and self.parse_thread.isRunning():
                 self.parse_thread.stop_parsing()
                 self.loading_label.setText(build_three_line_status("Canceling parsing...", "Waiting for parser thread to stop", "ETA --"))

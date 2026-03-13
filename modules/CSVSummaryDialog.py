@@ -39,7 +39,7 @@ from modules.csv_summary_utils import (
     migrate_csv_summary_presets,
     save_csv_summary_presets,
 )
-from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules.worker_progress_dialog import create_worker_progress_dialog, set_worker_progress_dialog_cancel_state
 from modules import ui_theme_tokens
 
 
@@ -1164,6 +1164,8 @@ class CSVSummaryDialog(QDialog):
     def stop_data_processing_and_close_loading(self):
         """Forward cancel requests to the worker thread if it is active."""
         if self.worker_thread:
+            set_worker_progress_dialog_cancel_state(self.loading_dialog, enabled=False, label_text="Canceling...")
+            self.loading_label.setText(build_three_line_status("Canceling processing...", "Waiting for worker thread to stop", "ETA --"))
             # Stop the data processing thread if it exists
             self.worker_thread.cancel()
 
