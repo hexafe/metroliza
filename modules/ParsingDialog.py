@@ -159,7 +159,7 @@ class ParsingDialog(QDialog):
 
         separator = QFrame(container)
         separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setStyleSheet(f"color: {ui_theme_tokens.COLOR_BORDER_MUTED};")
+        separator.setStyleSheet(f"background-color: {ui_theme_tokens.COLOR_BORDER_MUTED};")
         layout.addWidget(separator)
         layout.addLayout(content_layout)
         return container

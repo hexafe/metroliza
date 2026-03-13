@@ -117,7 +117,7 @@ class DataGrouping(QDialog):
                 "Create groups to control export comparisons. Select a reference or specific parts, then use Add to group."
             )
             self.helper_panel_label.setWordWrap(True)
-            self.helper_panel_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_HELPER))
+            self.helper_panel_label.setStyleSheet(ui_theme_tokens.typography_style("helper", ui_theme_tokens.COLOR_TEXT_SECONDARY))
 
             self.status_panel_title = QLabel("Grouping status")
             self.status_panel_title.setStyleSheet(ui_theme_tokens.typography_style("section", ui_theme_tokens.COLOR_TEXT_PRIMARY))
@@ -675,7 +675,7 @@ class DataGrouping(QDialog):
             self.groups_empty_label,
             self.part_group_empty_label,
         ):
-            state_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_HELPER))
+            state_label.setStyleSheet(ui_theme_tokens.typography_style('helper', ui_theme_tokens.COLOR_TEXT_SECONDARY))
 
     def search_list_widgets(self, list_widget, search_text):
         """Handle `search_list_widgets` for `DataGrouping`.
