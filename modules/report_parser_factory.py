@@ -8,6 +8,7 @@ This module keeps compatibility with both:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import metadata as importlib_metadata
 import importlib.util
 import inspect
 import os
@@ -45,6 +46,7 @@ class ExternalPluginLoadResult:
 
     loaded_plugin_ids: tuple[str, ...]
     loaded_modules: tuple[str, ...]
+    loaded_entry_points: tuple[str, ...]
     skipped_paths: tuple[str, ...]
     errors: tuple[str, ...]
 
@@ -176,6 +178,18 @@ def _discover_plugin_classes_in_module(module) -> list[ParserType]:
     return plugin_classes
 
 
+def _iter_external_plugin_entry_points(group: str = "metroliza.parser_plugins"):
+    try:
+        entry_points = importlib_metadata.entry_points()
+    except Exception:  # pragma: no cover - defensive
+        return ()
+
+    # Python >=3.10 exposes select(); older mapping style retained for compatibility.
+    if hasattr(entry_points, "select"):
+        return tuple(entry_points.select(group=group))
+    return tuple(entry_points.get(group, ()))
+
+
 def load_external_plugins(paths: str | tuple[str, ...] | None = None) -> ExternalPluginLoadResult:
     """Load external parser plugins from python files/directories.
 
@@ -185,6 +199,7 @@ def load_external_plugins(paths: str | tuple[str, ...] | None = None) -> Externa
 
     loaded_plugin_ids: list[str] = []
     loaded_modules: list[str] = []
+    loaded_entry_points: list[str] = []
     skipped_paths: list[str] = []
     errors: list[str] = []
 
@@ -225,9 +240,31 @@ def load_external_plugins(paths: str | tuple[str, ...] | None = None) -> Externa
             except Exception as exc:  # pragma: no cover - defensive hardening
                 errors.append(f"{candidate}: {exc}")
 
+    for entry_point in _iter_external_plugin_entry_points():
+        try:
+            loaded = entry_point.load()
+            parser_classes = loaded if isinstance(loaded, (list, tuple)) else (loaded,)
+            for parser_cls in parser_classes:
+                if not inspect.isclass(parser_cls) or not issubclass(parser_cls, BaseReportParserPlugin):
+                    errors.append(
+                        f"entry-point {entry_point.name}: loaded object must be BaseReportParserPlugin subclass"
+                    )
+                    continue
+                if inspect.isabstract(parser_cls):
+                    errors.append(f"entry-point {entry_point.name}: abstract parser classes are not loadable")
+                    continue
+                register_parser(parser_cls)
+                manifest = getattr(parser_cls, "manifest", None)
+                plugin_id = manifest.plugin_id if manifest is not None else parser_cls.__name__
+                loaded_plugin_ids.append(plugin_id)
+            loaded_entry_points.append(entry_point.name)
+        except Exception as exc:  # pragma: no cover - defensive hardening
+            errors.append(f"entry-point {entry_point.name}: {exc}")
+
     return ExternalPluginLoadResult(
         loaded_plugin_ids=tuple(loaded_plugin_ids),
         loaded_modules=tuple(loaded_modules),
+        loaded_entry_points=tuple(loaded_entry_points),
         skipped_paths=tuple(skipped_paths),
         errors=tuple(errors),
     )

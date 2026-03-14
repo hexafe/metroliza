@@ -102,3 +102,9 @@ Use this quick checklist when opening or reviewing PRs:
 - [ ] Full pytest suite passes (`unit-tests`)
 - [ ] Native artifact smoke/parity checks pass (`native-artifacts`)
 - [ ] Optional/manual non-blocking checks reviewed as needed (`packaging-smoke`, `google-conversion-smoke`)
+
+### Additional checklist for parser plugin changes
+
+When a PR touches parser plugin contracts/registry/plugins, also complete the governance checklist in:
+
+- [`docs/release_checks/parser_plugin_rollout_runbook.md`](./release_checks/parser_plugin_rollout_runbook.md)

@@ -58,13 +58,15 @@ After reviewing the current code paths and targeted tests, the status is:
 - **Not yet fully ready for broad production rollout** of LLM-generated plugins until deferred Pass 4/5 controls are implemented.
 
 ### Highest-priority next actions
-1. Implement an automated validation gate runner (contract + fixtures + legacy adapter parity + deterministic output checks).
-2. Add external plugin package loading/entrypoint discovery to decouple plugin delivery from core codebase releases.
-3. Add a repair-loop workflow that feeds failing test diffs back into a constrained regeneration pass.
-4. Publish rollout/rollback runbook and ownership governance checklist in CI/PR policy.
+1. Expand validation gate from baseline contract checks to fixture semantic parity and deterministic-output assertions in CI.
+2. Extend entrypoint-based external plugin loading with signature/allowlist hardening for production environments.
+3. Integrate repair-loop artifact generation into an automated candidate-regeneration workflow.
+4. Add runtime monitoring dashboards/alerts for parse failures, fallback spikes, and unresolved field drifts.
 
 ## Newly implemented from verification follow-up
 - Added external plugin discovery/loading via `PARSER_EXTERNAL_PLUGIN_PATHS` in `modules/report_parser_factory.py` (supports file or directory inputs).
 - Added a baseline automated validation gate utility in `modules/parser_plugin_validation.py` with a runnable script `scripts/validate_parser_plugins.py`.
 - Added tests covering external plugin loading and validation gate behavior.
-
+- Added entrypoint-based plugin discovery (`metroliza.parser_plugins`) in `modules/report_parser_factory.py`.
+- Added repair-loop prompt artifact helpers in `modules/parser_plugin_repair_loop.py` and script `scripts/build_parser_plugin_repair_prompt.py`.
+- Added rollout/rollback + ownership governance checklist in `docs/release_checks/parser_plugin_rollout_runbook.md` and linked it from `docs/ci-policy.md`.

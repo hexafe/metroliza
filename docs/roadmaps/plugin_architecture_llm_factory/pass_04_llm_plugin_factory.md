@@ -21,6 +21,16 @@ Use a controlled generation pipeline:
 - V2 schema + adapter policy (Pass 2).
 - Detection/registry rules (Pass 3).
 
+## Generation context pack format (v1)
+Store candidate-generation input as a JSON-serializable bundle with:
+- `supplier_id`: stable supplier key used in fixture naming.
+- `candidate_plugin_id`: expected plugin id.
+- `sample_inputs`: list of report file paths + inferred format.
+- `expected_outputs`: optional fixture references for semantic parity.
+- `locale_notes`: decimal/date/language assumptions.
+- `mapping_hints`: optional source-token to V2-field hints from domain experts.
+- `constraints`: required invariants (forbidden dependencies, deterministic parse requirement).
+
 ## Two-pass generation policy
 
 ### Pass A: Analysis only
@@ -74,9 +84,14 @@ No architecture invention allowed outside approved extension points.
 - Route failed candidates into repair loop with failing diffs as context.
 
 ## Jira seed checklist
-- [ ] Create generation context pack format.
+- [x] Create generation context pack format.
 - [x] Create baseline plugin scaffold.
 - [x] Create analysis-pass prompt template.
 - [x] Create implementation-pass prompt template.
 - [x] Implement validation gate script/workflow (baseline contract gate).
-- [ ] Implement repair loop policy and artifacts.
+- [x] Implement repair loop policy and artifacts.
+
+Artifacts:
+- Validation gate runner: `scripts/validate_parser_plugins.py`
+- Repair prompt generator: `scripts/build_parser_plugin_repair_prompt.py`
+- Repair-loop helper module: `modules/parser_plugin_repair_loop.py`
