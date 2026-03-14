@@ -942,6 +942,32 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual({text.get_fontsize() for text in rendered}, {9.1})
         plt.close(fig)
 
+    def test_render_histogram_annotations_drops_lower_priority_overlap_inside_plot_rect(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(0.0, 1.0)
+        plt.subplots_adjust(left=0.15, right=0.85, top=0.85, bottom=0.15)
+
+        annotation_specs = [
+            {'kind': 'mean', 'x': 0.5, 'text_y_axes': 0.95, 'text': 'Mean = 0.500', 'color': '#111111', 'ha': 'center', 'priority': 300},
+            {'kind': 'usl', 'x': 0.5, 'text_y_axes': 0.95, 'text': 'USL=0.500', 'color': '#222222', 'ha': 'center', 'priority': 100},
+        ]
+
+        rendered = render_histogram_annotations(
+            ax,
+            annotation_specs,
+            annotation_fontsize=8.5,
+            annotation_box={
+                'boxstyle': 'round,pad=0.15',
+                'fc': 'white',
+                'ec': '#cccccc',
+                'alpha': 0.94,
+                'plot_rect': {'x': 0.0, 'y': 0.0, 'width': 1.0, 'height': 1.0},
+            },
+        )
+
+        self.assertEqual([text.get_text() for text in rendered], ['Mean = 0.500'])
+        plt.close(fig)
+
 
     def test_compute_histogram_annotation_rows_stacks_close_markers_and_keeps_mean_highest(self):
         annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.01, lsl=9.99, y_max=1.0)
