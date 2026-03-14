@@ -8,6 +8,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from modules.export_histogram_layout import assert_non_overlapping_rectangles
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
 from modules.export_summary_utils import compute_normality_status
@@ -57,6 +58,7 @@ from modules.export_data_thread import (  # noqa: E402
     build_histogram_mean_line_style,
     compute_histogram_annotation_rows,
     compute_histogram_font_sizes,
+    compute_histogram_panel_layout,
     compute_histogram_table_layout,
     render_histogram_annotations,
     build_measurement_chart_format_policy,
@@ -98,6 +100,7 @@ from modules.export_data_thread import (  # noqa: E402
     render_histogram,
     render_density_line,
     render_panel_table,
+    render_panel_table_in_panel_axes,
     render_histogram_note_panel,
     resolve_summary_annotation_strategy,
     apply_summary_plot_theme,
@@ -223,8 +226,6 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             meta = render_histogram_note_panel(
                 ax=ax,
-                fig=fig,
-                note_rect={'x': 0.56, 'y': 0.06, 'width': 0.38, 'height': 0.20},
                 note_items=note_items,
                 style_options={'fontsize': 7.2, 'min_fontsize': 6.2, 'max_fontsize': 8.8},
                 available_height_px=10.0,
@@ -235,6 +236,82 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertIn('Family: One-sided +', rendered_text)
             self.assertNotIn('Context:', rendered_text)
             self.assertNotIn('extended context text for validation', rendered_text)
+            self.assertIn('text_artist', meta)
+            self.assertFalse(hasattr(meta.get('text_artist'), 'get_celld'))
+        finally:
+            plt.close(fig)
+
+    def test_render_panel_table_in_panel_axes_uses_full_panel_bounds(self):
+        fig = plt.figure(figsize=(4.0, 3.0))
+        panel_ax = fig.add_axes([0.1, 0.1, 0.35, 0.6])
+        try:
+            meta = render_panel_table_in_panel_axes(
+                ax=panel_ax,
+                title='Statistic',
+                rows=[('A', '1'), ('B', '2')],
+                style_options={'fontsize': 8.0},
+            )
+
+            self.assertEqual(meta['used_bounds'], {'x': 0.0, 'y': 0.0, 'width': 1.0, 'height': 1.0})
+            self.assertEqual(len(meta['rendered_rows']), 2)
+        finally:
+            plt.close(fig)
+
+    def test_histogram_panel_layout_rendering_smoke_with_dedicated_axes(self):
+        fig = plt.figure(figsize=(6.2, 4.0))
+        try:
+            measurements = pd.DataFrame(
+                {'MEAS': np.concatenate([np.linspace(9.8, 10.2, 40), np.linspace(10.25, 10.5, 16)])}
+            )
+            left_rows = [
+                ('Model', 'Johnson SU'),
+                ('GOF p', '0.0712'),
+                ('Est. NOK %', '0.123%'),
+                ('Est. PPM', '1,230'),
+                ('Est. yield', '99.877%'),
+                ('Fit quality', 'Medium'),
+            ]
+            right_rows = [
+                ('Average', '10.102'),
+                ('Std dev', '0.085'),
+                ('Cp', '1.34'),
+                ('Cpk', '1.19'),
+            ]
+            note_items = [
+                {'label': 'Family', 'compact_label': 'Family', 'value': 'Signed/bilateral', 'priority': 90},
+                {'label': 'Model', 'compact_label': 'Model', 'value': 'Johnson SU', 'priority': 80},
+                {'label': 'Fit quality', 'compact_label': 'Fit', 'value': 'Medium', 'priority': 70},
+                {'label': 'Warning', 'value': 'Use with caution for long-tail extrapolation.', 'priority': 20, 'expanded_only': True},
+            ]
+
+            rects = compute_histogram_panel_layout(
+                (6.2, 4.0),
+                table_fontsize=8.8,
+                left_row_count=len(left_rows),
+                right_row_count=len(right_rows),
+                note_line_count=len(note_items),
+            )
+            assert_non_overlapping_rectangles(rects)
+
+            left_ax = fig.add_axes([rects['left_table_rect']['x'], rects['left_table_rect']['y'], rects['left_table_rect']['width'], rects['left_table_rect']['height']])
+            plot_ax = fig.add_axes([rects['plot_rect']['x'], rects['plot_rect']['y'], rects['plot_rect']['width'], rects['plot_rect']['height']])
+            right_ax = fig.add_axes([rects['right_table_rect']['x'], rects['right_table_rect']['y'], rects['right_table_rect']['width'], rects['right_table_rect']['height']])
+            note_ax = fig.add_axes([rects['note_rect']['x'], rects['note_rect']['y'], rects['note_rect']['width'], rects['note_rect']['height']])
+            left_ax.set_axis_off()
+            right_ax.set_axis_off()
+            note_ax.set_axis_off()
+
+            render_histogram(plot_ax, measurements, lsl=9.9, usl=10.4)
+            left_meta = render_panel_table_in_panel_axes(ax=left_ax, title='Distribution Fit', rows=left_rows, style_options={'fontsize': 8.2})
+            right_meta = render_panel_table_in_panel_axes(ax=right_ax, title='Statistic', rows=right_rows, style_options={'fontsize': 8.2})
+            note_meta = render_histogram_note_panel(ax=note_ax, note_items=note_items, style_options={'fontsize': 7.0}, available_height_px=10.0)
+
+            self.assertEqual(len(fig.axes), 4)
+            self.assertGreater(rects['plot_rect']['width'], 0.0)
+            self.assertGreater(rects['note_rect']['height'], 0.0)
+            self.assertGreaterEqual(len(left_meta['rendered_rows']), 1)
+            self.assertGreaterEqual(len(right_meta['rendered_rows']), 1)
+            self.assertIn(note_meta['variant'], {'compact', 'expanded'})
         finally:
             plt.close(fig)
 
