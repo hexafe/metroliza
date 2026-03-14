@@ -119,6 +119,7 @@ from modules.export_chart_payload_helpers import (
 from modules.export_workbook_planning_helpers import (
     compute_histogram_font_sizes as _compute_histogram_font_sizes,
     compute_histogram_table_layout as _compute_histogram_table_layout,
+    compute_histogram_three_region_layout as _compute_histogram_three_region_layout,
 )
 from modules.export_summary_composition_service import (
     build_summary_table_composition as _build_summary_table_composition,
@@ -563,6 +564,67 @@ def compute_histogram_table_layout(
         table_fontsize=table_fontsize,
         has_table=has_table,
     )
+
+
+def compute_histogram_three_region_layout(
+    figure_size=(6, 4),
+    *,
+    table_fontsize=8.0,
+):
+    """Compute compact geometry for left/center/right histogram rendering regions."""
+    return _compute_histogram_three_region_layout(
+        figure_size=figure_size,
+        table_fontsize=table_fontsize,
+    )
+
+
+def _format_percent(value):
+    if value is None:
+        return 'N/A'
+    return f"{float(value):.3f}%"
+
+
+def _build_distribution_fit_table_rows(distribution_fit_result):
+    selected_model = distribution_fit_result.get('selected_model') or {}
+    fit_quality = distribution_fit_result.get('fit_quality') or {}
+    risk_estimates = distribution_fit_result.get('risk_estimates') or {}
+
+    return [
+        ('Selected model', selected_model.get('display_name', 'N/A')),
+        ('Fit quality', str(fit_quality.get('label', 'unknown')).title()),
+        ('Out-of-spec risk', _format_percent(risk_estimates.get('nok_percent'))),
+        ('Risk label', str(risk_estimates.get('risk_label', 'unknown')).title()),
+        ('Expected NOK (PPM)', 'N/A' if risk_estimates.get('ppm_nok') is None else f"{float(risk_estimates['ppm_nok']):,.0f}"),
+        ('Yield estimate', _format_percent(risk_estimates.get('yield_percent'))),
+    ]
+
+
+def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats):
+    inferred_support = distribution_fit_result.get('inferred_support_mode') or 'unknown'
+    candidate_family = 'Positive-support (one-sided)' if inferred_support == 'one_sided_zero_bound_positive' else 'Signed/bilateral'
+    selected_model = distribution_fit_result.get('selected_model') or {}
+    fit_quality = distribution_fit_result.get('fit_quality') or {}
+    fit_warning = distribution_fit_result.get('warning')
+
+    note_lines = [
+        f"One-sided context: {'Yes' if inferred_support == 'one_sided_zero_bound_positive' else 'No'}",
+        f"Candidate family: {candidate_family}",
+        f"Selected model: {selected_model.get('display_name', 'N/A')}",
+        f"Fit quality: {str(fit_quality.get('label', 'unknown')).title()}",
+    ]
+
+    normality_text = summary_stats.get('normality_text')
+    if normality_text:
+        note_lines.append(f"Reference normality: {normality_text}")
+
+    quality_label = str(fit_quality.get('label', '')).lower()
+    is_poor_fit = quality_label in {'weak', 'unreliable'}
+    if is_poor_fit:
+        note_lines.append('Warning: fit quality is weak/unreliable; use capability decisions with caution.')
+    if fit_warning:
+        note_lines.append(f"Warning: {fit_warning}")
+
+    return '\n'.join(note_lines), is_poor_fit
 
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
@@ -3252,21 +3314,30 @@ class ExportDataThread(QThread):
                         has_table=True,
                         readability_scale=self.summary_plot_scale,
                     )
-                    histogram_table_layout = compute_histogram_table_layout(
+                    three_region_layout = compute_histogram_three_region_layout(
                         histogram_figsize,
                         table_fontsize=histogram_font_sizes['table_fontsize'],
-                        has_table=True,
                     )
 
+                    distribution_fit_result = precomputed_distribution_fit
+                    if distribution_fit_result is None:
+                        distribution_fit_result = fit_measurement_distribution(
+                            sampled_histogram_group['MEAS'],
+                            lsl=LSL,
+                            usl=USL,
+                            nom=nom,
+                            point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                            include_kde_reference=True,
+                        )
+
                     table_render_data = build_histogram_table_render_data(table_data)
-                    table_bbox_x = 1.03
-                    table_bbox_width = min(0.56, histogram_table_layout['table_bbox_width'] + 0.06)
+                    side_table_width = three_region_layout['side_table_width']
                     ax_table = plt.table(
                         cellText=table_render_data,
                         colLabels=['Statistic', 'Value'],
                         cellLoc='center',
                         loc='right',
-                        bbox=[table_bbox_x, 0.06, table_bbox_width, 0.94],
+                        bbox=[three_region_layout['right_table_x'], 0.20, side_table_width, 0.80],
                     )
                     ax_table.auto_set_font_size(False)
                     ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
@@ -3282,35 +3353,47 @@ class ExportDataThread(QThread):
                         row_height_scale=1.15,
                     )
 
-                    normality_note = summary_stats.get('normality_text') or 'Shapiro p = N/A\nUnknown'
-                    normality_table = plt.table(
-                        cellText=[[normality_note]],
+                    distribution_fit_rows = _build_distribution_fit_table_rows(distribution_fit_result)
+                    distribution_fit_table = plt.table(
+                        cellText=build_histogram_table_render_data(distribution_fit_rows),
+                        colLabels=['Distribution Fit', 'Value'],
                         cellLoc='center',
-                        loc='right',
-                        bbox=[table_bbox_x, -0.17, table_bbox_width, 0.15],
+                        loc='left',
+                        bbox=[three_region_layout['left_table_x'], 0.20, side_table_width, 0.80],
                     )
-                    normality_table.auto_set_font_size(False)
-                    normality_table.set_fontsize(histogram_font_sizes['table_fontsize'])
-                    normality_cell = normality_table.get_celld()[(0, 0)]
-                    normality_badge = classify_normality_status(summary_stats.get('normality_status'))
-                    normality_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f"{normality_badge['palette_key']}_bg"])
-                    normality_cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
-                    normality_cell.set_linewidth(0.45)
-                    normality_cell.PAD = 0.03
-                    normality_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f"{normality_badge['palette_key']}_text"])
-                    normality_cell.get_text().set_ha('center')
-                    normality_cell.get_text().set_va('center')
+                    distribution_fit_table.auto_set_font_size(False)
+                    distribution_fit_table.set_fontsize(histogram_font_sizes['table_fontsize'])
+                    style_histogram_stats_table(distribution_fit_table, distribution_fit_rows)
+                    adjust_histogram_stats_table_geometry(
+                        distribution_fit_table,
+                        statistic_col_width_ratio=0.60,
+                        row_height_scale=1.10,
+                    )
 
-                    distribution_fit_result = precomputed_distribution_fit
-                    if distribution_fit_result is None:
-                        distribution_fit_result = fit_measurement_distribution(
-                            sampled_histogram_group['MEAS'],
-                            lsl=LSL,
-                            usl=USL,
-                            nom=nom,
-                            point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
-                            include_kde_reference=True,
-                        )
+                    model_info_note, poor_fit = _build_distribution_fit_info_note(
+                        distribution_fit_result,
+                        summary_stats=summary_stats,
+                    )
+                    model_info_table = plt.table(
+                        cellText=[[model_info_note]],
+                        cellLoc='left',
+                        loc='right',
+                        bbox=[three_region_layout['right_table_x'], 0.03, side_table_width, 0.14],
+                    )
+                    model_info_table.auto_set_font_size(False)
+                    model_info_table.set_fontsize(max(histogram_font_sizes['table_fontsize'] - 1.0, 7.0))
+                    model_info_cell = model_info_table.get_celld()[(0, 0)]
+                    model_info_cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
+                    model_info_cell.set_linewidth(0.45)
+                    model_info_cell.PAD = 0.03
+                    model_info_cell.get_text().set_ha('left')
+                    model_info_cell.get_text().set_va('center')
+                    if poor_fit:
+                        model_info_cell.set_facecolor(SUMMARY_PLOT_PALETTE['quality_risk_bg'])
+                        model_info_cell.get_text().set_color(SUMMARY_PLOT_PALETTE['quality_risk_text'])
+                    else:
+                        model_info_cell.set_facecolor(SUMMARY_PLOT_PALETTE['quality_unknown_bg'])
+                        model_info_cell.get_text().set_color(SUMMARY_PLOT_PALETTE['quality_unknown_text'])
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
                     if selected_model_curve is not None:
@@ -3331,23 +3414,6 @@ class ExportDataThread(QThread):
                     fit_warning = distribution_fit_result.get('warning')
                     if fit_warning:
                         logger.warning("%s Header=%s", fit_warning, header)
-                        ax.text(
-                            0.02,
-                            0.98,
-                            fit_warning,
-                            transform=ax.transAxes,
-                            fontsize=7,
-                            va='top',
-                            ha='left',
-                            color=SUMMARY_PLOT_PALETTE['quality_risk_text'],
-                            bbox={
-                                'boxstyle': 'round,pad=0.2',
-                                'facecolor': SUMMARY_PLOT_PALETTE['quality_risk_bg'],
-                                'edgecolor': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
-                                'linewidth': 0.4,
-                                'alpha': 0.9,
-                            },
-                        )
 
                     mean_line_style = build_histogram_mean_line_style()
                     ax.axvline(average, **mean_line_style)
@@ -3381,7 +3447,12 @@ class ExportDataThread(QThread):
                     )
 
                     histogram_top_margin = max(0.82, 0.82 + max(0.0, max_annotation_row - 1.01))
-                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=histogram_top_margin, bottom=0.18)
+                    plt.subplots_adjust(
+                        left=three_region_layout['subplot_left'],
+                        right=three_region_layout['subplot_right'],
+                        top=histogram_top_margin,
+                        bottom=0.18,
+                    )
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     histogram_slot = panel_plan['image_slots']['histogram']
