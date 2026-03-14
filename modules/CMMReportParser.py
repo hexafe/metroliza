@@ -262,7 +262,7 @@ class CMMReportParser(BaseReportParser):
 
         try:
             """Method to split raw text from pdf to blocks - split by measurements"""
-            parse_result = parse_blocks_with_backend_and_telemetry(self.raw_text, use_native=False)
+            parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)
             self.blocks_text = parse_result.blocks
             self.parse_backend_used = parse_result.backend
         except Exception as e:

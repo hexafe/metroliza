@@ -1,6 +1,9 @@
 import importlib
+import importlib.machinery
+import importlib.util
 import sys
 import types
+from pathlib import Path
 
 
 custom_logger_stub = types.ModuleType("modules.CustomLogger")
@@ -14,18 +17,26 @@ class _DummyCustomLogger:
 custom_logger_stub.CustomLogger = _DummyCustomLogger
 sys.modules.setdefault("modules.CustomLogger", custom_logger_stub)
 
-import importlib.machinery
 fitz_stub = types.ModuleType("fitz")
 fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
 fitz_stub.open = lambda *_args, **_kwargs: None
 sys.modules.setdefault("fitz", fitz_stub)
 
-
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
-cmm_module = importlib.import_module("modules.CMMReportParser")
 
-CMMReportParser = cmm_module.CMMReportParser
+
+def _load_real_cmm_report_parser_class():
+    module_path = Path("modules/CMMReportParser.py")
+    spec = importlib.util.spec_from_file_location("_real_cmm_report_parser_for_factory_tests", module_path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module.CMMReportParser
+
+
+CMMReportParser = _load_real_cmm_report_parser_class()
 BaseReportParser = base_module.BaseReportParser
 PARSER_DETECTORS = factory_module.PARSER_DETECTORS
 PARSER_MAP = factory_module.PARSER_MAP
@@ -42,7 +53,17 @@ def test_detect_format_accepts_pathlike(tmp_path):
 
 def test_get_parser_returns_cmm_parser_for_pdf(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.pdf"
-    parser = get_parser(report_path, database=":memory:")
+
+    original_cmm = PARSER_MAP.get("cmm")
+    PARSER_MAP["cmm"] = CMMReportParser
+    try:
+        parser = get_parser(report_path, database=":memory:")
+    finally:
+        if original_cmm is None:
+            del PARSER_MAP["cmm"]
+        else:
+            PARSER_MAP["cmm"] = original_cmm
+
     assert isinstance(parser, CMMReportParser)
 
 
