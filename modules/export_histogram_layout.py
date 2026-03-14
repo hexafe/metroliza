@@ -1,0 +1,146 @@
+"""Histogram panel layout helpers and rectangle-guard utilities."""
+
+from __future__ import annotations
+
+# Layout constants (normalized figure coordinates)
+HISTOGRAM_OUTER_PADDING_X = 0.035
+HISTOGRAM_OUTER_PADDING_Y = 0.04
+HISTOGRAM_INTER_PANEL_GAP = 0.02
+HISTOGRAM_MIN_PLOT_WIDTH = 0.42
+HISTOGRAM_MIN_NOTE_HEIGHT = 0.12
+HISTOGRAM_SIDE_PANEL_MIN_WIDTH = 0.16
+HISTOGRAM_SIDE_PANEL_MAX_WIDTH = 0.28
+
+_HISTOGRAM_BASE_SIDE_PANEL_WIDTH = 0.23
+_HISTOGRAM_TABLE_ROW_HEIGHT = 0.027
+_HISTOGRAM_BASE_TABLE_HEIGHT = 0.30
+_HISTOGRAM_NOTE_LINE_HEIGHT = 0.032
+_HISTOGRAM_BASE_NOTE_HEIGHT = 0.07
+_HISTOGRAM_MIN_TABLE_HEIGHT = 0.24
+
+
+def _clamp(value, lower, upper):
+    return min(upper, max(lower, value))
+
+
+def rectangles_overlap(rect_a, rect_b, *, epsilon=1e-9):
+    """Return True when two normalized rectangles intersect."""
+    ax0 = float(rect_a['x'])
+    ay0 = float(rect_a['y'])
+    ax1 = ax0 + float(rect_a['width'])
+    ay1 = ay0 + float(rect_a['height'])
+
+    bx0 = float(rect_b['x'])
+    by0 = float(rect_b['y'])
+    bx1 = bx0 + float(rect_b['width'])
+    by1 = by0 + float(rect_b['height'])
+
+    separated = (
+        ax1 <= bx0 + epsilon
+        or bx1 <= ax0 + epsilon
+        or ay1 <= by0 + epsilon
+        or by1 <= ay0 + epsilon
+    )
+    return not separated
+
+
+def assert_non_overlapping_rectangles(rectangles):
+    """Raise AssertionError when any named rectangle pair intersects."""
+    names = list(rectangles.keys())
+    for index, left_name in enumerate(names):
+        for right_name in names[index + 1 :]:
+            if rectangles_overlap(rectangles[left_name], rectangles[right_name]):
+                raise AssertionError(
+                    f"Layout rectangles intersect: {left_name} vs {right_name}"
+                )
+
+
+def compute_histogram_panel_layout(
+    figure_size=(6, 4),
+    *,
+    table_fontsize=8.0,
+    left_row_count=0,
+    right_row_count=0,
+    note_line_count=0,
+):
+    """Compute normalized non-overlapping rectangles for histogram side panels and plot."""
+    fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 6
+    fig_width = max(float(fig_width), 1.0)
+    width_scale = min(1.25, max(0.8, fig_width / 6.0))
+    oversized_font = max(0.0, float(table_fontsize) - 8.0)
+
+    side_pref = _HISTOGRAM_BASE_SIDE_PANEL_WIDTH + (0.008 * oversized_font) - (0.012 * (width_scale - 1.0))
+    side_pref = _clamp(
+        side_pref,
+        HISTOGRAM_SIDE_PANEL_MIN_WIDTH,
+        HISTOGRAM_SIDE_PANEL_MAX_WIDTH,
+    )
+
+    content_width = 1.0 - (2.0 * HISTOGRAM_OUTER_PADDING_X)
+    gaps_width = 2.0 * HISTOGRAM_INTER_PANEL_GAP
+    available_columns = content_width - gaps_width
+
+    left_width = side_pref
+    right_width = side_pref
+    plot_width = available_columns - left_width - right_width
+    if plot_width < HISTOGRAM_MIN_PLOT_WIDTH:
+        deficit = HISTOGRAM_MIN_PLOT_WIDTH - plot_width
+        shrink_budget = (left_width - HISTOGRAM_SIDE_PANEL_MIN_WIDTH) + (right_width - HISTOGRAM_SIDE_PANEL_MIN_WIDTH)
+        shrink = min(deficit, max(0.0, shrink_budget))
+        if shrink > 0:
+            left_share = (left_width - HISTOGRAM_SIDE_PANEL_MIN_WIDTH) / shrink_budget if shrink_budget > 0 else 0.5
+            left_width -= shrink * left_share
+            right_width -= shrink * (1.0 - left_share)
+        left_width = max(HISTOGRAM_SIDE_PANEL_MIN_WIDTH, left_width)
+        right_width = max(HISTOGRAM_SIDE_PANEL_MIN_WIDTH, right_width)
+        plot_width = available_columns - left_width - right_width
+
+    content_height = 1.0 - (2.0 * HISTOGRAM_OUTER_PADDING_Y)
+    y_bottom = HISTOGRAM_OUTER_PADDING_Y
+
+    desired_table_height = _HISTOGRAM_BASE_TABLE_HEIGHT + (_HISTOGRAM_TABLE_ROW_HEIGHT * max(left_row_count, right_row_count))
+    desired_note_height = _HISTOGRAM_BASE_NOTE_HEIGHT + (_HISTOGRAM_NOTE_LINE_HEIGHT * note_line_count)
+    note_height = max(HISTOGRAM_MIN_NOTE_HEIGHT, desired_note_height)
+
+    max_note_height = max(HISTOGRAM_MIN_NOTE_HEIGHT, content_height - HISTOGRAM_INTER_PANEL_GAP - _HISTOGRAM_MIN_TABLE_HEIGHT)
+    note_height = min(note_height, max_note_height)
+    right_table_height = content_height - HISTOGRAM_INTER_PANEL_GAP - note_height
+
+    if right_table_height < _HISTOGRAM_MIN_TABLE_HEIGHT:
+        shortfall = _HISTOGRAM_MIN_TABLE_HEIGHT - right_table_height
+        note_height = max(HISTOGRAM_MIN_NOTE_HEIGHT, note_height - shortfall)
+        right_table_height = content_height - HISTOGRAM_INTER_PANEL_GAP - note_height
+
+    left_x = HISTOGRAM_OUTER_PADDING_X
+    plot_x = left_x + left_width + HISTOGRAM_INTER_PANEL_GAP
+    right_x = plot_x + plot_width + HISTOGRAM_INTER_PANEL_GAP
+
+    right_table_y = y_bottom + note_height + HISTOGRAM_INTER_PANEL_GAP
+    rectangles = {
+        'left_table_rect': {
+            'x': left_x,
+            'y': y_bottom,
+            'width': left_width,
+            'height': content_height,
+        },
+        'plot_rect': {
+            'x': plot_x,
+            'y': y_bottom,
+            'width': plot_width,
+            'height': content_height,
+        },
+        'right_table_rect': {
+            'x': right_x,
+            'y': right_table_y,
+            'width': right_width,
+            'height': right_table_height,
+        },
+        'note_rect': {
+            'x': right_x,
+            'y': y_bottom,
+            'width': right_width,
+            'height': note_height,
+        },
+    }
+    assert_non_overlapping_rectangles(rectangles)
+    return rectangles

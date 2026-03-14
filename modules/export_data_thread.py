@@ -122,6 +122,10 @@ from modules.export_workbook_planning_helpers import (
     compute_histogram_table_layout as _compute_histogram_table_layout,
     compute_histogram_three_region_layout as _compute_histogram_three_region_layout,
 )
+from modules.export_histogram_layout import (
+    assert_non_overlapping_rectangles as _assert_non_overlapping_rectangles,
+    compute_histogram_panel_layout as _compute_histogram_panel_layout,
+)
 from modules.export_summary_composition_service import (
     build_summary_table_composition as _build_summary_table_composition,
     build_summary_panel_subtitle as _build_summary_panel_subtitle,
@@ -577,6 +581,29 @@ def compute_histogram_three_region_layout(
         figure_size=figure_size,
         table_fontsize=table_fontsize,
     )
+
+
+def compute_histogram_panel_layout(
+    figure_size=(6, 4),
+    *,
+    table_fontsize=8.0,
+    left_row_count=0,
+    right_row_count=0,
+    note_line_count=0,
+):
+    """Compute non-overlapping histogram panel rectangles."""
+    return _compute_histogram_panel_layout(
+        figure_size=figure_size,
+        table_fontsize=table_fontsize,
+        left_row_count=left_row_count,
+        right_row_count=right_row_count,
+        note_line_count=note_line_count,
+    )
+
+
+def assert_non_overlapping_rectangles(rectangles):
+    """Assert that provided rectangles do not intersect."""
+    return _assert_non_overlapping_rectangles(rectangles)
 
 
 def _format_percent(value):
@@ -3454,11 +3481,6 @@ class ExportDataThread(QThread):
                         has_table=True,
                         readability_scale=self.summary_plot_scale,
                     )
-                    three_region_layout = compute_histogram_three_region_layout(
-                        histogram_figsize,
-                        table_fontsize=histogram_font_sizes['table_fontsize'],
-                    )
-
                     distribution_fit_result = precomputed_distribution_fit
                     if distribution_fit_result is None:
                         distribution_fit_result = fit_measurement_distribution(
@@ -3472,16 +3494,44 @@ class ExportDataThread(QThread):
 
                     summary_stats.update(compute_estimated_tail_metrics(distribution_fit_result, lsl=LSL, usl=USL))
                     histogram_table_payload = build_histogram_table_data(summary_stats)
-                    table_data = histogram_table_payload['rows']
+                    right_rows = histogram_table_payload['rows']
+                    left_rows = _build_distribution_fit_table_rows(distribution_fit_result)
+                    model_info_note, poor_fit = _build_distribution_fit_info_note(
+                        distribution_fit_result,
+                        summary_stats=summary_stats,
+                    )
+                    note_lines = model_info_note.splitlines() or [model_info_note]
+                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
 
-                    table_render_data = build_histogram_table_render_data(table_data)
-                    side_table_width = three_region_layout['side_table_width']
+                    histogram_content_payload = {
+                        'left_rows': left_rows,
+                        'right_rows': right_rows,
+                        'note_lines': note_lines,
+                        'plot_annotations': annotation_specs,
+                    }
+
+                    panel_rects = compute_histogram_panel_layout(
+                        histogram_figsize,
+                        table_fontsize=histogram_font_sizes['table_fontsize'],
+                        left_row_count=len(histogram_content_payload['left_rows']),
+                        right_row_count=len(histogram_content_payload['right_rows']),
+                        note_line_count=len(histogram_content_payload['note_lines']),
+                    )
+                    assert_non_overlapping_rectangles(panel_rects)
+
+                    table_render_data = build_histogram_table_render_data(histogram_content_payload['right_rows'])
+                    right_table_rect = panel_rects['right_table_rect']
                     ax_table = plt.table(
                         cellText=table_render_data,
                         colLabels=['Statistic', 'Value'],
                         cellLoc='center',
                         loc='right',
-                        bbox=[three_region_layout['right_table_x'], 0.20, side_table_width, 0.80],
+                        bbox=[
+                            right_table_rect['x'],
+                            right_table_rect['y'],
+                            right_table_rect['width'],
+                            right_table_rect['height'],
+                        ],
                     )
                     ax_table.auto_set_font_size(False)
                     ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
@@ -3497,13 +3547,19 @@ class ExportDataThread(QThread):
                         row_height_scale=1.15,
                     )
 
-                    distribution_fit_rows = _build_distribution_fit_table_rows(distribution_fit_result)
+                    distribution_fit_rows = histogram_content_payload['left_rows']
+                    left_table_rect = panel_rects['left_table_rect']
                     distribution_fit_table = plt.table(
                         cellText=build_histogram_table_render_data(distribution_fit_rows),
                         colLabels=['Distribution Fit', 'Value'],
                         cellLoc='center',
                         loc='left',
-                        bbox=[three_region_layout['left_table_x'], 0.20, side_table_width, 0.80],
+                        bbox=[
+                            left_table_rect['x'],
+                            left_table_rect['y'],
+                            left_table_rect['width'],
+                            left_table_rect['height'],
+                        ],
                     )
                     distribution_fit_table.auto_set_font_size(False)
                     distribution_fit_table.set_fontsize(histogram_font_sizes['table_fontsize'])
@@ -3514,15 +3570,17 @@ class ExportDataThread(QThread):
                         row_height_scale=1.10,
                     )
 
-                    model_info_note, poor_fit = _build_distribution_fit_info_note(
-                        distribution_fit_result,
-                        summary_stats=summary_stats,
-                    )
+                    note_rect = panel_rects['note_rect']
                     model_info_table = plt.table(
                         cellText=[[model_info_note]],
                         cellLoc='left',
                         loc='right',
-                        bbox=[three_region_layout['right_table_x'], 0.03, side_table_width, 0.14],
+                        bbox=[
+                            note_rect['x'],
+                            note_rect['y'],
+                            note_rect['width'],
+                            note_rect['height'],
+                        ],
                     )
                     model_info_table.auto_set_font_size(False)
                     model_info_table.set_fontsize(max(histogram_font_sizes['table_fontsize'] - 1.0, 7.0))
@@ -3596,7 +3654,6 @@ class ExportDataThread(QThread):
                     apply_minimal_axis_style(ax, grid_axis='y')
 
                     annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
-                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
                     max_annotation_row = max(
                         (annotation.get('text_y_axes', 1.01) for annotation in annotation_specs),
                         default=1.01,
@@ -3609,11 +3666,13 @@ class ExportDataThread(QThread):
                     )
 
                     histogram_top_margin = max(0.82, 0.82 + max(0.0, max_annotation_row - 1.01))
+                    plot_rect = panel_rects['plot_rect']
+                    plot_top = plot_rect['y'] + plot_rect['height']
                     plt.subplots_adjust(
-                        left=three_region_layout['subplot_left'],
-                        right=three_region_layout['subplot_right'],
-                        top=histogram_top_margin,
-                        bottom=0.18,
+                        left=plot_rect['x'],
+                        right=plot_rect['x'] + plot_rect['width'],
+                        top=min(plot_top, histogram_top_margin),
+                        bottom=plot_rect['y'],
                     )
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
