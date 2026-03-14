@@ -710,8 +710,11 @@ class ExportDialog(QDialog):
     def _set_loading_cancel_enabled(self, enabled):
         if not hasattr(self, 'loading_dialog') or self.loading_dialog is None:
             return
+        if not hasattr(self.loading_dialog, 'findChildren'):
+            return
         for button in self.loading_dialog.findChildren(QPushButton):
-            if button.text().strip().lower() == 'cancel':
+            text = button.text().strip().lower() if hasattr(button, 'text') else ''
+            if text == 'cancel':
                 button.setEnabled(bool(enabled))
 
     def stop_exporting(self):
