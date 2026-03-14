@@ -12,9 +12,16 @@ from cryptography.hazmat.primitives import serialization
 from datetime import datetime
 import sys
 import base64
+import logging
+import os
 
 VERSION_DATE = VersionDate.VERSION_DATE
 LICENSE_VERIFICATION_ENABLED = False
+STARTUP_SMOKE_ENV = "METROLIZA_STARTUP_SMOKE"
+
+
+def startup_smoke_mode_enabled() -> bool:
+    return str(os.getenv(STARTUP_SMOKE_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 def log_and_exit(exception):
     """Handles logging exceptions using CustomLogger."""
@@ -124,8 +131,17 @@ def get_days_until_expiration(license_key):
 if __name__ == "__main__":
     # Setup logging configuration in both legacy and user-writable locations.
     ensure_application_logging()
+    logger = logging.getLogger(__name__)
 
     try:
+        if startup_smoke_mode_enabled():
+            logger.info("Startup smoke mode enabled (%s): beginning non-interactive init", STARTUP_SMOKE_ENV)
+            app = QApplication(sys.argv)
+            _ = LicenseKeyManager().generate_hardware_id()
+            app.processEvents()
+            logger.info("Startup smoke mode completed successfully; exiting without showing UI")
+            sys.exit(0)
+
         app = QApplication(sys.argv)
         hardware_id = LicenseKeyManager().generate_hardware_id()
         if verify_license():
