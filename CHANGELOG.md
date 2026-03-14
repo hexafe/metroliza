@@ -1,6 +1,7 @@
 # Changelog (for end users)
 
 ## 2026.03rc1(260307) — current version
+- Internal module imports now consistently use `modules.snake_case_name`; legacy `modules.CamelCaseName` paths remain temporary compatibility shims for external callers.
 - Group names can be renamed instantly via double-click in the group list.
 - Extended charts have improved visuals for better readability in complex views.
 - General UX polish improves clarity and flow across the main workflow.
