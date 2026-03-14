@@ -641,25 +641,162 @@ def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats)
     fit_quality = distribution_fit_result.get('fit_quality') or {}
     fit_warning = distribution_fit_result.get('warning')
 
-    note_lines = [
-        f"One-sided context: {'Yes' if inferred_support == 'one_sided_zero_bound_positive' else 'No'}",
-        f"Candidate family: {candidate_family}",
-        f"Selected model: {selected_model.get('display_name', 'N/A')}",
-        f"Fit quality: {str(fit_quality.get('label', 'unknown')).title()}",
+    note_items = [
+        {
+            'label': 'One-sided context',
+            'compact_label': 'One-sided',
+            'value': 'Yes' if inferred_support == 'one_sided_zero_bound_positive' else 'No',
+            'priority': 100,
+        },
+        {
+            'label': 'Candidate family',
+            'compact_label': 'Family',
+            'value': candidate_family,
+            'compact_value': 'One-sided +' if inferred_support == 'one_sided_zero_bound_positive' else 'Signed/bilateral',
+            'priority': 90,
+        },
+        {
+            'label': 'Selected model',
+            'compact_label': 'Model',
+            'value': selected_model.get('display_name', 'N/A'),
+            'priority': 80,
+        },
+        {
+            'label': 'Fit quality',
+            'compact_label': 'Fit',
+            'value': str(fit_quality.get('label', 'unknown')).title(),
+            'priority': 70,
+        },
     ]
 
     normality_text = summary_stats.get('normality_text')
     if normality_text:
-        note_lines.append(f"Reference normality: {normality_text}")
+        note_items.append({
+            'label': 'Reference normality',
+            'compact_label': 'Normality',
+            'value': normality_text,
+            'priority': 60,
+        })
 
     quality_label = str(fit_quality.get('label', '')).lower()
     is_poor_fit = quality_label in {'weak', 'unreliable'}
     if is_poor_fit:
-        note_lines.append('Warning: fit quality is weak/unreliable; use capability decisions with caution.')
+        note_items.append({
+            'label': 'Warning',
+            'value': 'Fit quality is weak/unreliable; use capability decisions with caution.',
+            'priority': 30,
+            'expanded_only': True,
+        })
     if fit_warning:
-        note_lines.append(f"Warning: {fit_warning}")
+        note_items.append({
+            'label': 'Warning',
+            'value': str(fit_warning),
+            'priority': 20,
+            'expanded_only': True,
+        })
 
-    return '\n'.join(note_lines), is_poor_fit
+    return note_items, is_poor_fit
+
+
+def render_histogram_note_panel(
+    *,
+    ax,
+    fig,
+    note_rect,
+    note_items,
+    style_options=None,
+    available_height_px=None,
+):
+    """Render histogram fit note panel with compact/expanded variants and priority truncation."""
+
+    options = dict(style_options or {})
+    fontsize = float(options.get('fontsize', 7.0))
+    min_fontsize = float(options.get('min_fontsize', 6.2))
+    max_fontsize = float(options.get('max_fontsize', 9.0))
+    fontsize = min(max(fontsize, min_fontsize), max_fontsize)
+    header_fontweight = options.get('header_fontweight', 'normal')
+    cell_padding_points = float(options.get('cell_padding_points', 2.0))
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    line_height_px = _measure_text_extent(fig, renderer, 'Ag', fontsize=fontsize, fontweight=header_fontweight)[1]
+    fig_height_px = float(fig.bbox.height)
+    max_height_px = max(1.0, available_height_px if available_height_px is not None else (note_rect['height'] * fig_height_px))
+    padding_px = cell_padding_points * (fig.dpi / 72.0)
+    usable_height_px = max(1.0, max_height_px - (2.0 * padding_px))
+    line_capacity = max(1, int(usable_height_px // max(1.0, line_height_px)))
+
+    normalized_items = []
+    for index, item in enumerate(note_items or []):
+        if not isinstance(item, dict):
+            continue
+        normalized_items.append({
+            'index': index,
+            'label': str(item.get('label', '')).strip(),
+            'value': str(item.get('value', '')).strip(),
+            'compact_label': str(item.get('compact_label', item.get('label', ''))).strip(),
+            'compact_value': str(item.get('compact_value', item.get('value', ''))).strip(),
+            'priority': int(item.get('priority', 0)),
+            'expanded_only': bool(item.get('expanded_only', False)),
+        })
+
+    compact_items = [item for item in normalized_items if not item['expanded_only']]
+    expanded_items = list(normalized_items)
+    using_compact = len(expanded_items) > line_capacity
+    selected_items = compact_items if using_compact else expanded_items
+
+    omitted_items = []
+    if len(selected_items) > line_capacity:
+        to_drop = len(selected_items) - line_capacity
+        ranked_for_drop = sorted(selected_items, key=lambda item: (item['priority'], -item['index']))
+        dropped_keys = {item['index'] for item in ranked_for_drop[:to_drop]}
+        omitted_items = [item for item in selected_items if item['index'] in dropped_keys]
+        selected_items = [item for item in selected_items if item['index'] not in dropped_keys]
+
+    rendered_lines = []
+    for item in selected_items:
+        if using_compact:
+            label = item['compact_label']
+            value = item['compact_value']
+        else:
+            label = item['label']
+            value = item['value']
+        if label and value:
+            rendered_lines.append(f"{label}: {value}")
+        elif value:
+            rendered_lines.append(value)
+
+    if not rendered_lines:
+        rendered_lines = ['N/A']
+
+    note_text = '\n'.join(rendered_lines)
+    model_info_table = plt.table(
+        cellText=[[note_text]],
+        cellLoc='left',
+        loc='right',
+        bbox=[
+            note_rect['x'],
+            note_rect['y'],
+            note_rect['width'],
+            note_rect['height'],
+        ],
+    )
+    model_info_table.auto_set_font_size(False)
+    model_info_table.set_fontsize(fontsize)
+    model_info_cell = model_info_table.get_celld()[(0, 0)]
+    model_info_cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
+    model_info_cell.set_linewidth(0.45)
+    model_info_cell.PAD = 0.03
+    model_info_cell.get_text().set_ha('left')
+    model_info_cell.get_text().set_va('center')
+
+    return {
+        'table': model_info_table,
+        'cell': model_info_cell,
+        'rendered_lines': rendered_lines,
+        'omitted_items': omitted_items,
+        'variant': 'compact' if using_compact else 'expanded',
+    }
 
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
@@ -3650,11 +3787,15 @@ class ExportDataThread(QThread):
                     histogram_table_payload = build_histogram_table_data(summary_stats)
                     right_rows = histogram_table_payload['rows']
                     left_rows = _build_distribution_fit_table_rows(distribution_fit_result)
-                    model_info_note, poor_fit = _build_distribution_fit_info_note(
+                    model_info_note_items, poor_fit = _build_distribution_fit_info_note(
                         distribution_fit_result,
                         summary_stats=summary_stats,
                     )
-                    note_lines = model_info_note.splitlines() or [model_info_note]
+                    note_lines = [
+                        f"{item.get('label', '')}: {item.get('value', '')}".strip(': ')
+                        for item in model_info_note_items
+                        if isinstance(item, dict)
+                    ]
                     annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
 
                     histogram_content_payload = {
@@ -3748,28 +3889,30 @@ class ExportDataThread(QThread):
                         for label, value in meta.get('overflow_rows', []):
                             deferred_row_lines.append(f"{label}: {value}")
                     if deferred_row_lines:
-                        model_info_note = f"{model_info_note}\nDeferred rows:\n" + '\n'.join(deferred_row_lines)
+                        for line in deferred_row_lines:
+                            model_info_note_items.append({
+                                'label': 'Extra context',
+                                'compact_label': 'Context',
+                                'value': line,
+                                'priority': 10,
+                                'expanded_only': True,
+                            })
 
                     note_rect = panel_rects['note_rect']
-                    model_info_table = plt.table(
-                        cellText=[[model_info_note]],
-                        cellLoc='left',
-                        loc='right',
-                        bbox=[
-                            note_rect['x'],
-                            note_rect['y'],
-                            note_rect['width'],
-                            note_rect['height'],
-                        ],
+                    note_meta = render_histogram_note_panel(
+                        ax=ax,
+                        fig=fig,
+                        note_rect=note_rect,
+                        note_items=model_info_note_items,
+                        style_options={
+                            'fontsize': max(histogram_font_sizes['table_fontsize'] - 1.0, 7.0),
+                            'min_fontsize': 6.2,
+                            'max_fontsize': 8.8,
+                            'cell_padding_points': 2.0,
+                        },
+                        available_height_px=note_rect['height'] * float(fig.bbox.height),
                     )
-                    model_info_table.auto_set_font_size(False)
-                    model_info_table.set_fontsize(max(histogram_font_sizes['table_fontsize'] - 1.0, 7.0))
-                    model_info_cell = model_info_table.get_celld()[(0, 0)]
-                    model_info_cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
-                    model_info_cell.set_linewidth(0.45)
-                    model_info_cell.PAD = 0.03
-                    model_info_cell.get_text().set_ha('left')
-                    model_info_cell.get_text().set_va('center')
+                    model_info_cell = note_meta['cell']
                     if poor_fit:
                         model_info_cell.set_facecolor(SUMMARY_PLOT_PALETTE['quality_risk_bg'])
                         model_info_cell.get_text().set_color(SUMMARY_PLOT_PALETTE['quality_risk_text'])
