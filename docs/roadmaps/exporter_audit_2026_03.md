@@ -52,9 +52,13 @@ These are the best next extraction targets because they combine control flow + f
   - **Mitigation:** require parity evidence updates in release-check docs per slice.
 
 ## Suggested TODO backlog (near-term)
-- [ ] Create `export_summary_composition_service.py` and extract non-I/O summary planning logic.
-- [ ] Add dedicated tests for extracted summary composition contracts.
-- [ ] Extract group analysis annotation payload builder from thread class.
-- [ ] Add tests for annotation payload/data-shape parity.
-- [ ] Run and record release-check parity evidence after each extraction merge.
+- [x] Create `export_summary_composition_service.py` and extract non-I/O summary planning logic.
+- [x] Add dedicated tests for extracted summary composition contracts.
+- [x] Extract group analysis annotation payload builder from thread class.
+- [x] Add tests for annotation payload/data-shape parity.
+- [x] Run and record release-check parity evidence after each extraction merge.
 
+
+
+## Extraction parity evidence log
+- 2026-03-14: `pytest tests/test_export_summary_composition_service.py tests/test_export_group_analysis_annotation_service.py tests/test_export_plot_helpers.py tests/test_thread_flow_helpers.py`
