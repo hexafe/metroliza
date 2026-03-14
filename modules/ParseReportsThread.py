@@ -1,9 +1,11 @@
+"""Background parser thread using report_parser_factory to instantiate parser implementations."""
+
 import inspect
 import logging
 import re
 import time
 
-from modules.cmm_report_parser import CMMReportParser
+from modules.report_parser_factory import get_parser
 import modules.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass
@@ -464,7 +466,7 @@ class ParseReportsThread(QThread):
                 result = parse_new_reports(
                     list_of_reports,
                     report_fingerprints,
-                    parser_factory=lambda report: CMMReportParser(report, self.db_file, connection=connection),
+                    parser_factory=lambda report: get_parser(report, self.db_file, connection=connection),
                     persist_report=lambda parser: parser.open_database_and_check_filename(),
                     should_cancel=lambda: self.parsing_canceled,
                     on_progress=lambda parsed_files, total_files: (
