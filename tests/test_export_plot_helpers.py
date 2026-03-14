@@ -98,6 +98,7 @@ from modules.export_data_thread import (  # noqa: E402
     render_histogram,
     render_density_line,
     render_panel_table,
+    render_histogram_note_panel,
     resolve_summary_annotation_strategy,
     apply_summary_plot_theme,
     apply_minimal_axis_style,
@@ -154,6 +155,86 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertTrue(meta['deferred_rows'])
             self.assertIn('reduced_fontsize', meta['fallbacks_applied'])
             self.assertIn('defer_low_priority_rows', meta['fallbacks_applied'])
+        finally:
+            plt.close(fig)
+
+    def test_render_panel_table_compacts_long_labels_before_deferred_row_reduction(self):
+        fig, ax = plt.subplots(figsize=(3.3, 2.3))
+        try:
+            rows = [
+                ('Estimated NOK (PPM)', '12,345'),
+                ('Estimated yield %', '99.875%'),
+                ('Goodness of fit p-value', '0.0421'),
+            ]
+            meta = render_panel_table(
+                ax=ax,
+                fig=fig,
+                title='Distribution fit summary',
+                rows=rows,
+                rect={'x': 0.05, 'y': 0.05, 'width': 0.42, 'height': 0.15},
+                style_options={
+                    'fontsize': 8.8,
+                    'min_fontsize': 6.4,
+                    'compact_label_mapping': {
+                        'Estimated NOK (PPM)': 'Est. PPM',
+                        'Estimated yield %': 'Est. yield',
+                        'Goodness of fit p-value': 'GOF p',
+                    },
+                    'low_priority_labels': set(),
+                },
+            )
+
+            self.assertTrue(meta['used_compact_labels'])
+            self.assertIn('compact_label_mapping', meta['fallbacks_applied'])
+            rendered_labels = [label for label, _ in meta['rendered_rows']]
+            self.assertIn('Est. PPM', rendered_labels)
+            self.assertNotIn('Estimated NOK (PPM)', rendered_labels)
+            self.assertTrue(meta['overflow'])
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_note_panel_switches_to_compact_variant_for_long_context_text(self):
+        fig, ax = plt.subplots(figsize=(3.0, 2.2))
+        try:
+            note_items = [
+                {
+                    'label': 'Candidate family',
+                    'compact_label': 'Family',
+                    'value': 'Positive-support one-sided family with extended context text for validation',
+                    'compact_value': 'One-sided +',
+                    'priority': 90,
+                },
+                {
+                    'label': 'Model',
+                    'compact_label': 'Model',
+                    'value': 'Gamma (3-parameter, constrained support)',
+                    'compact_value': 'Gamma',
+                    'priority': 80,
+                },
+                {
+                    'label': 'Context',
+                    'compact_label': 'Context',
+                    'value': 'Deferred row: Estimated NOK (PPM) with additional explanatory narrative text.',
+                    'compact_value': 'Deferred rows present',
+                    'priority': 20,
+                    'expanded_only': True,
+                },
+            ]
+
+            meta = render_histogram_note_panel(
+                ax=ax,
+                fig=fig,
+                note_rect={'x': 0.56, 'y': 0.06, 'width': 0.38, 'height': 0.20},
+                note_items=note_items,
+                style_options={'fontsize': 7.2, 'min_fontsize': 6.2, 'max_fontsize': 8.8},
+                available_height_px=10.0,
+            )
+
+            self.assertEqual(meta['variant'], 'compact')
+            rendered_text = '\n'.join(meta['rendered_lines'])
+            self.assertIn('Family: One-sided +', rendered_text)
+            self.assertNotIn('Context:', rendered_text)
+            self.assertNotIn('extended context text for validation', rendered_text)
         finally:
             plt.close(fig)
 
