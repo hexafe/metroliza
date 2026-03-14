@@ -1,6 +1,8 @@
 """CSV summary export dialogs and worker thread for workbook generation."""
 
 from pathlib import Path
+import logging
+import re
 
 from PyQt6.QtCore import pyqtSlot
 from PyQt6.QtWidgets import (
@@ -21,16 +23,22 @@ from modules import ui_theme_tokens
 from modules.csv_summary_utils import (
     build_csv_summary_preset_key,
     build_default_plot_toggles,
+    estimate_enabled_chart_count,
     load_csv_summary_presets,
     load_csv_with_fallbacks,
     migrate_csv_summary_presets,
     normalize_column_spec_limits,
+    normalize_plot_toggles,
     recommend_extended_plots_default,
     resolve_default_data_columns,
     save_csv_summary_presets,
 )
 from modules.csv_summary_worker import DataProcessingThread
+from modules.progress_status import build_three_line_status
 from modules.worker_progress_dialog import create_worker_progress_dialog
+
+
+logger = logging.getLogger(__name__)
 
 class FilterDialog(QDialog):
     """Select index and data columns for CSV summary processing.

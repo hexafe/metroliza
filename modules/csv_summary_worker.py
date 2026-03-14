@@ -3,7 +3,6 @@
 from concurrent.futures import ProcessPoolExecutor
 import logging
 from pathlib import Path
-import re
 import time
 
 import pandas as pd
@@ -12,7 +11,6 @@ from xlsxwriter.utility import xl_col_to_name, xl_rowcol_to_cell
 
 from modules.csv_summary_utils import (
     compute_column_summary_stats,
-    estimate_enabled_chart_count,
     normalize_plot_toggles,
 )
 from modules.csv_summary_worker_helpers import (
