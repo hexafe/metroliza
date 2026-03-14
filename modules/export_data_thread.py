@@ -156,6 +156,7 @@ from modules.chart_render_service import (
     sample_frame_for_chart,
     deterministic_downsample_frame,
 )
+from modules.distribution_fit_service import fit_measurement_distribution
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
 if _HAS_SEABORN:
@@ -1300,7 +1301,7 @@ def add_iqr_boxplot_legend(ax, *, include_tolerance_refs=False):
     )
 
 
-def render_density_line(ax, x, p):
+def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, linestyle='-'):
     """Render a density line on a hidden secondary y-axis.
 
     Histogram bar counts remain on the primary axis while the density curve uses
@@ -1332,10 +1333,19 @@ def render_density_line(ax, x, p):
         if spine is not None:
             spine.set_visible(False)
 
+    line_color = color or SUMMARY_PLOT_PALETTE['density_line']
     if _HAS_SEABORN:
-        sns.lineplot(x=x, y=p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4, ax=density_axis)
+        sns.lineplot(
+            x=x,
+            y=p,
+            color=line_color,
+            linewidth=linewidth,
+            linestyle=linestyle,
+            alpha=alpha,
+            ax=density_axis,
+        )
     else:
-        density_axis.plot(x, p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4)
+        density_axis.plot(x, p, color=line_color, linewidth=linewidth, linestyle=linestyle, alpha=alpha)
 
     density_values = np.asarray(p, dtype=float)
     finite_density_values = density_values[np.isfinite(density_values)]
@@ -2993,21 +3003,29 @@ class ExportDataThread(QThread):
             scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
 
             chart_mp_enabled = self._chart_executor is not None and len(header_group) >= 2500
-            precomputed_density_curve = None
+            precomputed_distribution_fit = None
             precomputed_trend_payload = None
             if chart_mp_enabled:
                 try:
-                    density_future = self._chart_executor.submit(build_histogram_density_curve_payload, sampled_histogram_group['MEAS'])
+                    distribution_fit_future = self._chart_executor.submit(
+                        fit_measurement_distribution,
+                        sampled_histogram_group['MEAS'],
+                        lsl=LSL,
+                        usl=USL,
+                        nom=nom,
+                        point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                        include_kde_reference=True,
+                    )
                     trend_future = self._chart_executor.submit(
                         build_trend_plot_payload,
                         sampled_trend_group,
                         grouping_active=grouping_applied,
                         label_column=distribution_key,
                     )
-                    precomputed_density_curve = density_future.result()
+                    precomputed_distribution_fit = distribution_fit_future.result()
                     precomputed_trend_payload = trend_future.result()
                 except Exception:
-                    precomputed_density_curve = None
+                    precomputed_distribution_fit = None
                     precomputed_trend_payload = None
 
             prep_executor = self._summary_prep_executor
@@ -3283,18 +3301,53 @@ class ExportDataThread(QThread):
                     normality_cell.get_text().set_ha('center')
                     normality_cell.get_text().set_va('center')
 
-                    density_curve_mode = 'normal_fit' if summary_stats.get('normality_status') == 'normal' else 'kde'
-                    density_curve = None
-                    if density_curve_mode == 'normal_fit':
-                        density_curve = precomputed_density_curve
-                    if density_curve is None:
-                        density_curve = build_histogram_density_curve_payload(
+                    distribution_fit_result = precomputed_distribution_fit
+                    if distribution_fit_result is None:
+                        distribution_fit_result = fit_measurement_distribution(
                             sampled_histogram_group['MEAS'],
+                            lsl=LSL,
+                            usl=USL,
+                            nom=nom,
                             point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
-                            mode=density_curve_mode,
+                            include_kde_reference=True,
                         )
-                    if density_curve is not None:
-                        render_density_line(ax, density_curve['x'], density_curve['y'])
+
+                    selected_model_curve = distribution_fit_result.get('selected_model_pdf')
+                    if selected_model_curve is not None:
+                        render_density_line(ax, selected_model_curve['x'], selected_model_curve['y'])
+
+                    kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
+                    if kde_reference_curve is not None:
+                        render_density_line(
+                            ax,
+                            kde_reference_curve['x'],
+                            kde_reference_curve['y'],
+                            color=SUMMARY_PLOT_PALETTE['density_line'],
+                            alpha=0.35,
+                            linewidth=1.0,
+                            linestyle='--',
+                        )
+
+                    fit_warning = distribution_fit_result.get('warning')
+                    if fit_warning:
+                        logger.warning("%s Header=%s", fit_warning, header)
+                        ax.text(
+                            0.02,
+                            0.98,
+                            fit_warning,
+                            transform=ax.transAxes,
+                            fontsize=7,
+                            va='top',
+                            ha='left',
+                            color=SUMMARY_PLOT_PALETTE['quality_risk_text'],
+                            bbox={
+                                'boxstyle': 'round,pad=0.2',
+                                'facecolor': SUMMARY_PLOT_PALETTE['quality_risk_bg'],
+                                'edgecolor': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                                'linewidth': 0.4,
+                                'alpha': 0.9,
+                            },
+                        )
 
                     mean_line_style = build_histogram_mean_line_style()
                     ax.axvline(average, **mean_line_style)
