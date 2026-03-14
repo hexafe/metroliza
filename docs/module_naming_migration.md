@@ -5,8 +5,9 @@ This project is standardizing Python modules on `snake_case.py`.
 ## Current state
 
 - **Canonical implementation location:** `snake_case.py` modules.
-- **Import style for app/test code:** `from modules.some_module import ...`.
+- **Import style for app/test/script code:** `from modules.some_module import ...`.
 - **Compatibility direction:** legacy `CamelCase.py` modules are temporary shims that re-export from snake_case modules.
+- **First-party CamelCase import policy:** prohibited everywhere except dedicated compatibility tests.
 
 ## Shimmed modules (temporary)
 
@@ -28,6 +29,13 @@ This project is standardizing Python modules on `snake_case.py`.
 | `ParsingDialog.py` | `parsing_dialog.py` | ✅ canonical flipped |
 | `ReleaseNotesDialog.py` | `release_notes_dialog.py` | ✅ canonical flipped |
 
+
+## Validation status
+
+- First-party runtime code (`modules/`, `scripts/`, `tests/`) now uses snake_case module imports.
+- `tests/test_no_camelcase_module_imports.py` enforces zero `modules.CamelCaseName` imports in first-party code.
+- `tests/test_module_naming_compat.py` intentionally keeps focused legacy import checks to validate temporary external compatibility shims.
+
 ## Compatibility shim pattern
 
 Legacy files now use this pattern:
@@ -40,7 +48,7 @@ from modules.snake_case_name import *  # noqa: F401,F403
 
 Remove legacy `CamelCase.py` shim files only when **all** criteria are met:
 
-1. A full-repo search shows no remaining imports of `modules.CamelCaseName` in first-party code (including scripts/tests/docs examples).
+1. A full-repo search plus CI policy test show no remaining `modules.CamelCaseName` imports in first-party runtime code (with compatibility tests explicitly allowlisted).
 2. Compatibility tests prove snake_case imports are in use and no runtime paths depend on legacy module paths.
 3. Release notes communicate the deprecation window and the shim removal release version.
 4. One cleanup PR removes all legacy shims in a single change set and updates migration docs accordingly.

@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 def _install_headless_stubs() -> None:
-    custom_logger_stub = types.ModuleType('modules.CustomLogger')
+    custom_logger_stub = types.ModuleType('modules.custom_logger')
 
     class _NoopLogger:
         def __init__(self, *args, **kwargs):
@@ -34,7 +34,7 @@ def _install_headless_stubs() -> None:
     custom_logger_stub.CustomLogger = _NoopLogger
     custom_logger_stub.handle_exception = _noop_handle_exception
     custom_logger_stub.LOG_ONLY = object()
-    sys.modules.setdefault('modules.CustomLogger', custom_logger_stub)
+    sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
 
     fitz_stub = types.ModuleType('fitz')
     fitz_stub.__spec__ = importlib.machinery.ModuleSpec('fitz', loader=None)
@@ -178,8 +178,8 @@ def _create_csv_fixture(csv_path: Path, *, row_count: int, data_columns: int) ->
 
 
 def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
-    from modules.CMMReportParser import CMMReportParser
-    from modules.ParseReportsThread import ParseReportsThread, parse_new_reports
+    from modules.cmm_report_parser import CMMReportParser
+    from modules.parse_reports_thread import ParseReportsThread, parse_new_reports
     from modules.contracts import ParseRequest
 
     db_path = temp_dir / 'parse_benchmark.sqlite'
@@ -222,7 +222,7 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
 
 
 def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
-    from modules.ExportDataThread import ExportDataThread
+    from modules.export_data_thread import ExportDataThread
     from modules.contracts import AppPaths, ExportOptions, ExportRequest
     from modules.db import read_sql_dataframe
     from modules.export_query_service import build_measurement_export_dataframe
@@ -255,7 +255,7 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
         compute_measurement_summary(group, usl=usl, lsl=lsl, nom=nom)
     groupby_stats_s = time.perf_counter() - groupby_start
 
-    import modules.ExportDataThread as export_module
+    import modules.export_data_thread as export_module
     original_insert_chart = export_module.insert_measurement_chart
     chart_seconds = 0.0
 
@@ -298,7 +298,7 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
 
 
 def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
-    from modules.ExportDataThread import ExportDataThread
+    from modules.export_data_thread import ExportDataThread
     from modules.chart_render_service import build_violin_payload_vectorized, resolve_chart_sampling_policy, sample_frame_for_chart
     from modules.contracts import AppPaths, ExportOptions, ExportRequest
     from modules.db import read_sql_dataframe
@@ -355,7 +355,7 @@ def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: 
 
 
 def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int) -> ScenarioResult:
-    from modules.CSVSummaryDialog import DataProcessingThread, load_csv_with_fallbacks
+    from modules.csv_summary_dialog import DataProcessingThread, load_csv_with_fallbacks
 
     class BenchmarkCSVThread(DataProcessingThread):
         def __init__(self, *args, **kwargs):
@@ -398,7 +398,7 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         for column in selected_data_columns
     }
 
-    import modules.CSVSummaryDialog as csv_module
+    import modules.csv_summary_dialog as csv_module
     stats_seconds = 0.0
     workbook_write_seconds = 0.0
     original_stats = csv_module.compute_column_summary_stats
