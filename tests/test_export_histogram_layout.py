@@ -5,11 +5,15 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from modules.export_histogram_layout import (
+    HISTOGRAM_OUTER_PADDING_BOTTOM,
+    HISTOGRAM_OUTER_PADDING_TOP,
     HISTOGRAM_MIN_NOTE_HEIGHT,
     HISTOGRAM_MIN_PLOT_WIDTH,
+    compute_panel_table_content_height,
     assert_non_overlapping_rectangles,
     compute_histogram_panel_layout,
     rectangles_overlap,
+    resolve_inner_table_rect,
 )
 
 
@@ -47,6 +51,35 @@ def test_compute_histogram_panel_layout_shrinks_side_content_before_plot_overlap
 
     assert rects['plot_rect']['width'] >= HISTOGRAM_MIN_PLOT_WIDTH - 1e-9
     assert rects['right_table_rect']['y'] >= rects['note_rect']['y'] + rects['note_rect']['height']
+
+
+def test_compute_histogram_panel_layout_supports_independent_side_width_hints():
+    rects = compute_histogram_panel_layout(
+        (6.2, 4),
+        table_fontsize=8.8,
+        left_row_count=6,
+        right_row_count=8,
+        note_line_count=3,
+        left_panel_width_hint=0.26,
+        right_panel_width_hint=0.19,
+    )
+    assert rects['left_table_rect']['width'] > rects['right_table_rect']['width']
+    assert rects['plot_rect']['width'] >= HISTOGRAM_MIN_PLOT_WIDTH - 1e-9
+
+
+def test_compute_histogram_panel_layout_uses_separate_top_and_bottom_padding():
+    rects = compute_histogram_panel_layout((6.0, 4.0))
+    assert rects['plot_rect']['y'] == pytest.approx(HISTOGRAM_OUTER_PADDING_BOTTOM)
+    plot_top = rects['plot_rect']['y'] + rects['plot_rect']['height']
+    assert (1.0 - plot_top) == pytest.approx(HISTOGRAM_OUTER_PADDING_TOP)
+
+
+def test_resolve_inner_table_rect_limits_table_height_to_content():
+    panel_rect = {'x': 0.1, 'y': 0.2, 'width': 0.3, 'height': 0.6}
+    inner_rect = resolve_inner_table_rect(panel_rect, row_count=4, row_height=0.06, header_rows=1, pad_y=0.02)
+    expected_height = compute_panel_table_content_height(4, header_rows=1, row_height=0.06, pad_y=0.02)
+    assert inner_rect['height'] == pytest.approx(expected_height)
+    assert inner_rect['y'] > panel_rect['y']
 
 
 def test_assert_non_overlapping_rectangles_raises_for_invalid_overlap():

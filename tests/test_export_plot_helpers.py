@@ -99,12 +99,14 @@ from modules.export_data_thread import (  # noqa: E402
     render_scatter_numeric,
     render_histogram,
     render_density_line,
+    render_modeled_tail_probability_annotations,
     render_panel_table,
     render_panel_table_in_panel_axes,
     render_histogram_note_panel,
     resolve_summary_annotation_strategy,
     apply_summary_plot_theme,
     apply_minimal_axis_style,
+    _build_distribution_fit_info_note,
     _build_distribution_fit_table_rows,
 )
 
@@ -166,7 +168,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         try:
             rows = [
                 ('Estimated NOK (PPM)', '12,345'),
-                ('Estimated yield %', '99.875%'),
+                ('Fit quality', 'Medium'),
                 ('Goodness of fit p-value', '0.0421'),
             ]
             meta = render_panel_table(
@@ -180,7 +182,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                     'min_fontsize': 6.4,
                     'compact_label_mapping': {
                         'Estimated NOK (PPM)': 'Est. PPM',
-                        'Estimated yield %': 'Est. yield',
+                        'Fit quality': 'Fit qual.',
                         'Goodness of fit p-value': 'GOF p',
                     },
                     'low_priority_labels': set(),
@@ -241,7 +243,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
-    def test_render_panel_table_in_panel_axes_uses_full_panel_bounds(self):
+    def test_render_panel_table_in_panel_axes_uses_content_height_bounds(self):
         fig = plt.figure(figsize=(4.0, 3.0))
         panel_ax = fig.add_axes([0.1, 0.1, 0.35, 0.6])
         try:
@@ -252,7 +254,10 @@ class TestExportPlotHelpers(unittest.TestCase):
                 style_options={'fontsize': 8.0},
             )
 
-            self.assertEqual(meta['used_bounds'], {'x': 0.0, 'y': 0.0, 'width': 1.0, 'height': 1.0})
+            self.assertEqual(meta['used_bounds']['x'], 0.0)
+            self.assertEqual(meta['used_bounds']['width'], 1.0)
+            self.assertLess(meta['used_bounds']['height'], 1.0)
+            self.assertGreater(meta['used_bounds']['y'], 0.0)
             self.assertEqual(len(meta['rendered_rows']), 2)
         finally:
             plt.close(fig)
@@ -268,7 +273,6 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ('GOF p', '0.0712'),
                 ('Est. NOK %', '0.123%'),
                 ('Est. PPM', '1,230'),
-                ('Est. yield', '99.877%'),
                 ('Fit quality', 'Medium'),
             ]
             right_rows = [
@@ -279,8 +283,6 @@ class TestExportPlotHelpers(unittest.TestCase):
             ]
             note_items = [
                 {'label': 'Family', 'compact_label': 'Family', 'value': 'Signed/bilateral', 'priority': 90},
-                {'label': 'Model', 'compact_label': 'Model', 'value': 'Johnson SU', 'priority': 80},
-                {'label': 'Fit quality', 'compact_label': 'Fit', 'value': 'Medium', 'priority': 70},
                 {'label': 'Warning', 'value': 'Use with caution for long-tail extrapolation.', 'priority': 20, 'expanded_only': True},
             ]
 
@@ -324,7 +326,6 @@ class TestExportPlotHelpers(unittest.TestCase):
                 'risk_estimates': {
                     'nok_percent': 0.1234,
                     'ppm_nok': 1234.0,
-                    'yield_percent': 99.8766,
                 },
             }
         )
@@ -334,15 +335,13 @@ class TestExportPlotHelpers(unittest.TestCase):
             'GOF p',
             'Est. NOK %',
             'Est. PPM',
-            'Est. yield',
             'Fit quality',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
         self.assertEqual(rows[1][1], '0.0734')
         self.assertEqual(rows[2][1], '0.123%')
         self.assertEqual(rows[3][1], '1,234')
-        self.assertEqual(rows[4][1], '99.877%')
-        self.assertEqual(rows[5][1], 'Medium')
+        self.assertEqual(rows[4][1], 'Medium')
 
     def test_distribution_fit_table_rows_fallback_to_na_when_fit_unreliable(self):
         rows = _build_distribution_fit_table_rows(
@@ -351,7 +350,6 @@ class TestExportPlotHelpers(unittest.TestCase):
                 'risk_estimates': {
                     'nok_percent': None,
                     'ppm_nok': None,
-                    'yield_percent': None,
                 },
             }
         )
@@ -360,8 +358,94 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(rows[1], ('GOF p', 'N/A'))
         self.assertEqual(rows[2], ('Est. NOK %', 'N/A'))
         self.assertEqual(rows[3], ('Est. PPM', 'N/A'))
-        self.assertEqual(rows[4], ('Est. yield', 'N/A'))
-        self.assertEqual(rows[5], ('Fit quality', 'Unreliable'))
+        self.assertEqual(rows[4], ('Fit quality', 'Unreliable'))
+
+    def test_left_and_right_panel_tables_share_fontsize_and_row_height_policy(self):
+        fig = plt.figure(figsize=(6.2, 4.0))
+        try:
+            left_ax = fig.add_axes([0.05, 0.08, 0.24, 0.84])
+            right_ax = fig.add_axes([0.72, 0.28, 0.22, 0.64])
+            left_ax.set_axis_off()
+            right_ax.set_axis_off()
+
+            left_meta = render_panel_table_in_panel_axes(
+                ax=left_ax,
+                title='Distribution Fit',
+                rows=[('Model', 'Johnson SU'), ('GOF p', '0.0712'), ('Est. NOK %', '0.123%'), ('Est. PPM', '1,230'), ('Fit quality', 'Medium')],
+                style_options={'fontsize': 8.3},
+                row_height=0.060,
+                pad_y=0.02,
+            )
+            right_meta = render_panel_table_in_panel_axes(
+                ax=right_ax,
+                title='Statistic',
+                rows=[('Average', '10.10'), ('Std dev', '0.08'), ('Cp', '1.33'), ('Cpk', '1.22')],
+                style_options={'fontsize': 8.3},
+                row_height=0.060,
+                pad_y=0.02,
+            )
+
+            self.assertEqual(left_meta['font_size'], right_meta['font_size'])
+            left_cells = left_meta['table'].get_celld()
+            right_cells = right_meta['table'].get_celld()
+            self.assertAlmostEqual(left_cells[(1, 0)].get_height(), right_cells[(1, 0)].get_height(), delta=0.03)
+            self.assertLess(left_meta['used_bounds']['height'], 1.0)
+        finally:
+            plt.close(fig)
+
+    def test_histogram_export_ticks_and_xaxis_label_remain_inside_figure_bounds(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
+        try:
+            values = pd.DataFrame({'MEAS': np.linspace(9.8, 10.5, 40)})
+            render_histogram(ax, values, lsl=9.9, usl=10.4)
+            ax.set_xlabel('Measurement')
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            fig_bbox = fig.bbox
+
+            for text in [*ax.get_xticklabels(), ax.xaxis.label]:
+                if not text.get_text():
+                    continue
+                bbox = text.get_window_extent(renderer=renderer)
+                self.assertGreaterEqual(bbox.y0, fig_bbox.y0 - 0.5)
+                self.assertLessEqual(bbox.y1, fig_bbox.y1 + 0.5)
+        finally:
+            plt.close(fig)
+
+    def test_render_modeled_tail_probability_annotations_follows_available_spec_limits(self):
+        fig, ax = plt.subplots(figsize=(6.0, 4.0))
+        ax.set_xlim(0.0, 10.0)
+        fit = {'risk_estimates': {'above_usl_probability': 0.02, 'below_lsl_probability': 0.03}}
+        try:
+            artists = render_modeled_tail_probability_annotations(ax, fit, lsl=2.0, usl=8.0, fontsize=7.0)
+            texts = [artist.get_text() for artist in artists]
+            self.assertEqual(len(texts), 2)
+            self.assertIn('P(X > USL)', texts[0] + texts[1])
+            self.assertIn('P(X < LSL)', texts[0] + texts[1])
+
+            upper_only = render_modeled_tail_probability_annotations(ax, fit, lsl=None, usl=8.0, fontsize=7.0)
+            self.assertEqual(len(upper_only), 1)
+            self.assertIn('P(X > USL)', upper_only[0].get_text())
+
+            lower_only = render_modeled_tail_probability_annotations(ax, fit, lsl=2.0, usl=None, fontsize=7.0)
+            self.assertEqual(len(lower_only), 1)
+            self.assertIn('P(X < LSL)', lower_only[0].get_text())
+        finally:
+            plt.close(fig)
+
+    def test_distribution_fit_note_panel_avoids_model_and_fit_quality_duplication(self):
+        note_items, _poor_fit = _build_distribution_fit_info_note(
+            {
+                'inferred_support_mode': 'signed',
+                'selected_model': {'display_name': 'Johnson SU'},
+                'fit_quality': {'label': 'medium'},
+            },
+            summary_stats={'normality_text': 'Shapiro non-normal'},
+        )
+        labels = [item.get('label') for item in note_items]
+        self.assertNotIn('Model', labels)
+        self.assertNotIn('Fit quality', labels)
+        self.assertIn('Candidate family', labels)
 
     def test_apply_summary_plot_theme_sets_lighter_grid_alpha_and_linewidth(self):
         apply_summary_plot_theme()
@@ -1124,6 +1208,38 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual([text.get_text() for text in rendered], ['Mean = 0.500'])
+        plt.close(fig)
+
+    def test_render_histogram_annotations_keeps_mean_usl_lsl_with_side_panel_plot_bounds(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(0.0, 10.0)
+        plt.subplots_adjust(left=0.30, right=0.70, top=0.84, bottom=0.22)
+
+        annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
+        annotation_specs, _ = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.04,
+            threshold_mode='axis_fraction',
+            x_span=10.0,
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+        rendered = render_histogram_annotations(
+            ax,
+            annotation_specs,
+            annotation_fontsize=8.2,
+            annotation_box={
+                'boxstyle': 'round,pad=0.15',
+                'fc': 'white',
+                'ec': '#cccccc',
+                'alpha': 0.94,
+                'plot_rect': {'x': 0.30, 'y': 0.22, 'width': 0.40, 'height': 0.62},
+            },
+        )
+        texts = {text.get_text() for text in rendered}
+        self.assertIn('Mean = 5.000', texts)
+        self.assertIn('USL=9.000', texts)
+        self.assertIn('LSL=1.000', texts)
         plt.close(fig)
 
 
