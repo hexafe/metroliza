@@ -11,6 +11,15 @@ This directory contains active operational and maintenance documentation.
 - Grouping dialog color policy uses shared semantic tokens from `modules/ui_theme_tokens.py` (base row background, selected-row colors, default group color, and generated group palette) so dialogs stay visually consistent across light/dark themes.
 - `roadmaps/2026_03_rc1_test_ci_execution_tracker.md` — active RC1 test/CI audit and incremental execution tracker.
 
+## Module boundary notes (export/grouping dialogs)
+
+- `modules/export_data_thread.py` is the orchestration entry point. Pure computations are kept in helper modules:
+  - `modules/export_chart_payload_helpers.py` for chart payload/table shaping.
+  - `modules/export_workbook_planning_helpers.py` for workbook/table layout sizing heuristics.
+  - `modules/export_row_aggregation_utils.py` for row/group aggregation computations.
+- `modules/csv_summary_dialog.py` keeps dialog/UI concerns and delegates worker-side export logic to `modules/csv_summary_worker.py`.
+- `modules/data_grouping.py` keeps widget/event orchestration and delegates data/query mutations to `modules/data_grouping_service.py`.
+
 ### Active release-check docs (`docs/release_checks/`)
 
 Canonical release operations docs (release gate/source-of-truth set):

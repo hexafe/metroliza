@@ -6,6 +6,12 @@ store, apply, and clear reference/part grouping assignments.
 
 from modules.custom_logger import CustomLogger
 from modules.db import read_sql_dataframe
+from modules.data_grouping_service import (
+    build_grouping_query as _build_grouping_query,
+    compute_group_key_for_df as _compute_group_key_for_df,
+    load_grouping_dataframe,
+    reassign_group_keys_to_default,
+)
 from modules.list_selection_utils import ListSelectionUtils
 from modules import ui_theme_tokens
 from PyQt6.QtCore import Qt
@@ -22,7 +28,6 @@ from PyQt6.QtWidgets import(
     QInputDialog,
     QMessageBox,
 )
-import hashlib
 import pandas as pd
 
 
@@ -249,23 +254,13 @@ class DataGrouping(QDialog):
 
         try:
             filter_query = self.parent().get_filter_query() if self.parent() else None
-            query = self._build_grouping_query(filter_query)
-            self.df = read_sql_dataframe(self.db_file, query)
+            self.df = load_grouping_dataframe(read_sql_dataframe, self.db_file, filter_query)
         except Exception as e:
             self.log_and_exit(e)
 
     @staticmethod
     def _build_grouping_query(filter_query):
-        default_query = "SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS"
-        if not isinstance(filter_query, str) or not filter_query.strip():
-            return default_query
-
-        return f"""
-            SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER
-            FROM (
-                {filter_query.strip()}
-            ) AS FILTERED_DATA
-        """
+        return _build_grouping_query(filter_query)
 
     def refresh_data(self):
         """Handle `refresh_data` for `DataGrouping`.
@@ -427,9 +422,7 @@ class DataGrouping(QDialog):
 
     def _compute_group_key_for_df(self, df):
         try:
-            key_columns = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
-            raw_key = df[key_columns].fillna('').astype(str).agg('|'.join, axis=1)
-            return raw_key.apply(lambda value: hashlib.sha1(value.encode('utf-8')).hexdigest())
+            return _compute_group_key_for_df(df)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -503,15 +496,13 @@ class DataGrouping(QDialog):
         return selected.text()
 
     def _reassign_group_keys_to_default(self, selected_part_keys, preferred_group_name=None, preferred_reference_name=None):
-        if not selected_part_keys:
-            return False
-
-        rows_to_reassign = (
-            (self.df['GROUP'] != self.default_group)
-            & (self.df['GROUP_KEY'].isin(selected_part_keys))
+        did_reassign = reassign_group_keys_to_default(
+            self.df,
+            selected_part_keys=selected_part_keys,
+            default_group=self.default_group,
+            group_color_column=self.group_color_column,
+            default_group_color=self.default_group_color,
         )
-        self.df.loc[rows_to_reassign, 'GROUP'] = self.default_group
-        self.df.loc[rows_to_reassign, self.group_color_column] = self.default_group_color
 
         try:
             self.populate_list_widgets(
@@ -523,7 +514,7 @@ class DataGrouping(QDialog):
             # with the historical single-parameter signature.
             self.populate_list_widgets(preferred_group_name=preferred_group_name)
         self.remove_from_group_button.setDisabled(True)
-        return bool(rows_to_reassign.any())
+        return did_reassign
             
     def populate_list_widgets(self, preferred_group_name=None, preferred_reference_name=None):
         """Handle `populate_list_widgets` for `DataGrouping`.
