@@ -48,9 +48,13 @@ from modules.export_google_result_utils import (
 )
 from modules.progress_status import build_three_line_status
 from modules.log_context import (
-    build_export_log_extra,
     build_google_conversion_log_extra,
     get_operation_logger,
+)
+from modules.export_logging_service import (
+    build_export_context as _build_export_context_payload,
+    log_export_stage as _log_export_stage_message,
+    log_google_issue as _log_google_issue_message,
 )
 from modules.export_summary_utils import (
     apply_shared_x_axis_label_strategy as _apply_shared_x_axis_label_strategy,
@@ -2241,7 +2245,7 @@ class ExportDataThread(QThread):
         self.update_label.emit(build_three_line_status(stage_message, "Exporting data...", "ETA --"))
 
     def _build_export_context(self, *, stage, fallback_reason=""):
-        return build_export_log_extra(
+        return _build_export_context_payload(
             export_target=self.export_target,
             output_path=self.excel_file,
             stage=stage,
@@ -2249,34 +2253,26 @@ class ExportDataThread(QThread):
         )
 
     def _log_export_stage(self, message, *, stage, level="info", fallback_reason="", **extra):
-        log_method = getattr(logger, level)
-        log_method(
+        _log_export_stage_message(
+            logger,
             message,
-            extra=self._build_export_context(stage=stage, fallback_reason=fallback_reason) | extra,
+            export_target=self.export_target,
+            output_path=self.excel_file,
+            stage=stage,
+            level=level,
+            fallback_reason=fallback_reason,
+            **extra,
         )
 
     def _log_google_issue(self, context, *, fallback_message="", warnings=None, error=None):
-        warning_list = [str(item) for item in (warnings or []) if str(item).strip()]
-        details = []
-        if fallback_message:
-            details.append(f"fallback={fallback_message}")
-        if warning_list:
-            details.append("warnings=" + " | ".join(warning_list))
-        if error is not None:
-            details.append(f"error={error}")
-
-        suffix = f" ({'; '.join(details)})" if details else ""
-        log_method = logger.error if error is not None else logger.warning
-        google_extra = build_google_conversion_log_extra(
-            file_ref=self.excel_file,
-            error_class=type(error).__name__ if error is not None else "",
-            outcome="fallback" if fallback_message else "warning",
-        )
-        log_method(
-            "Google export issue: %s%s",
+        _log_google_issue_message(
+            logger,
             context,
-            suffix,
-            extra=self._build_export_context(stage="google_issue", fallback_reason=fallback_message) | google_extra,
+            output_path=self.excel_file,
+            export_target=self.export_target,
+            fallback_message=fallback_message,
+            warnings=warnings,
+            error=error,
         )
 
     def run(self):

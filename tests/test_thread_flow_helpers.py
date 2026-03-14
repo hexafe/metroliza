@@ -72,6 +72,11 @@ from modules.export_google_result_utils import (  # noqa: E402
     build_google_fallback_metadata,
     build_google_stage_message,
 )
+from modules.export_logging_service import (  # noqa: E402
+    build_export_context,
+    log_export_stage,
+    log_google_issue,
+)
 from modules.parse_reports_thread import build_report_fingerprints_from_rows, parse_new_reports  # noqa: E402
 
 
@@ -384,6 +389,102 @@ class TestExportHelpers(unittest.TestCase):
         self.assertIn('Google export failed; using local .xlsx fallback: out.xlsx', metadata['fallback_message'])
         self.assertEqual(metadata['fallback_reason'], 'network')
         self.assertEqual(metadata['conversion_warnings'], ['temporary outage'])
+
+    def test_build_export_context_builds_structured_fields(self):
+        context = build_export_context(
+            export_target='google_sheets_drive_convert',
+            output_path='out.xlsx',
+            stage='uploading',
+            fallback_reason='network timeout',
+        )
+
+        self.assertEqual(
+            context,
+            {
+                'export_target': 'google_sheets_drive_convert',
+                'output_path': 'out.xlsx',
+                'stage': 'uploading',
+                'fallback_reason': 'network timeout',
+            },
+        )
+
+    def test_log_export_stage_merges_context_and_extra_payload(self):
+        operation_logger = mock.Mock()
+
+        log_export_stage(
+            operation_logger,
+            'Export started',
+            export_target='excel_xlsx',
+            output_path='out.xlsx',
+            stage='started',
+            elapsed_ms=42,
+        )
+
+        operation_logger.info.assert_called_once()
+        _message, kwargs = operation_logger.info.call_args
+        self.assertEqual(kwargs['extra']['export_target'], 'excel_xlsx')
+        self.assertEqual(kwargs['extra']['output_path'], 'out.xlsx')
+        self.assertEqual(kwargs['extra']['stage'], 'started')
+        self.assertEqual(kwargs['extra']['fallback_reason'], '')
+        self.assertEqual(kwargs['extra']['elapsed_ms'], 42)
+
+    def test_log_google_issue_emits_error_with_warning_details_and_fallback_context(self):
+        operation_logger = mock.Mock()
+        err = RuntimeError('upload failed')
+
+        log_google_issue(
+            operation_logger,
+            'conversion failed and fell back to local xlsx',
+            output_path='out.xlsx',
+            export_target='google_sheets_drive_convert',
+            fallback_message='using local file',
+            warnings=['temporary outage'],
+            error=err,
+        )
+
+        operation_logger.error.assert_called_once()
+        args, kwargs = operation_logger.error.call_args
+        self.assertEqual(args[0], 'Google export issue: %s%s')
+        self.assertIn('conversion failed and fell back to local xlsx', args[1])
+        self.assertIn('fallback=using local file', args[2])
+        self.assertIn('warnings=temporary outage', args[2])
+        self.assertIn('error=upload failed', args[2])
+        self.assertEqual(kwargs['extra']['stage'], 'google_issue')
+        self.assertEqual(kwargs['extra']['outcome'], 'fallback')
+
+    def test_thread_log_helpers_delegate_to_export_logging_service(self):
+        request = __import__('modules.contracts', fromlist=['ExportRequest', 'AppPaths', 'ExportOptions'])
+        thread = ExportDataThread(
+            request.ExportRequest(
+                paths=request.AppPaths(db_file=':memory:', excel_file='dummy.xlsx'),
+                options=request.ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+        )
+
+        with mock.patch('modules.export_data_thread._log_export_stage_message') as stage_logger, mock.patch(
+            'modules.export_data_thread._log_google_issue_message'
+        ) as issue_logger:
+            thread._log_export_stage('Export started', stage='started')
+            thread._log_google_issue('conversion warning', fallback_message='local fallback', warnings=['warn'])
+
+        stage_logger.assert_called_once_with(
+            mock.ANY,
+            'Export started',
+            export_target='google_sheets_drive_convert',
+            output_path='dummy.xlsx',
+            stage='started',
+            level='info',
+            fallback_reason='',
+        )
+        issue_logger.assert_called_once_with(
+            mock.ANY,
+            'conversion warning',
+            output_path='dummy.xlsx',
+            export_target='google_sheets_drive_convert',
+            fallback_message='local fallback',
+            warnings=['warn'],
+            error=None,
+        )
 
     def test_check_canceled_emits_cancel_signal_once(self):
         request = __import__('modules.contracts', fromlist=['ExportRequest', 'AppPaths', 'ExportOptions'])
