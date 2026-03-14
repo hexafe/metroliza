@@ -1,4 +1,3 @@
-
 def build_report_fingerprint(report):
     """Build a dedupe fingerprint from DB row or parser-like object."""
     report_id = report.get('ID')
@@ -15,11 +14,17 @@ def build_report_fingerprint(report):
     return "|".join(str(part) for part in parts)
 
 
-def build_parser_fingerprint(cmm_report):
-    return build_report_fingerprint({
-        'REFERENCE': cmm_report.pdf_reference,
-        'FILELOC': cmm_report.pdf_file_path,
-        'FILENAME': cmm_report.pdf_file_name,
-        'DATE': cmm_report.pdf_date,
-        'SAMPLE_NUMBER': cmm_report.pdf_sample_number,
-    })
+def _get_attr(obj, primary, fallback):
+    return getattr(obj, primary, getattr(obj, fallback, ''))
+
+
+def build_parser_fingerprint(report_parser):
+    return build_report_fingerprint(
+        {
+            'REFERENCE': _get_attr(report_parser, 'reference', 'pdf_reference'),
+            'FILELOC': _get_attr(report_parser, 'file_path', 'pdf_file_path'),
+            'FILENAME': _get_attr(report_parser, 'file_name', 'pdf_file_name'),
+            'DATE': _get_attr(report_parser, 'date', 'pdf_date'),
+            'SAMPLE_NUMBER': _get_attr(report_parser, 'sample_number', 'pdf_sample_number'),
+        }
+    )

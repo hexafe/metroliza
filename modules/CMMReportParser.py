@@ -7,10 +7,7 @@ rows used by downstream grouping and export workflows.
 import importlib.metadata
 import importlib.util
 import logging
-import re
 from pathlib import Path
-
-import pandas
 
 from modules.CustomLogger import CustomLogger
 from modules.characteristic_alias_service import (
@@ -19,6 +16,7 @@ from modules.characteristic_alias_service import (
 )
 from modules.cmm_native_parser import parse_blocks_with_backend_and_telemetry
 from modules.cmm_parsing import add_tolerances_to_blocks
+from modules.base_report_parser import BaseReportParser
 from modules.db import execute_with_retry, run_transaction_with_retry
 
 
@@ -67,159 +65,13 @@ else:
     fitz = None
 
 
-class CMMReportParser:
+class CMMReportParser(BaseReportParser):
     """Class to parse and convert PDF CMM report."""
 
-    def __init__(self, pdf_file_path: str, database: str, connection=None):
-        """
-        Initializes an instance of the CMMReport class.
-        Args:
-            pdf_file_path (str): The path of the PDF file.
-            database (str): The path of the database.
-        """
-        self.pdf_file_path = self.get_file_path_from_filename(pdf_file_path)
-        self.pdf_file_name = self.get_file_name_from_filename(pdf_file_path)
-        self.pdf_date = self.get_date_from_filename()
-        self.pdf_reference = self.get_reference_from_filename()
-        self.pdf_sample_number = self.get_sample_number_from_file()
-        self.pdf_raw_text = []
-        self.pdf_blocks_text = []
-        self.df = pandas.DataFrame()
+    def __init__(self, file_path: str, database: str, connection=None):
+        """Initialize parser for one CMM report file."""
+        super().__init__(file_path=file_path, database=database, connection=connection)
         self.parse_backend_used = "unknown"
-        self.database = database
-        self.connection = connection
-
-        # self.open_database_and_check_filename()
-
-    def get_file_path_from_filename(self, pdf_file_path: str):
-        """Handle `get_file_path_from_filename` for `CMMReportParser`.
-
-        Args:
-            pdf_file_path (object): Method input value.
-
-        Returns:
-            object | None: Method result for caller workflows.
-
-        Side Effects:
-            May update UI state, database rows, or in-memory export context.
-        """
-
-        try:
-            """
-            Retrieves the file path from the given PDF file path.
-            Args:
-                pdf_file_path (str): The path of the PDF file.
-            Returns:
-                str: The absolute parent directory path of the PDF file.
-            """
-            return str(Path(pdf_file_path).absolute().parent)
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def get_file_name_from_filename(self, pdf_file_path: str):
-        """Handle `get_file_name_from_filename` for `CMMReportParser`.
-
-        Args:
-            pdf_file_path (object): Method input value.
-
-        Returns:
-            object | None: Method result for caller workflows.
-
-        Side Effects:
-            May update UI state, database rows, or in-memory export context.
-        """
-
-        try:
-            """
-            Retrieves the file name from the given PDF file path.
-            Args:
-                pdf_file_path (str): The path of the PDF file.
-            Returns:
-                str: The file name of the PDF file.
-            """
-            return str(Path(pdf_file_path).name)
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def get_date_from_filename(self):
-        """Handle `get_date_from_filename` for `CMMReportParser`.
-
-        Args:
-
-        Returns:
-            object | None: Method result for caller workflows.
-
-        Side Effects:
-            May update UI state, database rows, or in-memory export context.
-        """
-
-        try:
-            """
-            Retrieves the date from the filename using regular expressions.
-            Returns:
-                str: The extracted date from the filename in the format "YYYY-MM-DD",
-                or "0000-00-00" if no date is found.
-            """
-            date_pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}"
-            date_match = re.findall(date_pattern, self.pdf_file_name)
-            date_match = date_match[-1] if date_match else "0000.00.00"
-            date_match = date_match.replace(".", "-").replace("_", "-").replace("/", "-")
-            return date_match
-        except Exception as e:
-            self.log_and_exit(e)
-    
-    def get_sample_number_from_file(self):
-        """Handle `get_sample_number_from_file` for `CMMReportParser`.
-
-        Args:
-
-        Returns:
-            object | None: Method result for caller workflows.
-
-        Side Effects:
-            May update UI state, database rows, or in-memory export context.
-        """
-
-        try:
-            """
-            Retrieves the sample number from the filename using regular expressions.
-            Returns:
-                str: The extracted sample number from the filename,
-                or "0000" if no sample number is found.
-            """
-            pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}_(.*?)\.(?i:pdf)"
-            match = re.search(pattern, self.pdf_file_name)
-            if match:
-                return match.group(1)
-            return "0000"
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def get_reference_from_filename(self):
-        """Handle `get_reference_from_filename` for `CMMReportParser`.
-
-        Args:
-
-        Returns:
-            object | None: Method result for caller workflows.
-
-        Side Effects:
-            May update UI state, database rows, or in-memory export context.
-        """
-
-        try:
-            """
-            Retrieves the reference from the filename using regular expressions.
-            Returns:
-                str: The extracted reference from the filename,
-                or "REF" if no reference is found.
-            """
-            reference_pattern = r"([A-Z][A-Za-z0-9]{4}\d{1,5}(_\d{3})?)|(\d{2}[A-Za-z][._-]?\d{3}[._-]?\d{3})|(216\d{5})"
-            reference_match = re.match(reference_pattern, self.pdf_file_name)
-            reference_match = reference_match.group(0) if reference_match else "REF"
-            return reference_match
-        except Exception as e:
-            self.log_and_exit(e)
 
     def open_database_and_check_filename(self):
         """Handle `open_database_and_check_filename` for `CMMReportParser`.
@@ -249,7 +101,7 @@ class CMMReportParser:
             """
             def open_split_to_sql():
                 # Helper function to open, split, and import data to the SQLite database
-                self.cmm_open()
+                self.open_report()
                 self.split_text_to_blocks()
                 self.to_sqlite()
 
@@ -269,7 +121,7 @@ class CMMReportParser:
             count_rows = execute_with_retry(
                 self.database,
                 'SELECT COUNT(*) FROM REPORTS WHERE FILENAME = ?',
-                (self.pdf_file_name,),
+                (self.file_name,),
                 connection=self.connection,
             )
             count = count_rows[0][0] if count_rows else 0
@@ -278,7 +130,7 @@ class CMMReportParser:
                 # File does not exist in the 'REPORTS' table, import the data
                 open_split_to_sql()
             else:
-                logger.info("Report '%s' already exists in the database; skipping.", self.pdf_file_name)
+                logger.info("Report '%s' already exists in the database; skipping.", self.file_name)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -291,7 +143,7 @@ class CMMReportParser:
             )
         return fitz
 
-    def cmm_open(self):
+    def open_report(self):
         """Handle `cmm_open` for `CMMReportParser`.
 
         Args:
@@ -309,14 +161,19 @@ class CMMReportParser:
             It uses the PyMuPDF library (fitz) to open the PDF file and extract the text from each page.
             """
             pdf_backend = self._require_pdf_backend()
-            pdf_path = Path(self.pdf_file_path) / self.pdf_file_name
+            pdf_path = Path(self.file_path) / self.file_name
             with pdf_backend.open(str(pdf_path)) as pdf_report:
                 for page in pdf_report:
                     page_text = page.get_text().splitlines()
                     for line in page_text:
-                        self.pdf_raw_text.append(line)
+                        self.raw_text.append(line)
         except Exception as e:
             self.log_and_exit(e)
+
+
+    def cmm_open(self):
+        """Backward-compatible alias for open_report."""
+        return self.open_report()
 
     def show_raw_text(self):
         """Handle `show_raw_text` for `CMMReportParser`.
@@ -335,7 +192,7 @@ class CMMReportParser:
             Method to print the raw text inside the PDF.
             It iterates over each line of text in the pdf_raw_text attribute and prints it.
             """
-            for line in self.pdf_raw_text:
+            for line in self.raw_text:
                 logger.debug("%s", line)
         except Exception as e:
             self.log_and_exit(e)
@@ -358,7 +215,7 @@ class CMMReportParser:
             It iterates over each block in the pdf_blocks_text attribute and prints each line within the block.
             Each block is surrounded by markers indicating the beginning and end of the block.
             """
-            for block in self.pdf_blocks_text:
+            for block in self.blocks_text:
                 logger.debug("___[BEGINNING OF BLOCK]___")
                 for line in block:
                     logger.debug("%s (len(line)=%s)", line, len(line))
@@ -384,7 +241,7 @@ class CMMReportParser:
             It iterates over each block in the pdf_blocks_text attribute and prints the entire block as a string.
             Each block is surrounded by markers indicating the beginning and end of the block.
             """
-            for block in self.pdf_blocks_text:
+            for block in self.blocks_text:
                 logger.debug("___[BEGINNING OF BLOCK]___")
                 logger.debug("%s", block)
                 logger.debug("___[END OF BLOCK (len(block)=%s)]___", len(block))
@@ -405,8 +262,8 @@ class CMMReportParser:
 
         try:
             """Method to split raw text from pdf to blocks - split by measurements"""
-            parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)
-            self.pdf_blocks_text = parse_result.blocks
+            parse_result = parse_blocks_with_backend_and_telemetry(self.raw_text, use_native=False)
+            self.blocks_text = parse_result.blocks
             self.parse_backend_used = parse_result.backend
         except Exception as e:
             self.log_and_exit(e)
@@ -424,84 +281,7 @@ class CMMReportParser:
         """
 
         try:
-            self.pdf_blocks_text = add_tolerances_to_blocks(self.pdf_blocks_text)
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def to_dict(self):
-        """Handle `to_dict` for `CMMReportParser`.
-
-        Args:
-
-        Returns:
-            object | None: Method result for caller workflows.
-
-        Side Effects:
-            May update UI state, database rows, or in-memory export context.
-        """
-
-        try:
-            """
-            Converts the parsed CMM report data into a dictionary.
-            Returns:
-                dict: A dictionary containing the parsed CMM report data.
-            """
-            cmm_report_dict = {
-                "file_name": self.pdf_file_name,
-                "date": self.pdf_date,
-                "reference": self.pdf_reference,
-                "blocks": []
-            }
-
-            for block in self.pdf_blocks_text:
-                block_dict = {
-                    "header_comment": block[0],
-                    "dimensions": block[1:]
-                }
-                cmm_report_dict["blocks"].append(block_dict)
-
-            return cmm_report_dict
-        except Exception as e:
-            self.log_and_exit(e)
-
-    def to_df(self):
-        """Handle `to_df` for `CMMReportParser`.
-
-        Args:
-
-        Returns:
-            object | None: Method result for caller workflows.
-
-        Side Effects:
-            May update UI state, database rows, or in-memory export context.
-        """
-
-        try:
-            """This method converts blocks to dataframe"""
-            df_list = []
-            for block in self.pdf_blocks_text:
-                header = ""
-                for sublist in block[0]:
-                    if isinstance(sublist, str):
-                        header += sublist
-                        header += ", "
-                    else:
-                        for item in sublist:
-                            if isinstance(item, str):
-                                header += item
-                                header += ", "
-                header = header[:-2]
-                columns = ['AX', 'NOM', '+TOL', '-TOL', 'BONUS', 'MEAS', 'DEV', 'OUTTOL']
-                df = pandas.DataFrame(block[1], columns=columns)
-                df['Header'] = header
-                df['Reference'] = self.pdf_reference
-                df['File location'] = self.pdf_file_path
-                df['File name'] = self.pdf_file_name
-                df['Date'] = self.pdf_date
-                df_list.append(df)
-
-            if df_list:
-                self.df = pandas.concat(df_list)
+            self.blocks_text = add_tolerances_to_blocks(self.blocks_text)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -522,10 +302,10 @@ class CMMReportParser:
             Creates tables (if necessary) and inserts measurements and reports data into an SQLite database.
             """
             # Check if there are measurements data
-            if not any(lst[1] for lst in self.pdf_blocks_text):
+            if not any(lst[1] for lst in self.blocks_text):
                 logger.warning(
                     "Report '%s' has no measurements data; skipping database insertion.",
-                    self.pdf_file_name,
+                    self.file_name,
                 )
                 return
 
@@ -560,7 +340,7 @@ class CMMReportParser:
 
                 transaction_cursor.execute(
                     'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
-                    (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number),
+                    (self.reference, self.file_path, self.file_name, self.date, self.sample_number),
                 )
                 count_rows = transaction_cursor.fetchall()
                 count = count_rows[0][0] if count_rows else 0
@@ -570,11 +350,11 @@ class CMMReportParser:
 
                 transaction_cursor.execute(
                     'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                    (self.pdf_reference, self.pdf_file_path, self.pdf_file_name, self.pdf_date, self.pdf_sample_number),
+                    (self.reference, self.file_path, self.file_name, self.date, self.sample_number),
                 )
                 report_id = transaction_cursor.lastrowid
 
-                for lst in self.pdf_blocks_text:
+                for lst in self.blocks_text:
                     table_name = ""
                     for sublist in lst[0]:
                         if isinstance(sublist, str):
@@ -608,10 +388,10 @@ class CMMReportParser:
                 retry_delay_s=1,
             )
             if was_inserted:
-                logger.info("Report '%s' measurements inserted into the database.", self.pdf_file_name)
+                logger.info("Report '%s' measurements inserted into the database.", self.file_name)
                 return
 
-            logger.info("Report '%s' already exists in the database.", self.pdf_file_name)
+            logger.info("Report '%s' already exists in the database.", self.file_name)
             return
         except Exception as e:
             self.log_and_exit(e)
