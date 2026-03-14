@@ -36,6 +36,13 @@ def build_histogram_table_data(summary_stats):
 
     return {
         'rows': table_rows,
+        'summary_metrics': {
+            'observed_nok_count': summary_stats.get('observed_nok_count', summary_stats.get('nok_count')),
+            'observed_nok_pct': summary_stats.get('observed_nok_pct', summary_stats.get('nok_pct')),
+            'estimated_nok_pct': summary_stats.get('estimated_nok_pct'),
+            'estimated_nok_ppm': summary_stats.get('estimated_nok_ppm'),
+            'estimated_yield_pct': summary_stats.get('estimated_yield_pct'),
+        },
         'capability_rows': {
             'Cp': {
                 'label': 'Cp',
