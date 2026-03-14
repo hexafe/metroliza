@@ -7,12 +7,12 @@ from modules.license_bootstrap import validate_license_bootstrap
 
 
 class TestBootstrapStartup(unittest.TestCase):
-    def test_load_startup_config_defaults_to_license_verification_enabled(self):
+    def test_load_startup_config_defaults_to_license_verification_disabled(self):
         with patch.dict("os.environ", {}, clear=True):
             config = metroliza.load_startup_config()
 
         self.assertFalse(config.startup_smoke_mode)
-        self.assertTrue(config.license_verification_enabled)
+        self.assertFalse(config.license_verification_enabled)
 
     def test_load_startup_config_can_disable_license_verification(self):
         with patch.dict(

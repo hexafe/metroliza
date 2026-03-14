@@ -23,11 +23,11 @@ python metroliza.py
 
 ### License verification mode
 
-- License verification is **enabled by default** at startup.
+- License verification is **disabled by default** at startup.
 - Configure with `METROLIZA_LICENSE_VERIFICATION`:
   - truthy values (`1`, `true`, `yes`, `on`) enforce license validation.
   - falsy values (`0`, `false`, `no`, `off`) bypass license validation.
-  - missing/invalid values fall back to the secure default (`enabled`).
+  - missing/invalid values fall back to the default (`disabled`).
 - When license verification is enabled and validation fails, the app shows the hardware-id dialog and exits instead of launching the main window.
 - `METROLIZA_STARTUP_SMOKE` remains available for non-interactive startup smoke checks.
 
