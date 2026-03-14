@@ -506,24 +506,71 @@ def build_histogram_mean_line_style():
 
 def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, annotation_box):
     """Render histogram annotations with consistent font sizing policy."""
+    def _resolve_plot_rect_display_bounds(fig, plot_rect):
+        if not isinstance(plot_rect, dict):
+            return None
+        try:
+            left = float(plot_rect['x']) * float(fig.bbox.width)
+            bottom = float(plot_rect['y']) * float(fig.bbox.height)
+            right = left + (float(plot_rect['width']) * float(fig.bbox.width))
+            top = bottom + (float(plot_rect['height']) * float(fig.bbox.height))
+        except (KeyError, TypeError, ValueError):
+            return None
+        return left, right, bottom, top
+
+    def _bbox_fits_plot_rect(bbox, bounds, *, padding_px=2.0):
+        if bbox is None or bounds is None:
+            return True
+        left, right, bottom, top = bounds
+        return (
+            bbox.x0 >= (left + padding_px)
+            and bbox.x1 <= (right - padding_px)
+            and bbox.y0 >= (bottom + padding_px)
+            and bbox.y1 <= (top - padding_px)
+        )
+
     rendered = []
     transform = ax.get_xaxis_transform()
-    for annotation in annotation_specs:
-        rendered.append(
-            ax.text(
-                annotation['x'],
-                annotation.get('text_y_axes', 1.02),
-                annotation['text'],
-                transform=transform,
-                color=annotation['color'],
-                ha=annotation['ha'],
-                va='bottom',
-                fontsize=annotation_fontsize,
-                bbox=annotation_box,
-                zorder=10,
-                clip_on=False,
-            )
+    figure = ax.figure
+    plot_rect = annotation_box.get('plot_rect') if isinstance(annotation_box, dict) else None
+    plot_rect_bounds = _resolve_plot_rect_display_bounds(figure, plot_rect)
+    priority_sorted = sorted(
+        list(enumerate(annotation_specs or [])),
+        key=lambda item: (-int(item[1].get('priority', 100)), item[0]),
+    )
+    accepted = {}
+    accepted_bboxes = []
+    for index, annotation in priority_sorted:
+        text_artist = ax.text(
+            annotation['x'],
+            annotation.get('text_y_axes', 1.02),
+            annotation['text'],
+            transform=transform,
+            color=annotation['color'],
+            ha=annotation['ha'],
+            va='bottom',
+            fontsize=annotation_fontsize,
+            bbox={k: v for k, v in annotation_box.items() if k != 'plot_rect'},
+            zorder=10,
+            clip_on=False,
         )
+        figure.canvas.draw()
+        bbox = text_artist.get_window_extent(renderer=figure.canvas.get_renderer())
+        is_safe = _bbox_fits_plot_rect(bbox, plot_rect_bounds)
+        if is_safe and plot_rect_bounds is not None and accepted_bboxes:
+            if any(bbox.overlaps(existing_bbox) for existing_bbox in accepted_bboxes):
+                is_safe = False
+
+        if is_safe:
+            accepted[index] = text_artist
+            accepted_bboxes.append(bbox)
+        else:
+            text_artist.remove()
+
+    for index, _annotation in enumerate(annotation_specs or []):
+        text_artist = accepted.get(index)
+        if text_artist is not None:
+            rendered.append(text_artist)
     return rendered
 
 
@@ -1682,7 +1729,15 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
         )
 
 
-def render_modeled_tail_probability_annotations(ax, distribution_fit_result, *, lsl=None, usl=None, fontsize=6.6):
+def render_modeled_tail_probability_annotations(
+    ax,
+    distribution_fit_result,
+    *,
+    lsl=None,
+    usl=None,
+    fontsize=6.6,
+    plot_rect=None,
+):
     """Annotate modeled tail probabilities near active specification limits when space allows."""
 
     entries = []
@@ -1698,7 +1753,7 @@ def render_modeled_tail_probability_annotations(ax, distribution_fit_result, *, 
     if not entries:
         return
 
-    ax.text(
+    text_artist = ax.text(
         0.985,
         0.93,
         '\n'.join(entries[:2]),
@@ -1710,6 +1765,29 @@ def render_modeled_tail_probability_annotations(ax, distribution_fit_result, *, 
         bbox={'boxstyle': 'round,pad=0.16', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.92},
         zorder=6,
     )
+    if isinstance(plot_rect, dict):
+        figure = ax.figure
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        bbox = text_artist.get_window_extent(renderer=renderer)
+        try:
+            left = float(plot_rect['x']) * float(figure.bbox.width)
+            bottom = float(plot_rect['y']) * float(figure.bbox.height)
+            right = left + (float(plot_rect['width']) * float(figure.bbox.width))
+            top = bottom + (float(plot_rect['height']) * float(figure.bbox.height))
+        except (KeyError, TypeError, ValueError):
+            return text_artist
+
+        if (
+            bbox.x0 < (left + 2.0)
+            or bbox.x1 > (right - 2.0)
+            or bbox.y0 < (bottom + 2.0)
+            or bbox.y1 > (top - 2.0)
+        ):
+            text_artist.remove()
+            return None
+
+    return text_artist
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -3796,13 +3874,10 @@ class ExportDataThread(QThread):
                         for item in model_info_note_items
                         if isinstance(item, dict)
                     ]
-                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
-
                     histogram_content_payload = {
                         'left_rows': left_rows,
                         'right_rows': right_rows,
                         'note_lines': note_lines,
-                        'plot_annotations': annotation_specs,
                     }
 
                     panel_rects = compute_histogram_panel_layout(
@@ -3921,6 +3996,19 @@ class ExportDataThread(QThread):
                         model_info_cell.get_text().set_color(SUMMARY_PLOT_PALETTE['quality_unknown_text'])
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
+                    plot_rect = panel_rects['plot_rect']
+                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
+                    x_left, x_right = ax.get_xlim()
+                    x_span = abs(float(x_right) - float(x_left))
+                    annotation_specs, _ = compute_histogram_annotation_rows(
+                        annotation_specs,
+                        distance_threshold=0.04,
+                        threshold_mode='axis_fraction',
+                        x_span=x_span,
+                        base_text_y_axes=1.01,
+                        row_step=0.025,
+                    )
+
                     if selected_model_curve is not None:
                         render_density_line(ax, selected_model_curve['x'], selected_model_curve['y'])
                         render_modeled_tail_shading(ax, distribution_fit_result, lsl=LSL, usl=USL)
@@ -3930,6 +4018,7 @@ class ExportDataThread(QThread):
                             lsl=LSL,
                             usl=USL,
                             fontsize=max(histogram_font_sizes['annotation_fontsize'] - 0.8, 6.2),
+                            plot_rect=plot_rect,
                         )
 
                     kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
@@ -3976,8 +4065,14 @@ class ExportDataThread(QThread):
                     ax.set_title(build_wrapped_chart_title(header), pad=histogram_title_pad)
                     apply_minimal_axis_style(ax, grid_axis='y')
 
-                    annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
-                    max_annotation_row = max(
+                    annotation_box = {
+                        'boxstyle': 'round,pad=0.15',
+                        'fc': 'white',
+                        'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                        'alpha': 0.94,
+                        'plot_rect': plot_rect,
+                    }
+                    max_annotation_text_y = max(
                         (annotation.get('text_y_axes', 1.01) for annotation in annotation_specs),
                         default=1.01,
                     )
@@ -3988,9 +4083,12 @@ class ExportDataThread(QThread):
                         annotation_box=annotation_box,
                     )
 
-                    histogram_top_margin = max(0.82, 0.82 + max(0.0, max_annotation_row - 1.01))
-                    plot_rect = panel_rects['plot_rect']
                     plot_top = plot_rect['y'] + plot_rect['height']
+                    plot_bottom = plot_rect['y']
+                    if max_annotation_text_y > 1.0:
+                        histogram_top_margin = plot_bottom + ((plot_top - plot_bottom) / max_annotation_text_y)
+                    else:
+                        histogram_top_margin = plot_top
                     plt.subplots_adjust(
                         left=plot_rect['x'],
                         right=plot_rect['x'] + plot_rect['width'],
