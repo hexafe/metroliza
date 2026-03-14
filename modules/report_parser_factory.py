@@ -8,6 +8,8 @@ This module keeps compatibility with both:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib.util
+import inspect
 import os
 from pathlib import Path
 from typing import Callable, Type
@@ -37,10 +39,23 @@ class ResolverDiagnostics:
     rejected_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class ExternalPluginLoadResult:
+    """Result summary for external plugin discovery/loading."""
+
+    loaded_plugin_ids: tuple[str, ...]
+    loaded_modules: tuple[str, ...]
+    skipped_paths: tuple[str, ...]
+    errors: tuple[str, ...]
+
+
 PARSER_MAP: dict[str, ParserType] = {}
 PARSER_MANIFESTS: dict[str, PluginManifest] = {}
 PARSER_DETECTORS: dict[str, DetectorType] = {}
 PROBE_RESULT_CACHE: dict[tuple[str, str], ProbeResult] = {}
+
+_EXTERNAL_PLUGINS_LOADED = False
+_EXTERNAL_PLUGIN_MODULE_COUNTER = 0
 
 
 def _as_file_path(file_path: str | Path) -> str:
@@ -121,8 +136,121 @@ def _probe_with_cache(
     return result
 
 
+def _iter_external_plugin_candidate_files(path_entry: str) -> list[Path]:
+    path = Path(path_entry)
+    if not path.exists():
+        return []
+    if path.is_file():
+        if path.suffix == ".py":
+            return [path]
+        return []
+
+    if not path.is_dir():
+        return []
+
+    return sorted(
+        file
+        for file in path.iterdir()
+        if file.is_file() and file.suffix == ".py" and not file.name.startswith("_")
+    )
+
+
+def _next_external_module_name() -> str:
+    global _EXTERNAL_PLUGIN_MODULE_COUNTER
+    _EXTERNAL_PLUGIN_MODULE_COUNTER += 1
+    return f"metroliza_external_parser_plugin_{_EXTERNAL_PLUGIN_MODULE_COUNTER}"
+
+
+def _discover_plugin_classes_in_module(module) -> list[ParserType]:
+    plugin_classes: list[ParserType] = []
+    for value in vars(module).values():
+        if not inspect.isclass(value):
+            continue
+        if value is BaseReportParserPlugin:
+            continue
+        if not issubclass(value, BaseReportParserPlugin):
+            continue
+        if inspect.isabstract(value):
+            continue
+        plugin_classes.append(value)
+    return plugin_classes
+
+
+def load_external_plugins(paths: str | tuple[str, ...] | None = None) -> ExternalPluginLoadResult:
+    """Load external parser plugins from python files/directories.
+
+    Source can be supplied explicitly or via ``PARSER_EXTERNAL_PLUGIN_PATHS`` where
+    entries are separated by ``os.pathsep``.
+    """
+
+    loaded_plugin_ids: list[str] = []
+    loaded_modules: list[str] = []
+    skipped_paths: list[str] = []
+    errors: list[str] = []
+
+    if paths is None:
+        raw_paths = os.getenv("PARSER_EXTERNAL_PLUGIN_PATHS", "")
+        path_entries = [entry.strip() for entry in raw_paths.split(os.pathsep) if entry.strip()]
+    elif isinstance(paths, str):
+        path_entries = [entry.strip() for entry in paths.split(os.pathsep) if entry.strip()]
+    else:
+        path_entries = [entry for entry in paths if entry]
+
+    for entry in path_entries:
+        candidates = _iter_external_plugin_candidate_files(entry)
+        if not candidates:
+            skipped_paths.append(entry)
+            continue
+
+        for candidate in candidates:
+            module_name = _next_external_module_name()
+            try:
+                spec = importlib.util.spec_from_file_location(module_name, candidate)
+                if spec is None or spec.loader is None:
+                    errors.append(f"{candidate}: failed to create import spec")
+                    continue
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                loaded_modules.append(module_name)
+
+                discovered = _discover_plugin_classes_in_module(module)
+                if not discovered:
+                    continue
+
+                for parser_cls in discovered:
+                    register_parser(parser_cls)
+                    plugin_manifest = getattr(parser_cls, "manifest", None)
+                    plugin_id = plugin_manifest.plugin_id if plugin_manifest is not None else parser_cls.__name__
+                    loaded_plugin_ids.append(plugin_id)
+            except Exception as exc:  # pragma: no cover - defensive hardening
+                errors.append(f"{candidate}: {exc}")
+
+    return ExternalPluginLoadResult(
+        loaded_plugin_ids=tuple(loaded_plugin_ids),
+        loaded_modules=tuple(loaded_modules),
+        skipped_paths=tuple(skipped_paths),
+        errors=tuple(errors),
+    )
+
+
+def _ensure_external_plugins_loaded_once() -> None:
+    global _EXTERNAL_PLUGINS_LOADED
+    if _EXTERNAL_PLUGINS_LOADED:
+        return
+
+    # No-op when no env config is provided.
+    if not os.getenv("PARSER_EXTERNAL_PLUGIN_PATHS", "").strip():
+        _EXTERNAL_PLUGINS_LOADED = True
+        return
+
+    load_external_plugins()
+    _EXTERNAL_PLUGINS_LOADED = True
+
+
 def resolve_parser_with_diagnostics(file_path: str | Path) -> ResolverDiagnostics:
     """Resolve plugin using deterministic confidence/priority/id tie-breakers."""
+
+    _ensure_external_plugins_loaded_once()
 
     normalized_path = _as_file_path(file_path)
     source_format = infer_source_format(normalized_path)
