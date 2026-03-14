@@ -21,6 +21,8 @@ This implementation now aligns runtime with roadmap Pass 1 / Pass 2 / Pass 3 and
    - Registry is driven by plugin manifest metadata and class-level probes.
    - Resolver selection uses deterministic tie-break rules (`confidence`, then manifest `priority`, then `plugin_id`).
    - Diagnostics payloads are available for selection/rejection visibility.
+   - Probe result caching is active per `(plugin_id, source_path)` to avoid repeated probe calls in long parse runs.
+   - Strict confidence gating is supported via `PARSER_STRICT_MATCHING` for higher-safety selection behavior.
 
 4. **Pass 4 LLM-assisted plugin factory base**
    - Baseline scaffold helper returns generation templates for analysis prompt, implementation prompt, plugin skeleton, and fixture test skeleton.
