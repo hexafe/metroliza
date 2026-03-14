@@ -4,7 +4,8 @@ from __future__ import annotations
 
 # Layout constants (normalized figure coordinates)
 HISTOGRAM_OUTER_PADDING_X = 0.035
-HISTOGRAM_OUTER_PADDING_Y = 0.04
+HISTOGRAM_OUTER_PADDING_TOP = 0.05
+HISTOGRAM_OUTER_PADDING_BOTTOM = 0.085
 HISTOGRAM_INTER_PANEL_GAP = 0.02
 HISTOGRAM_MIN_PLOT_WIDTH = 0.42
 HISTOGRAM_MIN_NOTE_HEIGHT = 0.12
@@ -17,6 +18,8 @@ _HISTOGRAM_BASE_TABLE_HEIGHT = 0.30
 _HISTOGRAM_NOTE_LINE_HEIGHT = 0.032
 _HISTOGRAM_BASE_NOTE_HEIGHT = 0.07
 _HISTOGRAM_MIN_TABLE_HEIGHT = 0.24
+_HISTOGRAM_PANEL_TABLE_ROW_HEIGHT = 0.060
+_HISTOGRAM_PANEL_TABLE_PAD_Y = 0.02
 
 
 def _clamp(value, lower, upper):
@@ -62,6 +65,8 @@ def compute_histogram_panel_layout(
     left_row_count=0,
     right_row_count=0,
     note_line_count=0,
+    left_panel_width_hint=None,
+    right_panel_width_hint=None,
 ):
     """Compute normalized non-overlapping rectangles for histogram side panels and plot."""
     fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 6
@@ -80,8 +85,10 @@ def compute_histogram_panel_layout(
     gaps_width = 2.0 * HISTOGRAM_INTER_PANEL_GAP
     available_columns = content_width - gaps_width
 
-    left_width = side_pref
-    right_width = side_pref
+    left_width = float(left_panel_width_hint) if left_panel_width_hint is not None else (side_pref + 0.018)
+    right_width = float(right_panel_width_hint) if right_panel_width_hint is not None else side_pref
+    left_width = _clamp(left_width, HISTOGRAM_SIDE_PANEL_MIN_WIDTH, HISTOGRAM_SIDE_PANEL_MAX_WIDTH)
+    right_width = _clamp(right_width, HISTOGRAM_SIDE_PANEL_MIN_WIDTH, HISTOGRAM_SIDE_PANEL_MAX_WIDTH)
     plot_width = available_columns - left_width - right_width
     if plot_width < HISTOGRAM_MIN_PLOT_WIDTH:
         deficit = HISTOGRAM_MIN_PLOT_WIDTH - plot_width
@@ -95,8 +102,8 @@ def compute_histogram_panel_layout(
         right_width = max(HISTOGRAM_SIDE_PANEL_MIN_WIDTH, right_width)
         plot_width = available_columns - left_width - right_width
 
-    content_height = 1.0 - (2.0 * HISTOGRAM_OUTER_PADDING_Y)
-    y_bottom = HISTOGRAM_OUTER_PADDING_Y
+    content_height = 1.0 - HISTOGRAM_OUTER_PADDING_TOP - HISTOGRAM_OUTER_PADDING_BOTTOM
+    y_bottom = HISTOGRAM_OUTER_PADDING_BOTTOM
 
     desired_table_height = _HISTOGRAM_BASE_TABLE_HEIGHT + (_HISTOGRAM_TABLE_ROW_HEIGHT * max(left_row_count, right_row_count))
     desired_note_height = _HISTOGRAM_BASE_NOTE_HEIGHT + (_HISTOGRAM_NOTE_LINE_HEIGHT * note_line_count)
@@ -149,3 +156,32 @@ def compute_histogram_panel_layout(
     }
     assert_non_overlapping_rectangles(rectangles)
     return rectangles
+
+
+def compute_panel_table_content_height(row_count, *, header_rows=1, row_height=_HISTOGRAM_PANEL_TABLE_ROW_HEIGHT, pad_y=_HISTOGRAM_PANEL_TABLE_PAD_Y):
+    total_rows = max(0, int(row_count)) + int(header_rows)
+    return (total_rows * float(row_height)) + (2.0 * float(pad_y))
+
+
+def resolve_inner_table_rect(panel_rect, *, row_count, row_height=_HISTOGRAM_PANEL_TABLE_ROW_HEIGHT, header_rows=1, pad_y=_HISTOGRAM_PANEL_TABLE_PAD_Y, valign='top'):
+    content_height = min(
+        float(panel_rect['height']),
+        compute_panel_table_content_height(
+            row_count,
+            header_rows=header_rows,
+            row_height=row_height,
+            pad_y=pad_y,
+        ),
+    )
+    if valign == 'top':
+        y = float(panel_rect['y']) + float(panel_rect['height']) - content_height
+    elif valign == 'center':
+        y = float(panel_rect['y']) + ((float(panel_rect['height']) - content_height) / 2.0)
+    else:
+        y = float(panel_rect['y'])
+    return {
+        'x': float(panel_rect['x']),
+        'y': y,
+        'width': float(panel_rect['width']),
+        'height': content_height,
+    }
