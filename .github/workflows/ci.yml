@@ -228,6 +228,30 @@ jobs:
       - name: Verify packaged artifact output exists
         run: test -f dist/metroliza
 
+      - name: Smoke launch packaged artifact (non-interactive init-and-exit)
+        env:
+          METROLIZA_STARTUP_SMOKE: '1'
+          METROLIZA_CONSOLE_LOG_LEVEL: INFO
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          mkdir -p smoke-artifacts
+          timeout 60s ./dist/metroliza > smoke-artifacts/packaging-smoke-stdout.log 2> smoke-artifacts/packaging-smoke-stderr.log
+
+      - name: Collect startup logs
+        if: always()
+        run: |
+          mkdir -p smoke-artifacts
+          cp -f metroliza.log smoke-artifacts/metroliza.log 2>/dev/null || true
+          cp -f "$HOME/.metroliza/metroliza.log" smoke-artifacts/metroliza-user.log 2>/dev/null || true
+
+      - name: Upload packaging smoke artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaging-smoke-artifacts
+          path: smoke-artifacts
+          if-no-files-found: warn
+
   google-conversion-smoke:
     name: Google conversion smoke (manual/opt-in)
     runs-on: ubuntu-latest
