@@ -33,10 +33,10 @@ def parse_env_flag(value: str | None, default: bool) -> bool:
 
 
 def load_startup_config() -> StartupConfig:
-    """Load startup behavior from environment with secure defaults."""
+    """Load startup behavior from environment defaults."""
     return StartupConfig(
         startup_smoke_mode=parse_env_flag(os.getenv(STARTUP_SMOKE_ENV), default=False),
-        license_verification_enabled=parse_env_flag(os.getenv(LICENSE_MODE_ENV), default=True),
+        license_verification_enabled=parse_env_flag(os.getenv(LICENSE_MODE_ENV), default=False),
     )
 
 
