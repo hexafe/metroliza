@@ -97,6 +97,7 @@ from modules.export_data_thread import (  # noqa: E402
     render_scatter_numeric,
     render_histogram,
     render_density_line,
+    render_panel_table,
     resolve_summary_annotation_strategy,
     apply_summary_plot_theme,
     apply_minimal_axis_style,
@@ -105,6 +106,56 @@ from modules.export_data_thread import (  # noqa: E402
 
 
 class TestExportPlotHelpers(unittest.TestCase):
+
+    def test_render_panel_table_applies_alignment_rules(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            meta = render_panel_table(
+                ax=ax,
+                fig=fig,
+                title='Statistic',
+                rows=[('Average', '10.23'), ('Std dev', '0.42')],
+                rect={'x': 0.05, 'y': 0.05, 'width': 0.45, 'height': 0.5},
+                style_options={'fontsize': 8.0},
+            )
+
+            self.assertFalse(meta['overflow'])
+            table = meta['table']
+            self.assertEqual(table.get_celld()[(1, 0)].get_text().get_ha(), 'left')
+            self.assertEqual(table.get_celld()[(1, 1)].get_text().get_ha(), 'right')
+        finally:
+            plt.close(fig)
+
+    def test_render_panel_table_fallback_chain_defers_low_priority_rows_before_overlap(self):
+        fig, ax = plt.subplots(figsize=(3.0, 2.2))
+        try:
+            rows = [
+                ('Critical A', '123.45'),
+                ('Critical B', '123.45'),
+                ('Optional Long Row 1', '123.45'),
+                ('Optional Long Row 2', '123.45'),
+                ('Optional Long Row 3', '123.45'),
+            ]
+            meta = render_panel_table(
+                ax=ax,
+                fig=fig,
+                title='Very Long Header Title',
+                rows=rows,
+                rect={'x': 0.05, 'y': 0.05, 'width': 0.42, 'height': 0.20},
+                style_options={
+                    'fontsize': 9.0,
+                    'min_fontsize': 6.6,
+                    'compact_label_mapping': {'Optional Long Row 1': 'Opt 1', 'Optional Long Row 2': 'Opt 2', 'Optional Long Row 3': 'Opt 3'},
+                    'low_priority_labels': {'Optional Long Row 1', 'Optional Long Row 2', 'Optional Long Row 3'},
+                },
+            )
+
+            self.assertTrue(meta['overflow'])
+            self.assertTrue(meta['deferred_rows'])
+            self.assertIn('reduced_fontsize', meta['fallbacks_applied'])
+            self.assertIn('defer_low_priority_rows', meta['fallbacks_applied'])
+        finally:
+            plt.close(fig)
 
     def test_distribution_fit_table_rows_include_expected_payload_and_ordering(self):
         rows = _build_distribution_fit_table_rows(
