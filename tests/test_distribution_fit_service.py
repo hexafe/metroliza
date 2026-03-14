@@ -17,6 +17,7 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertEqual(result['status'], 'ok')
         self.assertIsNotNone(result['selected_model'])
         self.assertIsNotNone(result['selected_model_pdf'])
+        self.assertIsNotNone(result['selected_model_cdf'])
         self.assertIsNotNone(result['gof_metrics'])
         self.assertGreaterEqual(len(result['ranking_metrics']), 1)
         self.assertIn('risk_label', result['risk_estimates'])
@@ -28,6 +29,7 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         self.assertIsNotNone(result['warning'])
         self.assertIsNone(result['selected_model_pdf'])
+        self.assertIsNone(result['selected_model_cdf'])
 
     def test_fit_measurement_distribution_can_skip_kde_reference(self):
         result = fit_measurement_distribution(

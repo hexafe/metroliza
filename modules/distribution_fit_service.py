@@ -39,6 +39,7 @@ class DistributionFitResult:
     inferred_support_mode: str
     selected_model: dict | None
     selected_model_pdf: dict | None
+    selected_model_cdf: dict | None
     kde_reference_pdf: dict | None
     gof_metrics: dict | None
     ranking_metrics: list[dict]
@@ -50,7 +51,7 @@ class DistributionFitResult:
 
     def to_dict(self) -> dict:
         payload = asdict(self)
-        for key in ('selected_model_pdf', 'kde_reference_pdf'):
+        for key in ('selected_model_pdf', 'selected_model_cdf', 'kde_reference_pdf'):
             curve = payload.get(key)
             if isinstance(curve, dict):
                 if curve.get('x') is not None:
@@ -108,6 +109,16 @@ def _build_density_curve(dist, params, x_values: np.ndarray):
     if not np.all(np.isfinite(y_values)):
         return None
     return {'x': np.asarray(x_values), 'y': np.asarray(y_values)}
+
+
+def _build_cdf_curve(dist, params, x_values: np.ndarray):
+    try:
+        y_values = dist.cdf(x_values, *params)
+    except Exception:
+        return None
+    if not np.all(np.isfinite(y_values)):
+        return None
+    return {'x': np.asarray(x_values), 'y': np.asarray(np.clip(y_values, 0.0, 1.0))}
 
 
 def _build_kde_reference_curve(values: np.ndarray, x_values: np.ndarray):
@@ -257,6 +268,7 @@ def _failure_result(sample_size: int, inferred_support_mode: str, warning: str, 
         inferred_support_mode=inferred_support_mode,
         selected_model=None,
         selected_model_pdf=None,
+        selected_model_cdf=None,
         kde_reference_pdf=None,
         gof_metrics=None,
         ranking_metrics=[],
@@ -378,6 +390,7 @@ def fit_measurement_distribution(
         c.scipy_dist for c in _candidate_pool_for_mode(inferred_mode) if c.name == best['model']
     )
     selected_pdf = _build_density_curve(selected_dist, best['params'], x_values)
+    selected_cdf = _build_cdf_curve(selected_dist, best['params'], x_values)
 
     fit_quality = _classify_fit_quality(best['gof']['ad_pvalue'], best['gof']['is_acceptable'])
 
@@ -393,6 +406,7 @@ def fit_measurement_distribution(
             'selection_mode': selection_mode,
         },
         selected_model_pdf=selected_pdf,
+        selected_model_cdf=selected_cdf,
         kde_reference_pdf=_build_kde_reference_curve(values, x_values) if include_kde_reference else None,
         gof_metrics=best['gof'],
         ranking_metrics=[
