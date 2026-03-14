@@ -1,5 +1,6 @@
 from modules.export_workbook_planning_helpers import (
     compute_histogram_font_sizes,
+    compute_histogram_three_region_layout,
     compute_histogram_table_layout,
 )
 
@@ -17,3 +18,14 @@ def test_compute_histogram_table_layout_bounds_right_margin_and_width():
 
     assert 0.38 <= layout['table_bbox_width'] <= 0.48
     assert 0.64 <= layout['subplot_right'] <= 0.76
+
+
+def test_compute_histogram_three_region_layout_returns_compact_separated_regions():
+    layout = compute_histogram_three_region_layout((6.2, 4), table_fontsize=9.0)
+
+    assert 0.21 <= layout['side_table_width'] <= 0.28
+    assert layout['left_table_x'] < 0.0
+    assert layout['right_table_x'] > 1.0
+    assert 0.26 <= layout['subplot_left'] <= 0.34
+    assert 0.66 <= layout['subplot_right'] <= 0.74
+    assert layout['subplot_right'] - layout['subplot_left'] >= 0.43
