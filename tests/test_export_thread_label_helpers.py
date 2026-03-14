@@ -159,6 +159,31 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(table[5], ('Cp', 'N/A'))
         self.assertEqual(table[6], ('Cpk', 'N/A'))
 
+    def test_build_histogram_table_data_right_stats_capability_rows_remain_intact(self):
+        summary_stats = {
+            'minimum': 1.23456,
+            'maximum': 9.87654,
+            'average': 5.55555,
+            'median': 5.5,
+            'sigma': 0.12345,
+            'cp': 1.9876,
+            'cpk': 1.4321,
+            'sample_size': 12,
+            'nok_count': 1,
+            'nok_pct': 0.083333,
+            'estimated_nok_pct': 0.017,
+            'estimated_nok_ppm': 17000.0,
+            'estimated_yield_pct': 0.983,
+        }
+
+        payload = build_histogram_table_data(summary_stats)
+        labels = [row[0] for row in payload['rows']]
+
+        self.assertEqual(labels[:7], ['Min', 'Max', 'Mean', 'Median', 'Std Dev', 'Cp', 'Cpk'])
+        self.assertEqual(labels[-2:], ['NOK', 'NOK %'])
+        self.assertIn('Cp', payload['capability_rows'])
+        self.assertIn('Cpk', payload['capability_rows'])
+
     def test_build_trend_plot_payload_builds_dense_x_and_dense_labels(self):
         import pandas as pd
 

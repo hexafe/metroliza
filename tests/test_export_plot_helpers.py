@@ -100,10 +100,59 @@ from modules.export_data_thread import (  # noqa: E402
     resolve_summary_annotation_strategy,
     apply_summary_plot_theme,
     apply_minimal_axis_style,
+    _build_distribution_fit_table_rows,
 )
 
 
 class TestExportPlotHelpers(unittest.TestCase):
+
+    def test_distribution_fit_table_rows_include_expected_payload_and_ordering(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'selected_model': {'display_name': 'Weibull (Min)'},
+                'gof_metrics': {'ad_pvalue': 0.07342},
+                'fit_quality': {'label': 'medium'},
+                'risk_estimates': {
+                    'nok_percent': 0.1234,
+                    'ppm_nok': 1234.0,
+                    'yield_percent': 99.8766,
+                },
+            }
+        )
+
+        self.assertEqual([label for label, _ in rows], [
+            'Best fit',
+            'GOF p-value',
+            'Estimated NOK %',
+            'Estimated NOK (PPM)',
+            'Estimated yield %',
+            'Fit quality',
+        ])
+        self.assertEqual(rows[0][1], 'Weibull (Min)')
+        self.assertEqual(rows[1][1], '0.0734')
+        self.assertEqual(rows[2][1], '0.123%')
+        self.assertEqual(rows[3][1], '1,234')
+        self.assertEqual(rows[4][1], '99.877%')
+        self.assertEqual(rows[5][1], 'Medium')
+
+    def test_distribution_fit_table_rows_fallback_to_na_when_fit_unreliable(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'fit_quality': {'label': 'unreliable'},
+                'risk_estimates': {
+                    'nok_percent': None,
+                    'ppm_nok': None,
+                    'yield_percent': None,
+                },
+            }
+        )
+
+        self.assertEqual(rows[0], ('Best fit', 'N/A'))
+        self.assertEqual(rows[1], ('GOF p-value', 'N/A'))
+        self.assertEqual(rows[2], ('Estimated NOK %', 'N/A'))
+        self.assertEqual(rows[3], ('Estimated NOK (PPM)', 'N/A'))
+        self.assertEqual(rows[4], ('Estimated yield %', 'N/A'))
+        self.assertEqual(rows[5], ('Fit quality', 'Unreliable'))
 
     def test_apply_summary_plot_theme_sets_lighter_grid_alpha_and_linewidth(self):
         apply_summary_plot_theme()

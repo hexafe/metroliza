@@ -588,15 +588,22 @@ def _format_percent(value):
 def _build_distribution_fit_table_rows(distribution_fit_result):
     selected_model = distribution_fit_result.get('selected_model') or {}
     fit_quality = distribution_fit_result.get('fit_quality') or {}
+    gof_metrics = distribution_fit_result.get('gof_metrics') or {}
     risk_estimates = distribution_fit_result.get('risk_estimates') or {}
 
+    gof_pvalue = gof_metrics.get('ad_pvalue')
+    if gof_pvalue is None:
+        gof_display = 'N/A'
+    else:
+        gof_display = f"{float(gof_pvalue):.4f}"
+
     return [
-        ('Selected model', selected_model.get('display_name', 'N/A')),
+        ('Best fit', selected_model.get('display_name', 'N/A')),
+        ('GOF p-value', gof_display),
+        ('Estimated NOK %', _format_percent(risk_estimates.get('nok_percent'))),
+        ('Estimated NOK (PPM)', 'N/A' if risk_estimates.get('ppm_nok') is None else f"{float(risk_estimates['ppm_nok']):,.0f}"),
+        ('Estimated yield %', _format_percent(risk_estimates.get('yield_percent'))),
         ('Fit quality', str(fit_quality.get('label', 'unknown')).title()),
-        ('Out-of-spec risk', _format_percent(risk_estimates.get('nok_percent'))),
-        ('Risk label', str(risk_estimates.get('risk_label', 'unknown')).title()),
-        ('Expected NOK (PPM)', 'N/A' if risk_estimates.get('ppm_nok') is None else f"{float(risk_estimates['ppm_nok']):,.0f}"),
-        ('Yield estimate', _format_percent(risk_estimates.get('yield_percent'))),
     ]
 
 
