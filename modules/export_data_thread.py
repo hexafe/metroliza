@@ -717,7 +717,6 @@ def _build_distribution_fit_table_rows(distribution_fit_result):
 def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats):
     inferred_support = distribution_fit_result.get('inferred_support_mode') or 'unknown'
     candidate_family = 'Positive-support (one-sided)' if inferred_support == 'one_sided_zero_bound_positive' else 'Signed/bilateral'
-    selected_model = distribution_fit_result.get('selected_model') or {}
     fit_quality = distribution_fit_result.get('fit_quality') or {}
     fit_warning = distribution_fit_result.get('warning')
 
