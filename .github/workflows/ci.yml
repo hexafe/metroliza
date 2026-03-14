@@ -126,6 +126,8 @@ jobs:
   unit-tests:
     name: Unit tests
     runs-on: ubuntu-latest
+    env:
+      COVERAGE_WARNING_THRESHOLD: '80'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -148,6 +150,49 @@ jobs:
             --cov=. \
             --cov-report=term \
             --cov-report=xml:coverage.xml
+
+      - name: Report coverage threshold status (non-blocking)
+        run: |
+          python - <<'PYCODE'
+          import os
+          import pathlib
+          import sys
+          import xml.etree.ElementTree as ET
+
+          threshold = float(os.environ.get('COVERAGE_WARNING_THRESHOLD', '80'))
+          coverage_path = pathlib.Path('coverage.xml')
+          if not coverage_path.exists():
+              print('::warning title=Coverage threshold status unavailable::coverage.xml was not generated; skipping threshold warning check.')
+              sys.exit(0)
+
+          root = ET.parse(coverage_path).getroot()
+          line_rate = root.attrib.get('line-rate')
+          if line_rate is None:
+              print('::warning title=Coverage threshold status unavailable::line-rate was not found in coverage.xml; skipping threshold warning check.')
+              sys.exit(0)
+
+          coverage_percent = float(line_rate) * 100.0
+          summary = (
+              '### Coverage threshold status (non-blocking)\n\n'
+              f'- Observed line coverage: `{coverage_percent:.2f}%`\n'
+              f'- Warning threshold: `{threshold:.2f}%`\n\n'
+          )
+
+          if coverage_percent < threshold:
+              print(
+                  f'::warning title=Coverage below warning threshold::Observed line coverage {coverage_percent:.2f}% is below warning threshold {threshold:.2f}%. This does not fail CI in the current staged policy.'
+              )
+              summary += '- Result: ⚠️ below warning threshold (informational only; CI remains non-blocking).\n'
+          else:
+              summary += '- Result: ✅ meets or exceeds warning threshold.\n'
+
+          github_step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if github_step_summary:
+              with open(github_step_summary, 'a', encoding='utf-8') as summary_file:
+                  summary_file.write(summary)
+
+          print(summary)
+          PYCODE
 
       - name: Upload unit test coverage artifacts
         uses: actions/upload-artifact@v4

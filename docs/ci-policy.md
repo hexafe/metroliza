@@ -23,15 +23,26 @@ The following checks must pass on every PR and branch push.
 
 ### Coverage reporting semantics
 
-- The `unit-tests` job now emits coverage output in two places:
+- The `unit-tests` job emits coverage output in two places:
   - terminal/log summary via `--cov-report=term`
   - machine-readable artifact via `coverage.xml` (`--cov-report=xml:coverage.xml`)
-- Coverage reporting is **visibility-only** right now and is **not** a merge gate.
-- There is intentionally no fail-under threshold configured yet.
-- Threshold go/no-go governance criteria (observation window, evidence sources, owner, and decision output) are tracked in the RC1 execution tracker: `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md` under **"TCI-007 governance criteria (deferred threshold decision)"**.
+- The same job also publishes a **non-blocking coverage threshold status** in the CI job summary by comparing observed line coverage from `coverage.xml` to `COVERAGE_WARNING_THRESHOLD`.
+- Current staged rollout keeps threshold checks **non-blocking**; a warning is emitted when coverage is below the warning threshold.
+- Threshold governance criteria (observation window, evidence sources, owner, decision date, and acceptance criteria) are tracked in the RC1 execution tracker: `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md` under **"TCI-007 governance criteria and staged threshold rollout"**.
 - Reviewers can inspect coverage evidence in:
-  - the `unit-tests` job log (terminal summary), and
+  - the `unit-tests` job log (terminal summary),
+  - the CI step summary section **"Coverage threshold status (non-blocking)"**, and
   - the uploaded workflow artifact named `unit-test-coverage` (contains `coverage.xml`).
+
+### Coverage threshold staged policy
+
+Coverage threshold adoption follows a staged policy to reduce noise risk while still surfacing regressions early:
+
+1. **Informational stage (current baseline):** coverage outputs are visible in logs/artifacts; no threshold signal.
+2. **Soft threshold warning stage (current enforcement mode):** CI emits a non-blocking warning in the job summary if coverage falls below `COVERAGE_WARNING_THRESHOLD`.
+3. **Blocking threshold stage (future):** after tracker acceptance criteria are satisfied and a dated owner decision is recorded, `unit-tests` may enable a blocking fail-under gate.
+
+Until the stage-3 decision is recorded, coverage threshold status is advisory and does not block PR merges.
 
 ## Optional/manual checks (non-blocking)
 
