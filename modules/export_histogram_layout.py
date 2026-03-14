@@ -102,7 +102,12 @@ def compute_histogram_panel_layout(
     desired_note_height = _HISTOGRAM_BASE_NOTE_HEIGHT + (_HISTOGRAM_NOTE_LINE_HEIGHT * note_line_count)
     note_height = max(HISTOGRAM_MIN_NOTE_HEIGHT, desired_note_height)
 
-    max_note_height = max(HISTOGRAM_MIN_NOTE_HEIGHT, content_height - HISTOGRAM_INTER_PANEL_GAP - _HISTOGRAM_MIN_TABLE_HEIGHT)
+    target_right_table_height = _clamp(
+        desired_table_height,
+        _HISTOGRAM_MIN_TABLE_HEIGHT,
+        max(_HISTOGRAM_MIN_TABLE_HEIGHT, content_height - HISTOGRAM_INTER_PANEL_GAP - HISTOGRAM_MIN_NOTE_HEIGHT),
+    )
+    max_note_height = max(HISTOGRAM_MIN_NOTE_HEIGHT, content_height - HISTOGRAM_INTER_PANEL_GAP - target_right_table_height)
     note_height = min(note_height, max_note_height)
     right_table_height = content_height - HISTOGRAM_INTER_PANEL_GAP - note_height
 

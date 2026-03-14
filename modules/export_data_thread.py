@@ -3213,7 +3213,6 @@ class ExportDataThread(QThread):
             summary_stats['usl'] = USL
             average = summary_stats['average']
             histogram_table_payload = build_histogram_table_data(summary_stats)
-            table_data = histogram_table_payload['rows']
             summary_table_composition = build_summary_table_composition(summary_stats, histogram_table_payload)
             capability_badge = summary_table_composition['capability_badge']
             histogram_row_badges = summary_table_composition['histogram_row_badges']
