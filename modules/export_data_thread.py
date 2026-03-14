@@ -120,6 +120,17 @@ from modules.export_workbook_planning_helpers import (
     compute_histogram_font_sizes as _compute_histogram_font_sizes,
     compute_histogram_table_layout as _compute_histogram_table_layout,
 )
+from modules.export_summary_composition_service import (
+    build_summary_table_composition as _build_summary_table_composition,
+    build_summary_panel_subtitle as _build_summary_panel_subtitle,
+    classify_capability_status as _classify_capability_status,
+    classify_capability_value as _classify_capability_value,
+    classify_nok_severity as _classify_nok_severity,
+    classify_normality_status as _classify_normality_status,
+)
+from modules.export_group_analysis_annotation_service import (
+    build_violin_group_annotation_payload as _build_violin_group_annotation_payload,
+)
 from modules.export_row_aggregation_utils import (
     all_measurements_within_limits as _all_measurements_within_limits,
     build_violin_group_stats_rows as _build_violin_group_stats_rows,
@@ -517,7 +528,13 @@ def resolve_summary_annotation_strategy(*, x_point_count):
 def build_summary_panel_subtitle_text(summary_stats):
     """Generate subtitle text displayed under summary panel titles."""
 
-    return build_summary_panel_subtitle(summary_stats)
+    return _build_summary_panel_subtitle(summary_stats)
+
+
+def build_summary_table_composition(summary_stats, histogram_table_payload):
+    """Build summary-table badges/subtitle contract from pure inputs."""
+
+    return _build_summary_table_composition(summary_stats, histogram_table_payload)
 
 
 def compute_histogram_font_sizes(
@@ -821,15 +838,18 @@ def annotate_violin_group_stats(
             )
         return selected_offset
 
-    for idx, group_values in enumerate(values):
-        arr = np.asarray(group_values, dtype=float)
-        if arr.size == 0:
-            continue
-        xpos = positions[idx]
-        mean_val = float(np.mean(arr))
-        std_val = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
-        min_val = float(np.min(arr))
-        max_val = float(np.max(arr))
+    annotation_payload = _build_violin_group_annotation_payload(
+        values,
+        positions,
+        show_sigma=style['show_sigma'],
+        one_sided_sigma_mode=one_sided_sigma_mode,
+    )
+
+    for item in annotation_payload:
+        xpos = item['position']
+        min_val = item['minimum']
+        max_val = item['maximum']
+        mean_val = item['mean']
 
         text_box = {'boxstyle': 'round,pad=0.2', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.9}
 
@@ -883,14 +903,11 @@ def annotate_violin_group_stats(
                 bbox=text_box,
             )
 
-        if style['show_sigma'] and std_val > 0:
-            sigma_low = mean_val - (3 * std_val)
-            sigma_high = mean_val + (3 * std_val)
-            sigma_start = mean_val if one_sided_sigma_mode else sigma_low
+        if item['show_sigma_segment']:
             ax.vlines(
                 xpos,
-                sigma_start,
-                sigma_high,
+                item['sigma_start'],
+                item['sigma_high'],
                 colors=SUMMARY_PLOT_PALETTE['sigma_band'],
                 linestyles=':',
                 linewidth=style['sigma_line_width'],
@@ -1449,109 +1466,31 @@ def adjust_histogram_stats_table_geometry(
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
 
-    def _as_float(value):
-        if isinstance(value, str):
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    cp_value = _as_float(cp)
-    cpk_value = _as_float(cpk)
-    if cp_value is None or cpk_value is None:
-        return {
-            'label': 'Cp/Cpk N/A',
-            'palette_key': 'quality_unknown',
-        }
-
-    if cpk_value >= 1.67 and cp_value >= 1.67:
-        return {
-            'label': 'Cp/Cpk capable',
-            'palette_key': 'quality_capable',
-        }
-
-    if cpk_value > 1.33 and cp_value > 1.33:
-        return {
-            'label': 'Cp/Cpk good',
-            'palette_key': 'quality_good',
-        }
-
-    if cpk_value >= 1.0 and cp_value >= 1.0:
-        return {
-            'label': 'Cp/Cpk marginal',
-            'palette_key': 'quality_marginal',
-        }
-
-    return {
-        'label': 'Cp/Cpk risk',
-        'palette_key': 'quality_risk',
-    }
+    return _classify_capability_status(cp, cpk)
 
 
 def classify_capability_value(value, *, label_prefix='Capability'):
     """Classify a single Cp/Cpk value for independent row highlighting."""
 
-    def _as_float(raw):
-        if isinstance(raw, str):
-            return None
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return None
-
-    numeric = _as_float(value)
-    if numeric is None:
-        return {'label': f'{label_prefix} N/A', 'palette_key': 'quality_unknown'}
-    if numeric >= 1.67:
-        return {'label': f'{label_prefix} capable', 'palette_key': 'quality_capable'}
-    if numeric > 1.33:
-        return {'label': f'{label_prefix} good', 'palette_key': 'quality_good'}
-    if numeric >= 1.0:
-        return {'label': f'{label_prefix} marginal', 'palette_key': 'quality_marginal'}
-    return {'label': f'{label_prefix} risk', 'palette_key': 'quality_risk'}
+    return _classify_capability_value(value, label_prefix=label_prefix)
 
 
 def classify_nok_severity(nok_pct):
     """Classify NOK ratio severity for chart title cueing."""
-    ratio = 0.0
-    try:
-        ratio = float(nok_pct)
-    except (TypeError, ValueError):
-        ratio = 0.0
 
-    if ratio <= 0.003:
-        return {
-            'label': 'NOK 0%',
-            'palette_key': 'quality_capable',
-        }
-
-    if ratio <= 0.05:
-        return {
-            'label': f'NOK {ratio * 100:.1f}% watch',
-            'palette_key': 'quality_marginal',
-        }
-
-    return {
-        'label': f'NOK {ratio * 100:.1f}% high',
-        'palette_key': 'quality_risk',
-    }
-
+    return _classify_nok_severity(nok_pct)
 
 
 def classify_normality_status(normality_status):
     """Map normality status to dedicated pastel normality palettes."""
-    if normality_status == 'normal':
-        return {'label': 'Normality normal', 'palette_key': 'normality_normal'}
-    if normality_status == 'not_normal':
-        return {'label': 'Normality not normal', 'palette_key': 'normality_not_normal'}
-    if normality_status == 'not_applicable':
-        return {'label': 'Normality not applicable', 'palette_key': 'normality_unknown'}
-    return {'label': 'Normality unknown', 'palette_key': 'normality_unknown'}
+
+    return _classify_normality_status(normality_status)
+
 
 def build_summary_panel_subtitle(summary_stats):
     """Return compact panel subtitle text showing sample size and NOK share."""
-    return f"n={int(summary_stats['sample_size'])} • NOK={summary_stats['nok_pct'] * 100:.1f}%"
+
+    return _build_summary_panel_subtitle(summary_stats)
 
 
 def _apply_table_row_badge(ax_table, row_index, palette_key):
@@ -3036,29 +2975,10 @@ class ExportDataThread(QThread):
             average = summary_stats['average']
             histogram_table_payload = build_histogram_table_data(summary_stats)
             table_data = histogram_table_payload['rows']
-            capability_rows = histogram_table_payload['capability_rows']
-
-            capability_badge = classify_capability_status(summary_stats['cp'], summary_stats['cpk'])
-            cpk_row_label = capability_rows['Cpk']['label']
-            capability_row_badges = {
-                'Cp': classify_capability_value(
-                    capability_rows['Cp']['classification_value'],
-                    label_prefix=capability_rows['Cp']['label'],
-                ),
-                cpk_row_label: classify_capability_value(
-                    capability_rows['Cpk']['classification_value'],
-                    label_prefix=cpk_row_label,
-                ),
-            }
-            normality_row_badge = {
-                'Normality': classify_normality_status(summary_stats.get('normality_status')),
-            }
-            histogram_row_badges = {
-                **capability_row_badges,
-                **normality_row_badge,
-                'NOK %': classify_nok_severity(summary_stats.get('nok_pct')),
-            }
-            panel_subtitle = build_summary_panel_subtitle(summary_stats)
+            summary_table_composition = build_summary_table_composition(summary_stats, histogram_table_payload)
+            capability_badge = summary_table_composition['capability_badge']
+            histogram_row_badges = summary_table_composition['histogram_row_badges']
+            panel_subtitle = summary_table_composition['panel_subtitle']
 
             grouping_df = self.prepared_grouping_df
             header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
