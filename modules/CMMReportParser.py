@@ -8,6 +8,7 @@ import importlib.metadata
 import importlib.util
 import logging
 from pathlib import Path
+from time import strftime
 
 from modules.CustomLogger import CustomLogger
 from modules.characteristic_alias_service import (
@@ -18,6 +19,17 @@ from modules.cmm_native_parser import parse_blocks_with_backend_and_telemetry
 from modules.cmm_parsing import add_tolerances_to_blocks
 from modules.base_report_parser import BaseReportParser
 from modules.db import execute_with_retry, run_transaction_with_retry
+from modules.parser_plugin_contracts import (
+    BaseReportParserPlugin,
+    MeasurementBlockV2,
+    MeasurementV2,
+    ParseMetaV2,
+    ParseResultV2,
+    PluginManifest,
+    ProbeContext,
+    ProbeResult,
+    ReportInfoV2,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -65,8 +77,38 @@ else:
     fitz = None
 
 
-class CMMReportParser(BaseReportParser):
+class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
     """Class to parse and convert PDF CMM report."""
+
+    manifest = PluginManifest(
+        plugin_id="cmm",
+        display_name="CMM PDF Parser",
+        version="1.0.0",
+        supported_formats=("pdf",),
+        supported_locales=("*",),
+        template_ids=("default",),
+        priority=100,
+        capabilities={"ocr_required": False, "table_extraction_mode": "mixed"},
+    )
+
+    @classmethod
+    def probe(cls, input_ref: str | Path, context: ProbeContext) -> ProbeResult:
+        path_text = str(input_ref)
+        if path_text.lower().endswith(".pdf"):
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=True,
+                confidence=100,
+                matched_template_id="default",
+                reasons=("pdf_extension",),
+            )
+
+        return ProbeResult(
+            plugin_id=cls.manifest.plugin_id,
+            can_parse=False,
+            confidence=0,
+            reasons=("unsupported_extension",),
+        )
 
     def __init__(self, file_path: str, database: str, connection=None):
         """Initialize parser for one CMM report file."""
@@ -267,6 +309,95 @@ class CMMReportParser(BaseReportParser):
             self.parse_backend_used = parse_result.backend
         except Exception as e:
             self.log_and_exit(e)
+
+    def parse_to_v2(self) -> ParseResultV2:
+        """Parse report into canonical V2 result."""
+
+        if not self.raw_text:
+            self.open_report()
+        if not self.blocks_text:
+            self.split_text_to_blocks()
+            self.add_tolerances()
+
+        blocks_v2: list[MeasurementBlockV2] = []
+        for block_index, block in enumerate(self.blocks_text):
+            header_tokens = []
+            for token in block[0]:
+                if isinstance(token, str):
+                    header_tokens.append(token)
+                elif isinstance(token, list):
+                    header_tokens.extend(str(item) for item in token if isinstance(item, str))
+
+            header_normalized = ", ".join(token for token in header_tokens if token)
+            dimensions: list[MeasurementV2] = []
+            for row in block[1]:
+                dimensions.append(
+                    MeasurementV2(
+                        axis_code=str(row[0]) if len(row) > 0 else "",
+                        nominal=row[1] if len(row) > 1 else None,
+                        tol_plus=row[2] if len(row) > 2 else None,
+                        tol_minus=row[3] if len(row) > 3 else None,
+                        bonus=row[4] if len(row) > 4 else None,
+                        measured=row[5] if len(row) > 5 else None,
+                        deviation=row[6] if len(row) > 6 else None,
+                        out_of_tolerance=row[7] if len(row) > 7 else None,
+                        raw_tokens=tuple(str(value) for value in row),
+                    )
+                )
+
+            blocks_v2.append(
+                MeasurementBlockV2(
+                    header_raw=tuple(header_tokens),
+                    header_normalized=header_normalized,
+                    dimensions=tuple(dimensions),
+                    block_index=block_index,
+                )
+            )
+
+        return ParseResultV2(
+            meta=ParseMetaV2(
+                source_file=str(Path(self.file_path) / self.file_name),
+                source_format="pdf",
+                plugin_id=self.manifest.plugin_id,
+                plugin_version=self.manifest.version,
+                template_id="default",
+                parse_timestamp=strftime("%Y-%m-%dT%H:%M:%SZ"),
+                locale_detected=None,
+                confidence=100,
+            ),
+            report=ReportInfoV2(
+                reference=self.reference,
+                report_date=self.date,
+                sample_number=self.sample_number,
+                file_name=self.file_name,
+                file_path=self.file_path,
+            ),
+            blocks=tuple(blocks_v2),
+        )
+
+    @staticmethod
+    def to_legacy_blocks(parse_result_v2: ParseResultV2):
+        """Convert V2 blocks back to legacy ``blocks_text`` shape."""
+
+        legacy_blocks = []
+        for block in parse_result_v2.blocks:
+            header = [list(block.header_raw)]
+            rows = []
+            for row in block.dimensions:
+                rows.append(
+                    [
+                        row.axis_code,
+                        row.nominal,
+                        row.tol_plus,
+                        row.tol_minus,
+                        row.bonus,
+                        row.measured,
+                        row.deviation,
+                        row.out_of_tolerance,
+                    ]
+                )
+            legacy_blocks.append([header, rows])
+        return legacy_blocks
 
     def add_tolerances(self):
         """Handle `add_tolerances` for `CMMReportParser`.
