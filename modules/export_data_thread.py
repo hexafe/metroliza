@@ -2350,7 +2350,12 @@ class ExportDataThread(QThread):
                             try:
                                 stage_attempt_totals["uploading"] = int(retry_match.group(2))
                             except ValueError:
-                                pass
+                                self._log_export_stage(
+                                    "Unable to parse Google upload retry attempt total",
+                                    stage="uploading_retry_parse",
+                                    level="warning",
+                                    raw_message=stage_message,
+                                )
                         self._emit_google_stage("uploading", detail=stage_message)
                         self._log_export_stage("Google conversion upload retry", stage="uploading_retry", level="warning")
 
@@ -3512,5 +3517,8 @@ class ExportDataThread(QThread):
                 reraise=False,
             )
         else:
-            custom_logger.CustomLogger(exception, reraise=False)
+            try:
+                custom_logger.CustomLogger(exception, reraise=False)
+            except Exception:
+                logger.exception("Failed to invoke fallback custom logger for %s", context)
         self.error_occurred.emit(f"{context}: {exception}")

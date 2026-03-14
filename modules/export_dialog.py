@@ -4,7 +4,7 @@ from modules.progress_status import build_three_line_status
 from modules.export_data_thread import ExportDataThread
 from modules.filter_dialog import FilterDialog
 from modules.data_grouping import DataGrouping
-from modules.custom_logger import CustomLogger
+import modules.custom_logger as custom_logger
 from modules.export_dialog_service import (
     build_export_completion_message,
     build_export_directory_link_line as build_export_directory_link_line,
@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import(
     QWidget,
 )
 import html
+import inspect
 import logging
 import re
 import shutil
@@ -59,10 +60,7 @@ def format_message_with_clickable_links(message):
 
 def handle_export_result_link(parent, url, excel_file=None):
     """Handle message-box link activation, revealing exported file when selected."""
-    try:
-        parsed = QUrl(str(url or ""))
-    except Exception:
-        parsed = QUrl()
+    parsed = QUrl(str(url or ""))
 
     if parsed.isValid() and parsed.scheme() == 'file' and excel_file:
         try:
@@ -71,8 +69,8 @@ def handle_export_result_link(parent, url, excel_file=None):
             if clicked_path == exported_path:
                 reveal_file_in_explorer(excel_file)
                 return
-        except Exception:
-            pass
+        except (OSError, ValueError) as exc:
+            _log_exception(exc, context="resolve export result link path", reraise=False)
 
     QDesktopServices.openUrl(parsed if parsed.isValid() else QUrl(str(url or "")))
 
@@ -103,15 +101,18 @@ def show_export_result_message(parent, level, title, message, excel_file=None):
 def _open_export_result_link(parent, link, excel_file):
     try:
         handle_export_result_link(parent, link, excel_file=excel_file)
-    except Exception as exc:
+    except (OSError, ValueError, RuntimeError) as exc:
         try:
             QMessageBox.warning(
                 parent,
                 "Unable to open file location",
                 f"Could not open the export location for {excel_file}.\n{exc}",
             )
-        except Exception:
-            logger.exception("Failed to show warning for export link activation failure.")
+        except (RuntimeError, TypeError) as warning_error:
+            _log_exception(warning_error, context="show export link failure warning", reraise=False)
+    except Exception as exc:
+        _log_exception(exc, context="open export result link", reraise=False)
+        raise
 
 
 def reveal_file_in_explorer(file_path):
@@ -143,6 +144,21 @@ def reveal_file_in_explorer(file_path):
 
 
 logger = logging.getLogger(__name__)
+
+
+def _log_exception(exception, *, context, reraise=False):
+    if hasattr(custom_logger, "handle_exception") and hasattr(custom_logger, "LOG_ONLY"):
+        custom_logger.handle_exception(
+            exception,
+            behavior=custom_logger.LOG_ONLY,
+            logger_name=logger.name,
+            context=context,
+            reraise=reraise,
+        )
+        return
+    logger.exception("Unhandled exception during %s: %s", context, exception)
+    if reraise:
+        raise exception
 
 
 class ExportDialog(QDialog):
@@ -196,8 +212,11 @@ class ExportDialog(QDialog):
             if changed:
                 save_export_dialog_config(self.config_path, migrated)
             return migrated
-        except Exception:
+        except (OSError, ValueError, TypeError):
             return {'selected_preset': 'fast_diagnostics'}
+        except Exception as exc:
+            _log_exception(exc, context="load export dialog config", reraise=False)
+            raise
 
     def _save_dialog_config(self):
         """Persist currently selected preset to the user config file."""
@@ -788,7 +807,8 @@ class ExportDialog(QDialog):
             self.export_error_message = None
             
     def log_and_exit(self, exception):
-        CustomLogger(exception, reraise=False)
+        caller = inspect.stack()[1].function
+        _log_exception(exception, context=f"ExportDialog.{caller}", reraise=False)
 
     def _selected_export_target(self):
         if self.include_google_sheets_checkbox.isChecked():

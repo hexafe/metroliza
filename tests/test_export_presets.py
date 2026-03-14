@@ -463,6 +463,16 @@ class TestShowExportResultMessage(unittest.TestCase):
         self.assertIn('Could not open the export location for out.xlsx.', warning_text)
         self.assertIn('boom', warning_text)
 
+    def test_open_export_result_link_reraises_unexpected_exception_after_logging(self):
+        from modules.export_dialog import _open_export_result_link
+
+        with patch('modules.export_dialog._log_exception') as log_exception_mock, \
+             patch('modules.export_dialog.handle_export_result_link', side_effect=KeyError('unexpected')):
+            with self.assertRaises(KeyError):
+                _open_export_result_link(parent=None, link='file:///tmp/out.xlsx', excel_file='out.xlsx')
+
+        log_exception_mock.assert_called_once()
+
 
 class TestExportDialogCompletionFlow(unittest.TestCase):
     @classmethod

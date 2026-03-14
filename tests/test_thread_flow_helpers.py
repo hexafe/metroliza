@@ -2386,6 +2386,63 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(captured['violin_labels'], ['A (n=2)', 'B (n=3)'])
         self.assertEqual(captured['iqr_labels'], ['A (n=2)', 'B (n=3)'])
 
+    def test_google_retry_parse_error_logs_warning(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+        import modules.export_data_thread as export_thread_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            stage_logs = []
+            original_log_export_stage = thread._log_export_stage
+            thread._log_export_stage = lambda message, **extra: stage_logs.append((message, extra))
+
+            class _FakeMatch:
+                @staticmethod
+                def group(index):
+                    return 'not-an-int' if index == 2 else '2'
+
+            previous_upload = export_thread_module.upload_and_convert_workbook
+            try:
+                def _fake_upload(*_args, **kwargs):
+                    kwargs['status_callback']('uploading retry 2/3, elapsed 01:20: temporary network issue')
+                    return GoogleDriveConversionResult(
+                        file_id='sheet-id',
+                        web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                        local_xlsx_path=out_file,
+                        fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
+                        warnings=(),
+                    )
+
+                export_thread_module.upload_and_convert_workbook = _fake_upload
+                with mock.patch('modules.export_data_thread.re.match', return_value=_FakeMatch()):
+                    thread.run()
+            finally:
+                export_thread_module.upload_and_convert_workbook = previous_upload
+                thread._log_export_stage = original_log_export_stage
+
+            warning_stages = [
+                extra for message, extra in stage_logs
+                if message == 'Unable to parse Google upload retry attempt total'
+            ]
+            self.assertEqual(len(warning_stages), 1)
+            self.assertEqual(warning_stages[0].get('stage'), 'uploading_retry_parse')
+            self.assertEqual(warning_stages[0].get('level'), 'warning')
+
 
 if __name__ == '__main__':
     unittest.main()
