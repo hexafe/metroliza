@@ -24,6 +24,7 @@ sys.modules.setdefault("fitz", fitz_stub)
 
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
+contracts_module = importlib.import_module("modules.parser_plugin_contracts")
 
 
 def _load_real_cmm_report_parser_class():
@@ -38,12 +39,34 @@ def _load_real_cmm_report_parser_class():
 
 CMMReportParser = _load_real_cmm_report_parser_class()
 BaseReportParser = base_module.BaseReportParser
-PARSER_DETECTORS = factory_module.PARSER_DETECTORS
+BaseReportParserPlugin = contracts_module.BaseReportParserPlugin
+PluginManifest = contracts_module.PluginManifest
+ProbeContext = contracts_module.ProbeContext
+ProbeResult = contracts_module.ProbeResult
+infer_source_format = contracts_module.infer_source_format
+PARSER_MANIFESTS = factory_module.PARSER_MANIFESTS
 PARSER_MAP = factory_module.PARSER_MAP
-ProbeResult = factory_module.ProbeResult
+PARSER_DETECTORS = factory_module.PARSER_DETECTORS
 detect_format = factory_module.detect_format
 get_parser = factory_module.get_parser
 register_parser = factory_module.register_parser
+resolve_parser_with_diagnostics = factory_module.resolve_parser_with_diagnostics
+
+
+def _restore_real_cmm_registration():
+    PARSER_MAP["cmm"] = CMMReportParser
+    PARSER_MANIFESTS["cmm"] = PluginManifest(
+        plugin_id="cmm",
+        display_name="CMM PDF Parser",
+        version="1.0.0",
+        supported_formats=("pdf",),
+        priority=100,
+    )
+    PARSER_DETECTORS["cmm"] = lambda path: ProbeResult(
+        plugin_id="cmm",
+        can_parse=infer_source_format(path) == "pdf",
+        confidence=100 if infer_source_format(path) == "pdf" else 0,
+    )
 
 
 def test_detect_format_accepts_pathlike(tmp_path):
@@ -54,52 +77,131 @@ def test_detect_format_accepts_pathlike(tmp_path):
 def test_get_parser_returns_cmm_parser_for_pdf(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.pdf"
 
-    original_cmm = PARSER_MAP.get("cmm")
-    PARSER_MAP["cmm"] = CMMReportParser
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
     try:
+        _restore_real_cmm_registration()
         parser = get_parser(report_path, database=":memory:")
     finally:
-        if original_cmm is None:
-            del PARSER_MAP["cmm"]
-        else:
-            PARSER_MAP["cmm"] = original_cmm
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
 
-    assert isinstance(parser, CMMReportParser)
+    assert parser.__class__.__name__ == "CMMReportParser"
 
 
 def test_register_parser_allows_runtime_extension(tmp_path):
-    class DummyParser(BaseReportParser):
+    class DummyParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="dummy",
+            display_name="Dummy",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=True,
+                confidence=50,
+            )
+
         def open_report(self):
             self.raw_text = ["ok"]
 
         def split_text_to_blocks(self):
             self.blocks_text = []
 
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
     original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
     original_detectors = dict(PARSER_DETECTORS)
     try:
-        register_parser(
-            "dummy",
-            DummyParser,
-            detector=lambda _path: ProbeResult(
-                format_id="dummy",
-                can_parse=True,
-                confidence=50,
-            ),
-        )
-
-        parser = get_parser(tmp_path / "file.any", database=":memory:")
+        _restore_real_cmm_registration()
+        register_parser(DummyParser)
+        parser = get_parser(tmp_path / "file.pdf", database=":memory:")
         assert "dummy" in PARSER_MAP
-        assert isinstance(parser, DummyParser)
+        assert isinstance(parser, BaseReportParser)
     finally:
         PARSER_MAP.clear()
         PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
         PARSER_DETECTORS.clear()
         PARSER_DETECTORS.update(original_detectors)
 
 
+def test_register_parser_supports_legacy_signature_with_detector(tmp_path):
+    class LegacyDummyParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="legacy_dummy",
+            display_name="Legacy Dummy",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=False, confidence=0)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    try:
+        register_parser(
+            "legacy_dummy",
+            LegacyDummyParser,
+            detector=lambda _path: ProbeResult(
+                plugin_id="legacy_dummy",
+                can_parse=True,
+                confidence=101,
+                reasons=("legacy_detector",),
+            ),
+        )
+
+        parser = get_parser(tmp_path / "legacy_file.pdf", database=":memory:")
+        assert isinstance(parser, LegacyDummyParser)
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+
+
+def test_resolver_reports_no_plugin_for_unknown_format(tmp_path):
+    diagnostics = resolve_parser_with_diagnostics(tmp_path / "file.txt")
+    assert diagnostics.selected is None
+    assert diagnostics.rejected_reason == "no_plugin_can_parse"
+
+
 def test_pdf_alias_assignment_updates_canonical_blocks_text():
     parser = CMMReportParser("REF01_2024-01-02_123.pdf", database=":memory:")
-    parser.pdf_blocks_text = [[['Header'], [['X', 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]]]]
+    parser.pdf_blocks_text = [[["Header"], [["X", 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]]]]
 
     assert parser.blocks_text == parser.pdf_blocks_text

@@ -25,6 +25,7 @@ This package is intentionally documentation-only and is designed to be executed 
 - [Pass 3 — Plugin registry, detection, and orchestration](./pass_03_registry_and_detection.md)
 - [Pass 4 — LLM-assisted plugin factory](./pass_04_llm_plugin_factory.md)
 - [Pass 5 — Validation, rollout, and governance](./pass_05_validation_rollout_governance.md)
+- [Quick start — Non-technical parser plugin creation](./plugin_creation_quickstart_non_technical.md)
 
 ## Deliverables expected from this roadmap
 - A stable parser plugin interface contract.
