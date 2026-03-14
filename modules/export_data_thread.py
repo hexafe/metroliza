@@ -8,7 +8,6 @@ This module coordinates data retrieval (`modules.export_query_service`), groupin
 """
 
 import logging
-import warnings
 import inspect
 import re
 import sqlite3
@@ -30,7 +29,6 @@ import matplotlib.transforms as mtransforms
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from PyQt6.QtCore import QCoreApplication, QThread, pyqtSignal
-from scipy.stats import ttest_ind
 
 from modules.contracts import ExportRequest, validate_export_request
 import modules.custom_logger as custom_logger
@@ -108,6 +106,20 @@ from modules.group_analysis_writer import (
     write_group_analysis_sheet,
 )
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
+from modules.export_chart_payload_helpers import (
+    build_histogram_table_data as _build_histogram_table_data,
+    build_histogram_table_render_data as _build_histogram_table_render_data,
+    compute_scaled_y_limits as _compute_scaled_y_limits,
+    resolve_summary_annotation_strategy as _resolve_summary_annotation_strategy,
+)
+from modules.export_workbook_planning_helpers import (
+    compute_histogram_font_sizes as _compute_histogram_font_sizes,
+    compute_histogram_table_layout as _compute_histogram_table_layout,
+)
+from modules.export_row_aggregation_utils import (
+    all_measurements_within_limits as _all_measurements_within_limits,
+    build_violin_group_stats_rows as _build_violin_group_stats_rows,
+)
 from modules.export_sheet_writer import (
     build_measurement_block_plan as _build_measurement_block_plan,
     build_measurement_header_block_plan as _build_measurement_header_block_plan,
@@ -351,8 +363,7 @@ def run_export_steps(steps, should_cancel):
 def all_measurements_within_limits(measurements, lower_limit, upper_limit):
     """Check whether every measurement value falls between inclusive limits."""
 
-    series = pd.Series(measurements)
-    return series.between(lower_limit, upper_limit, inclusive='both').all()
+    return _all_measurements_within_limits(measurements, lower_limit, upper_limit)
 
 
 def build_sparse_unique_labels(labels):
@@ -424,73 +435,16 @@ def build_tolerance_reference_legend_handles(*, include_nominal=True):
 def build_histogram_table_data(summary_stats):
     """Build stable, display-ready statistics rows and row metadata for histograms."""
 
-    def _rounded_or_text(value, digits):
-        return value if isinstance(value, str) else round(value, digits)
-
-    cp_value = summary_stats.get('cp')
-    cpk_label = 'Cpk'
-    cpk_value = summary_stats.get('cpk')
-    if isinstance(cp_value, str):
-        sigma_value = summary_stats.get('sigma')
-        average_value = summary_stats.get('average')
-        usl_value = summary_stats.get('usl')
-        if all(isinstance(item, (float, int)) for item in (sigma_value, average_value, usl_value)) and sigma_value > 0:
-            cpk_label = 'Cpk+'
-            cpk_value = (usl_value - average_value) / (3 * sigma_value)
-
-    cp_display_value = _rounded_or_text(summary_stats['cp'], 2)
-    cpk_display_value = _rounded_or_text(cpk_value, 2)
-
-    table_rows = [
-        ('Min', round(summary_stats['minimum'], 3)),
-        ('Max', round(summary_stats['maximum'], 3)),
-        ('Mean', round(summary_stats['average'], 3)),
-        ('Median', round(summary_stats['median'], 3)),
-        ('Std Dev', round(summary_stats['sigma'], 3)),
-        ('Cp', cp_display_value),
-        (cpk_label, cpk_display_value),
-        ('Samples', round(summary_stats['sample_size'], 1)),
-        ('NOK', round(summary_stats['nok_count'], 1)),
-        ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
-    ]
-
-    return {
-        'rows': table_rows,
-        'capability_rows': {
-            'Cp': {
-                'label': 'Cp',
-                'display_value': cp_display_value,
-                'classification_value': cp_display_value,
-            },
-            'Cpk': {
-                'label': cpk_label,
-                'display_value': cpk_display_value,
-                'classification_value': cpk_display_value,
-            },
-        },
-    }
-
+    return _build_histogram_table_data(summary_stats)
 
 def build_histogram_table_render_data(table_data, *, three_column=False):
     """Build render rows for histogram summary tables."""
 
-    if three_column:
-        render_data = []
-        for label, value in table_data:
-            render_data.append([label, '', value])
-
-        return render_data
-
-    render_data = list(table_data)
-    return render_data
-
+    return _build_histogram_table_render_data(table_data, three_column=three_column)
 
 def compute_scaled_y_limits(current_limits, scale_factor):
     """Return y-axis limits expanded by a symmetric scale factor."""
-    y_min, y_max = current_limits
-    data_range = y_max - y_min
-    padding = scale_factor * data_range / 2
-    return y_min - padding, y_max + padding
+    return _compute_scaled_y_limits(current_limits, scale_factor)
 
 
 def build_summary_sheet_position_plan(base_col):
@@ -553,24 +507,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
 
 def resolve_summary_annotation_strategy(*, x_point_count):
     """Resolve a low-overhead annotation strategy based on x-axis point density."""
-    safe_points = max(0, int(x_point_count))
-    if safe_points >= 60:
-        return {
-            'label_mode': 'sparse',
-            'annotation_mode': 'static_compact',
-            'show_violin_legend': False,
-        }
-    if safe_points >= 24:
-        return {
-            'label_mode': 'adaptive',
-            'annotation_mode': 'static_compact',
-            'show_violin_legend': True,
-        }
-    return {
-        'label_mode': 'adaptive',
-        'annotation_mode': 'dynamic',
-        'show_violin_legend': True,
-    }
+    return _resolve_summary_annotation_strategy(x_point_count=x_point_count)
 
 
 def build_summary_panel_subtitle_text(summary_stats):
@@ -586,25 +523,11 @@ def compute_histogram_font_sizes(
     readability_scale=None,
 ):
     """Compute histogram annotation/table font sizes for summary-sheet embedding."""
-    fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 6
-    fig_width = max(float(fig_width), 1.0)
-    width_scale = min(1.25, max(0.8, fig_width / 6.0))
-
-    optional_readability = 0.0 if readability_scale is None else float(readability_scale)
-    readability_bonus = optional_readability * 0.18
-
-    annotation_fontsize = 8.2 * width_scale
-    table_fontsize = 9.2 * width_scale
-    if has_table:
-        annotation_fontsize -= 0.2
-    annotation_fontsize += readability_bonus
-    table_fontsize += readability_bonus
-
-    return {
-        'annotation_fontsize': min(10.5, max(7.0, annotation_fontsize)),
-        'table_fontsize': min(11.5, max(8.0, table_fontsize)),
-    }
-
+    return _compute_histogram_font_sizes(
+        figure_size=figure_size,
+        has_table=has_table,
+        readability_scale=readability_scale,
+    )
 
 def compute_histogram_table_layout(
     figure_size=(6, 4),
@@ -613,24 +536,11 @@ def compute_histogram_table_layout(
     has_table=True,
 ):
     """Compute table bbox width and subplot right margin for histogram layouts."""
-    fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 6
-    fig_width = max(float(fig_width), 1.0)
-    width_scale = min(1.25, max(0.8, fig_width / 6.0))
-    oversized_font = max(0.0, float(table_fontsize) - 8.0)
-
-    table_bbox_width = 0.40 + (0.018 * oversized_font) - (0.008 * (width_scale - 1.0))
-    table_bbox_width = min(0.48, max(0.38, table_bbox_width))
-
-    right_margin = 0.69 + (0.02 * (width_scale - 1.0)) - (0.013 * oversized_font)
-    if has_table:
-        right_margin -= 0.005
-    right_margin = min(0.76, max(0.64, right_margin))
-
-    return {
-        'table_bbox_width': table_bbox_width,
-        'subplot_right': right_margin,
-    }
-
+    return _compute_histogram_table_layout(
+        figure_size=figure_size,
+        table_fontsize=table_fontsize,
+        has_table=has_table,
+    )
 
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
@@ -677,49 +587,7 @@ def apply_minimal_axis_style(ax, grid_axis='y'):
 def build_violin_group_stats_rows(labels, values):
     """Return per-group stats rows with p-values against a reference distribution."""
 
-    def _safe_ttest_p_value(group_values, reference_values):
-        if group_values.size < 2 or reference_values.size < 2:
-            return np.nan
-
-        if np.isclose(np.std(group_values, ddof=1), 0.0) or np.isclose(np.std(reference_values, ddof=1), 0.0):
-            return np.nan
-
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore', RuntimeWarning)
-            _, p_value = ttest_ind(group_values, reference_values, equal_var=False, nan_policy='omit')
-        return p_value
-
-    cleaned_groups = [np.asarray(group_values, dtype=float) for group_values in values]
-    if not cleaned_groups:
-        return []
-
-    population = np.concatenate(cleaned_groups)
-    reference = cleaned_groups[0] if len(cleaned_groups) > 1 else population
-    reference_name = str(labels[0]) if len(cleaned_groups) > 1 else 'Population'
-
-    rows = []
-    for label, group_values in zip(labels, cleaned_groups):
-        if group_values.size == 0:
-            continue
-
-        if len(cleaned_groups) > 1 and str(label) == reference_name:
-            p_value_display = 'Ref'
-        else:
-            p_value = _safe_ttest_p_value(group_values, reference)
-            p_value_display = 'N/A' if np.isnan(p_value) else f"{p_value:.4f}"
-
-        rows.append([
-            str(label),
-            int(group_values.size),
-            round(float(np.min(group_values)), 3),
-            round(float(np.mean(group_values)), 3),
-            round(float(np.max(group_values)), 3),
-            round(float(np.std(group_values, ddof=1)) if group_values.size > 1 else 0.0, 3),
-            p_value_display,
-        ])
-
-    return rows
-
+    return _build_violin_group_stats_rows(labels, values)
 
 def resolve_violin_annotation_style(
     *,
