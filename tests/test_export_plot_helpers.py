@@ -175,6 +175,21 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
+    def test_render_density_line_reuses_secondary_axis_for_multiple_overlays(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            x_values = np.linspace(0.0, 1.0, 20)
+            density_values = np.linspace(0.2, 2.0, 20)
+
+            render_density_line(ax, x_values, density_values)
+            render_density_line(ax, x_values, density_values * 0.8, linestyle='--', alpha=0.3)
+
+            self.assertEqual(len(fig.axes), 2)
+            secondary_axis = fig.axes[1]
+            self.assertEqual(len(secondary_axis.lines), 2)
+        finally:
+            plt.close(fig)
+
     def test_render_violin_draws_horizontal_spec_reference_lines(self):
         values = [[-1.89, -1.88, -1.90], [-1.87, -1.86, -1.88]]
         labels = ['A', 'B']

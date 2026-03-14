@@ -1364,6 +1364,21 @@ def add_iqr_boxplot_legend(ax, *, include_tolerance_refs=False):
     )
 
 
+def _get_or_create_density_axis(ax):
+    """Return a shared hidden density axis for histogram overlays."""
+
+    if ax is None:
+        return None
+
+    density_axis = getattr(ax, '_summary_density_axis', None)
+    if density_axis is not None:
+        return density_axis
+
+    density_axis = ax.twinx()
+    setattr(ax, '_summary_density_axis', density_axis)
+    return density_axis
+
+
 def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, linestyle='-'):
     """Render a density line on a hidden secondary y-axis.
 
@@ -1372,9 +1387,9 @@ def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, lines
     """
 
     if ax is None:
-        return
+        return None
 
-    density_axis = ax.twinx()
+    density_axis = _get_or_create_density_axis(ax)
     density_axis.set_facecolor('none')
     density_axis.patch.set_alpha(0.0)
     density_axis.grid(False)
@@ -1417,6 +1432,113 @@ def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, lines
         if density_max <= 0:
             density_max = 1.0
         density_axis.set_ylim(0.0, density_max * 1.05)
+
+    return density_axis
+
+
+def _safe_probability_percent(probability):
+    if probability is None:
+        return None
+    try:
+        value = float(probability)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value):
+        return None
+    return float(np.clip(value, 0.0, 1.0) * 100.0)
+
+
+def _resolve_tail_probability_percent(distribution_fit_result, *, spec_value, side):
+    selected_model_cdf = (distribution_fit_result or {}).get('selected_model_cdf') or {}
+    x_values = np.asarray(selected_model_cdf.get('x', []), dtype=float)
+    y_values = np.asarray(selected_model_cdf.get('y', []), dtype=float)
+    if x_values.size > 1 and y_values.size == x_values.size:
+        try:
+            cdf_at_spec = float(np.interp(float(spec_value), x_values, y_values))
+            cdf_at_spec = float(np.clip(cdf_at_spec, 0.0, 1.0))
+            probability = cdf_at_spec if side == 'left' else (1.0 - cdf_at_spec)
+            return _safe_probability_percent(probability)
+        except (TypeError, ValueError):
+            pass
+
+    risk_estimates = (distribution_fit_result or {}).get('risk_estimates') or {}
+    risk_key = 'below_lsl_probability' if side == 'left' else 'above_usl_probability'
+    return _safe_probability_percent(risk_estimates.get(risk_key))
+
+
+def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=None):
+    """Shade modeled PDF tails beyond active specification limits."""
+
+    selected_model_curve = (distribution_fit_result or {}).get('selected_model_pdf') or {}
+    x_values = np.asarray(selected_model_curve.get('x', []), dtype=float)
+    density_values = np.asarray(selected_model_curve.get('y', []), dtype=float)
+    if x_values.size < 2 or density_values.size != x_values.size:
+        return
+
+    density_axis = _get_or_create_density_axis(ax)
+    if density_axis is None:
+        return
+
+    parsed_lsl = None
+    parsed_usl = None
+    try:
+        if lsl is not None:
+            parsed_lsl = float(lsl)
+    except (TypeError, ValueError):
+        parsed_lsl = None
+    try:
+        if usl is not None:
+            parsed_usl = float(usl)
+    except (TypeError, ValueError):
+        parsed_usl = None
+
+    for limit_value, mask in (
+        (parsed_lsl, x_values <= parsed_lsl if parsed_lsl is not None else None),
+        (parsed_usl, x_values >= parsed_usl if parsed_usl is not None else None),
+    ):
+        if limit_value is None or mask is None:
+            continue
+        if np.count_nonzero(mask) < 2:
+            continue
+        density_axis.fill_between(
+            x_values[mask],
+            density_values[mask],
+            0.0,
+            color=SUMMARY_PLOT_PALETTE['spec_limit'],
+            alpha=0.12,
+            linewidth=0.0,
+            zorder=2,
+        )
+
+
+def render_modeled_tail_probability_annotations(ax, distribution_fit_result, *, lsl=None, usl=None, fontsize=6.6):
+    """Annotate modeled tail probabilities near active specification limits when space allows."""
+
+    entries = []
+    if usl is not None:
+        upper_pct = _resolve_tail_probability_percent(distribution_fit_result, spec_value=usl, side='right')
+        if upper_pct is not None:
+            entries.append(f"P(X > USL) = {upper_pct:.3f}%")
+    if lsl is not None:
+        lower_pct = _resolve_tail_probability_percent(distribution_fit_result, spec_value=lsl, side='left')
+        if lower_pct is not None:
+            entries.append(f"P(X < LSL) = {lower_pct:.3f}%")
+
+    if not entries:
+        return
+
+    ax.text(
+        0.985,
+        0.93,
+        '\n'.join(entries[:2]),
+        transform=ax.transAxes,
+        ha='right',
+        va='top',
+        fontsize=fontsize,
+        color=SUMMARY_PLOT_PALETTE['annotation_text'],
+        bbox={'boxstyle': 'round,pad=0.16', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.92},
+        zorder=6,
+    )
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -3087,7 +3209,7 @@ class ExportDataThread(QThread):
                         usl=USL,
                         nom=nom,
                         point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
-                        include_kde_reference=True,
+                        include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
                     )
                     trend_future = self._chart_executor.submit(
                         build_trend_plot_payload,
@@ -3338,7 +3460,7 @@ class ExportDataThread(QThread):
                             usl=USL,
                             nom=nom,
                             point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
-                            include_kde_reference=True,
+                            include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
                         )
 
                     summary_stats.update(compute_estimated_tail_metrics(distribution_fit_result, lsl=LSL, usl=USL))
@@ -3413,6 +3535,14 @@ class ExportDataThread(QThread):
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
                     if selected_model_curve is not None:
                         render_density_line(ax, selected_model_curve['x'], selected_model_curve['y'])
+                        render_modeled_tail_shading(ax, distribution_fit_result, lsl=LSL, usl=USL)
+                        render_modeled_tail_probability_annotations(
+                            ax,
+                            distribution_fit_result,
+                            lsl=LSL,
+                            usl=USL,
+                            fontsize=max(histogram_font_sizes['annotation_fontsize'] - 0.8, 6.2),
+                        )
 
                     kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
                     if kde_reference_curve is not None:
@@ -3421,9 +3551,19 @@ class ExportDataThread(QThread):
                             kde_reference_curve['x'],
                             kde_reference_curve['y'],
                             color=SUMMARY_PLOT_PALETTE['density_line'],
-                            alpha=0.35,
-                            linewidth=1.0,
+                            alpha=0.22,
+                            linewidth=0.9,
                             linestyle='--',
+                        )
+                        ax.text(
+                            0.015,
+                            0.02,
+                            'KDE (dashed) is descriptive only',
+                            transform=ax.transAxes,
+                            ha='left',
+                            va='bottom',
+                            fontsize=max(histogram_font_sizes['annotation_fontsize'] - 1.1, 6.0),
+                            color=SUMMARY_PLOT_PALETTE['axis_text'],
                         )
 
                     fit_warning = distribution_fit_result.get('warning')
