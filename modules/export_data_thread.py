@@ -1687,10 +1687,167 @@ def adjust_histogram_stats_table_geometry(
         cell.set_linewidth(border_linewidth)
         cell.PAD = cell_padding
 
-    if not has_three_columns:
-        return
 
-    return
+def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
+    """Measure text extents in display pixels for sizing-aware panel layout."""
+
+    probe = fig.text(0.0, 0.0, str(text), fontsize=fontsize, fontweight=fontweight, alpha=0.0)
+    try:
+        extent = probe.get_window_extent(renderer=renderer)
+        return extent.width, extent.height
+    finally:
+        probe.remove()
+
+
+def render_panel_table(
+    *,
+    ax,
+    fig,
+    title,
+    rows,
+    rect,
+    style_options=None,
+):
+    """Render a non-overlapping side panel table with dynamic width/height fitting.
+
+    Returns metadata describing used bounds, overflow, deferred rows, and fallbacks.
+    """
+
+    options = dict(style_options or {})
+    base_fontsize = float(options.get('fontsize', 8.0))
+    min_fontsize = float(options.get('min_fontsize', 6.8))
+    max_fontsize = float(options.get('max_fontsize', 9.0))
+    fontsize = min(max(base_fontsize, min_fontsize), max_fontsize)
+
+    min_label_fraction = float(options.get('min_label_fraction', 0.52))
+    min_value_fraction = float(options.get('min_value_fraction', 0.22))
+    header_fontweight = options.get('header_fontweight', 'bold')
+    compact_label_mapping = dict(options.get('compact_label_mapping') or {})
+    low_priority_labels = set(options.get('low_priority_labels') or set())
+    low_priority_labels.update(compact_label_mapping.get(label, label) for label in list(low_priority_labels))
+    cell_padding_points = float(options.get('cell_padding_points', 2.2))
+
+    normalized_rows = []
+    for row in rows or []:
+        if len(row) >= 2:
+            normalized_rows.append((str(row[0]), str(row[-1])))
+
+    # Ensure renderer-backed text metrics are current.
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    fig_width_px = float(fig.bbox.width)
+    fig_height_px = float(fig.bbox.height)
+    available_width_px = max(1.0, rect['width'] * fig_width_px)
+    available_height_px = max(1.0, rect['height'] * fig_height_px)
+    cell_padding_px = cell_padding_points * (fig.dpi / 72.0)
+
+    state_rows = list(normalized_rows)
+    deferred_rows = []
+    applied_fallbacks = []
+    using_compact_labels = False
+
+    def _measure_layout(candidate_rows, candidate_fontsize):
+        label_header_w, header_h = _measure_text_extent(fig, renderer, title, fontsize=candidate_fontsize, fontweight=header_fontweight)
+        value_header_w, _ = _measure_text_extent(fig, renderer, 'Value', fontsize=candidate_fontsize, fontweight=header_fontweight)
+        line_h = _measure_text_extent(fig, renderer, 'Ag', fontsize=candidate_fontsize)[1]
+
+        label_max = label_header_w
+        value_max = value_header_w
+        for label, value in candidate_rows:
+            label_max = max(label_max, _measure_text_extent(fig, renderer, label, fontsize=candidate_fontsize)[0])
+            value_max = max(value_max, _measure_text_extent(fig, renderer, value, fontsize=candidate_fontsize)[0])
+
+        required_total_w = label_max + value_max + (4.0 * cell_padding_px)
+        dynamic_label_fraction = (label_max + (2.0 * cell_padding_px)) / required_total_w if required_total_w > 0 else 0.5
+        dynamic_value_fraction = (value_max + (2.0 * cell_padding_px)) / required_total_w if required_total_w > 0 else 0.5
+
+        label_fraction = max(min_label_fraction, dynamic_label_fraction)
+        value_fraction = max(min_value_fraction, dynamic_value_fraction)
+        total_fraction = label_fraction + value_fraction
+        if total_fraction > 1.0:
+            label_fraction /= total_fraction
+            value_fraction /= total_fraction
+
+        header_height_px = header_h + (2.0 * cell_padding_px)
+        row_height_px = line_h + (2.0 * cell_padding_px)
+        required_height_px = header_height_px + (len(candidate_rows) * row_height_px)
+
+        return {
+            'label_fraction': label_fraction,
+            'value_fraction': value_fraction,
+            'required_height_px': required_height_px,
+            'row_height_px': row_height_px,
+        }
+
+    metrics = _measure_layout(state_rows, fontsize)
+
+    if metrics['required_height_px'] > available_height_px and compact_label_mapping:
+        compacted_rows = [(compact_label_mapping.get(label, label), value) for (label, value) in state_rows]
+        compact_metrics = _measure_layout(compacted_rows, fontsize)
+        if compact_metrics['required_height_px'] <= metrics['required_height_px']:
+            state_rows = compacted_rows
+            metrics = compact_metrics
+            using_compact_labels = True
+            applied_fallbacks.append('compact_label_mapping')
+
+    while metrics['required_height_px'] > available_height_px and fontsize > min_fontsize:
+        fontsize = max(min_fontsize, fontsize - 0.4)
+        metrics = _measure_layout(state_rows, fontsize)
+    if fontsize < base_fontsize:
+        applied_fallbacks.append('reduced_fontsize')
+
+    if metrics['required_height_px'] > available_height_px and state_rows:
+        keep_rows = []
+        for label, value in state_rows:
+            if label in low_priority_labels:
+                deferred_rows.append((label, value))
+                continue
+            keep_rows.append((label, value))
+        if len(keep_rows) != len(state_rows):
+            state_rows = keep_rows
+            metrics = _measure_layout(state_rows, fontsize)
+            applied_fallbacks.append('defer_low_priority_rows')
+
+    # Hard safety: if still overflowing, drop trailing rows to avoid any overlap.
+    overflow_rows = []
+    while metrics['required_height_px'] > available_height_px and state_rows:
+        overflow_rows.insert(0, state_rows.pop())
+        metrics = _measure_layout(state_rows, fontsize)
+    if overflow_rows:
+        applied_fallbacks.append('truncate_rows_to_prevent_overlap')
+
+    table = ax.table(
+        cellText=state_rows,
+        colLabels=[title, 'Value'],
+        cellLoc='center',
+        colWidths=[metrics['label_fraction'], metrics['value_fraction']],
+        bbox=[rect['x'], rect['y'], rect['width'], rect['height']],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(fontsize)
+
+    for (row_index, col_index), cell in table.get_celld().items():
+        cell.PAD = max(cell.PAD, cell_padding_points / 10.0)
+        txt = cell.get_text()
+        if row_index == 0:
+            txt.set_fontweight(header_fontweight)
+        if col_index == 0:
+            txt.set_ha('left')
+        else:
+            txt.set_ha('right')
+        txt.set_va('center')
+
+    return {
+        'table': table,
+        'used_bounds': dict(rect),
+        'overflow': bool(deferred_rows or overflow_rows),
+        'overflow_rows': overflow_rows,
+        'deferred_rows': deferred_rows,
+        'rendered_rows': state_rows,
+        'font_size': fontsize,
+        'used_compact_labels': using_compact_labels,
+        'fallbacks_applied': applied_fallbacks,
+    }
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
@@ -3518,25 +3675,33 @@ class ExportDataThread(QThread):
                     )
                     assert_non_overlapping_rectangles(panel_rects)
 
-                    table_render_data = build_histogram_table_render_data(histogram_content_payload['right_rows'])
                     right_table_rect = panel_rects['right_table_rect']
-                    ax_table = plt.table(
-                        cellText=table_render_data,
-                        colLabels=['Statistic', 'Value'],
-                        cellLoc='center',
-                        loc='right',
-                        bbox=[
-                            right_table_rect['x'],
-                            right_table_rect['y'],
-                            right_table_rect['width'],
-                            right_table_rect['height'],
-                        ],
+                    right_table_meta = render_panel_table(
+                        ax=ax,
+                        fig=fig,
+                        title='Statistic',
+                        rows=histogram_content_payload['right_rows'],
+                        rect=right_table_rect,
+                        style_options={
+                            'fontsize': histogram_font_sizes['table_fontsize'],
+                            'min_fontsize': 6.8,
+                            'max_fontsize': 9.2,
+                            'min_label_fraction': 0.52,
+                            'min_value_fraction': 0.26,
+                            'cell_padding_points': 2.2,
+                            'compact_label_mapping': {
+                                'Estimated NOK (PPM)': 'Est. NOK (PPM)',
+                                'Estimated yield %': 'Est. yield %',
+                                'GOF p-value': 'GOF p',
+                                'Normality': 'Norm.',
+                            },
+                            'low_priority_labels': {'Estimated NOK (PPM)', 'Estimated yield %', 'NOK (PPM)', 'Yield %'},
+                        },
                     )
-                    ax_table.auto_set_font_size(False)
-                    ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
+                    ax_table = right_table_meta['table']
                     style_histogram_stats_table(
                         ax_table,
-                        table_render_data,
+                        right_table_meta['rendered_rows'],
                         capability_badge=capability_badge,
                         capability_row_badges=histogram_row_badges,
                     )
@@ -3548,26 +3713,44 @@ class ExportDataThread(QThread):
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
                     left_table_rect = panel_rects['left_table_rect']
-                    distribution_fit_table = plt.table(
-                        cellText=build_histogram_table_render_data(distribution_fit_rows),
-                        colLabels=['Distribution Fit', 'Value'],
-                        cellLoc='center',
-                        loc='left',
-                        bbox=[
-                            left_table_rect['x'],
-                            left_table_rect['y'],
-                            left_table_rect['width'],
-                            left_table_rect['height'],
-                        ],
+                    left_table_meta = render_panel_table(
+                        ax=ax,
+                        fig=fig,
+                        title='Distribution Fit',
+                        rows=distribution_fit_rows,
+                        rect=left_table_rect,
+                        style_options={
+                            'fontsize': histogram_font_sizes['table_fontsize'],
+                            'min_fontsize': 6.8,
+                            'max_fontsize': 9.2,
+                            'min_label_fraction': 0.56,
+                            'min_value_fraction': 0.24,
+                            'cell_padding_points': 2.2,
+                            'compact_label_mapping': {
+                                'Estimated NOK (PPM)': 'Est. NOK (PPM)',
+                                'Estimated yield %': 'Est. yield %',
+                                'GOF p-value': 'GOF p',
+                                'Fit quality': 'Fit qual.',
+                            },
+                            'low_priority_labels': {'Estimated NOK (PPM)', 'Estimated yield %'},
+                        },
                     )
-                    distribution_fit_table.auto_set_font_size(False)
-                    distribution_fit_table.set_fontsize(histogram_font_sizes['table_fontsize'])
-                    style_histogram_stats_table(distribution_fit_table, distribution_fit_rows)
+                    distribution_fit_table = left_table_meta['table']
+                    style_histogram_stats_table(distribution_fit_table, left_table_meta['rendered_rows'])
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
                         statistic_col_width_ratio=0.60,
                         row_height_scale=1.10,
                     )
+
+                    deferred_row_lines = []
+                    for meta in (left_table_meta, right_table_meta):
+                        for label, value in meta.get('deferred_rows', []):
+                            deferred_row_lines.append(f"{label}: {value}")
+                        for label, value in meta.get('overflow_rows', []):
+                            deferred_row_lines.append(f"{label}: {value}")
+                    if deferred_row_lines:
+                        model_info_note = f"{model_info_note}\nDeferred rows:\n" + '\n'.join(deferred_row_lines)
 
                     note_rect = panel_rects['note_rect']
                     model_info_table = plt.table(
