@@ -1735,9 +1735,7 @@ def render_panel_table(
     # Ensure renderer-backed text metrics are current.
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
-    fig_width_px = float(fig.bbox.width)
     fig_height_px = float(fig.bbox.height)
-    available_width_px = max(1.0, rect['width'] * fig_width_px)
     available_height_px = max(1.0, rect['height'] * fig_height_px)
     cell_padding_px = cell_padding_points * (fig.dpi / 72.0)
 
