@@ -56,11 +56,11 @@ for name in [
     setattr(qtwidgets_stub, name, type(name, (), {}))
 sys.modules["PyQt6.QtWidgets"] = qtwidgets_stub
 
-custom_logger_stub = types.ModuleType("modules.CustomLogger")
+custom_logger_stub = types.ModuleType("modules.custom_logger")
 custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
-sys.modules["modules.CustomLogger"] = custom_logger_stub
+sys.modules["modules.custom_logger"] = custom_logger_stub
 
-from modules.ModifyDB import ModifyDB  # noqa: E402
+from modules.modify_db import ModifyDB  # noqa: E402
 
 
 class _FakeSelectionModel:

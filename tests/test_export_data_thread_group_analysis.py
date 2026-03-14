@@ -40,7 +40,7 @@ qtcore_stub.QThread = getattr(qtcore_stub, 'QThread', _DummyThread)
 qtcore_stub.pyqtSignal = getattr(qtcore_stub, 'pyqtSignal', _dummy_signal)
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 
 
 class _DummyLogger:
@@ -49,9 +49,9 @@ class _DummyLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules.setdefault('modules.CustomLogger', custom_logger_stub)
-from modules.ExportDataThread import ExportDataThread  # noqa: E402
-import modules.ExportDataThread as export_data_thread_module  # noqa: E402
+sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
+from modules.export_data_thread import ExportDataThread  # noqa: E402
+import modules.export_data_thread as export_data_thread_module  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 
 
@@ -228,8 +228,8 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         ax = MagicMock()
         with (
             patch.object(export_data_thread_module, '_HAS_SEABORN', False),
-            patch('modules.ExportDataThread.plt.subplots', return_value=(fig, ax)),
-            patch('modules.ExportDataThread.plt.close'),
+            patch('modules.export_data_thread.plt.subplots', return_value=(fig, ax)),
+            patch('modules.export_data_thread.plt.close'),
         ):
             result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'violin')
 
@@ -256,8 +256,8 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         fig = MagicMock()
         ax = MagicMock()
         with (
-            patch('modules.ExportDataThread.plt.subplots', return_value=(fig, ax)),
-            patch('modules.ExportDataThread.plt.close'),
+            patch('modules.export_data_thread.plt.subplots', return_value=(fig, ax)),
+            patch('modules.export_data_thread.plt.close'),
         ):
             result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram')
 

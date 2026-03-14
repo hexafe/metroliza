@@ -40,7 +40,7 @@ qtcore_stub.QThread = _DummyThread
 qtcore_stub.pyqtSignal = _dummy_signal
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 
 
 class _DummyLogger:
@@ -49,9 +49,9 @@ class _DummyLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.CustomLogger'] = custom_logger_stub
+sys.modules['modules.custom_logger'] = custom_logger_stub
 
-from modules.ExportDataThread import (  # noqa: E402
+from modules.export_data_thread import (  # noqa: E402
     ExportDataThread,
     build_histogram_annotation_specs,
     build_histogram_mean_line_style,
@@ -1957,14 +1957,14 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         fig_seaborn, ax_seaborn = plt.subplots(figsize=(6, 4))
         seaborn_stub = types.SimpleNamespace(violinplot=lambda **kwargs: None)
-        with mock.patch('modules.ExportDataThread._HAS_SEABORN', True), mock.patch('modules.ExportDataThread.sns', seaborn_stub, create=True):
+        with mock.patch('modules.export_data_thread._HAS_SEABORN', True), mock.patch('modules.export_data_thread.sns', seaborn_stub, create=True):
             render_violin(ax_seaborn, values, labels)
         seaborn_mean_x = sorted({float(text.xy[0]) for text in ax_seaborn.texts if text.get_text().startswith('μ=')})
         self.assertEqual(seaborn_mean_x, [0.0, 1.0])
         self.assertEqual(ax_seaborn.get_xticks().tolist(), [0.0, 1.0])
 
         fig_matplotlib, ax_matplotlib = plt.subplots(figsize=(6, 4))
-        with mock.patch('modules.ExportDataThread._HAS_SEABORN', False):
+        with mock.patch('modules.export_data_thread._HAS_SEABORN', False):
             render_violin(ax_matplotlib, values, labels)
         matplotlib_mean_x = sorted({float(text.xy[0]) for text in ax_matplotlib.texts if text.get_text().startswith('μ=')})
         self.assertEqual(matplotlib_mean_x, [1.0, 2.0])
@@ -1991,7 +1991,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             captured_axes.append(ax)
 
         seaborn_stub = types.SimpleNamespace(violinplot=_stub_violinplot)
-        with mock.patch('modules.ExportDataThread._HAS_SEABORN', True), mock.patch('modules.ExportDataThread.sns', seaborn_stub, create=True), mock.patch('modules.ExportDataThread.plt.close'):
+        with mock.patch('modules.export_data_thread._HAS_SEABORN', True), mock.patch('modules.export_data_thread.sns', seaborn_stub, create=True), mock.patch('modules.export_data_thread.plt.close'):
             asset = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'violin')
 
         self.assertIn('image_data', asset)
@@ -2022,7 +2022,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             captured_axes.append(ax)
             return fig, ax
 
-        with mock.patch('modules.ExportDataThread.plt.subplots', side_effect=_capture_subplots):
+        with mock.patch('modules.export_data_thread.plt.subplots', side_effect=_capture_subplots):
             asset = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram')
 
         self.assertIn('image_data', asset)

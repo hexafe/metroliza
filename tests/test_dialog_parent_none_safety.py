@@ -76,7 +76,7 @@ def _import_fresh(module_name):
 class TestDialogParentNoneSafety(unittest.TestCase):
     def test_data_grouping_constructor_with_none_parent(self):
         with _qt_stubbed_imports():
-            DataGrouping = _import_fresh('modules.DataGrouping').DataGrouping
+            DataGrouping = _import_fresh('modules.data_grouping').DataGrouping
             with patch.object(DataGrouping, 'setup_ui', return_value=None), patch.object(
                 DataGrouping, 'read_data_to_df', return_value=None
             ), patch.object(DataGrouping, 'add_default_group', return_value=None), patch.object(
@@ -86,9 +86,9 @@ class TestDialogParentNoneSafety(unittest.TestCase):
 
     def test_export_dialog_constructor_with_none_parent(self):
         with _qt_stubbed_imports():
-            _import_fresh('modules.FilterDialog')
-            _import_fresh('modules.DataGrouping')
-            ExportDialog = _import_fresh('modules.ExportDialog').ExportDialog
+            _import_fresh('modules.filter_dialog')
+            _import_fresh('modules.data_grouping')
+            ExportDialog = _import_fresh('modules.export_dialog').ExportDialog
             with patch.object(ExportDialog, 'init_widgets', return_value=None), patch.object(
                 ExportDialog, 'init_layout', return_value=None
             ), patch.object(ExportDialog, '_load_dialog_config', return_value={'selected_preset': 'fast_diagnostics'}):
@@ -96,19 +96,19 @@ class TestDialogParentNoneSafety(unittest.TestCase):
 
     def test_filter_dialog_constructor_with_none_parent(self):
         with _qt_stubbed_imports():
-            FilterDialog = _import_fresh('modules.FilterDialog').FilterDialog
+            FilterDialog = _import_fresh('modules.filter_dialog').FilterDialog
             with patch.object(FilterDialog, 'setup_ui', return_value=None):
                 FilterDialog(parent=None, db_file='')
 
     def test_modify_db_constructor_with_none_parent(self):
         with _qt_stubbed_imports():
-            ModifyDB = _import_fresh('modules.ModifyDB').ModifyDB
+            ModifyDB = _import_fresh('modules.modify_db').ModifyDB
             with patch.object(ModifyDB, 'setup_ui', return_value=None):
                 ModifyDB(parent=None, db_file='')
 
     def test_release_notes_dialog_constructor_with_none_parent(self):
         with _qt_stubbed_imports():
-            ReleaseNotesDialog = _import_fresh('modules.ReleaseNotesDialog').ReleaseNotesDialog
+            ReleaseNotesDialog = _import_fresh('modules.release_notes_dialog').ReleaseNotesDialog
             ReleaseNotesDialog(parent=None, release_notes='<p>Release notes</p>')
 
 

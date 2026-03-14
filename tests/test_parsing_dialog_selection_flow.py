@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 try:
     from PyQt6.QtWidgets import QApplication, QMessageBox
-    from modules.ParsingDialog import ParsingDialog
+    from modules.parsing_dialog import ParsingDialog
 except ImportError as exc:  # pragma: no cover - environment-dependent import
     QApplication = None
     QMessageBox = None
@@ -28,9 +28,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
     def test_cancel_directory_and_decline_archive_keeps_selection_empty(self):
         dialog = ParsingDialog(parent=None, directory=None, db_file=None)
 
-        with patch('modules.ParsingDialog.QFileDialog.getExistingDirectory', return_value=''), \
-                patch('modules.ParsingDialog.QMessageBox.question', return_value=QMessageBox.StandardButton.No), \
-                patch('modules.ParsingDialog.QFileDialog.getOpenFileName') as get_open_file_name:
+        with patch('modules.parsing_dialog.QFileDialog.getExistingDirectory', return_value=''), \
+                patch('modules.parsing_dialog.QMessageBox.question', return_value=QMessageBox.StandardButton.No), \
+                patch('modules.parsing_dialog.QFileDialog.getOpenFileName') as get_open_file_name:
             dialog.select_directory()
 
         self.assertEqual(dialog.directory, None)
@@ -40,9 +40,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
     def test_cancel_directory_and_accept_archive_opens_archive_dialog(self):
         dialog = ParsingDialog(parent=_DummyParent(), directory=None, db_file=None)
 
-        with patch('modules.ParsingDialog.QFileDialog.getExistingDirectory', return_value=''), \
-                patch('modules.ParsingDialog.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes), \
-                patch('modules.ParsingDialog.QFileDialog.getOpenFileName', return_value=('/tmp/source.zip', '')) as get_open_file_name:
+        with patch('modules.parsing_dialog.QFileDialog.getExistingDirectory', return_value=''), \
+                patch('modules.parsing_dialog.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes), \
+                patch('modules.parsing_dialog.QFileDialog.getOpenFileName', return_value=('/tmp/source.zip', '')) as get_open_file_name:
             dialog.select_directory()
 
         self.assertEqual(dialog.directory, '/tmp/source.zip')
