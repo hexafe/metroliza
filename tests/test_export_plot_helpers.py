@@ -172,11 +172,11 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual([label for label, _ in rows], [
-            'Best fit',
-            'GOF p-value',
-            'Estimated NOK %',
-            'Estimated NOK (PPM)',
-            'Estimated yield %',
+            'Model',
+            'GOF p',
+            'Est. NOK %',
+            'Est. PPM',
+            'Est. yield',
             'Fit quality',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
@@ -198,11 +198,11 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(rows[0], ('Best fit', 'N/A'))
-        self.assertEqual(rows[1], ('GOF p-value', 'N/A'))
-        self.assertEqual(rows[2], ('Estimated NOK %', 'N/A'))
-        self.assertEqual(rows[3], ('Estimated NOK (PPM)', 'N/A'))
-        self.assertEqual(rows[4], ('Estimated yield %', 'N/A'))
+        self.assertEqual(rows[0], ('Model', 'N/A'))
+        self.assertEqual(rows[1], ('GOF p', 'N/A'))
+        self.assertEqual(rows[2], ('Est. NOK %', 'N/A'))
+        self.assertEqual(rows[3], ('Est. PPM', 'N/A'))
+        self.assertEqual(rows[4], ('Est. yield', 'N/A'))
         self.assertEqual(rows[5], ('Fit quality', 'Unreliable'))
 
     def test_apply_summary_plot_theme_sets_lighter_grid_alpha_and_linewidth(self):

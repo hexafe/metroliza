@@ -178,6 +178,22 @@ _HISTOGRAM_X_PADDING_RATIO = 0.05
 _HISTOGRAM_ZERO_RANGE_ABS_PADDING = 0.05
 
 
+_DISTRIBUTION_FIT_COMPACT_LABELS = {
+    'Best fit': 'Model',
+    'Selected model': 'Model',
+    'GOF p-value': 'GOF p',
+    'Estimated NOK %': 'Est. NOK %',
+    'Estimated NOK (PPM)': 'Est. PPM',
+    'Estimated yield %': 'Est. yield',
+}
+
+
+def _compact_distribution_fit_label(label):
+    """Return compact distribution-fit labels used in tables and notes."""
+    normalized_label = str(label or '').strip()
+    return _DISTRIBUTION_FIT_COMPACT_LABELS.get(normalized_label, normalized_label)
+
+
 # Query wrappers keep the thread-facing import path stable while delegating
 # implementation to `export_query_service`, allowing tests to patch this module
 # without importing lower-level services directly.
@@ -671,7 +687,7 @@ def _build_distribution_fit_table_rows(distribution_fit_result):
     else:
         gof_display = f"{float(gof_pvalue):.4f}"
 
-    return [
+    raw_rows = [
         ('Best fit', selected_model.get('display_name', 'N/A')),
         ('GOF p-value', gof_display),
         ('Estimated NOK %', _format_percent(risk_estimates.get('nok_percent'))),
@@ -679,6 +695,7 @@ def _build_distribution_fit_table_rows(distribution_fit_result):
         ('Estimated yield %', _format_percent(risk_estimates.get('yield_percent'))),
         ('Fit quality', str(fit_quality.get('label', 'unknown')).title()),
     ]
+    return [(_compact_distribution_fit_label(label), value) for label, value in raw_rows]
 
 
 def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats):
@@ -703,8 +720,8 @@ def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats)
             'priority': 90,
         },
         {
-            'label': 'Selected model',
-            'compact_label': 'Model',
+            'label': 'Model',
+            'compact_label': _compact_distribution_fit_label('Selected model'),
             'value': selected_model.get('display_name', 'N/A'),
             'priority': 80,
         },
@@ -3904,12 +3921,10 @@ class ExportDataThread(QThread):
                             'min_value_fraction': 0.26,
                             'cell_padding_points': 2.2,
                             'compact_label_mapping': {
-                                'Estimated NOK (PPM)': 'Est. NOK (PPM)',
-                                'Estimated yield %': 'Est. yield %',
-                                'GOF p-value': 'GOF p',
+                                **_DISTRIBUTION_FIT_COMPACT_LABELS,
                                 'Normality': 'Norm.',
                             },
-                            'low_priority_labels': {'Estimated NOK (PPM)', 'Estimated yield %', 'NOK (PPM)', 'Yield %'},
+                            'low_priority_labels': {'Est. PPM', 'Est. yield', 'NOK (PPM)', 'Yield %'},
                         },
                     )
                     ax_table = right_table_meta['table']
@@ -3941,12 +3956,10 @@ class ExportDataThread(QThread):
                             'min_value_fraction': 0.24,
                             'cell_padding_points': 2.2,
                             'compact_label_mapping': {
-                                'Estimated NOK (PPM)': 'Est. NOK (PPM)',
-                                'Estimated yield %': 'Est. yield %',
-                                'GOF p-value': 'GOF p',
+                                **_DISTRIBUTION_FIT_COMPACT_LABELS,
                                 'Fit quality': 'Fit qual.',
                             },
-                            'low_priority_labels': {'Estimated NOK (PPM)', 'Estimated yield %'},
+                            'low_priority_labels': {'Est. PPM', 'Est. yield'},
                         },
                     )
                     distribution_fit_table = left_table_meta['table']
