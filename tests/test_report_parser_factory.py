@@ -331,3 +331,69 @@ def test_pdf_alias_assignment_updates_canonical_blocks_text():
     parser.pdf_blocks_text = [[["Header"], [["X", 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]]]]
 
     assert parser.blocks_text == parser.pdf_blocks_text
+
+
+def test_load_external_plugins_registers_plugin_from_file(tmp_path):
+    plugin_file = tmp_path / "demo_external_plugin.py"
+    plugin_file.write_text(
+        """
+from modules.base_report_parser import BaseReportParser
+from modules.parser_plugin_contracts import BaseReportParserPlugin, PluginManifest, ProbeResult
+
+class DemoExternalParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id=\"demo_external\",
+        display_name=\"Demo External\",
+        version=\"1.0.0\",
+        supported_formats=(\"pdf\",),
+    )
+
+    @classmethod
+    def probe(cls, _input_ref, _context):
+        return ProbeResult(plugin_id=\"demo_external\", can_parse=True, confidence=77)
+
+    def open_report(self):
+        self.raw_text = [\"ok\"]
+
+    def split_text_to_blocks(self):
+        self.blocks_text = []
+
+    def parse_to_v2(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def to_legacy_blocks(_parse_result_v2):
+        return []
+"""
+    )
+
+    load_external_plugins = factory_module.load_external_plugins
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    try:
+        result = load_external_plugins(str(plugin_file))
+        assert "demo_external" in PARSER_MAP
+        assert "demo_external" in result.loaded_plugin_ids
+        diagnostics = resolve_parser_with_diagnostics(tmp_path / "external.pdf")
+        assert diagnostics.selected is not None
+        assert diagnostics.selected.plugin_id == "cmm"
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
+def test_load_external_plugins_reports_skipped_paths_for_missing_input(tmp_path):
+    load_external_plugins = factory_module.load_external_plugins
+    missing_path = str(tmp_path / "missing_dir")
+
+    result = load_external_plugins(missing_path)
+    assert missing_path in result.skipped_paths

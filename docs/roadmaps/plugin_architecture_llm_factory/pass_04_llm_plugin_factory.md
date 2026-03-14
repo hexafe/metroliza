@@ -75,8 +75,8 @@ No architecture invention allowed outside approved extension points.
 
 ## Jira seed checklist
 - [ ] Create generation context pack format.
-- [ ] Create baseline plugin scaffold.
-- [ ] Create analysis-pass prompt template.
-- [ ] Create implementation-pass prompt template.
-- [ ] Implement validation gate script/workflow.
+- [x] Create baseline plugin scaffold.
+- [x] Create analysis-pass prompt template.
+- [x] Create implementation-pass prompt template.
+- [x] Implement validation gate script/workflow (baseline contract gate).
 - [ ] Implement repair loop policy and artifacts.

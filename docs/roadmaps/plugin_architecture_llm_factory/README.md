@@ -9,9 +9,9 @@ This roadmap defines a **staged planning package** for implementing:
 This package is intentionally documentation-only and is designed to be executed **after** core plugin architecture implementation starts.
 
 ## Status
-- **Current status:** Planning package prepared.
-- **Execution status:** Waiting for plugin architecture implementation kickoff.
-- **Owner handoff point:** Use each pass checklist as the execution backlog for iterative implementation.
+- **Current status:** Planning package prepared; major portions of Pass 1–3 are now implemented in code.
+- **Execution status:** Active implementation with partial Pass 4 baseline in place (LLM scaffold exists), while Pass 4/5 operationalization remains open.
+- **Owner handoff point:** Use each pass checklist as the execution backlog for remaining implementation and rollout hardening.
 
 ## Scope assumptions
 - Suppliers can use diverse regional conventions (decimal separators, date formats, locale-specific labels, multilingual content).

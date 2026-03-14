@@ -62,11 +62,12 @@ Design runtime selection of the right plugin for diverse report formats and glob
   - disabled (default): candidates with confidence `>= 1` can be selected,
   - enabled: candidates must have confidence `>= 80`.
 - Resolver diagnostics include explicit rejection reasons for unsupported inputs (`no_plugin_can_parse`) and threshold failures (`no_plugin_above_confidence_threshold`).
+- External plugin loading is available via `PARSER_EXTERNAL_PLUGIN_PATHS` (path-separated `.py` files or directories).
 
 ## Jira seed checklist
 - [x] Define registry API and plugin loading sequence.
 - [x] Define probe context object and caching policy.
 - [x] Define selection tie-break policy and thresholds.
-- [ ] Define parse-thread integration points.
+- [x] Define parse-thread integration points.
 - [x] Define diagnostics/logging payload for selection events.
 - [ ] Define unsupported-template handling path.

@@ -40,6 +40,31 @@ This implementation now aligns runtime with roadmap Pass 1 / Pass 2 / Pass 3 and
 ## Deferred roadmap items
 The following roadmap items remain future work (outside this refactor slice):
 - full adapter equivalence matrix and lossy conversion registry governance,
-- external plugin package loading/entrypoint discovery,
-- full validation gate automation for generated plugins,
 - end-to-end repair loop workflow and governance process for LLM-generated parser candidates.
+
+## Verification snapshot (2026-03-14)
+After reviewing the current code paths and targeted tests, the status is:
+
+- **Parser refactoring completion:** **Substantially complete for Pass 1–3 baseline** and usable in runtime.
+  - Contracts (`BaseReportParserPlugin`, `PluginManifest`, `ProbeResult`, `ParseResultV2`) are implemented.
+  - Registry/detection/resolution and compatibility registration paths are implemented and test-covered.
+  - CMM parser implements `parse_to_v2(...)` + `to_legacy_blocks(...)` and remains backward-compatible with existing entrypoints.
+- **LLM plugin build readiness:** **Partially ready (foundation ready, production workflow not complete).**
+  - A baseline LLM scaffold exists (`build_plugin_scaffold`) with prompt and template assets.
+  - However, roadmap Pass 4/5 operational gates remain incomplete (automated validation gate workflow, repair loop automation, external plugin loading/discovery, governance/runbook integration).
+
+### Readiness verdict
+- **Ready now for internal/pilot LLM-assisted plugin prototyping** against the existing contract and scaffold.
+- **Not yet fully ready for broad production rollout** of LLM-generated plugins until deferred Pass 4/5 controls are implemented.
+
+### Highest-priority next actions
+1. Implement an automated validation gate runner (contract + fixtures + legacy adapter parity + deterministic output checks).
+2. Add external plugin package loading/entrypoint discovery to decouple plugin delivery from core codebase releases.
+3. Add a repair-loop workflow that feeds failing test diffs back into a constrained regeneration pass.
+4. Publish rollout/rollback runbook and ownership governance checklist in CI/PR policy.
+
+## Newly implemented from verification follow-up
+- Added external plugin discovery/loading via `PARSER_EXTERNAL_PLUGIN_PATHS` in `modules/report_parser_factory.py` (supports file or directory inputs).
+- Added a baseline automated validation gate utility in `modules/parser_plugin_validation.py` with a runnable script `scripts/validate_parser_plugins.py`.
+- Added tests covering external plugin loading and validation gate behavior.
+
