@@ -1,6 +1,7 @@
 import importlib
 import importlib.machinery
 import importlib.util
+import os
 import sys
 import types
 from pathlib import Path
@@ -47,9 +48,11 @@ infer_source_format = contracts_module.infer_source_format
 PARSER_MANIFESTS = factory_module.PARSER_MANIFESTS
 PARSER_MAP = factory_module.PARSER_MAP
 PARSER_DETECTORS = factory_module.PARSER_DETECTORS
+PROBE_RESULT_CACHE = factory_module.PROBE_RESULT_CACHE
 detect_format = factory_module.detect_format
 get_parser = factory_module.get_parser
 register_parser = factory_module.register_parser
+reset_probe_cache = factory_module.reset_probe_cache
 resolve_parser_with_diagnostics = factory_module.resolve_parser_with_diagnostics
 
 
@@ -198,6 +201,129 @@ def test_resolver_reports_no_plugin_for_unknown_format(tmp_path):
     diagnostics = resolve_parser_with_diagnostics(tmp_path / "file.txt")
     assert diagnostics.selected is None
     assert diagnostics.rejected_reason == "no_plugin_can_parse"
+
+
+def test_resolver_uses_probe_cache_for_same_plugin_and_path(tmp_path):
+    class CachedProbeParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="cached_probe",
+            display_name="Cached Probe",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        probe_calls = 0
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            cls.probe_calls += 1
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=90)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    try:
+        reset_probe_cache()
+        _restore_real_cmm_registration()
+        register_parser(CachedProbeParser)
+
+        report_path = tmp_path / "cached_file.pdf"
+        resolve_parser_with_diagnostics(report_path)
+        resolve_parser_with_diagnostics(report_path)
+
+        assert CachedProbeParser.probe_calls == 1
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
+def test_strict_matching_rejects_low_confidence_candidate(tmp_path):
+    class LowConfidenceParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="low_confidence",
+            display_name="Low Confidence",
+            version="1.0.0",
+            supported_formats=("pdf",),
+            priority=1000,
+        )
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=40)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    original_env = os.environ.get("PARSER_STRICT_MATCHING")
+    try:
+        if "PARSER_STRICT_MATCHING" in os.environ:
+            del os.environ["PARSER_STRICT_MATCHING"]
+
+        _restore_real_cmm_registration()
+        register_parser(LowConfidenceParser)
+        PARSER_MAP.pop("cmm", None)
+        PARSER_MANIFESTS.pop("cmm", None)
+        PARSER_DETECTORS.pop("cmm", None)
+        reset_probe_cache()
+
+        report_path = tmp_path / "strict_mode.pdf"
+
+        non_strict = resolve_parser_with_diagnostics(report_path)
+        assert non_strict.selected is not None
+        assert non_strict.selected.plugin_id == "low_confidence"
+
+        os.environ["PARSER_STRICT_MATCHING"] = "true"
+        reset_probe_cache()
+        strict = resolve_parser_with_diagnostics(report_path)
+        assert strict.selected is None
+        assert strict.rejected_reason == "no_plugin_above_confidence_threshold"
+    finally:
+        if original_env is None:
+            os.environ.pop("PARSER_STRICT_MATCHING", None)
+        else:
+            os.environ["PARSER_STRICT_MATCHING"] = original_env
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
 
 
 def test_pdf_alias_assignment_updates_canonical_blocks_text():

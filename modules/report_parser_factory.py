@@ -8,6 +8,7 @@ This module keeps compatibility with both:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Callable, Type
 
@@ -39,6 +40,7 @@ class ResolverDiagnostics:
 PARSER_MAP: dict[str, ParserType] = {}
 PARSER_MANIFESTS: dict[str, PluginManifest] = {}
 PARSER_DETECTORS: dict[str, DetectorType] = {}
+PROBE_RESULT_CACHE: dict[tuple[str, str], ProbeResult] = {}
 
 
 def _as_file_path(file_path: str | Path) -> str:
@@ -49,6 +51,12 @@ def list_plugins() -> tuple[PluginManifest, ...]:
     """Return registered plugin manifests."""
 
     return tuple(PARSER_MANIFESTS.values())
+
+
+def reset_probe_cache() -> None:
+    """Clear in-process probe cache (primarily for tests and long-running jobs)."""
+
+    PROBE_RESULT_CACHE.clear()
 
 
 def plugins_for_format(source_format: str) -> tuple[ParserType, ...]:
@@ -88,6 +96,31 @@ def _safe_probe(
     return result
 
 
+def _strict_matching_enabled() -> bool:
+    value = os.getenv("PARSER_STRICT_MATCHING", "false").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _minimum_confidence_for_selection() -> int:
+    return 80 if _strict_matching_enabled() else 1
+
+
+def _probe_with_cache(
+    plugin_id: str,
+    parser_cls: ParserType,
+    normalized_path: str,
+    probe_context: ProbeContext,
+) -> ProbeResult:
+    cache_key = (plugin_id, normalized_path)
+    cached = PROBE_RESULT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    result = _safe_probe(plugin_id, parser_cls, normalized_path, probe_context)
+    PROBE_RESULT_CACHE[cache_key] = result
+    return result
+
+
 def resolve_parser_with_diagnostics(file_path: str | Path) -> ResolverDiagnostics:
     """Resolve plugin using deterministic confidence/priority/id tie-breakers."""
 
@@ -102,16 +135,20 @@ def resolve_parser_with_diagnostics(file_path: str | Path) -> ResolverDiagnostic
             continue
         if source_format not in manifest.supported_formats:
             continue
-        candidates.append(_safe_probe(plugin_id, parser_cls, normalized_path, probe_context))
+        candidates.append(_probe_with_cache(plugin_id, parser_cls, normalized_path, probe_context))
 
-    parseable = [c for c in candidates if c.can_parse]
+    minimum_confidence = _minimum_confidence_for_selection()
+    parseable = [c for c in candidates if c.can_parse and c.confidence >= minimum_confidence]
     if not parseable:
+        rejected_reason = "no_plugin_can_parse"
+        if any(c.can_parse for c in candidates):
+            rejected_reason = "no_plugin_above_confidence_threshold"
         return ResolverDiagnostics(
             source_path=normalized_path,
             source_format=source_format,
             candidates_considered=tuple(candidates),
             selected=None,
-            rejected_reason="no_plugin_can_parse",
+            rejected_reason=rejected_reason,
         )
 
     selected = max(
@@ -220,6 +257,7 @@ def register_parser(
 
     PARSER_MAP[plugin_id] = parser_cls
     PARSER_MANIFESTS[plugin_id] = plugin_manifest
+    PROBE_RESULT_CACHE.clear()
     if detector is not None:
         PARSER_DETECTORS[plugin_id] = detector
 

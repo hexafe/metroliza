@@ -46,6 +46,12 @@ Dependency files:
 
 Parity between native and Python backends is enforced through fixture-based tests in `tests/test_cmm_parser_parity.py`.
 
+## Parser plugin resolver controls
+
+- Default selection accepts parser probes with confidence `>=1` and resolves ties by confidence, plugin priority, then plugin id.
+- Optional strict selection: set `PARSER_STRICT_MATCHING=true` to require confidence `>=80`.
+- Probe results are cached per plugin/path during process runtime to reduce repeated probe work in batch parses.
+
 ## Group Comparison export sheet
 
 Excel exports now include a **Group Comparison** worksheet that consolidates:

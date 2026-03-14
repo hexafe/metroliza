@@ -56,10 +56,17 @@ Design runtime selection of the right plugin for diverse report formats and glob
 - Strict confidence thresholds + fallback to default compatible parser with warning.
 - Cache probe results per file path per run.
 
+## Current implementation notes (repo status)
+- Probe results are cached per `(plugin_id, source_path)` during process lifetime in `modules/report_parser_factory.py` and reset on registration changes.
+- Strict confidence thresholding is controlled by `PARSER_STRICT_MATCHING` (`true/1/on/yes`):
+  - disabled (default): candidates with confidence `>= 1` can be selected,
+  - enabled: candidates must have confidence `>= 80`.
+- Resolver diagnostics include explicit rejection reasons for unsupported inputs (`no_plugin_can_parse`) and threshold failures (`no_plugin_above_confidence_threshold`).
+
 ## Jira seed checklist
-- [ ] Define registry API and plugin loading sequence.
-- [ ] Define probe context object and caching policy.
-- [ ] Define selection tie-break policy and thresholds.
+- [x] Define registry API and plugin loading sequence.
+- [x] Define probe context object and caching policy.
+- [x] Define selection tie-break policy and thresholds.
 - [ ] Define parse-thread integration points.
-- [ ] Define diagnostics/logging payload for selection events.
+- [x] Define diagnostics/logging payload for selection events.
 - [ ] Define unsupported-template handling path.
