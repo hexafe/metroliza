@@ -183,9 +183,10 @@ _DISTRIBUTION_FIT_COMPACT_LABELS = {
     'Best fit': 'Model',
     'Selected model': 'Model',
     'GOF p-value': 'GOF p',
+    'Estimated P(X < LSL)': 'P(<LSL)',
+    'Estimated P(X > USL)': 'P(>USL)',
     'Estimated NOK %': 'Est. NOK %',
     'Estimated NOK (PPM)': 'Est. PPM',
-    'Estimated yield %': 'Est. yield',
 }
 
 
@@ -535,7 +536,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
             return None
         return left, right, bottom, top
 
-    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=22.0, extra_side_px=-40.0):
+    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=32.0, extra_side_px=-40.0):
         bounds = _resolve_plot_rect_display_bounds(fig, plot_rect)
         if bounds is None:
             return None
@@ -692,11 +693,31 @@ def _format_percent(value):
     return f"{float(value):.3f}%"
 
 
-def _build_distribution_fit_table_rows(distribution_fit_result):
+def _format_probability_percent(probability):
+    if probability is None:
+        return 'N/A'
+    try:
+        value = float(probability)
+    except (TypeError, ValueError):
+        return 'N/A'
+    if not np.isfinite(value):
+        return 'N/A'
+    return f"{max(0.0, min(1.0, value)) * 100.0:.3f}%"
+
+
+def _is_effectively_zero(value, tolerance=1e-12):
+    try:
+        return abs(float(value)) <= tolerance
+    except (TypeError, ValueError):
+        return False
+
+
+def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl=None):
     selected_model = distribution_fit_result.get('selected_model') or {}
     fit_quality = distribution_fit_result.get('fit_quality') or {}
     gof_metrics = distribution_fit_result.get('gof_metrics') or {}
     risk_estimates = distribution_fit_result.get('risk_estimates') or {}
+    inferred_support_mode = distribution_fit_result.get('inferred_support_mode')
 
     gof_pvalue = gof_metrics.get('ad_pvalue')
     if gof_pvalue is None:
@@ -704,13 +725,32 @@ def _build_distribution_fit_table_rows(distribution_fit_result):
     else:
         gof_display = f"{float(gof_pvalue):.4f}"
 
+    spec_type = str(risk_estimates.get('spec_type', 'none'))
+    below_lsl = risk_estimates.get('below_lsl_probability')
+    above_usl = risk_estimates.get('above_usl_probability')
+
     raw_rows = [
         ('Best fit', selected_model.get('display_name', 'N/A')),
         ('GOF p-value', gof_display),
+    ]
+
+    allow_lower_tail_row = spec_type in {'bilateral', 'lower_only'} and lsl is not None
+    if inferred_support_mode == 'one_sided_zero_bound_positive' and _is_effectively_zero(lsl):
+        if _format_probability_percent(below_lsl) == 'N/A' or _is_effectively_zero(below_lsl):
+            allow_lower_tail_row = False
+
+    if allow_lower_tail_row:
+        raw_rows.append(('Estimated P(X < LSL)', _format_probability_percent(below_lsl)))
+
+    if spec_type in {'bilateral', 'upper_only'} and usl is not None:
+        raw_rows.append(('Estimated P(X > USL)', _format_probability_percent(above_usl)))
+
+    raw_rows.extend([
         ('Estimated NOK %', _format_percent(risk_estimates.get('nok_percent'))),
         ('Estimated NOK (PPM)', 'N/A' if risk_estimates.get('ppm_nok') is None else f"{float(risk_estimates['ppm_nok']):,.0f}"),
         ('Fit quality', str(fit_quality.get('label', 'unknown')).title()),
-    ]
+    ])
+
     return [(_compact_distribution_fit_label(label), value) for label, value in raw_rows]
 
 
@@ -1666,36 +1706,6 @@ def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, lines
     return density_axis
 
 
-def _safe_probability_percent(probability):
-    if probability is None:
-        return None
-    try:
-        value = float(probability)
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(value):
-        return None
-    return float(np.clip(value, 0.0, 1.0) * 100.0)
-
-
-def _resolve_tail_probability_percent(distribution_fit_result, *, spec_value, side):
-    selected_model_cdf = (distribution_fit_result or {}).get('selected_model_cdf') or {}
-    x_values = np.asarray(selected_model_cdf.get('x', []), dtype=float)
-    y_values = np.asarray(selected_model_cdf.get('y', []), dtype=float)
-    if x_values.size > 1 and y_values.size == x_values.size:
-        try:
-            cdf_at_spec = float(np.interp(float(spec_value), x_values, y_values))
-            cdf_at_spec = float(np.clip(cdf_at_spec, 0.0, 1.0))
-            probability = cdf_at_spec if side == 'left' else (1.0 - cdf_at_spec)
-            return _safe_probability_percent(probability)
-        except (TypeError, ValueError):
-            pass
-
-    risk_estimates = (distribution_fit_result or {}).get('risk_estimates') or {}
-    risk_key = 'below_lsl_probability' if side == 'left' else 'above_usl_probability'
-    return _safe_probability_percent(risk_estimates.get(risk_key))
-
-
 def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=None):
     """Shade modeled PDF tails beyond active specification limits."""
 
@@ -1739,69 +1749,6 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
             linewidth=0.0,
             zorder=2,
         )
-
-
-def render_modeled_tail_probability_annotations(
-    ax,
-    distribution_fit_result,
-    *,
-    lsl=None,
-    usl=None,
-    fontsize=6.6,
-    plot_rect=None,
-):
-    """Annotate modeled tail probabilities near active specification limits when space allows."""
-
-    style = {
-        'fontsize': fontsize,
-        'color': SUMMARY_PLOT_PALETTE['annotation_text'],
-        'bbox': {'boxstyle': 'round,pad=0.16', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.92},
-        'zorder': 6,
-        'transform': ax.get_xaxis_transform(),
-        'va': 'top',
-    }
-    figure = ax.figure
-
-    specs = []
-    if usl is not None:
-        upper_pct = _resolve_tail_probability_percent(distribution_fit_result, spec_value=usl, side='right')
-        if upper_pct is not None:
-            specs.append({'kind': 'tail_usl', 'x': float(usl), 'y': 0.93, 'text': f"P(X > USL) = {upper_pct:.3f}%", 'ha': 'right'})
-    if lsl is not None:
-        lower_pct = _resolve_tail_probability_percent(distribution_fit_result, spec_value=lsl, side='left')
-        if lower_pct is not None:
-            specs.append({'kind': 'tail_lsl', 'x': float(lsl), 'y': 0.87, 'text': f"P(X < LSL) = {lower_pct:.3f}%", 'ha': 'left'})
-    if not specs:
-        return []
-
-    if len(specs) == 2 and abs(specs[0]['x'] - specs[1]['x']) < 0.06 * abs(ax.get_xlim()[1] - ax.get_xlim()[0]):
-        specs[0]['y'] = 0.95
-        specs[1]['y'] = 0.85
-
-    rendered = []
-    bounds = None
-    if isinstance(plot_rect, dict):
-        figure.canvas.draw()
-        try:
-            left = float(plot_rect['x']) * float(figure.bbox.width)
-            bottom = float(plot_rect['y']) * float(figure.bbox.height)
-            right = left + (float(plot_rect['width']) * float(figure.bbox.width))
-            top = bottom + (float(plot_rect['height']) * float(figure.bbox.height))
-            bounds = (left + 2.0, right - 2.0, bottom + 2.0, top - 2.0)
-        except (KeyError, TypeError, ValueError):
-            bounds = None
-
-    for spec in specs:
-        artist = ax.text(spec['x'], spec['y'], spec['text'], ha=spec['ha'], **style)
-        if bounds is not None:
-            figure.canvas.draw()
-            bbox = artist.get_window_extent(renderer=figure.canvas.get_renderer())
-            if bbox.x0 < bounds[0] or bbox.x1 > bounds[1] or bbox.y0 < bounds[2] or bbox.y1 > bounds[3]:
-                artist.remove()
-                continue
-        rendered.append(artist)
-
-    return rendered
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -3908,7 +3855,11 @@ class ExportDataThread(QThread):
                     summary_stats.update(compute_estimated_tail_metrics(distribution_fit_result, lsl=LSL, usl=USL))
                     histogram_table_payload = build_histogram_table_data(summary_stats)
                     right_rows = histogram_table_payload['rows']
-                    left_rows = _build_distribution_fit_table_rows(distribution_fit_result)
+                    left_rows = _build_distribution_fit_table_rows(
+                        distribution_fit_result,
+                        lsl=LSL,
+                        usl=USL,
+                    )
                     model_info_note_items, poor_fit = _build_distribution_fit_info_note(
                         distribution_fit_result,
                         summary_stats=summary_stats,
@@ -4105,15 +4056,6 @@ class ExportDataThread(QThread):
                             linewidth=1.2 if poor_fit else 1.7,
                         )
                         render_modeled_tail_shading(plot_ax, distribution_fit_result, lsl=LSL, usl=USL)
-                        render_modeled_tail_probability_annotations(
-                            plot_ax,
-                            distribution_fit_result,
-                            lsl=LSL,
-                            usl=USL,
-                            fontsize=max(histogram_font_sizes['annotation_fontsize'] - 0.8, 6.2),
-                            plot_rect=plot_rect,
-                        )
-
                     kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
                     if kde_reference_curve is not None:
                         render_density_line(

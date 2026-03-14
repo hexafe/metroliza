@@ -99,7 +99,6 @@ from modules.export_data_thread import (  # noqa: E402
     render_scatter_numeric,
     render_histogram,
     render_density_line,
-    render_modeled_tail_probability_annotations,
     render_panel_table,
     render_panel_table_in_panel_axes,
     render_histogram_note_panel,
@@ -317,31 +316,89 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
-    def test_distribution_fit_table_rows_include_expected_payload_and_ordering(self):
+    def test_distribution_fit_table_rows_include_expected_payload_and_ordering_for_bilateral_specs(self):
         rows = _build_distribution_fit_table_rows(
             {
                 'selected_model': {'display_name': 'Weibull (Min)'},
                 'gof_metrics': {'ad_pvalue': 0.07342},
                 'fit_quality': {'label': 'medium'},
                 'risk_estimates': {
+                    'spec_type': 'bilateral',
+                    'below_lsl_probability': 0.0012,
+                    'above_usl_probability': 0.0023,
                     'nok_percent': 0.1234,
                     'ppm_nok': 1234.0,
                 },
-            }
+            },
+            lsl=9.5,
+            usl=10.5,
         )
 
         self.assertEqual([label for label, _ in rows], [
             'Model',
             'GOF p',
+            'P(<LSL)',
+            'P(>USL)',
             'Est. NOK %',
             'Est. PPM',
             'Fit quality',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
         self.assertEqual(rows[1][1], '0.0734')
-        self.assertEqual(rows[2][1], '0.123%')
-        self.assertEqual(rows[3][1], '1,234')
-        self.assertEqual(rows[4][1], 'Medium')
+        self.assertEqual(rows[2][1], '0.120%')
+        self.assertEqual(rows[3][1], '0.230%')
+        self.assertEqual(rows[4][1], '0.123%')
+        self.assertEqual(rows[5][1], '1,234')
+        self.assertEqual(rows[6][1], 'Medium')
+
+    def test_distribution_fit_table_rows_follow_upper_only_contract(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.01234,
+                    'nok_percent': 1.234,
+                    'ppm_nok': 12340.0,
+                },
+            },
+            lsl=None,
+            usl=10.0,
+        )
+
+        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(>USL)', 'Est. NOK %', 'Est. PPM', 'Fit quality'])
+
+    def test_distribution_fit_table_rows_follow_lower_only_contract(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'risk_estimates': {
+                    'spec_type': 'lower_only',
+                    'below_lsl_probability': 0.0456,
+                    'nok_percent': 4.56,
+                    'ppm_nok': 45600.0,
+                },
+            },
+            lsl=2.0,
+            usl=None,
+        )
+
+        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(<LSL)', 'Est. NOK %', 'Est. PPM', 'Fit quality'])
+
+    def test_distribution_fit_table_rows_omit_zero_bound_lower_tail_for_positive_support(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'inferred_support_mode': 'one_sided_zero_bound_positive',
+                'risk_estimates': {
+                    'spec_type': 'lower_only',
+                    'below_lsl_probability': 0.0,
+                    'nok_percent': 0.0,
+                    'ppm_nok': 0.0,
+                },
+            },
+            lsl=0.0,
+            usl=None,
+        )
+
+        self.assertNotIn('P(<LSL)', [label for label, _ in rows])
 
     def test_distribution_fit_table_rows_fallback_to_na_when_fit_unreliable(self):
         rows = _build_distribution_fit_table_rows(
@@ -412,27 +469,6 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
-    def test_render_modeled_tail_probability_annotations_follows_available_spec_limits(self):
-        fig, ax = plt.subplots(figsize=(6.0, 4.0))
-        ax.set_xlim(0.0, 10.0)
-        fit = {'risk_estimates': {'above_usl_probability': 0.02, 'below_lsl_probability': 0.03}}
-        try:
-            artists = render_modeled_tail_probability_annotations(ax, fit, lsl=2.0, usl=8.0, fontsize=7.0)
-            texts = [artist.get_text() for artist in artists]
-            self.assertEqual(len(texts), 2)
-            self.assertIn('P(X > USL)', texts[0] + texts[1])
-            self.assertIn('P(X < LSL)', texts[0] + texts[1])
-
-            upper_only = render_modeled_tail_probability_annotations(ax, fit, lsl=None, usl=8.0, fontsize=7.0)
-            self.assertEqual(len(upper_only), 1)
-            self.assertIn('P(X > USL)', upper_only[0].get_text())
-
-            lower_only = render_modeled_tail_probability_annotations(ax, fit, lsl=2.0, usl=None, fontsize=7.0)
-            self.assertEqual(len(lower_only), 1)
-            self.assertIn('P(X < LSL)', lower_only[0].get_text())
-        finally:
-            plt.close(fig)
-
     def test_distribution_fit_note_panel_avoids_model_and_fit_quality_duplication(self):
         note_items, _poor_fit = _build_distribution_fit_info_note(
             {
@@ -446,6 +482,37 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertNotIn('Model', labels)
         self.assertNotIn('Fit quality', labels)
         self.assertIn('Candidate family', labels)
+
+    def test_histogram_annotation_rendering_keeps_mean_and_spec_labels_without_tail_probability_text(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
+        try:
+            values = pd.DataFrame({'MEAS': np.linspace(9.7, 10.5, 60)})
+            render_histogram(ax, values, lsl=9.9, usl=10.3)
+
+            annotation_specs = build_histogram_annotation_specs(average=10.1, usl=10.3, lsl=9.9, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=0.8,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#cccccc', 'alpha': 0.94},
+            )
+
+            rendered_texts = [text.get_text() for text in ax.texts]
+            self.assertTrue(any(text.startswith('Mean =') for text in rendered_texts))
+            self.assertTrue(any(text.startswith('USL=') for text in rendered_texts))
+            self.assertTrue(any(text.startswith('LSL=') for text in rendered_texts))
+            self.assertFalse(any('P(X < LSL)' in text for text in rendered_texts))
+            self.assertFalse(any('P(X > USL)' in text for text in rendered_texts))
+        finally:
+            plt.close(fig)
 
     def test_apply_summary_plot_theme_sets_lighter_grid_alpha_and_linewidth(self):
         apply_summary_plot_theme()
@@ -672,16 +739,18 @@ class TestExportPlotHelpers(unittest.TestCase):
 
     def test_build_histogram_annotation_specs_returns_ordered_mean_usl_lsl_labels(self):
         annotations = build_histogram_annotation_specs(average=10.1234, usl=10.6, lsl=9.8, y_max=2.0)
+        by_kind = {item['kind']: item for item in annotations}
 
         self.assertEqual(len(annotations), 3)
         self.assertEqual(annotations[0]['text'], 'Mean = 10.123')
         self.assertEqual(annotations[0]['x'], 10.1234)
         self.assertEqual(annotations[1]['text'], 'USL=10.600')
-        self.assertGreater(annotations[1]['text_y_axes'], annotations[0]['text_y_axes'])
         self.assertEqual(annotations[1]['ha'], 'center')
         self.assertEqual(annotations[2]['text'], 'LSL=9.800')
         self.assertEqual(annotations[2]['ha'], 'center')
-        self.assertGreater(annotations[0]['text_y_axes'], annotations[2]['text_y_axes'])
+        self.assertEqual(by_kind['mean']['preferred_slot'], 'mean_primary')
+        self.assertEqual(by_kind['usl']['preferred_slot'], 'spec_primary')
+        self.assertEqual(by_kind['lsl']['preferred_slot'], 'spec_secondary')
 
     def test_summary_palette_keeps_annotation_emphasis_alias_for_backward_compatibility(self):
         self.assertEqual(
@@ -1257,8 +1326,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         by_kind = {item['kind']: item for item in resolved}
         self.assertEqual(max_row, 2)
         self.assertGreater(by_kind['mean']['row_index'], by_kind['usl']['row_index'])
-        self.assertGreater(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
         self.assertNotEqual(by_kind['usl']['row_index'], by_kind['lsl']['row_index'])
+        self.assertNotEqual(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
         self.assertEqual(by_kind['mean']['x'], 10.0)
 
     def test_compute_histogram_annotation_rows_allows_shared_lower_row_when_limits_are_far(self):
@@ -1273,11 +1342,11 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 1)
+        self.assertEqual(max_row, 2)
         self.assertEqual(by_kind['mean']['row_index'], 1)
         self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
-        self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.035)
+        self.assertEqual(by_kind['lsl']['row_index'], 2)
+        self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.020)
     def test_compute_histogram_annotation_rows_stacks_mean_and_usl_when_close(self):
         annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.02, lsl=7.0, y_max=1.0)
 
@@ -1290,10 +1359,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 1)
+        self.assertEqual(max_row, 2)
         self.assertEqual(by_kind['mean']['row_index'], 1)
         self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual(by_kind['lsl']['row_index'], 2)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 10.02, 7.0])
 
@@ -1309,10 +1378,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 1)
+        self.assertEqual(max_row, 2)
         self.assertEqual(by_kind['mean']['row_index'], 1)
         self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual(by_kind['lsl']['row_index'], 2)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 13.0, 10.03])
 
@@ -1330,9 +1399,9 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         by_kind = {item['kind']: item for item in resolved}
         self.assertEqual(max_row, 2)
-        self.assertEqual(by_kind['mean']['row_index'], 2)
-        self.assertEqual(by_kind['usl']['row_index'], 1)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 0)
+        self.assertEqual(by_kind['lsl']['row_index'], 2)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 10.2, 9.9])
 
@@ -1358,7 +1427,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             )
             by_kind = {item['kind']: item for item in resolved}
             self.assertGreater(by_kind['mean']['row_index'], by_kind['usl']['row_index'])
-            self.assertGreater(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
+            self.assertNotEqual(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
 
     def test_compute_histogram_annotation_rows_clustered_triplet_uses_non_overlapping_rows(self):
         annotation_specs = build_histogram_annotation_specs(average=5.0, usl=5.01, lsl=4.99, y_max=1.0)
@@ -1375,7 +1444,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(max_row, 2)
         self.assertEqual(len(set(rows)), 3)
 
-    def test_compute_histogram_annotation_rows_well_separated_triplet_keeps_compact_rows(self):
+    def test_compute_histogram_annotation_rows_well_separated_triplet_keeps_preferred_slots(self):
         annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
 
         resolved, max_row = compute_histogram_annotation_rows(
@@ -1387,10 +1456,39 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
         by_kind = {item['kind']: item for item in resolved}
 
-        self.assertEqual(max_row, 1)
+        self.assertEqual(max_row, 2)
         self.assertEqual(by_kind['mean']['row_index'], 1)
         self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual(by_kind['lsl']['row_index'], 2)
+        self.assertEqual(by_kind['mean']['assigned_slot'], 'mean_primary')
+        self.assertEqual(by_kind['usl']['assigned_slot'], 'spec_primary')
+        self.assertEqual(by_kind['lsl']['assigned_slot'], 'spec_secondary')
+
+    def test_compute_histogram_annotation_rows_is_deterministic_for_same_inputs(self):
+        annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.05, lsl=9.95, y_max=1.0)
+
+        resolved_a, max_row_a = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.04,
+            threshold_mode='axis_fraction',
+            x_span=1.0,
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+        resolved_b, max_row_b = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.04,
+            threshold_mode='axis_fraction',
+            x_span=1.0,
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+
+        self.assertEqual(max_row_a, max_row_b)
+        self.assertEqual(
+            [(item['kind'], item['assigned_slot'], item['text_y_axes']) for item in resolved_a],
+            [(item['kind'], item['assigned_slot'], item['text_y_axes']) for item in resolved_b],
+        )
 
     def test_build_histogram_annotation_specs_aligns_annotation_x_to_marker_values(self):
         average, usl, lsl = 10.123, 11.3, 9.4
