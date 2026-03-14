@@ -17,24 +17,31 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# Headless fallback: avoid hard failure when Qt/OpenGL runtime is unavailable.
-try:  # pragma: no cover - runtime environment dependent
-    from modules import report_parser_factory
-except Exception:
-    custom_logger_stub = types.ModuleType("modules.CustomLogger")
 
-    class _DummyCustomLogger:
-        def __init__(self, *_args, **_kwargs):
-            pass
+def _load_runtime_modules():
+    """Load runtime modules with headless fallback for optional GUI deps."""
 
-    custom_logger_stub.CustomLogger = _DummyCustomLogger
-    sys.modules.setdefault("modules.CustomLogger", custom_logger_stub)
-    from modules import report_parser_factory
+    # Headless fallback: avoid hard failure when Qt/OpenGL runtime is unavailable.
+    try:  # pragma: no cover - runtime environment dependent
+        from modules import report_parser_factory
+    except Exception:
+        custom_logger_stub = types.ModuleType("modules.CustomLogger")
 
-from modules.parser_plugin_validation import validate_plugin_contract
+        class _DummyCustomLogger:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+        custom_logger_stub.CustomLogger = _DummyCustomLogger
+        sys.modules.setdefault("modules.CustomLogger", custom_logger_stub)
+        from modules import report_parser_factory
+
+    from modules.parser_plugin_validation import validate_plugin_contract
+
+    return report_parser_factory, validate_plugin_contract
 
 
 def main() -> int:
+    report_parser_factory, validate_plugin_contract = _load_runtime_modules()
     report_parser_factory.load_external_plugins()
     failures = 0
 
