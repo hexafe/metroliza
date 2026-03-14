@@ -56,7 +56,7 @@ for name in [
     setattr(qtwidgets_stub, name, type(name, (), {}))
 sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
 
-from modules.CSVSummaryDialog import DataProcessingThread  # noqa: E402
+from modules.csv_summary_dialog import DataProcessingThread  # noqa: E402
 from modules.csv_summary_utils import build_default_plot_toggles  # noqa: E402
 
 

@@ -77,7 +77,7 @@ class TestParseDedupeFingerprint(unittest.TestCase):
 @unittest.skipIf(importlib.util.find_spec("cryptography") is None, "cryptography dependency not installed")
 class TestLicenseHardening(unittest.TestCase):
     def test_invalid_license_payload_returns_invalid_state(self):
-        from modules.LicenseKeyManager import LicenseKeyManager
+        from modules.license_key_manager import LicenseKeyManager
 
         invalid = "not-base64"
         self.assertFalse(LicenseKeyManager.validate_license_key(invalid, "00:11:22:33:44:55", public_key=None))

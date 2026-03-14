@@ -124,8 +124,8 @@ class TestAboutWindowGifLifetime(unittest.TestCase):
             },
             clear=False,
         ):
-            sys.modules.pop("modules.AboutWindow", None)
-            about_module = importlib.import_module("modules.AboutWindow")
+            sys.modules.pop("modules.about_window", None)
+            about_module = importlib.import_module("modules.about_window")
             dialog = about_module.AboutWindow()
 
             gif_path = dialog._gif_temp_file_path
@@ -147,14 +147,14 @@ class TestAboutWindowGifLifetime(unittest.TestCase):
             },
             clear=False,
         ):
-            sys.modules.pop("modules.AboutWindow", None)
-            about_module = importlib.import_module("modules.AboutWindow")
+            sys.modules.pop("modules.about_window", None)
+            about_module = importlib.import_module("modules.about_window")
             dialog = about_module.AboutWindow()
 
             gif_path = dialog._gif_temp_file_path
             self.assertTrue(os.path.exists(gif_path))
 
-            with patch("modules.AboutWindow.os.remove", side_effect=PermissionError):
+            with patch("modules.about_window.os.remove", side_effect=PermissionError):
                 dialog.closeEvent(None)
 
             self.assertTrue(os.path.exists(gif_path))

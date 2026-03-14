@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import QDialog, QLabel, QProgressBar, QPushButton, QVBoxLay
 
 import base64
 
-from modules import Base64EncodedFiles
+from modules import base64_encoded_files
 
 
 def create_worker_progress_dialog(parent, *, window_title, initial_status_text, on_cancel):
@@ -18,7 +18,7 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     loading_gif_label.setFixedSize(200, 200)
     loading_gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-    loading_gif_decoded = base64.b64decode(Base64EncodedFiles.encoded_loading_gif)
+    loading_gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
 
     temp_file = QTemporaryFile()
     temp_file.setAutoRemove(False)

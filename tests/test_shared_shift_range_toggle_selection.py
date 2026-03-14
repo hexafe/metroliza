@@ -238,8 +238,8 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
             },
             clear=False,
         ):
-            sys.modules.pop("modules.FilterDialog", None)
-            filter_dialog_module = importlib.import_module("modules.FilterDialog")
+            sys.modules.pop("modules.filter_dialog", None)
+            filter_dialog_module = importlib.import_module("modules.filter_dialog")
             dialog = filter_dialog_module.FilterDialog.__new__(filter_dialog_module.FilterDialog)
             dialog._list_selection_utils = Mock()
 
@@ -269,8 +269,8 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
             },
             clear=False,
         ):
-            sys.modules.pop("modules.DataGrouping", None)
-            data_grouping_module = importlib.import_module("modules.DataGrouping")
+            sys.modules.pop("modules.data_grouping", None)
+            data_grouping_module = importlib.import_module("modules.data_grouping")
             dialog = data_grouping_module.DataGrouping.__new__(data_grouping_module.DataGrouping)
             dialog._list_selection_utils = Mock()
 

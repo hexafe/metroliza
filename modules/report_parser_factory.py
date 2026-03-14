@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Callable, Type
 
-from modules.CMMReportParser import CMMReportParser
+from modules.cmm_report_parser import CMMReportParser
 from modules.parser_plugin_contracts import (
     BaseReportParserPlugin,
     PluginManifest,

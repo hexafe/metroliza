@@ -31,7 +31,7 @@ qtcore_stub.QThread = _DummyThread
 qtcore_stub.pyqtSignal = _dummy_signal
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 
 
 class _DummyLogger:
@@ -40,12 +40,12 @@ class _DummyLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.CustomLogger'] = custom_logger_stub
+sys.modules['modules.custom_logger'] = custom_logger_stub
 
 
 from modules.export_summary_utils import normalize_plot_axis_values  # noqa: E402
 
-from modules.ExportDataThread import (  # noqa: E402
+from modules.export_data_thread import (  # noqa: E402
     ExportDataThread,
     all_measurements_within_limits,
     build_sheet_series_range,
@@ -237,7 +237,7 @@ class TestExportThreadProgressLabelFormatting(unittest.TestCase):
     def test_measurement_label_uses_three_rows_with_eta_placeholder_early(self):
         thread = ExportDataThread.__new__(ExportDataThread)
 
-        import modules.ExportDataThread as export_module
+        import modules.export_data_thread as export_module
         previous_perf_counter = export_module.time.perf_counter
         export_module.time.perf_counter = lambda: 1.0
         try:
@@ -260,7 +260,7 @@ class TestExportThreadProgressLabelFormatting(unittest.TestCase):
     def test_measurement_label_uses_three_rows_with_eta_and_elapsed(self):
         thread = ExportDataThread.__new__(ExportDataThread)
 
-        import modules.ExportDataThread as export_module
+        import modules.export_data_thread as export_module
         previous_perf_counter = export_module.time.perf_counter
         export_module.time.perf_counter = lambda: 10.0
         try:

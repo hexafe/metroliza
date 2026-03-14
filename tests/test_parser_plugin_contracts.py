@@ -4,7 +4,7 @@ import sys
 import types
 
 
-custom_logger_stub = types.ModuleType("modules.CustomLogger")
+custom_logger_stub = types.ModuleType("modules.custom_logger")
 
 
 class _DummyCustomLogger:
@@ -13,14 +13,14 @@ class _DummyCustomLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyCustomLogger
-sys.modules.setdefault("modules.CustomLogger", custom_logger_stub)
+sys.modules.setdefault("modules.custom_logger", custom_logger_stub)
 
 fitz_stub = types.ModuleType("fitz")
 fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
 fitz_stub.open = lambda *_args, **_kwargs: None
 sys.modules.setdefault("fitz", fitz_stub)
 
-CMMReportParser = importlib.import_module("modules.CMMReportParser").CMMReportParser
+CMMReportParser = importlib.import_module("modules.cmm_report_parser").CMMReportParser
 build_plugin_scaffold = importlib.import_module("modules.llm_plugin_factory").build_plugin_scaffold
 
 
