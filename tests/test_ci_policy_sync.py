@@ -24,14 +24,36 @@ def test_docs_remain_aligned_with_coverage_visibility_contract() -> None:
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
     checklist = RC_CHECKLIST_PATH.read_text(encoding='utf-8')
 
-    assert 'Coverage reporting is **visibility-only**' in ci_policy
-    assert 'There is intentionally no fail-under threshold configured yet.' in ci_policy
+    assert 'Coverage threshold staged policy' in ci_policy
+    assert 'Soft threshold warning stage (current enforcement mode)' in ci_policy
+    assert 'Blocking threshold stage (future)' in ci_policy
     assert 'unit-test-coverage' in ci_policy
     assert 'coverage.xml' in ci_policy
 
     assert 'Coverage visibility output from `unit-tests` is reviewed' in checklist
     assert '`unit-test-coverage` artifact `coverage.xml`' in checklist
 
+
+
+
+def test_ci_workflow_emits_non_blocking_coverage_threshold_status() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+
+    assert 'COVERAGE_WARNING_THRESHOLD' in workflow
+    assert 'Report coverage threshold status (non-blocking)' in workflow
+    assert 'Coverage threshold status (non-blocking)' in workflow
+    assert '::warning title=Coverage below warning threshold::' in workflow
+    assert 'This does not fail CI in the current staged policy.' in workflow
+
+
+def test_tracker_defines_threshold_decision_owner_date_and_acceptance_criteria() -> None:
+    tracker = Path('docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md').read_text(encoding='utf-8')
+
+    assert 'TCI-007 governance criteria and staged threshold rollout' in tracker
+    assert 'Decision owner:' in tracker
+    assert '**Decision date:** **2026-03-29**' in tracker
+    assert 'Acceptance criteria for stage-3 (blocking fail-under) adoption' in tracker
+    assert 'At least **14 calendar days** of routine CI runs' in tracker
 
 def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
