@@ -4,7 +4,10 @@ This UI reads report data from SQLite and coordinates with the main window to
 store, apply, and clear reference/part grouping assignments.
 """
 
-from modules.custom_logger import CustomLogger
+import inspect
+import sqlite3
+
+import modules.custom_logger as custom_logger
 from modules.db import read_sql_dataframe
 from modules.data_grouping_service import (
     build_grouping_query as _build_grouping_query,
@@ -255,8 +258,10 @@ class DataGrouping(QDialog):
         try:
             filter_query = self.parent().get_filter_query() if self.parent() else None
             self.df = load_grouping_dataframe(read_sql_dataframe, self.db_file, filter_query)
-        except Exception as e:
+        except (sqlite3.Error, ValueError, TypeError) as e:
             self.log_and_exit(e)
+        except Exception as e:
+            self.log_and_exit(e, reraise=True)
 
     @staticmethod
     def _build_grouping_query(filter_query):
@@ -280,7 +285,7 @@ class DataGrouping(QDialog):
             self._restore_saved_grouping_state()
             self.populate_list_widgets()
         except Exception as e:
-            self.log_and_exit(e)
+            self.log_and_exit(e, reraise=True)
             
     def add_default_group(self):
         """Handle `add_default_group` for `DataGrouping`.
@@ -962,7 +967,7 @@ class DataGrouping(QDialog):
         except Exception as e:
             self.log_and_exit(e)
             
-    def log_and_exit(self, exception):
+    def log_and_exit(self, exception, *, reraise=False):
         """Handle `log_and_exit` for `DataGrouping`.
 
         Args:
@@ -975,4 +980,15 @@ class DataGrouping(QDialog):
             May update UI state, database rows, or in-memory export context.
         """
 
-        CustomLogger(exception, reraise=False)
+        caller = inspect.stack()[1].function
+        if hasattr(custom_logger, "handle_exception") and hasattr(custom_logger, "LOG_ONLY"):
+            custom_logger.handle_exception(
+                exception,
+                behavior=custom_logger.LOG_ONLY,
+                logger_name=__name__,
+                context=f"DataGrouping.{caller}",
+                reraise=reraise,
+            )
+            return
+        if reraise:
+            raise exception
