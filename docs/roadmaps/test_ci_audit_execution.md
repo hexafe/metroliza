@@ -22,7 +22,7 @@ In scope for this tracker:
 
 ## 4) Current-state audit summary
 Repository-specific findings from static audit:
-- Test suite is substantial (46 test modules) and includes targeted regression tests for export logic, DB migration behavior, parser behavior, docs hygiene, and policy guardrails.
+- Test suite is substantial and includes broad module coverage plus targeted regression tests for export logic, DB migration behavior, parser behavior, docs hygiene, and policy guardrails.
 - CI already runs meaningful blocking jobs: static checks, full pytest suite, native wheel build/smoke, and parser parity (native-enabled).
 - A release-only Google conversion smoke path exists and is intentionally non-blocking/opt-in in CI, matching local-OAuth constraints.
 - Coverage reporting is not configured in test tooling or CI (no `pytest-cov` usage, no coverage artifact/public summary, no threshold policy).

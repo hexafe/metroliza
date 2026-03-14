@@ -18,7 +18,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 - Any change that weakens existing blocking CI checks.
 
 ## 4. Current-State Audit Summary
-- Test suite breadth is strong (46 test modules) with targeted regression coverage for export helpers/flows, DB migration behavior, parser behavior, docs hygiene, and policy checks.
+- Test suite breadth is strong, with broad module coverage and targeted regression checks for export helpers/flows, DB migration behavior, parser behavior, docs hygiene, and policy checks.
 - CI has meaningful blocking lanes: static checks, full pytest, native wheel build/smoke, native parser parity tests; plus opt-in manual Google conversion smoke.
 - Native parser confidence exists and parity fixture corpus depth was incrementally improved with interrupted multi-line edge coverage (**addressed by TCI-005**); additional edge-shape expansion remains iterative (**still open**).
 - Coverage visibility baseline is in place (`pytest-cov`, `coverage.xml`, and uploaded CI artifact) (**addressed by TCI-002**), with threshold gating intentionally deferred pending trend/noise governance (**still open; see deferred TCI-007**).
