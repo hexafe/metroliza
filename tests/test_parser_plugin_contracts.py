@@ -1,5 +1,27 @@
-from modules.CMMReportParser import CMMReportParser
-from modules.llm_plugin_factory import build_plugin_scaffold
+import importlib
+import importlib.machinery
+import sys
+import types
+
+
+custom_logger_stub = types.ModuleType("modules.CustomLogger")
+
+
+class _DummyCustomLogger:
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+
+custom_logger_stub.CustomLogger = _DummyCustomLogger
+sys.modules.setdefault("modules.CustomLogger", custom_logger_stub)
+
+fitz_stub = types.ModuleType("fitz")
+fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
+fitz_stub.open = lambda *_args, **_kwargs: None
+sys.modules.setdefault("fitz", fitz_stub)
+
+CMMReportParser = importlib.import_module("modules.CMMReportParser").CMMReportParser
+build_plugin_scaffold = importlib.import_module("modules.llm_plugin_factory").build_plugin_scaffold
 
 
 def test_cmm_parse_to_v2_and_back_to_legacy_roundtrip_shape():

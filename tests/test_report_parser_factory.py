@@ -1,7 +1,9 @@
 import importlib
 import importlib.machinery
+import importlib.util
 import sys
 import types
+from pathlib import Path
 
 
 custom_logger_stub = types.ModuleType("modules.CustomLogger")
@@ -24,12 +26,24 @@ factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
 contracts_module = importlib.import_module("modules.parser_plugin_contracts")
 
-CMMReportParser = importlib.import_module("modules.CMMReportParser").CMMReportParser
+
+def _load_real_cmm_report_parser_class():
+    module_path = Path("modules/CMMReportParser.py")
+    spec = importlib.util.spec_from_file_location("_real_cmm_report_parser_for_factory_tests", module_path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module.CMMReportParser
+
+
+CMMReportParser = _load_real_cmm_report_parser_class()
 BaseReportParser = base_module.BaseReportParser
 BaseReportParserPlugin = contracts_module.BaseReportParserPlugin
 PluginManifest = contracts_module.PluginManifest
 ProbeContext = contracts_module.ProbeContext
 ProbeResult = contracts_module.ProbeResult
+infer_source_format = contracts_module.infer_source_format
 PARSER_MANIFESTS = factory_module.PARSER_MANIFESTS
 PARSER_MAP = factory_module.PARSER_MAP
 PARSER_DETECTORS = factory_module.PARSER_DETECTORS
@@ -39,6 +53,22 @@ register_parser = factory_module.register_parser
 resolve_parser_with_diagnostics = factory_module.resolve_parser_with_diagnostics
 
 
+def _restore_real_cmm_registration():
+    PARSER_MAP["cmm"] = CMMReportParser
+    PARSER_MANIFESTS["cmm"] = PluginManifest(
+        plugin_id="cmm",
+        display_name="CMM PDF Parser",
+        version="1.0.0",
+        supported_formats=("pdf",),
+        priority=100,
+    )
+    PARSER_DETECTORS["cmm"] = lambda path: ProbeResult(
+        plugin_id="cmm",
+        can_parse=infer_source_format(path) == "pdf",
+        confidence=100 if infer_source_format(path) == "pdf" else 0,
+    )
+
+
 def test_detect_format_accepts_pathlike(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.PDF"
     assert detect_format(report_path) == "cmm"
@@ -46,8 +76,22 @@ def test_detect_format_accepts_pathlike(tmp_path):
 
 def test_get_parser_returns_cmm_parser_for_pdf(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.pdf"
-    parser = get_parser(report_path, database=":memory:")
-    assert isinstance(parser, CMMReportParser)
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    try:
+        _restore_real_cmm_registration()
+        parser = get_parser(report_path, database=":memory:")
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+
+    assert parser.__class__.__name__ == "CMMReportParser"
 
 
 def test_register_parser_allows_runtime_extension(tmp_path):
@@ -82,7 +126,9 @@ def test_register_parser_allows_runtime_extension(tmp_path):
 
     original_map = dict(PARSER_MAP)
     original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
     try:
+        _restore_real_cmm_registration()
         register_parser(DummyParser)
         parser = get_parser(tmp_path / "file.pdf", database=":memory:")
         assert "dummy" in PARSER_MAP
@@ -92,7 +138,8 @@ def test_register_parser_allows_runtime_extension(tmp_path):
         PARSER_MAP.update(original_map)
         PARSER_MANIFESTS.clear()
         PARSER_MANIFESTS.update(original_manifests)
-
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
 
 
 def test_register_parser_supports_legacy_signature_with_detector(tmp_path):
@@ -145,6 +192,7 @@ def test_register_parser_supports_legacy_signature_with_detector(tmp_path):
         PARSER_MANIFESTS.update(original_manifests)
         PARSER_DETECTORS.clear()
         PARSER_DETECTORS.update(original_detectors)
+
 
 def test_resolver_reports_no_plugin_for_unknown_format(tmp_path):
     diagnostics = resolve_parser_with_diagnostics(tmp_path / "file.txt")

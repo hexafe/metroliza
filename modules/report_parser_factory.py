@@ -149,6 +149,27 @@ def get_parser(file_path: str | Path, database: str, connection=None):
     return parser_cls(normalized_path, database, connection=connection)
 
 
+def _default_cmm_detector(file_path: str) -> ProbeResult:
+    if file_path.lower().endswith('.pdf'):
+        return ProbeResult(
+            plugin_id='cmm',
+            can_parse=True,
+            confidence=100,
+            reasons=('pdf_extension',),
+        )
+    return ProbeResult(plugin_id='cmm', can_parse=False, confidence=0, reasons=('unsupported_extension',))
+
+
+def _infer_plugin_id_from_parser_cls(parser_cls: ParserType) -> str:
+    name = getattr(parser_cls, '__name__', 'parser')
+    lowered = name.lower()
+    if lowered.endswith('reportparser'):
+        lowered = lowered[:-len('reportparser')]
+    if lowered.endswith('parser'):
+        lowered = lowered[:-len('parser')]
+    return lowered or 'parser'
+
+
 def _default_manifest(plugin_id: str, parser_cls: ParserType) -> PluginManifest:
     return PluginManifest(
         plugin_id=plugin_id,
@@ -192,8 +213,10 @@ def register_parser(
         parser_cls = parser_or_format
         plugin_manifest = manifest or getattr(parser_cls, "manifest", None)
         if plugin_manifest is None:
-            raise ValueError("Parser class must define `manifest` or pass `manifest=` during registration.")
-        plugin_id = plugin_manifest.plugin_id
+            plugin_id = _infer_plugin_id_from_parser_cls(parser_cls)
+            plugin_manifest = _default_manifest(plugin_id, parser_cls)
+        else:
+            plugin_id = plugin_manifest.plugin_id
 
     PARSER_MAP[plugin_id] = parser_cls
     PARSER_MANIFESTS[plugin_id] = plugin_manifest
@@ -201,4 +224,15 @@ def register_parser(
         PARSER_DETECTORS[plugin_id] = detector
 
 
-register_parser(CMMReportParser)
+register_parser(
+    'cmm',
+    CMMReportParser,
+    detector=_default_cmm_detector,
+    manifest=PluginManifest(
+        plugin_id='cmm',
+        display_name='CMM PDF Parser',
+        version='1.0.0',
+        supported_formats=('pdf',),
+        priority=100,
+    ),
+)

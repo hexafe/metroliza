@@ -4,6 +4,7 @@ The parser consumes raw report text, derives metadata from filenames, and writes
 rows used by downstream grouping and export workflows.
 """
 
+import importlib
 import importlib.metadata
 import importlib.util
 import logging
@@ -68,13 +69,16 @@ def _resolve_pymupdf_backend_module() -> str | None:
     return None
 
 
-_PYMUPDF_BACKEND_MODULE = _resolve_pymupdf_backend_module()
-if _PYMUPDF_BACKEND_MODULE == "pymupdf":
-    import pymupdf as fitz
-elif _PYMUPDF_BACKEND_MODULE == "fitz":
-    import fitz
-else:
-    fitz = None
+
+def _load_pdf_backend():
+    backend_name = _resolve_pymupdf_backend_module()
+    if backend_name is None:
+        return None
+
+    try:
+        return importlib.import_module(backend_name)
+    except Exception:
+        return None
 
 
 class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
@@ -93,6 +97,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
     @classmethod
     def probe(cls, input_ref: str | Path, context: ProbeContext) -> ProbeResult:
+        """Return parser detection result for a candidate report file."""
+
         path_text = str(input_ref)
         if path_text.lower().endswith(".pdf"):
             return ProbeResult(
@@ -177,6 +183,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             self.log_and_exit(e)
 
     def _require_pdf_backend(self):
+        fitz = _load_pdf_backend()
         if fitz is None:
             raise ImportError(
                 "PyMuPDF is required to parse PDF reports. Install `PyMuPDF` (which "
