@@ -67,6 +67,25 @@ def test_compute_histogram_panel_layout_supports_independent_side_width_hints():
     assert rects['plot_rect']['width'] >= HISTOGRAM_MIN_PLOT_WIDTH - 1e-9
 
 
+def test_compute_histogram_panel_layout_preserves_safe_gutter_with_wider_export_geometry():
+    rects = compute_histogram_panel_layout(
+        (7.2, 4.0),
+        table_fontsize=8.8,
+        left_row_count=8,
+        right_row_count=9,
+        note_line_count=3,
+        left_panel_width_hint=0.27,
+        right_panel_width_hint=0.19,
+    )
+
+    left_right_edge = rects['left_table_rect']['x'] + rects['left_table_rect']['width']
+    plot_left_edge = rects['plot_rect']['x']
+    assert rects['left_table_rect']['width'] > rects['right_table_rect']['width']
+    assert rects['plot_rect']['width'] >= HISTOGRAM_MIN_PLOT_WIDTH - 1e-9
+    assert (plot_left_edge - left_right_edge) >= 0.022 - 1e-9
+    assert_non_overlapping_rectangles(rects)
+
+
 def test_compute_histogram_panel_layout_uses_separate_top_and_bottom_padding():
     rects = compute_histogram_panel_layout((6.0, 4.0))
     assert rects['plot_rect']['y'] == pytest.approx(HISTOGRAM_OUTER_PADDING_BOTTOM)

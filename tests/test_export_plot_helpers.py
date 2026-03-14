@@ -107,6 +107,7 @@ from modules.export_data_thread import (  # noqa: E402
     apply_minimal_axis_style,
     _build_distribution_fit_info_note,
     _build_distribution_fit_table_rows,
+    _apply_non_normal_cpk_reference_label,
 )
 
 
@@ -1311,6 +1312,126 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('LSL=1.000', texts)
         plt.close(fig)
 
+    def test_render_histogram_annotations_and_title_fit_with_side_panels_enabled(self):
+        fig = plt.figure(figsize=(7.2, 4.0))
+        try:
+            rects = compute_histogram_panel_layout(
+                (7.2, 4.0),
+                table_fontsize=8.8,
+                left_row_count=7,
+                right_row_count=8,
+                note_line_count=3,
+                left_panel_width_hint=0.27,
+                right_panel_width_hint=0.19,
+            )
+            plot_rect = rects['plot_rect']
+            plot_ax = fig.add_axes([
+                plot_rect['x'],
+                plot_rect['y'],
+                plot_rect['width'],
+                plot_rect['height'],
+            ])
+            plot_ax.set_xlim(0.0, 10.0)
+            plot_ax.set_ylim(0.0, 1.0)
+            plot_ax.set_title('Histogram panel title', pad=14)
+            annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=10.0,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            rendered = render_histogram_annotations(
+                plot_ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': plot_rect,
+                },
+            )
+            fig.canvas.draw()
+            fig_bbox = fig.bbox
+            title_bbox = plot_ax.title.get_window_extent(renderer=fig.canvas.get_renderer())
+
+            texts = {text.get_text() for text in rendered}
+            self.assertEqual(len(rendered), 3)
+            self.assertIn('Mean = 5.000', texts)
+            self.assertIn('USL=9.000', texts)
+            self.assertIn('LSL=1.000', texts)
+            self.assertLess(title_bbox.y0, fig_bbox.y1)
+        finally:
+            plt.close(fig)
+
+    def test_histogram_layout_keeps_xlabel_and_ticks_inside_figure_bounds(self):
+        fig = plt.figure(figsize=(7.2, 4.0))
+        try:
+            rects = compute_histogram_panel_layout(
+                (7.2, 4.0),
+                table_fontsize=8.8,
+                left_row_count=6,
+                right_row_count=6,
+                note_line_count=2,
+                left_panel_width_hint=0.27,
+                right_panel_width_hint=0.19,
+            )
+            plot_rect = rects['plot_rect']
+            ax = fig.add_axes([plot_rect['x'], plot_rect['y'], plot_rect['width'], plot_rect['height']])
+            ax.plot([0, 1, 2], [1, 3, 2])
+            ax.set_xlabel('Measurement')
+            fig.canvas.draw()
+
+            renderer = fig.canvas.get_renderer()
+            fig_bbox = fig.bbox
+            xlabel_bbox = ax.xaxis.label.get_window_extent(renderer=renderer)
+            tick_bboxes = [tick.label1.get_window_extent(renderer=renderer) for tick in ax.xaxis.get_major_ticks() if tick.label1.get_visible()]
+
+            self.assertGreaterEqual(xlabel_bbox.y0, fig_bbox.y0)
+            self.assertTrue(all(bbox.y0 >= fig_bbox.y0 for bbox in tick_bboxes))
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_note_panel_keeps_compact_text_within_panel_bounds(self):
+        fig = plt.figure(figsize=(7.2, 4.0))
+        try:
+            rects = compute_histogram_panel_layout(
+                (7.2, 4.0),
+                table_fontsize=8.8,
+                left_row_count=6,
+                right_row_count=7,
+                note_line_count=3,
+                left_panel_width_hint=0.27,
+                right_panel_width_hint=0.19,
+            )
+            note_rect = rects['note_rect']
+            note_ax = fig.add_axes([note_rect['x'], note_rect['y'], note_rect['width'], note_rect['height']])
+            note_ax.set_axis_off()
+            meta = render_histogram_note_panel(
+                ax=note_ax,
+                note_items=[
+                    {'label': 'Family', 'compact_label': 'Family', 'value': 'signed/bilateral', 'priority': 90},
+                    {'label': 'Normality', 'compact_label': 'Normality', 'value': 'non-normal', 'priority': 60},
+                    {'label': 'Warning', 'compact_label': 'Warning', 'value': 'fit weak', 'priority': 30},
+                ],
+                style_options={'fontsize': 7.0},
+                available_height_px=note_rect['height'] * float(fig.bbox.height),
+            )
+            fig.canvas.draw()
+            text_bbox = meta['text_artist'].get_window_extent(renderer=fig.canvas.get_renderer())
+            ax_bbox = note_ax.get_window_extent(renderer=fig.canvas.get_renderer())
+
+            self.assertGreaterEqual(text_bbox.x0, ax_bbox.x0 - 1.0)
+            self.assertLessEqual(text_bbox.x1, ax_bbox.x1 + 1.0)
+            self.assertGreaterEqual(text_bbox.y0, ax_bbox.y0 - 1.0)
+            self.assertLessEqual(text_bbox.y1, ax_bbox.y1 + 1.0)
+        finally:
+            plt.close(fig)
+
 
     def test_compute_histogram_annotation_rows_stacks_close_markers_and_keeps_mean_highest(self):
         annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.01, lsl=9.99, y_max=1.0)
@@ -1577,6 +1698,24 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(payload['capability_rows']['Cpk']['label'], 'Cpk+')
         self.assertEqual(payload['capability_rows']['Cpk']['display_value'], expected_cpk_plus)
         self.assertEqual(payload['capability_rows']['Cpk']['classification_value'], expected_cpk_plus)
+
+    def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
+        payload = {
+            'rows': [('Cp', 1.22), ('Cpk', 1.11), ('NOK %', '0.40%')],
+            'capability_rows': {
+                'Cp': {'label': 'Cp', 'display_value': 1.22, 'classification_value': 1.22},
+                'Cpk': {'label': 'Cpk', 'display_value': 1.11, 'classification_value': 1.11},
+            },
+        }
+
+        relabeled = _apply_non_normal_cpk_reference_label(
+            payload,
+            {'selected_model': {'model': 'johnsonsu'}},
+        )
+        labels = [label for label, _ in relabeled['rows']]
+
+        self.assertIn('Cpk (normal ref)', labels)
+        self.assertEqual(relabeled['capability_rows']['Cpk']['label'], 'Cpk (normal ref)')
 
 
     def test_build_histogram_table_render_data_three_column_duplicates_label_in_first_two_columns(self):
