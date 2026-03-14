@@ -4034,7 +4034,7 @@ class ExportDataThread(QThread):
                                 'expanded_only': True,
                             })
 
-                    note_meta = render_histogram_note_panel(
+                    render_histogram_note_panel(
                         ax=note_ax,
                         note_items=model_info_note_items,
                         style_options={
@@ -4123,10 +4123,6 @@ class ExportDataThread(QThread):
                         'alpha': 0.94,
                         'plot_rect': plot_rect,
                     }
-                    max_annotation_text_y = max(
-                        (annotation.get('text_y_axes', 1.01) for annotation in annotation_specs),
-                        default=1.01,
-                    )
                     render_histogram_annotations(
                         plot_ax,
                         annotation_specs,
