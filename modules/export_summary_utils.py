@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import gaussian_kde, norm, shapiro
+from scipy.stats import gaussian_kde, norm, shapiro, johnsonsu, skewnorm, halfnorm, foldnorm, gamma, weibull_min, lognorm
 import math
 import re
 from matplotlib.lines import Line2D
@@ -12,6 +12,17 @@ from modules.stats_utils import is_one_sided_geometric_tolerance, safe_process_c
 
 
 _INTEGER_PATTERN = re.compile(r'^[+-]?\d+$')
+
+_DISTRIBUTION_BY_NAME = {
+    'norm': norm,
+    'skewnorm': skewnorm,
+    'johnsonsu': johnsonsu,
+    'halfnorm': halfnorm,
+    'foldnorm': foldnorm,
+    'gamma': gamma,
+    'weibull_min': weibull_min,
+    'lognorm': lognorm,
+}
 
 
 def normalize_plot_axis_values(values):
@@ -84,10 +95,61 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
         'sample_size': sample_size,
         'nok_count': nok_count,
         'nok_pct': (nok_count / sample_size) if sample_size else 0,
+        'observed_nok_count': nok_count,
+        'observed_nok_pct': (nok_count / sample_size) if sample_size else 0,
+        'estimated_nok_pct': None,
+        'estimated_nok_ppm': None,
+        'estimated_yield_pct': None,
         'normality_status': normality['status'],
         'normality_text': normality['text'],
         'normality_test_name': normality.get('test_name', 'Shapiro'),
         'normality_p_value': normality.get('p_value'),
+    }
+
+
+def compute_estimated_tail_metrics(distribution_fit_result, *, lsl=None, usl=None):
+    """Estimate NOK/yield metrics from selected fitted model CDF tails."""
+    selected_model = (distribution_fit_result or {}).get('selected_model') or {}
+    model_name = selected_model.get('model')
+    params = selected_model.get('params')
+    dist = _DISTRIBUTION_BY_NAME.get(model_name)
+
+    if dist is None or not params:
+        return {
+            'estimated_nok_pct': None,
+            'estimated_nok_ppm': None,
+            'estimated_yield_pct': None,
+            'estimated_tail_below_lsl': None,
+            'estimated_tail_above_usl': None,
+        }
+
+    try:
+        below_lsl = None if lsl is None else float(np.clip(dist.cdf(lsl, *params), 0.0, 1.0))
+        above_usl = None if usl is None else float(np.clip(1.0 - dist.cdf(usl, *params), 0.0, 1.0))
+    except Exception:
+        return {
+            'estimated_nok_pct': None,
+            'estimated_nok_ppm': None,
+            'estimated_yield_pct': None,
+            'estimated_tail_below_lsl': None,
+            'estimated_tail_above_usl': None,
+        }
+
+    if lsl is not None and usl is not None:
+        outside_probability = float(np.clip((below_lsl or 0.0) + (above_usl or 0.0), 0.0, 1.0))
+    elif usl is not None:
+        outside_probability = float(np.clip(above_usl or 0.0, 0.0, 1.0))
+    elif lsl is not None:
+        outside_probability = float(np.clip(below_lsl or 0.0, 0.0, 1.0))
+    else:
+        outside_probability = None
+
+    return {
+        'estimated_nok_pct': outside_probability,
+        'estimated_nok_ppm': None if outside_probability is None else outside_probability * 1_000_000.0,
+        'estimated_yield_pct': None if outside_probability is None else (1.0 - outside_probability),
+        'estimated_tail_below_lsl': below_lsl,
+        'estimated_tail_above_usl': above_usl,
     }
 
 

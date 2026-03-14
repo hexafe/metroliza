@@ -64,6 +64,7 @@ from modules.export_summary_utils import (
     build_trend_plot_payload as _build_trend_plot_payload,
     compute_measurement_summary,
     compute_normality_status,
+    compute_estimated_tail_metrics,
     normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
     render_spec_reference_lines as _render_spec_reference_lines,
@@ -3032,6 +3033,11 @@ class ExportDataThread(QThread):
                             'sample_size': sample_size,
                             'nok_count': nok_count,
                             'nok_pct': (nok_count / sample_size),
+                            'observed_nok_count': nok_count,
+                            'observed_nok_pct': (nok_count / sample_size),
+                            'estimated_nok_pct': None,
+                            'estimated_nok_ppm': None,
+                            'estimated_yield_pct': None,
                             'normality_status': normality['status'],
                             'normality_text': normality['text'],
                             'normality_test_name': normality.get('test_name', 'Shapiro'),
@@ -3043,6 +3049,11 @@ class ExportDataThread(QThread):
                 summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
             summary_stats.setdefault('normality_test_name', 'Shapiro')
             summary_stats.setdefault('normality_p_value', None)
+            summary_stats.setdefault('observed_nok_count', summary_stats.get('nok_count', 0))
+            summary_stats.setdefault('observed_nok_pct', summary_stats.get('nok_pct', 0))
+            summary_stats.setdefault('estimated_nok_pct', None)
+            summary_stats.setdefault('estimated_nok_ppm', None)
+            summary_stats.setdefault('estimated_yield_pct', None)
             summary_stats['usl'] = USL
             average = summary_stats['average']
             histogram_table_payload = build_histogram_table_data(summary_stats)
@@ -3329,6 +3340,10 @@ class ExportDataThread(QThread):
                             point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
                             include_kde_reference=True,
                         )
+
+                    summary_stats.update(compute_estimated_tail_metrics(distribution_fit_result, lsl=LSL, usl=USL))
+                    histogram_table_payload = build_histogram_table_data(summary_stats)
+                    table_data = histogram_table_payload['rows']
 
                     table_render_data = build_histogram_table_render_data(table_data)
                     side_table_width = three_region_layout['side_table_width']

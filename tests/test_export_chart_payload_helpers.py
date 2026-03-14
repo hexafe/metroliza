@@ -35,3 +35,33 @@ def test_resolve_summary_annotation_strategy_switches_at_density_thresholds():
     assert resolve_summary_annotation_strategy(x_point_count=8)['annotation_mode'] == 'dynamic'
     assert resolve_summary_annotation_strategy(x_point_count=24)['annotation_mode'] == 'static_compact'
     assert resolve_summary_annotation_strategy(x_point_count=60)['label_mode'] == 'sparse'
+
+
+def test_build_histogram_table_data_exposes_observed_and_estimated_metrics():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 1.0,
+            'maximum': 3.0,
+            'average': 2.0,
+            'median': 2.0,
+            'sigma': 0.1,
+            'cp': 1.5,
+            'cpk': 1.2,
+            'sample_size': 10,
+            'nok_count': 1,
+            'nok_pct': 0.1,
+            'observed_nok_count': 1,
+            'observed_nok_pct': 0.1,
+            'estimated_nok_pct': 0.2,
+            'estimated_nok_ppm': 200000.0,
+            'estimated_yield_pct': 0.8,
+        }
+    )
+
+    assert payload['summary_metrics'] == {
+        'observed_nok_count': 1,
+        'observed_nok_pct': 0.1,
+        'estimated_nok_pct': 0.2,
+        'estimated_nok_ppm': 200000.0,
+        'estimated_yield_pct': 0.8,
+    }
