@@ -397,3 +397,59 @@ def test_load_external_plugins_reports_skipped_paths_for_missing_input(tmp_path)
 
     result = load_external_plugins(missing_path)
     assert missing_path in result.skipped_paths
+
+
+def test_load_external_plugins_registers_plugins_from_entry_points(monkeypatch):
+    class DemoEntryPointParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="demo_ep",
+            display_name="Demo EP",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        @classmethod
+        def probe(cls, _input_ref, _context):
+            return ProbeResult(plugin_id="demo_ep", can_parse=True, confidence=60)
+
+        def open_report(self):
+            self.raw_text = []
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    class _DummyEntryPoint:
+        name = "demo_ep"
+
+        @staticmethod
+        def load():
+            return DemoEntryPointParser
+
+    load_external_plugins = factory_module.load_external_plugins
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    try:
+        monkeypatch.setattr(factory_module, "_iter_external_plugin_entry_points", lambda: (_DummyEntryPoint(),))
+        result = load_external_plugins(paths=())
+        assert "demo_ep" in PARSER_MAP
+        assert "demo_ep" in result.loaded_plugin_ids
+        assert "demo_ep" in result.loaded_entry_points
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
