@@ -49,6 +49,12 @@ from modules.export_google_result_utils import (
     build_google_stage_message,
 )
 from modules.progress_status import build_three_line_status
+from modules.export_status_service import (
+    build_measurement_status_label,
+    clamp_progress,
+    compute_stage_progress,
+    format_elapsed_or_eta,
+)
 from modules.log_context import (
     build_export_log_extra,
     build_google_conversion_log_extra,
@@ -85,6 +91,7 @@ from modules.export_chart_writer import (
 from modules.export_query_service import (
     build_export_dataframe as _build_export_dataframe,
     build_measurement_export_dataframe as _build_measurement_export_dataframe,
+    ensure_sample_number_column as _ensure_sample_number_column,
     execute_export_query as _execute_export_query,
     fetch_partition_header_counts,
     fetch_partition_values,
@@ -2060,7 +2067,7 @@ class ExportDataThread(QThread):
 
     @staticmethod
     def _clamp_progress(value):
-        return max(0, min(100, int(round(value))))
+        return clamp_progress(value)
 
     def _emit_progress(self, value):
         clamped_value = self._clamp_progress(value)
@@ -2071,9 +2078,7 @@ class ExportDataThread(QThread):
         self.update_progress.emit(progress_value)
 
     def _emit_stage_progress(self, stage_name, fraction=1.0):
-        start, end = self.PROGRESS_STAGE_RANGES[stage_name]
-        safe_fraction = max(0.0, min(1.0, float(fraction)))
-        stage_progress = start + ((end - start) * safe_fraction)
+        stage_progress = compute_stage_progress(self.PROGRESS_STAGE_RANGES, stage_name, fraction=fraction)
         self._emit_progress(stage_progress)
 
     def _record_exported_sheet_name(self, sheet_name):
@@ -2091,38 +2096,17 @@ class ExportDataThread(QThread):
 
     @staticmethod
     def _format_elapsed_or_eta(seconds):
-        safe_seconds = max(0, int(seconds))
-        minutes, remaining_seconds = divmod(safe_seconds, 60)
-        hours, remaining_minutes = divmod(minutes, 60)
-        if hours:
-            return f"{hours:d}:{remaining_minutes:02d}:{remaining_seconds:02d}"
-        return f"{remaining_minutes:d}:{remaining_seconds:02d}"
+        return format_elapsed_or_eta(seconds)
 
     def _build_measurement_label(self, *, ref_index, total_references, completed_header_units, total_header_units, start_time):
-        stage_line = "Building measurement sheets..."
-        if total_header_units <= 0:
-            detail_line = f"Ref {ref_index}/{total_references}, Headers remaining 0"
-            return build_three_line_status(stage_line, detail_line, "ETA --")
-
-        remaining_headers = max(0, total_header_units - completed_header_units)
-        detail_line = (
-            f"Ref {ref_index}/{total_references}, "
-            f"Headers remaining {remaining_headers}/{total_header_units}"
-        )
-
         elapsed_seconds = max(0.0, time.perf_counter() - start_time)
-        if completed_header_units < 5 or elapsed_seconds < 2.0:
-            return build_three_line_status(stage_line, detail_line, "ETA --")
-
-        headers_per_second = completed_header_units / elapsed_seconds if elapsed_seconds > 0 else 0.0
-        if headers_per_second <= 0:
-            return build_three_line_status(stage_line, detail_line, "ETA --")
-
-        eta_seconds = remaining_headers / headers_per_second
-        elapsed_display = self._format_elapsed_or_eta(elapsed_seconds)
-        eta_display = self._format_elapsed_or_eta(eta_seconds)
-        eta_line = f"{elapsed_display} elapsed, ETA {eta_display}"
-        return build_three_line_status(stage_line, detail_line, eta_line)
+        return build_measurement_status_label(
+            ref_index=ref_index,
+            total_references=total_references,
+            completed_header_units=completed_header_units,
+            total_header_units=total_header_units,
+            elapsed_seconds=elapsed_seconds,
+        )
 
     @property
     def prepared_grouping_df(self):
@@ -2147,12 +2131,7 @@ class ExportDataThread(QThread):
 
     @staticmethod
     def _ensure_sample_number_column(df):
-        if 'SAMPLE_NUMBER' in df.columns:
-            return df
-
-        normalized_df = df.copy()
-        normalized_df['SAMPLE_NUMBER'] = [str(index + 1) for index in range(len(normalized_df))]
-        return normalized_df
+        return _ensure_sample_number_column(df)
 
     @staticmethod
     def _build_violin_payload(header_group, group_column, min_samplesize):
