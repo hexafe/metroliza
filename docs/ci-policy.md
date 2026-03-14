@@ -42,6 +42,37 @@ These checks are explicitly non-blocking for normal PR CI:
 | Packaging smoke build (release-only) | `packaging-smoke` | Manual `workflow_dispatch` with `run_packaging_smoke=1` | **Non-blocking** for regular PRs and pushes |
 | Google conversion smoke (release-only) | `google-conversion-smoke` | Manual `workflow_dispatch` with `run_google_conversion_smoke=1` | **Non-blocking** for regular PRs and pushes |
 
+## Dependency setup and cache policy
+
+- CI no longer uses a standalone `python-setup` dependency warm-up job. That job did not share an environment with downstream jobs (each job runs on a fresh runner), so it added serial waiting time without reducing downstream install work.
+- Each job now performs only the setup it actually needs:
+  - `static-checks`, `unit-tests`, `google-conversion-smoke` use `requirements-dev.txt`.
+  - `native-artifacts`, `packaging-smoke` use `requirements-build.txt`.
+- `actions/setup-python@v5` pip caching is enabled per job with deterministic dependency keys via `cache-dependency-path` pinned to the exact requirements file used by that job.
+
+### Cache determinism and safety
+
+- The cache key includes the dependency file hash (via `cache-dependency-path`) and the selected Python version, so cache reuse is deterministic for unchanged dependency manifests.
+- Any edit to `requirements-dev.txt` or `requirements-build.txt` automatically invalidates the relevant pip cache and forces a refresh.
+- This keeps cache behavior safe for dependency updates while preserving faster warm-cache installs for unchanged dependency sets.
+
+## CI duration measurement (before/after)
+
+Because this repository snapshot is running in a local container without GitHub Actions run history access, timing here is recorded as a **critical-path structural measurement** from workflow topology, which is deterministic from `ci.yml`:
+
+| Metric | Before | After | Impact |
+|---|---:|---:|---:|
+| Required serial gate jobs before main checks start | 1 (`python-setup`) | 0 | -1 serial gate job |
+| Required jobs that independently install Python dependencies | 3 | 3 | no change |
+| Redundant dependency install pass in required path | 1 | 0 | removed |
+
+Interpretation:
+- The required checks now start immediately (no pre-job gate), which reduces end-to-end CI wall-clock time by the former `python-setup` job duration on every required run.
+- Warm-cache improvements are additionally expected for repeated runs because each job now restores pip wheels/downloads from deterministic cache keys.
+
+Recommended follow-up measurement (on GitHub-hosted runs):
+- Compare median duration of the `CI` workflow across at least 10 runs before/after this change using `gh run list --workflow ci.yml --limit 20 --json databaseId,createdAt,updatedAt,status,conclusion` plus runtime aggregation.
+
 ## PR checklist
 
 Use this quick checklist when opening or reviewing PRs:
