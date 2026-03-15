@@ -42,7 +42,7 @@ def build_summary_image_anchor_plan(base_col):
     """Return deterministic worksheet anchor columns for all summary visual panels."""
     base_position = build_summary_sheet_position_plan(base_col)
     image_row = base_position['image_row']
-    scatter_column_offset = 1
+    scatter_column_offset = 4
 
     return {
         'header': (base_position['header_row'], base_position['column']),
