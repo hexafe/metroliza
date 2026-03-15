@@ -7,6 +7,41 @@ LOW_N_WARNING_THRESHOLD = 25
 LOW_N_SEVERE_THRESHOLD = 10
 
 
+def _is_numeric(value):
+    return isinstance(value, (int, float))
+
+
+def _is_zeroish(value, tolerance=1e-12):
+    return _is_numeric(value) and abs(float(value)) <= tolerance
+
+
+def _resolve_spec_type(summary_stats):
+    explicit_spec_type = str(summary_stats.get('spec_type') or '').strip().lower()
+    if explicit_spec_type in {'one_sided_upper', 'one-sided upper', 'upper'}:
+        return 'one-sided upper'
+    if explicit_spec_type in {'one_sided_lower', 'one-sided lower', 'lower'}:
+        return 'one-sided lower'
+
+    nom_value = summary_stats.get('nom')
+    usl_value = summary_stats.get('usl')
+    lsl_value = summary_stats.get('lsl')
+    cp_value = summary_stats.get('cp')
+
+    if isinstance(cp_value, str):
+        if _is_zeroish(nom_value) and _is_zeroish(lsl_value) and _is_numeric(usl_value) and float(usl_value) > 0:
+            return 'one-sided upper'
+        if _is_zeroish(nom_value) and _is_zeroish(usl_value) and _is_numeric(lsl_value) and float(lsl_value) < 0:
+            return 'one-sided lower'
+        if _is_numeric(usl_value) and not _is_numeric(lsl_value):
+            return 'one-sided upper'
+        if _is_numeric(lsl_value) and not _is_numeric(usl_value):
+            return 'one-sided lower'
+        if _is_numeric(usl_value):
+            return 'one-sided upper'
+
+    return 'two-sided'
+
+
 def _resolve_sample_confidence(sample_size):
     n = max(0, int(sample_size or 0))
     if n <= 0:
@@ -59,21 +94,34 @@ def build_histogram_table_data(summary_stats):
 
     sample_size = summary_stats.get('sample_size', 0)
     sample_confidence = _resolve_sample_confidence(sample_size)
+    spec_type = _resolve_spec_type(summary_stats)
     cp_value = summary_stats.get('cp')
     cpk_label = 'Cpk'
     cpk_value = summary_stats.get('cpk')
-    if isinstance(cp_value, str):
+
+    if spec_type == 'one-sided upper':
         sigma_value = summary_stats.get('sigma')
         average_value = summary_stats.get('average')
         usl_value = summary_stats.get('usl')
-        if all(isinstance(item, (float, int)) for item in (sigma_value, average_value, usl_value)) and sigma_value > 0:
-            cpk_label = 'Cpk+'
+        cpk_label = 'Cpu'
+        if all(_is_numeric(item) for item in (sigma_value, average_value, usl_value)) and sigma_value > 0:
             cpk_value = (usl_value - average_value) / (3 * sigma_value)
+    elif spec_type == 'one-sided lower':
+        sigma_value = summary_stats.get('sigma')
+        average_value = summary_stats.get('average')
+        lsl_value = summary_stats.get('lsl')
+        cpk_label = 'Cpl'
+        if all(_is_numeric(item) for item in (sigma_value, average_value, lsl_value)) and sigma_value > 0:
+            cpk_value = (average_value - lsl_value) / (3 * sigma_value)
 
     cp_display_value = _rounded_or_text(summary_stats['cp'], 2)
     cpk_display_value = _rounded_or_text(cpk_value, 2)
 
     cp_label = 'Cp'
+    if spec_type != 'two-sided':
+        cp_label = 'Cp (not defined for one-sided) ⓘ'
+        cp_display_value = 'N/A'
+
     resolved_cpk_label = cpk_label
     if sample_confidence['is_low_n'] and sample_confidence['severity'] == 'severe':
         if not isinstance(cp_display_value, str):
@@ -87,15 +135,19 @@ def build_histogram_table_data(summary_stats):
         ('Mean', round(summary_stats['average'], 3)),
         ('Median', round(summary_stats['median'], 3)),
         ('Std Dev', round(summary_stats['sigma'], 3)),
+        ('Spec type', spec_type),
         (cp_label, cp_display_value),
         (resolved_cpk_label, cpk_display_value),
     ]
     if sample_confidence['is_low_n']:
+        uncertainty_rows = []
+        if spec_type == 'two-sided':
+            uncertainty_rows.append((f"{cp_label} uncertainty", _approx_uncertainty_band(summary_stats['cp'], sample_size)))
+        uncertainty_rows.append((f"{resolved_cpk_label} uncertainty", _approx_uncertainty_band(cpk_value, sample_size)))
         table_rows.extend([
             (f"Confidence {sample_confidence['badge']}", f"Low-confidence estimate (n={sample_confidence['sample_size']})"),
-            (f"{cp_label} uncertainty", _approx_uncertainty_band(summary_stats['cp'], sample_size)),
-            (f"{resolved_cpk_label} uncertainty", _approx_uncertainty_band(cpk_value, sample_size)),
         ])
+        table_rows.extend(uncertainty_rows)
 
     table_rows.extend([
         ('Samples', round(summary_stats['sample_size'], 1)),
@@ -117,7 +169,7 @@ def build_histogram_table_data(summary_stats):
             'Cp': {
                 'label': cp_label,
                 'display_value': cp_display_value,
-                'classification_value': _rounded_or_text(summary_stats['cp'], 2),
+                'classification_value': 'N/A' if spec_type != 'two-sided' else _rounded_or_text(summary_stats['cp'], 2),
             },
             'Cpk': {
                 'label': resolved_cpk_label,

@@ -1939,7 +1939,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(table[-1], ('NOK %', '8.33%'))
 
 
-    def test_build_histogram_table_data_uses_cpk_plus_for_one_sided_case(self):
+    def test_build_histogram_table_data_uses_cpu_for_one_sided_upper_case(self):
         payload = build_histogram_table_data(
             {
                 'minimum': 0.0,
@@ -1960,10 +1960,13 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         table = payload['rows']
         labels = [label for label, _ in table]
-        self.assertIn('Cpk+', labels)
+        self.assertIn('Cpu', labels)
         self.assertNotIn('Cpk', labels)
+        self.assertIn('Spec type', labels)
+        self.assertIn(('Spec type', 'one-sided upper'), table)
+        self.assertIn('Cp (not defined for one-sided) ⓘ', labels)
 
-    def test_build_histogram_table_data_exposes_cpk_plus_metadata_for_badges(self):
+    def test_build_histogram_table_data_exposes_cpu_metadata_for_badges(self):
         payload = build_histogram_table_data(
             {
                 'minimum': 0.0,
@@ -1982,22 +1985,23 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        cpk_row = next((row for row in payload['rows'] if row[0] == 'Cpk+'), None)
+        cpk_row = next((row for row in payload['rows'] if row[0] == 'Cpu'), None)
         self.assertIsNotNone(cpk_row)
 
-        expected_cpk_plus = round((0.06 - 0.031) / (3 * 0.0099), 2)
+        expected_cpu = round((0.06 - 0.031) / (3 * 0.0099), 2)
         self.assertIn('Low-confidence estimate', str(cpk_row[1]))
-        self.assertEqual(payload['capability_rows']['Cpk']['label'], 'Cpk+')
+        self.assertEqual(payload['capability_rows']['Cpk']['label'], 'Cpu')
         self.assertIn('Low-confidence estimate', str(payload['capability_rows']['Cpk']['display_value']))
-        self.assertEqual(payload['capability_rows']['Cpk']['classification_value'], expected_cpk_plus)
+        self.assertEqual(payload['capability_rows']['Cpk']['classification_value'], expected_cpu)
 
     def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
         payload = {
-            'rows': [('Cp', 1.22), ('Cpk', 1.15), ('Cpk+', 1.11), ('NOK %', '0.40%')],
+            'rows': [('Cp', 1.22), ('Cpk', 1.15), ('Cpu', 1.11), ('Cpl', 1.08), ('NOK %', '0.40%')],
             'capability_rows': {
                 'Cp': {'label': 'Cp', 'display_value': 1.22, 'classification_value': 1.22},
-                'Cpk': {'label': 'Cpk+', 'display_value': 1.11, 'classification_value': 1.11},
-                'Cpk+': {'label': 'Cpk+', 'display_value': 1.11, 'classification_value': 1.11},
+                'Cpk': {'label': 'Cpk', 'display_value': 1.11, 'classification_value': 1.11},
+                'Cpu': {'label': 'Cpu', 'display_value': 1.11, 'classification_value': 1.11},
+                'Cpl': {'label': 'Cpl', 'display_value': 1.08, 'classification_value': 1.08},
             },
         }
 
@@ -2007,14 +2011,18 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
         labels = [label for label, _ in relabeled['rows']]
 
-        self.assertEqual(labels.count('Cpk (normal ref)'), 2)
+        self.assertEqual(labels.count('Cpk (normal ref)'), 1)
+        self.assertIn('Cpu (normal ref)', labels)
+        self.assertIn('Cpl (normal ref)', labels)
         self.assertIn('Cp (normal ref)', labels)
         self.assertNotIn('Cp', labels)
         self.assertNotIn('Cpk', labels)
-        self.assertNotIn('Cpk+', labels)
+        self.assertNotIn('Cpu', labels)
+        self.assertNotIn('Cpl', labels)
         self.assertEqual(relabeled['capability_rows']['Cp']['label'], 'Cp (normal ref)')
         self.assertEqual(relabeled['capability_rows']['Cpk']['label'], 'Cpk (normal ref)')
-        self.assertEqual(relabeled['capability_rows']['Cpk+']['label'], 'Cpk (normal ref)')
+        self.assertEqual(relabeled['capability_rows']['Cpu']['label'], 'Cpu (normal ref)')
+        self.assertEqual(relabeled['capability_rows']['Cpl']['label'], 'Cpl (normal ref)')
 
 
     def test_build_histogram_table_render_data_three_column_duplicates_label_in_first_two_columns(self):
@@ -3099,7 +3107,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(lines, ['Family: positive-support', 'Warning: fit weak', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
+        self.assertEqual(lines, ['Family: positive-support', 'Spec type: one-sided upper', 'Warning: fit weak', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
         self.assertFalse(any(line.startswith('Normality:') for line in lines))
         self.assertFalse(any('Model:' in line for line in lines))
 
@@ -3112,7 +3120,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(lines, ['Family: signed/bilateral', 'Fit confidence: medium', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
+        self.assertEqual(lines, ['Family: signed/bilateral', 'Spec type: two-sided', 'Fit confidence: medium', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
 
 
     def test_compact_histogram_note_lines_downgrades_fit_for_n10(self):

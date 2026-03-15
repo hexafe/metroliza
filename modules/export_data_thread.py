@@ -1130,8 +1130,13 @@ def _build_compact_histogram_note_lines(distribution_fit_result, *, summary_stat
     mode = fit_result.get('inferred_support_mode')
     if mode == 'one_sided_zero_bound_positive':
         lines.append('Family: positive-support')
+        lines.append('Spec type: one-sided upper')
+    elif mode == 'one_sided_zero_bound_negative':
+        lines.append('Family: negative-support')
+        lines.append('Spec type: one-sided lower')
     elif mode == 'bilateral_signed':
         lines.append('Family: signed/bilateral')
+        lines.append('Spec type: two-sided')
 
     fit_quality = ((fit_result.get('fit_quality') or {}).get('label') or '').strip().lower()
     is_poor_fit = fit_quality in {'weak', 'unreliable'}
@@ -1186,19 +1191,26 @@ def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_
     payload = dict(histogram_table_payload or {})
     rows = []
     for label, value in payload.get('rows', []):
+        if label in {'Cpu', 'Cpl'}:
+            rows.append((f'{label} (normal ref)', value))
+            continue
         rows.append(
             ('Cpk (normal ref)', value)
             if label in {'Cpk', 'Cpk+'}
-            else ('Cp (normal ref)', value) if label == 'Cp' else (label, value)
+            else ('Cp (normal ref)', value)
+            if label == 'Cp'
+            else (label, value)
         )
     payload['rows'] = rows
 
     capability_rows = dict(payload.get('capability_rows') or {})
-    for key in ('Cp', 'Cpk', 'Cpk+'):
+    for key in ('Cp', 'Cpk', 'Cpk+', 'Cpu', 'Cpl'):
         cpk_meta = dict(capability_rows.get(key) or {})
         if cpk_meta:
             if key == 'Cp':
                 cpk_meta['label'] = 'Cp (normal ref)'
+            elif key in {'Cpu', 'Cpl'}:
+                cpk_meta['label'] = f'{key} (normal ref)'
             else:
                 cpk_meta['label'] = 'Cpk (normal ref)'
             capability_rows[key] = cpk_meta
@@ -2164,7 +2176,7 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
             label, value = row[0], row[1]
         normalized_rows.append((label, value))
 
-    cp_cpk_rows = {'Cp', 'Cpk', 'Cpk+'}
+    cp_cpk_rows = {'Cp', 'Cpk', 'Cpk+', 'Cpu', 'Cpl'}
     for row_index, (label, value) in enumerate(normalized_rows, start=1):
         if capability_row_badges and label in capability_row_badges:
             _apply_table_row_badge(ax_table, row_index, capability_row_badges[label]['palette_key'])

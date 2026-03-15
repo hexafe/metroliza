@@ -84,6 +84,20 @@ Effect size caveats:
 - Two-group parametric paths report Cohen's *d*; non-parametric paths report Cliff's delta.
 - Multi-group rows use an omnibus effect (eta-squared by default), so pairwise practical interpretation should consider group imbalance and distribution shape.
 
+## Capability metrics legend (summary report)
+
+Histogram statistics tables now use capability terminology aligned with common SPC notation:
+
+- **Two-sided specs**: `Cp` and `Cpk` are shown.
+- **One-sided upper specs**: `Cp` is shown as not defined (`Cp (not defined for one-sided) ⓘ`), and capability is shown as **`Cpu`**.
+- **One-sided lower specs**: `Cp` is shown as not defined (`Cp (not defined for one-sided) ⓘ`), and capability is shown as **`Cpl`**.
+
+Examples of metric availability by spec type:
+
+- `Spec type: two-sided` → `Cp`, `Cpk`.
+- `Spec type: one-sided upper` → `Cp (not defined for one-sided) ⓘ`, `Cpu`.
+- `Spec type: one-sided lower` → `Cp (not defined for one-sided) ⓘ`, `Cpl`.
+
 ## Documentation map
 
 - Release highlights: [`CHANGELOG.md`](CHANGELOG.md)
