@@ -109,11 +109,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.03rc2(260315)`): Histogram and chart readability upgrade: cleaner layouts, taller summary rows, and better title/axis visibility.
+Current release highlight (`2026.03rc1(260307)`): Histogram and chart readability upgrade: cleaner layouts, taller summary rows, and better title/axis visibility.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.03rc2(260315)`)
+### Changelog highlights (release `2026.03rc1(260307)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

@@ -1,5 +1,5 @@
-RELEASE_VERSION = "2026.03rc2"
-VERSION_DATE = "260315"
+RELEASE_VERSION = "2026.03rc1"
+VERSION_DATE = "260307"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
     "Histogram and chart readability upgrade: cleaner layouts, taller summary rows, and better title/axis visibility."
@@ -12,10 +12,7 @@ release_notes = f"""
     - Chart titles and axis ranges are now more consistently visible in exports and previews<br>
     - Symbol rendering issues in chart labels were fixed to prevent missing-glyph warnings<br>
 
-    <br><b>Version 2026.03rc1 (build 260307):</b><br>
     - Group names can be renamed instantly by double-clicking them in the group list<br>
-    - Extended charts now have cleaner visuals for easier reading in dense plots<br>
-    - General UX polish improves readability across main workflows<br>
 
     <br><b>Version 2026.03 (build 260301):</b><br>
     - Google Sheets export implementation with safe `.xlsx` fallback<br>
