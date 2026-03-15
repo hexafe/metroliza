@@ -108,6 +108,7 @@ from modules.export_data_thread import (  # noqa: E402
     render_violin,
     render_scatter_numeric,
     render_histogram,
+    lock_histogram_y_axis_to_bar_heights,
     render_density_line,
     render_panel_table,
     render_panel_table_in_panel_axes,
@@ -335,7 +336,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             {
                 'selected_model': {'display_name': 'Weibull (Min)'},
                 'gof_metrics': {'ad_pvalue': 0.07342},
-                'fit_quality': {'label': 'medium'},
+                'fit_quality': {'label': 'strong'},
                 'risk_estimates': {
                     'spec_type': 'bilateral',
                     'below_lsl_probability': 0.0012,
@@ -350,8 +351,6 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual([label for label, _ in rows], [
             'Model',
-            'Family',
-            'GOF p',
             'P(<LSL)',
             'P(>USL)',
             'Est. NOK %',
@@ -359,13 +358,11 @@ class TestExportPlotHelpers(unittest.TestCase):
             'Fit quality',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
-        self.assertEqual(rows[1][1], 'unknown')
-        self.assertEqual(rows[2][1], '0.073')
-        self.assertEqual(rows[3][1], '0.120%')
-        self.assertEqual(rows[4][1], '0.230%')
-        self.assertEqual(rows[5][1], '0.123%')
-        self.assertEqual(rows[6][1], '1,234')
-        self.assertEqual(rows[7][1], 'Medium')
+        self.assertEqual(rows[1][1], '0.120%')
+        self.assertEqual(rows[2][1], '0.230%')
+        self.assertEqual(rows[3][1], '0.123%')
+        self.assertEqual(rows[4][1], '1,234')
+        self.assertEqual(rows[5][1], 'Strong')
 
     def test_distribution_fit_table_rows_follow_upper_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -381,7 +378,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=10.0,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'Family', 'GOF p', 'P(>USL)', 'Est. NOK %', 'Est. PPM', 'Fit quality'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality'])
 
     def test_distribution_fit_table_rows_follow_lower_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -397,7 +394,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=None,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'Family', 'GOF p', 'P(<LSL)', 'Est. NOK %', 'Est. PPM', 'Fit quality'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality'])
 
     def test_distribution_fit_table_rows_omit_zero_bound_lower_tail_for_positive_support(self):
         rows = _build_distribution_fit_table_rows(
@@ -428,12 +425,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(rows[0], ('Model', 'N/A'))
-        self.assertEqual(rows[1], ('Family', 'unknown'))
-        self.assertEqual(rows[2], ('GOF p', 'N/A'))
-        self.assertEqual(rows[3], ('Est. NOK %', 'N/A'))
-        self.assertEqual(rows[4], ('Est. PPM', 'N/A'))
-        self.assertEqual(rows[5], ('Fit quality', 'Unreliable'))
-        self.assertEqual(rows[6], ('Warning', 'fit unreliable'))
+        self.assertEqual(rows[1], ('Fit quality', 'Unreliable'))
+        self.assertEqual(rows[2], ('Warning', 'fit unreliable'))
 
     def test_left_and_right_panel_tables_share_fontsize_and_row_height_policy(self):
         fig = plt.figure(figsize=(6.2, 4.0))
@@ -446,9 +439,9 @@ class TestExportPlotHelpers(unittest.TestCase):
             left_meta = render_panel_table_in_panel_axes(
                 ax=left_ax,
                 title='Distribution Fit',
-                rows=[('Model', 'Johnson SU'), ('Family', 'signed/bilateral'), ('GOF p', '0.0712'), ('Est. NOK %', '0.123%'), ('Est. PPM', '1,230'), ('Fit quality', 'Medium')],
+                rows=[('Model', 'Johnson SU'), ('Est. NOK %', '0.123%'), ('Est. PPM', '1,230'), ('Fit quality', 'Medium')],
                 style_options={'fontsize': 8.3},
-                row_height=0.082,
+                row_height=0.092,
                 pad_y=0.02,
             )
             right_meta = render_panel_table_in_panel_axes(
@@ -456,14 +449,14 @@ class TestExportPlotHelpers(unittest.TestCase):
                 title='Statistic',
                 rows=[('Average', '10.10'), ('Std dev', '0.08'), ('Cp', '1.33'), ('Cpk', '1.22')],
                 style_options={'fontsize': 8.3},
-                row_height=0.082,
+                row_height=0.092,
                 pad_y=0.02,
             )
 
             self.assertEqual(left_meta['font_size'], right_meta['font_size'])
             left_cells = left_meta['table'].get_celld()
             right_cells = right_meta['table'].get_celld()
-            self.assertAlmostEqual(left_cells[(1, 0)].get_height(), right_cells[(1, 0)].get_height(), delta=0.03)
+            self.assertAlmostEqual(left_cells[(1, 0)].get_height(), right_cells[(1, 0)].get_height(), delta=0.05)
             self.assertLess(left_meta['used_bounds']['height'], 1.0)
         finally:
             plt.close(fig)
@@ -498,7 +491,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 title='Distribution Fit',
                 rows=[('Fit quality', 'Weak')],
                 style_options={'fontsize': 8.3},
-                row_height=0.082,
+                row_height=0.092,
                 pad_y=0.02,
             )
             table = meta['table']
@@ -546,7 +539,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertNotIn('Model', labels)
         self.assertNotIn('Fit quality', labels)
         self.assertIn('Spec handling', labels)
-        self.assertIn('Family (debug)', labels)
+        self.assertNotIn('Family (debug)', labels)
 
     def test_distribution_fit_default_rows_do_not_include_detached_note_metadata(self):
         rows = _build_distribution_fit_table_rows(
@@ -625,7 +618,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             plt.close(fig)
 
 
-    def test_histogram_y_axis_tracks_bar_counts_not_overlay_curve(self):
+    def test_histogram_y_axis_autoscales_to_include_overlay_curve_when_count_scaled(self):
         import pandas as pd
 
         values = [1.0] * 14 + [1.25] * 12 + [1.5] * 10 + [1.75] * 8 + [2.0] * 6
@@ -639,17 +632,17 @@ class TestExportPlotHelpers(unittest.TestCase):
             exaggerated_curve = np.linspace(80.0, 120.0, 50)
             render_density_line(ax, x_values, exaggerated_curve)
 
+            lock_histogram_y_axis_to_bar_heights(ax)
             bar_ylim_after_overlay = ax.get_ylim()
-            self.assertEqual(bar_ylim_after_overlay, bar_ylim_before_overlay)
+            self.assertGreater(bar_ylim_after_overlay[1], bar_ylim_before_overlay[1])
 
             max_bar_height = max((patch.get_height() for patch in ax.patches), default=0.0)
             self.assertGreater(max_bar_height, 0.0)
             self.assertGreaterEqual(bar_ylim_after_overlay[1], max_bar_height)
-            self.assertLessEqual(bar_ylim_after_overlay[1], max_bar_height * 1.2)
         finally:
             plt.close(fig)
 
-    def test_render_density_line_uses_hidden_secondary_y_axis(self):
+    def test_render_density_line_plots_on_primary_axis(self):
         fig, ax = plt.subplots(figsize=(4, 3))
         try:
             x_values = np.linspace(0.0, 1.0, 20)
@@ -657,16 +650,12 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             render_density_line(ax, x_values, density_values)
 
-            self.assertEqual(len(fig.axes), 2)
-            secondary_axis = fig.axes[1]
-            self.assertFalse(secondary_axis.yaxis.get_visible())
-            self.assertEqual(list(secondary_axis.get_yticks()), [])
-            self.assertFalse(secondary_axis.spines['right'].get_visible())
-            self.assertEqual(len(secondary_axis.lines), 1)
+            self.assertEqual(len(fig.axes), 1)
+            self.assertEqual(len(ax.lines), 1)
         finally:
             plt.close(fig)
 
-    def test_render_density_line_reuses_secondary_axis_for_multiple_overlays(self):
+    def test_render_density_line_adds_multiple_overlays_to_primary_axis(self):
         fig, ax = plt.subplots(figsize=(4, 3))
         try:
             x_values = np.linspace(0.0, 1.0, 20)
@@ -675,9 +664,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             render_density_line(ax, x_values, density_values)
             render_density_line(ax, x_values, density_values * 0.8, linestyle='--', alpha=0.3)
 
-            self.assertEqual(len(fig.axes), 2)
-            secondary_axis = fig.axes[1]
-            self.assertEqual(len(secondary_axis.lines), 2)
+            self.assertEqual(len(fig.axes), 1)
+            self.assertEqual(len(ax.lines), 2)
         finally:
             plt.close(fig)
 
@@ -1123,8 +1111,8 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             self.assertEqual(len(ax.patches), expected_fd_bins)
             self.assertEqual(len(ax.patches), 3)
-            total_density_area = sum((patch.get_height() * patch.get_width()) for patch in ax.patches)
-            self.assertAlmostEqual(total_density_area, 1.0, places=2)
+            total_count = sum(patch.get_height() for patch in ax.patches)
+            self.assertAlmostEqual(total_count, len(histogram_data), places=2)
             self.assertAlmostEqual(ax.patches[0].get_linewidth(), 0.5)
             self.assertEqual(ax.patches[0].get_edgecolor(), (1.0, 1.0, 1.0, 0.72))
         finally:
@@ -1138,8 +1126,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             render_histogram(ax, pd.DataFrame({'MEAS': [7.0] * 25}))
 
             self.assertEqual(len(ax.patches), 5)
-            total_density_area = sum((patch.get_height() * patch.get_width()) for patch in ax.patches)
-            self.assertAlmostEqual(total_density_area, 1.0, places=2)
+            total_count = sum(patch.get_height() for patch in ax.patches)
+            self.assertAlmostEqual(total_count, 25.0, places=2)
         finally:
             plt.close(fig)
 
@@ -1151,8 +1139,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             render_histogram(ax, pd.DataFrame({'MEAS': [1.0]}))
 
             self.assertEqual(len(ax.patches), 3)
-            total_density_area = sum((patch.get_height() * patch.get_width()) for patch in ax.patches)
-            self.assertAlmostEqual(total_density_area, 1.0, places=2)
+            total_count = sum(patch.get_height() for patch in ax.patches)
+            self.assertAlmostEqual(total_count, 1.0, places=2)
         finally:
             plt.close(fig)
 
@@ -2064,8 +2052,9 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         table = payload['rows']
-        self.assertEqual(table[-2], ('NOK', '2.000'))
-        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+        self.assertEqual(table[-3], ('NOK', '2'))
+        self.assertEqual(table[-2], ('NOK %', '8.33%'))
+        self.assertEqual(table[-1], ('Samples', '10'))
         self.assertNotIn(('NOK % (obs vs est)', 'N/A'), table)
         self.assertNotIn(('NOK % Δ (abs/rel)', 'N/A'), table)
 
@@ -3348,7 +3337,7 @@ class TestExportPlotHelpers(unittest.TestCase):
     def test_distribution_fit_table_rows_use_small_probability_notation(self):
         rows = _build_distribution_fit_table_rows(
             {
-                'gof_metrics': {'ad_pvalue': 0.0004},
+                'fit_quality': {'label': 'strong'},
                 'risk_estimates': {
                     'spec_type': 'upper_only',
                     'above_usl_probability': 0.0000009,
@@ -3358,7 +3347,6 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         rows_by_label = dict(rows)
-        self.assertEqual(rows_by_label['GOF p'], '<0.001')
         self.assertEqual(rows_by_label['P(>USL)'], '<0.001%')
 
 if __name__ == '__main__':

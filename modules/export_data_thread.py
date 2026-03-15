@@ -119,7 +119,6 @@ from modules.summary_plot_palette import (
 )
 from modules.stats_number_formatting import (
     format_ppm,
-    format_probability,
     format_probability_percent,
 )
 
@@ -208,7 +207,6 @@ _SELECTED_MODEL_CURVE_STYLE_BY_QUALITY = {
 _DISTRIBUTION_FIT_COMPACT_LABELS = {
     'Best fit': 'Model',
     'Selected model': 'Model',
-    'GOF p-value': 'GOF p',
     'Estimated P(X < LSL)': 'P(<LSL)',
     'Estimated P(X > USL)': 'P(>USL)',
     'Estimated NOK %': 'Est. NOK %',
@@ -1034,51 +1032,39 @@ def _resolve_capability_status(*, cp=None, cpk=None, ppk=None, nok_ratio=None):
 def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl=None, summary_stats=None):
     selected_model = distribution_fit_result.get('selected_model') or {}
     fit_quality = distribution_fit_result.get('fit_quality') or {}
-    gof_metrics = distribution_fit_result.get('gof_metrics') or {}
     risk_estimates = distribution_fit_result.get('risk_estimates') or {}
     inferred_support_mode = distribution_fit_result.get('inferred_support_mode')
-
-    gof_pvalue = gof_metrics.get('ad_pvalue')
-    if gof_pvalue is None:
-        gof_display = 'N/A'
-    else:
-        gof_display = format_probability(gof_pvalue, decimals=3, threshold=0.001)
 
     spec_type = str(risk_estimates.get('spec_type', 'none'))
     below_lsl = risk_estimates.get('below_lsl_probability')
     above_usl = risk_estimates.get('above_usl_probability')
 
-    family_label = {
-        'one_sided_zero_bound_positive': 'positive-support',
-        'one_sided_zero_bound_negative': 'negative-support',
-        'bilateral_signed': 'signed/bilateral',
-    }.get(str(inferred_support_mode), 'unknown')
-
     raw_rows = [
         ('Model', selected_model.get('display_name', 'N/A')),
-        ('Family', family_label),
-        ('GOF p', gof_display),
     ]
+
+    quality_key = str(fit_quality.get('label') or '').strip().lower()
+    show_modeled_risk_rows = quality_key == 'strong'
 
     allow_lower_tail_row = spec_type in {'bilateral', 'lower_only'} and lsl is not None
     if inferred_support_mode == 'one_sided_zero_bound_positive' and _is_effectively_zero(lsl):
         if _format_probability_percent(below_lsl) == 'N/A' or _is_effectively_zero(below_lsl):
             allow_lower_tail_row = False
 
-    if allow_lower_tail_row:
+    if allow_lower_tail_row and show_modeled_risk_rows:
         raw_rows.append(('Estimated P(X < LSL)', _format_probability_percent(below_lsl)))
 
-    if spec_type in {'bilateral', 'upper_only'} and usl is not None:
+    if spec_type in {'bilateral', 'upper_only'} and usl is not None and show_modeled_risk_rows:
         raw_rows.append(('Estimated P(X > USL)', _format_probability_percent(above_usl)))
 
-    raw_rows.extend([
-        ('Estimated NOK %', _format_percent(risk_estimates.get('nok_percent'))),
-        ('Estimated NOK (PPM)', format_ppm(risk_estimates.get('ppm_nok'))),
-        ('Model fit quality', str(fit_quality.get('label', 'unknown')).title()),
-    ])
+    if show_modeled_risk_rows:
+        raw_rows.extend([
+            ('Estimated NOK %', _format_percent(risk_estimates.get('nok_percent'))),
+            ('Estimated NOK (PPM)', format_ppm(risk_estimates.get('ppm_nok'))),
+        ])
+    raw_rows.append(('Model fit quality', str(fit_quality.get('label', 'unknown')).title()))
 
     warning_text = str(distribution_fit_result.get('warning') or '').strip()
-    quality_key = str(fit_quality.get('label') or '').strip().lower()
     if not warning_text and quality_key in {'weak', 'unreliable'}:
         warning_text = f'fit {quality_key}'
     if warning_text:
@@ -1089,11 +1075,6 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
 
 def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats):
     inferred_support = distribution_fit_result.get('inferred_support_mode') or 'unknown'
-    candidate_family = {
-        'one_sided_zero_bound_positive': 'positive-support',
-        'one_sided_zero_bound_negative': 'negative-support',
-        'bilateral_signed': 'signed/bilateral',
-    }.get(inferred_support, 'unknown')
     spec_handling_text = {
         'one_sided_zero_bound_positive': 'one-sided upper',
         'one_sided_zero_bound_negative': 'one-sided lower',
@@ -1110,14 +1091,6 @@ def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats)
             'compact_value': spec_handling_text,
             'priority': 90,
             'tooltip': 'How limits are applied when computing estimated NOK and capability metrics.',
-        },
-        {
-            'label': 'Family (debug)',
-            'compact_label': 'Family (debug)',
-            'value': candidate_family,
-            'compact_value': candidate_family,
-            'priority': 10,
-            'expanded_only': True,
         },
     ]
 
@@ -1868,7 +1841,7 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
         sns.histplot(
             x=histogram_values,
             bins=bin_count,
-            stat='density',
+            stat='count',
             alpha=0.72,
             color=SUMMARY_PLOT_PALETTE['distribution_base'],
             edgecolor=(1.0, 1.0, 1.0, 0.72),
@@ -1879,7 +1852,7 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
         ax.hist(
             histogram_values,
             bins=bin_count,
-            density=True,
+            density=False,
             alpha=0.72,
             color=SUMMARY_PLOT_PALETTE['distribution_base'],
             edgecolor=(1.0, 1.0, 1.0, 0.72),
@@ -1891,9 +1864,20 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
     enforce_minimum_histogram_bar_width(ax)
     lock_histogram_y_axis_to_bar_heights(ax)
 
+    bin_widths = [
+        float(patch.get_width())
+        for patch in ax.patches
+        if np.isfinite(patch.get_width()) and patch.get_width() > 0
+    ]
+    representative_bin_width = float(np.median(bin_widths)) if bin_widths else None
+    count_scale_factor = None
+    if representative_bin_width is not None and histogram_values.size > 0:
+        count_scale_factor = float(histogram_values.size) * representative_bin_width
+
     return {
         'is_grouped': False,
         'group_labels': [],
+        'count_scale_factor': count_scale_factor,
     }
 
 
@@ -1907,16 +1891,22 @@ def lock_histogram_y_axis_to_bar_heights(ax, *, top_padding_ratio=0.08):
     if ax is None:
         return
 
-    bar_heights = []
+    y_candidates = []
     for patch in ax.patches:
         height = patch.get_height()
         if np.isfinite(height) and height >= 0:
-            bar_heights.append(float(height))
+            y_candidates.append(float(height))
 
-    if not bar_heights:
+    for line in ax.lines:
+        y_data = np.asarray(line.get_ydata(), dtype=float)
+        finite_y = y_data[np.isfinite(y_data)]
+        if finite_y.size > 0:
+            y_candidates.append(float(np.max(finite_y)))
+
+    if not y_candidates:
         return
 
-    max_height = max(bar_heights)
+    max_height = max(y_candidates)
     if max_height <= 0:
         max_height = 1.0
 
@@ -2056,52 +2046,11 @@ def add_iqr_boxplot_legend(ax, *, include_tolerance_refs=False):
     )
 
 
-def _get_or_create_density_axis(ax):
-    """Return a shared hidden density axis for histogram overlays."""
-
-    if ax is None:
-        return None
-
-    density_axis = getattr(ax, '_summary_density_axis', None)
-    if density_axis is not None:
-        return density_axis
-
-    density_axis = ax.twinx()
-    setattr(ax, '_summary_density_axis', density_axis)
-    return density_axis
-
-
 def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, linestyle='-'):
-    """Render a density line on a hidden secondary y-axis.
-
-    Histogram bar counts remain on the primary axis while the density curve uses
-    an independent scale to avoid clipping or extending beyond count bounds.
-    """
+    """Render a count-scaled reference/model line on the primary y-axis."""
 
     if ax is None:
         return None
-
-    density_axis = _get_or_create_density_axis(ax)
-    density_axis.set_facecolor('none')
-    density_axis.patch.set_alpha(0.0)
-    density_axis.grid(False)
-
-    density_axis.tick_params(
-        axis='y',
-        which='both',
-        left=False,
-        right=False,
-        labelleft=False,
-        labelright=False,
-        length=0,
-    )
-    density_axis.set_yticks([])
-    density_axis.yaxis.set_visible(False)
-
-    for spine_name in ('left', 'right', 'top'):
-        spine = density_axis.spines.get(spine_name)
-        if spine is not None:
-            spine.set_visible(False)
 
     line_color = color or SUMMARY_PLOT_PALETTE['density_line']
     if _HAS_SEABORN:
@@ -2112,33 +2061,21 @@ def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, lines
             linewidth=linewidth,
             linestyle=linestyle,
             alpha=alpha,
-            ax=density_axis,
+            ax=ax,
         )
     else:
-        density_axis.plot(x, p, color=line_color, linewidth=linewidth, linestyle=linestyle, alpha=alpha)
+        ax.plot(x, p, color=line_color, linewidth=linewidth, linestyle=linestyle, alpha=alpha)
 
-    density_values = np.asarray(p, dtype=float)
-    finite_density_values = density_values[np.isfinite(density_values)]
-    if finite_density_values.size > 0:
-        density_max = float(np.max(finite_density_values))
-        if density_max <= 0:
-            density_max = 1.0
-        density_axis.set_ylim(0.0, density_max * 1.05)
-
-    return density_axis
+    return ax
 
 
 def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=None):
-    """Shade modeled PDF tails beyond active specification limits."""
+    """Shade count-scaled modeled tails beyond active specification limits."""
 
     selected_model_curve = (distribution_fit_result or {}).get('selected_model_pdf') or {}
     x_values = np.asarray(selected_model_curve.get('x', []), dtype=float)
     density_values = np.asarray(selected_model_curve.get('y', []), dtype=float)
     if x_values.size < 2 or density_values.size != x_values.size:
-        return
-
-    density_axis = _get_or_create_density_axis(ax)
-    if density_axis is None:
         return
 
     parsed_lsl = None
@@ -2162,7 +2099,7 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
             continue
         if np.count_nonzero(mask) < 2:
             continue
-        density_axis.fill_between(
+        ax.fill_between(
             x_values[mask],
             density_values[mask],
             0.0,
@@ -4392,7 +4329,7 @@ class ExportDataThread(QThread):
                             'min_value_fraction': 0.28,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
-                        row_height=0.082,
+                        row_height=0.092,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4410,7 +4347,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         ax_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.32,
+                        row_height_scale=1.40,
                     )
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
@@ -4425,7 +4362,7 @@ class ExportDataThread(QThread):
                             'value_wrap_width': 30,
                             'low_priority_labels': {'Est. PPM'},
                         },
-                        row_height=0.082,
+                        row_height=0.092,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4453,7 +4390,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.32,
+                        row_height_scale=1.40,
                     )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
@@ -4471,20 +4408,32 @@ class ExportDataThread(QThread):
 
                     if selected_model_curve is not None:
                         model_curve_style = resolve_selected_model_curve_style(distribution_fit_result)
+                        model_curve_y = np.asarray(selected_model_curve['y'], dtype=float)
+                        count_scale_factor = histogram_render_meta.get('count_scale_factor')
+                        if count_scale_factor is not None:
+                            model_curve_y = model_curve_y * float(count_scale_factor)
                         render_density_line(
                             plot_ax,
                             selected_model_curve['x'],
-                            selected_model_curve['y'],
+                            model_curve_y,
                             alpha=model_curve_style['alpha'],
                             linewidth=model_curve_style['linewidth'],
                         )
+                        distribution_fit_result['selected_model_pdf'] = {
+                            **selected_model_curve,
+                            'y': model_curve_y,
+                        }
                         render_modeled_tail_shading(plot_ax, distribution_fit_result, lsl=LSL, usl=USL)
                     kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
                     if kde_reference_curve is not None:
+                        kde_curve_y = np.asarray(kde_reference_curve['y'], dtype=float)
+                        count_scale_factor = histogram_render_meta.get('count_scale_factor')
+                        if count_scale_factor is not None:
+                            kde_curve_y = kde_curve_y * float(count_scale_factor)
                         render_density_line(
                             plot_ax,
                             kde_reference_curve['x'],
-                            kde_reference_curve['y'],
+                            kde_curve_y,
                             color=SUMMARY_PLOT_PALETTE['density_line'],
                             alpha=0.22,
                             linewidth=0.9,
@@ -4507,6 +4456,8 @@ class ExportDataThread(QThread):
                             },
                             zorder=8,
                         )
+
+                    lock_histogram_y_axis_to_bar_heights(plot_ax)
 
                     fit_warning = distribution_fit_result.get('warning')
                     if fit_warning:
