@@ -176,7 +176,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         try:
             rows = [
                 ('Estimated NOK (PPM)', '12,345'),
-                ('Fit quality', 'Medium'),
+                ('Model fit quality', 'Medium'),
                 ('Goodness of fit p-value', '0.0421'),
             ]
             meta = render_panel_table(
@@ -190,7 +190,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                     'min_fontsize': 6.4,
                     'compact_label_mapping': {
                         'Estimated NOK (PPM)': 'Est. PPM',
-                        'Fit quality': 'Fit qual.',
+                        'Model fit quality': 'Fit qual.',
                         'Goodness of fit p-value': 'GOF p',
                     },
                     'low_priority_labels': set(),
@@ -283,7 +283,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ('P(>USL)', '0.108%'),
                 ('Est. NOK %', '0.123%'),
                 ('Est. PPM', '1,230'),
-                ('Fit quality', 'Medium'),
+                ('Model fit quality', 'Medium'),
             ]
             stats_rows = [
                 ('Average', '10.102'),
@@ -361,6 +361,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             'Est. NOK %',
             'Est. PPM',
             'Fit quality',
+            'Capability',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
         self.assertEqual(rows[1][1], '0.0734')
@@ -369,6 +370,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(rows[4][1], '0.123%')
         self.assertEqual(rows[5][1], '1,234')
         self.assertEqual(rows[6][1], 'Medium')
+        self.assertEqual(rows[7][1], 'Risk')
 
     def test_distribution_fit_table_rows_follow_upper_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -384,7 +386,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=10.0,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(>USL)', 'Est. NOK %', 'Est. PPM', 'Fit quality'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(>USL)', 'Est. NOK %', 'Est. PPM', 'Fit quality', 'Capability'])
 
     def test_distribution_fit_table_rows_follow_lower_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -400,7 +402,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=None,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(<LSL)', 'Est. NOK %', 'Est. PPM', 'Fit quality'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(<LSL)', 'Est. NOK %', 'Est. PPM', 'Fit quality', 'Capability'])
 
     def test_distribution_fit_table_rows_omit_zero_bound_lower_tail_for_positive_support(self):
         rows = _build_distribution_fit_table_rows(
@@ -435,6 +437,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(rows[2], ('Est. NOK %', 'N/A'))
         self.assertEqual(rows[3], ('Est. PPM', 'N/A'))
         self.assertEqual(rows[4], ('Fit quality', 'Unreliable'))
+        self.assertEqual(rows[5], ('Capability', 'N/A'))
 
     def test_left_and_right_panel_tables_share_fontsize_and_row_height_policy(self):
         fig = plt.figure(figsize=(6.2, 4.0))
@@ -447,7 +450,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             left_meta = render_panel_table_in_panel_axes(
                 ax=left_ax,
                 title='Distribution Fit',
-                rows=[('Model', 'Johnson SU'), ('GOF p', '0.0712'), ('Est. NOK %', '0.123%'), ('Est. PPM', '1,230'), ('Fit quality', 'Medium')],
+                rows=[('Model', 'Johnson SU'), ('GOF p', '0.0712'), ('Est. NOK %', '0.123%'), ('Est. PPM', '1,230'), ('Model fit quality', 'Medium')],
                 style_options={'fontsize': 8.3},
                 row_height=0.060,
                 pad_y=0.02,
@@ -3096,7 +3099,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(lines, ['Family: positive-support', 'Warning: fit weak'])
+        self.assertEqual(lines, ['Family: positive-support', 'Warning: fit weak', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
         self.assertFalse(any(line.startswith('Normality:') for line in lines))
         self.assertFalse(any('Model:' in line for line in lines))
 
@@ -3109,7 +3112,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(lines, ['Family: signed/bilateral', 'Fit confidence: medium'])
+        self.assertEqual(lines, ['Family: signed/bilateral', 'Fit confidence: medium', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
 
     def test_kde_footer_note_uses_bbox_background_for_readability(self):
         fig, ax = plt.subplots(figsize=(6.0, 4.0))

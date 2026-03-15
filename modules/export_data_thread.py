@@ -198,6 +198,8 @@ _DISTRIBUTION_FIT_COMPACT_LABELS = {
     'Estimated P(X > USL)': 'P(>USL)',
     'Estimated NOK %': 'Est. NOK %',
     'Estimated NOK (PPM)': 'Est. PPM',
+    'Model fit quality': 'Fit quality',
+    'Capability status': 'Capability',
 }
 
 
@@ -961,7 +963,63 @@ def _is_effectively_zero(value, tolerance=1e-12):
         return False
 
 
-def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl=None):
+def _as_float_or_none(value):
+    if isinstance(value, str):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if np.isfinite(numeric) else None
+
+
+def _resolve_capability_status(*, cp=None, cpk=None, ppk=None, nok_ratio=None):
+    capability_values = [
+        value
+        for value in (_as_float_or_none(cp), _as_float_or_none(cpk), _as_float_or_none(ppk))
+        if value is not None
+    ]
+    nok_value = _as_float_or_none(nok_ratio)
+
+    capability_tier = None
+    if capability_values:
+        limiting_index = min(capability_values)
+        if limiting_index >= 1.67:
+            capability_tier = 'capable'
+        elif limiting_index > 1.33:
+            capability_tier = 'good'
+        elif limiting_index >= 1.0:
+            capability_tier = 'marginal'
+        else:
+            capability_tier = 'risk'
+
+    nok_tier = None
+    if nok_value is not None:
+        if nok_value <= 0.003:
+            nok_tier = 'good'
+        elif nok_value <= 0.05:
+            nok_tier = 'marginal'
+        else:
+            nok_tier = 'risk'
+
+    tier_rank = {'capable': 0, 'good': 1, 'marginal': 2, 'risk': 3}
+    selected_tier = None
+    for tier in (capability_tier, nok_tier):
+        if tier is None:
+            continue
+        if selected_tier is None or tier_rank[tier] > tier_rank[selected_tier]:
+            selected_tier = tier
+
+    if selected_tier is None:
+        return {'label': 'N/A', 'palette_key': 'quality_unknown'}
+    if selected_tier in {'capable', 'good'}:
+        return {'label': selected_tier.title(), 'palette_key': 'quality_capable'}
+    if selected_tier == 'marginal':
+        return {'label': 'Marginal', 'palette_key': 'quality_marginal'}
+    return {'label': 'Risk', 'palette_key': 'quality_risk'}
+
+
+def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl=None, summary_stats=None):
     selected_model = distribution_fit_result.get('selected_model') or {}
     fit_quality = distribution_fit_result.get('fit_quality') or {}
     gof_metrics = distribution_fit_result.get('gof_metrics') or {}
@@ -997,8 +1055,19 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     raw_rows.extend([
         ('Estimated NOK %', _format_percent(risk_estimates.get('nok_percent'))),
         ('Estimated NOK (PPM)', 'N/A' if risk_estimates.get('ppm_nok') is None else f"{float(risk_estimates['ppm_nok']):,.0f}"),
-        ('Fit quality', str(fit_quality.get('label', 'unknown')).title()),
+        ('Model fit quality', str(fit_quality.get('label', 'unknown')).title()),
     ])
+
+    cp_value = (summary_stats or {}).get('cp')
+    cpk_value = (summary_stats or {}).get('cpk')
+    ppk_value = (summary_stats or {}).get('ppk')
+    capability_status = _resolve_capability_status(
+        cp=cp_value,
+        cpk=cpk_value,
+        ppk=ppk_value,
+        nok_ratio=risk_estimates.get('nok_percent', (summary_stats or {}).get('estimated_nok_pct')),
+    )
+    raw_rows.append(('Capability status', capability_status['label']))
 
     return [(_compact_distribution_fit_label(label), value) for label, value in raw_rows]
 
@@ -1078,7 +1147,12 @@ def _build_compact_histogram_note_lines(distribution_fit_result):
     if (not is_poor_fit) and fit_quality not in {'medium'} and normality_is_concise and normality_adds_context:
         lines.append(f'Normality: {reference_normality}')
 
-    return lines[:2]
+    lines.extend([
+        'Help: model fit quality = statistical adequacy of chosen distribution',
+        'Help: capability status = conformance risk against specs',
+    ])
+
+    return lines[:4]
 
 def _is_non_normal_capability_reference_model(distribution_fit_result):
     selected_model = (distribution_fit_result or {}).get('selected_model') or {}
@@ -4166,6 +4240,7 @@ class ExportDataThread(QThread):
                         distribution_fit_result,
                         lsl=LSL,
                         usl=USL,
+                        summary_stats=summary_stats,
                     )
                     _note_items, poor_fit = _build_distribution_fit_info_note(
                         distribution_fit_result,
@@ -4299,22 +4374,36 @@ class ExportDataThread(QThread):
                     )
                     distribution_fit_table = left_table_meta['table']
                     fit_quality_value = None
+                    capability_status_value = None
                     for label, value in left_table_meta.get('rendered_rows', []):
                         if label == 'Fit quality':
                             fit_quality_value = str(value).strip().lower()
-                            break
+                        elif label == 'Capability':
+                            capability_status_value = str(value).strip().lower()
+
                     fit_quality_palette = None
                     if fit_quality_value in {'weak', 'unreliable'}:
-                        fit_quality_palette = 'quality_risk'
+                        fit_quality_palette = 'fit_quality_low'
                     elif fit_quality_value in {'medium', 'marginal'}:
-                        fit_quality_palette = 'quality_marginal'
+                        fit_quality_palette = 'fit_quality_medium'
                     elif fit_quality_value in {'good', 'strong', 'capable'}:
-                        fit_quality_palette = 'quality_good'
+                        fit_quality_palette = 'fit_quality_high'
+
+                    capability_status_palette = None
+                    if capability_status_value in {'risk'}:
+                        capability_status_palette = 'quality_risk'
+                    elif capability_status_value in {'marginal'}:
+                        capability_status_palette = 'quality_marginal'
+                    elif capability_status_value in {'good', 'capable'}:
+                        capability_status_palette = 'quality_capable'
 
                     style_histogram_stats_table(
                         distribution_fit_table,
                         left_table_meta['rendered_rows'],
-                        capability_row_badges={'Fit quality': {'palette_key': fit_quality_palette}} if fit_quality_palette else None,
+                        capability_row_badges={
+                            **({'Fit quality': {'palette_key': fit_quality_palette}} if fit_quality_palette else {}),
+                            **({'Capability': {'palette_key': capability_status_palette}} if capability_status_palette else {}),
+                        } or None,
                     )
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
