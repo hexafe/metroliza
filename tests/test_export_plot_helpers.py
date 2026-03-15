@@ -1576,7 +1576,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 2)
+        self.assertEqual(max_row, 3)
         self.assertGreater(by_kind['mean']['row_index'], by_kind['usl']['row_index'])
         self.assertNotEqual(by_kind['usl']['row_index'], by_kind['lsl']['row_index'])
         self.assertNotEqual(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
@@ -1594,10 +1594,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 2)
-        self.assertEqual(by_kind['mean']['row_index'], 1)
-        self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 2)
+        self.assertEqual(max_row, 3)
+        self.assertEqual(by_kind['mean']['row_index'], 2)
+        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.020)
     def test_compute_histogram_annotation_rows_stacks_mean_and_usl_when_close(self):
         annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.02, lsl=7.0, y_max=1.0)
@@ -1611,10 +1611,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 2)
-        self.assertEqual(by_kind['mean']['row_index'], 1)
-        self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 2)
+        self.assertEqual(max_row, 3)
+        self.assertEqual(by_kind['mean']['row_index'], 2)
+        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 10.02, 7.0])
 
@@ -1630,10 +1630,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 2)
-        self.assertEqual(by_kind['mean']['row_index'], 1)
-        self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 2)
+        self.assertEqual(max_row, 3)
+        self.assertEqual(by_kind['mean']['row_index'], 2)
+        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 13.0, 10.03])
 
@@ -1650,10 +1650,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 2)
-        self.assertEqual(by_kind['mean']['row_index'], 1)
-        self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 2)
+        self.assertEqual(max_row, 3)
+        self.assertEqual(by_kind['mean']['row_index'], 2)
+        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 10.2, 9.9])
 
@@ -1693,7 +1693,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
         rows = [item['row_index'] for item in resolved]
 
-        self.assertEqual(max_row, 2)
+        self.assertEqual(max_row, 3)
         self.assertEqual(len(set(rows)), 3)
 
     def test_compute_histogram_annotation_rows_well_separated_triplet_keeps_preferred_slots(self):
@@ -1708,10 +1708,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
         by_kind = {item['kind']: item for item in resolved}
 
-        self.assertEqual(max_row, 2)
-        self.assertEqual(by_kind['mean']['row_index'], 1)
-        self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 2)
+        self.assertEqual(max_row, 3)
+        self.assertEqual(by_kind['mean']['row_index'], 2)
+        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual(by_kind['mean']['assigned_slot'], 'mean_primary')
         self.assertEqual(by_kind['usl']['assigned_slot'], 'spec_primary')
         self.assertEqual(by_kind['lsl']['assigned_slot'], 'spec_secondary')
