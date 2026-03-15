@@ -198,6 +198,8 @@ _DISTRIBUTION_FIT_COMPACT_LABELS = {
     'Estimated P(X > USL)': 'P(>USL)',
     'Estimated NOK %': 'Est. NOK %',
     'Estimated NOK (PPM)': 'Est. PPM',
+    'NOK % (obs vs est)': 'Obs vs Est NOK %',
+    'NOK % Δ (abs/rel)': 'NOK % Δ',
     'Model fit quality': 'Fit quality',
     'Capability status': 'Capability',
 }
@@ -1170,6 +1172,7 @@ def _build_compact_histogram_note_lines(distribution_fit_result, *, summary_stat
         lines.append(f'Rationale: {threshold_text}; capability shown as low-confidence estimate')
 
     lines.extend([
+        'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data',
         'Help: model fit quality = statistical adequacy of chosen distribution',
         'Help: capability status = conformance risk against specs',
     ])
