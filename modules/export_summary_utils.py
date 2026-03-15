@@ -25,6 +25,67 @@ _DISTRIBUTION_BY_NAME = {
 }
 
 
+def resolve_histogram_bin_count(values, *, min_bins=3, max_bins=48):
+    """Resolve a stable histogram bin count using FD/Scott with low-n safeguards."""
+    numeric_values = pd.to_numeric(pd.Series(list(values)), errors='coerce').dropna().to_numpy(dtype=float)
+    n = int(numeric_values.size)
+    if n == 0:
+        return {'bin_count': int(min_bins), 'method': 'minimum', 'sample_size': 0}
+
+    data_min = float(np.min(numeric_values))
+    data_max = float(np.max(numeric_values))
+    data_range = max(0.0, data_max - data_min)
+
+    chosen_bins = None
+    chosen_method = 'fallback_sqrt'
+
+    if n >= 2 and data_range > 0:
+        q1, q3 = np.percentile(numeric_values, [25, 75])
+        iqr = float(q3 - q1)
+        std = float(np.std(numeric_values, ddof=1)) if n > 1 else 0.0
+
+        if iqr > 0:
+            fd_width = 2.0 * iqr * (n ** (-1.0 / 3.0))
+            if np.isfinite(fd_width) and fd_width > 0:
+                fd_bins = int(np.ceil(data_range / fd_width))
+                if fd_bins > 0:
+                    chosen_bins = fd_bins
+                    chosen_method = 'freedman_diaconis'
+
+        if chosen_bins is None and std > 0:
+            scott_width = 3.5 * std * (n ** (-1.0 / 3.0))
+            if np.isfinite(scott_width) and scott_width > 0:
+                scott_bins = int(np.ceil(data_range / scott_width))
+                if scott_bins > 0:
+                    chosen_bins = scott_bins
+                    chosen_method = 'scott'
+
+    if chosen_bins is None:
+        chosen_bins = int(np.ceil(np.sqrt(n)))
+
+    low_n_upper_bound = 8 if n <= 10 else 12 if n <= 20 else max_bins
+    bounded_upper = min(int(max_bins), int(low_n_upper_bound))
+    bounded_bins = int(np.clip(chosen_bins, int(min_bins), max(int(min_bins), bounded_upper)))
+
+    return {
+        'bin_count': bounded_bins,
+        'method': chosen_method,
+        'sample_size': n,
+    }
+
+
+def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
+    """Resolve curve point density and KDE smoothing safeguards for low sample sizes."""
+    n = max(0, int(sample_size))
+    if n <= 10:
+        return {'point_count': min(int(requested_point_count), 40), 'kde_min_bandwidth': 0.45}
+    if n <= 20:
+        return {'point_count': min(int(requested_point_count), 60), 'kde_min_bandwidth': 0.35}
+    if n <= 40:
+        return {'point_count': min(int(requested_point_count), 80), 'kde_min_bandwidth': 0.25}
+    return {'point_count': max(20, int(requested_point_count)), 'kde_min_bandwidth': 0.0}
+
+
 def normalize_plot_axis_values(values):
     """Normalize string-based axis values into numeric or datetime types when parseable."""
     normalized = []
@@ -247,12 +308,17 @@ def build_histogram_density_curve_payload(measurements, point_count=100, *, mode
     if np.isclose(x_min, x_max):
         return None
 
-    x_values = np.linspace(x_min, x_max, point_count)
+    sampling = resolve_density_curve_sampling(int(numeric_measurements.size), requested_point_count=point_count)
+    resolved_point_count = max(20, int(sampling['point_count']))
+    x_values = np.linspace(x_min, x_max, resolved_point_count)
     if mode == 'kde':
         if numeric_measurements.size < 2:
             return None
         try:
             kde = gaussian_kde(numeric_measurements)
+            min_bandwidth = float(sampling.get('kde_min_bandwidth', 0.0))
+            if min_bandwidth > 0:
+                kde.set_bandwidth(bw_method=max(float(kde.factor), min_bandwidth))
             y_values = kde(x_values)
         except Exception:
             return None

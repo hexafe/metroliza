@@ -14,7 +14,11 @@ from modules.export_histogram_layout import (
 )
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
-from modules.export_summary_utils import compute_normality_status
+from modules.export_summary_utils import (
+    compute_normality_status,
+    resolve_density_curve_sampling,
+    resolve_histogram_bin_count,
+)
 
 
 qtcore_stub = types.ModuleType('PyQt6.QtCore')
@@ -809,8 +813,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         payload = build_histogram_density_curve_payload([1.0, 1.5, 2.0, 2.5])
 
         self.assertIsNotNone(payload)
-        self.assertEqual(len(payload['x']), 100)
-        self.assertEqual(len(payload['y']), 100)
+        self.assertEqual(len(payload['x']), 40)
+        self.assertEqual(len(payload['y']), 40)
 
     def test_build_histogram_density_curve_payload_returns_none_for_constant_data(self):
         payload = build_histogram_density_curve_payload([3.0, 3.0, 3.0])
@@ -987,14 +991,14 @@ class TestExportPlotHelpers(unittest.TestCase):
         payload = build_histogram_density_curve_payload(['1.0', '1.5', '2.0', '2.5'])
 
         self.assertIsNotNone(payload)
-        self.assertEqual(len(payload['x']), 100)
-        self.assertEqual(len(payload['y']), 100)
+        self.assertEqual(len(payload['x']), 40)
+        self.assertEqual(len(payload['y']), 40)
 
     def test_build_histogram_density_curve_payload_supports_kde_mode(self):
         payload = build_histogram_density_curve_payload([0.0, 0.0, 0.1, 0.2, 0.4, 3.0, 7.0], mode='kde')
 
         self.assertIsNotNone(payload)
-        self.assertEqual(len(payload['x']), 100)
+        self.assertEqual(len(payload['x']), 40)
 
     def test_classify_normality_status_maps_all_quality_paths(self):
         self.assertEqual(classify_normality_status('normal')['palette_key'], 'normality_normal')
@@ -1030,7 +1034,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertTrue(result['text'].endswith('\nNormality not applicable'))
         self.assertEqual(classify_normality_status(result['status'])['label'], '! Normality not applicable')
 
-    def test_render_histogram_uses_fd_bins_for_non_degenerate_data(self):
+    def test_render_histogram_uses_stable_fd_bins_for_non_degenerate_data(self):
         import pandas as pd
 
         histogram_data = [
@@ -1040,10 +1044,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             7.5, 8.0, 8.5, 9.0, 9.5,
             10.0, 10.5, 11.0, 11.5, 12.0,
         ]
-        q1, q3 = pd.Series(histogram_data).quantile([0.25, 0.75])
-        iqr = q3 - q1
-        data_range = max(histogram_data) - min(histogram_data)
-        expected_fd_bins = int(np.ceil(data_range / (2 * iqr * (len(histogram_data) ** (-1 / 3)))))
+        expected_fd_bins = resolve_histogram_bin_count(histogram_data)['bin_count']
 
         fig, ax = plt.subplots(figsize=(4, 3))
         try:
@@ -1051,7 +1052,8 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             self.assertEqual(len(ax.patches), expected_fd_bins)
             self.assertEqual(len(ax.patches), 3)
-            self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), float(len(histogram_data)))
+            total_density_area = sum((patch.get_height() * patch.get_width()) for patch in ax.patches)
+            self.assertAlmostEqual(total_density_area, 1.0, places=2)
             self.assertAlmostEqual(ax.patches[0].get_linewidth(), 0.5)
             self.assertEqual(ax.patches[0].get_edgecolor(), (1.0, 1.0, 1.0, 0.72))
         finally:
@@ -1065,7 +1067,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             render_histogram(ax, pd.DataFrame({'MEAS': [7.0] * 25}))
 
             self.assertEqual(len(ax.patches), 5)
-            self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), 25.0)
+            total_density_area = sum((patch.get_height() * patch.get_width()) for patch in ax.patches)
+            self.assertAlmostEqual(total_density_area, 1.0, places=2)
         finally:
             plt.close(fig)
 
@@ -1077,9 +1080,36 @@ class TestExportPlotHelpers(unittest.TestCase):
             render_histogram(ax, pd.DataFrame({'MEAS': [1.0]}))
 
             self.assertEqual(len(ax.patches), 3)
-            self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), 1.0)
+            total_density_area = sum((patch.get_height() * patch.get_width()) for patch in ax.patches)
+            self.assertAlmostEqual(total_density_area, 1.0, places=2)
         finally:
             plt.close(fig)
+
+    def test_histogram_binning_qa_snapshots_for_n10_n20_and_skewed(self):
+        n10_values = np.array([0.10, 0.12, 0.15, 0.20, 0.22, 0.24, 0.25, 0.30, 0.31, 0.33])
+        n20_values = np.linspace(-1.0, 1.0, 20)
+        skewed_values = np.array([0.0, 0.0, 0.02, 0.03, 0.05, 0.08, 0.12, 0.2, 0.4, 0.8, 1.4, 2.3, 3.8, 6.2])
+
+        snapshots = {
+            'n10': resolve_histogram_bin_count(n10_values),
+            'n20': resolve_histogram_bin_count(n20_values),
+            'skewed': resolve_histogram_bin_count(skewed_values),
+        }
+
+        self.assertEqual(snapshots['n10']['sample_size'], 10)
+        self.assertLessEqual(snapshots['n10']['bin_count'], 8)
+        self.assertEqual(snapshots['n20']['sample_size'], 20)
+        self.assertLessEqual(snapshots['n20']['bin_count'], 12)
+        self.assertGreaterEqual(snapshots['skewed']['bin_count'], 3)
+
+    def test_density_curve_sampling_qa_snapshots_for_n10_n20_and_n50(self):
+        n10 = resolve_density_curve_sampling(10, requested_point_count=100)
+        n20 = resolve_density_curve_sampling(20, requested_point_count=100)
+        n50 = resolve_density_curve_sampling(50, requested_point_count=100)
+
+        self.assertEqual(n10, {'point_count': 40, 'kde_min_bandwidth': 0.45})
+        self.assertEqual(n20, {'point_count': 60, 'kde_min_bandwidth': 0.35})
+        self.assertEqual(n50, {'point_count': 100, 'kde_min_bandwidth': 0.0})
 
     def test_render_histogram_handles_numeric_strings_without_matplotlib_warnings(self):
         import pandas as pd
@@ -3174,7 +3204,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             artist = ax.text(
                 0.02,
                 0.02,
-                'Dashed KDE: descriptive only',
+                'Dashed KDE: descriptive only (not used for decisions)',
                 transform=ax.transAxes,
                 ha='left',
                 va='bottom',
@@ -3188,7 +3218,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 },
                 zorder=8,
             )
-            self.assertEqual(artist.get_text(), 'Dashed KDE: descriptive only')
+            self.assertEqual(artist.get_text(), 'Dashed KDE: descriptive only (not used for decisions)')
             self.assertIsNotNone(artist.get_bbox_patch())
             self.assertGreaterEqual(artist.get_position()[0], 0.0)
             self.assertGreaterEqual(artist.get_position()[1], 0.0)

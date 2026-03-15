@@ -126,6 +126,16 @@ def _build_kde_reference_curve(values: np.ndarray, x_values: np.ndarray):
         return None
     try:
         kde = gaussian_kde(values)
+        sample_size = int(values.size)
+        min_bandwidth = 0.0
+        if sample_size <= 10:
+            min_bandwidth = 0.45
+        elif sample_size <= 20:
+            min_bandwidth = 0.35
+        elif sample_size <= 40:
+            min_bandwidth = 0.25
+        if min_bandwidth > 0:
+            kde.set_bandwidth(bw_method=max(float(kde.factor), min_bandwidth))
         y_values = kde(x_values)
     except Exception:
         return None
@@ -336,7 +346,14 @@ def fit_measurement_distribution(
     usl_value = _safe_float(usl)
 
     spread = x_max - x_min
-    x_values = np.linspace(x_min - 0.03 * spread, x_max + 0.03 * spread, max(20, point_count))
+    resolved_point_count = max(20, int(point_count))
+    if sample_size <= 10:
+        resolved_point_count = min(resolved_point_count, 40)
+    elif sample_size <= 20:
+        resolved_point_count = min(resolved_point_count, 60)
+    elif sample_size <= 40:
+        resolved_point_count = min(resolved_point_count, 80)
+    x_values = np.linspace(x_min - 0.03 * spread, x_max + 0.03 * spread, resolved_point_count)
 
     notes: list[str] = []
     candidates = []
