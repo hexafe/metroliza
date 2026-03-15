@@ -21,13 +21,14 @@ def test_build_histogram_table_data_preserves_capability_rows():
         }
     )
 
-    assert payload['rows'][5] == ('Spec type', 'two-sided')
+    assert payload['rows'][5][0] == 'Cp'
+    assert payload['rows'][5][1].startswith('1.50 [')
     cp_row = dict(payload['rows'])['Cp']
     cpk_row = dict(payload['rows'])['Cpk']
     assert cp_row.startswith('1.50 [')
     assert cpk_row.startswith('1.20 [')
     assert payload['capability_rows']['Cpk']['display_value'].startswith('1.20 [')
-    assert 'Cpk 95% CI' in dict(payload['rows'])
+    assert 'Cpk 95% CI' not in dict(payload['rows'])
 
 
 def test_build_histogram_table_render_data_supports_three_column_mode():
@@ -77,7 +78,7 @@ def test_build_histogram_table_data_exposes_observed_and_estimated_metrics():
     }
 
 
-def test_build_histogram_table_data_flags_n10_with_warning_confidence_rows():
+def test_build_histogram_table_data_omits_uncertainty_and_ci_rows_from_default_dashboard():
     payload = build_histogram_table_data(
         {
             'minimum': 1.0,
@@ -94,14 +95,16 @@ def test_build_histogram_table_data_flags_n10_with_warning_confidence_rows():
     )
 
     labels = [label for label, _ in payload['rows']]
-    assert 'Confidence !' in labels
-    assert 'Cp uncertainty' in labels
-    assert 'Cpk uncertainty' in labels
+    assert 'Confidence !' not in labels
+    assert 'Cp uncertainty' not in labels
+    assert 'Cpk uncertainty' not in labels
+    assert 'Cp 95% CI' not in labels
+    assert 'Cpk 95% CI' not in labels
     assert payload['sample_confidence']['severity'] == 'warning'
     assert payload['capability_rows']['Cp']['label'] == 'Cp'
 
 
-def test_build_histogram_table_data_flags_warning_low_n_with_uncertainty_bands():
+def test_build_histogram_table_data_keeps_compact_default_rows_for_low_n():
     payload = build_histogram_table_data(
         {
             'minimum': 1.0,
@@ -118,9 +121,9 @@ def test_build_histogram_table_data_flags_warning_low_n_with_uncertainty_bands()
     )
 
     labels = [label for label, _ in payload['rows']]
-    assert 'Confidence !' in labels
-    assert 'Cp uncertainty' in labels
-    assert 'Cpk uncertainty' in labels
+    assert 'Confidence !' not in labels
+    assert 'Cp uncertainty' not in labels
+    assert 'Cpk uncertainty' not in labels
     assert payload['sample_confidence']['is_low_n'] is True
     assert payload['sample_confidence']['severity'] == 'warning'
 
@@ -147,7 +150,7 @@ def test_build_histogram_table_data_keeps_standard_labels_for_stable_n():
     assert payload['sample_confidence']['is_low_n'] is False
 
 
-def test_build_histogram_table_data_uses_cpu_and_cp_not_defined_for_one_sided_upper():
+def test_build_histogram_table_data_uses_cpu_only_for_one_sided_upper():
     payload = build_histogram_table_data(
         {
             'minimum': 0.0,
@@ -167,12 +170,13 @@ def test_build_histogram_table_data_uses_cpu_and_cp_not_defined_for_one_sided_up
     )
 
     labels = [label for label, _ in payload['rows']]
-    assert ('Spec type', 'one-sided upper') in payload['rows']
-    assert 'Cp (not defined for one-sided) (info)' in labels
+    assert ('Spec type', 'one-sided upper') not in payload['rows']
+    assert 'Cp (not defined for one-sided) (info)' not in labels
+    assert 'Cp' not in labels
     assert 'Cpu' in labels
     assert 'Cp uncertainty' not in labels
-    assert 'Cpu uncertainty' in labels
-    assert 'Cpu 95% CI' in labels
+    assert 'Cpu uncertainty' not in labels
+    assert 'Cpu 95% CI' not in labels
 
 
 def test_build_histogram_table_data_uses_cpl_for_one_sided_lower():
@@ -195,9 +199,9 @@ def test_build_histogram_table_data_uses_cpl_for_one_sided_lower():
     )
 
     labels = [label for label, _ in payload['rows']]
-    assert ('Spec type', 'one-sided lower') in payload['rows']
+    assert ('Spec type', 'one-sided lower') not in payload['rows']
     assert 'Cpl' in labels
-    assert 'Cpl 95% CI' in labels
+    assert 'Cpl 95% CI' not in labels
 
 
 def test_build_histogram_table_data_supports_opt_out_of_capability_ci_annotations():
@@ -224,7 +228,7 @@ def test_build_histogram_table_data_supports_opt_out_of_capability_ci_annotation
     assert 'Cpk 95% CI' not in rows
 
 
-def test_build_histogram_table_data_adds_obs_vs_est_comparison_rows():
+def test_build_histogram_table_data_excludes_obs_vs_est_rows_from_default_contract():
     payload = build_histogram_table_data(
         {
             'minimum': 1.0,
@@ -242,11 +246,11 @@ def test_build_histogram_table_data_adds_obs_vs_est_comparison_rows():
     )
 
     rows = dict(payload['rows'])
-    assert rows['NOK % (obs vs est)'] == 'Obs 10.00% vs Est 12.00%'
-    assert rows['NOK % Δ (abs/rel)'] == '2.00 pp / 20.0%'
+    assert 'NOK % (obs vs est)' not in rows
+    assert 'NOK % Δ (abs/rel)' not in rows
 
 
-def test_build_histogram_table_data_flags_obs_vs_est_discrepancy_warning():
+def test_build_histogram_table_data_keeps_obs_vs_est_metrics_for_non_table_logic():
     payload = build_histogram_table_data(
         {
             'minimum': 1.0,
@@ -263,8 +267,6 @@ def test_build_histogram_table_data_flags_obs_vs_est_discrepancy_warning():
         }
     )
 
-    rows = dict(payload['rows'])
-    assert rows['NOK % Δ (abs/rel)'].startswith('WARN: ')
     assert payload['summary_metrics']['nok_pct_discrepancy_warning'] is True
 
 

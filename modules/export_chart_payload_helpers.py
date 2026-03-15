@@ -1,7 +1,5 @@
 """Pure helpers for chart payload shaping used by export orchestration."""
 
-import math
-
 from modules.stats_utils import compute_capability_confidence_intervals
 from modules.stats_number_formatting import (
     format_capability_index,
@@ -83,15 +81,6 @@ def _resolve_sample_confidence(sample_size):
         'badge': '',
         'rationale': '',
     }
-
-
-def _approx_uncertainty_band(value, sample_size):
-    if isinstance(value, str):
-        return 'N/A'
-    n = max(1, int(sample_size or 1))
-    baseline = abs(float(value)) if float(value) != 0 else 1.0
-    margin = 1.96 * baseline / math.sqrt(n)
-    return f"±{margin:.2f} (approx 95% band)"
 
 
 def _compute_nok_discrepancy_metrics(observed_nok_pct, estimated_nok_pct):
@@ -178,17 +167,16 @@ def build_histogram_table_data(summary_stats):
     cpk_ci = capability_ci.get('cpk') if isinstance(capability_ci, dict) else None
 
     cp_label = 'Cp'
-    if spec_type != 'two-sided':
-        cp_label = 'Cp (not defined for one-sided) (info)'
-        cp_display_value = 'N/A'
+    include_cp_row = spec_type == 'two-sided'
 
     resolved_cpk_label = cpk_label
-    if include_capability_ci:
+    if include_capability_ci and include_cp_row:
         cp_display_value = _append_ci(cp_display_value, cp_ci)
+    if include_capability_ci:
         cpk_display_value = _append_ci(cpk_display_value, cpk_ci)
 
     if sample_confidence['is_low_n'] and sample_confidence['severity'] == 'severe':
-        if cp_display_value != 'N/A':
+        if include_cp_row and cp_display_value != 'N/A':
             cp_display_value = f"{_append_ci(format_capability_index(summary_stats['cp']), cp_ci)} (Low-confidence estimate)"
         if cpk_display_value != 'N/A':
             cpk_display_value = f"{_append_ci(format_capability_index(cpk_value), cpk_ci)} (Low-confidence estimate)"
@@ -199,24 +187,10 @@ def build_histogram_table_data(summary_stats):
         ('Mean', format_measurement_value(summary_stats['average'])),
         ('Median', format_measurement_value(summary_stats['median'])),
         ('Std Dev', format_measurement_value(summary_stats['sigma'])),
-        ('Spec type', spec_type),
-        (cp_label, cp_display_value),
-        (resolved_cpk_label, cpk_display_value),
     ]
-    if sample_confidence['is_low_n']:
-        uncertainty_rows = []
-        if spec_type == 'two-sided':
-            uncertainty_rows.append((f"{cp_label} uncertainty", _approx_uncertainty_band(summary_stats['cp'], sample_size)))
-        uncertainty_rows.append((f"{resolved_cpk_label} uncertainty", _approx_uncertainty_band(cpk_value, sample_size)))
-        table_rows.extend([
-            (f"Confidence {sample_confidence['badge']}", f"Low-confidence estimate (n={sample_confidence['sample_size']})"),
-        ])
-        table_rows.extend(uncertainty_rows)
-
-    if include_capability_ci:
-        if spec_type == 'two-sided':
-            table_rows.append((f'{cp_label} 95% CI', _format_ci_bounds(cp_ci)))
-        table_rows.append((f'{resolved_cpk_label} 95% CI', _format_ci_bounds(cpk_ci)))
+    if include_cp_row:
+        table_rows.append((cp_label, cp_display_value))
+    table_rows.append((resolved_cpk_label, cpk_display_value))
 
     observed_nok_pct = summary_stats.get('observed_nok_pct', summary_stats.get('nok_pct'))
     estimated_nok_pct = summary_stats.get('estimated_nok_pct')
@@ -226,28 +200,6 @@ def build_histogram_table_data(summary_stats):
         ('Samples', format_measurement_value(summary_stats['sample_size'])),
         ('NOK', format_measurement_value(summary_stats['nok_count'])),
         ('NOK %', format_percent_from_ratio(summary_stats['nok_pct'], decimals=2)),
-        (
-            'NOK % (obs vs est)',
-            (
-                f"Obs {format_percent_from_ratio(observed_nok_pct, decimals=2)} vs Est {format_percent_from_ratio(estimated_nok_pct, decimals=2)}"
-                if _is_numeric(observed_nok_pct) and _is_numeric(estimated_nok_pct)
-                else 'N/A'
-            ),
-        ),
-        (
-            'NOK % Δ (abs/rel)',
-            (
-                f"{'WARN: ' if discrepancy_metrics['is_warning'] else ''}"
-                f"{discrepancy_metrics['abs_diff_pp']:.2f} pp / "
-                f"{discrepancy_metrics['rel_diff'] * 100:.1f}%"
-                if discrepancy_metrics['abs_diff_pp'] is not None and discrepancy_metrics['rel_diff'] is not None
-                else (
-                    f"{'WARN: ' if discrepancy_metrics['is_warning'] else ''}{discrepancy_metrics['abs_diff_pp']:.2f} pp / N/A"
-                    if discrepancy_metrics['abs_diff_pp'] is not None
-                    else 'N/A'
-                )
-            ),
-        ),
     ])
 
     raw_rows = [
@@ -256,21 +208,13 @@ def build_histogram_table_data(summary_stats):
         ('Mean', summary_stats['average']),
         ('Median', summary_stats['median']),
         ('Std Dev', summary_stats['sigma']),
-        ('Spec type', spec_type),
-        (cp_label, summary_stats['cp']),
-        (resolved_cpk_label, cpk_value),
         ('Samples', summary_stats['sample_size']),
         ('NOK', summary_stats['nok_count']),
         ('NOK %', summary_stats['nok_pct']),
-        ('NOK % (obs vs est)', {'observed_nok_pct': observed_nok_pct, 'estimated_nok_pct': estimated_nok_pct}),
-        ('NOK % Δ (abs/rel)', {'abs_diff_pp': discrepancy_metrics['abs_diff_pp'], 'rel_diff': discrepancy_metrics['rel_diff']}),
     ]
-    if include_capability_ci:
-        if spec_type == 'two-sided':
-            raw_rows.insert(8, (f'{cp_label} 95% CI', cp_ci))
-            raw_rows.insert(9, (f'{resolved_cpk_label} 95% CI', cpk_ci))
-        else:
-            raw_rows.insert(8, (f'{resolved_cpk_label} 95% CI', cpk_ci))
+    if include_cp_row:
+        raw_rows.insert(5, (cp_label, summary_stats['cp']))
+    raw_rows.insert(6 if include_cp_row else 5, (resolved_cpk_label, cpk_value))
 
     return {
         'rows': table_rows,
