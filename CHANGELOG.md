@@ -1,10 +1,13 @@
 # Changelog (for end users)
 
-## 2026.03rc1(260307) — current version
-- Internal module imports now consistently use `modules.snake_case_name`; legacy `modules.CamelCaseName` paths remain temporary compatibility shims for external callers.
+## 2026.03rc1(260315) — current version
+- Histogram dashboards and chart layouts were improved for readability (cleaner side tables, taller rows, clearer title/x-axis visibility).
+- Capability reporting now includes confidence intervals in rendered analytics/exports for better statistical interpretation.
+- Low-sample safeguards were added for capability and distribution-fit metrics to reduce overconfident conclusions.
+- Capability labels are clearer by spec type (`Cp/Cpk`, `Cpu`, `Cpl`), and symbol-rendering issues in chart labels were fixed.
+- Added observed-vs-estimated NOK discrepancy warnings to highlight practical quality gaps.
 - Group names can be renamed instantly via double-click in the group list.
-- Extended charts have improved visuals for better readability in complex views.
-- General UX polish improves clarity and flow across the main workflow.
+
 ## 2026.02 (build 260223)
 - Performance improvements during report generation.
 - Additional stability improvements in export and grouping flows.

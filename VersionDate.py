@@ -1,15 +1,18 @@
 RELEASE_VERSION = "2026.03rc1"
-VERSION_DATE = "260307"
+VERSION_DATE = "260315"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "UX improvements: faster group renaming, clearer extended-chart visuals, and cleaner workflow readability."
+    "Major analytics update: histogram/chart readability improvements plus new capability confidence and safeguards for low-sample interpretation."
 )
 
 release_notes = f"""
     <br><b>Current version {VERSION_LABEL}:</b><br>
-    - Group names can be renamed instantly by double-clicking them in the group list<br>
-    - Extended charts now have cleaner visuals for easier reading in dense plots<br>
-    - General UX polish improves readability across main workflows<br>
+    - Histogram dashboards are clearer: cleaner side tables, taller rows, and improved title/axis visibility in dense views<br>
+    - Capability reporting now includes confidence intervals to improve interpretability in exports and summaries<br>
+    - Low-sample safeguards were added for capability and distribution-fit metrics to reduce misleading conclusions<br>
+    - Spec-type capability labels are clearer (`Cp/Cpk`, `Cpu`, `Cpl`) and chart-symbol rendering warnings were fixed<br>
+    - Added observed-vs-estimated NOK discrepancy warnings to help spot practical quality gaps faster<br>
+    - Group names can still be renamed instantly by double-clicking in the group list<br>
 
     <br><b>Version 2026.03 (build 260301):</b><br>
     - Google Sheets export implementation with safe `.xlsx` fallback<br>
