@@ -25,6 +25,7 @@ _HISTOGRAM_PANEL_TABLE_ROW_HEIGHT = 0.060
 _HISTOGRAM_PANEL_TABLE_PAD_Y = 0.02
 _HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT = 0.24
 _HISTOGRAM_RIGHT_STACK_GAP = 0.012
+_HISTOGRAM_RIGHT_COLUMN_LEFT_INSET = 0.010
 
 
 def _clamp(value, lower, upper):
@@ -180,7 +181,7 @@ def compute_histogram_plot_with_right_info_layout(
     oversized_font = max(0.0, float(table_fontsize) - 8.0)
 
     left_padding = 0.056
-    right_padding = 0.026
+    right_padding = 0.016
     content_width = 1.0 - left_padding - right_padding
     content_height = 1.0 - HISTOGRAM_OUTER_PADDING_TOP - HISTOGRAM_OUTER_PADDING_BOTTOM
     content_height = max(0.0, content_height - HISTOGRAM_TITLE_BAND_HEIGHT)
@@ -213,8 +214,13 @@ def compute_histogram_plot_with_right_info_layout(
         'width': plot_width,
         'height': content_height,
     }
+    right_container_x = left_padding + plot_width + panel_gap
+    right_container_width = max(
+        HISTOGRAM_RIGHT_INFO_MIN_WIDTH,
+        right_container_width - _HISTOGRAM_RIGHT_COLUMN_LEFT_INSET,
+    )
     right_container_rect = {
-        'x': left_padding + plot_width + panel_gap,
+        'x': right_container_x + _HISTOGRAM_RIGHT_COLUMN_LEFT_INSET,
         'y': y_bottom,
         'width': right_container_width,
         'height': content_height,
