@@ -94,7 +94,7 @@ def test_build_histogram_table_data_flags_n10_with_warning_confidence_rows():
     )
 
     labels = [label for label, _ in payload['rows']]
-    assert 'Confidence ⚠' in labels
+    assert 'Confidence !' in labels
     assert 'Cp uncertainty' in labels
     assert 'Cpk uncertainty' in labels
     assert payload['sample_confidence']['severity'] == 'warning'
@@ -118,7 +118,7 @@ def test_build_histogram_table_data_flags_warning_low_n_with_uncertainty_bands()
     )
 
     labels = [label for label, _ in payload['rows']]
-    assert 'Confidence ⚠' in labels
+    assert 'Confidence !' in labels
     assert 'Cp uncertainty' in labels
     assert 'Cpk uncertainty' in labels
     assert payload['sample_confidence']['is_low_n'] is True
@@ -168,7 +168,7 @@ def test_build_histogram_table_data_uses_cpu_and_cp_not_defined_for_one_sided_up
 
     labels = [label for label, _ in payload['rows']]
     assert ('Spec type', 'one-sided upper') in payload['rows']
-    assert 'Cp (not defined for one-sided) ⓘ' in labels
+    assert 'Cp (not defined for one-sided) (info)' in labels
     assert 'Cpu' in labels
     assert 'Cp uncertainty' not in labels
     assert 'Cpu uncertainty' in labels
@@ -264,7 +264,7 @@ def test_build_histogram_table_data_flags_obs_vs_est_discrepancy_warning():
     )
 
     rows = dict(payload['rows'])
-    assert rows['NOK % Δ (abs/rel)'].startswith('⚠ ')
+    assert rows['NOK % Δ (abs/rel)'].startswith('WARN: ')
     assert payload['summary_metrics']['nok_pct_discrepancy_warning'] is True
 
 

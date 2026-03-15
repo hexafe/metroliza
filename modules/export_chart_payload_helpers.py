@@ -65,7 +65,7 @@ def _resolve_sample_confidence(sample_size):
             'sample_size': n,
             'is_low_n': True,
             'severity': 'severe',
-            'badge': '⚠⚠',
+            'badge': '!!',
             'rationale': 'n<10: capability and fit estimates are highly unstable.',
         }
     if n < LOW_N_WARNING_THRESHOLD:
@@ -73,7 +73,7 @@ def _resolve_sample_confidence(sample_size):
             'sample_size': n,
             'is_low_n': True,
             'severity': 'warning',
-            'badge': '⚠',
+            'badge': '!',
             'rationale': 'n<25: capability and fit estimates have broad uncertainty.',
         }
     return {
@@ -179,7 +179,7 @@ def build_histogram_table_data(summary_stats):
 
     cp_label = 'Cp'
     if spec_type != 'two-sided':
-        cp_label = 'Cp (not defined for one-sided) ⓘ'
+        cp_label = 'Cp (not defined for one-sided) (info)'
         cp_display_value = 'N/A'
 
     resolved_cpk_label = cpk_label
@@ -237,12 +237,12 @@ def build_histogram_table_data(summary_stats):
         (
             'NOK % Δ (abs/rel)',
             (
-                f"{'⚠ ' if discrepancy_metrics['is_warning'] else ''}"
+                f"{'WARN: ' if discrepancy_metrics['is_warning'] else ''}"
                 f"{discrepancy_metrics['abs_diff_pp']:.2f} pp / "
                 f"{discrepancy_metrics['rel_diff'] * 100:.1f}%"
                 if discrepancy_metrics['abs_diff_pp'] is not None and discrepancy_metrics['rel_diff'] is not None
                 else (
-                    f"{'⚠ ' if discrepancy_metrics['is_warning'] else ''}{discrepancy_metrics['abs_diff_pp']:.2f} pp / N/A"
+                    f"{'WARN: ' if discrepancy_metrics['is_warning'] else ''}{discrepancy_metrics['abs_diff_pp']:.2f} pp / N/A"
                     if discrepancy_metrics['abs_diff_pp'] is not None
                     else 'N/A'
                 )

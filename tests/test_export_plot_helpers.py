@@ -1998,7 +1998,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertNotIn('Cpk', labels)
         self.assertIn('Spec type', labels)
         self.assertIn(('Spec type', 'one-sided upper'), table)
-        self.assertIn('Cp (not defined for one-sided) ⓘ', labels)
+        self.assertIn('Cp (not defined for one-sided) (info)', labels)
 
     def test_build_histogram_table_data_exposes_cpu_metadata_for_badges(self):
         payload = build_histogram_table_data(
