@@ -789,8 +789,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         anchors = build_summary_image_anchor_plan(15)
 
         self.assertEqual(anchors['header'], (40, 0))
-        self.assertEqual(anchors['distribution'], (41, 0))
-        self.assertEqual(anchors['iqr'], (41, 9))
+        self.assertEqual(anchors['distribution'], (41, 1))
+        self.assertEqual(anchors['iqr'], (41, 10))
         self.assertEqual(anchors['histogram'], (41, 19))
         self.assertEqual(anchors['trend'], (41, 29))
 
@@ -962,6 +962,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         base_value_width = ax_table.get_celld()[(1, 2)].get_width()
         base_height = ax_table.get_celld()[(1, 0)].get_height()
+        base_header_height = ax_table.get_celld()[(0, 0)].get_height()
 
         style_histogram_stats_table(ax_table, render_data)
         adjust_histogram_stats_table_geometry(
@@ -980,6 +981,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertAlmostEqual(header_w2 / header_total, 0.44, places=3)
         self.assertTrue(ax_table.get_celld()[(1, 1)].get_visible())
         self.assertGreater(ax_table.get_celld()[(1, 0)].get_height(), base_height)
+        self.assertGreater(ax_table.get_celld()[(0, 0)].get_height(), base_header_height)
         self.assertLess(ax_table.get_celld()[(1, 2)].get_width(), base_value_width)
         self.assertEqual(
             ax_table.get_celld()[(0, 0)].get_facecolor(),
