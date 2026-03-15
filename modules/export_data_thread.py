@@ -189,10 +189,7 @@ logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 
-_HISTOGRAM_X_PADDING_RATIO = 0.05
-_HISTOGRAM_ZERO_RANGE_ABS_PADDING = 0.05
-_HISTOGRAM_ULTRA_NARROW_THRESHOLD = 0.05
-_HISTOGRAM_FOCUSED_SPAN_MULTIPLIER = 8.0
+_HISTOGRAM_X_MARGIN_RATIO = 0.10
 
 _SELECTED_MODEL_CURVE_STYLE_BY_QUALITY = {
     'strong': {'alpha': 0.80, 'linewidth': 1.72},
@@ -620,7 +617,7 @@ def resolve_edge_safe_label_anchor(x_data, x_min, x_max, edge_fraction=0.06):
 
 
 def resolve_histogram_x_view(values, *, lsl=None, usl=None):
-    """Resolve deterministic histogram x framing for full vs focused contexts."""
+    """Resolve histogram x framing with 10% margins around data/spec span."""
 
     finite_values = pd.to_numeric(pd.Series(values), errors='coerce').dropna().to_numpy(dtype=float)
     if finite_values.size == 0:
@@ -628,57 +625,36 @@ def resolve_histogram_x_view(values, *, lsl=None, usl=None):
 
     data_min = float(np.min(finite_values))
     data_max = float(np.max(finite_values))
-    data_span = max(0.0, data_max - data_min)
-
-    finite_spec_limits = []
-    for raw_limit in (lsl, usl):
+    left_ref = data_min
+    right_ref = data_max
+    for raw_limit, side in ((lsl, 'left'), (usl, 'right')):
         if raw_limit is None:
             continue
         try:
             limit_value = float(raw_limit)
         except (TypeError, ValueError):
             continue
-        if np.isfinite(limit_value):
-            finite_spec_limits.append(limit_value)
+        if not np.isfinite(limit_value):
+            continue
+        if side == 'left':
+            left_ref = min(left_ref, limit_value)
+        else:
+            right_ref = max(right_ref, limit_value)
 
-    x_min_full = min([data_min, *finite_spec_limits])
-    x_max_full = max([data_max, *finite_spec_limits])
-    full_span = max(0.0, x_max_full - x_min_full)
-    effective_span = full_span if full_span > 0 else max(data_span, 1e-12)
-    narrow_ratio = (data_span / effective_span) if effective_span > 0 else 1.0
-
-    reference_magnitude = max(abs(x_min_full), abs(x_max_full), 1.0)
-    minimum_margin = max(1e-6, 0.01 * reference_magnitude)
-
-    if full_span > 0 and data_span > 0 and narrow_ratio < _HISTOGRAM_ULTRA_NARROW_THRESHOLD:
-        center = float(np.mean(finite_values))
-        focused_span = max(data_span * _HISTOGRAM_FOCUSED_SPAN_MULTIPLIER, minimum_margin * 6.0)
-        near_spec_limits = [
-            limit
-            for limit in finite_spec_limits
-            if abs(limit - center) <= (focused_span * 0.9)
-        ]
-        if near_spec_limits:
-            focused_min_candidate = min(data_min, *near_spec_limits)
-            focused_max_candidate = max(data_max, *near_spec_limits)
-            focused_span = max(focused_span, focused_max_candidate - focused_min_candidate)
-
-        padding = max(_HISTOGRAM_X_PADDING_RATIO * max(focused_span, minimum_margin), minimum_margin)
-        return {
-            'x_min': (center - (focused_span / 2.0)) - padding,
-            'x_max': (center + (focused_span / 2.0)) + padding,
-            'mode': 'focused',
-        }
-
-    if full_span > 0:
-        padding_basis = data_span if (data_span > 0 and narrow_ratio < 0.08) else full_span
-        padding = max(_HISTOGRAM_X_PADDING_RATIO * max(padding_basis, minimum_margin), minimum_margin)
-    else:
-        padding = max(_HISTOGRAM_ZERO_RANGE_ABS_PADDING * reference_magnitude, minimum_margin)
+    raw_span = max(1e-12, right_ref - left_ref)
+    reference_magnitude = max(abs(left_ref), abs(right_ref), abs(data_min), abs(data_max), 1.0)
+    min_span = reference_magnitude * 0.01
+    span = max(raw_span, min_span)
+    if raw_span < min_span:
+        center = (left_ref + right_ref) / 2.0
+        half_span = span / 2.0
+        left_ref = center - half_span
+        right_ref = center + half_span
+    padding = span * _HISTOGRAM_X_MARGIN_RATIO
 
     return {
-        'x_min': x_min_full - padding,
-        'x_max': x_max_full + padding,
+        'x_min': left_ref - padding,
+        'x_max': right_ref + padding,
         'mode': 'full',
     }
 
@@ -697,7 +673,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
             return None
         return left, right, bottom, top
 
-    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=56.0, extra_side_px=6.0):
+    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=92.0, extra_side_px=8.0):
         bounds = _resolve_plot_rect_display_bounds(fig, plot_rect)
         if bounds is None:
             return None
@@ -1077,6 +1053,20 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
         nok_ratio=risk_estimates.get('nok_percent', (summary_stats or {}).get('estimated_nok_pct')),
     )
     raw_rows.append(('Capability status', capability_status['label']))
+
+    family_label = {
+        'one_sided_zero_bound_positive': 'positive-support',
+        'one_sided_zero_bound_negative': 'negative-support',
+        'bilateral_signed': 'signed/bilateral',
+    }.get(str(inferred_support_mode), 'unknown')
+    raw_rows.append(('Family', family_label))
+
+    warning_text = str(distribution_fit_result.get('warning') or '').strip()
+    quality_key = str(fit_quality.get('label') or '').strip().lower()
+    if not warning_text and quality_key in {'weak', 'unreliable'}:
+        warning_text = f'fit {quality_key}'
+    if warning_text:
+        raw_rows.append(('Warning', warning_text))
 
     return [(_compact_distribution_fit_label(label), value) for label, value in raw_rows]
 
@@ -4275,7 +4265,7 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    histogram_figsize = (8.4, 4)
+                    histogram_figsize = (8.8, 4)
                     chart_start = time.perf_counter()
                     fig = plt.figure(figsize=histogram_figsize)
 
@@ -4309,15 +4299,9 @@ class ExportDataThread(QThread):
                         usl=USL,
                         summary_stats=summary_stats,
                     )
-                    _note_items, poor_fit = _build_distribution_fit_info_note(
-                        distribution_fit_result,
-                        summary_stats=summary_stats,
-                    )
-                    note_lines = _build_compact_histogram_note_lines(distribution_fit_result, summary_stats=summary_stats)
                     histogram_content_payload = {
                         'left_rows': left_rows,
                         'right_rows': right_rows,
-                        'note_lines': note_lines,
                     }
 
                     panel_rects = compute_histogram_plot_with_right_info_layout(
@@ -4325,7 +4309,7 @@ class ExportDataThread(QThread):
                         table_fontsize=histogram_font_sizes['table_fontsize'],
                         fit_row_count=len(histogram_content_payload['left_rows']),
                         stats_row_count=len(histogram_content_payload['right_rows']),
-                        note_line_count=len(histogram_content_payload['note_lines']),
+                        note_line_count=0,
                         right_container_width_hint=0.34,
                     )
                     assert_non_overlapping_rectangles(
@@ -4340,7 +4324,6 @@ class ExportDataThread(QThread):
                     fit_table_rect = panel_rects['fit_table_rect']
                     plot_rect = panel_rects['plot_rect']
                     stats_table_rect = panel_rects['stats_table_rect']
-                    footer_rect = panel_rects['footer_rect']
 
                     fit_ax = fig.add_axes([
                         fit_table_rect['x'],
@@ -4360,18 +4343,9 @@ class ExportDataThread(QThread):
                         stats_table_rect['width'],
                         stats_table_rect['height'],
                     ])
-                    footer_ax = None
-                    if footer_rect['height'] > 1e-6:
-                        footer_ax = fig.add_axes([
-                            footer_rect['x'],
-                            footer_rect['y'],
-                            footer_rect['width'],
-                            footer_rect['height'],
-                        ])
                     fit_ax.set_axis_off()
                     stats_ax.set_axis_off()
-                    if footer_ax is not None:
-                        footer_ax.set_axis_off()
+
 
                     histogram_render_meta = render_histogram(
                         plot_ax,
@@ -4402,7 +4376,7 @@ class ExportDataThread(QThread):
                             'min_value_fraction': 0.28,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
-                        row_height=0.068,
+                        row_height=0.074,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4420,7 +4394,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         ax_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.20,
+                        row_height_scale=1.26,
                     )
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
@@ -4430,12 +4404,12 @@ class ExportDataThread(QThread):
                         rows=distribution_fit_rows,
                         style_options={
                             **table_style_options,
-                            'min_label_fraction': 0.44,
-                            'min_value_fraction': 0.40,
-                            'value_wrap_width': 22,
+                            'min_label_fraction': 0.42,
+                            'min_value_fraction': 0.44,
+                            'value_wrap_width': 28,
                             'low_priority_labels': {'Est. PPM'},
                         },
-                        row_height=0.070,
+                        row_height=0.074,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4474,33 +4448,9 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
-                        statistic_col_width_ratio=0.60,
-                        row_height_scale=1.20,
+                        statistic_col_width_ratio=0.54,
+                        row_height_scale=1.26,
                     )
-
-                    if footer_ax is not None and note_lines:
-                        callout_palette = 'quality_risk' if poor_fit else 'quality_unknown'
-                        callout_prefix = STATUS_ICON_PREFIX_BY_PALETTE.get(callout_palette, '!')
-                        render_histogram_note_panel(
-                            ax=footer_ax,
-                            note_items=[
-                                {
-                                    'label': line.split(':', 1)[0],
-                                    'value': f"{callout_prefix} {line.split(':', 1)[1].strip()}" if ':' in line else f'{callout_prefix} {line}',
-                                }
-                                for line in note_lines
-                            ],
-                            style_options={
-                                'fontsize': max(histogram_font_sizes['table_fontsize'] - 0.4, 7.0),
-                                'min_fontsize': 6.2,
-                                'max_fontsize': 8.8,
-                                'box_facecolor': SUMMARY_PLOT_PALETTE[f'{callout_palette}_bg'],
-                                'text_color': SUMMARY_PLOT_PALETTE[f'{callout_palette}_text'],
-                                'box_edgecolor': SUMMARY_PLOT_PALETTE[f'{callout_palette}_text'],
-                                'box_linewidth': STATUS_BORDER_STYLE_BY_PALETTE.get(callout_palette, {}).get('linewidth', 0.9),
-                            },
-                            available_height_px=footer_rect['height'] * float(fig.bbox.height),
-                        )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
                     annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
@@ -4539,7 +4489,7 @@ class ExportDataThread(QThread):
                         plot_ax.text(
                             0.02,
                             0.02,
-                            'Dashed KDE: descriptive only (not used for decisions)',
+                            'Dashed KDE: descriptive only',
                             transform=plot_ax.transAxes,
                             ha='left',
                             va='bottom',
@@ -4571,7 +4521,7 @@ class ExportDataThread(QThread):
                     render_spec_reference_lines(plot_ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
                     plot_ax.set_xlabel('Measurement')
                     if not histogram_render_meta.get('is_grouped'):
-                        plot_ax.set_ylabel('Density')
+                        plot_ax.set_ylabel('Count')
                     title_artist = render_histogram_title(
                         plot_ax,
                         build_wrapped_chart_title(header),

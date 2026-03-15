@@ -295,14 +295,12 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ('Cp', '1.34'),
                 ('Cpk (normal ref)', '1.19'),
             ]
-            note_lines = ['Family: signed/bilateral', 'Normality: non-normal']
-
             rects = compute_histogram_plot_with_right_info_layout(
                 (8.4, 4.0),
                 table_fontsize=8.8,
                 fit_row_count=len(fit_rows),
                 stats_row_count=len(stats_rows),
-                note_line_count=len(note_lines),
+                note_line_count=0,
                 right_container_width_hint=0.34,
             )
             assert_non_overlapping_rectangles({
@@ -315,26 +313,17 @@ class TestExportPlotHelpers(unittest.TestCase):
             fit_ax = fig.add_axes([rects['fit_table_rect']['x'], rects['fit_table_rect']['y'], rects['fit_table_rect']['width'], rects['fit_table_rect']['height']])
             plot_ax = fig.add_axes([rects['plot_rect']['x'], rects['plot_rect']['y'], rects['plot_rect']['width'], rects['plot_rect']['height']])
             stats_ax = fig.add_axes([rects['stats_table_rect']['x'], rects['stats_table_rect']['y'], rects['stats_table_rect']['width'], rects['stats_table_rect']['height']])
-            note_ax = fig.add_axes([rects['footer_rect']['x'], rects['footer_rect']['y'], rects['footer_rect']['width'], rects['footer_rect']['height']])
             fit_ax.set_axis_off()
             stats_ax.set_axis_off()
-            note_ax.set_axis_off()
 
             render_histogram(plot_ax, measurements, lsl=9.9, usl=10.4)
             fit_meta = render_panel_table_in_panel_axes(ax=fit_ax, title='Distribution Fit', rows=fit_rows, style_options={'fontsize': 8.2})
             stats_meta = render_panel_table_in_panel_axes(ax=stats_ax, title='Statistics', rows=stats_rows, style_options={'fontsize': 8.2})
-            note_meta = render_histogram_note_panel(
-                ax=note_ax,
-                note_items=[{'label': line.split(':', 1)[0], 'value': line.split(':', 1)[1].strip()} for line in note_lines],
-                style_options={'fontsize': 7.0},
-                available_height_px=note_ax.bbox.height,
-            )
-
-            self.assertEqual(len(fig.axes), 4)
+            self.assertEqual(len(fig.axes), 3)
             self.assertGreater(rects['plot_rect']['width'], rects['fit_table_rect']['width'])
+            self.assertEqual(rects['footer_rect']['height'], 0.0)
             self.assertGreaterEqual(len(fit_meta['rendered_rows']), 1)
             self.assertGreaterEqual(len(stats_meta['rendered_rows']), 1)
-            self.assertIn(note_meta['variant'], {'compact', 'expanded'})
         finally:
             plt.close(fig)
 
@@ -366,6 +355,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             'Est. PPM',
             'Fit quality',
             'Capability',
+            'Family',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
         self.assertEqual(rows[1][1], '0.073')
@@ -375,6 +365,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(rows[5][1], '1,234')
         self.assertEqual(rows[6][1], 'Medium')
         self.assertEqual(rows[7][1], 'Risk')
+        self.assertEqual(rows[8][1], 'unknown')
 
     def test_distribution_fit_table_rows_follow_upper_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -390,7 +381,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=10.0,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(>USL)', 'Est. NOK %', 'Est. PPM', 'Fit quality', 'Capability'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(>USL)', 'Est. NOK %', 'Est. PPM', 'Fit quality', 'Capability', 'Family'])
 
     def test_distribution_fit_table_rows_follow_lower_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -406,7 +397,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=None,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(<LSL)', 'Est. NOK %', 'Est. PPM', 'Fit quality', 'Capability'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(<LSL)', 'Est. NOK %', 'Est. PPM', 'Fit quality', 'Capability', 'Family'])
 
     def test_distribution_fit_table_rows_omit_zero_bound_lower_tail_for_positive_support(self):
         rows = _build_distribution_fit_table_rows(
@@ -442,6 +433,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(rows[3], ('Est. PPM', 'N/A'))
         self.assertEqual(rows[4], ('Fit quality', 'Unreliable'))
         self.assertEqual(rows[5], ('Capability', 'N/A'))
+        self.assertEqual(rows[6], ('Family', 'unknown'))
+        self.assertEqual(rows[7], ('Warning', 'fit unreliable'))
 
     def test_left_and_right_panel_tables_share_fontsize_and_row_height_policy(self):
         fig = plt.figure(figsize=(6.2, 4.0))
@@ -473,6 +466,26 @@ class TestExportPlotHelpers(unittest.TestCase):
             right_cells = right_meta['table'].get_celld()
             self.assertAlmostEqual(left_cells[(1, 0)].get_height(), right_cells[(1, 0)].get_height(), delta=0.03)
             self.assertLess(left_meta['used_bounds']['height'], 1.0)
+        finally:
+            plt.close(fig)
+
+    def test_distribution_fit_table_value_column_wraps_long_model_without_overlap(self):
+        fig = plt.figure(figsize=(4.8, 3.2))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Distribution Fit',
+                rows=[('Model', 'Johnson SU Extended Variant Name'), ('Est. PPM', '123,456,789')],
+                style_options={'fontsize': 8.3, 'value_wrap_width': 12, 'min_label_fraction': 0.42, 'min_value_fraction': 0.44},
+                row_height=0.074,
+                pad_y=0.02,
+            )
+
+            rendered = dict(meta['rendered_rows'])
+            self.assertIn('\n', rendered['Model'])
+            self.assertFalse(meta['overflow'])
         finally:
             plt.close(fig)
 
@@ -842,8 +855,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         x_min, x_max = ax.get_xlim()
         self.assertLess(x_min, 7.0)
         self.assertGreater(x_max, 7.0)
-        self.assertAlmostEqual(x_min, 6.65)
-        self.assertAlmostEqual(x_max, 7.35)
+        self.assertGreater(x_max - x_min, 0.07)
+        self.assertLess(x_max - x_min, 0.09)
         plt.close(fig)
 
     def test_render_histogram_xlim_includes_spec_limits_with_margin(self):
@@ -860,15 +873,19 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(x_max, usl)
         plt.close(fig)
 
-    def test_resolve_histogram_x_view_uses_focused_mode_for_ultra_narrow_spread(self):
+    def test_resolve_histogram_x_view_restores_spec_aware_full_range_with_10_percent_margin(self):
         values = [10.0000, 10.0006, 10.0012, 10.0016]
 
-        resolved = resolve_histogram_x_view(values, lsl=8.0, usl=12.0)
+        resolved = resolve_histogram_x_view(values, lsl=9.95, usl=10.05)
 
-        self.assertEqual(resolved['mode'], 'focused')
-        self.assertLess(resolved['x_max'] - resolved['x_min'], 4.0)
-        self.assertGreaterEqual(resolved['x_min'], 8.0)
-        self.assertLessEqual(resolved['x_max'], 12.0)
+        raw_span = 10.05 - 9.95
+        min_span = 10.05 * 0.01
+        span = max(raw_span, min_span)
+        margin = span * 0.10
+        center = (9.95 + 10.05) / 2.0
+        self.assertEqual(resolved['mode'], 'full')
+        self.assertAlmostEqual(resolved['x_min'], center - (span / 2.0) - margin)
+        self.assertAlmostEqual(resolved['x_max'], center + (span / 2.0) + margin)
 
     def test_resolve_histogram_x_view_uses_full_mode_for_regular_spread(self):
         values = [8.2, 9.0, 9.7, 10.2]
@@ -878,6 +895,15 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(resolved['mode'], 'full')
         self.assertLess(resolved['x_min'], 8.0)
         self.assertGreater(resolved['x_max'], 10.5)
+
+    def test_resolve_histogram_x_view_uses_min_span_guard_for_ultra_narrow_data_without_specs(self):
+        values = [10.0, 10.0 + 1e-9]
+
+        resolved = resolve_histogram_x_view(values)
+
+        self.assertEqual(resolved['mode'], 'full')
+        self.assertGreater(resolved['x_max'] - resolved['x_min'], 0.09)
+        self.assertLess(resolved['x_max'] - resolved['x_min'], 0.2)
 
     def test_render_histogram_ignores_invalid_spec_limits(self):
         fig, ax = plt.subplots()
@@ -3228,7 +3254,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             artist = ax.text(
                 0.02,
                 0.02,
-                'Dashed KDE: descriptive only (not used for decisions)',
+                'Dashed KDE: descriptive only',
                 transform=ax.transAxes,
                 ha='left',
                 va='bottom',
@@ -3242,7 +3268,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 },
                 zorder=8,
             )
-            self.assertEqual(artist.get_text(), 'Dashed KDE: descriptive only (not used for decisions)')
+            self.assertEqual(artist.get_text(), 'Dashed KDE: descriptive only')
             self.assertIsNotNone(artist.get_bbox_patch())
             self.assertGreaterEqual(artist.get_position()[0], 0.0)
             self.assertGreaterEqual(artist.get_position()[1], 0.0)

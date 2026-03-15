@@ -4,7 +4,7 @@ from __future__ import annotations
 
 # Layout constants (normalized figure coordinates)
 HISTOGRAM_OUTER_PADDING_X = 0.03
-HISTOGRAM_OUTER_PADDING_TOP = 0.08
+HISTOGRAM_OUTER_PADDING_TOP = 0.10
 HISTOGRAM_OUTER_PADDING_BOTTOM = 0.103
 HISTOGRAM_INTER_PANEL_GAP = 0.022
 HISTOGRAM_MIN_PLOT_WIDTH = 0.42
@@ -178,13 +178,13 @@ def compute_histogram_plot_with_right_info_layout(
     width_scale = min(1.35, max(0.85, fig_width / 8.4))
     oversized_font = max(0.0, float(table_fontsize) - 8.0)
 
-    left_padding = 0.048
-    right_padding = 0.028
+    left_padding = 0.056
+    right_padding = 0.026
     content_width = 1.0 - left_padding - right_padding
     content_height = 1.0 - HISTOGRAM_OUTER_PADDING_TOP - HISTOGRAM_OUTER_PADDING_BOTTOM
     panel_gap = HISTOGRAM_INTER_PANEL_GAP
 
-    base_right_width = 0.33 + (0.006 * oversized_font) - (0.014 * (width_scale - 1.0))
+    base_right_width = 0.315 + (0.005 * oversized_font) - (0.012 * (width_scale - 1.0))
     right_container_width = (
         float(right_container_width_hint)
         if right_container_width_hint is not None
@@ -218,17 +218,12 @@ def compute_histogram_plot_with_right_info_layout(
         'height': content_height,
     }
 
+    del note_line_count
     footer_height = 0.0
-    if int(note_line_count) > 0:
-        footer_height = _clamp(
-            _HISTOGRAM_BASE_NOTE_HEIGHT + (_HISTOGRAM_NOTE_LINE_HEIGHT * max(int(note_line_count), 0)),
-            0.075,
-            0.15,
-        )
 
     stats_target = compute_panel_table_content_height(int(stats_row_count), row_height=0.056, header_rows=1, pad_y=0.018)
     fit_target = compute_panel_table_content_height(int(fit_row_count), row_height=0.056, header_rows=1, pad_y=0.018)
-    content_for_tables = max(0.0, content_height - footer_height - (2.0 * _HISTOGRAM_RIGHT_STACK_GAP))
+    content_for_tables = max(0.0, content_height - _HISTOGRAM_RIGHT_STACK_GAP)
     total_target = max(1e-9, stats_target + fit_target)
     stats_height = content_for_tables * (stats_target / total_target)
     fit_height = content_for_tables - stats_height
