@@ -917,14 +917,17 @@ def _build_compact_histogram_note_lines(distribution_fit_result):
     elif mode == 'bilateral_signed':
         lines.append('Family: signed/bilateral')
 
-    gof_metrics = fit_result.get('gof_metrics') or {}
-    reference_normality = gof_metrics.get('reference_normality_label')
-    if reference_normality:
-        lines.append(f'Normality: {reference_normality}')
-
     fit_quality = ((fit_result.get('fit_quality') or {}).get('label') or '').strip().lower()
-    if fit_quality in {'weak', 'unreliable'}:
+    is_poor_fit = fit_quality in {'weak', 'unreliable'}
+    if is_poor_fit:
         lines.append(f'Warning: fit {fit_quality}')
+
+    gof_metrics = fit_result.get('gof_metrics') or {}
+    reference_normality = str(gof_metrics.get('reference_normality_label') or '').strip()
+    normality_is_concise = reference_normality and len(reference_normality) <= 24
+    normality_adds_context = reference_normality.lower() not in {'normal', 'gaussian-like'}
+    if (not is_poor_fit) and normality_is_concise and normality_adds_context:
+        lines.append(f'Normality: {reference_normality}')
 
     return lines[:3]
 
