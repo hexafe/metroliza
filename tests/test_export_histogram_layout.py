@@ -219,7 +219,7 @@ def test_histogram_panel_axes_rectangles_do_not_overlap():
 
 def test_compute_histogram_plot_with_right_info_layout_geometry_and_nesting():
     rects = compute_histogram_plot_with_right_info_layout(
-        (7.6, 4.0),
+        (8.4, 4.0),
         table_fontsize=8.8,
         fit_row_count=8,
         stats_row_count=9,
@@ -228,22 +228,22 @@ def test_compute_histogram_plot_with_right_info_layout_geometry_and_nesting():
     )
 
     assert rects['plot_rect']['width'] >= HISTOGRAM_MIN_PLOT_WIDTH - 1e-9
+    assert rects['plot_rect']['width'] > rects['right_container_rect']['width']
     assert rects['fit_table_rect']['x'] >= rects['right_container_rect']['x']
     assert rects['stats_table_rect']['x'] >= rects['right_container_rect']['x']
-    assert rects['note_rect']['x'] == pytest.approx(rects['right_container_rect']['x'])
-    assert rects['note_rect']['width'] == pytest.approx(rects['right_container_rect']['width'])
-    assert rects['note_rect']['y'] + rects['note_rect']['height'] <= rects['fit_table_rect']['y'] + 1e-9
-    assert rects['fit_table_rect']['width'] > rects['stats_table_rect']['width']
-    combined_top_width = rects['fit_table_rect']['width'] + rects['stats_table_rect']['width']
-    fit_share = rects['fit_table_rect']['width'] / combined_top_width
-    stats_share = rects['stats_table_rect']['width'] / combined_top_width
-    assert 0.52 <= fit_share <= 0.55
-    assert 0.45 <= stats_share <= 0.48
+    assert rects['fit_table_rect']['x'] == pytest.approx(rects['right_container_rect']['x'])
+    assert rects['stats_table_rect']['x'] == pytest.approx(rects['right_container_rect']['x'])
+    assert rects['fit_table_rect']['width'] == pytest.approx(rects['right_container_rect']['width'])
+    assert rects['stats_table_rect']['width'] == pytest.approx(rects['right_container_rect']['width'])
+    assert rects['footer_rect']['x'] == pytest.approx(rects['right_container_rect']['x'])
+    assert rects['footer_rect']['width'] == pytest.approx(rects['right_container_rect']['width'])
+    assert rects['fit_table_rect']['y'] + rects['fit_table_rect']['height'] <= rects['stats_table_rect']['y'] + 1e-9
+    assert rects['footer_rect']['y'] + rects['footer_rect']['height'] <= rects['fit_table_rect']['y'] + 1e-9
     assert_non_overlapping_rectangles({
         'plot_rect': rects['plot_rect'],
         'fit_table_rect': rects['fit_table_rect'],
         'stats_table_rect': rects['stats_table_rect'],
-        'note_rect': rects['note_rect'],
+        'footer_rect': rects['footer_rect'],
     })
 
 
@@ -258,7 +258,7 @@ def test_histogram_right_info_layout_keeps_plot_dominant_vs_old_composition():
         right_panel_width_hint=0.19,
     )
     final = compute_histogram_plot_with_right_info_layout(
-        (7.6, 4.0),
+        (8.4, 4.0),
         table_fontsize=8.8,
         fit_row_count=8,
         stats_row_count=9,

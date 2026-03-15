@@ -12,7 +12,7 @@ HISTOGRAM_MIN_NOTE_HEIGHT = 0.125
 HISTOGRAM_SIDE_PANEL_MIN_WIDTH = 0.16
 HISTOGRAM_SIDE_PANEL_MAX_WIDTH = 0.28
 HISTOGRAM_RIGHT_INFO_MIN_WIDTH = 0.28
-HISTOGRAM_RIGHT_INFO_MAX_WIDTH = 0.38
+HISTOGRAM_RIGHT_INFO_MAX_WIDTH = 0.37
 
 _HISTOGRAM_BASE_SIDE_PANEL_WIDTH = 0.23
 _HISTOGRAM_TABLE_ROW_HEIGHT = 0.027
@@ -23,6 +23,7 @@ _HISTOGRAM_MIN_TABLE_HEIGHT = 0.24
 _HISTOGRAM_PANEL_TABLE_ROW_HEIGHT = 0.060
 _HISTOGRAM_PANEL_TABLE_PAD_Y = 0.02
 _HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT = 0.24
+_HISTOGRAM_RIGHT_STACK_GAP = 0.012
 
 
 def _clamp(value, lower, upper):
@@ -162,7 +163,7 @@ def compute_histogram_panel_layout(
 
 
 def compute_histogram_plot_with_right_info_layout(
-    figure_size=(7.6, 4.0),
+    figure_size=(8.4, 4.0),
     *,
     table_fontsize=8.0,
     fit_row_count=0,
@@ -170,18 +171,20 @@ def compute_histogram_plot_with_right_info_layout(
     note_line_count=0,
     right_container_width_hint=None,
 ):
-    """Return non-overlapping rectangles for histogram + right information column layout."""
+    """Return non-overlapping rectangles for histogram + stacked right information column layout."""
 
-    fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 7.6
+    fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 8.4
     fig_width = max(float(fig_width), 1.0)
-    width_scale = min(1.35, max(0.85, fig_width / 7.6))
+    width_scale = min(1.35, max(0.85, fig_width / 8.4))
     oversized_font = max(0.0, float(table_fontsize) - 8.0)
 
-    content_width = 1.0 - (2.0 * HISTOGRAM_OUTER_PADDING_X)
+    left_padding = 0.048
+    right_padding = 0.028
+    content_width = 1.0 - left_padding - right_padding
     content_height = 1.0 - HISTOGRAM_OUTER_PADDING_TOP - HISTOGRAM_OUTER_PADDING_BOTTOM
     panel_gap = HISTOGRAM_INTER_PANEL_GAP
 
-    base_right_width = 0.34 + (0.006 * oversized_font) - (0.014 * (width_scale - 1.0))
+    base_right_width = 0.33 + (0.006 * oversized_font) - (0.014 * (width_scale - 1.0))
     right_container_width = (
         float(right_container_width_hint)
         if right_container_width_hint is not None
@@ -203,46 +206,50 @@ def compute_histogram_plot_with_right_info_layout(
 
     y_bottom = HISTOGRAM_OUTER_PADDING_BOTTOM
     plot_rect = {
-        'x': HISTOGRAM_OUTER_PADDING_X,
+        'x': left_padding,
         'y': y_bottom,
         'width': plot_width,
         'height': content_height,
     }
     right_container_rect = {
-        'x': HISTOGRAM_OUTER_PADDING_X + plot_width + panel_gap,
+        'x': left_padding + plot_width + panel_gap,
         'y': y_bottom,
         'width': right_container_width,
         'height': content_height,
     }
 
-    top_row_desired = _HISTOGRAM_BASE_TABLE_HEIGHT + (
-        _HISTOGRAM_TABLE_ROW_HEIGHT * max(int(fit_row_count), int(stats_row_count), 0)
-    )
-    note_height = max(
-        HISTOGRAM_MIN_NOTE_HEIGHT,
-        _HISTOGRAM_BASE_NOTE_HEIGHT + (_HISTOGRAM_NOTE_LINE_HEIGHT * max(int(note_line_count), 0)),
-    )
-    top_row_height = content_height - panel_gap - note_height
+    footer_height = 0.0
+    if int(note_line_count) > 0:
+        footer_height = _clamp(
+            _HISTOGRAM_BASE_NOTE_HEIGHT + (_HISTOGRAM_NOTE_LINE_HEIGHT * max(int(note_line_count), 0)),
+            0.075,
+            0.15,
+        )
 
-    if top_row_height < _HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT:
-        note_height = max(HISTOGRAM_MIN_NOTE_HEIGHT, content_height - panel_gap - _HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT)
-        top_row_height = content_height - panel_gap - note_height
+    stats_target = compute_panel_table_content_height(int(stats_row_count), row_height=0.056, header_rows=1, pad_y=0.018)
+    fit_target = compute_panel_table_content_height(int(fit_row_count), row_height=0.056, header_rows=1, pad_y=0.018)
+    content_for_tables = max(0.0, content_height - footer_height - (2.0 * _HISTOGRAM_RIGHT_STACK_GAP))
+    total_target = max(1e-9, stats_target + fit_target)
+    stats_height = content_for_tables * (stats_target / total_target)
+    fit_height = content_for_tables - stats_height
 
-    top_row_height = min(
-        max(_HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT, top_row_height),
-        max(_HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT, top_row_desired),
-    )
-    max_top_row_height = content_height - panel_gap - HISTOGRAM_MIN_NOTE_HEIGHT
-    top_row_height = min(top_row_height, max_top_row_height)
-    note_height = content_height - panel_gap - top_row_height
+    min_table_height = 0.24
+    if stats_height < min_table_height:
+        delta = min_table_height - stats_height
+        stats_height = min_table_height
+        fit_height = max(min_table_height, fit_height - delta)
+    if fit_height < min_table_height:
+        delta = min_table_height - fit_height
+        fit_height = min_table_height
+        stats_height = max(min_table_height, stats_height - delta)
 
-    fit_table_rect, stats_table_rect, note_rect = split_right_container(
+    fit_table_rect, stats_table_rect, footer_rect = split_stacked_right_container(
         right_container_rect,
         y_bottom=y_bottom,
-        panel_gap=panel_gap,
-        top_row_height=top_row_height,
-        note_height=note_height,
-        fit_fraction=0.54,
+        stats_height=stats_height,
+        fit_height=fit_height,
+        footer_height=footer_height,
+        gap=_HISTOGRAM_RIGHT_STACK_GAP,
     )
 
     rectangles = {
@@ -250,54 +257,56 @@ def compute_histogram_plot_with_right_info_layout(
         'right_container_rect': right_container_rect,
         'fit_table_rect': fit_table_rect,
         'stats_table_rect': stats_table_rect,
-        'note_rect': note_rect,
+        'footer_rect': footer_rect,
     }
     assert_non_overlapping_rectangles(
         {
             'plot_rect': plot_rect,
             'fit_table_rect': fit_table_rect,
             'stats_table_rect': stats_table_rect,
-            'note_rect': note_rect,
+            'footer_rect': footer_rect,
         }
     )
     return rectangles
 
 
-def split_right_container(
+def split_stacked_right_container(
     right_container_rect,
     *,
     y_bottom,
-    panel_gap,
-    top_row_height,
-    note_height,
-    fit_fraction=0.54,
+    stats_height,
+    fit_height,
+    footer_height,
+    gap,
 ):
-    """Split right container into fit/stats top tables and full-width note section."""
-    table_gap = max(0.012, panel_gap * 0.6)
-    available_table_width = max(0.0, float(right_container_rect['width']) - table_gap)
-    fit_width = available_table_width * float(fit_fraction)
-    stats_width = available_table_width - fit_width
+    """Split right container into stacked stats, fit, and optional compact footer areas."""
+    full_x = float(right_container_rect['x'])
+    full_y = float(y_bottom)
+    full_w = float(right_container_rect['width'])
 
-    top_row_y = float(y_bottom) + float(note_height) + float(panel_gap)
-    fit_table_rect = {
-        'x': float(right_container_rect['x']),
-        'y': top_row_y,
-        'width': fit_width,
-        'height': float(top_row_height),
-    }
+    footer_y = full_y
+    fit_y = footer_y + float(footer_height) + (float(gap) if footer_height > 0 else 0.0)
+    stats_y = fit_y + float(fit_height) + float(gap)
+
     stats_table_rect = {
-        'x': float(right_container_rect['x']) + fit_width + table_gap,
-        'y': top_row_y,
-        'width': stats_width,
-        'height': float(top_row_height),
-    }
-    note_rect = {
         'x': float(right_container_rect['x']),
-        'y': float(y_bottom),
-        'width': float(right_container_rect['width']),
-        'height': float(note_height),
+        'y': stats_y,
+        'width': full_w,
+        'height': float(stats_height),
     }
-    return fit_table_rect, stats_table_rect, note_rect
+    fit_table_rect = {
+        'x': full_x,
+        'y': fit_y,
+        'width': full_w,
+        'height': float(fit_height),
+    }
+    footer_rect = {
+        'x': full_x,
+        'y': footer_y,
+        'width': full_w,
+        'height': float(footer_height),
+    }
+    return fit_table_rect, stats_table_rect, footer_rect
 
 
 def compute_panel_table_content_height(row_count, *, header_rows=1, row_height=_HISTOGRAM_PANEL_TABLE_ROW_HEIGHT, pad_y=_HISTOGRAM_PANEL_TABLE_PAD_Y):

@@ -267,7 +267,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             plt.close(fig)
 
     def test_histogram_panel_layout_rendering_smoke_with_dedicated_axes(self):
-        fig = plt.figure(figsize=(7.6, 4.0))
+        fig = plt.figure(figsize=(8.4, 4.0))
         try:
             measurements = pd.DataFrame(
                 {'MEAS': np.concatenate([np.linspace(9.8, 10.2, 40), np.linspace(10.25, 10.5, 16)])}
@@ -290,7 +290,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             note_lines = ['Family: signed/bilateral', 'Normality: non-normal']
 
             rects = compute_histogram_plot_with_right_info_layout(
-                (7.6, 4.0),
+                (8.4, 4.0),
                 table_fontsize=8.8,
                 fit_row_count=len(fit_rows),
                 stats_row_count=len(stats_rows),
@@ -301,20 +301,20 @@ class TestExportPlotHelpers(unittest.TestCase):
                 'plot_rect': rects['plot_rect'],
                 'fit_table_rect': rects['fit_table_rect'],
                 'stats_table_rect': rects['stats_table_rect'],
-                'note_rect': rects['note_rect'],
+                'footer_rect': rects['footer_rect'],
             })
 
             fit_ax = fig.add_axes([rects['fit_table_rect']['x'], rects['fit_table_rect']['y'], rects['fit_table_rect']['width'], rects['fit_table_rect']['height']])
             plot_ax = fig.add_axes([rects['plot_rect']['x'], rects['plot_rect']['y'], rects['plot_rect']['width'], rects['plot_rect']['height']])
             stats_ax = fig.add_axes([rects['stats_table_rect']['x'], rects['stats_table_rect']['y'], rects['stats_table_rect']['width'], rects['stats_table_rect']['height']])
-            note_ax = fig.add_axes([rects['note_rect']['x'], rects['note_rect']['y'], rects['note_rect']['width'], rects['note_rect']['height']])
+            note_ax = fig.add_axes([rects['footer_rect']['x'], rects['footer_rect']['y'], rects['footer_rect']['width'], rects['footer_rect']['height']])
             fit_ax.set_axis_off()
             stats_ax.set_axis_off()
             note_ax.set_axis_off()
 
             render_histogram(plot_ax, measurements, lsl=9.9, usl=10.4)
             fit_meta = render_panel_table_in_panel_axes(ax=fit_ax, title='Distribution Fit', rows=fit_rows, style_options={'fontsize': 8.2})
-            stats_meta = render_panel_table_in_panel_axes(ax=stats_ax, title='Statistics / Capability', rows=stats_rows, style_options={'fontsize': 8.2})
+            stats_meta = render_panel_table_in_panel_axes(ax=stats_ax, title='Statistics', rows=stats_rows, style_options={'fontsize': 8.2})
             note_meta = render_histogram_note_panel(
                 ax=note_ax,
                 note_items=[{'label': line.split(':', 1)[0], 'value': line.split(':', 1)[1].strip()} for line in note_lines],
@@ -1219,15 +1219,17 @@ class TestExportPlotHelpers(unittest.TestCase):
 
     def test_resolve_selected_model_curve_style_maps_explicit_fit_quality_tiers(self):
         strong = resolve_selected_model_curve_style({'fit_quality': {'label': 'strong'}})
+        medium = resolve_selected_model_curve_style({'fit_quality': {'label': 'medium'}})
         weak = resolve_selected_model_curve_style({'fit_quality': {'label': 'weak'}})
         unreliable = resolve_selected_model_curve_style({'fit_quality': {'label': 'unreliable'}})
 
         self.assertEqual(strong, {'alpha': 0.78, 'linewidth': 1.7})
+        self.assertEqual(medium, {'alpha': 0.70, 'linewidth': 1.6})
         self.assertEqual(weak, {'alpha': 0.62, 'linewidth': 1.5})
         self.assertEqual(unreliable, {'alpha': 0.34, 'linewidth': 1.2})
 
     def test_resolve_selected_model_curve_style_defaults_unknown_quality_to_strong(self):
-        fallback = resolve_selected_model_curve_style({'fit_quality': {'label': 'medium'}})
+        fallback = resolve_selected_model_curve_style({'fit_quality': {'label': 'mystery'}})
 
         self.assertEqual(fallback, {'alpha': 0.78, 'linewidth': 1.7})
 
@@ -1628,7 +1630,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(by_kind['mean']['row_index'], 2)
         self.assertEqual(by_kind['usl']['row_index'], 1)
         self.assertEqual(by_kind['lsl']['row_index'], 3)
-        self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.020)
+        self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.075)
     def test_compute_histogram_annotation_rows_stacks_mean_and_usl_when_close(self):
         annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.02, lsl=7.0, y_max=1.0)
 

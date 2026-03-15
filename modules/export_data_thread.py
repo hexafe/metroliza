@@ -182,6 +182,7 @@ _HISTOGRAM_ZERO_RANGE_ABS_PADDING = 0.05
 
 _SELECTED_MODEL_CURVE_STYLE_BY_QUALITY = {
     'strong': {'alpha': 0.78, 'linewidth': 1.7},
+    'medium': {'alpha': 0.70, 'linewidth': 1.6},
     'weak': {'alpha': 0.62, 'linewidth': 1.5},
     'unreliable': {'alpha': 0.34, 'linewidth': 1.2},
 }
@@ -550,7 +551,7 @@ def build_histogram_mean_line_style():
 def render_histogram_title(ax, title, *, slot='title_band', fontsize=10.0, fontweight='semibold'):
     """Render a histogram title in a dedicated top-band slot above annotations."""
 
-    slot_y = _CHART_TOP_SLOT_Y.get(slot, 1.145)
+    slot_y = _CHART_TOP_SLOT_Y.get(slot, 1.135)
     try:
         axis_bbox = ax.get_window_extent()
         figure_bbox = ax.figure.bbox
@@ -614,7 +615,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
             return None
         return left, right, bottom, top
 
-    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=40.0, extra_side_px=4.0):
+    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=56.0, extra_side_px=6.0):
         bounds = _resolve_plot_rect_display_bounds(fig, plot_rect)
         if bounds is None:
             return None
@@ -788,7 +789,7 @@ def compute_histogram_panel_layout(
 
 
 def compute_histogram_plot_with_right_info_layout(
-    figure_size=(7.6, 4.0),
+    figure_size=(8.4, 4.0),
     *,
     table_fontsize=8.0,
     fit_row_count=0,
@@ -1606,15 +1607,16 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
     x_min_base = min([data_min, *finite_spec_limits])
     x_max_base = max([data_max, *finite_spec_limits])
     combined_range = x_max_base - x_min_base
+    data_range = data_max - data_min
 
     reference_magnitude = max(abs(x_min_base), abs(x_max_base), 1.0)
     minimum_margin = max(1e-6, 0.01 * reference_magnitude)
+    narrow_spread = data_range > 0 and combined_range > 0 and (data_range / combined_range) < 0.08
     if combined_range > 0:
-        x_padding = max(_HISTOGRAM_X_PADDING_RATIO * combined_range, minimum_margin)
+        padding_basis = data_range if narrow_spread else combined_range
+        x_padding = max(_HISTOGRAM_X_PADDING_RATIO * max(padding_basis, minimum_margin), minimum_margin)
     else:
         x_padding = max(_HISTOGRAM_ZERO_RANGE_ABS_PADDING * reference_magnitude, minimum_margin)
-
-    data_range = data_max - data_min
 
     q1, q3 = np.percentile(histogram_values, [25, 75])
     iqr = float(q3 - q1)
@@ -2088,6 +2090,7 @@ def render_panel_table(
     min_value_fraction = float(options.get('min_value_fraction', 0.22))
     header_fontweight = options.get('header_fontweight', 'bold')
     compact_label_mapping = dict(options.get('compact_label_mapping') or {})
+    value_wrap_width = int(options.get('value_wrap_width', 0) or 0)
     low_priority_labels = set(options.get('low_priority_labels') or set())
     low_priority_labels.update(compact_label_mapping.get(label, label) for label in list(low_priority_labels))
     cell_padding_points = float(options.get('cell_padding_points', 2.2))
@@ -2095,7 +2098,11 @@ def render_panel_table(
     normalized_rows = []
     for row in rows or []:
         if len(row) >= 2:
-            normalized_rows.append((str(row[0]), str(row[-1])))
+            label_text = str(row[0])
+            value_text = str(row[-1])
+            if value_wrap_width > 0:
+                value_text = textwrap.fill(value_text, width=value_wrap_width)
+            normalized_rows.append((label_text, value_text))
 
     # Ensure renderer-backed text metrics are current.
     fig.canvas.draw()
@@ -4021,7 +4028,7 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    histogram_figsize = (7.6, 4)
+                    histogram_figsize = (8.4, 4)
                     chart_start = time.perf_counter()
                     fig = plt.figure(figsize=histogram_figsize)
 
@@ -4077,14 +4084,14 @@ class ExportDataThread(QThread):
                             'plot_rect': panel_rects['plot_rect'],
                             'fit_table_rect': panel_rects['fit_table_rect'],
                             'stats_table_rect': panel_rects['stats_table_rect'],
-                            'note_rect': panel_rects['note_rect'],
+                            'footer_rect': panel_rects['footer_rect'],
                         }
                     )
 
                     fit_table_rect = panel_rects['fit_table_rect']
                     plot_rect = panel_rects['plot_rect']
                     stats_table_rect = panel_rects['stats_table_rect']
-                    note_rect = panel_rects['note_rect']
+                    footer_rect = panel_rects['footer_rect']
 
                     fit_ax = fig.add_axes([
                         fit_table_rect['x'],
@@ -4104,15 +4111,18 @@ class ExportDataThread(QThread):
                         stats_table_rect['width'],
                         stats_table_rect['height'],
                     ])
-                    note_ax = fig.add_axes([
-                        note_rect['x'],
-                        note_rect['y'],
-                        note_rect['width'],
-                        note_rect['height'],
-                    ])
+                    footer_ax = None
+                    if footer_rect['height'] > 1e-6:
+                        footer_ax = fig.add_axes([
+                            footer_rect['x'],
+                            footer_rect['y'],
+                            footer_rect['width'],
+                            footer_rect['height'],
+                        ])
                     fit_ax.set_axis_off()
                     stats_ax.set_axis_off()
-                    note_ax.set_axis_off()
+                    if footer_ax is not None:
+                        footer_ax.set_axis_off()
 
                     histogram_render_meta = render_histogram(
                         plot_ax,
@@ -4135,15 +4145,15 @@ class ExportDataThread(QThread):
 
                     right_table_meta = render_panel_table_in_panel_axes(
                         ax=stats_ax,
-                        title='Statistics / Capability',
+                        title='Statistics',
                         rows=histogram_content_payload['right_rows'],
                         style_options={
                             **table_style_options,
-                            'min_label_fraction': 0.52,
-                            'min_value_fraction': 0.26,
+                            'min_label_fraction': 0.50,
+                            'min_value_fraction': 0.28,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
-                        row_height=0.060,
+                        row_height=0.064,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4157,7 +4167,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         ax_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.15,
+                        row_height_scale=1.20,
                     )
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
@@ -4167,11 +4177,12 @@ class ExportDataThread(QThread):
                         rows=distribution_fit_rows,
                         style_options={
                             **table_style_options,
-                            'min_label_fraction': 0.56,
-                            'min_value_fraction': 0.24,
+                            'min_label_fraction': 0.44,
+                            'min_value_fraction': 0.40,
+                            'value_wrap_width': 18,
                             'low_priority_labels': {'Est. PPM'},
                         },
-                        row_height=0.060,
+                        row_height=0.064,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4197,21 +4208,22 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
                         statistic_col_width_ratio=0.60,
-                        row_height_scale=1.15,
+                        row_height_scale=1.20,
                     )
 
-                    render_histogram_note_panel(
-                        ax=note_ax,
-                        note_items=[{'label': line.split(':', 1)[0], 'value': line.split(':', 1)[1].strip() if ':' in line else line} for line in note_lines],
-                        style_options={
-                            'fontsize': max(histogram_font_sizes['table_fontsize'] - 0.4, 7.0),
-                            'min_fontsize': 6.2,
-                            'max_fontsize': 8.8,
-                            'box_facecolor': SUMMARY_PLOT_PALETTE['quality_risk_bg'] if poor_fit else SUMMARY_PLOT_PALETTE['quality_unknown_bg'],
-                            'text_color': SUMMARY_PLOT_PALETTE['quality_risk_text'] if poor_fit else SUMMARY_PLOT_PALETTE['quality_unknown_text'],
-                        },
-                        available_height_px=note_rect['height'] * float(fig.bbox.height),
-                    )
+                    if footer_ax is not None and note_lines:
+                        render_histogram_note_panel(
+                            ax=footer_ax,
+                            note_items=[{'label': line.split(':', 1)[0], 'value': line.split(':', 1)[1].strip() if ':' in line else line} for line in note_lines],
+                            style_options={
+                                'fontsize': max(histogram_font_sizes['table_fontsize'] - 0.4, 7.0),
+                                'min_fontsize': 6.2,
+                                'max_fontsize': 8.8,
+                                'box_facecolor': SUMMARY_PLOT_PALETTE['quality_risk_bg'] if poor_fit else SUMMARY_PLOT_PALETTE['quality_unknown_bg'],
+                                'text_color': SUMMARY_PLOT_PALETTE['quality_risk_text'] if poor_fit else SUMMARY_PLOT_PALETTE['quality_unknown_text'],
+                            },
+                            available_height_px=footer_rect['height'] * float(fig.bbox.height),
+                        )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
                     annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
@@ -4258,9 +4270,9 @@ class ExportDataThread(QThread):
                             color='#5f6b7a',
                             bbox={
                                 'boxstyle': 'round,pad=0.16',
-                                'facecolor': (1.0, 1.0, 1.0, 0.65),
-                                'edgecolor': 'none',
-                                'linewidth': 0.0,
+                                'facecolor': (1.0, 1.0, 1.0, 0.74),
+                                'edgecolor': '#c7ced7',
+                                'linewidth': 0.45,
                             },
                             zorder=10,
                         )
