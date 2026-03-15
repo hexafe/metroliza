@@ -1,12 +1,18 @@
-RELEASE_VERSION = "2026.03rc1"
-VERSION_DATE = "260307"
+RELEASE_VERSION = "2026.03rc2"
+VERSION_DATE = "260315"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "UX improvements: faster group renaming, clearer extended-chart visuals, and cleaner workflow readability."
+    "Histogram and chart readability upgrade: cleaner layouts, taller summary rows, and better title/axis visibility."
 )
 
 release_notes = f"""
     <br><b>Current version {VERSION_LABEL}:</b><br>
+    - Histogram dashboards were redesigned for clearer side-table summaries and reduced visual clutter<br>
+    - Extended histogram table rows are taller, improving readability for dense metrics<br>
+    - Chart titles and axis ranges are now more consistently visible in exports and previews<br>
+    - Symbol rendering issues in chart labels were fixed to prevent missing-glyph warnings<br>
+
+    <br><b>Version 2026.03rc1 (build 260307):</b><br>
     - Group names can be renamed instantly by double-clicking them in the group list<br>
     - Extended charts now have cleaner visuals for easier reading in dense plots<br>
     - General UX polish improves readability across main workflows<br>

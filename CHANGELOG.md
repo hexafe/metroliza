@@ -1,7 +1,12 @@
 # Changelog (for end users)
 
-## 2026.03rc1(260307) — current version
-- Internal module imports now consistently use `modules.snake_case_name`; legacy `modules.CamelCaseName` paths remain temporary compatibility shims for external callers.
+## 2026.03rc2(260315) — current version
+- Histogram dashboards were redesigned for clearer side-table summaries and less visual clutter.
+- Extended histogram tables now use taller rows so dense values are easier to scan.
+- Chart title bands and x-axis range behavior were corrected for clearer previews and exports.
+- Fixed symbol rendering warnings in chart labels to avoid missing-glyph export issues.
+
+## 2026.03rc1 (build 260307)
 - Group names can be renamed instantly via double-click in the group list.
 - Extended charts have improved visuals for better readability in complex views.
 - General UX polish improves clarity and flow across the main workflow.
