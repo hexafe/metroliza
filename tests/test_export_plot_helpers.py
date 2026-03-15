@@ -62,6 +62,7 @@ from modules.export_data_thread import (  # noqa: E402
     compute_histogram_plot_with_right_info_layout,
     compute_histogram_table_layout,
     render_histogram_annotations,
+    render_histogram_title,
     build_measurement_chart_format_policy,
     build_measurement_block_plan,
     build_measurement_chart_range_specs,
@@ -1082,8 +1083,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 bbox=[1, 0, layout['table_bbox_width'], 1],
             )
 
-            title_pad = 26
-            title = ax.set_title(build_wrapped_chart_title('Histogram Layout Validation'), pad=title_pad)
+            title = render_histogram_title(ax, build_wrapped_chart_title('Histogram Layout Validation'))
 
             annotation_specs = build_histogram_annotation_specs(10.2, 10.6, 9.8, 1.0)
             annotation_specs, max_annotation_row = compute_histogram_annotation_rows(
@@ -1112,6 +1112,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             self.assertFalse(title_bbox.overlaps(mean_bbox))
             self.assertLess(mean_bbox.y1, title_bbox.y0)
+            self.assertFalse(title.get_clip_on())
         finally:
             plt.close(fig)
 
@@ -1345,7 +1346,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             ])
             plot_ax.set_xlim(0.0, 10.0)
             plot_ax.set_ylim(0.0, 1.0)
-            plot_ax.set_title('Histogram panel title', pad=14)
+            title_artist = render_histogram_title(plot_ax, 'Histogram panel title')
             annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
             annotation_specs, _ = compute_histogram_annotation_rows(
                 annotation_specs,
@@ -1369,7 +1370,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             )
             fig.canvas.draw()
             fig_bbox = fig.bbox
-            title_bbox = plot_ax.title.get_window_extent(renderer=fig.canvas.get_renderer())
+            title_bbox = title_artist.get_window_extent(renderer=fig.canvas.get_renderer())
 
             texts = {text.get_text() for text in rendered}
             self.assertEqual(len(rendered), 3)
@@ -1377,6 +1378,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertIn('USL=9.000', texts)
             self.assertIn('LSL=1.000', texts)
             self.assertLess(title_bbox.y0, fig_bbox.y1)
+            self.assertLessEqual(title_artist.get_position()[1], 1.145)
+            self.assertGreater(title_artist.get_position()[1], 1.0)
         finally:
             plt.close(fig)
 
@@ -1400,7 +1403,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             ])
             plot_ax.set_xlim(0.0, 10.0)
             plot_ax.set_ylim(0.0, 1.0)
-            plot_ax.set_title('Histogram panel title', pad=14)
+            title_artist = render_histogram_title(plot_ax, 'Histogram panel title')
             annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
             annotation_specs, _ = compute_histogram_annotation_rows(
                 annotation_specs,
@@ -1431,7 +1434,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertIn('LSL=1.000', texts)
             self.assertFalse(any('P(X < LSL)' in text for text in texts))
             self.assertFalse(any('P(X > USL)' in text for text in texts))
-            self.assertLess(plot_ax.title.get_window_extent(renderer=fig.canvas.get_renderer()).y0, fig.bbox.y1)
+            self.assertLess(title_artist.get_window_extent(renderer=fig.canvas.get_renderer()).y0, fig.bbox.y1)
+            self.assertFalse(title_artist.get_clip_on())
         finally:
             plt.close(fig)
 
