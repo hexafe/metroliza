@@ -1986,9 +1986,9 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIsNotNone(cpk_row)
 
         expected_cpk_plus = round((0.06 - 0.031) / (3 * 0.0099), 2)
-        self.assertEqual(cpk_row[1], expected_cpk_plus)
+        self.assertIn('Low-confidence estimate', str(cpk_row[1]))
         self.assertEqual(payload['capability_rows']['Cpk']['label'], 'Cpk+')
-        self.assertEqual(payload['capability_rows']['Cpk']['display_value'], expected_cpk_plus)
+        self.assertIn('Low-confidence estimate', str(payload['capability_rows']['Cpk']['display_value']))
         self.assertEqual(payload['capability_rows']['Cpk']['classification_value'], expected_cpk_plus)
 
     def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
@@ -3113,6 +3113,47 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(lines, ['Family: signed/bilateral', 'Fit confidence: medium', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
+
+
+    def test_compact_histogram_note_lines_downgrades_fit_for_n10(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'good'},
+                'gof_metrics': {'reference_normality_label': 'normal'},
+            },
+            summary_stats={'sample_size': 10},
+        )
+
+        self.assertIn('Warning: limited sample size (n=10)', lines)
+        self.assertIn('Fit confidence: guarded (n<25)', lines)
+        self.assertTrue(any(line.startswith('Rationale:') for line in lines))
+
+    def test_compact_histogram_note_lines_downgrades_fit_for_n20(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'strong'},
+                'gof_metrics': {'reference_normality_label': 'normal'},
+            },
+            summary_stats={'sample_size': 20},
+        )
+
+        self.assertIn('Warning: limited sample size (n=20)', lines)
+        self.assertIn('Fit confidence: guarded (n<25)', lines)
+
+    def test_compact_histogram_note_lines_keep_default_fit_confidence_for_n50(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'medium'},
+                'gof_metrics': {'reference_normality_label': 'non-normal'},
+            },
+            summary_stats={'sample_size': 50},
+        )
+
+        self.assertIn('Fit confidence: medium', lines)
+        self.assertFalse(any('limited sample size' in line for line in lines))
 
     def test_kde_footer_note_uses_bbox_background_for_readability(self):
         fig, ax = plt.subplots(figsize=(6.0, 4.0))

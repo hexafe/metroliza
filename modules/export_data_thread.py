@@ -1121,7 +1121,7 @@ def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats)
 
 
 
-def _build_compact_histogram_note_lines(distribution_fit_result):
+def _build_compact_histogram_note_lines(distribution_fit_result, *, summary_stats=None):
     """Build compact right-panel note lines for histogram export context."""
 
     fit_result = distribution_fit_result or {}
@@ -1135,8 +1135,21 @@ def _build_compact_histogram_note_lines(distribution_fit_result):
 
     fit_quality = ((fit_result.get('fit_quality') or {}).get('label') or '').strip().lower()
     is_poor_fit = fit_quality in {'weak', 'unreliable'}
+    sample_size = int((summary_stats or {}).get('sample_size') or 0)
+    low_n_severe = 0 < sample_size < 10
+    low_n_warning = 10 <= sample_size < 25
+
+    if low_n_severe:
+        lines.append(f'Warning: low sample size (n={sample_size})')
+    elif low_n_warning:
+        lines.append(f'Warning: limited sample size (n={sample_size})')
+
     if is_poor_fit:
         lines.append(f'Warning: fit {fit_quality}')
+    elif low_n_severe:
+        lines.append('Fit confidence: low (sample-limited)')
+    elif low_n_warning:
+        lines.append('Fit confidence: guarded (n<25)')
     elif fit_quality == 'medium':
         lines.append('Fit confidence: medium')
 
@@ -1147,12 +1160,16 @@ def _build_compact_histogram_note_lines(distribution_fit_result):
     if (not is_poor_fit) and fit_quality not in {'medium'} and normality_is_concise and normality_adds_context:
         lines.append(f'Normality: {reference_normality}')
 
+    if low_n_severe or low_n_warning:
+        threshold_text = 'n<10 severe instability' if low_n_severe else 'n<25 broad uncertainty'
+        lines.append(f'Rationale: {threshold_text}; capability shown as low-confidence estimate')
+
     lines.extend([
         'Help: model fit quality = statistical adequacy of chosen distribution',
         'Help: capability status = conformance risk against specs',
     ])
 
-    return lines[:4]
+    return lines[:6]
 
 def _is_non_normal_capability_reference_model(distribution_fit_result):
     selected_model = (distribution_fit_result or {}).get('selected_model') or {}
@@ -4246,7 +4263,7 @@ class ExportDataThread(QThread):
                         distribution_fit_result,
                         summary_stats=summary_stats,
                     )
-                    note_lines = _build_compact_histogram_note_lines(distribution_fit_result)
+                    note_lines = _build_compact_histogram_note_lines(distribution_fit_result, summary_stats=summary_stats)
                     histogram_content_payload = {
                         'left_rows': left_rows,
                         'right_rows': right_rows,

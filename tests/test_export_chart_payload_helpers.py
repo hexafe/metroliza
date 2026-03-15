@@ -65,3 +65,71 @@ def test_build_histogram_table_data_exposes_observed_and_estimated_metrics():
         'estimated_nok_ppm': 200000.0,
         'estimated_yield_pct': 0.8,
     }
+
+
+def test_build_histogram_table_data_flags_n10_with_warning_confidence_rows():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 1.0,
+            'maximum': 3.0,
+            'average': 2.0,
+            'median': 2.0,
+            'sigma': 0.1,
+            'cp': 1.5,
+            'cpk': 1.2,
+            'sample_size': 10,
+            'nok_count': 1,
+            'nok_pct': 0.1,
+        }
+    )
+
+    labels = [label for label, _ in payload['rows']]
+    assert 'Confidence ⚠' in labels
+    assert 'Cp uncertainty' in labels
+    assert payload['sample_confidence']['severity'] == 'warning'
+    assert payload['capability_rows']['Cp']['label'] == 'Cp'
+
+
+def test_build_histogram_table_data_flags_warning_low_n_with_uncertainty_bands():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 1.0,
+            'maximum': 3.0,
+            'average': 2.0,
+            'median': 2.0,
+            'sigma': 0.1,
+            'cp': 1.5,
+            'cpk': 1.2,
+            'sample_size': 20,
+            'nok_count': 1,
+            'nok_pct': 0.1,
+        }
+    )
+
+    labels = [label for label, _ in payload['rows']]
+    assert 'Confidence ⚠' in labels
+    assert 'Cp uncertainty' in labels
+    assert payload['sample_confidence']['is_low_n'] is True
+    assert payload['sample_confidence']['severity'] == 'warning'
+
+
+def test_build_histogram_table_data_keeps_standard_labels_for_stable_n():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 1.0,
+            'maximum': 3.0,
+            'average': 2.0,
+            'median': 2.0,
+            'sigma': 0.1,
+            'cp': 1.5,
+            'cpk': 1.2,
+            'sample_size': 50,
+            'nok_count': 1,
+            'nok_pct': 0.1,
+        }
+    )
+
+    labels = [label for label, _ in payload['rows']]
+    assert 'Cp' in labels
+    assert not any('uncertainty' in label for label in labels)
+    assert payload['sample_confidence']['is_low_n'] is False

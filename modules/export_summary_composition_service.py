@@ -114,12 +114,14 @@ def build_summary_table_composition(summary_stats, histogram_table_payload):
 
     capability_rows = histogram_table_payload['capability_rows']
     cpk_row_label = capability_rows['Cpk']['label']
+    cp_row_label = capability_rows['Cp']['label']
+    sample_confidence = histogram_table_payload.get('sample_confidence') or {}
 
     capability_badge = classify_capability_status(summary_stats['cp'], summary_stats['cpk'])
     capability_row_badges = {
-        'Cp': classify_capability_value(
+        cp_row_label: classify_capability_value(
             capability_rows['Cp']['classification_value'],
-            label_prefix=capability_rows['Cp']['label'],
+            label_prefix=cp_row_label,
         ),
         cpk_row_label: classify_capability_value(
             capability_rows['Cpk']['classification_value'],
@@ -132,6 +134,26 @@ def build_summary_table_composition(summary_stats, histogram_table_payload):
         'Normality': classify_normality_status(summary_stats.get('normality_status')),
         'NOK %': classify_nok_severity(summary_stats.get('nok_pct')),
     }
+
+    if sample_confidence.get('is_low_n'):
+        severity = sample_confidence.get('severity')
+        sample_badge_palette = 'quality_risk' if severity == 'severe' else 'quality_marginal'
+        capability_badge = {
+            'label': 'Capability low confidence',
+            'palette_key': 'quality_unknown',
+        }
+        histogram_row_badges[cp_row_label] = {
+            'label': 'Low-confidence estimate',
+            'palette_key': sample_badge_palette,
+        }
+        histogram_row_badges[cpk_row_label] = {
+            'label': 'Low-confidence estimate',
+            'palette_key': sample_badge_palette,
+        }
+        histogram_row_badges['Samples'] = {
+            'label': 'Low sample size',
+            'palette_key': sample_badge_palette,
+        }
 
     return {
         'capability_badge': capability_badge,
