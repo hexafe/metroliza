@@ -1195,6 +1195,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         try:
             title_artist = render_histogram_figure_title(fig, 'Histogram Title QA')
             self.assertIsNotNone(title_artist)
+            self.assertEqual(title_artist.get_ha(), 'left')
+            self.assertAlmostEqual(title_artist.get_position()[0], 0.06, places=3)
             fig.canvas.draw()
             renderer = fig.canvas.get_renderer()
             bbox = title_artist.get_window_extent(renderer=renderer)

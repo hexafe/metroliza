@@ -566,16 +566,25 @@ def build_histogram_mean_line_style():
     }
 
 
-def render_histogram_figure_title(fig, title, *, fontsize=12.0, color='#2f3b4a', fontweight='bold'):
+def render_histogram_figure_title(
+    fig,
+    title,
+    *,
+    fontsize=12.0,
+    color='#2f3b4a',
+    fontweight='bold',
+    x=0.06,
+    ha='left',
+):
     """Render histogram title in figure space so layout can reserve a stable top band."""
 
     if not title:
         return None
     return fig.text(
-        0.5,
+        x,
         0.985,
         str(title),
-        ha='center',
+        ha=ha,
         va='top',
         fontsize=fontsize,
         fontweight=fontweight,
@@ -4329,7 +4338,7 @@ class ExportDataThread(QThread):
                             'min_value_fraction': 0.28,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
-                        row_height=0.092,
+                        row_height=0.098,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4347,7 +4356,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         ax_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.40,
+                        row_height_scale=1.48,
                     )
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
@@ -4362,7 +4371,7 @@ class ExportDataThread(QThread):
                             'value_wrap_width': 30,
                             'low_priority_labels': {'Est. PPM'},
                         },
-                        row_height=0.092,
+                        row_height=0.098,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4390,7 +4399,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.40,
+                        row_height_scale=1.48,
                     )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
