@@ -789,10 +789,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         anchors = build_summary_image_anchor_plan(15)
 
         self.assertEqual(anchors['header'], (40, 0))
-        self.assertEqual(anchors['distribution'], (41, 4))
-        self.assertEqual(anchors['iqr'], (41, 13))
-        self.assertEqual(anchors['histogram'], (41, 19))
-        self.assertEqual(anchors['trend'], (41, 29))
+        self.assertEqual(anchors['distribution'], (41, 1))
+        self.assertEqual(anchors['iqr'], (41, 11))
+        self.assertEqual(anchors['histogram'], (41, 21))
+        self.assertEqual(anchors['trend'], (41, 35))
 
     def test_build_summary_sheet_position_plan_stacks_sequential_headers_without_gaps(self):
         rows = [build_summary_sheet_position_plan(base_col)['row'] for base_col in (5, 10, 15, 20)]
