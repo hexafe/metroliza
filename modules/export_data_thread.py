@@ -4219,19 +4219,19 @@ class ExportDataThread(QThread):
                         plot_ax.text(
                             0.02,
                             0.02,
-                            'Dashed KDE = descriptive only',
+                            'Dashed KDE: descriptive only',
                             transform=plot_ax.transAxes,
                             ha='left',
                             va='bottom',
-                            fontsize=max(histogram_font_sizes['annotation_fontsize'] - 1.1, 6.5),
-                            color='#495463',
+                            fontsize=max(histogram_font_sizes['annotation_fontsize'] - 1.5, 6.0),
+                            color='#5f6b7a',
                             bbox={
-                                'boxstyle': 'round,pad=0.18',
-                                'facecolor': (1.0, 1.0, 1.0, 0.72),
-                                'edgecolor': '#c7ced7',
-                                'linewidth': 0.5,
+                                'boxstyle': 'round,pad=0.16',
+                                'facecolor': (1.0, 1.0, 1.0, 0.65),
+                                'edgecolor': 'none',
+                                'linewidth': 0.0,
                             },
-                            zorder=8,
+                            zorder=10,
                         )
 
                     fit_warning = distribution_fit_result.get('warning')
