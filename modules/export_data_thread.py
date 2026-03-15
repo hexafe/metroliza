@@ -118,6 +118,12 @@ from modules.summary_plot_palette import (
     STATUS_BORDER_STYLE_BY_PALETTE,
     STATUS_ICON_PREFIX_BY_PALETTE,
 )
+from modules.stats_number_formatting import (
+    format_ppm,
+    format_probability,
+    format_probability_percent,
+)
+
 from modules.export_chart_payload_helpers import (
     build_histogram_table_data as _build_histogram_table_data,
     build_histogram_table_render_data as _build_histogram_table_render_data,
@@ -949,19 +955,14 @@ def assert_non_overlapping_rectangles(rectangles):
 def _format_percent(value):
     if value is None:
         return 'N/A'
-    return f"{float(value):.3f}%"
+    try:
+        return f"{float(value):.3f}%"
+    except (TypeError, ValueError):
+        return 'N/A'
 
 
 def _format_probability_percent(probability):
-    if probability is None:
-        return 'N/A'
-    try:
-        value = float(probability)
-    except (TypeError, ValueError):
-        return 'N/A'
-    if not np.isfinite(value):
-        return 'N/A'
-    return f"{max(0.0, min(1.0, value)) * 100.0:.3f}%"
+    return format_probability_percent(probability, decimals=3, threshold_percent=0.001)
 
 
 def _is_effectively_zero(value, tolerance=1e-12):
@@ -1038,7 +1039,7 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     if gof_pvalue is None:
         gof_display = 'N/A'
     else:
-        gof_display = f"{float(gof_pvalue):.4f}"
+        gof_display = format_probability(gof_pvalue, decimals=3, threshold=0.001)
 
     spec_type = str(risk_estimates.get('spec_type', 'none'))
     below_lsl = risk_estimates.get('below_lsl_probability')
@@ -1062,7 +1063,7 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
 
     raw_rows.extend([
         ('Estimated NOK %', _format_percent(risk_estimates.get('nok_percent'))),
-        ('Estimated NOK (PPM)', 'N/A' if risk_estimates.get('ppm_nok') is None else f"{float(risk_estimates['ppm_nok']):,.0f}"),
+        ('Estimated NOK (PPM)', format_ppm(risk_estimates.get('ppm_nok'))),
         ('Model fit quality', str(fit_quality.get('label', 'unknown')).title()),
     ])
 

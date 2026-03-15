@@ -22,8 +22,8 @@ def test_build_histogram_table_data_preserves_capability_rows():
     )
 
     assert payload['rows'][5] == ('Spec type', 'two-sided')
-    assert payload['rows'][6] == ('Cp', 1.5)
-    assert payload['capability_rows']['Cpk']['display_value'] == 1.2
+    assert payload['rows'][6] == ('Cp', '1.50')
+    assert payload['capability_rows']['Cpk']['display_value'] == '1.20'
 
 
 def test_build_histogram_table_render_data_supports_three_column_mode():
@@ -236,3 +236,23 @@ def test_build_histogram_table_data_flags_obs_vs_est_discrepancy_warning():
     rows = dict(payload['rows'])
     assert rows['NOK % Δ (abs/rel)'].startswith('⚠ ')
     assert payload['summary_metrics']['nok_pct_discrepancy_warning'] is True
+
+
+def test_build_histogram_table_data_includes_raw_rows_for_full_precision_tooltips():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 1.23456,
+            'maximum': 3.0,
+            'average': 2.0,
+            'median': 2.0,
+            'sigma': 0.1,
+            'cp': 1.5555,
+            'cpk': 1.2345,
+            'sample_size': 10,
+            'nok_count': 1,
+            'nok_pct': 0.1,
+        }
+    )
+
+    assert ('Min', 1.23456) in payload['raw_rows']
+    assert payload['capability_rows']['Cpk']['raw_value'] == 1.2345

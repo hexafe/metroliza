@@ -368,7 +368,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             'Capability',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
-        self.assertEqual(rows[1][1], '0.0734')
+        self.assertEqual(rows[1][1], '0.073')
         self.assertEqual(rows[2][1], '0.120%')
         self.assertEqual(rows[3][1], '0.230%')
         self.assertEqual(rows[4][1], '0.123%')
@@ -1966,7 +1966,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         table = payload['rows']
-        self.assertEqual(table[-4], ('NOK', 2))
+        self.assertEqual(table[-4], ('NOK', '2.000'))
         self.assertEqual(table[-3], ('NOK %', '8.33%'))
         self.assertEqual(table[-2], ('NOK % (obs vs est)', 'N/A'))
         self.assertEqual(table[-1], ('NOK % Δ (abs/rel)', 'N/A'))
@@ -2021,7 +2021,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         cpk_row = next((row for row in payload['rows'] if row[0] == 'Cpu'), None)
         self.assertIsNotNone(cpk_row)
 
-        expected_cpu = round((0.06 - 0.031) / (3 * 0.0099), 2)
+        expected_cpu = (0.06 - 0.031) / (3 * 0.0099)
         self.assertIn('Low-confidence estimate', str(cpk_row[1]))
         self.assertEqual(payload['capability_rows']['Cpk']['label'], 'Cpu')
         self.assertIn('Low-confidence estimate', str(payload['capability_rows']['Cpk']['display_value']))
@@ -3224,6 +3224,23 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertGreaterEqual(artist.get_position()[1], 0.0)
         finally:
             plt.close(fig)
+
+
+    def test_distribution_fit_table_rows_use_small_probability_notation(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'gof_metrics': {'ad_pvalue': 0.0004},
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.0000009,
+                },
+            },
+            usl=10.0,
+        )
+
+        rows_by_label = dict(rows)
+        self.assertEqual(rows_by_label['GOF p'], '<0.001')
+        self.assertEqual(rows_by_label['P(>USL)'], '<0.001%')
 
 if __name__ == '__main__':
     unittest.main()
