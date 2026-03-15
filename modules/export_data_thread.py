@@ -1083,17 +1083,35 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
 
 def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats):
     inferred_support = distribution_fit_result.get('inferred_support_mode') or 'unknown'
-    candidate_family = 'positive-support' if inferred_support == 'one_sided_zero_bound_positive' else 'signed/bilateral'
+    candidate_family = {
+        'one_sided_zero_bound_positive': 'positive-support',
+        'one_sided_zero_bound_negative': 'negative-support',
+        'bilateral_signed': 'signed/bilateral',
+    }.get(inferred_support, 'unknown')
+    spec_handling_text = {
+        'one_sided_zero_bound_positive': 'one-sided upper',
+        'one_sided_zero_bound_negative': 'one-sided lower',
+        'bilateral_signed': 'two-sided (both LSL and USL active)',
+    }.get(inferred_support, 'based on active limits')
     fit_quality = distribution_fit_result.get('fit_quality') or {}
     fit_warning = distribution_fit_result.get('warning')
 
     note_items = [
         {
-            'label': 'Candidate family',
-            'compact_label': 'Family',
+            'label': 'Spec handling',
+            'compact_label': 'Spec handling',
+            'value': spec_handling_text,
+            'compact_value': spec_handling_text,
+            'priority': 90,
+            'tooltip': 'How limits are applied when computing estimated NOK and capability metrics.',
+        },
+        {
+            'label': 'Family (debug)',
+            'compact_label': 'Family (debug)',
             'value': candidate_family,
             'compact_value': candidate_family,
-            'priority': 90,
+            'priority': 10,
+            'expanded_only': True,
         },
     ]
 
@@ -1138,14 +1156,14 @@ def _build_compact_histogram_note_lines(distribution_fit_result, *, summary_stat
 
     mode = fit_result.get('inferred_support_mode')
     if mode == 'one_sided_zero_bound_positive':
-        lines.append('Family: positive-support')
-        lines.append('Spec type: one-sided upper')
+        lines.append('Spec handling: one-sided upper')
+        lines.append('Tooltip: Uses only USL for tail risk and capability decisions (Cp suppressed; Cpk shown as Cpu)')
     elif mode == 'one_sided_zero_bound_negative':
-        lines.append('Family: negative-support')
-        lines.append('Spec type: one-sided lower')
+        lines.append('Spec handling: one-sided lower')
+        lines.append('Tooltip: Uses only LSL for tail risk and capability decisions (Cp suppressed; Cpk shown as Cpl)')
     elif mode == 'bilateral_signed':
-        lines.append('Family: signed/bilateral')
-        lines.append('Spec type: two-sided')
+        lines.append('Spec handling: two-sided (both LSL and USL active)')
+        lines.append('Tooltip: Uses both tails; Cp and Cpk summarize spread and centering versus both limits')
 
     fit_quality = ((fit_result.get('fit_quality') or {}).get('label') or '').strip().lower()
     is_poor_fit = fit_quality in {'weak', 'unreliable'}
@@ -1161,11 +1179,13 @@ def _build_compact_histogram_note_lines(distribution_fit_result, *, summary_stat
     if is_poor_fit:
         lines.append(f'Warning: fit {fit_quality}')
     elif low_n_severe:
-        lines.append('Fit confidence: low (sample-limited)')
+        lines.append('Fit reliability: low (sample-limited)')
     elif low_n_warning:
-        lines.append('Fit confidence: guarded (n<25)')
+        lines.append('Fit reliability: guarded (n<25)')
     elif fit_quality == 'medium':
-        lines.append('Fit confidence: medium')
+        lines.append('Fit reliability: medium')
+    if fit_quality in {'medium', 'good', 'strong'} and not is_poor_fit:
+        lines.append('Tooltip: Fit reliability reflects distribution adequacy; lower reliability increases uncertainty in estimated NOK/PPM')
 
     gof_metrics = fit_result.get('gof_metrics') or {}
     reference_normality = str(gof_metrics.get('reference_normality_label') or '').strip()
@@ -1184,7 +1204,7 @@ def _build_compact_histogram_note_lines(distribution_fit_result, *, summary_stat
         'Help: capability status = conformance risk against specs',
     ])
 
-    return lines[:6]
+    return lines[:7]
 
 def _is_non_normal_capability_reference_model(distribution_fit_result):
     selected_model = (distribution_fit_result or {}).get('selected_model') or {}
