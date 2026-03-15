@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from modules.export_histogram_layout import (
     HISTOGRAM_OUTER_PADDING_BOTTOM,
     HISTOGRAM_OUTER_PADDING_TOP,
+    HISTOGRAM_TITLE_BAND_HEIGHT,
     HISTOGRAM_MIN_NOTE_HEIGHT,
     HISTOGRAM_MIN_PLOT_WIDTH,
     compute_panel_table_content_height,
@@ -215,6 +216,15 @@ def test_histogram_panel_axes_rectangles_do_not_overlap():
                 assert not rectangles_overlap(left_rect, right_rect)
     finally:
         plt.close(fig)
+
+
+
+def test_compute_histogram_plot_with_right_info_layout_reserves_title_band_above_plot():
+    rects = compute_histogram_plot_with_right_info_layout((8.4, 4.0), table_fontsize=8.8, fit_row_count=8, stats_row_count=9)
+
+    plot_top = rects['plot_rect']['y'] + rects['plot_rect']['height']
+    expected_top = 1.0 - HISTOGRAM_OUTER_PADDING_TOP - HISTOGRAM_TITLE_BAND_HEIGHT
+    assert plot_top == pytest.approx(expected_top)
 
 
 def test_compute_histogram_plot_with_right_info_layout_geometry_and_nesting():

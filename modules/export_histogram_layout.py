@@ -6,6 +6,7 @@ from __future__ import annotations
 HISTOGRAM_OUTER_PADDING_X = 0.03
 HISTOGRAM_OUTER_PADDING_TOP = 0.10
 HISTOGRAM_OUTER_PADDING_BOTTOM = 0.103
+HISTOGRAM_TITLE_BAND_HEIGHT = 0.05
 HISTOGRAM_INTER_PANEL_GAP = 0.022
 HISTOGRAM_MIN_PLOT_WIDTH = 0.42
 HISTOGRAM_MIN_NOTE_HEIGHT = 0.125
@@ -182,6 +183,7 @@ def compute_histogram_plot_with_right_info_layout(
     right_padding = 0.026
     content_width = 1.0 - left_padding - right_padding
     content_height = 1.0 - HISTOGRAM_OUTER_PADDING_TOP - HISTOGRAM_OUTER_PADDING_BOTTOM
+    content_height = max(0.0, content_height - HISTOGRAM_TITLE_BAND_HEIGHT)
     panel_gap = HISTOGRAM_INTER_PANEL_GAP
 
     base_right_width = 0.315 + (0.005 * oversized_font) - (0.012 * (width_scale - 1.0))
