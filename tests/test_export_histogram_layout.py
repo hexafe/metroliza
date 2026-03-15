@@ -237,6 +237,7 @@ def test_compute_histogram_plot_with_right_info_layout_geometry_and_nesting():
     assert rects['stats_table_rect']['width'] == pytest.approx(rects['right_container_rect']['width'])
     assert rects['footer_rect']['x'] == pytest.approx(rects['right_container_rect']['x'])
     assert rects['footer_rect']['width'] == pytest.approx(rects['right_container_rect']['width'])
+    assert rects['footer_rect']['height'] == pytest.approx(0.0)
     assert rects['fit_table_rect']['y'] + rects['fit_table_rect']['height'] <= rects['stats_table_rect']['y'] + 1e-9
     assert rects['footer_rect']['y'] + rects['footer_rect']['height'] <= rects['fit_table_rect']['y'] + 1e-9
     assert_non_overlapping_rectangles({
