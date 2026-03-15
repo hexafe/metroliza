@@ -8,7 +8,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from modules.export_histogram_layout import assert_non_overlapping_rectangles
+from modules.export_histogram_layout import (
+    HISTOGRAM_OUTER_PADDING_TOP,
+    assert_non_overlapping_rectangles,
+)
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
 from modules.export_summary_utils import compute_normality_status
@@ -1335,7 +1338,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual({text.get_fontsize() for text in rendered}, {9.1})
         plt.close(fig)
 
-    def test_render_histogram_annotations_drops_lower_priority_overlap_inside_plot_rect(self):
+    def test_render_histogram_annotations_resolves_priority_overlap_inside_plot_rect(self):
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.set_xlim(0.0, 1.0)
         plt.subplots_adjust(left=0.15, right=0.85, top=0.85, bottom=0.15)
@@ -1358,7 +1361,13 @@ class TestExportPlotHelpers(unittest.TestCase):
             },
         )
 
-        self.assertEqual([text.get_text() for text in rendered], ['Mean = 0.500'])
+        texts = [text.get_text() for text in rendered]
+        self.assertIn('Mean = 0.500', texts)
+        fig.canvas.draw()
+        bboxes = [artist.get_window_extent(renderer=fig.canvas.get_renderer()) for artist in rendered]
+        for index, left in enumerate(bboxes):
+            for right in bboxes[index + 1:]:
+                self.assertFalse(left.overlaps(right))
         plt.close(fig)
 
     def test_render_histogram_annotations_keeps_mean_usl_lsl_with_side_panel_plot_bounds(self):
@@ -1510,6 +1519,87 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertGreater(title_artist.get_position()[1], 1.0)
         finally:
             plt.close(fig)
+
+
+    def test_render_histogram_annotations_resolves_close_limit_collisions_with_offsets_or_leaders(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
+        try:
+            ax.set_xlim(9.95, 10.05)
+            ax.set_ylim(0.0, 1.0)
+            annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.002, lsl=9.998, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=0.10,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            rendered = render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=8.1,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': {'x': 0.14, 'y': 0.18, 'width': 0.76, 'height': 0.70},
+                },
+            )
+            self.assertEqual(len(rendered), 3)
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            bboxes = [artist.get_window_extent(renderer=renderer) for artist in rendered]
+            for index, left in enumerate(bboxes):
+                for right in bboxes[index + 1:]:
+                    self.assertFalse(left.overlaps(right))
+
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_annotations_avoids_title_overlap_with_offsets(self):
+        fig = plt.figure(figsize=(7.2, 4.0))
+        try:
+            rects = compute_histogram_plot_with_right_info_layout(
+                (7.2, 4.0),
+                table_fontsize=8.8,
+                fit_row_count=8,
+                stats_row_count=8,
+                note_line_count=2,
+                right_container_width_hint=0.34,
+            )
+            plot_rect = rects['plot_rect']
+            ax = fig.add_axes([plot_rect['x'], plot_rect['y'], plot_rect['width'], plot_rect['height']])
+            ax.set_xlim(0.0, 1.0)
+            title_artist = render_histogram_title(ax, 'Distribution Fit')
+            annotation_specs = [
+                {'kind': 'mean', 'x': 0.5, 'text_y_axes': 1.14, 'text': 'Mean = 0.500', 'color': '#111111', 'ha': 'center', 'priority': 300},
+                {'kind': 'usl', 'x': 0.52, 'text_y_axes': 1.14, 'text': 'USL=0.520', 'color': '#222222', 'ha': 'center', 'priority': 260},
+                {'kind': 'lsl', 'x': 0.48, 'text_y_axes': 1.14, 'text': 'LSL=0.480', 'color': '#222222', 'ha': 'center', 'priority': 250},
+            ]
+            rendered = render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': plot_rect,
+                    'title_artist': title_artist,
+                },
+            )
+            fig.canvas.draw()
+            title_bbox = title_artist.get_window_extent(renderer=fig.canvas.get_renderer())
+            for artist in rendered:
+                self.assertFalse(artist.get_window_extent(renderer=fig.canvas.get_renderer()).overlaps(title_bbox))
+        finally:
+            plt.close(fig)
+
+    def test_histogram_layout_reserves_additional_top_padding_for_annotation_band(self):
+        self.assertGreaterEqual(HISTOGRAM_OUTER_PADDING_TOP, 0.08)
 
     def test_render_histogram_annotations_and_title_fit_with_right_info_column_layout(self):
         fig = plt.figure(figsize=(7.6, 4.0))

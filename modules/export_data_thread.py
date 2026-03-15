@@ -698,16 +698,44 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
             return True
         left, right, bottom, top = bounds
         return (
-            bbox.y0 >= (bottom + padding_px)
+            bbox.x0 >= (left + padding_px)
+            and bbox.x1 <= (right - padding_px)
+            and bbox.y0 >= (bottom + padding_px)
             and bbox.y1 <= (top - padding_px)
         )
+
+    def _build_candidate_offsets(annotation_kind):
+        if annotation_kind == 'mean':
+            return [(0.0, 0.0), (0.0, -6.0), (0.0, -12.0), (-8.0, -6.0), (8.0, -6.0)]
+        if annotation_kind in {'lsl', 'usl'}:
+            return [
+                (0.0, 0.0),
+                (-8.0, -6.0),
+                (8.0, -6.0),
+                (-12.0, -10.0),
+                (12.0, -10.0),
+                (0.0, -14.0),
+            ]
+        return [(0.0, 0.0), (0.0, -6.0), (0.0, -12.0)]
+
+    def _resolve_ha_from_offset(default_ha, x_offset_points):
+        if x_offset_points > 6.0:
+            return 'left'
+        if x_offset_points < -6.0:
+            return 'right'
+        return default_ha
 
     rendered = []
     transform = ax.get_xaxis_transform()
     figure = ax.figure
     x_min, x_max = ax.get_xlim()
     plot_rect = annotation_box.get('plot_rect') if isinstance(annotation_box, dict) else None
+    title_artist = annotation_box.get('title_artist') if isinstance(annotation_box, dict) else None
     plot_rect_bounds = _resolve_annotation_safe_bounds(figure, plot_rect)
+    title_bbox = None
+    if title_artist is not None:
+        figure.canvas.draw()
+        title_bbox = title_artist.get_window_extent(renderer=figure.canvas.get_renderer())
     priority_sorted = sorted(
         list(enumerate(annotation_specs or [])),
         key=lambda item: (-int(item[1].get('priority', 100)), item[0]),
@@ -730,46 +758,73 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
             if edge_offset_points != 0.0:
                 resolved_ha = edge_ha
                 x_offset_points = edge_offset_points
-        text_transform = transform
-        if x_offset_points != 0.0:
-            text_transform = mtransforms.offset_copy(
-                transform,
-                fig=figure,
-                x=x_offset_points,
-                y=0.0,
-                units='points',
-            )
-
-        text_artist = ax.text(
-            annotation['x'],
-            annotation.get('text_y_axes', 1.02),
-            annotation['text'],
-            transform=text_transform,
-            color=annotation['color'],
-            ha=resolved_ha,
-            va='bottom',
-            fontsize=annotation_fontsize,
-            bbox={k: v for k, v in annotation_box.items() if k != 'plot_rect'},
-            zorder=10,
-            clip_on=False,
-        )
-        figure.canvas.draw()
-        bbox = text_artist.get_window_extent(renderer=figure.canvas.get_renderer())
-        is_safe = _bbox_fits_plot_rect(bbox, plot_rect_bounds)
+        placed_artist = None
+        placed_bbox = None
         annotation_row = annotation.get('row_index')
-        if is_safe and plot_rect_bounds is not None and accepted_bboxes:
-            if any(
-                bbox.overlaps(existing_bbox) and annotation_row == existing_row
-                for existing_bbox, existing_row in zip(accepted_bboxes, accepted_rows)
-            ):
+        base_y_axes = annotation.get('text_y_axes', 1.02)
+        for extra_x_offset, extra_y_offset in _build_candidate_offsets(annotation_kind):
+            total_x_offset = x_offset_points + float(extra_x_offset)
+            candidate_ha = _resolve_ha_from_offset(resolved_ha, total_x_offset)
+            needs_leader_line = abs(total_x_offset) >= 8.0 or abs(float(extra_y_offset)) >= 6.0
+            if abs(total_x_offset) < 1e-9 and abs(float(extra_y_offset)) < 1e-9:
+                candidate_artist = ax.text(
+                    annotation['x'],
+                    base_y_axes,
+                    annotation['text'],
+                    transform=transform,
+                    color=annotation['color'],
+                    ha=candidate_ha,
+                    va='bottom',
+                    fontsize=annotation_fontsize,
+                    bbox={k: v for k, v in annotation_box.items() if k not in {'plot_rect', 'title_artist'}},
+                    zorder=10,
+                    clip_on=False,
+                )
+            else:
+                candidate_artist = ax.annotate(
+                    annotation['text'],
+                    xy=(annotation['x'], base_y_axes),
+                    xycoords=transform,
+                    xytext=(total_x_offset, float(extra_y_offset)),
+                    textcoords='offset points',
+                    color=annotation['color'],
+                    ha=candidate_ha,
+                    va='bottom',
+                    fontsize=annotation_fontsize,
+                    bbox={k: v for k, v in annotation_box.items() if k not in {'plot_rect', 'title_artist'}},
+                    arrowprops=(
+                        {
+                            'arrowstyle': '-',
+                            'color': annotation['color'],
+                            'linewidth': 0.75,
+                            'alpha': 0.65,
+                            'shrinkA': 0,
+                            'shrinkB': 2,
+                        }
+                        if needs_leader_line
+                        else None
+                    ),
+                    zorder=10,
+                    clip_on=False,
+                )
+            figure.canvas.draw()
+            candidate_bbox = candidate_artist.get_window_extent(renderer=figure.canvas.get_renderer())
+            is_safe = _bbox_fits_plot_rect(candidate_bbox, plot_rect_bounds)
+            if is_safe and title_bbox is not None and candidate_bbox.overlaps(title_bbox):
                 is_safe = False
+            if is_safe and accepted_bboxes:
+                if any(candidate_bbox.overlaps(existing_bbox) for existing_bbox in accepted_bboxes):
+                    is_safe = False
+            if is_safe:
+                placed_artist = candidate_artist
+                placed_bbox = candidate_bbox
+                break
+            candidate_artist.remove()
 
-        if is_safe:
-            accepted[index] = text_artist
-            accepted_bboxes.append(bbox)
+        if placed_artist is not None:
+            accepted[index] = placed_artist
+            accepted_bboxes.append(placed_bbox)
             accepted_rows.append(annotation_row)
-        else:
-            text_artist.remove()
 
     for index, _annotation in enumerate(annotation_specs or []):
         text_artist = accepted.get(index)
@@ -4351,7 +4406,7 @@ class ExportDataThread(QThread):
                     plot_ax.set_xlabel('Measurement')
                     if not histogram_render_meta.get('is_grouped'):
                         plot_ax.set_ylabel('Count')
-                    render_histogram_title(
+                    title_artist = render_histogram_title(
                         plot_ax,
                         build_wrapped_chart_title(header),
                         fontsize=max(histogram_font_sizes['annotation_fontsize'] + 1.1, 8.8),
@@ -4364,6 +4419,7 @@ class ExportDataThread(QThread):
                         'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
                         'alpha': 0.94,
                         'plot_rect': plot_rect,
+                        'title_artist': title_artist,
                     }
                     render_histogram_annotations(
                         plot_ax,
