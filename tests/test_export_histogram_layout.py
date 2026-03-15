@@ -12,6 +12,7 @@ from modules.export_histogram_layout import (
     compute_panel_table_content_height,
     assert_non_overlapping_rectangles,
     compute_histogram_panel_layout,
+    compute_histogram_plot_with_right_info_layout,
     rectangles_overlap,
     resolve_inner_table_rect,
 )
@@ -214,3 +215,52 @@ def test_histogram_panel_axes_rectangles_do_not_overlap():
                 assert not rectangles_overlap(left_rect, right_rect)
     finally:
         plt.close(fig)
+
+
+def test_compute_histogram_plot_with_right_info_layout_geometry_and_nesting():
+    rects = compute_histogram_plot_with_right_info_layout(
+        (7.6, 4.0),
+        table_fontsize=8.8,
+        fit_row_count=8,
+        stats_row_count=9,
+        note_line_count=3,
+        right_container_width_hint=0.34,
+    )
+
+    assert rects['plot_rect']['width'] >= HISTOGRAM_MIN_PLOT_WIDTH - 1e-9
+    assert rects['fit_table_rect']['x'] >= rects['right_container_rect']['x']
+    assert rects['stats_table_rect']['x'] >= rects['right_container_rect']['x']
+    assert rects['note_rect']['x'] == pytest.approx(rects['right_container_rect']['x'])
+    assert rects['note_rect']['width'] == pytest.approx(rects['right_container_rect']['width'])
+    assert rects['note_rect']['y'] + rects['note_rect']['height'] <= rects['fit_table_rect']['y'] + 1e-9
+    assert rects['fit_table_rect']['width'] == pytest.approx(rects['stats_table_rect']['width'])
+    assert_non_overlapping_rectangles({
+        'plot_rect': rects['plot_rect'],
+        'fit_table_rect': rects['fit_table_rect'],
+        'stats_table_rect': rects['stats_table_rect'],
+        'note_rect': rects['note_rect'],
+    })
+
+
+def test_histogram_right_info_layout_keeps_plot_dominant_vs_old_composition():
+    legacy = compute_histogram_panel_layout(
+        (7.2, 4.0),
+        table_fontsize=8.8,
+        left_row_count=8,
+        right_row_count=9,
+        note_line_count=3,
+        left_panel_width_hint=0.27,
+        right_panel_width_hint=0.19,
+    )
+    final = compute_histogram_plot_with_right_info_layout(
+        (7.6, 4.0),
+        table_fontsize=8.8,
+        fit_row_count=8,
+        stats_row_count=9,
+        note_line_count=3,
+        right_container_width_hint=0.34,
+    )
+
+    assert final['plot_rect']['width'] > legacy['plot_rect']['width']
+    assert final['plot_rect']['width'] >= HISTOGRAM_MIN_PLOT_WIDTH - 1e-9
+    assert final['right_container_rect']['width'] >= 0.30
