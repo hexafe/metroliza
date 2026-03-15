@@ -95,7 +95,6 @@ def build_histogram_table_data(summary_stats):
     sample_size = summary_stats.get('sample_size', 0)
     sample_confidence = _resolve_sample_confidence(sample_size)
     spec_type = _resolve_spec_type(summary_stats)
-    cp_value = summary_stats.get('cp')
     cpk_label = 'Cpk'
     cpk_value = summary_stats.get('cpk')
 
