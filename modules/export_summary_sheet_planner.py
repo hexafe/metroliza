@@ -19,7 +19,8 @@ CHART_TOP_SLOT_Y = {
     'spec_tertiary': 0.935,
 }
 
-ANNOTATION_SLOT_ORDER = tuple(slot for slot in CHART_TOP_SLOT_ORDER if slot != 'title_band')
+ANNOTATION_SLOT_Y = dict(CHART_TOP_SLOT_Y)
+ANNOTATION_SLOT_ORDER = tuple(CHART_TOP_SLOT_ORDER)
 
 
 def build_summary_sheet_position_plan(base_col):
@@ -120,21 +121,30 @@ def compute_histogram_annotation_rows(
     lsl = by_kind.get('lsl')
 
     slot_index = {name: idx for idx, name in enumerate(ANNOTATION_SLOT_ORDER)}
+    fallback_slot_by_kind = {
+        'title': 'title_band',
+        'mean': 'mean_primary',
+        'usl': 'spec_tertiary',
+        'lsl': 'spec_tertiary',
+    }
 
     def _slot_y(slot_name):
-        return CHART_TOP_SLOT_Y.get(slot_name, base_text_y_axes)
+        return ANNOTATION_SLOT_Y.get(slot_name, base_text_y_axes)
 
-    def _safe_slot(slot_name):
+    def _safe_slot(slot_name, *, kind=None):
         if slot_name in slot_index:
             return slot_name
-        return ANNOTATION_SLOT_ORDER[0]
+        fallback_slot = fallback_slot_by_kind.get(kind)
+        if fallback_slot in slot_index:
+            return fallback_slot
+        return ANNOTATION_SLOT_ORDER[-1]
 
     row_map = {}
     if mean and usl and lsl:
         assigned_slots = {
-            'mean': _safe_slot(mean.get('preferred_slot')),
-            'usl': _safe_slot(usl.get('preferred_slot')),
-            'lsl': _safe_slot(lsl.get('preferred_slot')),
+            'mean': _safe_slot(mean.get('preferred_slot'), kind='mean'),
+            'usl': _safe_slot(usl.get('preferred_slot'), kind='usl'),
+            'lsl': _safe_slot(lsl.get('preferred_slot'), kind='lsl'),
         }
 
         close_pairs = set()
