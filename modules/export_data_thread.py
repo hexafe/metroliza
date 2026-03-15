@@ -124,6 +124,12 @@ from modules.stats_number_formatting import (
     format_probability_percent,
 )
 
+
+def _uses_symbol_font_fallback(text):
+    """Return True when text contains symbols often missing from Arial on Windows."""
+
+    return any(icon in str(text) for icon in ('✓', '×'))
+
 from modules.export_chart_payload_helpers import (
     build_histogram_table_data as _build_histogram_table_data,
     build_histogram_table_render_data as _build_histogram_table_render_data,
@@ -758,6 +764,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
             total_x_offset = x_offset_points + float(extra_x_offset)
             candidate_ha = _resolve_ha_from_offset(resolved_ha, total_x_offset)
             needs_leader_line = abs(total_x_offset) >= 8.0 or abs(float(extra_y_offset)) >= 6.0
+            candidate_fontfamily = 'DejaVu Sans' if _uses_symbol_font_fallback(annotation['text']) else None
             if abs(total_x_offset) < 1e-9 and abs(float(extra_y_offset)) < 1e-9:
                 candidate_artist = ax.text(
                     annotation['x'],
@@ -771,6 +778,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
                     bbox={k: v for k, v in annotation_box.items() if k not in {'plot_rect', 'title_artist'}},
                     zorder=10,
                     clip_on=False,
+                    fontfamily=candidate_fontfamily,
                 )
             else:
                 candidate_artist = ax.annotate(
@@ -798,6 +806,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
                     ),
                     zorder=10,
                     clip_on=False,
+                    fontfamily=candidate_fontfamily,
                 )
             figure.canvas.draw()
             candidate_bbox = candidate_artist.get_window_extent(renderer=figure.canvas.get_renderer())
@@ -2273,7 +2282,15 @@ def adjust_histogram_stats_table_geometry(
 def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
     """Measure text extents in display pixels for sizing-aware panel layout."""
 
-    probe = fig.text(0.0, 0.0, str(text), fontsize=fontsize, fontweight=fontweight, alpha=0.0)
+    probe_kwargs = {
+        'fontsize': fontsize,
+        'fontweight': fontweight,
+        'alpha': 0.0,
+    }
+    if _uses_symbol_font_fallback(text):
+        probe_kwargs['fontfamily'] = 'DejaVu Sans'
+
+    probe = fig.text(0.0, 0.0, str(text), **probe_kwargs)
     try:
         extent = probe.get_window_extent(renderer=renderer)
         return extent.width, extent.height
@@ -2421,6 +2438,8 @@ def render_panel_table(
         else:
             txt.set_ha('right')
         txt.set_va('center')
+        if _uses_symbol_font_fallback(txt.get_text()):
+            txt.set_fontfamily('DejaVu Sans')
 
     return {
         'table': table,
@@ -2581,6 +2600,7 @@ def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
         va='bottom',
         fontsize=7.4,
         color=SUMMARY_PLOT_PALETTE[f'{palette_key}_text'],
+        fontfamily='DejaVu Sans' if _uses_symbol_font_fallback(label) else None,
         bbox={
             'boxstyle': 'round,pad=0.16',
             'fc': SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'],
