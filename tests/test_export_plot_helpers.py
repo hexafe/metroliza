@@ -789,8 +789,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         anchors = build_summary_image_anchor_plan(15)
 
         self.assertEqual(anchors['header'], (40, 0))
-        self.assertEqual(anchors['distribution'], (41, 1))
-        self.assertEqual(anchors['iqr'], (41, 10))
+        self.assertEqual(anchors['distribution'], (41, 4))
+        self.assertEqual(anchors['iqr'], (41, 13))
         self.assertEqual(anchors['histogram'], (41, 19))
         self.assertEqual(anchors['trend'], (41, 29))
 
