@@ -125,11 +125,6 @@ from modules.stats_number_formatting import (
 )
 
 
-def _uses_symbol_font_fallback(text):
-    """Return True when text contains symbols often missing from Arial on Windows."""
-
-    return any(icon in str(text) for icon in ('✓', '×'))
-
 from modules.export_chart_payload_helpers import (
     build_histogram_table_data as _build_histogram_table_data,
     build_histogram_table_render_data as _build_histogram_table_render_data,
@@ -193,6 +188,12 @@ if _HAS_SEABORN:
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
+
+
+def _uses_symbol_font_fallback(text):
+    """Return True when text contains symbols often missing from Arial on Windows."""
+
+    return any(icon in str(text) for icon in ('✓', '×'))
 
 
 _HISTOGRAM_X_MARGIN_RATIO = 0.10
