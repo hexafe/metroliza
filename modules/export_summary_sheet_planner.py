@@ -12,11 +12,11 @@ CHART_TOP_SLOT_ORDER = (
 )
 
 CHART_TOP_SLOT_Y = {
-    'title_band': 1.145,
-    'spec_primary': 1.065,
-    'mean_primary': 1.020,
-    'spec_secondary': 0.975,
-    'spec_tertiary': 0.935,
+    'title_band': 1.135,
+    'mean_primary': 1.075,
+    'spec_primary': 1.030,
+    'spec_secondary': 0.990,
+    'spec_tertiary': 0.950,
 }
 
 ANNOTATION_SLOT_Y = dict(CHART_TOP_SLOT_Y)
