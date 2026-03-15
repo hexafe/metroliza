@@ -2224,7 +2224,7 @@ def adjust_histogram_stats_table_geometry(
                 text.set_ha('right')
                 text.set_x(0.94)
 
-        if row_index >= 1 and row_index not in full_width_rows:
+        if row_index not in full_width_rows:
             cell.set_height(cell.get_height() * safe_row_scale)
 
         cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
@@ -4356,7 +4356,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         ax_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.78,
+                        row_height_scale=1.9,
                     )
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
@@ -4399,7 +4399,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.78,
+                        row_height_scale=1.9,
                     )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
