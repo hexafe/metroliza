@@ -1832,10 +1832,11 @@ class TestExportPlotHelpers(unittest.TestCase):
 
     def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
         payload = {
-            'rows': [('Cp', 1.22), ('Cpk', 1.11), ('NOK %', '0.40%')],
+            'rows': [('Cp', 1.22), ('Cpk', 1.15), ('Cpk+', 1.11), ('NOK %', '0.40%')],
             'capability_rows': {
                 'Cp': {'label': 'Cp', 'display_value': 1.22, 'classification_value': 1.22},
-                'Cpk': {'label': 'Cpk', 'display_value': 1.11, 'classification_value': 1.11},
+                'Cpk': {'label': 'Cpk+', 'display_value': 1.11, 'classification_value': 1.11},
+                'Cpk+': {'label': 'Cpk+', 'display_value': 1.11, 'classification_value': 1.11},
             },
         }
 
@@ -1845,8 +1846,11 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
         labels = [label for label, _ in relabeled['rows']]
 
-        self.assertIn('Cpk (normal ref)', labels)
+        self.assertEqual(labels.count('Cpk (normal ref)'), 2)
+        self.assertNotIn('Cpk', labels)
+        self.assertNotIn('Cpk+', labels)
         self.assertEqual(relabeled['capability_rows']['Cpk']['label'], 'Cpk (normal ref)')
+        self.assertEqual(relabeled['capability_rows']['Cpk+']['label'], 'Cpk (normal ref)')
 
 
     def test_build_histogram_table_render_data_three_column_duplicates_label_in_first_two_columns(self):

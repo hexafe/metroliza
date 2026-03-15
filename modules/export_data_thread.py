@@ -946,14 +946,21 @@ def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_
     payload = dict(histogram_table_payload or {})
     rows = []
     for label, value in payload.get('rows', []):
-        rows.append(('Cpk (normal ref)', value) if label == 'Cpk' else (label, value))
+        rows.append(
+            ('Cpk (normal ref)', value)
+            if label in {'Cpk', 'Cpk+'}
+            else (label, value)
+        )
     payload['rows'] = rows
 
     capability_rows = dict(payload.get('capability_rows') or {})
-    cpk_meta = dict(capability_rows.get('Cpk') or {})
-    if cpk_meta:
-        cpk_meta['label'] = 'Cpk (normal ref)'
-        capability_rows['Cpk'] = cpk_meta
+    for key in ('Cpk', 'Cpk+'):
+        cpk_meta = dict(capability_rows.get(key) or {})
+        if cpk_meta:
+            cpk_meta['label'] = 'Cpk (normal ref)'
+            capability_rows[key] = cpk_meta
+
+    if capability_rows:
         payload['capability_rows'] = capability_rows
     return payload
 
