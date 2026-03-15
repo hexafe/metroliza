@@ -59,6 +59,7 @@ from modules.export_data_thread import (  # noqa: E402
     compute_histogram_annotation_rows,
     compute_histogram_font_sizes,
     compute_histogram_panel_layout,
+    compute_histogram_plot_with_right_info_layout,
     compute_histogram_table_layout,
     render_histogram_annotations,
     build_measurement_chart_format_policy,
@@ -108,6 +109,7 @@ from modules.export_data_thread import (  # noqa: E402
     _build_distribution_fit_info_note,
     _build_distribution_fit_table_rows,
     _apply_non_normal_cpk_reference_label,
+    _build_compact_histogram_note_lines,
 )
 
 
@@ -263,59 +265,69 @@ class TestExportPlotHelpers(unittest.TestCase):
             plt.close(fig)
 
     def test_histogram_panel_layout_rendering_smoke_with_dedicated_axes(self):
-        fig = plt.figure(figsize=(6.2, 4.0))
+        fig = plt.figure(figsize=(7.6, 4.0))
         try:
             measurements = pd.DataFrame(
                 {'MEAS': np.concatenate([np.linspace(9.8, 10.2, 40), np.linspace(10.25, 10.5, 16)])}
             )
-            left_rows = [
+            fit_rows = [
                 ('Model', 'Johnson SU'),
                 ('GOF p', '0.0712'),
+                ('P(<LSL)', '0.011%'),
+                ('P(>USL)', '0.108%'),
                 ('Est. NOK %', '0.123%'),
                 ('Est. PPM', '1,230'),
                 ('Fit quality', 'Medium'),
             ]
-            right_rows = [
+            stats_rows = [
                 ('Average', '10.102'),
                 ('Std dev', '0.085'),
                 ('Cp', '1.34'),
-                ('Cpk', '1.19'),
+                ('Cpk (normal ref)', '1.19'),
             ]
-            note_items = [
-                {'label': 'Family', 'compact_label': 'Family', 'value': 'Signed/bilateral', 'priority': 90},
-                {'label': 'Warning', 'value': 'Use with caution for long-tail extrapolation.', 'priority': 20, 'expanded_only': True},
-            ]
+            note_lines = ['Family: signed/bilateral', 'Normality: non-normal']
 
-            rects = compute_histogram_panel_layout(
-                (6.2, 4.0),
+            rects = compute_histogram_plot_with_right_info_layout(
+                (7.6, 4.0),
                 table_fontsize=8.8,
-                left_row_count=len(left_rows),
-                right_row_count=len(right_rows),
-                note_line_count=len(note_items),
+                fit_row_count=len(fit_rows),
+                stats_row_count=len(stats_rows),
+                note_line_count=len(note_lines),
+                right_container_width_hint=0.34,
             )
-            assert_non_overlapping_rectangles(rects)
+            assert_non_overlapping_rectangles({
+                'plot_rect': rects['plot_rect'],
+                'fit_table_rect': rects['fit_table_rect'],
+                'stats_table_rect': rects['stats_table_rect'],
+                'note_rect': rects['note_rect'],
+            })
 
-            left_ax = fig.add_axes([rects['left_table_rect']['x'], rects['left_table_rect']['y'], rects['left_table_rect']['width'], rects['left_table_rect']['height']])
+            fit_ax = fig.add_axes([rects['fit_table_rect']['x'], rects['fit_table_rect']['y'], rects['fit_table_rect']['width'], rects['fit_table_rect']['height']])
             plot_ax = fig.add_axes([rects['plot_rect']['x'], rects['plot_rect']['y'], rects['plot_rect']['width'], rects['plot_rect']['height']])
-            right_ax = fig.add_axes([rects['right_table_rect']['x'], rects['right_table_rect']['y'], rects['right_table_rect']['width'], rects['right_table_rect']['height']])
+            stats_ax = fig.add_axes([rects['stats_table_rect']['x'], rects['stats_table_rect']['y'], rects['stats_table_rect']['width'], rects['stats_table_rect']['height']])
             note_ax = fig.add_axes([rects['note_rect']['x'], rects['note_rect']['y'], rects['note_rect']['width'], rects['note_rect']['height']])
-            left_ax.set_axis_off()
-            right_ax.set_axis_off()
+            fit_ax.set_axis_off()
+            stats_ax.set_axis_off()
             note_ax.set_axis_off()
 
             render_histogram(plot_ax, measurements, lsl=9.9, usl=10.4)
-            left_meta = render_panel_table_in_panel_axes(ax=left_ax, title='Distribution Fit', rows=left_rows, style_options={'fontsize': 8.2})
-            right_meta = render_panel_table_in_panel_axes(ax=right_ax, title='Statistic', rows=right_rows, style_options={'fontsize': 8.2})
-            note_meta = render_histogram_note_panel(ax=note_ax, note_items=note_items, style_options={'fontsize': 7.0}, available_height_px=10.0)
+            fit_meta = render_panel_table_in_panel_axes(ax=fit_ax, title='Distribution Fit', rows=fit_rows, style_options={'fontsize': 8.2})
+            stats_meta = render_panel_table_in_panel_axes(ax=stats_ax, title='Statistics / Capability', rows=stats_rows, style_options={'fontsize': 8.2})
+            note_meta = render_histogram_note_panel(
+                ax=note_ax,
+                note_items=[{'label': line.split(':', 1)[0], 'value': line.split(':', 1)[1].strip()} for line in note_lines],
+                style_options={'fontsize': 7.0},
+                available_height_px=note_ax.bbox.height,
+            )
 
             self.assertEqual(len(fig.axes), 4)
-            self.assertGreater(rects['plot_rect']['width'], 0.0)
-            self.assertGreater(rects['note_rect']['height'], 0.0)
-            self.assertGreaterEqual(len(left_meta['rendered_rows']), 1)
-            self.assertGreaterEqual(len(right_meta['rendered_rows']), 1)
+            self.assertGreater(rects['plot_rect']['width'], rects['fit_table_rect']['width'])
+            self.assertGreaterEqual(len(fit_meta['rendered_rows']), 1)
+            self.assertGreaterEqual(len(stats_meta['rendered_rows']), 1)
             self.assertIn(note_meta['variant'], {'compact', 'expanded'})
         finally:
             plt.close(fig)
+
 
     def test_distribution_fit_table_rows_include_expected_payload_and_ordering_for_bilateral_specs(self):
         rows = _build_distribution_fit_table_rows(
@@ -1365,6 +1377,61 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertIn('USL=9.000', texts)
             self.assertIn('LSL=1.000', texts)
             self.assertLess(title_bbox.y0, fig_bbox.y1)
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_annotations_and_title_fit_with_right_info_column_layout(self):
+        fig = plt.figure(figsize=(7.6, 4.0))
+        try:
+            rects = compute_histogram_plot_with_right_info_layout(
+                (7.6, 4.0),
+                table_fontsize=8.8,
+                fit_row_count=7,
+                stats_row_count=8,
+                note_line_count=3,
+                right_container_width_hint=0.34,
+            )
+            plot_rect = rects['plot_rect']
+            plot_ax = fig.add_axes([
+                plot_rect['x'],
+                plot_rect['y'],
+                plot_rect['width'],
+                plot_rect['height'],
+            ])
+            plot_ax.set_xlim(0.0, 10.0)
+            plot_ax.set_ylim(0.0, 1.0)
+            plot_ax.set_title('Histogram panel title', pad=14)
+            annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=10.0,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            rendered = render_histogram_annotations(
+                plot_ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': plot_rect,
+                },
+            )
+            fig.canvas.draw()
+
+            texts = {text.get_text() for text in rendered}
+            self.assertEqual(len(rendered), 3)
+            self.assertIn('Mean = 5.000', texts)
+            self.assertIn('USL=9.000', texts)
+            self.assertIn('LSL=1.000', texts)
+            self.assertFalse(any('P(X < LSL)' in text for text in texts))
+            self.assertFalse(any('P(X > USL)' in text for text in texts))
+            self.assertLess(plot_ax.title.get_window_extent(renderer=fig.canvas.get_renderer()).y0, fig.bbox.y1)
         finally:
             plt.close(fig)
 
@@ -2790,6 +2857,47 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('Nominal', legend_labels)
         plt.close(fig)
 
+
+    def test_compact_histogram_note_lines_include_only_contextual_fields(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'one_sided_zero_bound_positive',
+                'fit_quality': {'label': 'weak'},
+                'gof_metrics': {'reference_normality_label': 'non-normal'},
+            }
+        )
+
+        self.assertEqual(lines[0], 'Family: positive-support')
+        self.assertIn('Normality: non-normal', lines)
+        self.assertIn('Warning: fit weak', lines)
+        self.assertFalse(any('Model:' in line for line in lines))
+
+    def test_kde_footer_note_uses_bbox_background_for_readability(self):
+        fig, ax = plt.subplots(figsize=(6.0, 4.0))
+        try:
+            artist = ax.text(
+                0.02,
+                0.02,
+                'Dashed KDE = descriptive only',
+                transform=ax.transAxes,
+                ha='left',
+                va='bottom',
+                fontsize=6.5,
+                color='#495463',
+                bbox={
+                    'boxstyle': 'round,pad=0.18',
+                    'facecolor': (1.0, 1.0, 1.0, 0.72),
+                    'edgecolor': '#c7ced7',
+                    'linewidth': 0.5,
+                },
+                zorder=8,
+            )
+            self.assertEqual(artist.get_text(), 'Dashed KDE = descriptive only')
+            self.assertIsNotNone(artist.get_bbox_patch())
+            self.assertGreaterEqual(artist.get_position()[0], 0.0)
+            self.assertGreaterEqual(artist.get_position()[1], 0.0)
+        finally:
+            plt.close(fig)
 
 if __name__ == '__main__':
     unittest.main()

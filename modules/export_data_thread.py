@@ -125,6 +125,7 @@ from modules.export_workbook_planning_helpers import (
 from modules.export_histogram_layout import (
     assert_non_overlapping_rectangles as _assert_non_overlapping_rectangles,
     compute_histogram_panel_layout as _compute_histogram_panel_layout,
+    compute_histogram_plot_with_right_info_layout as _compute_histogram_plot_with_right_info_layout,
     resolve_inner_table_rect as _resolve_inner_table_rect,
 )
 from modules.export_summary_composition_service import (
@@ -536,7 +537,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
             return None
         return left, right, bottom, top
 
-    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=36.0, extra_side_px=-8.0):
+    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=40.0, extra_side_px=4.0):
         bounds = _resolve_plot_rect_display_bounds(fig, plot_rect)
         if bounds is None:
             return None
@@ -686,6 +687,26 @@ def compute_histogram_panel_layout(
     )
 
 
+def compute_histogram_plot_with_right_info_layout(
+    figure_size=(7.6, 4.0),
+    *,
+    table_fontsize=8.0,
+    fit_row_count=0,
+    stats_row_count=0,
+    note_line_count=0,
+    right_container_width_hint=None,
+):
+    """Compute plot + right info-column rectangles for histogram exports."""
+    return _compute_histogram_plot_with_right_info_layout(
+        figure_size=figure_size,
+        table_fontsize=table_fontsize,
+        fit_row_count=fit_row_count,
+        stats_row_count=stats_row_count,
+        note_line_count=note_line_count,
+        right_container_width_hint=right_container_width_hint,
+    )
+
+
 def assert_non_overlapping_rectangles(rectangles):
     """Assert that provided rectangles do not intersect."""
     return _assert_non_overlapping_rectangles(rectangles)
@@ -805,6 +826,30 @@ def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats)
 
     return note_items, is_poor_fit
 
+
+
+def _build_compact_histogram_note_lines(distribution_fit_result):
+    """Build compact right-panel note lines for histogram export context."""
+
+    fit_result = distribution_fit_result or {}
+    lines = []
+
+    mode = fit_result.get('inferred_support_mode')
+    if mode == 'one_sided_zero_bound_positive':
+        lines.append('Family: positive-support')
+    elif mode == 'bilateral_signed':
+        lines.append('Family: signed/bilateral')
+
+    gof_metrics = fit_result.get('gof_metrics') or {}
+    reference_normality = gof_metrics.get('reference_normality_label')
+    if reference_normality:
+        lines.append(f'Normality: {reference_normality}')
+
+    fit_quality = ((fit_result.get('fit_quality') or {}).get('label') or '').strip().lower()
+    if fit_quality in {'weak', 'unreliable'}:
+        lines.append(f'Warning: fit {fit_quality}')
+
+    return lines[:3]
 
 def _is_non_normal_capability_reference_model(distribution_fit_result):
     selected_model = (distribution_fit_result or {}).get('selected_model') or {}
@@ -3866,7 +3911,7 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    histogram_figsize = (7.2, 4)
+                    histogram_figsize = (7.6, 4)
                     chart_start = time.perf_counter()
                     fig = plt.figure(figsize=histogram_figsize)
 
@@ -3898,42 +3943,44 @@ class ExportDataThread(QThread):
                         lsl=LSL,
                         usl=USL,
                     )
-                    model_info_note_items, poor_fit = _build_distribution_fit_info_note(
+                    _note_items, poor_fit = _build_distribution_fit_info_note(
                         distribution_fit_result,
                         summary_stats=summary_stats,
                     )
-                    note_lines = [
-                        f"{item.get('label', '')}: {item.get('value', '')}".strip(': ')
-                        for item in model_info_note_items
-                        if isinstance(item, dict)
-                    ]
+                    note_lines = _build_compact_histogram_note_lines(distribution_fit_result)
                     histogram_content_payload = {
                         'left_rows': left_rows,
                         'right_rows': right_rows,
                         'note_lines': note_lines,
                     }
 
-                    panel_rects = compute_histogram_panel_layout(
+                    panel_rects = compute_histogram_plot_with_right_info_layout(
                         histogram_figsize,
                         table_fontsize=histogram_font_sizes['table_fontsize'],
-                        left_row_count=len(histogram_content_payload['left_rows']),
-                        right_row_count=len(histogram_content_payload['right_rows']),
+                        fit_row_count=len(histogram_content_payload['left_rows']),
+                        stats_row_count=len(histogram_content_payload['right_rows']),
                         note_line_count=len(histogram_content_payload['note_lines']),
-                        left_panel_width_hint=0.27,
-                        right_panel_width_hint=0.19,
+                        right_container_width_hint=0.34,
                     )
-                    assert_non_overlapping_rectangles(panel_rects)
+                    assert_non_overlapping_rectangles(
+                        {
+                            'plot_rect': panel_rects['plot_rect'],
+                            'fit_table_rect': panel_rects['fit_table_rect'],
+                            'stats_table_rect': panel_rects['stats_table_rect'],
+                            'note_rect': panel_rects['note_rect'],
+                        }
+                    )
 
-                    left_table_rect = panel_rects['left_table_rect']
+                    fit_table_rect = panel_rects['fit_table_rect']
                     plot_rect = panel_rects['plot_rect']
-                    right_table_rect = panel_rects['right_table_rect']
+                    stats_table_rect = panel_rects['stats_table_rect']
                     note_rect = panel_rects['note_rect']
 
-                    left_ax = fig.add_axes([
-                        left_table_rect['x'],
-                        left_table_rect['y'],
-                        left_table_rect['width'],
-                        left_table_rect['height'],
+                    fit_ax = fig.add_axes([
+                        fit_table_rect['x'],
+                        fit_table_rect['y'],
+                        fit_table_rect['width'],
+                        fit_table_rect['height'],
                     ])
                     plot_ax = fig.add_axes([
                         plot_rect['x'],
@@ -3941,11 +3988,11 @@ class ExportDataThread(QThread):
                         plot_rect['width'],
                         plot_rect['height'],
                     ])
-                    right_ax = fig.add_axes([
-                        right_table_rect['x'],
-                        right_table_rect['y'],
-                        right_table_rect['width'],
-                        right_table_rect['height'],
+                    stats_ax = fig.add_axes([
+                        stats_table_rect['x'],
+                        stats_table_rect['y'],
+                        stats_table_rect['width'],
+                        stats_table_rect['height'],
                     ])
                     note_ax = fig.add_axes([
                         note_rect['x'],
@@ -3953,8 +4000,8 @@ class ExportDataThread(QThread):
                         note_rect['width'],
                         note_rect['height'],
                     ])
-                    left_ax.set_axis_off()
-                    right_ax.set_axis_off()
+                    fit_ax.set_axis_off()
+                    stats_ax.set_axis_off()
                     note_ax.set_axis_off()
 
                     histogram_render_meta = render_histogram(
@@ -3977,8 +4024,8 @@ class ExportDataThread(QThread):
                     }
 
                     right_table_meta = render_panel_table_in_panel_axes(
-                        ax=right_ax,
-                        title='Statistic',
+                        ax=stats_ax,
+                        title='Statistics / Capability',
                         rows=histogram_content_payload['right_rows'],
                         style_options={
                             **table_style_options,
@@ -4005,7 +4052,7 @@ class ExportDataThread(QThread):
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
                     left_table_meta = render_panel_table_in_panel_axes(
-                        ax=left_ax,
+                        ax=fit_ax,
                         title='Distribution Fit',
                         rows=distribution_fit_rows,
                         style_options={
@@ -4043,25 +4090,9 @@ class ExportDataThread(QThread):
                         row_height_scale=1.15,
                     )
 
-                    deferred_row_lines = []
-                    for meta in (left_table_meta, right_table_meta):
-                        for label, value in meta.get('deferred_rows', []):
-                            deferred_row_lines.append(f"{label}: {value}")
-                        for label, value in meta.get('overflow_rows', []):
-                            deferred_row_lines.append(f"{label}: {value}")
-                    if deferred_row_lines:
-                        for line in deferred_row_lines:
-                            model_info_note_items.append({
-                                'label': 'Extra context',
-                                'compact_label': 'Context',
-                                'value': line,
-                                'priority': 10,
-                                'expanded_only': True,
-                            })
-
                     render_histogram_note_panel(
                         ax=note_ax,
-                        note_items=model_info_note_items,
+                        note_items=[{'label': line.split(':', 1)[0], 'value': line.split(':', 1)[1].strip() if ':' in line else line} for line in note_lines],
                         style_options={
                             'fontsize': max(histogram_font_sizes['table_fontsize'] - 0.4, 7.0),
                             'min_fontsize': 6.2,
@@ -4106,14 +4137,21 @@ class ExportDataThread(QThread):
                             linestyle='--',
                         )
                         plot_ax.text(
-                            0.015,
                             0.02,
-                            'KDE (dashed) is descriptive only',
+                            0.02,
+                            'Dashed KDE = descriptive only',
                             transform=plot_ax.transAxes,
                             ha='left',
                             va='bottom',
-                            fontsize=max(histogram_font_sizes['annotation_fontsize'] - 1.1, 6.0),
-                            color=SUMMARY_PLOT_PALETTE['axis_text'],
+                            fontsize=max(histogram_font_sizes['annotation_fontsize'] - 1.1, 6.5),
+                            color='#495463',
+                            bbox={
+                                'boxstyle': 'round,pad=0.18',
+                                'facecolor': (1.0, 1.0, 1.0, 0.72),
+                                'edgecolor': '#c7ced7',
+                                'linewidth': 0.5,
+                            },
+                            zorder=8,
                         )
 
                     fit_warning = distribution_fit_result.get('warning')

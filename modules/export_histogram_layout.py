@@ -11,6 +11,8 @@ HISTOGRAM_MIN_PLOT_WIDTH = 0.42
 HISTOGRAM_MIN_NOTE_HEIGHT = 0.125
 HISTOGRAM_SIDE_PANEL_MIN_WIDTH = 0.16
 HISTOGRAM_SIDE_PANEL_MAX_WIDTH = 0.28
+HISTOGRAM_RIGHT_INFO_MIN_WIDTH = 0.28
+HISTOGRAM_RIGHT_INFO_MAX_WIDTH = 0.38
 
 _HISTOGRAM_BASE_SIDE_PANEL_WIDTH = 0.23
 _HISTOGRAM_TABLE_ROW_HEIGHT = 0.027
@@ -20,6 +22,7 @@ _HISTOGRAM_BASE_NOTE_HEIGHT = 0.07
 _HISTOGRAM_MIN_TABLE_HEIGHT = 0.24
 _HISTOGRAM_PANEL_TABLE_ROW_HEIGHT = 0.060
 _HISTOGRAM_PANEL_TABLE_PAD_Y = 0.02
+_HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT = 0.24
 
 
 def _clamp(value, lower, upper):
@@ -155,6 +158,122 @@ def compute_histogram_panel_layout(
         },
     }
     assert_non_overlapping_rectangles(rectangles)
+    return rectangles
+
+
+def compute_histogram_plot_with_right_info_layout(
+    figure_size=(7.6, 4.0),
+    *,
+    table_fontsize=8.0,
+    fit_row_count=0,
+    stats_row_count=0,
+    note_line_count=0,
+    right_container_width_hint=None,
+):
+    """Return non-overlapping rectangles for histogram + right information column layout."""
+
+    fig_width = figure_size[0] if isinstance(figure_size, (tuple, list)) and figure_size else 7.6
+    fig_width = max(float(fig_width), 1.0)
+    width_scale = min(1.35, max(0.85, fig_width / 7.6))
+    oversized_font = max(0.0, float(table_fontsize) - 8.0)
+
+    content_width = 1.0 - (2.0 * HISTOGRAM_OUTER_PADDING_X)
+    content_height = 1.0 - HISTOGRAM_OUTER_PADDING_TOP - HISTOGRAM_OUTER_PADDING_BOTTOM
+    panel_gap = HISTOGRAM_INTER_PANEL_GAP
+
+    base_right_width = 0.34 + (0.006 * oversized_font) - (0.014 * (width_scale - 1.0))
+    right_container_width = (
+        float(right_container_width_hint)
+        if right_container_width_hint is not None
+        else base_right_width
+    )
+    right_container_width = _clamp(
+        right_container_width,
+        HISTOGRAM_RIGHT_INFO_MIN_WIDTH,
+        HISTOGRAM_RIGHT_INFO_MAX_WIDTH,
+    )
+
+    plot_width = content_width - panel_gap - right_container_width
+    if plot_width < HISTOGRAM_MIN_PLOT_WIDTH:
+        right_container_width = max(
+            HISTOGRAM_RIGHT_INFO_MIN_WIDTH,
+            content_width - panel_gap - HISTOGRAM_MIN_PLOT_WIDTH,
+        )
+        plot_width = content_width - panel_gap - right_container_width
+
+    y_bottom = HISTOGRAM_OUTER_PADDING_BOTTOM
+    plot_rect = {
+        'x': HISTOGRAM_OUTER_PADDING_X,
+        'y': y_bottom,
+        'width': plot_width,
+        'height': content_height,
+    }
+    right_container_rect = {
+        'x': HISTOGRAM_OUTER_PADDING_X + plot_width + panel_gap,
+        'y': y_bottom,
+        'width': right_container_width,
+        'height': content_height,
+    }
+
+    top_row_desired = _HISTOGRAM_BASE_TABLE_HEIGHT + (
+        _HISTOGRAM_TABLE_ROW_HEIGHT * max(int(fit_row_count), int(stats_row_count), 0)
+    )
+    note_height = max(
+        HISTOGRAM_MIN_NOTE_HEIGHT,
+        _HISTOGRAM_BASE_NOTE_HEIGHT + (_HISTOGRAM_NOTE_LINE_HEIGHT * max(int(note_line_count), 0)),
+    )
+    top_row_height = content_height - panel_gap - note_height
+
+    if top_row_height < _HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT:
+        note_height = max(HISTOGRAM_MIN_NOTE_HEIGHT, content_height - panel_gap - _HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT)
+        top_row_height = content_height - panel_gap - note_height
+
+    top_row_height = min(
+        max(_HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT, top_row_height),
+        max(_HISTOGRAM_RIGHT_TABLE_MIN_HEIGHT, top_row_desired),
+    )
+    max_top_row_height = content_height - panel_gap - HISTOGRAM_MIN_NOTE_HEIGHT
+    top_row_height = min(top_row_height, max_top_row_height)
+    note_height = content_height - panel_gap - top_row_height
+
+    table_gap = max(0.012, panel_gap * 0.6)
+    table_width = (right_container_width - table_gap) / 2.0
+
+    top_row_y = y_bottom + note_height + panel_gap
+    fit_table_rect = {
+        'x': right_container_rect['x'],
+        'y': top_row_y,
+        'width': table_width,
+        'height': top_row_height,
+    }
+    stats_table_rect = {
+        'x': right_container_rect['x'] + table_width + table_gap,
+        'y': top_row_y,
+        'width': table_width,
+        'height': top_row_height,
+    }
+    note_rect = {
+        'x': right_container_rect['x'],
+        'y': y_bottom,
+        'width': right_container_width,
+        'height': note_height,
+    }
+
+    rectangles = {
+        'plot_rect': plot_rect,
+        'right_container_rect': right_container_rect,
+        'fit_table_rect': fit_table_rect,
+        'stats_table_rect': stats_table_rect,
+        'note_rect': note_rect,
+    }
+    assert_non_overlapping_rectangles(
+        {
+            'plot_rect': plot_rect,
+            'fit_table_rect': fit_table_rect,
+            'stats_table_rect': stats_table_rect,
+            'note_rect': note_rect,
+        }
+    )
     return rectangles
 
 
