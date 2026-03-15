@@ -125,11 +125,11 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         payload = build_histogram_table_data(summary_stats)
         table = payload['rows']
 
-        self.assertEqual(table[0], ('Min', 1.235))
+        self.assertEqual(table[0], ('Min', '1.235'))
         self.assertEqual(table[5], ('Spec type', 'two-sided'))
-        self.assertEqual(table[6], ('Cp', 1.99))
-        self.assertEqual(table[7], ('Cpk', 1.43))
-        self.assertEqual(table[-4], ('NOK', 1))
+        self.assertEqual(table[6], ('Cp', '1.99'))
+        self.assertEqual(table[7], ('Cpk', '1.43'))
+        self.assertEqual(table[-4], ('NOK', '1.000'))
         self.assertEqual(table[-3], ('NOK %', '8.33%'))
         self.assertEqual(table[-2][0], 'NOK % (obs vs est)')
         self.assertEqual(table[-1][0], 'NOK % Δ (abs/rel)')
