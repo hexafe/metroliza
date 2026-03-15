@@ -33,6 +33,14 @@ def format_measurement_value(value, *, na='N/A'):
     return f"{numeric:.3f}"
 
 
+def format_count(value, *, na='N/A'):
+    """Format count-like values (sample size, NOK count) as integers."""
+    numeric = _to_finite_float(value)
+    if numeric is None:
+        return na
+    return f"{int(round(numeric))}"
+
+
 def format_percent_from_ratio(value, *, decimals=2, na='N/A'):
     """Format ratio values (0..1) as percentages with fixed decimals."""
     numeric = _to_finite_float(value)

@@ -3,6 +3,7 @@
 from modules.stats_utils import compute_capability_confidence_intervals
 from modules.stats_number_formatting import (
     format_capability_index,
+    format_count,
     format_measurement_value,
     format_percent_from_ratio,
 )
@@ -197,9 +198,9 @@ def build_histogram_table_data(summary_stats):
     discrepancy_metrics = _compute_nok_discrepancy_metrics(observed_nok_pct, estimated_nok_pct)
 
     table_rows.extend([
-        ('Samples', format_measurement_value(summary_stats['sample_size'])),
-        ('NOK', format_measurement_value(summary_stats['nok_count'])),
+        ('NOK', format_count(summary_stats['nok_count'])),
         ('NOK %', format_percent_from_ratio(summary_stats['nok_pct'], decimals=2)),
+        ('Samples', format_count(summary_stats['sample_size'])),
     ])
 
     raw_rows = [
@@ -208,9 +209,9 @@ def build_histogram_table_data(summary_stats):
         ('Mean', summary_stats['average']),
         ('Median', summary_stats['median']),
         ('Std Dev', summary_stats['sigma']),
-        ('Samples', summary_stats['sample_size']),
         ('NOK', summary_stats['nok_count']),
         ('NOK %', summary_stats['nok_pct']),
+        ('Samples', summary_stats['sample_size']),
     ]
     if include_cp_row:
         raw_rows.insert(5, (cp_label, summary_stats['cp']))
