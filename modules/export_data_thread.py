@@ -180,6 +180,12 @@ logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 _HISTOGRAM_X_PADDING_RATIO = 0.05
 _HISTOGRAM_ZERO_RANGE_ABS_PADDING = 0.05
 
+_SELECTED_MODEL_CURVE_STYLE_BY_QUALITY = {
+    'strong': {'alpha': 0.78, 'linewidth': 1.7},
+    'weak': {'alpha': 0.62, 'linewidth': 1.5},
+    'unreliable': {'alpha': 0.34, 'linewidth': 1.2},
+}
+
 
 _DISTRIBUTION_FIT_COMPACT_LABELS = {
     'Best fit': 'Model',
@@ -196,6 +202,23 @@ def _compact_distribution_fit_label(label):
     """Return compact distribution-fit labels used in tables and notes."""
     normalized_label = str(label or '').strip()
     return _DISTRIBUTION_FIT_COMPACT_LABELS.get(normalized_label, normalized_label)
+
+
+def resolve_selected_model_curve_style(distribution_fit_result):
+    """Resolve fitted-model curve style from fit-quality tiers.
+
+    Tiers intentionally maintain histogram visual hierarchy:
+    - strong: dominant model curve style
+    - weak: softened (slightly lighter/thinner)
+    - unreliable: clearly downgraded dominance
+    """
+
+    fit_quality = (distribution_fit_result or {}).get('fit_quality') or {}
+    quality_label = str(fit_quality.get('label') or '').strip().lower()
+    if quality_label not in _SELECTED_MODEL_CURVE_STYLE_BY_QUALITY:
+        quality_label = 'strong'
+    style = _SELECTED_MODEL_CURVE_STYLE_BY_QUALITY[quality_label]
+    return {'alpha': float(style['alpha']), 'linewidth': float(style['linewidth'])}
 
 
 # Query wrappers keep the thread-facing import path stable while delegating
@@ -4204,12 +4227,13 @@ class ExportDataThread(QThread):
                     )
 
                     if selected_model_curve is not None:
+                        model_curve_style = resolve_selected_model_curve_style(distribution_fit_result)
                         render_density_line(
                             plot_ax,
                             selected_model_curve['x'],
                             selected_model_curve['y'],
-                            alpha=0.34 if poor_fit else 0.78,
-                            linewidth=1.2 if poor_fit else 1.7,
+                            alpha=model_curve_style['alpha'],
+                            linewidth=model_curve_style['linewidth'],
                         )
                         render_modeled_tail_shading(plot_ax, distribution_fit_result, lsl=LSL, usl=USL)
                     kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')

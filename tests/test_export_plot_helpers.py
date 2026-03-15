@@ -111,6 +111,7 @@ from modules.export_data_thread import (  # noqa: E402
     _build_distribution_fit_table_rows,
     _apply_non_normal_cpk_reference_label,
     _build_compact_histogram_note_lines,
+    resolve_selected_model_curve_style,
 )
 
 
@@ -1215,6 +1216,35 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertLessEqual(style['linewidth'], 1.4)
         self.assertLessEqual(style['alpha'], 0.5)
         self.assertLess(style['zorder'], 3)
+
+    def test_resolve_selected_model_curve_style_maps_explicit_fit_quality_tiers(self):
+        strong = resolve_selected_model_curve_style({'fit_quality': {'label': 'strong'}})
+        weak = resolve_selected_model_curve_style({'fit_quality': {'label': 'weak'}})
+        unreliable = resolve_selected_model_curve_style({'fit_quality': {'label': 'unreliable'}})
+
+        self.assertEqual(strong, {'alpha': 0.78, 'linewidth': 1.7})
+        self.assertEqual(weak, {'alpha': 0.62, 'linewidth': 1.5})
+        self.assertEqual(unreliable, {'alpha': 0.34, 'linewidth': 1.2})
+
+    def test_resolve_selected_model_curve_style_defaults_unknown_quality_to_strong(self):
+        fallback = resolve_selected_model_curve_style({'fit_quality': {'label': 'medium'}})
+
+        self.assertEqual(fallback, {'alpha': 0.78, 'linewidth': 1.7})
+
+    def test_resolve_selected_model_curve_style_keeps_weak_unreliable_less_dominant_than_strong(self):
+        def _visual_weight(style):
+            return style['alpha'] * style['linewidth']
+
+        strong = resolve_selected_model_curve_style({'fit_quality': {'label': 'strong'}})
+        weak = resolve_selected_model_curve_style({'fit_quality': {'label': 'weak'}})
+        unreliable = resolve_selected_model_curve_style({'fit_quality': {'label': 'unreliable'}})
+
+        self.assertLess(weak['alpha'], strong['alpha'])
+        self.assertLess(weak['linewidth'], strong['linewidth'])
+        self.assertLess(unreliable['alpha'], weak['alpha'])
+        self.assertLess(unreliable['linewidth'], weak['linewidth'])
+        self.assertLess(_visual_weight(weak), _visual_weight(strong))
+        self.assertLess(_visual_weight(unreliable), _visual_weight(weak))
 
     def test_render_histogram_annotations_renders_mean_usl_lsl_and_offsets_mean_right(self):
         fig, ax = plt.subplots(figsize=(6, 4))
