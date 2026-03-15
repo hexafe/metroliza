@@ -5,15 +5,15 @@ from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 CHART_TOP_SLOT_ORDER = (
     'title_band',
-    'spec_primary',
     'mean_primary',
+    'spec_primary',
     'spec_secondary',
     'spec_tertiary',
 )
 
 CHART_TOP_SLOT_Y = {
-    'title_band': 1.135,
-    'mean_primary': 1.075,
+    'title_band': 1.145,
+    'mean_primary': 1.08,
     'spec_primary': 1.030,
     'spec_secondary': 0.990,
     'spec_tertiary': 0.950,

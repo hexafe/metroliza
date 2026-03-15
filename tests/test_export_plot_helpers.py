@@ -112,6 +112,7 @@ from modules.export_data_thread import (  # noqa: E402
     _apply_non_normal_cpk_reference_label,
     _build_compact_histogram_note_lines,
     resolve_selected_model_curve_style,
+    resolve_histogram_x_view,
 )
 
 
@@ -767,6 +768,22 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(by_kind['usl']['preferred_slot'], 'spec_primary')
         self.assertEqual(by_kind['lsl']['preferred_slot'], 'spec_secondary')
 
+    def test_compute_histogram_annotation_rows_top_band_slots_keep_mean_above_specs(self):
+        annotation_specs = build_histogram_annotation_specs(average=10.2, usl=10.5, lsl=9.8, y_max=1.0)
+
+        resolved, _ = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.04,
+            threshold_mode='axis_fraction',
+            x_span=1.0,
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+        by_kind = {item['kind']: item for item in resolved}
+
+        self.assertGreater(by_kind['mean']['text_y_axes'], by_kind['usl']['text_y_axes'])
+        self.assertGreater(by_kind['mean']['text_y_axes'], by_kind['lsl']['text_y_axes'])
+
     def test_summary_palette_keeps_annotation_emphasis_alias_for_backward_compatibility(self):
         self.assertEqual(
             SUMMARY_PLOT_PALETTE['annotation_emphasis'],
@@ -831,6 +848,25 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(x_max, max(values))
         self.assertGreater(x_max, usl)
         plt.close(fig)
+
+    def test_resolve_histogram_x_view_uses_focused_mode_for_ultra_narrow_spread(self):
+        values = [10.0000, 10.0006, 10.0012, 10.0016]
+
+        resolved = resolve_histogram_x_view(values, lsl=8.0, usl=12.0)
+
+        self.assertEqual(resolved['mode'], 'focused')
+        self.assertLess(resolved['x_max'] - resolved['x_min'], 4.0)
+        self.assertGreaterEqual(resolved['x_min'], 8.0)
+        self.assertLessEqual(resolved['x_max'], 12.0)
+
+    def test_resolve_histogram_x_view_uses_full_mode_for_regular_spread(self):
+        values = [8.2, 9.0, 9.7, 10.2]
+
+        resolved = resolve_histogram_x_view(values, lsl=8.0, usl=10.5)
+
+        self.assertEqual(resolved['mode'], 'full')
+        self.assertLess(resolved['x_min'], 8.0)
+        self.assertGreater(resolved['x_max'], 10.5)
 
     def test_render_histogram_ignores_invalid_spec_limits(self):
         fig, ax = plt.subplots()
@@ -1223,15 +1259,15 @@ class TestExportPlotHelpers(unittest.TestCase):
         weak = resolve_selected_model_curve_style({'fit_quality': {'label': 'weak'}})
         unreliable = resolve_selected_model_curve_style({'fit_quality': {'label': 'unreliable'}})
 
-        self.assertEqual(strong, {'alpha': 0.78, 'linewidth': 1.7})
-        self.assertEqual(medium, {'alpha': 0.70, 'linewidth': 1.6})
-        self.assertEqual(weak, {'alpha': 0.62, 'linewidth': 1.5})
-        self.assertEqual(unreliable, {'alpha': 0.34, 'linewidth': 1.2})
+        self.assertEqual(strong, {'alpha': 0.8, 'linewidth': 1.72})
+        self.assertEqual(medium, {'alpha': 0.68, 'linewidth': 1.55})
+        self.assertEqual(weak, {'alpha': 0.48, 'linewidth': 1.3})
+        self.assertEqual(unreliable, {'alpha': 0.28, 'linewidth': 1.05})
 
     def test_resolve_selected_model_curve_style_defaults_unknown_quality_to_strong(self):
         fallback = resolve_selected_model_curve_style({'fit_quality': {'label': 'mystery'}})
 
-        self.assertEqual(fallback, {'alpha': 0.78, 'linewidth': 1.7})
+        self.assertEqual(fallback, {'alpha': 0.8, 'linewidth': 1.72})
 
     def test_resolve_selected_model_curve_style_keeps_weak_unreliable_less_dominant_than_strong(self):
         def _visual_weight(style):
@@ -1609,7 +1645,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         by_kind = {item['kind']: item for item in resolved}
         self.assertEqual(max_row, 3)
-        self.assertGreater(by_kind['mean']['row_index'], by_kind['usl']['row_index'])
+        self.assertGreater(by_kind['mean']['text_y_axes'], by_kind['usl']['text_y_axes'])
         self.assertNotEqual(by_kind['usl']['row_index'], by_kind['lsl']['row_index'])
         self.assertNotEqual(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
         self.assertEqual(by_kind['mean']['x'], 10.0)
@@ -1627,10 +1663,10 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         by_kind = {item['kind']: item for item in resolved}
         self.assertEqual(max_row, 3)
-        self.assertEqual(by_kind['mean']['row_index'], 2)
-        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
         self.assertEqual(by_kind['lsl']['row_index'], 3)
-        self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.075)
+        self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.08)
     def test_compute_histogram_annotation_rows_stacks_mean_and_usl_when_close(self):
         annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.02, lsl=7.0, y_max=1.0)
 
@@ -1644,8 +1680,8 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         by_kind = {item['kind']: item for item in resolved}
         self.assertEqual(max_row, 3)
-        self.assertEqual(by_kind['mean']['row_index'], 2)
-        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
         self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 10.02, 7.0])
@@ -1663,8 +1699,8 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         by_kind = {item['kind']: item for item in resolved}
         self.assertEqual(max_row, 3)
-        self.assertEqual(by_kind['mean']['row_index'], 2)
-        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
         self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 13.0, 10.03])
@@ -1683,8 +1719,8 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         by_kind = {item['kind']: item for item in resolved}
         self.assertEqual(max_row, 3)
-        self.assertEqual(by_kind['mean']['row_index'], 2)
-        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
         self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 10.2, 9.9])
@@ -1710,7 +1746,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 **case['kwargs'],
             )
             by_kind = {item['kind']: item for item in resolved}
-            self.assertGreater(by_kind['mean']['row_index'], by_kind['usl']['row_index'])
+            self.assertGreater(by_kind['mean']['text_y_axes'], by_kind['usl']['text_y_axes'])
             self.assertNotEqual(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
 
     def test_compute_histogram_annotation_rows_clustered_triplet_uses_non_overlapping_rows(self):
@@ -1741,8 +1777,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         by_kind = {item['kind']: item for item in resolved}
 
         self.assertEqual(max_row, 3)
-        self.assertEqual(by_kind['mean']['row_index'], 2)
-        self.assertEqual(by_kind['usl']['row_index'], 1)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
         self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual(by_kind['mean']['assigned_slot'], 'mean_primary')
         self.assertEqual(by_kind['usl']['assigned_slot'], 'spec_primary')
@@ -1879,8 +1915,11 @@ class TestExportPlotHelpers(unittest.TestCase):
         labels = [label for label, _ in relabeled['rows']]
 
         self.assertEqual(labels.count('Cpk (normal ref)'), 2)
+        self.assertIn('Cp (normal ref)', labels)
+        self.assertNotIn('Cp', labels)
         self.assertNotIn('Cpk', labels)
         self.assertNotIn('Cpk+', labels)
+        self.assertEqual(relabeled['capability_rows']['Cp']['label'], 'Cp (normal ref)')
         self.assertEqual(relabeled['capability_rows']['Cpk']['label'], 'Cpk (normal ref)')
         self.assertEqual(relabeled['capability_rows']['Cpk+']['label'], 'Cpk (normal ref)')
 
@@ -2971,6 +3010,17 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertFalse(any(line.startswith('Normality:') for line in lines))
         self.assertFalse(any('Model:' in line for line in lines))
 
+    def test_compact_histogram_note_lines_adds_medium_confidence_line(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'medium'},
+                'gof_metrics': {'reference_normality_label': 'non-normal'},
+            }
+        )
+
+        self.assertEqual(lines, ['Family: signed/bilateral', 'Fit confidence: medium'])
+
     def test_kde_footer_note_uses_bbox_background_for_readability(self):
         fig, ax = plt.subplots(figsize=(6.0, 4.0))
         try:
@@ -2981,15 +3031,15 @@ class TestExportPlotHelpers(unittest.TestCase):
                 transform=ax.transAxes,
                 ha='left',
                 va='bottom',
-                fontsize=6.0,
-                color='#5f6b7a',
+                fontsize=6.5,
+                color='#4d5968',
                 bbox={
                     'boxstyle': 'round,pad=0.16',
-                    'facecolor': (1.0, 1.0, 1.0, 0.65),
-                    'edgecolor': 'none',
-                    'linewidth': 0.0,
+                    'facecolor': (1.0, 1.0, 1.0, 0.74),
+                    'edgecolor': '#c7ced7',
+                    'linewidth': 0.45,
                 },
-                zorder=10,
+                zorder=8,
             )
             self.assertEqual(artist.get_text(), 'Dashed KDE: descriptive only')
             self.assertIsNotNone(artist.get_bbox_patch())
