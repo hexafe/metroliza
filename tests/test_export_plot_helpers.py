@@ -2931,9 +2931,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(lines[0], 'Family: positive-support')
-        self.assertIn('Normality: non-normal', lines)
-        self.assertIn('Warning: fit weak', lines)
+        self.assertEqual(lines, ['Family: positive-support', 'Warning: fit weak'])
+        self.assertFalse(any(line.startswith('Normality:') for line in lines))
         self.assertFalse(any('Model:' in line for line in lines))
 
     def test_kde_footer_note_uses_bbox_background_for_readability(self):
