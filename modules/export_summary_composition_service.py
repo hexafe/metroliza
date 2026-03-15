@@ -1,5 +1,14 @@
 """Pure summary-sheet composition helpers for exporter rendering flows."""
 
+from modules.summary_plot_palette import STATUS_ICON_PREFIX_BY_PALETTE
+
+
+def _with_status_prefix(label, palette_key):
+    prefix = STATUS_ICON_PREFIX_BY_PALETTE.get(palette_key)
+    if not prefix:
+        return label
+    return f'{prefix} {label}'
+
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
@@ -16,30 +25,30 @@ def classify_capability_status(cp, cpk):
     cpk_value = _as_float(cpk)
     if cp_value is None or cpk_value is None:
         return {
-            'label': 'Cp/Cpk N/A',
+            'label': _with_status_prefix('Cp/Cpk N/A', 'quality_unknown'),
             'palette_key': 'quality_unknown',
         }
 
     if cpk_value >= 1.67 and cp_value >= 1.67:
         return {
-            'label': 'Cp/Cpk capable',
+            'label': _with_status_prefix('Cp/Cpk capable', 'quality_capable'),
             'palette_key': 'quality_capable',
         }
 
     if cpk_value > 1.33 and cp_value > 1.33:
         return {
-            'label': 'Cp/Cpk good',
+            'label': _with_status_prefix('Cp/Cpk good', 'quality_good'),
             'palette_key': 'quality_good',
         }
 
     if cpk_value >= 1.0 and cp_value >= 1.0:
         return {
-            'label': 'Cp/Cpk marginal',
+            'label': _with_status_prefix('Cp/Cpk marginal', 'quality_marginal'),
             'palette_key': 'quality_marginal',
         }
 
     return {
-        'label': 'Cp/Cpk risk',
+        'label': _with_status_prefix('Cp/Cpk risk', 'quality_risk'),
         'palette_key': 'quality_risk',
     }
 
@@ -57,14 +66,14 @@ def classify_capability_value(value, *, label_prefix='Capability'):
 
     numeric = _as_float(value)
     if numeric is None:
-        return {'label': f'{label_prefix} N/A', 'palette_key': 'quality_unknown'}
+        return {'label': _with_status_prefix(f'{label_prefix} N/A', 'quality_unknown'), 'palette_key': 'quality_unknown'}
     if numeric >= 1.67:
-        return {'label': f'{label_prefix} capable', 'palette_key': 'quality_capable'}
+        return {'label': _with_status_prefix(f'{label_prefix} capable', 'quality_capable'), 'palette_key': 'quality_capable'}
     if numeric > 1.33:
-        return {'label': f'{label_prefix} good', 'palette_key': 'quality_good'}
+        return {'label': _with_status_prefix(f'{label_prefix} good', 'quality_good'), 'palette_key': 'quality_good'}
     if numeric >= 1.0:
-        return {'label': f'{label_prefix} marginal', 'palette_key': 'quality_marginal'}
-    return {'label': f'{label_prefix} risk', 'palette_key': 'quality_risk'}
+        return {'label': _with_status_prefix(f'{label_prefix} marginal', 'quality_marginal'), 'palette_key': 'quality_marginal'}
+    return {'label': _with_status_prefix(f'{label_prefix} risk', 'quality_risk'), 'palette_key': 'quality_risk'}
 
 
 def classify_nok_severity(nok_pct):
@@ -77,18 +86,18 @@ def classify_nok_severity(nok_pct):
 
     if ratio <= 0.003:
         return {
-            'label': 'NOK 0%',
+            'label': _with_status_prefix('NOK 0%', 'quality_capable'),
             'palette_key': 'quality_capable',
         }
 
     if ratio <= 0.05:
         return {
-            'label': f'NOK {ratio * 100:.1f}% watch',
+            'label': _with_status_prefix(f'NOK {ratio * 100:.1f}% watch', 'quality_marginal'),
             'palette_key': 'quality_marginal',
         }
 
     return {
-        'label': f'NOK {ratio * 100:.1f}% high',
+        'label': _with_status_prefix(f'NOK {ratio * 100:.1f}% high', 'quality_risk'),
         'palette_key': 'quality_risk',
     }
 
@@ -100,24 +109,24 @@ def classify_nok_discrepancy_status(discrepancy_abs, *, threshold_abs=0.02):
     try:
         abs_value = float(discrepancy_abs)
     except (TypeError, ValueError):
-        return {'label': 'NOK discrepancy N/A', 'palette_key': 'quality_unknown'}
+        return {'label': _with_status_prefix('NOK discrepancy N/A', 'quality_unknown'), 'palette_key': 'quality_unknown'}
 
     threshold = float(threshold_abs)
     if abs_value > threshold:
-        return {'label': f'NOK discrepancy {abs_value * 100:.2f}pp high', 'palette_key': 'quality_risk'}
+        return {'label': _with_status_prefix(f'NOK discrepancy {abs_value * 100:.2f}pp high', 'quality_risk'), 'palette_key': 'quality_risk'}
     if abs_value > (threshold * 0.5):
-        return {'label': f'NOK discrepancy {abs_value * 100:.2f}pp watch', 'palette_key': 'quality_marginal'}
-    return {'label': f'NOK discrepancy {abs_value * 100:.2f}pp low', 'palette_key': 'quality_capable'}
+        return {'label': _with_status_prefix(f'NOK discrepancy {abs_value * 100:.2f}pp watch', 'quality_marginal'), 'palette_key': 'quality_marginal'}
+    return {'label': _with_status_prefix(f'NOK discrepancy {abs_value * 100:.2f}pp low', 'quality_capable'), 'palette_key': 'quality_capable'}
 
 def classify_normality_status(normality_status):
     """Map normality status to dedicated pastel normality palettes."""
     if normality_status == 'normal':
-        return {'label': 'Normality normal', 'palette_key': 'normality_normal'}
+        return {'label': _with_status_prefix('Normality normal', 'normality_normal'), 'palette_key': 'normality_normal'}
     if normality_status == 'not_normal':
-        return {'label': 'Normality not normal', 'palette_key': 'normality_not_normal'}
+        return {'label': _with_status_prefix('Normality not normal', 'normality_not_normal'), 'palette_key': 'normality_not_normal'}
     if normality_status == 'not_applicable':
-        return {'label': 'Normality not applicable', 'palette_key': 'normality_unknown'}
-    return {'label': 'Normality unknown', 'palette_key': 'normality_unknown'}
+        return {'label': _with_status_prefix('Normality not applicable', 'normality_unknown'), 'palette_key': 'normality_unknown'}
+    return {'label': _with_status_prefix('Normality unknown', 'normality_unknown'), 'palette_key': 'normality_unknown'}
 
 
 def build_summary_panel_subtitle(summary_stats):
@@ -160,19 +169,19 @@ def build_summary_table_composition(summary_stats, histogram_table_payload):
         severity = sample_confidence.get('severity')
         sample_badge_palette = 'quality_risk' if severity == 'severe' else 'quality_marginal'
         capability_badge = {
-            'label': 'Capability low confidence',
+            'label': _with_status_prefix('Capability low confidence', 'quality_unknown'),
             'palette_key': 'quality_unknown',
         }
         histogram_row_badges[cp_row_label] = {
-            'label': 'Low-confidence estimate',
+            'label': _with_status_prefix('Low-confidence estimate', sample_badge_palette),
             'palette_key': sample_badge_palette,
         }
         histogram_row_badges[cpk_row_label] = {
-            'label': 'Low-confidence estimate',
+            'label': _with_status_prefix('Low-confidence estimate', sample_badge_palette),
             'palette_key': sample_badge_palette,
         }
         histogram_row_badges['Samples'] = {
-            'label': 'Low sample size',
+            'label': _with_status_prefix('Low sample size', sample_badge_palette),
             'palette_key': sample_badge_palette,
         }
 

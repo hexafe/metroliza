@@ -1028,6 +1028,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('One-sided tolerance', result['text'])
         self.assertNotIn('Bound =', result['text'])
         self.assertTrue(result['text'].endswith('\nNormality not applicable'))
+        self.assertEqual(classify_normality_status(result['status'])['label'], '! Normality not applicable')
 
     def test_render_histogram_uses_fd_bins_for_non_degenerate_data(self):
         import pandas as pd
@@ -2073,11 +2074,13 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertTrue(ax_table.get_celld()[(1, 1)].get_visible())
             self.assertTrue(ax_table.get_celld()[(1, 2)].get_visible())
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), 'Normality')
-            self.assertEqual(ax_table.get_celld()[(1, 2)].get_text().get_text(), normality_text)
+            self.assertTrue(ax_table.get_celld()[(1, 2)].get_text().get_text().startswith(('✓ ', '! ', '× ')))
+            self.assertTrue(ax_table.get_celld()[(1, 2)].get_text().get_text().endswith(normality_text))
             self.assertEqual(
                 ax_table.get_celld()[(1, 0)].get_text().get_color(),
                 SUMMARY_PLOT_PALETTE[palette_bg.replace('_bg', '_text')],
             )
+            self.assertTrue(ax_table.get_celld()[(1, 0)].get_hatch() in {'', '..', '///', 'xx'})
 
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_fontweight(), 'normal')
             self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_fontweight(), 'normal')
@@ -2248,8 +2251,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             capability_badge={'label': 'Cp/Cpk good', 'palette_key': 'quality_good'},
         )
 
-        self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_text(), '1.45')
-        self.assertEqual(ax_table.get_celld()[(2, 1)].get_text().get_text(), '1.4')
+        self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_text(), '✓ 1.45')
+        self.assertEqual(ax_table.get_celld()[(2, 1)].get_text().get_text(), '✓ 1.4')
         self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), 'Cp')
         self.assertEqual(ax_table.get_celld()[(2, 0)].get_text().get_text(), 'Cpk')
         plt.close(fig)

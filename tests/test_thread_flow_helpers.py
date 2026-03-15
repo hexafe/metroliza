@@ -316,7 +316,7 @@ class TestExportHelpers(unittest.TestCase):
     def test_classify_normality_status_maps_one_sided_not_applicable_to_neutral_badge(self):
         badge = classify_normality_status('not_applicable')
 
-        self.assertEqual(badge['label'], 'Normality not applicable')
+        self.assertEqual(badge['label'], '! Normality not applicable')
         self.assertEqual(badge['palette_key'], 'normality_unknown')
 
     def test_run_export_steps_stops_when_canceled(self):

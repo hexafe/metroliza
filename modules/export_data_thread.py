@@ -111,7 +111,12 @@ from modules.group_analysis_writer import (
     write_group_analysis_diagnostics_sheet,
     write_group_analysis_sheet,
 )
-from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
+from modules.summary_plot_palette import (
+    SUMMARY_PLOT_PALETTE,
+    EMPHASIS_TABLE_ROWS,
+    STATUS_BORDER_STYLE_BY_PALETTE,
+    STATUS_ICON_PREFIX_BY_PALETTE,
+)
 from modules.export_chart_payload_helpers import (
     build_histogram_table_data as _build_histogram_table_data,
     build_histogram_table_render_data as _build_histogram_table_render_data,
@@ -2503,14 +2508,29 @@ def _apply_table_row_badge(ax_table, row_index, palette_key):
     column_indexes = sorted({col for (row, col) in cell_map.keys() if row == 0})
     if not column_indexes:
         column_indexes = [0, 1]
+    label_column_index = min(column_indexes)
 
     for col_index in column_indexes:
         cell = cell_map.get((row_index, col_index))
         if cell is None:
             continue
         cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+        border_style = STATUS_BORDER_STYLE_BY_PALETTE.get(palette_key, {})
+        cell.set_edgecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+        cell.set_linestyle(border_style.get('linestyle', 'solid'))
+        cell.set_linewidth(float(border_style.get('linewidth', 0.9)))
+        cell.set_hatch(border_style.get('hatch', ''))
         text = cell.get_text()
         text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+        prefix = STATUS_ICON_PREFIX_BY_PALETTE.get(palette_key)
+        current_text = text.get_text()
+        if (
+            col_index != label_column_index
+            and prefix
+            and current_text
+            and not current_text.startswith((f'{prefix} ', '✓ ', '! ', '× '))
+        ):
+            text.set_text(f'{prefix} {current_text}')
 
 
 def _merge_table_row_cells(ax_table, row_index, col_index=0, *, col_span, text=None, palette_key=None, height_scale=1.0):
@@ -2550,6 +2570,10 @@ def _merge_table_row_cells(ax_table, row_index, col_index=0, *, col_span, text=N
 
 def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
     """Render a subtle colored quality badge near the chart title area."""
+    prefix = STATUS_ICON_PREFIX_BY_PALETTE.get(palette_key)
+    if prefix and label and not str(label).startswith((f'{prefix} ', '✓ ', '! ', '× ')):
+        label = f'{prefix} {label}'
+    border_style = STATUS_BORDER_STYLE_BY_PALETTE.get(palette_key, {})
     ax.text(
         x,
         y,
@@ -2562,7 +2586,10 @@ def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
         bbox={
             'boxstyle': 'round,pad=0.16',
             'fc': SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'],
-            'ec': SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'],
+            'ec': SUMMARY_PLOT_PALETTE[f'{palette_key}_text'],
+            'linestyle': border_style.get('linestyle', 'solid'),
+            'linewidth': float(border_style.get('linewidth', 0.9)),
+            'hatch': border_style.get('hatch', ''),
             'alpha': 0.95,
         },
         zorder=6,
@@ -4444,15 +4471,25 @@ class ExportDataThread(QThread):
                     )
 
                     if footer_ax is not None and note_lines:
+                        callout_palette = 'quality_risk' if poor_fit else 'quality_unknown'
+                        callout_prefix = STATUS_ICON_PREFIX_BY_PALETTE.get(callout_palette, '!')
                         render_histogram_note_panel(
                             ax=footer_ax,
-                            note_items=[{'label': line.split(':', 1)[0], 'value': line.split(':', 1)[1].strip() if ':' in line else line} for line in note_lines],
+                            note_items=[
+                                {
+                                    'label': line.split(':', 1)[0],
+                                    'value': f"{callout_prefix} {line.split(':', 1)[1].strip()}" if ':' in line else f'{callout_prefix} {line}',
+                                }
+                                for line in note_lines
+                            ],
                             style_options={
                                 'fontsize': max(histogram_font_sizes['table_fontsize'] - 0.4, 7.0),
                                 'min_fontsize': 6.2,
                                 'max_fontsize': 8.8,
-                                'box_facecolor': SUMMARY_PLOT_PALETTE['quality_risk_bg'] if poor_fit else SUMMARY_PLOT_PALETTE['quality_unknown_bg'],
-                                'text_color': SUMMARY_PLOT_PALETTE['quality_risk_text'] if poor_fit else SUMMARY_PLOT_PALETTE['quality_unknown_text'],
+                                'box_facecolor': SUMMARY_PLOT_PALETTE[f'{callout_palette}_bg'],
+                                'text_color': SUMMARY_PLOT_PALETTE[f'{callout_palette}_text'],
+                                'box_edgecolor': SUMMARY_PLOT_PALETTE[f'{callout_palette}_text'],
+                                'box_linewidth': STATUS_BORDER_STYLE_BY_PALETTE.get(callout_palette, {}).get('linewidth', 0.9),
                             },
                             available_height_px=footer_rect['height'] * float(fig.bbox.height),
                         )

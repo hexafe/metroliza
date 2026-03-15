@@ -43,3 +43,32 @@ SUMMARY_PLOT_PALETTE = {
 }
 
 EMPHASIS_TABLE_ROWS = {'Cp', 'Cpk', 'Normality'}
+
+# Explicit state cues used for text-first accessibility and grayscale readability.
+STATUS_ICON_PREFIX_BY_PALETTE = {
+    'quality_capable': '✓',
+    'quality_good': '✓',
+    'quality_marginal': '!',
+    'quality_risk': '×',
+    'quality_unknown': '!',
+    'fit_quality_high': '✓',
+    'fit_quality_medium': '!',
+    'fit_quality_low': '×',
+    'normality_normal': '✓',
+    'normality_unknown': '!',
+    'normality_not_normal': '×',
+}
+
+STATUS_BORDER_STYLE_BY_PALETTE = {
+    'quality_capable': {'linestyle': 'solid', 'linewidth': 0.9, 'hatch': ''},
+    'quality_good': {'linestyle': 'solid', 'linewidth': 0.9, 'hatch': ''},
+    'quality_marginal': {'linestyle': '--', 'linewidth': 1.05, 'hatch': '///'},
+    'quality_risk': {'linestyle': 'solid', 'linewidth': 1.2, 'hatch': 'xx'},
+    'quality_unknown': {'linestyle': ':', 'linewidth': 1.0, 'hatch': '..'},
+    'fit_quality_high': {'linestyle': 'solid', 'linewidth': 0.9, 'hatch': ''},
+    'fit_quality_medium': {'linestyle': '--', 'linewidth': 1.05, 'hatch': '///'},
+    'fit_quality_low': {'linestyle': 'solid', 'linewidth': 1.2, 'hatch': 'xx'},
+    'normality_normal': {'linestyle': 'solid', 'linewidth': 0.9, 'hatch': ''},
+    'normality_unknown': {'linestyle': ':', 'linewidth': 1.0, 'hatch': '..'},
+    'normality_not_normal': {'linestyle': 'solid', 'linewidth': 1.2, 'hatch': 'xx'},
+}

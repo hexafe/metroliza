@@ -51,7 +51,7 @@ class TestExportSummaryCompositionService(unittest.TestCase):
 
         result = build_summary_table_composition(summary_stats, histogram_table_payload)
 
-        self.assertEqual(result['capability_badge']['label'], 'Capability low confidence')
+        self.assertEqual(result['capability_badge']['label'], '! Capability low confidence')
         self.assertIn('Samples', result['histogram_row_badges'])
         self.assertEqual(result['histogram_row_badges']['Cp ⚠']['palette_key'], 'quality_marginal')
 
