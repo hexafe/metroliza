@@ -22,7 +22,7 @@ import pandas as pd
 from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.export_grouping_utils import normalize_group_labels
-from modules.stats_utils import safe_process_capability
+from modules.stats_utils import compute_capability_confidence_intervals, safe_process_capability
 
 _SKIP_REASON_MESSAGES = {
     'forced_single_reference_scope_mismatch': (
@@ -616,6 +616,7 @@ def compute_capability_payload(values, spec_payload):
             'capability': None,
             'capability_type': None,
             'cpk': None,
+            'capability_ci': {'cp': None, 'cpk': None},
             'status': status,
             'sigma': sigma,
             'mean': mean_value,
@@ -701,12 +702,18 @@ def compute_capability_payload(values, spec_payload):
     capability_value = float(cpk_value)
     cpk_value = float(cpk_value)
     status = 'ok' if cp_value is not None or cpk_value is not None else 'not_applicable'
+    capability_ci = compute_capability_confidence_intervals(
+        sample_size=arr.size,
+        cp=cp_value,
+        cpk=cpk_value,
+    )
 
     return {
         'cp': cp_value,
         'capability': capability_value,
         'capability_type': capability_type,
         'cpk': cpk_value,
+        'capability_ci': capability_ci,
         'status': status,
         'sigma': sigma,
         'mean': mean_value,

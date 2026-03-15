@@ -8,7 +8,7 @@ from matplotlib.patches import Patch
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
-from modules.stats_utils import is_one_sided_geometric_tolerance, safe_process_capability
+from modules.stats_utils import compute_capability_confidence_intervals, is_one_sided_geometric_tolerance, safe_process_capability
 
 
 _INTEGER_PATTERN = re.compile(r'^[+-]?\d+$')
@@ -142,6 +142,11 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
     nok_count = header_group[(meas > usl) | (meas < lsl)]['MEAS'].count()
 
     cp, cpk = safe_process_capability(nom, usl, lsl, sigma, average)
+    capability_ci = compute_capability_confidence_intervals(
+        sample_size=sample_size,
+        cp=None if cp == 'N/A' else cp,
+        cpk=None if cpk == 'N/A' else cpk,
+    )
     one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, lsl))
     normality = compute_normality_status(meas, one_sided=one_sided_mode, location_bound=lsl)
 
@@ -153,6 +158,7 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
         'median': meas.median(),
         'cp': cp,
         'cpk': cpk,
+        'capability_ci': capability_ci,
         'sample_size': sample_size,
         'nok_count': nok_count,
         'nok_pct': (nok_count / sample_size) if sample_size else 0,

@@ -1201,14 +1201,18 @@ def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_
     payload = dict(histogram_table_payload or {})
     rows = []
     for label, value in payload.get('rows', []):
-        if label in {'Cpu', 'Cpl'}:
+        if label in {'Cpu', 'Cpl', 'Cpu 95% CI', 'Cpl 95% CI'}:
             rows.append((f'{label} (normal ref)', value))
             continue
         rows.append(
             ('Cpk (normal ref)', value)
             if label in {'Cpk', 'Cpk+'}
+            else ('Cpk (normal ref) 95% CI', value)
+            if label in {'Cpk 95% CI', 'Cpk+ 95% CI'}
             else ('Cp (normal ref)', value)
             if label == 'Cp'
+            else ('Cp (normal ref) 95% CI', value)
+            if label == 'Cp 95% CI'
             else (label, value)
         )
     payload['rows'] = rows

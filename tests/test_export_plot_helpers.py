@@ -2029,7 +2029,15 @@ class TestExportPlotHelpers(unittest.TestCase):
 
     def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
         payload = {
-            'rows': [('Cp', 1.22), ('Cpk', 1.15), ('Cpu', 1.11), ('Cpl', 1.08), ('NOK %', '0.40%')],
+            'rows': [
+                ('Cp', 1.22),
+                ('Cp 95% CI', '[1.10, 1.34]'),
+                ('Cpk', 1.15),
+                ('Cpk 95% CI', '[1.03, 1.28]'),
+                ('Cpu', 1.11),
+                ('Cpl', 1.08),
+                ('NOK %', '0.40%'),
+            ],
             'capability_rows': {
                 'Cp': {'label': 'Cp', 'display_value': 1.22, 'classification_value': 1.22},
                 'Cpk': {'label': 'Cpk', 'display_value': 1.11, 'classification_value': 1.11},
@@ -2045,6 +2053,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         labels = [label for label, _ in relabeled['rows']]
 
         self.assertEqual(labels.count('Cpk (normal ref)'), 1)
+        self.assertIn('Cp (normal ref) 95% CI', labels)
+        self.assertIn('Cpk (normal ref) 95% CI', labels)
         self.assertIn('Cpu (normal ref)', labels)
         self.assertIn('Cpl (normal ref)', labels)
         self.assertIn('Cp (normal ref)', labels)
@@ -2056,6 +2066,19 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(relabeled['capability_rows']['Cpk']['label'], 'Cpk (normal ref)')
         self.assertEqual(relabeled['capability_rows']['Cpu']['label'], 'Cpu (normal ref)')
         self.assertEqual(relabeled['capability_rows']['Cpl']['label'], 'Cpl (normal ref)')
+
+    def test_apply_non_normal_cpk_reference_label_keeps_ci_labels_for_normal_model(self):
+        payload = {
+            'rows': [('Cp', 1.22), ('Cp 95% CI', '[1.10, 1.34]'), ('Cpk', 1.15), ('Cpk 95% CI', '[1.03, 1.28]')],
+            'capability_rows': {
+                'Cp': {'label': 'Cp', 'display_value': 1.22, 'classification_value': 1.22},
+                'Cpk': {'label': 'Cpk', 'display_value': 1.11, 'classification_value': 1.11},
+            },
+        }
+
+        relabeled = _apply_non_normal_cpk_reference_label(payload, {'selected_model': {'model': 'norm'}})
+        labels = [label for label, _ in relabeled['rows']]
+        self.assertEqual(labels, ['Cp', 'Cp 95% CI', 'Cpk', 'Cpk 95% CI'])
 
 
     def test_build_histogram_table_render_data_three_column_duplicates_label_in_first_two_columns(self):

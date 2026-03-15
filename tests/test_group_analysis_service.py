@@ -365,6 +365,8 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIsNotNone(payload['cp'])
         self.assertIsNotNone(payload['capability'])
         self.assertIsNotNone(payload['cpk'])
+        self.assertIsInstance(payload['capability_ci']['cp'], dict)
+        self.assertIsInstance(payload['capability_ci']['cpk'], dict)
 
     def test_capability_payload_upper_only_mode_returns_cpk_plus(self):
         payload = compute_capability_payload([9.9, 10.0, 10.1, 10.2], {'lsl': None, 'nominal': 10.0, 'usl': 11.0})
@@ -375,6 +377,8 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIsNone(payload['cp'])
         self.assertIsNotNone(payload['capability'])
         self.assertEqual(payload['capability'], payload['cpk'])
+        self.assertIsNone(payload['capability_ci']['cp'])
+        self.assertIsInstance(payload['capability_ci']['cpk'], dict)
 
     def test_capability_payload_lower_only_mode_returns_cpk_minus(self):
         payload = compute_capability_payload([9.9, 10.0, 10.1, 10.2], {'lsl': 9.0, 'nominal': 10.0, 'usl': None})

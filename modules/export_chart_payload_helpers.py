@@ -2,6 +2,7 @@
 
 import math
 
+from modules.stats_utils import compute_capability_confidence_intervals
 from modules.stats_number_formatting import (
     format_capability_index,
     format_measurement_value,
@@ -120,6 +121,25 @@ def _compute_nok_discrepancy_metrics(observed_nok_pct, estimated_nok_pct):
     }
 
 
+def _format_ci_bounds(interval):
+    if not isinstance(interval, dict):
+        return 'N/A'
+    lower = interval.get('lower')
+    upper = interval.get('upper')
+    if not _is_numeric(lower) or not _is_numeric(upper):
+        return 'N/A'
+    return f"[{lower:.2f}, {upper:.2f}]"
+
+
+def _append_ci(display_value, interval):
+    if display_value == 'N/A':
+        return 'N/A'
+    ci_text = _format_ci_bounds(interval)
+    if ci_text == 'N/A':
+        return display_value
+    return f'{display_value} {ci_text}'
+
+
 def build_histogram_table_data(summary_stats):
     """Build stable, display-ready statistics rows and row metadata for histograms."""
 
@@ -146,6 +166,16 @@ def build_histogram_table_data(summary_stats):
 
     cp_display_value = format_capability_index(summary_stats['cp'])
     cpk_display_value = format_capability_index(cpk_value)
+    include_capability_ci = bool(summary_stats.get('include_capability_ci', True))
+    capability_ci = summary_stats.get('capability_ci')
+    if not isinstance(capability_ci, dict):
+        capability_ci = compute_capability_confidence_intervals(
+            sample_size=sample_size,
+            cp=summary_stats.get('cp') if spec_type == 'two-sided' else None,
+            cpk=cpk_value,
+        )
+    cp_ci = capability_ci.get('cp') if isinstance(capability_ci, dict) else None
+    cpk_ci = capability_ci.get('cpk') if isinstance(capability_ci, dict) else None
 
     cp_label = 'Cp'
     if spec_type != 'two-sided':
@@ -153,11 +183,15 @@ def build_histogram_table_data(summary_stats):
         cp_display_value = 'N/A'
 
     resolved_cpk_label = cpk_label
+    if include_capability_ci:
+        cp_display_value = _append_ci(cp_display_value, cp_ci)
+        cpk_display_value = _append_ci(cpk_display_value, cpk_ci)
+
     if sample_confidence['is_low_n'] and sample_confidence['severity'] == 'severe':
         if cp_display_value != 'N/A':
-            cp_display_value = f"{format_capability_index(summary_stats['cp'])} (Low-confidence estimate)"
+            cp_display_value = f"{_append_ci(format_capability_index(summary_stats['cp']), cp_ci)} (Low-confidence estimate)"
         if cpk_display_value != 'N/A':
-            cpk_display_value = f"{format_capability_index(cpk_value)} (Low-confidence estimate)"
+            cpk_display_value = f"{_append_ci(format_capability_index(cpk_value), cpk_ci)} (Low-confidence estimate)"
 
     table_rows = [
         ('Min', format_measurement_value(summary_stats['minimum'])),
@@ -178,6 +212,11 @@ def build_histogram_table_data(summary_stats):
             (f"Confidence {sample_confidence['badge']}", f"Low-confidence estimate (n={sample_confidence['sample_size']})"),
         ])
         table_rows.extend(uncertainty_rows)
+
+    if include_capability_ci:
+        if spec_type == 'two-sided':
+            table_rows.append((f'{cp_label} 95% CI', _format_ci_bounds(cp_ci)))
+        table_rows.append((f'{resolved_cpk_label} 95% CI', _format_ci_bounds(cpk_ci)))
 
     observed_nok_pct = summary_stats.get('observed_nok_pct', summary_stats.get('nok_pct'))
     estimated_nok_pct = summary_stats.get('estimated_nok_pct')
@@ -226,6 +265,12 @@ def build_histogram_table_data(summary_stats):
         ('NOK % (obs vs est)', {'observed_nok_pct': observed_nok_pct, 'estimated_nok_pct': estimated_nok_pct}),
         ('NOK % Δ (abs/rel)', {'abs_diff_pp': discrepancy_metrics['abs_diff_pp'], 'rel_diff': discrepancy_metrics['rel_diff']}),
     ]
+    if include_capability_ci:
+        if spec_type == 'two-sided':
+            raw_rows.insert(8, (f'{cp_label} 95% CI', cp_ci))
+            raw_rows.insert(9, (f'{resolved_cpk_label} 95% CI', cpk_ci))
+        else:
+            raw_rows.insert(8, (f'{resolved_cpk_label} 95% CI', cpk_ci))
 
     return {
         'rows': table_rows,
@@ -249,12 +294,16 @@ def build_histogram_table_data(summary_stats):
                 'display_value': cp_display_value,
                 'classification_value': 'N/A' if spec_type != 'two-sided' else summary_stats['cp'],
                 'raw_value': summary_stats['cp'],
+                'ci': cp_ci,
+                'ci_display': _format_ci_bounds(cp_ci),
             },
             'Cpk': {
                 'label': resolved_cpk_label,
                 'display_value': cpk_display_value,
                 'classification_value': cpk_value,
                 'raw_value': cpk_value,
+                'ci': cpk_ci,
+                'ci_display': _format_ci_bounds(cpk_ci),
             },
         },
     }

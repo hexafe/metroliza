@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from modules.excel_sheet_utils import sanitize_sheet_name, unique_sheet_name
-from modules.stats_utils import safe_process_capability
+from modules.stats_utils import compute_capability_confidence_intervals, safe_process_capability
 from modules.report_fingerprint import build_report_fingerprint, build_parser_fingerprint
 
 
@@ -45,6 +45,22 @@ class TestStatsUtilities(unittest.TestCase):
         cp, cpk = safe_process_capability(0, 1, 0, math.nan, 0.2)
         self.assertEqual(cp, "N/A")
         self.assertEqual(cpk, "N/A")
+
+    def test_compute_capability_confidence_intervals_bilateral(self):
+        payload = compute_capability_confidence_intervals(sample_size=30, cp=1.2, cpk=1.1)
+
+        self.assertIsInstance(payload['cp'], dict)
+        self.assertIsInstance(payload['cpk'], dict)
+        self.assertLess(payload['cp']['lower'], 1.2)
+        self.assertGreater(payload['cp']['upper'], 1.2)
+        self.assertLess(payload['cpk']['lower'], 1.1)
+        self.assertGreater(payload['cpk']['upper'], 1.1)
+
+    def test_compute_capability_confidence_intervals_one_sided(self):
+        payload = compute_capability_confidence_intervals(sample_size=30, cp=None, cpk=1.05)
+
+        self.assertIsNone(payload['cp'])
+        self.assertIsInstance(payload['cpk'], dict)
 
 
 class TestParseDedupeFingerprint(unittest.TestCase):
