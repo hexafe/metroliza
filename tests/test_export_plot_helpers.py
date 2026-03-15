@@ -1295,35 +1295,95 @@ class TestExportPlotHelpers(unittest.TestCase):
 
     def test_render_histogram_annotations_keeps_mean_usl_lsl_with_side_panel_plot_bounds(self):
         fig, ax = plt.subplots(figsize=(6, 4))
-        ax.set_xlim(0.0, 10.0)
-        plt.subplots_adjust(left=0.30, right=0.70, top=0.84, bottom=0.22)
+        try:
+            ax.set_xlim(0.0, 10.0)
+            plt.subplots_adjust(left=0.30, right=0.70, top=0.84, bottom=0.22)
 
-        annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
-        annotation_specs, _ = compute_histogram_annotation_rows(
-            annotation_specs,
-            distance_threshold=0.04,
-            threshold_mode='axis_fraction',
-            x_span=10.0,
-            base_text_y_axes=1.01,
-            row_step=0.025,
-        )
-        rendered = render_histogram_annotations(
-            ax,
-            annotation_specs,
-            annotation_fontsize=8.2,
-            annotation_box={
-                'boxstyle': 'round,pad=0.15',
-                'fc': 'white',
-                'ec': '#cccccc',
-                'alpha': 0.94,
-                'plot_rect': {'x': 0.30, 'y': 0.22, 'width': 0.40, 'height': 0.62},
-            },
-        )
-        texts = {text.get_text() for text in rendered}
-        self.assertIn('Mean = 5.000', texts)
-        self.assertIn('USL=9.000', texts)
-        self.assertIn('LSL=1.000', texts)
-        plt.close(fig)
+            annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=10.0,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            rendered = render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': {'x': 0.30, 'y': 0.22, 'width': 0.40, 'height': 0.62},
+                },
+            )
+            texts = {text.get_text() for text in rendered}
+            self.assertIn('Mean = 5.000', texts)
+            self.assertIn('USL=9.000', texts)
+            self.assertIn('LSL=1.000', texts)
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_annotations_uses_left_safe_anchor_for_lsl_near_left_boundary(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(0.0, 1.0)
+        try:
+            rendered = render_histogram_annotations(
+                ax,
+                [
+                    {
+                        'kind': 'lsl',
+                        'x': 0.01,
+                        'text_y_axes': 1.02,
+                        'text': 'LSL=0.010',
+                        'color': '#222222',
+                        'ha': 'center',
+                    }
+                ],
+                annotation_fontsize=8.5,
+                annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#cccccc', 'alpha': 0.94},
+            )
+
+            self.assertEqual(len(rendered), 1)
+            self.assertEqual(rendered[0].get_ha(), 'left')
+
+            fig.canvas.draw()
+            bbox = rendered[0].get_window_extent(renderer=fig.canvas.get_renderer())
+            self.assertGreaterEqual(bbox.x0, 0.0)
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_annotations_uses_right_safe_anchor_for_usl_near_right_boundary(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(0.0, 1.0)
+        try:
+            rendered = render_histogram_annotations(
+                ax,
+                [
+                    {
+                        'kind': 'usl',
+                        'x': 0.99,
+                        'text_y_axes': 1.02,
+                        'text': 'USL=0.990',
+                        'color': '#222222',
+                        'ha': 'center',
+                    }
+                ],
+                annotation_fontsize=8.5,
+                annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#cccccc', 'alpha': 0.94},
+            )
+
+            self.assertEqual(len(rendered), 1)
+            self.assertEqual(rendered[0].get_ha(), 'right')
+
+            fig.canvas.draw()
+            bbox = rendered[0].get_window_extent(renderer=fig.canvas.get_renderer())
+            self.assertLessEqual(bbox.x1, fig.bbox.x1)
+        finally:
+            plt.close(fig)
 
     def test_render_histogram_annotations_and_title_fit_with_side_panels_enabled(self):
         fig = plt.figure(figsize=(7.2, 4.0))
