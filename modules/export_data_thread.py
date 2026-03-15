@@ -179,12 +179,14 @@ logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 _HISTOGRAM_X_PADDING_RATIO = 0.05
 _HISTOGRAM_ZERO_RANGE_ABS_PADDING = 0.05
+_HISTOGRAM_ULTRA_NARROW_THRESHOLD = 0.05
+_HISTOGRAM_FOCUSED_SPAN_MULTIPLIER = 8.0
 
 _SELECTED_MODEL_CURVE_STYLE_BY_QUALITY = {
-    'strong': {'alpha': 0.78, 'linewidth': 1.7},
-    'medium': {'alpha': 0.70, 'linewidth': 1.6},
-    'weak': {'alpha': 0.62, 'linewidth': 1.5},
-    'unreliable': {'alpha': 0.34, 'linewidth': 1.2},
+    'strong': {'alpha': 0.80, 'linewidth': 1.72},
+    'medium': {'alpha': 0.68, 'linewidth': 1.55},
+    'weak': {'alpha': 0.48, 'linewidth': 1.30},
+    'unreliable': {'alpha': 0.28, 'linewidth': 1.05},
 }
 
 
@@ -548,7 +550,7 @@ def build_histogram_mean_line_style():
     }
 
 
-def render_histogram_title(ax, title, *, slot='title_band', fontsize=10.0, fontweight='semibold'):
+def render_histogram_title(ax, title, *, slot='title_band', fontsize=10.0, fontweight='bold'):
     """Render a histogram title in a dedicated top-band slot above annotations."""
 
     slot_y = _CHART_TOP_SLOT_Y.get(slot, 1.135)
@@ -585,20 +587,84 @@ def resolve_edge_safe_label_anchor(x_data, x_min, x_max, edge_fraction=0.06):
         right_edge = float(x_max)
         edge_ratio = max(0.0, float(edge_fraction))
     except (TypeError, ValueError):
-        return 'center', 0.0
+        return {'ha': 'center', 'x_offset_points': 0.0}
 
     if right_edge < left_edge:
         left_edge, right_edge = right_edge, left_edge
     x_span = right_edge - left_edge
     if x_span <= 0:
-        return 'center', 0.0
+        return {'ha': 'center', 'x_offset_points': 0.0}
 
     edge_delta = x_span * edge_ratio
     if x_value <= (left_edge + edge_delta):
-        return 'left', 6.0
+        return {'ha': 'left', 'x_offset_points': 6.0}
     if x_value >= (right_edge - edge_delta):
-        return 'right', -6.0
-    return 'center', 0.0
+        return {'ha': 'right', 'x_offset_points': -6.0}
+    return {'ha': 'center', 'x_offset_points': 0.0}
+
+
+def resolve_histogram_x_view(values, *, lsl=None, usl=None):
+    """Resolve deterministic histogram x framing for full vs focused contexts."""
+
+    finite_values = pd.to_numeric(pd.Series(values), errors='coerce').dropna().to_numpy(dtype=float)
+    if finite_values.size == 0:
+        return {'x_min': 0.0, 'x_max': 1.0, 'mode': 'full'}
+
+    data_min = float(np.min(finite_values))
+    data_max = float(np.max(finite_values))
+    data_span = max(0.0, data_max - data_min)
+
+    finite_spec_limits = []
+    for raw_limit in (lsl, usl):
+        if raw_limit is None:
+            continue
+        try:
+            limit_value = float(raw_limit)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(limit_value):
+            finite_spec_limits.append(limit_value)
+
+    x_min_full = min([data_min, *finite_spec_limits])
+    x_max_full = max([data_max, *finite_spec_limits])
+    full_span = max(0.0, x_max_full - x_min_full)
+    effective_span = full_span if full_span > 0 else max(data_span, 1e-12)
+    narrow_ratio = (data_span / effective_span) if effective_span > 0 else 1.0
+
+    reference_magnitude = max(abs(x_min_full), abs(x_max_full), 1.0)
+    minimum_margin = max(1e-6, 0.01 * reference_magnitude)
+
+    if full_span > 0 and data_span > 0 and narrow_ratio < _HISTOGRAM_ULTRA_NARROW_THRESHOLD:
+        center = float(np.mean(finite_values))
+        focused_span = max(data_span * _HISTOGRAM_FOCUSED_SPAN_MULTIPLIER, minimum_margin * 6.0)
+        near_spec_limits = [
+            limit
+            for limit in finite_spec_limits
+            if abs(limit - center) <= (focused_span * 0.9)
+        ]
+        if near_spec_limits:
+            focused_min_candidate = min(data_min, *near_spec_limits)
+            focused_max_candidate = max(data_max, *near_spec_limits)
+            focused_span = max(focused_span, focused_max_candidate - focused_min_candidate)
+
+        padding = max(_HISTOGRAM_X_PADDING_RATIO * max(focused_span, minimum_margin), minimum_margin)
+        return {
+            'x_min': (center - (focused_span / 2.0)) - padding,
+            'x_max': (center + (focused_span / 2.0)) + padding,
+            'mode': 'focused',
+        }
+
+    if full_span > 0:
+        padding_basis = data_span if (data_span > 0 and narrow_ratio < 0.08) else full_span
+        padding = max(_HISTOGRAM_X_PADDING_RATIO * max(padding_basis, minimum_margin), minimum_margin)
+    else:
+        padding = max(_HISTOGRAM_ZERO_RANGE_ABS_PADDING * reference_magnitude, minimum_margin)
+
+    return {
+        'x_min': x_min_full - padding,
+        'x_max': x_max_full + padding,
+        'mode': 'full',
+    }
 
 
 def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, annotation_box):
@@ -654,11 +720,13 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
         resolved_ha = annotation.get('ha', 'center')
         x_offset_points = 0.0
         if annotation_kind in {'lsl', 'usl'}:
-            edge_ha, edge_offset_points = resolve_edge_safe_label_anchor(
+            edge_anchor = resolve_edge_safe_label_anchor(
                 annotation.get('x'),
                 x_min,
                 x_max,
             )
+            edge_ha = edge_anchor.get('ha', 'center')
+            edge_offset_points = float(edge_anchor.get('x_offset_points', 0.0))
             if edge_offset_points != 0.0:
                 resolved_ha = edge_ha
                 x_offset_points = edge_offset_points
@@ -945,15 +1013,17 @@ def _build_compact_histogram_note_lines(distribution_fit_result):
     is_poor_fit = fit_quality in {'weak', 'unreliable'}
     if is_poor_fit:
         lines.append(f'Warning: fit {fit_quality}')
+    elif fit_quality == 'medium':
+        lines.append('Fit confidence: medium')
 
     gof_metrics = fit_result.get('gof_metrics') or {}
     reference_normality = str(gof_metrics.get('reference_normality_label') or '').strip()
     normality_is_concise = reference_normality and len(reference_normality) <= 24
     normality_adds_context = reference_normality.lower() not in {'normal', 'gaussian-like'}
-    if (not is_poor_fit) and normality_is_concise and normality_adds_context:
+    if (not is_poor_fit) and fit_quality not in {'medium'} and normality_is_concise and normality_adds_context:
         lines.append(f'Normality: {reference_normality}')
 
-    return lines[:3]
+    return lines[:2]
 
 def _is_non_normal_capability_reference_model(distribution_fit_result):
     selected_model = (distribution_fit_result or {}).get('selected_model') or {}
@@ -973,15 +1043,18 @@ def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_
         rows.append(
             ('Cpk (normal ref)', value)
             if label in {'Cpk', 'Cpk+'}
-            else (label, value)
+            else ('Cp (normal ref)', value) if label == 'Cp' else (label, value)
         )
     payload['rows'] = rows
 
     capability_rows = dict(payload.get('capability_rows') or {})
-    for key in ('Cpk', 'Cpk+'):
+    for key in ('Cp', 'Cpk', 'Cpk+'):
         cpk_meta = dict(capability_rows.get(key) or {})
         if cpk_meta:
-            cpk_meta['label'] = 'Cpk (normal ref)'
+            if key == 'Cp':
+                cpk_meta['label'] = 'Cp (normal ref)'
+            else:
+                cpk_meta['label'] = 'Cpk (normal ref)'
             capability_rows[key] = cpk_meta
 
     if capability_rows:
@@ -1590,33 +1663,10 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
     if histogram_values.size == 0:
         return {'is_grouped': False, 'group_labels': []}
 
-    finite_spec_limits = []
-    for raw_limit in (lsl, usl):
-        if raw_limit is None:
-            continue
-        try:
-            limit_value = float(raw_limit)
-        except (TypeError, ValueError):
-            continue
-        if np.isfinite(limit_value):
-            finite_spec_limits.append(limit_value)
-
     n = histogram_values.size
     data_min = float(np.min(histogram_values))
     data_max = float(np.max(histogram_values))
-    x_min_base = min([data_min, *finite_spec_limits])
-    x_max_base = max([data_max, *finite_spec_limits])
-    combined_range = x_max_base - x_min_base
     data_range = data_max - data_min
-
-    reference_magnitude = max(abs(x_min_base), abs(x_max_base), 1.0)
-    minimum_margin = max(1e-6, 0.01 * reference_magnitude)
-    narrow_spread = data_range > 0 and combined_range > 0 and (data_range / combined_range) < 0.08
-    if combined_range > 0:
-        padding_basis = data_range if narrow_spread else combined_range
-        x_padding = max(_HISTOGRAM_X_PADDING_RATIO * max(padding_basis, minimum_margin), minimum_margin)
-    else:
-        x_padding = max(_HISTOGRAM_ZERO_RANGE_ABS_PADDING * reference_magnitude, minimum_margin)
 
     q1, q3 = np.percentile(histogram_values, [25, 75])
     iqr = float(q3 - q1)
@@ -1656,7 +1706,8 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
             linewidth=0.5,
         )
 
-    ax.set_xlim(x_min_base - x_padding, x_max_base + x_padding)
+    x_view = resolve_histogram_x_view(histogram_values, lsl=lsl, usl=usl)
+    ax.set_xlim(x_view['x_min'], x_view['x_max'])
     enforce_minimum_histogram_bar_width(ax)
     lock_histogram_y_axis_to_bar_heights(ax)
 
@@ -4054,6 +4105,7 @@ class ExportDataThread(QThread):
                         histogram_table_payload,
                         distribution_fit_result,
                     )
+                    non_normal_reference_mode = _is_non_normal_capability_reference_model(distribution_fit_result)
                     right_rows = histogram_table_payload['rows']
                     left_rows = _build_distribution_fit_table_rows(
                         distribution_fit_result,
@@ -4153,16 +4205,20 @@ class ExportDataThread(QThread):
                             'min_value_fraction': 0.28,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
-                        row_height=0.064,
+                        row_height=0.068,
                         pad_y=0.02,
                         valign='top',
                     )
                     ax_table = right_table_meta['table']
+                    non_normal_row_badges = dict(histogram_row_badges or {})
+                    if non_normal_reference_mode:
+                        for label in ('Cp (normal ref)', 'Cpk (normal ref)'):
+                            non_normal_row_badges[label] = {'palette_key': 'quality_unknown'}
                     style_histogram_stats_table(
                         ax_table,
                         right_table_meta['rendered_rows'],
                         capability_badge=capability_badge,
-                        capability_row_badges=histogram_row_badges,
+                        capability_row_badges=non_normal_row_badges,
                     )
                     adjust_histogram_stats_table_geometry(
                         ax_table,
@@ -4179,10 +4235,10 @@ class ExportDataThread(QThread):
                             **table_style_options,
                             'min_label_fraction': 0.44,
                             'min_value_fraction': 0.40,
-                            'value_wrap_width': 18,
+                            'value_wrap_width': 22,
                             'low_priority_labels': {'Est. PPM'},
                         },
-                        row_height=0.064,
+                        row_height=0.070,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4266,15 +4322,15 @@ class ExportDataThread(QThread):
                             transform=plot_ax.transAxes,
                             ha='left',
                             va='bottom',
-                            fontsize=max(histogram_font_sizes['annotation_fontsize'] - 1.5, 6.0),
-                            color='#5f6b7a',
+                            fontsize=max(6.5, histogram_font_sizes['table_fontsize'] - 1.0),
+                            color='#4d5968',
                             bbox={
                                 'boxstyle': 'round,pad=0.16',
                                 'facecolor': (1.0, 1.0, 1.0, 0.74),
                                 'edgecolor': '#c7ced7',
                                 'linewidth': 0.45,
                             },
-                            zorder=10,
+                            zorder=8,
                         )
 
                     fit_warning = distribution_fit_result.get('warning')
