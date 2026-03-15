@@ -553,6 +553,30 @@ def render_histogram_title(ax, title, *, slot='title_band', fontsize=10.0, fontw
     )
 
 
+def resolve_edge_safe_label_anchor(x_data, x_min, x_max, edge_fraction=0.06):
+    """Resolve alignment and horizontal offset for labels near x-axis edges."""
+    try:
+        x_value = float(x_data)
+        left_edge = float(x_min)
+        right_edge = float(x_max)
+        edge_ratio = max(0.0, float(edge_fraction))
+    except (TypeError, ValueError):
+        return 'center', 0.0
+
+    if right_edge < left_edge:
+        left_edge, right_edge = right_edge, left_edge
+    x_span = right_edge - left_edge
+    if x_span <= 0:
+        return 'center', 0.0
+
+    edge_delta = x_span * edge_ratio
+    if x_value <= (left_edge + edge_delta):
+        return 'left', 6.0
+    if x_value >= (right_edge - edge_delta):
+        return 'right', -6.0
+    return 'center', 0.0
+
+
 def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, annotation_box):
     """Render histogram annotations with consistent font sizing policy."""
     def _resolve_plot_rect_display_bounds(fig, plot_rect):
@@ -591,6 +615,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
     rendered = []
     transform = ax.get_xaxis_transform()
     figure = ax.figure
+    x_min, x_max = ax.get_xlim()
     plot_rect = annotation_box.get('plot_rect') if isinstance(annotation_box, dict) else None
     plot_rect_bounds = _resolve_annotation_safe_bounds(figure, plot_rect)
     priority_sorted = sorted(
@@ -601,13 +626,35 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
     accepted_bboxes = []
     accepted_rows = []
     for index, annotation in priority_sorted:
+        annotation_kind = str(annotation.get('kind') or '').lower()
+        resolved_ha = annotation.get('ha', 'center')
+        x_offset_points = 0.0
+        if annotation_kind in {'lsl', 'usl'}:
+            edge_ha, edge_offset_points = resolve_edge_safe_label_anchor(
+                annotation.get('x'),
+                x_min,
+                x_max,
+            )
+            if edge_offset_points != 0.0:
+                resolved_ha = edge_ha
+                x_offset_points = edge_offset_points
+        text_transform = transform
+        if x_offset_points != 0.0:
+            text_transform = mtransforms.offset_copy(
+                transform,
+                fig=figure,
+                x=x_offset_points,
+                y=0.0,
+                units='points',
+            )
+
         text_artist = ax.text(
             annotation['x'],
             annotation.get('text_y_axes', 1.02),
             annotation['text'],
-            transform=transform,
+            transform=text_transform,
             color=annotation['color'],
-            ha=annotation['ha'],
+            ha=resolved_ha,
             va='bottom',
             fontsize=annotation_fontsize,
             bbox={k: v for k, v in annotation_box.items() if k != 'plot_rect'},
