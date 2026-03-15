@@ -126,13 +126,14 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         table = payload['rows']
 
         self.assertEqual(table[0], ('Min', '1.235'))
-        self.assertEqual(table[5], ('Spec type', 'two-sided'))
-        self.assertTrue(table[6][1].startswith('1.99 ['))
-        self.assertTrue(table[7][1].startswith('1.43 ['))
-        self.assertEqual(table[-4], ('NOK', '1.000'))
-        self.assertEqual(table[-3], ('NOK %', '8.33%'))
-        self.assertEqual(table[-2][0], 'NOK % (obs vs est)')
-        self.assertEqual(table[-1][0], 'NOK % Δ (abs/rel)')
+        self.assertEqual(table[5][0], 'Cp')
+        self.assertTrue(table[5][1].startswith('1.99 ['))
+        self.assertEqual(table[6][0], 'Cpk')
+        self.assertTrue(table[6][1].startswith('1.43 ['))
+        self.assertEqual(table[-2], ('NOK', '1.000'))
+        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+        self.assertNotIn('NOK % (obs vs est)', [label for label, _ in table])
+        self.assertNotIn('NOK % Δ (abs/rel)', [label for label, _ in table])
 
 
     def test_build_histogram_table_render_data_keeps_row_order(self):
@@ -159,9 +160,8 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         payload = build_histogram_table_data(summary_stats)
         table = payload['rows']
 
-        self.assertEqual(table[5], ('Spec type', 'two-sided'))
-        self.assertEqual(table[6], ('Cp', 'N/A'))
-        self.assertEqual(table[7], ('Cpk', 'N/A'))
+        self.assertEqual(table[5], ('Cp', 'N/A'))
+        self.assertEqual(table[6], ('Cpk', 'N/A'))
 
     def test_build_histogram_table_data_right_stats_capability_rows_remain_intact(self):
         summary_stats = {
@@ -183,11 +183,12 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         payload = build_histogram_table_data(summary_stats)
         labels = [row[0] for row in payload['rows']]
 
-        self.assertEqual(labels[:8], ['Min', 'Max', 'Mean', 'Median', 'Std Dev', 'Spec type', 'Cp', 'Cpk'])
-        self.assertIn('Cp 95% CI', labels)
-        self.assertIn('Cpk 95% CI', labels)
-        self.assertEqual(labels[-4:-2], ['NOK', 'NOK %'])
-        self.assertEqual(labels[-2:], ['NOK % (obs vs est)', 'NOK % Δ (abs/rel)'])
+        self.assertEqual(labels[:7], ['Min', 'Max', 'Mean', 'Median', 'Std Dev', 'Cp', 'Cpk'])
+        self.assertNotIn('Cp 95% CI', labels)
+        self.assertNotIn('Cpk 95% CI', labels)
+        self.assertEqual(labels[-2:], ['NOK', 'NOK %'])
+        self.assertNotIn('NOK % (obs vs est)', labels)
+        self.assertNotIn('NOK % Δ (abs/rel)', labels)
         self.assertIn('Cp', payload['capability_rows'])
         self.assertIn('Cpk', payload['capability_rows'])
 

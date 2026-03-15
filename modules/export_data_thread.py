@@ -2532,8 +2532,6 @@ def _apply_table_row_badge(ax_table, row_index, palette_key):
     column_indexes = sorted({col for (row, col) in cell_map.keys() if row == 0})
     if not column_indexes:
         column_indexes = [0, 1]
-    label_column_index = min(column_indexes)
-
     for col_index in column_indexes:
         cell = cell_map.get((row_index, col_index))
         if cell is None:
