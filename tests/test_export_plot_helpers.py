@@ -507,7 +507,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         labels = [item.get('label') for item in note_items]
         self.assertNotIn('Model', labels)
         self.assertNotIn('Fit quality', labels)
-        self.assertIn('Candidate family', labels)
+        self.assertIn('Spec handling', labels)
+        self.assertIn('Family (debug)', labels)
 
     def test_histogram_annotation_rendering_keeps_mean_and_spec_labels_without_tail_probability_text(self):
         fig, ax = plt.subplots(figsize=(6.2, 4.0))
@@ -3165,7 +3166,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(lines, ['Family: positive-support', 'Spec type: one-sided upper', 'Warning: fit weak', 'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
+        self.assertEqual(lines, ['Spec handling: one-sided upper', 'Tooltip: Uses only USL for tail risk and capability decisions (Cp suppressed; Cpk shown as Cpu)', 'Warning: fit weak', 'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
         self.assertFalse(any(line.startswith('Normality:') for line in lines))
         self.assertFalse(any('Model:' in line for line in lines))
 
@@ -3178,7 +3179,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(lines, ['Family: signed/bilateral', 'Spec type: two-sided', 'Fit confidence: medium', 'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
+        self.assertEqual(lines, ['Spec handling: two-sided (both LSL and USL active)', 'Tooltip: Uses both tails; Cp and Cpk summarize spread and centering versus both limits', 'Fit reliability: medium', 'Tooltip: Fit reliability reflects distribution adequacy; lower reliability increases uncertainty in estimated NOK/PPM', 'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
 
 
     def test_compact_histogram_note_lines_downgrades_fit_for_n10(self):
@@ -3192,7 +3193,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertIn('Warning: limited sample size (n=10)', lines)
-        self.assertIn('Fit confidence: guarded (n<25)', lines)
+        self.assertIn('Fit reliability: guarded (n<25)', lines)
         self.assertTrue(any(line.startswith('Rationale:') for line in lines))
 
     def test_compact_histogram_note_lines_downgrades_fit_for_n20(self):
@@ -3206,7 +3207,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertIn('Warning: limited sample size (n=20)', lines)
-        self.assertIn('Fit confidence: guarded (n<25)', lines)
+        self.assertIn('Fit reliability: guarded (n<25)', lines)
 
     def test_compact_histogram_note_lines_keep_default_fit_confidence_for_n50(self):
         lines = _build_compact_histogram_note_lines(
@@ -3218,7 +3219,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             summary_stats={'sample_size': 50},
         )
 
-        self.assertIn('Fit confidence: medium', lines)
+        self.assertIn('Fit reliability: medium', lines)
         self.assertFalse(any('limited sample size' in line for line in lines))
 
     def test_kde_footer_note_uses_bbox_background_for_readability(self):
