@@ -7,12 +7,9 @@ CURRENT_RELEASE_HIGHLIGHT = (
 
 release_notes = f"""
     <br><b>Current version {VERSION_LABEL}:</b><br>
-    - Histogram dashboards are clearer: cleaner side tables, taller rows, and improved title/axis visibility in dense views<br>
-    - Capability reporting now includes confidence intervals to improve interpretability in exports and summaries<br>
-    - Low-sample safeguards were added for capability and distribution-fit metrics to reduce misleading conclusions<br>
-    - Spec-type capability labels are clearer (`Cp/Cpk`, `Cpu`, `Cpl`) and chart-symbol rendering warnings were fixed<br>
-    - Added observed-vs-estimated NOK discrepancy warnings to help spot practical quality gaps faster<br>
-    - Group names can still be renamed instantly by double-clicking in the group list<br>
+    - Clearer histogram and chart layouts for easier reading in dense views<br>
+    - Capability results now show confidence intervals for better decision-making<br>
+    - New low-sample safeguards and NOK discrepancy warnings to avoid misleading quality conclusions<br>
 
     <br><b>Version 2026.03 (build 260301):</b><br>
     - Google Sheets export implementation with safe `.xlsx` fallback<br>
