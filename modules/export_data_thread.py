@@ -72,6 +72,7 @@ from modules.export_summary_utils import (
     build_tolerance_reference_legend_handles as _build_tolerance_reference_legend_handles,
 )
 from modules.export_summary_sheet_planner import (
+    CHART_TOP_SLOT_Y as _CHART_TOP_SLOT_Y,
     build_histogram_annotation_specs as _build_histogram_annotation_specs,
     compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
     build_summary_image_anchor_plan as _build_summary_image_anchor_plan,
@@ -521,6 +522,35 @@ def build_histogram_mean_line_style():
         'alpha': 0.48,
         'zorder': 2,
     }
+
+
+def render_histogram_title(ax, title, *, slot='title_band', fontsize=10.0, fontweight='semibold'):
+    """Render a histogram title in a dedicated top-band slot above annotations."""
+
+    slot_y = _CHART_TOP_SLOT_Y.get(slot, 1.145)
+    try:
+        axis_bbox = ax.get_window_extent()
+        figure_bbox = ax.figure.bbox
+        max_title_y_display = float(figure_bbox.y1) - 6.0
+        projected_y_display = float(axis_bbox.y0) + (float(slot_y) * float(axis_bbox.height))
+        if axis_bbox.height > 0 and projected_y_display > max_title_y_display:
+            slot_y = (max_title_y_display - float(axis_bbox.y0)) / float(axis_bbox.height)
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    return ax.text(
+        0.5,
+        slot_y,
+        str(title),
+        transform=ax.transAxes,
+        ha='center',
+        va='bottom',
+        fontsize=fontsize,
+        fontweight=fontweight,
+        color=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+        clip_on=False,
+        zorder=12,
+    )
 
 
 def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, annotation_box):
@@ -4172,8 +4202,11 @@ class ExportDataThread(QThread):
                     plot_ax.set_xlabel('Measurement')
                     if not histogram_render_meta.get('is_grouped'):
                         plot_ax.set_ylabel('Count')
-                    histogram_title_pad = 14
-                    plot_ax.set_title(build_wrapped_chart_title(header), pad=histogram_title_pad)
+                    render_histogram_title(
+                        plot_ax,
+                        build_wrapped_chart_title(header),
+                        fontsize=max(histogram_font_sizes['annotation_fontsize'] + 1.1, 8.8),
+                    )
                     apply_minimal_axis_style(plot_ax, grid_axis='y')
 
                     annotation_box = {

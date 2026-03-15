@@ -3,14 +3,23 @@
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
-ANNOTATION_SLOT_Y = {
+CHART_TOP_SLOT_ORDER = (
+    'title_band',
+    'spec_primary',
+    'mean_primary',
+    'spec_secondary',
+    'spec_tertiary',
+)
+
+CHART_TOP_SLOT_Y = {
+    'title_band': 1.145,
     'spec_primary': 1.065,
     'mean_primary': 1.020,
     'spec_secondary': 0.975,
     'spec_tertiary': 0.935,
 }
 
-ANNOTATION_SLOT_ORDER = ('spec_primary', 'mean_primary', 'spec_secondary', 'spec_tertiary')
+ANNOTATION_SLOT_ORDER = tuple(slot for slot in CHART_TOP_SLOT_ORDER if slot != 'title_band')
 
 
 def build_summary_sheet_position_plan(base_col):
@@ -113,7 +122,7 @@ def compute_histogram_annotation_rows(
     slot_index = {name: idx for idx, name in enumerate(ANNOTATION_SLOT_ORDER)}
 
     def _slot_y(slot_name):
-        return ANNOTATION_SLOT_Y.get(slot_name, base_text_y_axes)
+        return CHART_TOP_SLOT_Y.get(slot_name, base_text_y_axes)
 
     def _safe_slot(slot_name):
         if slot_name in slot_index:
