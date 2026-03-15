@@ -65,6 +65,7 @@ from modules.export_summary_utils import (
     compute_measurement_summary,
     compute_normality_status,
     compute_estimated_tail_metrics,
+    resolve_histogram_bin_count,
     normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
     render_spec_reference_lines as _render_spec_reference_lines,
@@ -1829,32 +1830,14 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
     if histogram_values.size == 0:
         return {'is_grouped': False, 'group_labels': []}
 
-    n = histogram_values.size
-    data_min = float(np.min(histogram_values))
-    data_max = float(np.max(histogram_values))
-    data_range = data_max - data_min
-
-    q1, q3 = np.percentile(histogram_values, [25, 75])
-    iqr = float(q3 - q1)
-
-    bins = None
-    if n > 0 and iqr > 0 and data_range > 0:
-        bin_width = 2 * iqr * (n ** (-1 / 3))
-        if np.isfinite(bin_width) and bin_width > 0:
-            fd_bins = np.ceil(data_range / bin_width)
-            if np.isfinite(fd_bins) and fd_bins > 0:
-                bins = int(fd_bins)
-
-    if bins is None:
-        bins = min(int(np.sqrt(n)), 10)
-
-    bin_count = max(3, bins)
+    binning = resolve_histogram_bin_count(histogram_values)
+    bin_count = int(binning['bin_count'])
 
     if _HAS_SEABORN:
         sns.histplot(
             x=histogram_values,
             bins=bin_count,
-            stat='count',
+            stat='density',
             alpha=0.72,
             color=SUMMARY_PLOT_PALETTE['distribution_base'],
             edgecolor=(1.0, 1.0, 1.0, 0.72),
@@ -1865,7 +1848,7 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
         ax.hist(
             histogram_values,
             bins=bin_count,
-            density=False,
+            density=True,
             alpha=0.72,
             color=SUMMARY_PLOT_PALETTE['distribution_base'],
             edgecolor=(1.0, 1.0, 1.0, 0.72),
@@ -4531,7 +4514,7 @@ class ExportDataThread(QThread):
                         plot_ax.text(
                             0.02,
                             0.02,
-                            'Dashed KDE: descriptive only',
+                            'Dashed KDE: descriptive only (not used for decisions)',
                             transform=plot_ax.transAxes,
                             ha='left',
                             va='bottom',
@@ -4563,7 +4546,7 @@ class ExportDataThread(QThread):
                     render_spec_reference_lines(plot_ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
                     plot_ax.set_xlabel('Measurement')
                     if not histogram_render_meta.get('is_grouped'):
-                        plot_ax.set_ylabel('Count')
+                        plot_ax.set_ylabel('Density')
                     title_artist = render_histogram_title(
                         plot_ax,
                         build_wrapped_chart_title(header),
