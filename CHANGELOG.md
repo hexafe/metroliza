@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.03rc1(260307) — current version
+## 2026.03rc1(260315) — current version
 - Histogram dashboards were redesigned for clearer side-table summaries and less visual clutter.
 - Extended histogram tables now use taller rows so dense values are easier to scan.
 - Chart title bands and x-axis range behavior were corrected for clearer previews and exports.

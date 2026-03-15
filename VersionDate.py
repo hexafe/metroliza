@@ -1,5 +1,5 @@
 RELEASE_VERSION = "2026.03rc1"
-VERSION_DATE = "260307"
+VERSION_DATE = "260315"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
     "Histogram and chart readability upgrade: cleaner layouts, taller summary rows, and better title/axis visibility."
