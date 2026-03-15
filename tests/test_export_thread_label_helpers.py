@@ -129,8 +129,10 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(table[5], ('Spec type', 'two-sided'))
         self.assertEqual(table[6], ('Cp', 1.99))
         self.assertEqual(table[7], ('Cpk', 1.43))
-        self.assertEqual(table[-2], ('NOK', 1))
-        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+        self.assertEqual(table[-4], ('NOK', 1))
+        self.assertEqual(table[-3], ('NOK %', '8.33%'))
+        self.assertEqual(table[-2][0], 'NOK % (obs vs est)')
+        self.assertEqual(table[-1][0], 'NOK % Δ (abs/rel)')
 
 
     def test_build_histogram_table_render_data_keeps_row_order(self):
@@ -182,7 +184,8 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         labels = [row[0] for row in payload['rows']]
 
         self.assertEqual(labels[:8], ['Min', 'Max', 'Mean', 'Median', 'Std Dev', 'Spec type', 'Cp', 'Cpk'])
-        self.assertEqual(labels[-2:], ['NOK', 'NOK %'])
+        self.assertEqual(labels[-4:-2], ['NOK', 'NOK %'])
+        self.assertEqual(labels[-2:], ['NOK % (obs vs est)', 'NOK % Δ (abs/rel)'])
         self.assertIn('Cp', payload['capability_rows'])
         self.assertIn('Cpk', payload['capability_rows'])
 

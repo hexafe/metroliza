@@ -20,7 +20,8 @@ class TestExportSummaryCompositionService(unittest.TestCase):
             'capability_rows': {
                 'Cp': {'label': 'Cp', 'classification_value': 1.45},
                 'Cpk': {'label': 'Cpk', 'classification_value': 1.21},
-            }
+            },
+            'summary_metrics': {'nok_pct_abs_diff': 0.03, 'nok_pct_discrepancy_threshold': 0.02},
         }
 
         result = build_summary_table_composition(summary_stats, histogram_table_payload)
@@ -28,6 +29,7 @@ class TestExportSummaryCompositionService(unittest.TestCase):
         self.assertEqual(result['capability_badge']['palette_key'], 'quality_marginal')
         self.assertEqual(result['histogram_row_badges']['Normality']['palette_key'], 'normality_not_normal')
         self.assertEqual(result['histogram_row_badges']['NOK %']['palette_key'], 'quality_marginal')
+        self.assertEqual(result['histogram_row_badges']['NOK % Δ (abs/rel)']['palette_key'], 'quality_risk')
         self.assertEqual(result['panel_subtitle'], 'n=84 • NOK=1.2%')
 
 

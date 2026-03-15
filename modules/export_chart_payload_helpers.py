@@ -5,6 +5,7 @@ import math
 
 LOW_N_WARNING_THRESHOLD = 25
 LOW_N_SEVERE_THRESHOLD = 10
+NOK_DISCREPANCY_WARNING_ABS_THRESHOLD = 0.02
 
 
 def _is_numeric(value):
@@ -86,6 +87,33 @@ def _approx_uncertainty_band(value, sample_size):
     return f"±{margin:.2f} (approx 95% band)"
 
 
+def _compute_nok_discrepancy_metrics(observed_nok_pct, estimated_nok_pct):
+    observed = float(observed_nok_pct) if _is_numeric(observed_nok_pct) else None
+    estimated = float(estimated_nok_pct) if _is_numeric(estimated_nok_pct) else None
+    if observed is None or estimated is None:
+        return {
+            'abs_diff': None,
+            'abs_diff_pp': None,
+            'rel_diff': None,
+            'threshold_abs': NOK_DISCREPANCY_WARNING_ABS_THRESHOLD,
+            'is_warning': False,
+        }
+
+    abs_diff = abs(observed - estimated)
+    if abs(observed) <= 1e-12:
+        rel_diff = 0.0 if abs_diff <= 1e-12 else None
+    else:
+        rel_diff = abs_diff / abs(observed)
+
+    return {
+        'abs_diff': abs_diff,
+        'abs_diff_pp': abs_diff * 100.0,
+        'rel_diff': rel_diff,
+        'threshold_abs': NOK_DISCREPANCY_WARNING_ABS_THRESHOLD,
+        'is_warning': abs_diff > NOK_DISCREPANCY_WARNING_ABS_THRESHOLD,
+    }
+
+
 def build_histogram_table_data(summary_stats):
     """Build stable, display-ready statistics rows and row metadata for histograms."""
 
@@ -148,20 +176,51 @@ def build_histogram_table_data(summary_stats):
         ])
         table_rows.extend(uncertainty_rows)
 
+    observed_nok_pct = summary_stats.get('observed_nok_pct', summary_stats.get('nok_pct'))
+    estimated_nok_pct = summary_stats.get('estimated_nok_pct')
+    discrepancy_metrics = _compute_nok_discrepancy_metrics(observed_nok_pct, estimated_nok_pct)
+
     table_rows.extend([
         ('Samples', round(summary_stats['sample_size'], 1)),
         ('NOK', round(summary_stats['nok_count'], 1)),
         ('NOK %', f"{summary_stats['nok_pct'] * 100:.2f}%"),
+        (
+            'NOK % (obs vs est)',
+            (
+                f"Obs {observed_nok_pct * 100:.2f}% vs Est {estimated_nok_pct * 100:.2f}%"
+                if _is_numeric(observed_nok_pct) and _is_numeric(estimated_nok_pct)
+                else 'N/A'
+            ),
+        ),
+        (
+            'NOK % Δ (abs/rel)',
+            (
+                f"{'⚠ ' if discrepancy_metrics['is_warning'] else ''}"
+                f"{discrepancy_metrics['abs_diff_pp']:.2f} pp / "
+                f"{discrepancy_metrics['rel_diff'] * 100:.1f}%"
+                if discrepancy_metrics['abs_diff_pp'] is not None and discrepancy_metrics['rel_diff'] is not None
+                else (
+                    f"{'⚠ ' if discrepancy_metrics['is_warning'] else ''}{discrepancy_metrics['abs_diff_pp']:.2f} pp / N/A"
+                    if discrepancy_metrics['abs_diff_pp'] is not None
+                    else 'N/A'
+                )
+            ),
+        ),
     ])
 
     return {
         'rows': table_rows,
         'summary_metrics': {
             'observed_nok_count': summary_stats.get('observed_nok_count', summary_stats.get('nok_count')),
-            'observed_nok_pct': summary_stats.get('observed_nok_pct', summary_stats.get('nok_pct')),
-            'estimated_nok_pct': summary_stats.get('estimated_nok_pct'),
+            'observed_nok_pct': observed_nok_pct,
+            'estimated_nok_pct': estimated_nok_pct,
             'estimated_nok_ppm': summary_stats.get('estimated_nok_ppm'),
             'estimated_yield_pct': summary_stats.get('estimated_yield_pct'),
+            'nok_pct_abs_diff': discrepancy_metrics['abs_diff'],
+            'nok_pct_abs_diff_pp': discrepancy_metrics['abs_diff_pp'],
+            'nok_pct_rel_diff': discrepancy_metrics['rel_diff'],
+            'nok_pct_discrepancy_threshold': discrepancy_metrics['threshold_abs'],
+            'nok_pct_discrepancy_warning': discrepancy_metrics['is_warning'],
         },
         'sample_confidence': sample_confidence,
         'capability_rows': {

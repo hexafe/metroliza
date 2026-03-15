@@ -1935,8 +1935,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         table = payload['rows']
-        self.assertEqual(table[-2], ('NOK', 2))
-        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+        self.assertEqual(table[-4], ('NOK', 2))
+        self.assertEqual(table[-3], ('NOK %', '8.33%'))
+        self.assertEqual(table[-2], ('NOK % (obs vs est)', 'N/A'))
+        self.assertEqual(table[-1], ('NOK % Δ (abs/rel)', 'N/A'))
 
 
     def test_build_histogram_table_data_uses_cpu_for_one_sided_upper_case(self):
@@ -3107,7 +3109,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(lines, ['Family: positive-support', 'Spec type: one-sided upper', 'Warning: fit weak', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
+        self.assertEqual(lines, ['Family: positive-support', 'Spec type: one-sided upper', 'Warning: fit weak', 'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
         self.assertFalse(any(line.startswith('Normality:') for line in lines))
         self.assertFalse(any('Model:' in line for line in lines))
 
@@ -3120,7 +3122,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(lines, ['Family: signed/bilateral', 'Spec type: two-sided', 'Fit confidence: medium', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
+        self.assertEqual(lines, ['Family: signed/bilateral', 'Spec type: two-sided', 'Fit confidence: medium', 'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
 
 
     def test_compact_histogram_note_lines_downgrades_fit_for_n10(self):

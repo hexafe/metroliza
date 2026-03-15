@@ -93,6 +93,22 @@ def classify_nok_severity(nok_pct):
     }
 
 
+
+
+def classify_nok_discrepancy_status(discrepancy_abs, *, threshold_abs=0.02):
+    """Classify observed-vs-estimated NOK discrepancy severity."""
+    try:
+        abs_value = float(discrepancy_abs)
+    except (TypeError, ValueError):
+        return {'label': 'NOK discrepancy N/A', 'palette_key': 'quality_unknown'}
+
+    threshold = float(threshold_abs)
+    if abs_value > threshold:
+        return {'label': f'NOK discrepancy {abs_value * 100:.2f}pp high', 'palette_key': 'quality_risk'}
+    if abs_value > (threshold * 0.5):
+        return {'label': f'NOK discrepancy {abs_value * 100:.2f}pp watch', 'palette_key': 'quality_marginal'}
+    return {'label': f'NOK discrepancy {abs_value * 100:.2f}pp low', 'palette_key': 'quality_capable'}
+
 def classify_normality_status(normality_status):
     """Map normality status to dedicated pastel normality palettes."""
     if normality_status == 'normal':
@@ -129,10 +145,15 @@ def build_summary_table_composition(summary_stats, histogram_table_payload):
         ),
     }
 
+    summary_metrics = histogram_table_payload.get('summary_metrics') or {}
     histogram_row_badges = {
         **capability_row_badges,
         'Normality': classify_normality_status(summary_stats.get('normality_status')),
         'NOK %': classify_nok_severity(summary_stats.get('nok_pct')),
+        'NOK % Δ (abs/rel)': classify_nok_discrepancy_status(
+            summary_metrics.get('nok_pct_abs_diff'),
+            threshold_abs=summary_metrics.get('nok_pct_discrepancy_threshold', 0.02),
+        ),
     }
 
     if sample_confidence.get('is_low_n'):

@@ -65,6 +65,11 @@ def test_build_histogram_table_data_exposes_observed_and_estimated_metrics():
         'estimated_nok_pct': 0.2,
         'estimated_nok_ppm': 200000.0,
         'estimated_yield_pct': 0.8,
+        'nok_pct_abs_diff': 0.1,
+        'nok_pct_abs_diff_pp': 10.0,
+        'nok_pct_rel_diff': 1.0,
+        'nok_pct_discrepancy_threshold': 0.02,
+        'nok_pct_discrepancy_warning': True,
     }
 
 
@@ -187,3 +192,47 @@ def test_build_histogram_table_data_uses_cpl_for_one_sided_lower():
     labels = [label for label, _ in payload['rows']]
     assert ('Spec type', 'one-sided lower') in payload['rows']
     assert 'Cpl' in labels
+
+
+def test_build_histogram_table_data_adds_obs_vs_est_comparison_rows():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 1.0,
+            'maximum': 3.0,
+            'average': 2.0,
+            'median': 2.0,
+            'sigma': 0.1,
+            'cp': 1.5,
+            'cpk': 1.2,
+            'sample_size': 30,
+            'nok_count': 3,
+            'nok_pct': 0.1,
+            'estimated_nok_pct': 0.12,
+        }
+    )
+
+    rows = dict(payload['rows'])
+    assert rows['NOK % (obs vs est)'] == 'Obs 10.00% vs Est 12.00%'
+    assert rows['NOK % Δ (abs/rel)'] == '2.00 pp / 20.0%'
+
+
+def test_build_histogram_table_data_flags_obs_vs_est_discrepancy_warning():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 1.0,
+            'maximum': 3.0,
+            'average': 2.0,
+            'median': 2.0,
+            'sigma': 0.1,
+            'cp': 1.5,
+            'cpk': 1.2,
+            'sample_size': 30,
+            'nok_count': 3,
+            'nok_pct': 0.1,
+            'estimated_nok_pct': 0.2,
+        }
+    )
+
+    rows = dict(payload['rows'])
+    assert rows['NOK % Δ (abs/rel)'].startswith('⚠ ')
+    assert payload['summary_metrics']['nok_pct_discrepancy_warning'] is True
