@@ -283,12 +283,13 @@ class TestExportPlotHelpers(unittest.TestCase):
             )
             fit_rows = [
                 ('Model', 'Johnson SU'),
+                ('Family', 'signed/bilateral'),
                 ('GOF p', '0.0712'),
                 ('P(<LSL)', '0.011%'),
                 ('P(>USL)', '0.108%'),
                 ('Est. NOK %', '0.123%'),
                 ('Est. PPM', '1,230'),
-                ('Model fit quality', 'Medium'),
+                ('Fit quality', 'Medium'),
             ]
             stats_rows = [
                 ('Average', '10.102'),
@@ -349,24 +350,22 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual([label for label, _ in rows], [
             'Model',
+            'Family',
             'GOF p',
             'P(<LSL)',
             'P(>USL)',
             'Est. NOK %',
             'Est. PPM',
             'Fit quality',
-            'Capability',
-            'Family',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
-        self.assertEqual(rows[1][1], '0.073')
-        self.assertEqual(rows[2][1], '0.120%')
-        self.assertEqual(rows[3][1], '0.230%')
-        self.assertEqual(rows[4][1], '0.123%')
-        self.assertEqual(rows[5][1], '1,234')
-        self.assertEqual(rows[6][1], 'Medium')
-        self.assertEqual(rows[7][1], 'Risk')
-        self.assertEqual(rows[8][1], 'unknown')
+        self.assertEqual(rows[1][1], 'unknown')
+        self.assertEqual(rows[2][1], '0.073')
+        self.assertEqual(rows[3][1], '0.120%')
+        self.assertEqual(rows[4][1], '0.230%')
+        self.assertEqual(rows[5][1], '0.123%')
+        self.assertEqual(rows[6][1], '1,234')
+        self.assertEqual(rows[7][1], 'Medium')
 
     def test_distribution_fit_table_rows_follow_upper_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -382,7 +381,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=10.0,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(>USL)', 'Est. NOK %', 'Est. PPM', 'Fit quality', 'Capability', 'Family'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'Family', 'GOF p', 'P(>USL)', 'Est. NOK %', 'Est. PPM', 'Fit quality'])
 
     def test_distribution_fit_table_rows_follow_lower_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -398,7 +397,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=None,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'GOF p', 'P(<LSL)', 'Est. NOK %', 'Est. PPM', 'Fit quality', 'Capability', 'Family'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'Family', 'GOF p', 'P(<LSL)', 'Est. NOK %', 'Est. PPM', 'Fit quality'])
 
     def test_distribution_fit_table_rows_omit_zero_bound_lower_tail_for_positive_support(self):
         rows = _build_distribution_fit_table_rows(
@@ -429,13 +428,12 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual(rows[0], ('Model', 'N/A'))
-        self.assertEqual(rows[1], ('GOF p', 'N/A'))
-        self.assertEqual(rows[2], ('Est. NOK %', 'N/A'))
-        self.assertEqual(rows[3], ('Est. PPM', 'N/A'))
-        self.assertEqual(rows[4], ('Fit quality', 'Unreliable'))
-        self.assertEqual(rows[5], ('Capability', 'N/A'))
-        self.assertEqual(rows[6], ('Family', 'unknown'))
-        self.assertEqual(rows[7], ('Warning', 'fit unreliable'))
+        self.assertEqual(rows[1], ('Family', 'unknown'))
+        self.assertEqual(rows[2], ('GOF p', 'N/A'))
+        self.assertEqual(rows[3], ('Est. NOK %', 'N/A'))
+        self.assertEqual(rows[4], ('Est. PPM', 'N/A'))
+        self.assertEqual(rows[5], ('Fit quality', 'Unreliable'))
+        self.assertEqual(rows[6], ('Warning', 'fit unreliable'))
 
     def test_left_and_right_panel_tables_share_fontsize_and_row_height_policy(self):
         fig = plt.figure(figsize=(6.2, 4.0))
@@ -448,9 +446,9 @@ class TestExportPlotHelpers(unittest.TestCase):
             left_meta = render_panel_table_in_panel_axes(
                 ax=left_ax,
                 title='Distribution Fit',
-                rows=[('Model', 'Johnson SU'), ('GOF p', '0.0712'), ('Est. NOK %', '0.123%'), ('Est. PPM', '1,230'), ('Model fit quality', 'Medium')],
+                rows=[('Model', 'Johnson SU'), ('Family', 'signed/bilateral'), ('GOF p', '0.0712'), ('Est. NOK %', '0.123%'), ('Est. PPM', '1,230'), ('Fit quality', 'Medium')],
                 style_options={'fontsize': 8.3},
-                row_height=0.060,
+                row_height=0.082,
                 pad_y=0.02,
             )
             right_meta = render_panel_table_in_panel_axes(
@@ -458,7 +456,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 title='Statistic',
                 rows=[('Average', '10.10'), ('Std dev', '0.08'), ('Cp', '1.33'), ('Cpk', '1.22')],
                 style_options={'fontsize': 8.3},
-                row_height=0.060,
+                row_height=0.082,
                 pad_y=0.02,
             )
 
@@ -487,6 +485,32 @@ class TestExportPlotHelpers(unittest.TestCase):
             rendered = dict(meta['rendered_rows'])
             self.assertIn('\n', rendered['Model'])
             self.assertFalse(meta['overflow'])
+        finally:
+            plt.close(fig)
+
+    def test_table_badge_styling_avoids_hatch_and_icon_noise(self):
+        fig = plt.figure(figsize=(4.8, 3.2))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Distribution Fit',
+                rows=[('Fit quality', 'Weak')],
+                style_options={'fontsize': 8.3},
+                row_height=0.082,
+                pad_y=0.02,
+            )
+            table = meta['table']
+            style_histogram_stats_table(
+                table,
+                meta['rendered_rows'],
+                capability_row_badges={'Fit quality': {'palette_key': 'fit_quality_low'}},
+            )
+
+            value_cell = table.get_celld()[(1, 1)]
+            self.assertEqual(value_cell.get_hatch(), '')
+            self.assertFalse(value_cell.get_text().get_text().startswith(('✓ ', '! ', '× ')))
         finally:
             plt.close(fig)
 
@@ -523,6 +547,23 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertNotIn('Fit quality', labels)
         self.assertIn('Spec handling', labels)
         self.assertIn('Family (debug)', labels)
+
+    def test_distribution_fit_default_rows_do_not_include_detached_note_metadata(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'selected_model': {'display_name': 'Johnson SU'},
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {'spec_type': 'bilateral', 'below_lsl_probability': 0.001, 'above_usl_probability': 0.002, 'nok_percent': 0.003, 'ppm_nok': 3000},
+            },
+            lsl=9.0,
+            usl=11.0,
+        )
+
+        labels = [label for label, _ in rows]
+        self.assertNotIn('Spec handling', labels)
+        self.assertNotIn('Family (debug)', labels)
+        self.assertNotIn('Capability', labels)
 
     def test_histogram_annotation_rendering_keeps_mean_and_spec_labels_without_tail_probability_text(self):
         fig, ax = plt.subplots(figsize=(6.2, 4.0))
@@ -2023,10 +2064,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         table = payload['rows']
-        self.assertEqual(table[-4], ('NOK', '2.000'))
-        self.assertEqual(table[-3], ('NOK %', '8.33%'))
-        self.assertEqual(table[-2], ('NOK % (obs vs est)', 'N/A'))
-        self.assertEqual(table[-1], ('NOK % Δ (abs/rel)', 'N/A'))
+        self.assertEqual(table[-2], ('NOK', '2.000'))
+        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+        self.assertNotIn(('NOK % (obs vs est)', 'N/A'), table)
+        self.assertNotIn(('NOK % Δ (abs/rel)', 'N/A'), table)
 
 
     def test_build_histogram_table_data_uses_cpu_for_one_sided_upper_case(self):
@@ -2052,9 +2093,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         labels = [label for label, _ in table]
         self.assertIn('Cpu', labels)
         self.assertNotIn('Cpk', labels)
-        self.assertIn('Spec type', labels)
-        self.assertIn(('Spec type', 'one-sided upper'), table)
-        self.assertIn('Cp (not defined for one-sided) (info)', labels)
+        self.assertNotIn('Spec type', labels)
+        self.assertNotIn('Cp (not defined for one-sided) (info)', labels)
 
     def test_build_histogram_table_data_exposes_cpu_metadata_for_badges(self):
         payload = build_histogram_table_data(
@@ -2184,13 +2224,12 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertTrue(ax_table.get_celld()[(1, 1)].get_visible())
             self.assertTrue(ax_table.get_celld()[(1, 2)].get_visible())
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), 'Normality')
-            self.assertTrue(ax_table.get_celld()[(1, 2)].get_text().get_text().startswith(('✓ ', '! ', '× ')))
-            self.assertTrue(ax_table.get_celld()[(1, 2)].get_text().get_text().endswith(normality_text))
+            self.assertEqual(ax_table.get_celld()[(1, 2)].get_text().get_text(), normality_text)
             self.assertEqual(
                 ax_table.get_celld()[(1, 0)].get_text().get_color(),
                 SUMMARY_PLOT_PALETTE[palette_bg.replace('_bg', '_text')],
             )
-            self.assertTrue(ax_table.get_celld()[(1, 0)].get_hatch() in {'', '..', '///', 'xx'})
+            self.assertEqual(ax_table.get_celld()[(1, 0)].get_hatch(), '')
 
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_fontweight(), 'normal')
             self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_fontweight(), 'normal')
@@ -2361,8 +2400,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             capability_badge={'label': 'Cp/Cpk good', 'palette_key': 'quality_good'},
         )
 
-        self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_text(), '✓ 1.45')
-        self.assertEqual(ax_table.get_celld()[(2, 1)].get_text().get_text(), '✓ 1.4')
+        self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_text(), '1.45')
+        self.assertEqual(ax_table.get_celld()[(2, 1)].get_text().get_text(), '1.4')
         self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_text(), 'Cp')
         self.assertEqual(ax_table.get_celld()[(2, 0)].get_text().get_text(), 'Cpk')
         plt.close(fig)

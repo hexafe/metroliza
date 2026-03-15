@@ -216,7 +216,6 @@ _DISTRIBUTION_FIT_COMPACT_LABELS = {
     'NOK % (obs vs est)': 'Obs vs Est NOK %',
     'NOK % Δ (abs/rel)': 'NOK % Δ',
     'Model fit quality': 'Fit quality',
-    'Capability status': 'Capability',
 }
 
 
@@ -1049,9 +1048,16 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     below_lsl = risk_estimates.get('below_lsl_probability')
     above_usl = risk_estimates.get('above_usl_probability')
 
+    family_label = {
+        'one_sided_zero_bound_positive': 'positive-support',
+        'one_sided_zero_bound_negative': 'negative-support',
+        'bilateral_signed': 'signed/bilateral',
+    }.get(str(inferred_support_mode), 'unknown')
+
     raw_rows = [
-        ('Best fit', selected_model.get('display_name', 'N/A')),
-        ('GOF p-value', gof_display),
+        ('Model', selected_model.get('display_name', 'N/A')),
+        ('Family', family_label),
+        ('GOF p', gof_display),
     ]
 
     allow_lower_tail_row = spec_type in {'bilateral', 'lower_only'} and lsl is not None
@@ -1070,24 +1076,6 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
         ('Estimated NOK (PPM)', format_ppm(risk_estimates.get('ppm_nok'))),
         ('Model fit quality', str(fit_quality.get('label', 'unknown')).title()),
     ])
-
-    cp_value = (summary_stats or {}).get('cp')
-    cpk_value = (summary_stats or {}).get('cpk')
-    ppk_value = (summary_stats or {}).get('ppk')
-    capability_status = _resolve_capability_status(
-        cp=cp_value,
-        cpk=cpk_value,
-        ppk=ppk_value,
-        nok_ratio=risk_estimates.get('nok_percent', (summary_stats or {}).get('estimated_nok_pct')),
-    )
-    raw_rows.append(('Capability status', capability_status['label']))
-
-    family_label = {
-        'one_sided_zero_bound_positive': 'positive-support',
-        'one_sided_zero_bound_negative': 'negative-support',
-        'bilateral_signed': 'signed/bilateral',
-    }.get(str(inferred_support_mode), 'unknown')
-    raw_rows.append(('Family', family_label))
 
     warning_text = str(distribution_fit_result.get('warning') or '').strip()
     quality_key = str(fit_quality.get('label') or '').strip().lower()
@@ -2555,18 +2543,9 @@ def _apply_table_row_badge(ax_table, row_index, palette_key):
         cell.set_edgecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
         cell.set_linestyle(border_style.get('linestyle', 'solid'))
         cell.set_linewidth(float(border_style.get('linewidth', 0.9)))
-        cell.set_hatch(border_style.get('hatch', ''))
+        cell.set_hatch('')
         text = cell.get_text()
         text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
-        prefix = STATUS_ICON_PREFIX_BY_PALETTE.get(palette_key)
-        current_text = text.get_text()
-        if (
-            col_index != label_column_index
-            and prefix
-            and current_text
-            and not current_text.startswith((f'{prefix} ', '✓ ', '! ', '× '))
-        ):
-            text.set_text(f'{prefix} {current_text}')
 
 
 def _merge_table_row_cells(ax_table, row_index, col_index=0, *, col_span, text=None, palette_key=None, height_scale=1.0):
@@ -4415,7 +4394,7 @@ class ExportDataThread(QThread):
                             'min_value_fraction': 0.28,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
-                        row_height=0.074,
+                        row_height=0.082,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4433,7 +4412,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         ax_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.26,
+                        row_height_scale=1.32,
                     )
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
@@ -4443,23 +4422,20 @@ class ExportDataThread(QThread):
                         rows=distribution_fit_rows,
                         style_options={
                             **table_style_options,
-                            'min_label_fraction': 0.42,
-                            'min_value_fraction': 0.44,
-                            'value_wrap_width': 28,
+                            'min_label_fraction': 0.38,
+                            'min_value_fraction': 0.48,
+                            'value_wrap_width': 30,
                             'low_priority_labels': {'Est. PPM'},
                         },
-                        row_height=0.074,
+                        row_height=0.082,
                         pad_y=0.02,
                         valign='top',
                     )
                     distribution_fit_table = left_table_meta['table']
                     fit_quality_value = None
-                    capability_status_value = None
                     for label, value in left_table_meta.get('rendered_rows', []):
                         if label == 'Fit quality':
                             fit_quality_value = str(value).strip().lower()
-                        elif label == 'Capability':
-                            capability_status_value = str(value).strip().lower()
 
                     fit_quality_palette = None
                     if fit_quality_value in {'weak', 'unreliable'}:
@@ -4469,26 +4445,17 @@ class ExportDataThread(QThread):
                     elif fit_quality_value in {'good', 'strong', 'capable'}:
                         fit_quality_palette = 'fit_quality_high'
 
-                    capability_status_palette = None
-                    if capability_status_value in {'risk'}:
-                        capability_status_palette = 'quality_risk'
-                    elif capability_status_value in {'marginal'}:
-                        capability_status_palette = 'quality_marginal'
-                    elif capability_status_value in {'good', 'capable'}:
-                        capability_status_palette = 'quality_capable'
-
                     style_histogram_stats_table(
                         distribution_fit_table,
                         left_table_meta['rendered_rows'],
                         capability_row_badges={
                             **({'Fit quality': {'palette_key': fit_quality_palette}} if fit_quality_palette else {}),
-                            **({'Capability': {'palette_key': capability_status_palette}} if capability_status_palette else {}),
                         } or None,
                     )
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.26,
+                        row_height_scale=1.32,
                     )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
