@@ -127,8 +127,8 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
 
         self.assertEqual(table[0], ('Min', '1.235'))
         self.assertEqual(table[5], ('Spec type', 'two-sided'))
-        self.assertEqual(table[6], ('Cp', '1.99'))
-        self.assertEqual(table[7], ('Cpk', '1.43'))
+        self.assertTrue(table[6][1].startswith('1.99 ['))
+        self.assertTrue(table[7][1].startswith('1.43 ['))
         self.assertEqual(table[-4], ('NOK', '1.000'))
         self.assertEqual(table[-3], ('NOK %', '8.33%'))
         self.assertEqual(table[-2][0], 'NOK % (obs vs est)')
@@ -184,6 +184,8 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         labels = [row[0] for row in payload['rows']]
 
         self.assertEqual(labels[:8], ['Min', 'Max', 'Mean', 'Median', 'Std Dev', 'Spec type', 'Cp', 'Cpk'])
+        self.assertIn('Cp 95% CI', labels)
+        self.assertIn('Cpk 95% CI', labels)
         self.assertEqual(labels[-4:-2], ['NOK', 'NOK %'])
         self.assertEqual(labels[-2:], ['NOK % (obs vs est)', 'NOK % Δ (abs/rel)'])
         self.assertIn('Cp', payload['capability_rows'])

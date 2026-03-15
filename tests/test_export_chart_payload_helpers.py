@@ -22,8 +22,12 @@ def test_build_histogram_table_data_preserves_capability_rows():
     )
 
     assert payload['rows'][5] == ('Spec type', 'two-sided')
-    assert payload['rows'][6] == ('Cp', '1.50')
-    assert payload['capability_rows']['Cpk']['display_value'] == '1.20'
+    cp_row = dict(payload['rows'])['Cp']
+    cpk_row = dict(payload['rows'])['Cpk']
+    assert cp_row.startswith('1.50 [')
+    assert cpk_row.startswith('1.20 [')
+    assert payload['capability_rows']['Cpk']['display_value'].startswith('1.20 [')
+    assert 'Cpk 95% CI' in dict(payload['rows'])
 
 
 def test_build_histogram_table_render_data_supports_three_column_mode():
@@ -168,6 +172,7 @@ def test_build_histogram_table_data_uses_cpu_and_cp_not_defined_for_one_sided_up
     assert 'Cpu' in labels
     assert 'Cp uncertainty' not in labels
     assert 'Cpu uncertainty' in labels
+    assert 'Cpu 95% CI' in labels
 
 
 def test_build_histogram_table_data_uses_cpl_for_one_sided_lower():
@@ -192,6 +197,31 @@ def test_build_histogram_table_data_uses_cpl_for_one_sided_lower():
     labels = [label for label, _ in payload['rows']]
     assert ('Spec type', 'one-sided lower') in payload['rows']
     assert 'Cpl' in labels
+    assert 'Cpl 95% CI' in labels
+
+
+def test_build_histogram_table_data_supports_opt_out_of_capability_ci_annotations():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 1.0,
+            'maximum': 3.0,
+            'average': 2.0,
+            'median': 2.0,
+            'sigma': 0.1,
+            'cp': 1.5,
+            'cpk': 1.2,
+            'sample_size': 50,
+            'nok_count': 1,
+            'nok_pct': 0.1,
+            'include_capability_ci': False,
+        }
+    )
+
+    rows = dict(payload['rows'])
+    assert rows['Cp'] == '1.50'
+    assert rows['Cpk'] == '1.20'
+    assert 'Cp 95% CI' not in rows
+    assert 'Cpk 95% CI' not in rows
 
 
 def test_build_histogram_table_data_adds_obs_vs_est_comparison_rows():
