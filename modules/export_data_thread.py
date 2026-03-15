@@ -2182,7 +2182,7 @@ def adjust_histogram_stats_table_geometry(
     label_col0_ratio = statistic_area_ratio * 0.78
     label_col1_ratio = statistic_area_ratio * 0.22
     value_ratio = 1.0 - statistic_area_ratio
-    safe_row_scale = min(1.4, max(0.9, float(row_height_scale)))
+    safe_row_scale = min(1.9, max(0.9, float(row_height_scale)))
     border_linewidth = 0.45
     cell_padding = 0.12
 
@@ -4338,7 +4338,7 @@ class ExportDataThread(QThread):
                             'min_value_fraction': 0.28,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
-                        row_height=0.106,
+                        row_height=0.118,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4356,7 +4356,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         ax_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.62,
+                        row_height_scale=1.78,
                     )
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
@@ -4371,7 +4371,7 @@ class ExportDataThread(QThread):
                             'value_wrap_width': 30,
                             'low_priority_labels': {'Est. PPM'},
                         },
-                        row_height=0.106,
+                        row_height=0.118,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4399,7 +4399,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=1.62,
+                        row_height_scale=1.78,
                     )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
