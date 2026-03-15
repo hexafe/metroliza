@@ -2941,21 +2941,21 @@ class TestExportPlotHelpers(unittest.TestCase):
             artist = ax.text(
                 0.02,
                 0.02,
-                'Dashed KDE = descriptive only',
+                'Dashed KDE: descriptive only',
                 transform=ax.transAxes,
                 ha='left',
                 va='bottom',
-                fontsize=6.5,
-                color='#495463',
+                fontsize=6.0,
+                color='#5f6b7a',
                 bbox={
-                    'boxstyle': 'round,pad=0.18',
-                    'facecolor': (1.0, 1.0, 1.0, 0.72),
-                    'edgecolor': '#c7ced7',
-                    'linewidth': 0.5,
+                    'boxstyle': 'round,pad=0.16',
+                    'facecolor': (1.0, 1.0, 1.0, 0.65),
+                    'edgecolor': 'none',
+                    'linewidth': 0.0,
                 },
-                zorder=8,
+                zorder=10,
             )
-            self.assertEqual(artist.get_text(), 'Dashed KDE = descriptive only')
+            self.assertEqual(artist.get_text(), 'Dashed KDE: descriptive only')
             self.assertIsNotNone(artist.get_bbox_patch())
             self.assertGreaterEqual(artist.get_position()[0], 0.0)
             self.assertGreaterEqual(artist.get_position()[1], 0.0)
