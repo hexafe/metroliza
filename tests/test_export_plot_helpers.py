@@ -2729,7 +2729,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
     def test_resolve_extended_chart_fig_width_scales_with_group_count(self):
         self.assertEqual(resolve_extended_chart_fig_width(0), 6.2)
-        self.assertAlmostEqual(resolve_extended_chart_fig_width(10), 8.4)
+        self.assertAlmostEqual(resolve_extended_chart_fig_width(10), 7.08)
         self.assertEqual(resolve_extended_chart_fig_width(100), 11.0)
 
     def test_finalize_extended_chart_layout_expands_bottom_margin_for_rotated_labels_and_legend(self):

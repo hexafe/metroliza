@@ -4215,10 +4215,26 @@ class ExportDataThread(QThread):
             panel_plan = build_summary_panel_write_plan(summary_anchors, header)
             header_cell = panel_plan['header_cell']
             default_image_slots = panel_plan['image_slots']
+            distribution_overflow_cols = 0
 
             def _reserve_summary_image_slot(chart_name, fig):
-                del fig
-                return dict(default_image_slots.get(chart_name, default_image_slots['distribution']))
+                nonlocal distribution_overflow_cols
+
+                default_slot = dict(default_image_slots.get(chart_name, default_image_slots['distribution']))
+                if chart_name == 'distribution':
+                    span = self._resolve_chart_cell_span(fig)
+                    distribution_end_col = int(default_slot['col']) + int(span.get('col_span', 1))
+                    default_iqr_col = int(default_image_slots.get('iqr', default_slot)['col'])
+                    distribution_overflow_cols = max(0, distribution_end_col - default_iqr_col)
+                    return default_slot
+
+                if chart_name == 'iqr':
+                    return {
+                        'row': default_slot['row'],
+                        'col': int(default_slot['col']) + int(distribution_overflow_cols),
+                    }
+
+                return default_slot
 
             write_start = time.perf_counter()
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])

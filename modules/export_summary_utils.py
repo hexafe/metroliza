@@ -451,7 +451,8 @@ def resolve_extended_chart_fig_width(n_groups: int, *, base_width: float = 6.2, 
     """Resolve a dynamic figure width for extended categorical charts."""
 
     group_count = max(0, int(n_groups))
-    candidate = float(base_width) + (group_count * float(per_group))
+    growth_groups = max(0, group_count - 6)
+    candidate = float(base_width) + (growth_groups * float(per_group))
     return min(float(max_width), max(float(base_width), candidate))
 
 

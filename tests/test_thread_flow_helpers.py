@@ -1037,6 +1037,52 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
 
+    def test_summary_sheet_fill_shifts_iqr_slot_when_distribution_span_grows(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr'}
+        thread.violin_plot_min_samplesize = 1
+
+        # Force a larger calculated span for extended charts to emulate a wide
+        # categorical export and verify iqr placement advances accordingly.
+        thread._resolve_chart_cell_span = lambda _fig: {'col_span': 14, 'row_span': 1}
+
+        worksheet = _FakeSummaryWorksheet()
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        panel_slots = build_summary_image_anchor_plan(5)
+        inserted = worksheet.inserted_images
+        self.assertEqual(inserted[0], panel_slots['distribution'])
+        self.assertGreater(inserted[1][1], panel_slots['iqr'][1])
+
     def test_apply_bottleneck_optimizations_preserves_trend_for_normal_runs(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
