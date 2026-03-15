@@ -536,7 +536,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
             return None
         return left, right, bottom, top
 
-    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=32.0, extra_side_px=-40.0):
+    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=36.0, extra_side_px=-8.0):
         bounds = _resolve_plot_rect_display_bounds(fig, plot_rect)
         if bounds is None:
             return None
@@ -553,9 +553,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
             return True
         left, right, bottom, top = bounds
         return (
-            bbox.x0 >= (left + padding_px)
-            and bbox.x1 <= (right - padding_px)
-            and bbox.y0 >= (bottom + padding_px)
+            bbox.y0 >= (bottom + padding_px)
             and bbox.y1 <= (top - padding_px)
         )
 
@@ -570,6 +568,7 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
     )
     accepted = {}
     accepted_bboxes = []
+    accepted_rows = []
     for index, annotation in priority_sorted:
         text_artist = ax.text(
             annotation['x'],
@@ -587,13 +586,18 @@ def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, a
         figure.canvas.draw()
         bbox = text_artist.get_window_extent(renderer=figure.canvas.get_renderer())
         is_safe = _bbox_fits_plot_rect(bbox, plot_rect_bounds)
+        annotation_row = annotation.get('row_index')
         if is_safe and plot_rect_bounds is not None and accepted_bboxes:
-            if any(bbox.overlaps(existing_bbox) for existing_bbox in accepted_bboxes):
+            if any(
+                bbox.overlaps(existing_bbox) and annotation_row == existing_row
+                for existing_bbox, existing_row in zip(accepted_bboxes, accepted_rows)
+            ):
                 is_safe = False
 
         if is_safe:
             accepted[index] = text_artist
             accepted_bboxes.append(bbox)
+            accepted_rows.append(annotation_row)
         else:
             text_artist.remove()
 
@@ -756,7 +760,7 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
 
 def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats):
     inferred_support = distribution_fit_result.get('inferred_support_mode') or 'unknown'
-    candidate_family = 'Positive-support (one-sided)' if inferred_support == 'one_sided_zero_bound_positive' else 'Signed/bilateral'
+    candidate_family = 'positive-support' if inferred_support == 'one_sided_zero_bound_positive' else 'signed/bilateral'
     fit_quality = distribution_fit_result.get('fit_quality') or {}
     fit_warning = distribution_fit_result.get('warning')
 
@@ -765,7 +769,7 @@ def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats)
             'label': 'Candidate family',
             'compact_label': 'Family',
             'value': candidate_family,
-            'compact_value': 'One-sided +' if inferred_support == 'one_sided_zero_bound_positive' else 'Signed/bilateral',
+            'compact_value': candidate_family,
             'priority': 90,
         },
     ]
@@ -776,6 +780,7 @@ def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats)
             'label': 'Reference normality',
             'compact_label': 'Normality',
             'value': normality_text,
+            'compact_value': str(normality_text).splitlines()[-1],
             'priority': 60,
         })
 
@@ -784,19 +789,48 @@ def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats)
     if is_poor_fit:
         note_items.append({
             'label': 'Warning',
-            'value': 'Fit quality is weak/unreliable; use capability decisions with caution.',
+            'compact_label': 'Warning',
+            'value': f'fit {quality_label}',
+            'compact_value': f'fit {quality_label}',
             'priority': 30,
-            'expanded_only': True,
         })
     if fit_warning:
         note_items.append({
             'label': 'Warning',
-            'value': str(fit_warning),
+            'value': 'fit warning',
+            'compact_value': 'fit warning',
             'priority': 20,
             'expanded_only': True,
         })
 
     return note_items, is_poor_fit
+
+
+def _is_non_normal_capability_reference_model(distribution_fit_result):
+    selected_model = (distribution_fit_result or {}).get('selected_model') or {}
+    model_name = str(selected_model.get('model') or '').strip().lower()
+    if not model_name:
+        return False
+    return model_name not in {'norm'}
+
+
+def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_fit_result):
+    if not _is_non_normal_capability_reference_model(distribution_fit_result):
+        return histogram_table_payload
+
+    payload = dict(histogram_table_payload or {})
+    rows = []
+    for label, value in payload.get('rows', []):
+        rows.append(('Cpk (normal ref)', value) if label == 'Cpk' else (label, value))
+    payload['rows'] = rows
+
+    capability_rows = dict(payload.get('capability_rows') or {})
+    cpk_meta = dict(capability_rows.get('Cpk') or {})
+    if cpk_meta:
+        cpk_meta['label'] = 'Cpk (normal ref)'
+        capability_rows['Cpk'] = cpk_meta
+        payload['capability_rows'] = capability_rows
+    return payload
 
 
 def render_histogram_note_panel(
@@ -3832,7 +3866,7 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    histogram_figsize = (6.2, 4)
+                    histogram_figsize = (7.2, 4)
                     chart_start = time.perf_counter()
                     fig = plt.figure(figsize=histogram_figsize)
 
@@ -3854,6 +3888,10 @@ class ExportDataThread(QThread):
 
                     summary_stats.update(compute_estimated_tail_metrics(distribution_fit_result, lsl=LSL, usl=USL))
                     histogram_table_payload = build_histogram_table_data(summary_stats)
+                    histogram_table_payload = _apply_non_normal_cpk_reference_label(
+                        histogram_table_payload,
+                        distribution_fit_result,
+                    )
                     right_rows = histogram_table_payload['rows']
                     left_rows = _build_distribution_fit_table_rows(
                         distribution_fit_result,
@@ -3881,8 +3919,8 @@ class ExportDataThread(QThread):
                         left_row_count=len(histogram_content_payload['left_rows']),
                         right_row_count=len(histogram_content_payload['right_rows']),
                         note_line_count=len(histogram_content_payload['note_lines']),
-                        left_panel_width_hint=0.245,
-                        right_panel_width_hint=0.205,
+                        left_panel_width_hint=0.27,
+                        right_panel_width_hint=0.19,
                     )
                     assert_non_overlapping_rectangles(panel_rects)
 
@@ -4096,7 +4134,7 @@ class ExportDataThread(QThread):
                     plot_ax.set_xlabel('Measurement')
                     if not histogram_render_meta.get('is_grouped'):
                         plot_ax.set_ylabel('Count')
-                    histogram_title_pad = 26
+                    histogram_title_pad = 14
                     plot_ax.set_title(build_wrapped_chart_title(header), pad=histogram_title_pad)
                     apply_minimal_axis_style(plot_ax, grid_axis='y')
 
