@@ -2881,7 +2881,7 @@ class ExportDataThread(QThread):
         return image_buffer.getvalue()
 
     @staticmethod
-    def _resolve_chart_cell_span(fig, *, px_per_col=64.0, px_per_row=20.0, padding_cols=1, padding_rows=1):
+    def _resolve_chart_cell_span(fig, *, px_per_col=110.0, px_per_row=20.0, padding_cols=0, padding_rows=1):
         """Translate rendered figure size into worksheet cell spans."""
 
         if fig is None:
@@ -4204,18 +4204,11 @@ class ExportDataThread(QThread):
             summary_anchors = build_summary_image_anchor_plan(col)
             panel_plan = build_summary_panel_write_plan(summary_anchors, header)
             header_cell = panel_plan['header_cell']
-            summary_image_row = panel_plan['image_slots']['distribution']['row']
-            next_image_col = panel_plan['image_slots']['distribution']['col']
+            default_image_slots = panel_plan['image_slots']
 
-            def _reserve_summary_image_slot(_chart_name, fig):
-                nonlocal next_image_col
-                span = self._resolve_chart_cell_span(fig)
-                slot = {
-                    'row': summary_image_row,
-                    'col': next_image_col,
-                }
-                next_image_col += span['col_span']
-                return slot
+            def _reserve_summary_image_slot(chart_name, fig):
+                del fig
+                return dict(default_image_slots.get(chart_name, default_image_slots['distribution']))
 
             write_start = time.perf_counter()
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])

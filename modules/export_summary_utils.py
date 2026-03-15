@@ -371,6 +371,13 @@ def apply_shared_x_axis_label_strategy(
     strategy = prepare_categorical_x_axis(safe_labels)
     rotation = strategy['rotation']
     label_count = len(safe_labels)
+    max_length = max((len(label) for label in safe_labels), default=0)
+
+    # Backward-compatible readability guard: when thinning is explicitly
+    # disabled on very dense/long label sets, force 90° rotation so all labels
+    # can remain rendered without overlap collapse.
+    if not allow_thinning and (label_count > 16 or max_length > 18):
+        rotation = 90
 
     display_labels = list(strategy['processed_labels'])
     if truncate_labels:
@@ -391,7 +398,7 @@ def apply_shared_x_axis_label_strategy(
 
     display_positions = [positions[idx] for idx in indices]
     display_text = [display_labels[idx] for idx in indices]
-    horizontal_alignment = strategy['ha']
+    horizontal_alignment = 'center' if rotation == 0 else 'right'
 
     ax.set_xticks(display_positions)
     ax.set_xticklabels(display_text)
