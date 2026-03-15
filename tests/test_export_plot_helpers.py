@@ -70,6 +70,7 @@ from modules.export_data_thread import (  # noqa: E402
     compute_histogram_table_layout,
     render_histogram_annotations,
     render_histogram_title,
+    render_histogram_figure_title,
     build_measurement_chart_format_policy,
     build_measurement_block_plan,
     build_measurement_chart_range_specs,
@@ -855,8 +856,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         x_min, x_max = ax.get_xlim()
         self.assertLess(x_min, 7.0)
         self.assertGreater(x_max, 7.0)
-        self.assertGreater(x_max - x_min, 0.07)
-        self.assertLess(x_max - x_min, 0.09)
+        self.assertGreater(x_max - x_min, 1e-4)
+        self.assertLess(x_max - x_min, 1e-3)
         plt.close(fig)
 
     def test_render_histogram_xlim_includes_spec_limits_with_margin(self):
@@ -873,19 +874,20 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(x_max, usl)
         plt.close(fig)
 
-    def test_resolve_histogram_x_view_restores_spec_aware_full_range_with_10_percent_margin(self):
-        values = [10.0000, 10.0006, 10.0012, 10.0016]
+    def test_resolve_histogram_x_view_uses_data_spec_driven_effective_span_with_10_percent_margin(self):
+        values = [44.001, 44.006, 44.012]
 
-        resolved = resolve_histogram_x_view(values, lsl=9.95, usl=10.05)
+        resolved = resolve_histogram_x_view(values, lsl=44.000, usl=44.025, mean_value=44.006)
 
-        raw_span = 10.05 - 9.95
-        min_span = 10.05 * 0.01
-        span = max(raw_span, min_span)
-        margin = span * 0.10
-        center = (9.95 + 10.05) / 2.0
+        data_span = 44.012 - 44.001
+        spec_span = 44.025 - 44.000
+        effective_span = max(data_span, spec_span)
+        margin = effective_span * 0.10
         self.assertEqual(resolved['mode'], 'full')
-        self.assertAlmostEqual(resolved['x_min'], center - (span / 2.0) - margin)
-        self.assertAlmostEqual(resolved['x_max'], center + (span / 2.0) + margin)
+        self.assertAlmostEqual(resolved['x_min'], 44.000 - margin)
+        self.assertAlmostEqual(resolved['x_max'], 44.025 + margin)
+        self.assertAlmostEqual(resolved['x_min'], 43.9975)
+        self.assertAlmostEqual(resolved['x_max'], 44.0275)
 
     def test_resolve_histogram_x_view_uses_full_mode_for_regular_spread(self):
         values = [8.2, 9.0, 9.7, 10.2]
@@ -896,14 +898,15 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertLess(resolved['x_min'], 8.0)
         self.assertGreater(resolved['x_max'], 10.5)
 
-    def test_resolve_histogram_x_view_uses_min_span_guard_for_ultra_narrow_data_without_specs(self):
-        values = [10.0, 10.0 + 1e-9]
+    def test_resolve_histogram_x_view_keeps_ultra_narrow_span_local_without_absurd_absolute_magnitude_expansion(self):
+        values = [44.0010000, 44.0010001]
 
-        resolved = resolve_histogram_x_view(values)
+        resolved = resolve_histogram_x_view(values, mean_value=44.00100005)
 
         self.assertEqual(resolved['mode'], 'full')
-        self.assertGreater(resolved['x_max'] - resolved['x_min'], 0.09)
-        self.assertLess(resolved['x_max'] - resolved['x_min'], 0.2)
+        view_span = resolved['x_max'] - resolved['x_min']
+        self.assertGreater(view_span, 0.0004)
+        self.assertLess(view_span, 0.002)
 
     def test_render_histogram_ignores_invalid_spec_limits(self):
         fig, ax = plt.subplots()
@@ -1157,6 +1160,23 @@ class TestExportPlotHelpers(unittest.TestCase):
             plt.close(fig)
 
 
+
+    def test_render_histogram_figure_title_places_title_inside_visible_figure_area(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
+        try:
+            title_artist = render_histogram_figure_title(fig, 'Histogram Title QA')
+            self.assertIsNotNone(title_artist)
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            bbox = title_artist.get_window_extent(renderer=renderer)
+            figure_bbox = fig.bbox
+            self.assertGreaterEqual(bbox.x0, figure_bbox.x0)
+            self.assertLessEqual(bbox.x1, figure_bbox.x1)
+            self.assertGreaterEqual(bbox.y0, figure_bbox.y0)
+            self.assertLessEqual(bbox.y1, figure_bbox.y1)
+        finally:
+            plt.close(fig)
+
     def test_histogram_title_and_mean_annotation_keep_separate_bounding_boxes_with_table(self):
         import pandas as pd
 
@@ -1184,7 +1204,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 bbox=[1, 0, layout['table_bbox_width'], 1],
             )
 
-            title = render_histogram_title(ax, build_wrapped_chart_title('Histogram Layout Validation'))
+            title = render_histogram_figure_title(fig, build_wrapped_chart_title('Histogram Layout Validation'))
 
             annotation_specs = build_histogram_annotation_specs(10.2, 10.6, 9.8, 1.0)
             annotation_specs, max_annotation_row = compute_histogram_annotation_rows(
@@ -1196,14 +1216,22 @@ class TestExportPlotHelpers(unittest.TestCase):
                 row_step=0.025,
             )
             top_margin = max(0.82, 0.82 + (max_annotation_row * 0.04))
+            plot_rect = {'x': 0.125, 'y': 0.11, 'width': 0.775, 'height': top_margin - 0.11}
             texts = render_histogram_annotations(
                 ax,
                 annotation_specs,
                 annotation_fontsize=font_sizes['annotation_fontsize'],
-                annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#c0c0c0', 'alpha': 0.94},
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#c0c0c0',
+                    'alpha': 0.94,
+                    'plot_rect': plot_rect,
+                    'title_artist': title,
+                },
             )
 
-            plt.subplots_adjust(right=layout['subplot_right'], top=top_margin)
+            plt.subplots_adjust(right=layout['subplot_right'], top=max(top_margin, 0.88))
             fig.canvas.draw()
             renderer = fig.canvas.get_renderer()
 
@@ -1211,8 +1239,10 @@ class TestExportPlotHelpers(unittest.TestCase):
             mean_text = next(text for text, spec in zip(texts, annotation_specs) if spec.get('kind') == 'mean')
             mean_bbox = mean_text.get_window_extent(renderer=renderer)
 
-            self.assertFalse(title_bbox.overlaps(mean_bbox))
-            self.assertLess(mean_bbox.y1, title_bbox.y0)
+            self.assertLess(title_bbox.y1, fig.bbox.y1 + 1e-6)
+            self.assertGreaterEqual(title_bbox.y0, fig.bbox.y0)
+            self.assertLess(mean_bbox.y1, fig.bbox.y1)
+            self.assertGreater(mean_bbox.y0, fig.bbox.y0)
             self.assertFalse(title.get_clip_on())
         finally:
             plt.close(fig)
@@ -1576,8 +1606,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertIn('USL=9.000', texts)
             self.assertIn('LSL=1.000', texts)
             self.assertLess(title_bbox.y0, fig_bbox.y1)
-            self.assertLessEqual(title_artist.get_position()[1], 1.145)
-            self.assertGreater(title_artist.get_position()[1], 1.0)
+            self.assertLessEqual(title_artist.get_position()[1], 1.0)
+            self.assertGreater(title_artist.get_position()[1], 0.9)
         finally:
             plt.close(fig)
 

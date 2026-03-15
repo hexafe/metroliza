@@ -73,7 +73,6 @@ from modules.export_summary_utils import (
     build_tolerance_reference_legend_handles as _build_tolerance_reference_legend_handles,
 )
 from modules.export_summary_sheet_planner import (
-    CHART_TOP_SLOT_Y as _CHART_TOP_SLOT_Y,
     build_histogram_annotation_specs as _build_histogram_annotation_specs,
     compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
     build_summary_image_anchor_plan as _build_summary_image_anchor_plan,
@@ -570,32 +569,38 @@ def build_histogram_mean_line_style():
     }
 
 
-def render_histogram_title(ax, title, *, slot='title_band', fontsize=10.0, fontweight='bold'):
-    """Render a histogram title in a dedicated top-band slot above annotations."""
+def render_histogram_figure_title(fig, title, *, fontsize=12.0, color='#2f3b4a', fontweight='bold'):
+    """Render histogram title in figure space so layout can reserve a stable top band."""
 
-    slot_y = _CHART_TOP_SLOT_Y.get(slot, 1.135)
-    try:
-        axis_bbox = ax.get_window_extent()
-        figure_bbox = ax.figure.bbox
-        max_title_y_display = float(figure_bbox.y1) - 6.0
-        projected_y_display = float(axis_bbox.y0) + (float(slot_y) * float(axis_bbox.height))
-        if axis_bbox.height > 0 and projected_y_display > max_title_y_display:
-            slot_y = (max_title_y_display - float(axis_bbox.y0)) / float(axis_bbox.height)
-    except (AttributeError, TypeError, ValueError):
-        pass
-
-    return ax.text(
+    if not title:
+        return None
+    return fig.text(
         0.5,
-        slot_y,
+        0.985,
         str(title),
-        transform=ax.transAxes,
         ha='center',
-        va='bottom',
+        va='top',
         fontsize=fontsize,
         fontweight=fontweight,
-        color=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+        color=color,
+        zorder=14,
         clip_on=False,
-        zorder=12,
+    )
+
+
+def render_histogram_title(ax, title, *, slot='title_band', fontsize=10.0, fontweight='bold'):
+    """Backward-compatible wrapper for figure-level histogram title rendering."""
+
+    del slot
+    fig = getattr(ax, 'figure', None)
+    if fig is None:
+        return None
+    return render_histogram_figure_title(
+        fig,
+        title,
+        fontsize=fontsize,
+        color=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+        fontweight=fontweight,
     )
 
 
@@ -623,8 +628,8 @@ def resolve_edge_safe_label_anchor(x_data, x_min, x_max, edge_fraction=0.06):
     return {'ha': 'center', 'x_offset_points': 0.0}
 
 
-def resolve_histogram_x_view(values, *, lsl=None, usl=None):
-    """Resolve histogram x framing with 10% margins around data/spec span."""
+def resolve_histogram_x_view(values, *, lsl=None, usl=None, mean_value=None, margin_ratio=_HISTOGRAM_X_MARGIN_RATIO):
+    """Resolve histogram x framing with local span + small fallback safety margin."""
 
     finite_values = pd.to_numeric(pd.Series(values), errors='coerce').dropna().to_numpy(dtype=float)
     if finite_values.size == 0:
@@ -632,8 +637,9 @@ def resolve_histogram_x_view(values, *, lsl=None, usl=None):
 
     data_min = float(np.min(finite_values))
     data_max = float(np.max(finite_values))
-    left_ref = data_min
-    right_ref = data_max
+
+    left_limit = None
+    right_limit = None
     for raw_limit, side in ((lsl, 'left'), (usl, 'right')):
         if raw_limit is None:
             continue
@@ -644,24 +650,36 @@ def resolve_histogram_x_view(values, *, lsl=None, usl=None):
         if not np.isfinite(limit_value):
             continue
         if side == 'left':
-            left_ref = min(left_ref, limit_value)
+            left_limit = limit_value
         else:
-            right_ref = max(right_ref, limit_value)
+            right_limit = limit_value
 
-    raw_span = max(1e-12, right_ref - left_ref)
-    reference_magnitude = max(abs(left_ref), abs(right_ref), abs(data_min), abs(data_max), 1.0)
-    min_span = reference_magnitude * 0.01
-    span = max(raw_span, min_span)
-    if raw_span < min_span:
-        center = (left_ref + right_ref) / 2.0
-        half_span = span / 2.0
-        left_ref = center - half_span
-        right_ref = center + half_span
-    padding = span * _HISTOGRAM_X_MARGIN_RATIO
+    left_ref = data_min if left_limit is None else min(data_min, left_limit)
+    right_ref = data_max if right_limit is None else max(data_max, right_limit)
+
+    data_span = max(data_max - data_min, 0.0)
+    if left_limit is not None and right_limit is not None:
+        spec_span = max(right_limit - left_limit, 0.0)
+    else:
+        spec_span = max(right_ref - left_ref, 0.0)
+
+    mean_magnitude = 0.0
+    if mean_value is not None:
+        try:
+            candidate_mean = float(mean_value)
+            if np.isfinite(candidate_mean):
+                mean_magnitude = abs(candidate_mean)
+        except (TypeError, ValueError):
+            pass
+    ref_magnitude = max(mean_magnitude, abs(data_min), abs(data_max), 1.0)
+    fallback_span = max(1e-6, 1e-4 * ref_magnitude)
+
+    effective_span = max(data_span, spec_span, fallback_span)
+    margin = effective_span * max(0.0, float(margin_ratio))
 
     return {
-        'x_min': left_ref - padding,
-        'x_max': right_ref + padding,
+        'x_min': left_ref - margin,
+        'x_max': right_ref + margin,
         'mode': 'full',
     }
 
