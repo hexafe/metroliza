@@ -236,28 +236,14 @@ def compute_histogram_plot_with_right_info_layout(
     top_row_height = min(top_row_height, max_top_row_height)
     note_height = content_height - panel_gap - top_row_height
 
-    table_gap = max(0.012, panel_gap * 0.6)
-    table_width = (right_container_width - table_gap) / 2.0
-
-    top_row_y = y_bottom + note_height + panel_gap
-    fit_table_rect = {
-        'x': right_container_rect['x'],
-        'y': top_row_y,
-        'width': table_width,
-        'height': top_row_height,
-    }
-    stats_table_rect = {
-        'x': right_container_rect['x'] + table_width + table_gap,
-        'y': top_row_y,
-        'width': table_width,
-        'height': top_row_height,
-    }
-    note_rect = {
-        'x': right_container_rect['x'],
-        'y': y_bottom,
-        'width': right_container_width,
-        'height': note_height,
-    }
+    fit_table_rect, stats_table_rect, note_rect = split_right_container(
+        right_container_rect,
+        y_bottom=y_bottom,
+        panel_gap=panel_gap,
+        top_row_height=top_row_height,
+        note_height=note_height,
+        fit_fraction=0.54,
+    )
 
     rectangles = {
         'plot_rect': plot_rect,
@@ -275,6 +261,43 @@ def compute_histogram_plot_with_right_info_layout(
         }
     )
     return rectangles
+
+
+def split_right_container(
+    right_container_rect,
+    *,
+    y_bottom,
+    panel_gap,
+    top_row_height,
+    note_height,
+    fit_fraction=0.54,
+):
+    """Split right container into fit/stats top tables and full-width note section."""
+    table_gap = max(0.012, panel_gap * 0.6)
+    available_table_width = max(0.0, float(right_container_rect['width']) - table_gap)
+    fit_width = available_table_width * float(fit_fraction)
+    stats_width = available_table_width - fit_width
+
+    top_row_y = float(y_bottom) + float(note_height) + float(panel_gap)
+    fit_table_rect = {
+        'x': float(right_container_rect['x']),
+        'y': top_row_y,
+        'width': fit_width,
+        'height': float(top_row_height),
+    }
+    stats_table_rect = {
+        'x': float(right_container_rect['x']) + fit_width + table_gap,
+        'y': top_row_y,
+        'width': stats_width,
+        'height': float(top_row_height),
+    }
+    note_rect = {
+        'x': float(right_container_rect['x']),
+        'y': float(y_bottom),
+        'width': float(right_container_rect['width']),
+        'height': float(note_height),
+    }
+    return fit_table_rect, stats_table_rect, note_rect
 
 
 def compute_panel_table_content_height(row_count, *, header_rows=1, row_height=_HISTOGRAM_PANEL_TABLE_ROW_HEIGHT, pad_y=_HISTOGRAM_PANEL_TABLE_PAD_Y):
