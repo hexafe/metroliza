@@ -95,6 +95,9 @@ from modules.export_data_thread import (  # noqa: E402
     render_spec_reference_lines,
     build_tolerance_reference_legend_handles,
     apply_shared_x_axis_label_strategy,
+    prepare_categorical_x_axis,
+    resolve_extended_chart_fig_width,
+    finalize_extended_chart_layout,
     classify_capability_status,
     classify_nok_severity,
     build_summary_panel_subtitle_text,
@@ -2702,11 +2705,64 @@ class TestExportPlotHelpers(unittest.TestCase):
         rendered = ax.get_xticklabels()
         self.assertLess(len(rendered), len(labels))
         self.assertTrue(all(tick.get_text().endswith('…') for tick in rendered[:-1]))
-        self.assertEqual(int(rendered[0].get_rotation()), 90)
+        self.assertEqual(int(rendered[0].get_rotation()), 45)
         self.assertTrue(all(tick.get_ha() == 'right' for tick in rendered))
         self.assertEqual(ax.xaxis.majorTicks[0].get_pad(), 11)
         self.assertEqual(ax.get_xticks()[-1], 29)
         plt.close(fig)
+
+    def test_prepare_categorical_x_axis_wraps_and_recommends_wider_figures(self):
+        strategy = prepare_categorical_x_axis([
+            'Very Long Label For Group A',
+            'Very Long Label For Group B',
+            'Very Long Label For Group C',
+            'Very Long Label For Group D',
+            'Very Long Label For Group E',
+            'Very Long Label For Group F',
+            'Very Long Label For Group G',
+        ])
+
+        self.assertEqual(strategy['rotation'], 45)
+        self.assertGreater(strategy['recommended_fig_width'], 6.2)
+        self.assertGreaterEqual(strategy['bottom_margin'], 0.30)
+        self.assertTrue(any('\n' in label or label.endswith('…') for label in strategy['processed_labels']))
+
+    def test_resolve_extended_chart_fig_width_scales_with_group_count(self):
+        self.assertEqual(resolve_extended_chart_fig_width(0), 6.2)
+        self.assertAlmostEqual(resolve_extended_chart_fig_width(10), 8.4)
+        self.assertEqual(resolve_extended_chart_fig_width(100), 11.0)
+
+    def test_finalize_extended_chart_layout_expands_bottom_margin_for_rotated_labels_and_legend(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4))
+        labels = [f'Long Group Label {index}' for index in range(1, 13)]
+        ax.plot(range(len(labels)), np.linspace(1.0, 2.0, num=len(labels)), marker='o')
+        ax.legend(['Series'], loc='upper left', bbox_to_anchor=(1.0, 1.0))
+        ax.set_title('Very long title that should still fit in the exported figure bounds')
+        strategy = apply_shared_x_axis_label_strategy(ax, labels, positions=list(range(len(labels))))
+        baseline_bottom = fig.subplotpars.bottom
+
+        figure_legend = move_legend_to_figure(ax)
+        finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=strategy)
+
+        self.assertGreater(fig.subplotpars.bottom, baseline_bottom)
+        plt.close(fig)
+
+    def test_summary_chart_cell_span_grows_with_figure_width_for_sequential_placement(self):
+        fig_small, _ = plt.subplots(figsize=(6.2, 4))
+        fig_wide, _ = plt.subplots(figsize=(10.5, 4))
+        try:
+            small_span = ExportDataThread._resolve_chart_cell_span(fig_small)
+            wide_span = ExportDataThread._resolve_chart_cell_span(fig_wide)
+
+            self.assertGreater(wide_span['col_span'], small_span['col_span'])
+
+            base_col = 4
+            first_slot = {'row': 1, 'col': base_col}
+            second_slot = {'row': 1, 'col': first_slot['col'] + wide_span['col_span']}
+            self.assertGreater(second_slot['col'], base_col + small_span['col_span'])
+        finally:
+            plt.close(fig_small)
+            plt.close(fig_wide)
 
     def test_shared_x_axis_label_strategy_force_sparse_thins_even_small_sets(self):
         fig, ax = plt.subplots()

@@ -3,6 +3,7 @@ import numpy as np
 from scipy.stats import gaussian_kde, norm, shapiro, johnsonsu, skewnorm, halfnorm, foldnorm, gamma, weibull_min, lognorm
 import math
 import re
+import textwrap
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
@@ -353,7 +354,7 @@ def apply_shared_x_axis_label_strategy(
     force_sparse=False,
     allow_thinning=True,
 ):
-    """Apply a consistent x-axis label strategy for dense categorical charts."""
+    """Apply a consistent categorical x-axis strategy and return layout metadata."""
     if ax is None:
         return
 
@@ -367,28 +368,19 @@ def apply_shared_x_axis_label_strategy(
     if len(positions) != len(safe_labels):
         raise ValueError("positions and labels must have the same length")
 
-    max_length = max((len(label) for label in safe_labels), default=0)
+    strategy = prepare_categorical_x_axis(safe_labels)
+    rotation = strategy['rotation']
     label_count = len(safe_labels)
 
-    if not allow_thinning and (label_count > 16 or max_length > 18):
-        rotation = 90
-    elif label_count <= 6 and max_length <= 10:
-        rotation = 0
-    elif label_count <= 12 and max_length <= 20:
-        rotation = 30
-    elif label_count <= 24 and max_length <= 28:
-        rotation = 45
-    else:
-        rotation = 90
-
-    def _truncate(label):
-        if not truncate_labels:
-            return label
-        if max_label_chars < 2 or len(label) <= max_label_chars:
-            return label
-        return f"{label[:max_label_chars - 1]}…"
-
-    display_labels = [_truncate(label) for label in safe_labels]
+    display_labels = list(strategy['processed_labels'])
+    if truncate_labels:
+        truncated_labels = []
+        for label in display_labels:
+            plain_label = str(label).replace('\n', ' ')
+            if max_label_chars >= 2 and len(plain_label) > max_label_chars:
+                plain_label = f"{plain_label[:max_label_chars - 1]}…"
+            truncated_labels.append(plain_label)
+        display_labels = truncated_labels
 
     indices = list(range(label_count))
     if allow_thinning and (force_sparse or label_count > thinning_threshold):
@@ -399,7 +391,7 @@ def apply_shared_x_axis_label_strategy(
 
     display_positions = [positions[idx] for idx in indices]
     display_text = [display_labels[idx] for idx in indices]
-    horizontal_alignment = 'center' if rotation == 0 else 'right'
+    horizontal_alignment = strategy['ha']
 
     ax.set_xticks(display_positions)
     ax.set_xticklabels(display_text)
@@ -408,7 +400,103 @@ def apply_shared_x_axis_label_strategy(
         tick.set_horizontalalignment(horizontal_alignment)
         tick.set_rotation_mode('anchor')
 
-    ax.tick_params(axis='x', pad=tick_padding)
+    ax.tick_params(axis='x', pad=max(tick_padding, strategy['tick_padding']))
+
+    return {
+        'rotation': rotation,
+        'ha': horizontal_alignment,
+        'display_labels': display_text,
+        'display_positions': display_positions,
+        'recommended_fig_width': strategy['recommended_fig_width'],
+        'bottom_margin': strategy['bottom_margin'],
+    }
+
+
+def wrap_tick_label(text: str, *, width: int = 10, max_lines: int = 2) -> str:
+    """Wrap a categorical tick label to at most ``max_lines`` lines."""
+
+    safe_text = str(text or '').strip()
+    if not safe_text:
+        return ''
+
+    normalized = safe_text.replace(' - ', '\n').replace('_', '_\n')
+    wrapped_lines = []
+    for segment in normalized.splitlines():
+        pieces = textwrap.wrap(
+            segment,
+            width=max(4, int(width)),
+            break_long_words=False,
+            break_on_hyphens=False,
+        ) or ['']
+        wrapped_lines.extend(pieces)
+
+    wrapped_lines = wrapped_lines[:max(1, int(max_lines))]
+    if not wrapped_lines:
+        return safe_text
+
+    joined = '\n'.join(wrapped_lines)
+    if len(joined.replace('\n', '')) >= len(safe_text):
+        return joined
+    return f"{joined.rstrip(' .')}…"
+
+
+def resolve_extended_chart_fig_width(n_groups: int, *, base_width: float = 6.2, per_group: float = 0.22, max_width: float = 11.0) -> float:
+    """Resolve a dynamic figure width for extended categorical charts."""
+
+    group_count = max(0, int(n_groups))
+    candidate = float(base_width) + (group_count * float(per_group))
+    return min(float(max_width), max(float(base_width), candidate))
+
+
+def prepare_categorical_x_axis(labels, *, base_fig_width=6.2):
+    """Return shared categorical-label layout decisions for extended charts."""
+
+    safe_labels = [str(label) if label is not None else '' for label in labels]
+    label_count = len(safe_labels)
+    if label_count == 0:
+        return {
+            'processed_labels': [],
+            'rotation': 0,
+            'ha': 'center',
+            'bottom_margin': 0.16,
+            'recommended_fig_width': float(base_fig_width),
+            'tick_padding': 6,
+        }
+
+    lengths = [len(label.strip()) for label in safe_labels]
+    max_length = max(lengths)
+    avg_length = sum(lengths) / float(label_count)
+    should_wrap = max_length > 14
+    wrap_width = 12 if max_length <= 20 else 10
+    processed_labels = [wrap_tick_label(label, width=wrap_width, max_lines=2) if should_wrap else label for label in safe_labels]
+
+    if label_count <= 6 and max_length <= 12 and avg_length <= 9:
+        rotation = 0
+    elif label_count <= 12 and max_length <= 20:
+        rotation = 30
+    else:
+        rotation = 45
+
+    if max_length > 28:
+        rotation = 45
+
+    bottom_margin = 0.16
+    if rotation == 30:
+        bottom_margin = 0.23
+    elif rotation == 45:
+        bottom_margin = 0.28
+
+    if should_wrap:
+        bottom_margin = max(bottom_margin, 0.30 if rotation else 0.22)
+
+    return {
+        'processed_labels': processed_labels,
+        'rotation': rotation,
+        'ha': 'center' if rotation == 0 else 'right',
+        'bottom_margin': min(0.35, bottom_margin),
+        'recommended_fig_width': resolve_extended_chart_fig_width(label_count, base_width=base_fig_width),
+        'tick_padding': 8 if rotation >= 30 else 6,
+    }
 
 
 def render_tolerance_band(ax, nom, lsl, usl, one_sided=False, orientation='horizontal'):
