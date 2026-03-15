@@ -2764,6 +2764,17 @@ class TestExportPlotHelpers(unittest.TestCase):
             plt.close(fig_small)
             plt.close(fig_wide)
 
+    def test_summary_chart_cell_span_uses_export_dpi_not_figure_default_dpi(self):
+        fig, _ = plt.subplots(figsize=(6.2, 4), dpi=100)
+        try:
+            span = ExportDataThread._resolve_chart_cell_span(fig, px_per_col=110.0, padding_cols=0, export_dpi=150.0)
+            expected_col_span = int(np.ceil((6.2 * 150.0) / 110.0))
+
+            self.assertEqual(span['col_span'], expected_col_span)
+            self.assertNotEqual(span['col_span'], int(np.ceil((6.2 * 100.0) / 110.0)))
+        finally:
+            plt.close(fig)
+
     def test_shared_x_axis_label_strategy_force_sparse_thins_even_small_sets(self):
         fig, ax = plt.subplots()
         positions = list(range(12))

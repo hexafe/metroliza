@@ -2868,9 +2868,10 @@ class ExportDataThread(QThread):
     @staticmethod
     def _save_summary_chart(fig, mode='workbook'):
         """Persist summary-sheet charts with a workbook-friendly rendering policy."""
+        export_dpi = 150
         save_kwargs = {
             'format': 'png',
-            'dpi': 150,
+            'dpi': export_dpi,
         }
         if mode == 'clipped':
             # Keep a fallback for charts that may require clipping fixes.
@@ -2881,13 +2882,22 @@ class ExportDataThread(QThread):
         return image_buffer.getvalue()
 
     @staticmethod
-    def _resolve_chart_cell_span(fig, *, px_per_col=110.0, px_per_row=20.0, padding_cols=0, padding_rows=1):
+    def _resolve_chart_cell_span(
+        fig,
+        *,
+        px_per_col=110.0,
+        px_per_row=20.0,
+        padding_cols=0,
+        padding_rows=1,
+        export_dpi=150.0,
+    ):
         """Translate rendered figure size into worksheet cell spans."""
 
         if fig is None:
             return {'col_span': 1, 'row_span': 1}
-        width_px = max(1.0, fig.get_figwidth() * fig.dpi)
-        height_px = max(1.0, fig.get_figheight() * fig.dpi)
+        resolved_export_dpi = max(1.0, float(export_dpi))
+        width_px = max(1.0, fig.get_figwidth() * resolved_export_dpi)
+        height_px = max(1.0, fig.get_figheight() * resolved_export_dpi)
         return {
             'col_span': max(1, int(np.ceil(width_px / float(px_per_col))) + int(padding_cols)),
             'row_span': max(1, int(np.ceil(height_px / float(px_per_row))) + int(padding_rows)),
