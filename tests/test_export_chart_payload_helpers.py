@@ -21,7 +21,8 @@ def test_build_histogram_table_data_preserves_capability_rows():
         }
     )
 
-    assert payload['rows'][5] == ('Cp', 1.5)
+    assert payload['rows'][5] == ('Spec type', 'two-sided')
+    assert payload['rows'][6] == ('Cp', 1.5)
     assert payload['capability_rows']['Cpk']['display_value'] == 1.2
 
 
@@ -86,6 +87,7 @@ def test_build_histogram_table_data_flags_n10_with_warning_confidence_rows():
     labels = [label for label, _ in payload['rows']]
     assert 'Confidence ⚠' in labels
     assert 'Cp uncertainty' in labels
+    assert 'Cpk uncertainty' in labels
     assert payload['sample_confidence']['severity'] == 'warning'
     assert payload['capability_rows']['Cp']['label'] == 'Cp'
 
@@ -109,6 +111,7 @@ def test_build_histogram_table_data_flags_warning_low_n_with_uncertainty_bands()
     labels = [label for label, _ in payload['rows']]
     assert 'Confidence ⚠' in labels
     assert 'Cp uncertainty' in labels
+    assert 'Cpk uncertainty' in labels
     assert payload['sample_confidence']['is_low_n'] is True
     assert payload['sample_confidence']['severity'] == 'warning'
 
@@ -133,3 +136,54 @@ def test_build_histogram_table_data_keeps_standard_labels_for_stable_n():
     assert 'Cp' in labels
     assert not any('uncertainty' in label for label in labels)
     assert payload['sample_confidence']['is_low_n'] is False
+
+
+def test_build_histogram_table_data_uses_cpu_and_cp_not_defined_for_one_sided_upper():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 0.0,
+            'maximum': 0.06,
+            'average': 0.03,
+            'median': 0.03,
+            'sigma': 0.01,
+            'cp': 'N/A',
+            'cpk': 0.0,
+            'sample_size': 8,
+            'nok_count': 0,
+            'nok_pct': 0.0,
+            'nom': 0.0,
+            'lsl': 0.0,
+            'usl': 0.06,
+        }
+    )
+
+    labels = [label for label, _ in payload['rows']]
+    assert ('Spec type', 'one-sided upper') in payload['rows']
+    assert 'Cp (not defined for one-sided) ⓘ' in labels
+    assert 'Cpu' in labels
+    assert 'Cp uncertainty' not in labels
+    assert 'Cpu uncertainty' in labels
+
+
+def test_build_histogram_table_data_uses_cpl_for_one_sided_lower():
+    payload = build_histogram_table_data(
+        {
+            'minimum': -0.06,
+            'maximum': 0.0,
+            'average': -0.03,
+            'median': -0.03,
+            'sigma': 0.01,
+            'cp': 'N/A',
+            'cpk': 0.0,
+            'sample_size': 8,
+            'nok_count': 0,
+            'nok_pct': 0.0,
+            'nom': 0.0,
+            'lsl': -0.06,
+            'usl': 0.0,
+        }
+    )
+
+    labels = [label for label, _ in payload['rows']]
+    assert ('Spec type', 'one-sided lower') in payload['rows']
+    assert 'Cpl' in labels
