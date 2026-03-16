@@ -2,18 +2,17 @@ import importlib
 import sys
 import types
 
-custom_logger_stub = types.ModuleType("modules.custom_logger")
-
 
 class _DummyCustomLogger:
     def __init__(self, *_args, **_kwargs):
         pass
 
 
-custom_logger_stub.CustomLogger = _DummyCustomLogger
-sys.modules.setdefault("modules.custom_logger", custom_logger_stub)
-
-from modules import cmm_report_parser
+def _load_cmm_report_parser_module():
+    custom_logger_stub = types.ModuleType("modules.custom_logger")
+    custom_logger_stub.CustomLogger = _DummyCustomLogger
+    sys.modules.setdefault("modules.custom_logger", custom_logger_stub)
+    return importlib.import_module("modules.cmm_report_parser")
 
 
 class _FakeSpec:  # simple non-None sentinel
@@ -21,6 +20,7 @@ class _FakeSpec:  # simple non-None sentinel
 
 
 def test_resolve_prefers_pymupdf_when_backend_available(monkeypatch):
+    cmm_report_parser = _load_cmm_report_parser_module()
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: _FakeSpec() if name in {"pymupdf", "fitz"} else None)
 
     pymupdf_stub = types.SimpleNamespace(open=lambda *_args, **_kwargs: None)
@@ -35,6 +35,7 @@ def test_resolve_prefers_pymupdf_when_backend_available(monkeypatch):
 
 
 def test_resolve_falls_back_to_fitz_when_pymupdf_import_fails(monkeypatch):
+    cmm_report_parser = _load_cmm_report_parser_module()
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: _FakeSpec() if name in {"pymupdf", "fitz"} else None)
 
     fitz_stub = types.SimpleNamespace(open=lambda *_args, **_kwargs: None)
@@ -50,6 +51,7 @@ def test_resolve_falls_back_to_fitz_when_pymupdf_import_fails(monkeypatch):
 
 
 def test_resolve_rejects_fitz_without_open(monkeypatch):
+    cmm_report_parser = _load_cmm_report_parser_module()
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: _FakeSpec() if name == "fitz" else None)
     monkeypatch.setattr(importlib, "import_module", lambda _name: types.SimpleNamespace())
 
