@@ -69,6 +69,7 @@ If hidden import resolution fails on a platform, release may proceed only if pur
 - default output filename is `metroliza_N_<RELEASE_VERSION>(<VERSION_DATE>).exe` from `VersionDate.py`
 - still supports explicit override with `-OutputName`
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
+- always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
 - defaults to pure-Python fallback packaging when native module is absent
 - supports `-RequireNative` to fail fast if native module is missing
 - bundles `credentials.json` into the executable only when the configured `-CredentialsPath` exists (default: `credentials.json`)
