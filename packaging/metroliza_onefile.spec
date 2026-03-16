@@ -3,13 +3,14 @@
 from pathlib import Path
 
 block_cipher = None
-ROOT_DIR = Path(__file__).resolve().parents[1]
+SPEC_DIR = Path(SPECPATH).resolve()
+ROOT_DIR = SPEC_DIR.parent
 VERSION_NS = {}
 exec((ROOT_DIR / "VersionDate.py").read_text(encoding="utf-8"), VERSION_NS)
 RELEASE_VERSION = VERSION_NS["RELEASE_VERSION"]
 VERSION_DATE = VERSION_NS["VERSION_DATE"]
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
-ICON_PATH = Path(__file__).resolve().with_name('metroliza_icon2.ico')
+ICON_PATH = SPEC_DIR / 'metroliza_icon2.ico'
 
 
 a = Analysis(
@@ -36,7 +37,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name=f'metroliza_PYI_{VERSION_LABEL}',
+    name='metroliza',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
