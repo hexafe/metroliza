@@ -131,15 +131,19 @@ def _append_ci(display_value, interval):
 
 
 def _format_observed_nok_with_side_split(summary_stats, spec_type):
-    total_nok = format_count(summary_stats.get('nok_count'))
+    nok_count = summary_stats.get('nok_count')
+    total_nok = format_count(nok_count)
+    if not _is_numeric(nok_count) or int(nok_count) <= 0:
+        return total_nok
+
     below_count = summary_stats.get('observed_nok_below_lsl_count')
     above_count = summary_stats.get('observed_nok_above_usl_count')
 
     side_parts = []
-    if spec_type in {'two-sided', 'one-sided upper'} and _is_numeric(above_count):
-        side_parts.append(f"U: {format_count(above_count)}")
-    if spec_type in {'two-sided', 'one-sided lower'} and _is_numeric(below_count):
+    if spec_type in {'two-sided', 'one-sided lower'} and _is_numeric(below_count) and int(below_count) > 0:
         side_parts.append(f"L: {format_count(below_count)}")
+    if spec_type in {'two-sided', 'one-sided upper'} and _is_numeric(above_count) and int(above_count) > 0:
+        side_parts.append(f"U: {format_count(above_count)}")
 
     if not side_parts:
         return total_nok

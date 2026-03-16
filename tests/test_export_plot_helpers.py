@@ -423,7 +423,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual(rows[0], ('Model', 'N/A'))
         self.assertEqual(rows[1], ('Fit quality', 'Unreliable'))
-        self.assertEqual(rows[2], ('Warning', 'fit unreliable — use observed NOK only'))
+        self.assertEqual(rows[2], ('Warning', 'fit unreliable; observed NOK only'))
 
     def test_left_and_right_panel_tables_share_fontsize_and_row_height_policy(self):
         fig = plt.figure(figsize=(6.2, 4.0))
@@ -1026,7 +1026,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         fig, ax = plt.subplots()
         table_rows = [
             ('Model', 'Skew Normal'),
-            ('Warning', 'low sample size — capability uncertain\nfit unreliable — use observed NOK only'),
+            ('Warning', 'small sample\nfit unreliable'),
         ]
         ax_table = plt.table(
             cellText=table_rows,
@@ -2142,6 +2142,50 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(str(payload['capability_rows']['Cpk']['display_value']), '0.98')
         self.assertEqual(payload['capability_rows']['Cpk']['classification_value'], expected_cpu)
 
+    def test_build_histogram_table_data_hides_zero_nok_side_split_for_two_sided(self):
+        payload = build_histogram_table_data(
+            {
+                'minimum': 1.0,
+                'maximum': 2.0,
+                'average': 1.5,
+                'median': 1.5,
+                'sigma': 0.1,
+                'cp': 1.2,
+                'cpk': 1.1,
+                'sample_size': 10,
+                'nok_count': 0,
+                'nok_pct': 0.0,
+                'observed_nok_below_lsl_count': 0,
+                'observed_nok_above_usl_count': 0,
+                'lsl': 1.1,
+                'usl': 1.9,
+            }
+        )
+
+        self.assertEqual(dict(payload['rows'])['NOK'], '0')
+
+    def test_build_histogram_table_data_shows_compact_nok_side_split_only_for_non_zero_sides(self):
+        payload = build_histogram_table_data(
+            {
+                'minimum': 1.0,
+                'maximum': 2.0,
+                'average': 1.5,
+                'median': 1.5,
+                'sigma': 0.1,
+                'cp': 1.2,
+                'cpk': 1.1,
+                'sample_size': 10,
+                'nok_count': 11,
+                'nok_pct': 0.11,
+                'observed_nok_below_lsl_count': 1,
+                'observed_nok_above_usl_count': 10,
+                'lsl': 1.1,
+                'usl': 1.9,
+            }
+        )
+
+        self.assertEqual(dict(payload['rows'])['NOK'], '11 (L: 1, U: 10)')
+
     def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
         payload = {
             'rows': [
@@ -2194,6 +2238,25 @@ class TestExportPlotHelpers(unittest.TestCase):
         relabeled = _apply_non_normal_cpk_reference_label(payload, {'selected_model': {'model': 'norm'}})
         labels = [label for label, _ in relabeled['rows']]
         self.assertEqual(labels, ['Cp', 'Cp 95% CI', 'Cpk', 'Cpk 95% CI'])
+
+    def test_apply_non_normal_cpk_reference_label_marks_ref_for_low_n_unreliable_guard(self):
+        payload = {
+            'rows': [('Cp', 1.22), ('Cpk', 1.15)],
+            'capability_rows': {
+                'Cp': {'label': 'Cp', 'display_value': 1.22, 'classification_value': 1.22},
+                'Cpk': {'label': 'Cpk', 'display_value': 1.11, 'classification_value': 1.11},
+            },
+        }
+
+        relabeled = _apply_non_normal_cpk_reference_label(
+            payload,
+            {'selected_model': {'model': 'norm'}, 'fit_quality': {'label': 'strong'}},
+            summary_stats={'sample_size': 4},
+        )
+
+        labels = [label for label, _ in relabeled['rows']]
+        self.assertIn('Cp (ref)', labels)
+        self.assertIn('Cpk (ref)', labels)
 
 
     def test_build_histogram_table_render_data_three_column_duplicates_label_in_first_two_columns(self):
@@ -3476,7 +3539,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         rows_by_label = dict(rows)
         self.assertEqual(rows_by_label['Fit quality'], 'Unreliable')
         self.assertNotIn('Est. NOK %', rows_by_label)
-        self.assertEqual(rows_by_label['Warning'], 'low sample size — capability uncertain; fit unreliable — use observed NOK only')
+        self.assertEqual(rows_by_label['Warning'], 'fit unreliable; observed NOK only')
 
     def test_distribution_fit_table_rows_applies_sample_size_ceiling_for_low_n(self):
         rows = _build_distribution_fit_table_rows(
@@ -3495,7 +3558,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         rows_by_label = dict(rows)
         self.assertEqual(rows_by_label['Fit quality'], 'Medium')
         self.assertNotIn('Est. NOK %', rows_by_label)
-        self.assertEqual(rows_by_label['Warning'], 'low sample size — capability uncertain')
+        self.assertEqual(rows_by_label['Warning'], 'small sample; capability uncertain')
     def test_distribution_fit_table_rows_hide_modeled_risk_when_fit_weak(self):
         rows = _build_distribution_fit_table_rows(
             {
@@ -3513,7 +3576,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality', 'Warning'])
-        self.assertEqual(dict(rows)['Warning'], 'low sample size — capability uncertain; fit weak — model-based risk hidden')
+        self.assertEqual(dict(rows)['Warning'], 'small sample; capability uncertain')
 
 if __name__ == '__main__':
     unittest.main()
