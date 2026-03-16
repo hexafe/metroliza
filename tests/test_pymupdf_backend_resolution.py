@@ -1,6 +1,8 @@
 import importlib
+import importlib.util
 import sys
 import types
+from pathlib import Path
 
 
 class _DummyCustomLogger:
@@ -12,7 +14,14 @@ def _load_cmm_report_parser_module():
     custom_logger_stub = types.ModuleType("modules.custom_logger")
     custom_logger_stub.CustomLogger = _DummyCustomLogger
     sys.modules.setdefault("modules.custom_logger", custom_logger_stub)
-    return importlib.import_module("modules.cmm_report_parser")
+
+    module_path = Path("modules/cmm_report_parser.py")
+    spec = importlib.util.spec_from_file_location("_cmm_report_parser_for_backend_tests", module_path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 class _FakeSpec:  # simple non-None sentinel
