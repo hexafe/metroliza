@@ -62,6 +62,13 @@ python -c "import modules.cmm_native_parser as p; print(p.native_backend_availab
 
 If hidden import resolution fails on a platform, release may proceed only if pure-Python mode is validated.
 
+If packaged Windows executables fail at startup with `ImportError: DLL load failed while importing _ctypes`, verify all of the following before release:
+
+- build with current tooling from `requirements-build.txt` (newer PyInstaller + hooks),
+- the build interpreter is a full CPython install (not embeddable/minimal),
+- Python runtime DLLs under `<python>/DLLs` (including `libffi*.dll`) are bundled into the executable.
+
+
 ## Nuitka inclusion rules and smoke checks
 
 `packaging/build_nuitka.ps1` now conditionally includes the native parser module when available in the build environment and auto-generates output naming from release metadata:
