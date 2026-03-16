@@ -2267,6 +2267,7 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
 
 _EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.155
 _EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.7
+_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO = 0.44
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -2363,7 +2364,7 @@ def adjust_histogram_stats_table_geometry(
         for visible_cell in visible_cells:
             text_value = visible_cell.get_text().get_text()
             max_line_count = max(max_line_count, len(str(text_value).splitlines()))
-        row_line_multipliers[row_index] = min(2.5, 1.0 + (max_line_count - 1) * 0.75)
+        row_line_multipliers[row_index] = float(max_line_count)
 
     for (row_index, col_index), cell in table_cells.items():
         if not cell.get_visible():
@@ -4586,7 +4587,7 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         ax_table,
-                        statistic_col_width_ratio=0.48,
+                        statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
                         row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
                     )
 
@@ -4629,7 +4630,7 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
-                        statistic_col_width_ratio=0.48,
+                        statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
                         row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
                     )
 
