@@ -1112,12 +1112,34 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     raw_rows.append(('Model fit quality', display_quality.title()))
 
     warning_parts = []
-    if sample_size is not None and 0 < int(sample_size) < 25:
-        warning_parts.append('low sample size — capability uncertain')
+    sample_size_value = int(sample_size) if sample_size is not None else None
+    if sample_size_value is not None and 0 < sample_size_value < 10:
+        warning_parts.append('fit unreliable')
+    elif sample_size_value is not None and sample_size_value < 25:
+        warning_parts.append('small sample')
+
     if display_quality == 'weak':
-        warning_parts.append('fit weak — model-based risk hidden')
+        warning_parts.append('fit weak')
     elif display_quality == 'unreliable':
-        warning_parts.append('fit unreliable — use observed NOK only')
+        if 'fit unreliable' not in warning_parts:
+            warning_parts.append('fit unreliable')
+        warning_parts.append('observed NOK only')
+
+    if sample_size_value is not None and 0 < sample_size_value < 25 and display_quality != 'unreliable':
+        if 'small sample' not in warning_parts:
+            warning_parts.insert(0, 'small sample')
+        warning_parts.append('capability uncertain')
+
+    warning_parts = [part for part in warning_parts if part]
+    if len(warning_parts) > 2:
+        if 'fit unreliable' in warning_parts and 'observed NOK only' in warning_parts:
+            warning_parts = ['fit unreliable', 'observed NOK only']
+        elif 'small sample' in warning_parts and 'capability uncertain' in warning_parts:
+            warning_parts = ['small sample', 'capability uncertain']
+        elif 'fit weak' in warning_parts:
+            warning_parts = ['fit weak']
+        else:
+            warning_parts = warning_parts[:2]
 
     if warning_parts:
         raw_rows.append(('Warning', '; '.join(warning_parts)))
@@ -1246,14 +1268,16 @@ def _is_non_normal_capability_reference_model(distribution_fit_result):
     return model_name not in {'norm'}
 
 
-def _should_use_capability_reference_label(distribution_fit_result):
+def _should_use_capability_reference_label(distribution_fit_result, *, summary_stats=None):
     fit_quality = ((distribution_fit_result or {}).get('fit_quality') or {}).get('label')
     quality_key = str(fit_quality or '').strip().lower()
-    return _is_non_normal_capability_reference_model(distribution_fit_result) or quality_key in {'weak', 'unreliable'}
+    sample_size = (summary_stats or {}).get('sample_size')
+    display_quality = _apply_fit_quality_sample_size_guard(quality_key, sample_size)
+    return _is_non_normal_capability_reference_model(distribution_fit_result) or display_quality in {'weak', 'unreliable'}
 
 
-def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_fit_result):
-    if not _should_use_capability_reference_label(distribution_fit_result):
+def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_fit_result, *, summary_stats=None):
+    if not _should_use_capability_reference_label(distribution_fit_result, summary_stats=summary_stats):
         return histogram_table_payload
 
     payload = dict(histogram_table_payload or {})
@@ -4458,6 +4482,7 @@ class ExportDataThread(QThread):
                     histogram_table_payload = _apply_non_normal_cpk_reference_label(
                         histogram_table_payload,
                         distribution_fit_result,
+                        summary_stats=summary_stats,
                     )
                     non_normal_reference_mode = _is_non_normal_capability_reference_model(distribution_fit_result)
                     right_rows = histogram_table_payload['rows']
