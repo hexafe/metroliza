@@ -2184,7 +2184,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(dict(payload['rows'])['NOK'], '11 (L: 1, U: 10)')
+        self.assertEqual(dict(payload['rows'])['NOK'], '11 (U: 10, L: 1)')
 
     def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
         payload = {
