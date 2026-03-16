@@ -2205,6 +2205,10 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
         )
 
 
+_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.148
+_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.25
+
+
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
     """Apply semantic emphasis colors to the histogram summary table."""
     if ax_table is None:
@@ -4477,7 +4481,7 @@ class ExportDataThread(QThread):
                             'min_value_fraction': 0.28,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
-                        row_height=0.132,
+                        row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4495,7 +4499,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         ax_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=2.1,
+                        row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
                     )
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
@@ -4510,7 +4514,7 @@ class ExportDataThread(QThread):
                             'value_wrap_width': 30,
                             'low_priority_labels': {'Est. PPM'},
                         },
-                        row_height=0.132,
+                        row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
                         pad_y=0.02,
                         valign='top',
                     )
@@ -4538,7 +4542,7 @@ class ExportDataThread(QThread):
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
                         statistic_col_width_ratio=0.54,
-                        row_height_scale=2.1,
+                        row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
                     )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
