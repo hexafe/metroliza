@@ -976,17 +976,17 @@ def assert_non_overlapping_rectangles(rectangles):
     return _assert_non_overlapping_rectangles(rectangles)
 
 
-def _format_percent(value):
+def _format_percent(value, *, decimals=4):
     if value is None:
         return 'N/A'
     try:
-        return f"{float(value):.3f}%"
+        return f"{float(value):.{int(decimals)}f}%"
     except (TypeError, ValueError):
         return 'N/A'
 
 
-def _format_probability_percent(probability):
-    return format_probability_percent(probability, decimals=3, threshold_percent=0.001)
+def _format_probability_percent(probability, *, decimals=4):
+    return format_probability_percent(probability, decimals=decimals, threshold_percent=0.0001)
 
 
 def _is_effectively_zero(value, tolerance=1e-12):
@@ -1069,27 +1069,31 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     quality_key = str(fit_quality.get('label') or '').strip().lower()
     show_modeled_risk_rows = quality_key == 'strong'
 
-    allow_lower_tail_row = spec_type in {'bilateral', 'lower_only'} and lsl is not None
-    if inferred_support_mode == 'one_sided_zero_bound_positive' and _is_effectively_zero(lsl):
-        if _format_probability_percent(below_lsl) == 'N/A' or _is_effectively_zero(below_lsl):
-            allow_lower_tail_row = False
-
-    if allow_lower_tail_row and show_modeled_risk_rows:
-        raw_rows.append(('Estimated P(X < LSL)', _format_probability_percent(below_lsl)))
-
-    if spec_type in {'bilateral', 'upper_only'} and usl is not None and show_modeled_risk_rows:
-        raw_rows.append(('Estimated P(X > USL)', _format_probability_percent(above_usl)))
-
+    est_nok_value = None
     if show_modeled_risk_rows:
-        raw_rows.extend([
-            ('Estimated NOK %', _format_percent(risk_estimates.get('nok_percent'))),
-            ('Estimated NOK (PPM)', format_ppm(risk_estimates.get('ppm_nok'))),
-        ])
+        side_parts = []
+        allow_lower_tail = spec_type in {'bilateral', 'lower_only'} and lsl is not None
+        if inferred_support_mode == 'one_sided_zero_bound_positive' and _is_effectively_zero(lsl):
+            if _format_probability_percent(below_lsl, decimals=4) == 'N/A' or _is_effectively_zero(below_lsl):
+                allow_lower_tail = False
+        if allow_lower_tail:
+            side_parts.append(f"<LSL: {_format_probability_percent(below_lsl, decimals=4)}")
+        if spec_type in {'bilateral', 'upper_only'} and usl is not None:
+            side_parts.append(f">USL: {_format_probability_percent(above_usl, decimals=4)}")
+
+        est_nok_value = _format_percent(risk_estimates.get('nok_percent'), decimals=4)
+        if side_parts:
+            est_nok_value = f"{est_nok_value} ({', '.join(side_parts)})"
+        raw_rows.append(('Estimated NOK %', est_nok_value))
+
     raw_rows.append(('Model fit quality', str(fit_quality.get('label', 'unknown')).title()))
 
-    warning_text = str(distribution_fit_result.get('warning') or '').strip()
-    if not warning_text and quality_key in {'weak', 'unreliable'}:
-        warning_text = f'fit {quality_key}'
+    warning_text = ''
+    if quality_key == 'weak':
+        warning_text = 'fit weak — model-based risk hidden'
+    elif quality_key == 'unreliable':
+        warning_text = 'fit unreliable — use observed NOK only'
+
     if warning_text:
         raw_rows.append(('Warning', warning_text))
 
@@ -1216,24 +1220,30 @@ def _is_non_normal_capability_reference_model(distribution_fit_result):
     return model_name not in {'norm'}
 
 
+def _should_use_capability_reference_label(distribution_fit_result):
+    fit_quality = ((distribution_fit_result or {}).get('fit_quality') or {}).get('label')
+    quality_key = str(fit_quality or '').strip().lower()
+    return _is_non_normal_capability_reference_model(distribution_fit_result) or quality_key in {'weak', 'unreliable'}
+
+
 def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_fit_result):
-    if not _is_non_normal_capability_reference_model(distribution_fit_result):
+    if not _should_use_capability_reference_label(distribution_fit_result):
         return histogram_table_payload
 
     payload = dict(histogram_table_payload or {})
     rows = []
     for label, value in payload.get('rows', []):
         if label in {'Cpu', 'Cpl', 'Cpu 95% CI', 'Cpl 95% CI'}:
-            rows.append((f'{label} (normal ref)', value))
+            rows.append((f'{label} (ref)', value))
             continue
         rows.append(
-            ('Cpk (normal ref)', value)
+            ('Cpk (ref)', value)
             if label in {'Cpk', 'Cpk+'}
-            else ('Cpk (normal ref) 95% CI', value)
+            else ('Cpk (ref) 95% CI', value)
             if label in {'Cpk 95% CI', 'Cpk+ 95% CI'}
-            else ('Cp (normal ref)', value)
+            else ('Cp (ref)', value)
             if label == 'Cp'
-            else ('Cp (normal ref) 95% CI', value)
+            else ('Cp (ref) 95% CI', value)
             if label == 'Cp 95% CI'
             else (label, value)
         )
@@ -1244,11 +1254,11 @@ def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_
         cpk_meta = dict(capability_rows.get(key) or {})
         if cpk_meta:
             if key == 'Cp':
-                cpk_meta['label'] = 'Cp (normal ref)'
+                cpk_meta['label'] = 'Cp (ref)'
             elif key in {'Cpu', 'Cpl'}:
-                cpk_meta['label'] = f'{key} (normal ref)'
+                cpk_meta['label'] = f'{key} (ref)'
             else:
-                cpk_meta['label'] = 'Cpk (normal ref)'
+                cpk_meta['label'] = 'Cpk (ref)'
             capability_rows[key] = cpk_meta
 
     if capability_rows:
@@ -4092,6 +4102,11 @@ class ExportDataThread(QThread):
             summary_stats.setdefault('estimated_nok_pct', None)
             summary_stats.setdefault('estimated_nok_ppm', None)
             summary_stats.setdefault('estimated_yield_pct', None)
+            meas_series = pd.to_numeric(header_group.get('MEAS'), errors='coerce')
+            if LSL is not None:
+                summary_stats.setdefault('observed_nok_below_lsl_count', int((meas_series < LSL).sum()))
+            if USL is not None:
+                summary_stats.setdefault('observed_nok_above_usl_count', int((meas_series > USL).sum()))
             summary_stats['usl'] = USL
             average = summary_stats['average']
             histogram_table_payload = build_histogram_table_data(summary_stats)
@@ -4488,7 +4503,7 @@ class ExportDataThread(QThread):
                     ax_table = right_table_meta['table']
                     non_normal_row_badges = dict(histogram_row_badges or {})
                     if non_normal_reference_mode:
-                        for label in ('Cp (normal ref)', 'Cpk (normal ref)'):
+                        for label in ('Cp (ref)', 'Cpk (ref)'):
                             non_normal_row_badges[label] = {'palette_key': 'quality_unknown'}
                     style_histogram_stats_table(
                         ax_table,

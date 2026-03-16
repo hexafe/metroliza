@@ -299,7 +299,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ('Average', '10.102'),
                 ('Std dev', '0.085'),
                 ('Cp', '1.34'),
-                ('Cpk (normal ref)', '1.19'),
+                ('Cpk (ref)', '1.19'),
             ]
             rects = compute_histogram_plot_with_right_info_layout(
                 (8.4, 4.0),
@@ -354,18 +354,12 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual([label for label, _ in rows], [
             'Model',
-            'P(<LSL)',
-            'P(>USL)',
             'Est. NOK %',
-            'Est. PPM',
             'Fit quality',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
-        self.assertEqual(rows[1][1], '0.120%')
-        self.assertEqual(rows[2][1], '0.230%')
-        self.assertEqual(rows[3][1], '0.123%')
-        self.assertEqual(rows[4][1], '1,234')
-        self.assertEqual(rows[5][1], 'Strong')
+        self.assertEqual(rows[1][1], '0.1234% (<LSL: 0.1200%, >USL: 0.2300%)')
+        self.assertEqual(rows[2][1], 'Strong')
 
     def test_distribution_fit_table_rows_follow_upper_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -429,7 +423,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertEqual(rows[0], ('Model', 'N/A'))
         self.assertEqual(rows[1], ('Fit quality', 'Unreliable'))
-        self.assertEqual(rows[2], ('Warning', 'fit unreliable'))
+        self.assertEqual(rows[2], ('Warning', 'fit unreliable — use observed NOK only'))
 
     def test_left_and_right_panel_tables_share_fontsize_and_row_height_policy(self):
         fig = plt.figure(figsize=(6.2, 4.0))
@@ -2145,20 +2139,20 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
         labels = [label for label, _ in relabeled['rows']]
 
-        self.assertEqual(labels.count('Cpk (normal ref)'), 1)
-        self.assertIn('Cp (normal ref) 95% CI', labels)
-        self.assertIn('Cpk (normal ref) 95% CI', labels)
-        self.assertIn('Cpu (normal ref)', labels)
-        self.assertIn('Cpl (normal ref)', labels)
-        self.assertIn('Cp (normal ref)', labels)
+        self.assertEqual(labels.count('Cpk (ref)'), 1)
+        self.assertIn('Cp (ref) 95% CI', labels)
+        self.assertIn('Cpk (ref) 95% CI', labels)
+        self.assertIn('Cpu (ref)', labels)
+        self.assertIn('Cpl (ref)', labels)
+        self.assertIn('Cp (ref)', labels)
         self.assertNotIn('Cp', labels)
         self.assertNotIn('Cpk', labels)
         self.assertNotIn('Cpu', labels)
         self.assertNotIn('Cpl', labels)
-        self.assertEqual(relabeled['capability_rows']['Cp']['label'], 'Cp (normal ref)')
-        self.assertEqual(relabeled['capability_rows']['Cpk']['label'], 'Cpk (normal ref)')
-        self.assertEqual(relabeled['capability_rows']['Cpu']['label'], 'Cpu (normal ref)')
-        self.assertEqual(relabeled['capability_rows']['Cpl']['label'], 'Cpl (normal ref)')
+        self.assertEqual(relabeled['capability_rows']['Cp']['label'], 'Cp (ref)')
+        self.assertEqual(relabeled['capability_rows']['Cpk']['label'], 'Cpk (ref)')
+        self.assertEqual(relabeled['capability_rows']['Cpu']['label'], 'Cpu (ref)')
+        self.assertEqual(relabeled['capability_rows']['Cpl']['label'], 'Cpl (ref)')
 
     def test_apply_non_normal_cpk_reference_label_keeps_ci_labels_for_normal_model(self):
         payload = {
@@ -3425,13 +3419,33 @@ class TestExportPlotHelpers(unittest.TestCase):
                 'risk_estimates': {
                     'spec_type': 'upper_only',
                     'above_usl_probability': 0.0000009,
+                    'nok_percent': 0.0000009,
                 },
             },
             usl=10.0,
         )
 
         rows_by_label = dict(rows)
-        self.assertEqual(rows_by_label['P(>USL)'], '<0.001%')
+        self.assertEqual(rows_by_label['Est. NOK %'], '0.0000% (>USL: <0.0001%)')
+
+
+    def test_distribution_fit_table_rows_hide_modeled_risk_when_fit_weak(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'fit_quality': {'label': 'weak'},
+                'risk_estimates': {
+                    'spec_type': 'bilateral',
+                    'below_lsl_probability': 0.01,
+                    'above_usl_probability': 0.02,
+                    'nok_percent': 0.03,
+                },
+            },
+            lsl=1.0,
+            usl=2.0,
+        )
+
+        self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality', 'Warning'])
+        self.assertEqual(dict(rows)['Warning'], 'fit weak — model-based risk hidden')
 
 if __name__ == '__main__':
     unittest.main()
