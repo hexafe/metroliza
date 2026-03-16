@@ -7,6 +7,7 @@ from modules.export_query_service import (
     build_measurement_export_dataframe,
     ensure_sample_number_column,
     execute_export_query,
+    fetch_partition_header_counts,
 )
 
 
@@ -42,6 +43,32 @@ class TestExportQueryService(unittest.TestCase):
     def test_build_export_dataframe_preserves_columns(self):
         df = build_export_dataframe([(1, 'A')], ['ID', 'LABEL'])
         self.assertEqual(list(df.columns), ['ID', 'LABEL'])
+
+    def test_fetch_partition_header_counts_uses_sqlite_literal_delimiter(self):
+        captured = {}
+
+        def fake_read_sql_query(_db_file, query, *, params=(), connection=None):
+            captured['query'] = query
+            self.assertEqual(params, ())
+            self.assertIsNone(connection)
+            return pd.DataFrame(
+                {
+                    'partition_value': ['REF_A'],
+                    'header_count': [2],
+                }
+            )
+
+        from modules import export_query_service as service
+
+        previous_reader = service._read_sql_query
+        try:
+            service._read_sql_query = fake_read_sql_query
+            counts = fetch_partition_header_counts('db.sqlite', 'SELECT * FROM REPORTS')
+        finally:
+            service._read_sql_query = previous_reader
+
+        self.assertEqual(counts, {'REF_A': 2})
+        self.assertIn("HEADER || ' - ' || AX", captured['query'])
 
 
 if __name__ == '__main__':

@@ -144,7 +144,7 @@ def fetch_partition_header_counts(
     filter_query,
     *,
     partition_column='REFERENCE',
-    header_expr='HEADER || " - " || AX',
+    header_expr="HEADER || ' - ' || AX",
     connection: sqlite3.Connection | None = None,
 ):
     """Count distinct headers per partition from a scoped export query.
@@ -154,7 +154,7 @@ def fetch_partition_header_counts(
         filter_query: SQL query used as the scoped source.
         partition_column: Column name used to partition export rows.
         header_expr: SQL expression that defines a header identity for distinct
-            counting (defaults to ``HEADER || " - " || AX``).
+            counting (defaults to ``HEADER || ' - ' || AX``).
         connection: Optional active SQLite connection to reuse.
 
     Returns:
