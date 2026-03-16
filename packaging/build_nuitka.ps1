@@ -60,6 +60,7 @@ $commonArgs = @(
     "-m", "nuitka", $EntryPoint,
     "--windows-console-mode=disable",
     "--enable-plugin=pyqt6",
+    "--include-package=modules",
     "--windows-icon-from-ico=$IconPath",
     "--output-filename=$OutputName",
     "--assume-yes-for-downloads",
