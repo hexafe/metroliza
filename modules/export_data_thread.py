@@ -1051,6 +1051,28 @@ def _resolve_capability_status(*, cp=None, cpk=None, ppk=None, nok_ratio=None):
     return {'label': 'Risk', 'palette_key': 'quality_risk'}
 
 
+def _fit_quality_sample_size_ceiling(sample_size):
+    if sample_size is None:
+        return None
+    n = max(0, int(sample_size or 0))
+    if 0 < n < 10:
+        return 'unreliable'
+    if n < 25:
+        return 'medium'
+    return None
+
+
+def _apply_fit_quality_sample_size_guard(quality_key, sample_size):
+    order = {'unreliable': 0, 'weak': 1, 'medium': 2, 'strong': 3}
+    normalized_quality = quality_key if quality_key in order else quality_key
+    if normalized_quality not in order:
+        return normalized_quality
+    ceiling = _fit_quality_sample_size_ceiling(sample_size)
+    if ceiling is None:
+        return normalized_quality
+    return min(normalized_quality, ceiling, key=lambda item: order[item])
+
+
 def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl=None, summary_stats=None):
     selected_model = distribution_fit_result.get('selected_model') or {}
     fit_quality = distribution_fit_result.get('fit_quality') or {}
@@ -1060,13 +1082,15 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     spec_type = str(risk_estimates.get('spec_type', 'none'))
     below_lsl = risk_estimates.get('below_lsl_probability')
     above_usl = risk_estimates.get('above_usl_probability')
+    sample_size = (summary_stats or {}).get('sample_size')
 
     raw_rows = [
         ('Model', selected_model.get('display_name', 'N/A')),
     ]
 
     quality_key = str(fit_quality.get('label') or '').strip().lower()
-    show_modeled_risk_rows = quality_key == 'strong'
+    display_quality = _apply_fit_quality_sample_size_guard(quality_key, sample_size)
+    show_modeled_risk_rows = display_quality == 'strong'
 
     est_nok_value = None
     if show_modeled_risk_rows:
@@ -1076,25 +1100,27 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
             if _format_probability_percent(below_lsl, decimals=4) == 'N/A' or _is_effectively_zero(below_lsl):
                 allow_lower_tail = False
         if allow_lower_tail:
-            side_parts.append(f"<LSL: {_format_probability_percent(below_lsl, decimals=4)}")
+            side_parts.append(f"L: {_format_probability_percent(below_lsl, decimals=4)}")
         if spec_type in {'bilateral', 'upper_only'} and usl is not None:
-            side_parts.append(f">USL: {_format_probability_percent(above_usl, decimals=4)}")
+            side_parts.append(f"U: {_format_probability_percent(above_usl, decimals=4)}")
 
         est_nok_value = _format_percent(risk_estimates.get('nok_percent'), decimals=4)
         if side_parts:
             est_nok_value = f"{est_nok_value} ({', '.join(side_parts)})"
         raw_rows.append(('Estimated NOK %', est_nok_value))
 
-    raw_rows.append(('Model fit quality', str(fit_quality.get('label', 'unknown')).title()))
+    raw_rows.append(('Model fit quality', display_quality.title()))
 
-    warning_text = ''
-    if quality_key == 'weak':
-        warning_text = 'fit weak — model-based risk hidden'
-    elif quality_key == 'unreliable':
-        warning_text = 'fit unreliable — use observed NOK only'
+    warning_parts = []
+    if sample_size is not None and 0 < int(sample_size) < 25:
+        warning_parts.append('low sample size — capability uncertain')
+    if display_quality == 'weak':
+        warning_parts.append('fit weak — model-based risk hidden')
+    elif display_quality == 'unreliable':
+        warning_parts.append('fit unreliable — use observed NOK only')
 
-    if warning_text:
-        raw_rows.append(('Warning', warning_text))
+    if warning_parts:
+        raw_rows.append(('Warning', '; '.join(warning_parts)))
 
     return [(_compact_distribution_fit_label(label), value) for label, value in raw_rows]
 
@@ -1172,14 +1198,15 @@ def _build_compact_histogram_note_lines(distribution_fit_result, *, summary_stat
 
     fit_quality = ((fit_result.get('fit_quality') or {}).get('label') or '').strip().lower()
     is_poor_fit = fit_quality in {'weak', 'unreliable'}
-    sample_size = int((summary_stats or {}).get('sample_size') or 0)
-    low_n_severe = 0 < sample_size < 10
-    low_n_warning = 10 <= sample_size < 25
+    sample_size = (summary_stats or {}).get('sample_size')
+    sample_size_value = int(sample_size) if sample_size is not None else 0
+    low_n_severe = 0 < sample_size_value < 10
+    low_n_warning = 10 <= sample_size_value < 25
 
     if low_n_severe:
-        lines.append(f'Warning: low sample size (n={sample_size})')
+        lines.append(f'Warning: low sample size (n={sample_size_value})')
     elif low_n_warning:
-        lines.append(f'Warning: limited sample size (n={sample_size})')
+        lines.append(f'Warning: limited sample size (n={sample_size_value})')
 
     if is_poor_fit:
         lines.append(f'Warning: fit {fit_quality}')

@@ -22,12 +22,12 @@ def test_build_histogram_table_data_preserves_capability_rows():
     )
 
     assert payload['rows'][5][0] == 'Cp'
-    assert payload['rows'][5][1].startswith('1.50 [')
+    assert payload['rows'][5][1] == '1.50'
     cp_row = dict(payload['rows'])['Cp']
     cpk_row = dict(payload['rows'])['Cpk']
-    assert cp_row.startswith('1.50 [')
-    assert cpk_row.startswith('1.20 [')
-    assert payload['capability_rows']['Cpk']['display_value'].startswith('1.20 [')
+    assert cp_row == '1.50'
+    assert cpk_row == '1.20'
+    assert payload['capability_rows']['Cpk']['display_value'] == '1.20'
     assert 'Cpk 95% CI' not in dict(payload['rows'])
 
 

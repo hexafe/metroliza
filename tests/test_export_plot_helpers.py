@@ -358,7 +358,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             'Fit quality',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
-        self.assertEqual(rows[1][1], '0.1234% (<LSL: 0.1200%, >USL: 0.2300%)')
+        self.assertEqual(rows[1][1], '0.1234% (L: 0.1200%, U: 0.2300%)')
         self.assertEqual(rows[2][1], 'Strong')
 
     def test_distribution_fit_table_rows_follow_upper_only_contract(self):
@@ -2109,9 +2109,9 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIsNotNone(cpk_row)
 
         expected_cpu = (0.06 - 0.031) / (3 * 0.0099)
-        self.assertIn('Low-confidence estimate', str(cpk_row[1]))
+        self.assertEqual(str(cpk_row[1]), '0.98')
         self.assertEqual(payload['capability_rows']['Cpk']['label'], 'Cpu')
-        self.assertIn('Low-confidence estimate', str(payload['capability_rows']['Cpk']['display_value']))
+        self.assertEqual(str(payload['capability_rows']['Cpk']['display_value']), '0.98')
         self.assertEqual(payload['capability_rows']['Cpk']['classification_value'], expected_cpu)
 
     def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
@@ -3426,9 +3426,48 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         rows_by_label = dict(rows)
-        self.assertEqual(rows_by_label['Est. NOK %'], '0.0000% (>USL: <0.0001%)')
+        self.assertEqual(rows_by_label['Est. NOK %'], '0.0000% (U: <0.0001%)')
 
 
+
+
+    def test_distribution_fit_table_rows_applies_sample_size_guard_for_very_low_n(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.02,
+                    'nok_percent': 0.02,
+                },
+            },
+            usl=2.0,
+            summary_stats={'sample_size': 4},
+        )
+
+        rows_by_label = dict(rows)
+        self.assertEqual(rows_by_label['Fit quality'], 'Unreliable')
+        self.assertNotIn('Est. NOK %', rows_by_label)
+        self.assertEqual(rows_by_label['Warning'], 'low sample size — capability uncertain; fit unreliable — use observed NOK only')
+
+    def test_distribution_fit_table_rows_applies_sample_size_ceiling_for_low_n(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.02,
+                    'nok_percent': 0.02,
+                },
+            },
+            usl=2.0,
+            summary_stats={'sample_size': 20},
+        )
+
+        rows_by_label = dict(rows)
+        self.assertEqual(rows_by_label['Fit quality'], 'Medium')
+        self.assertNotIn('Est. NOK %', rows_by_label)
+        self.assertEqual(rows_by_label['Warning'], 'low sample size — capability uncertain')
     def test_distribution_fit_table_rows_hide_modeled_risk_when_fit_weak(self):
         rows = _build_distribution_fit_table_rows(
             {
@@ -3442,10 +3481,11 @@ class TestExportPlotHelpers(unittest.TestCase):
             },
             lsl=1.0,
             usl=2.0,
+            summary_stats={'sample_size': 20},
         )
 
         self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality', 'Warning'])
-        self.assertEqual(dict(rows)['Warning'], 'fit weak — model-based risk hidden')
+        self.assertEqual(dict(rows)['Warning'], 'low sample size — capability uncertain; fit weak — model-based risk hidden')
 
 if __name__ == '__main__':
     unittest.main()
