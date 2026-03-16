@@ -58,6 +58,8 @@ from modules.export_logging_service import (
 )
 from modules.export_summary_utils import (
     apply_shared_x_axis_label_strategy as _apply_shared_x_axis_label_strategy,
+    prepare_categorical_x_axis as _prepare_categorical_x_axis,
+    resolve_extended_chart_fig_width as _resolve_extended_chart_fig_width,
     build_histogram_density_curve_payload as _build_histogram_density_curve_payload,
     build_sparse_unique_labels as _build_sparse_unique_labels,
     build_summary_panel_labels as _build_summary_panel_labels,
@@ -482,6 +484,18 @@ def apply_shared_x_axis_label_strategy(ax, labels, **kwargs):
     """Apply shared x-axis tick labeling policy to a matplotlib axis."""
 
     return _apply_shared_x_axis_label_strategy(ax, labels, **kwargs)
+
+
+def prepare_categorical_x_axis(labels, **kwargs):
+    """Resolve shared categorical axis layout metadata for extended charts."""
+
+    return _prepare_categorical_x_axis(labels, **kwargs)
+
+
+def resolve_extended_chart_fig_width(n_groups, **kwargs):
+    """Resolve a dynamic figure width for extended categorical charts."""
+
+    return _resolve_extended_chart_fig_width(n_groups, **kwargs)
 
 
 def render_tolerance_band(ax, nom, lsl, usl, *, one_sided=False, orientation='horizontal'):
@@ -1742,9 +1756,9 @@ def move_legend_to_figure(ax):
         labels = [text.get_text() for text in existing_legend.get_texts()]
 
     if not handles:
-        return
+        return None
 
-    fig.legend(
+    figure_legend = fig.legend(
         handles,
         labels,
         loc="upper right",
@@ -1752,6 +1766,78 @@ def move_legend_to_figure(ax):
         bbox_transform=fig.transFigure,
     )
     fig.subplots_adjust(top=0.82)
+    return figure_legend
+
+
+def finalize_extended_chart_layout(fig, ax, *, legend=None, strategy=None):
+    """Run a final artist-bounds-driven layout pass for extended charts."""
+
+    if fig is None or ax is None:
+        return
+
+    strategy_bottom_margin = None
+    if strategy and strategy.get('bottom_margin'):
+        strategy_bottom_margin = float(strategy['bottom_margin'])
+        fig.subplots_adjust(bottom=strategy_bottom_margin)
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    artists = []
+    artists.extend(ax.get_xticklabels())
+    artists.extend(ax.get_yticklabels())
+
+    if ax.xaxis.label is not None:
+        artists.append(ax.xaxis.label)
+    if ax.yaxis.label is not None:
+        artists.append(ax.yaxis.label)
+    if ax.title is not None:
+        artists.append(ax.title)
+
+    legend_artist = legend
+    if legend_artist is None and getattr(fig, 'legends', None):
+        legend_artist = fig.legends[-1]
+    if legend_artist is not None:
+        artists.append(legend_artist)
+
+    fig_w_px = max(1.0, fig.get_figwidth() * fig.dpi)
+    fig_h_px = max(1.0, fig.get_figheight() * fig.dpi)
+
+    left_px = 24.0
+    right_px = 22.0
+    top_px = 20.0
+    bottom_px = 20.0
+
+    for artist in artists:
+        if artist is None or not getattr(artist, 'get_visible', lambda: True)():
+            continue
+        try:
+            bbox = artist.get_window_extent(renderer=renderer)
+        except Exception:
+            continue
+        left_px = max(left_px, max(0.0, -bbox.x0) + 8.0)
+        right_px = max(right_px, max(0.0, bbox.x1 - fig_w_px) + 8.0)
+        bottom_px = max(bottom_px, max(0.0, -bbox.y0) + 8.0)
+        top_px = max(top_px, max(0.0, bbox.y1 - fig_h_px) + 8.0)
+
+    proposed_left = min(0.22, max(0.08, left_px / fig_w_px))
+    proposed_right = max(0.76, min(0.98, 1.0 - (right_px / fig_w_px)))
+    proposed_bottom = min(0.36, max(0.14, bottom_px / fig_h_px))
+    if strategy_bottom_margin is not None:
+        proposed_bottom = max(proposed_bottom, strategy_bottom_margin)
+    proposed_top = max(0.68, min(0.95, 1.0 - (top_px / fig_h_px)))
+
+    if proposed_right <= proposed_left + 0.25:
+        proposed_right = min(0.98, proposed_left + 0.25)
+    if proposed_top <= proposed_bottom + 0.20:
+        proposed_top = min(0.98, proposed_bottom + 0.20)
+
+    fig.subplots_adjust(
+        left=proposed_left,
+        right=proposed_right,
+        bottom=proposed_bottom,
+        top=proposed_top,
+    )
 
 
 def build_wrapped_chart_title(title, *, width=42, max_lines=3):
@@ -2786,9 +2872,10 @@ class ExportDataThread(QThread):
     @staticmethod
     def _save_summary_chart(fig, mode='workbook'):
         """Persist summary-sheet charts with a workbook-friendly rendering policy."""
+        export_dpi = 150
         save_kwargs = {
             'format': 'png',
-            'dpi': 150,
+            'dpi': export_dpi,
         }
         if mode == 'clipped':
             # Keep a fallback for charts that may require clipping fixes.
@@ -2797,6 +2884,34 @@ class ExportDataThread(QThread):
         image_buffer = BytesIO()
         fig.savefig(image_buffer, **save_kwargs)
         return image_buffer.getvalue()
+
+    @staticmethod
+    def _resolve_chart_cell_span(
+        fig,
+        *,
+        px_per_col=110.0,
+        px_per_row=20.0,
+        padding_cols=0,
+        padding_rows=1,
+        export_dpi=150.0,
+    ):
+        """Translate rendered figure size into worksheet cell spans."""
+
+        if fig is None:
+            return {'col_span': 1, 'row_span': 1}
+        resolved_export_dpi = max(1.0, float(export_dpi))
+        width_px = max(1.0, fig.get_figwidth() * resolved_export_dpi)
+        height_px = max(1.0, fig.get_figheight() * resolved_export_dpi)
+        return {
+            'col_span': max(1, int(np.ceil(width_px / float(px_per_col))) + int(padding_cols)),
+            'row_span': max(1, int(np.ceil(height_px / float(px_per_row))) + int(padding_rows)),
+        }
+
+    @staticmethod
+    def _insert_summary_image(worksheet, slot, image_data):
+        """Insert summary image and guard against missing worksheet backends."""
+
+        worksheet.insert_image(slot['row'], slot['col'], '', {'image_data': image_data})
 
     def _build_iqr_plot_payload(self, labels, values, sampled_group, *, grouping_active=False):
         strategy_labels = build_summary_panel_labels(labels or ['All'], grouping_active=grouping_active)
@@ -4103,6 +4218,28 @@ class ExportDataThread(QThread):
             summary_anchors = build_summary_image_anchor_plan(col)
             panel_plan = build_summary_panel_write_plan(summary_anchors, header)
             header_cell = panel_plan['header_cell']
+            default_image_slots = panel_plan['image_slots']
+            distribution_overflow_cols = 0
+
+            def _reserve_summary_image_slot(chart_name, fig):
+                nonlocal distribution_overflow_cols
+
+                default_slot = dict(default_image_slots.get(chart_name, default_image_slots['distribution']))
+                if chart_name == 'distribution':
+                    span = self._resolve_chart_cell_span(fig)
+                    distribution_end_col = int(default_slot['col']) + int(span.get('col_span', 1))
+                    default_iqr_col = int(default_image_slots.get('iqr', default_slot)['col'])
+                    distribution_overflow_cols = max(0, distribution_end_col - default_iqr_col)
+                    return default_slot
+
+                if chart_name == 'iqr':
+                    return {
+                        'row': default_slot['row'],
+                        'col': int(default_slot['col']) + int(distribution_overflow_cols),
+                    }
+
+                return default_slot
+
             write_start = time.perf_counter()
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
             summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, panel_subtitle)
@@ -4113,7 +4250,8 @@ class ExportDataThread(QThread):
                     apply_summary_plot_theme()
                     chart_start = time.perf_counter()
 
-                    fig, ax = plt.subplots(figsize=(6, 4))
+                    categorical_strategy = prepare_categorical_x_axis(distribution_labels)
+                    fig, ax = plt.subplots(figsize=(categorical_strategy['recommended_fig_width'], 4))
                     if can_render_violin:
                         render_violin(
                             ax,
@@ -4141,7 +4279,7 @@ class ExportDataThread(QThread):
                             render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
 
                     apply_minimal_axis_style(ax, grid_axis='y')
-                    apply_shared_x_axis_label_strategy(
+                    axis_layout = apply_shared_x_axis_label_strategy(
                         ax,
                         distribution_labels,
                         positions=label_positions,
@@ -4154,14 +4292,14 @@ class ExportDataThread(QThread):
                     ax.set_xlabel(distribution_x_axis_label)
                     ax.set_ylabel('Measurement')
                     ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
-                    move_legend_to_figure(ax)
-                    plt.subplots_adjust(right=0.8)
+                    figure_legend = move_legend_to_figure(ax)
+                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
 
-                    distribution_slot = panel_plan['image_slots']['distribution']
+                    distribution_slot = _reserve_summary_image_slot('distribution', fig)
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(distribution_slot['row'], distribution_slot['col'], '', {'image_data': image_data})
+                    self._insert_summary_image(summary_worksheet, distribution_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     if self._check_canceled():
@@ -4177,13 +4315,14 @@ class ExportDataThread(QThread):
             if self._summary_chart_required('iqr'):
                 try:
                     chart_start = time.perf_counter()
-                    fig, ax = plt.subplots(figsize=(6, 4))
                     boxplot_labels, boxplot_values = self._build_iqr_plot_payload(
                         iqr_labels,
                         iqr_values,
                         sampled_iqr_group,
                         grouping_active=grouping_applied,
                     )
+                    iqr_strategy = prepare_categorical_x_axis(boxplot_labels)
+                    fig, ax = plt.subplots(figsize=(iqr_strategy['recommended_fig_width'], 4))
                     render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
                     render_tolerance_band(
                         ax,
@@ -4194,9 +4333,9 @@ class ExportDataThread(QThread):
                     )
                     render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
                     add_iqr_boxplot_legend(ax, include_tolerance_refs=False)
-                    move_legend_to_figure(ax)
+                    figure_legend = move_legend_to_figure(ax)
                     apply_minimal_axis_style(ax, grid_axis='y')
-                    apply_shared_x_axis_label_strategy(
+                    axis_layout = apply_shared_x_axis_label_strategy(
                         ax,
                         boxplot_labels,
                         positions=list(range(1, len(boxplot_labels) + 1)),
@@ -4205,17 +4344,17 @@ class ExportDataThread(QThread):
                     ax.set_xlabel('Group')
                     ax.set_ylabel('Measurement')
                     ax.set_title(build_wrapped_chart_title(header), pad=20)
-                    plt.subplots_adjust(right=0.8)
 
                     current_y_limits = ax.get_ylim()
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
+                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
 
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    iqr_slot = panel_plan['image_slots']['iqr']
+                    iqr_slot = _reserve_summary_image_slot('iqr', fig)
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], '', {'image_data': image_data})
+                    self._insert_summary_image(summary_worksheet, iqr_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     if self._check_canceled():
@@ -4509,9 +4648,9 @@ class ExportDataThread(QThread):
                     )
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    histogram_slot = panel_plan['image_slots']['histogram']
+                    histogram_slot = _reserve_summary_image_slot('histogram', fig)
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], '', {'image_data': image_data})
+                    self._insert_summary_image(summary_worksheet, histogram_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     if self._check_canceled():
@@ -4565,9 +4704,9 @@ class ExportDataThread(QThread):
 
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    trend_slot = panel_plan['image_slots']['trend']
+                    trend_slot = _reserve_summary_image_slot('trend', fig)
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], '', {'image_data': image_data})
+                    self._insert_summary_image(summary_worksheet, trend_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
                     if self._check_canceled():
                         plt.close(fig)
