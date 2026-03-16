@@ -78,6 +78,7 @@ If packaged Windows executables fail at startup with `ImportError: DLL load fail
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
 - defaults to pure-Python fallback packaging when native module is absent
+- supports `-EnableConsole` for troubleshooting startup failures by showing a Windows console with traceback
 - supports `-RequireNative` to fail fast if native module is missing
 - bundles `credentials.json` into the executable only when the configured `-CredentialsPath` exists (default: `credentials.json`)
 - always applies `--noinclude-data-files` guards for `token.json` path variants so OAuth tokens are not bundled
@@ -88,6 +89,8 @@ Smoke checks after build:
 ./packaging/build_nuitka.ps1 -FastDev
 # strict mode: require native parser to be present in the build env
 ./packaging/build_nuitka.ps1 -RequireNative
+# troubleshooting mode: show console and traceback if startup fails
+./packaging/build_nuitka.ps1 -EnableConsole
 # run the built executable in a sandbox and verify startup
 ```
 

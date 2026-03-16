@@ -4,7 +4,8 @@ param(
     [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
     [string]$CredentialsPath = "credentials.json",
     [switch]$FastDev,
-    [switch]$RequireNative
+    [switch]$RequireNative,
+    [switch]$EnableConsole
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,10 +42,12 @@ $jobs = if ($env:NUMBER_OF_PROCESSORS) { $env:NUMBER_OF_PROCESSORS } else { 4 }
 $modeLabel = if ($FastDev) { "standalone (faster dev build)" } else { "onefile (release-like build)" }
 $nativeModeLabel = if ($RequireNative) { "required" } else { "optional" }
 $credentialsPathLabel = if ($CredentialsPath) { $CredentialsPath } else { "(disabled)" }
+$consoleMode = if ($EnableConsole) { "force" } else { "disable" }
 
 Write-Host "[2/4] Build mode: $modeLabel"
 Write-Host "      Native parser module: $nativeModeLabel"
 Write-Host "      Credentials bundle path: $credentialsPathLabel"
+Write-Host "      Windows console mode: $consoleMode"
 
 $nativeModuleAvailable = $false
 python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('_metroliza_cmm_native') else 1)" 2>$null
@@ -58,7 +61,7 @@ if ($RequireNative -and -not $nativeModuleAvailable) {
 
 $commonArgs = @(
     "-m", "nuitka", $EntryPoint,
-    "--windows-console-mode=disable",
+    "--windows-console-mode=$consoleMode",
     "--enable-plugin=pyqt6",
     "--include-package=modules",
     "--windows-icon-from-ico=$IconPath",
