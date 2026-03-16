@@ -2241,8 +2241,8 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
         )
 
 
-_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.148
-_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.4
+_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.155
+_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.7
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -2308,7 +2308,7 @@ def adjust_histogram_stats_table_geometry(
     label_col0_ratio = statistic_area_ratio * 0.78
     label_col1_ratio = statistic_area_ratio * 0.22
     value_ratio = 1.0 - statistic_area_ratio
-    safe_row_scale = min(2.3, max(0.9, float(row_height_scale)))
+    safe_row_scale = min(2.8, max(0.9, float(row_height_scale)))
     border_linewidth = 0.45
     cell_padding = 0.12
 
@@ -4433,7 +4433,7 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    histogram_figsize = (8.8, 4)
+                    histogram_figsize = (8.8, 4.4)
                     chart_start = time.perf_counter()
                     fig = plt.figure(figsize=histogram_figsize)
 
@@ -4541,7 +4541,7 @@ class ExportDataThread(QThread):
                         style_options={
                             **table_style_options,
                             'min_label_fraction': 0.50,
-                            'min_value_fraction': 0.28,
+                            'min_value_fraction': 0.34,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
                         row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
@@ -4561,7 +4561,7 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         ax_table,
-                        statistic_col_width_ratio=0.54,
+                        statistic_col_width_ratio=0.48,
                         row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
                     )
 
@@ -4573,8 +4573,8 @@ class ExportDataThread(QThread):
                         style_options={
                             **table_style_options,
                             'min_label_fraction': 0.38,
-                            'min_value_fraction': 0.48,
-                            'value_wrap_width': 30,
+                            'min_value_fraction': 0.52,
+                            'value_wrap_width': 26,
                             'low_priority_labels': {'Est. PPM'},
                         },
                         row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
@@ -4604,7 +4604,7 @@ class ExportDataThread(QThread):
                     )
                     adjust_histogram_stats_table_geometry(
                         distribution_fit_table,
-                        statistic_col_width_ratio=0.54,
+                        statistic_col_width_ratio=0.48,
                         row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
                     )
 
