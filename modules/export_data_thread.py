@@ -120,7 +120,6 @@ from modules.summary_plot_palette import (
     STATUS_ICON_PREFIX_BY_PALETTE,
 )
 from modules.stats_number_formatting import (
-    format_ppm,
     format_probability_percent,
 )
 
