@@ -2747,6 +2747,19 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(fig.subplotpars.bottom, baseline_bottom)
         plt.close(fig)
 
+    def test_finalize_extended_chart_layout_preserves_strategy_bottom_margin_floor(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4))
+        try:
+            ax.plot([0, 1], [1.0, 1.1])
+            ax.set_xticks([0, 1])
+            ax.set_xticklabels(['A', 'B'])
+
+            finalize_extended_chart_layout(fig, ax, strategy={'bottom_margin': 0.31})
+
+            self.assertGreaterEqual(fig.subplotpars.bottom, 0.31)
+        finally:
+            plt.close(fig)
+
     def test_summary_chart_cell_span_grows_with_figure_width_for_sequential_placement(self):
         fig_small, _ = plt.subplots(figsize=(6.2, 4))
         fig_wide, _ = plt.subplots(figsize=(10.5, 4))

@@ -1775,8 +1775,10 @@ def finalize_extended_chart_layout(fig, ax, *, legend=None, strategy=None):
     if fig is None or ax is None:
         return
 
+    strategy_bottom_margin = None
     if strategy and strategy.get('bottom_margin'):
-        fig.subplots_adjust(bottom=float(strategy['bottom_margin']))
+        strategy_bottom_margin = float(strategy['bottom_margin'])
+        fig.subplots_adjust(bottom=strategy_bottom_margin)
 
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
@@ -1821,6 +1823,8 @@ def finalize_extended_chart_layout(fig, ax, *, legend=None, strategy=None):
     proposed_left = min(0.22, max(0.08, left_px / fig_w_px))
     proposed_right = max(0.76, min(0.98, 1.0 - (right_px / fig_w_px)))
     proposed_bottom = min(0.36, max(0.14, bottom_px / fig_h_px))
+    if strategy_bottom_margin is not None:
+        proposed_bottom = max(proposed_bottom, strategy_bottom_margin)
     proposed_top = max(0.68, min(0.95, 1.0 - (top_px / fig_h_px)))
 
     if proposed_right <= proposed_left + 0.25:
@@ -4340,11 +4344,11 @@ class ExportDataThread(QThread):
                     ax.set_xlabel('Group')
                     ax.set_ylabel('Measurement')
                     ax.set_title(build_wrapped_chart_title(header), pad=20)
-                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
 
                     current_y_limits = ax.get_ylim()
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
+                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
 
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
