@@ -130,6 +130,22 @@ def _append_ci(display_value, interval):
     return f'{display_value} {ci_text}'
 
 
+def _format_observed_nok_with_side_split(summary_stats, spec_type):
+    total_nok = format_count(summary_stats.get('nok_count'))
+    below_count = summary_stats.get('observed_nok_below_lsl_count')
+    above_count = summary_stats.get('observed_nok_above_usl_count')
+
+    side_parts = []
+    if spec_type in {'two-sided', 'one-sided lower'} and _is_numeric(below_count):
+        side_parts.append(f"<LSL: {format_count(below_count)}")
+    if spec_type in {'two-sided', 'one-sided upper'} and _is_numeric(above_count):
+        side_parts.append(f">USL: {format_count(above_count)}")
+
+    if not side_parts:
+        return total_nok
+    return f"{total_nok} ({', '.join(side_parts)})"
+
+
 def build_histogram_table_data(summary_stats):
     """Build stable, display-ready statistics rows and row metadata for histograms."""
 
@@ -198,7 +214,7 @@ def build_histogram_table_data(summary_stats):
     discrepancy_metrics = _compute_nok_discrepancy_metrics(observed_nok_pct, estimated_nok_pct)
 
     table_rows.extend([
-        ('NOK', format_count(summary_stats['nok_count'])),
+        ('NOK', _format_observed_nok_with_side_split(summary_stats, spec_type)),
         ('NOK %', format_percent_from_ratio(summary_stats['nok_pct'], decimals=2)),
         ('Samples', format_count(summary_stats['sample_size'])),
     ])

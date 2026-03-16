@@ -120,6 +120,8 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
             'sample_size': 12,
             'nok_count': 1,
             'nok_pct': 0.083333,
+            'observed_nok_below_lsl_count': 0,
+            'observed_nok_above_usl_count': 1,
         }
 
         payload = build_histogram_table_data(summary_stats)
@@ -130,7 +132,7 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertTrue(table[5][1].startswith('1.99 ['))
         self.assertEqual(table[6][0], 'Cpk')
         self.assertTrue(table[6][1].startswith('1.43 ['))
-        self.assertEqual(table[-3], ('NOK', '1'))
+        self.assertEqual(table[-3], ('NOK', '1 (<LSL: 0, >USL: 1)'))
         self.assertEqual(table[-2], ('NOK %', '8.33%'))
         self.assertEqual(table[-1], ('Samples', '12'))
         self.assertNotIn('NOK % (obs vs est)', [label for label, _ in table])
