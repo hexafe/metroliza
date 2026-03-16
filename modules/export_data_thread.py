@@ -2266,8 +2266,8 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
 
 
 _EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.155
-_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.7
-_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO = 0.44
+_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.95
+_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO = 0.39
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -2333,7 +2333,7 @@ def adjust_histogram_stats_table_geometry(
     label_col0_ratio = statistic_area_ratio * 0.78
     label_col1_ratio = statistic_area_ratio * 0.22
     value_ratio = 1.0 - statistic_area_ratio
-    safe_row_scale = min(2.8, max(0.9, float(row_height_scale)))
+    safe_row_scale = min(3.1, max(0.9, float(row_height_scale)))
     border_linewidth = 0.45
     cell_padding = 0.12
 
