@@ -129,9 +129,9 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
 
         self.assertEqual(table[0], ('Min', '1.235'))
         self.assertEqual(table[5][0], 'Cp')
-        self.assertTrue(table[5][1].startswith('1.99 ['))
+        self.assertEqual(table[5][1], '1.99')
         self.assertEqual(table[6][0], 'Cpk')
-        self.assertTrue(table[6][1].startswith('1.43 ['))
+        self.assertEqual(table[6][1], '1.43')
         self.assertEqual(table[-3], ('NOK', '1 (<LSL: 0, >USL: 1)'))
         self.assertEqual(table[-2], ('NOK %', '8.33%'))
         self.assertEqual(table[-1], ('Samples', '12'))

@@ -172,7 +172,6 @@ def build_histogram_table_data(summary_stats):
 
     cp_display_value = format_capability_index(summary_stats['cp'])
     cpk_display_value = format_capability_index(cpk_value)
-    include_capability_ci = bool(summary_stats.get('include_capability_ci', True))
     capability_ci = summary_stats.get('capability_ci')
     if not isinstance(capability_ci, dict):
         capability_ci = compute_capability_confidence_intervals(
@@ -187,16 +186,6 @@ def build_histogram_table_data(summary_stats):
     include_cp_row = spec_type == 'two-sided'
 
     resolved_cpk_label = cpk_label
-    if include_capability_ci and include_cp_row:
-        cp_display_value = _append_ci(cp_display_value, cp_ci)
-    if include_capability_ci:
-        cpk_display_value = _append_ci(cpk_display_value, cpk_ci)
-
-    if sample_confidence['is_low_n'] and sample_confidence['severity'] == 'severe':
-        if include_cp_row and cp_display_value != 'N/A':
-            cp_display_value = f"{_append_ci(format_capability_index(summary_stats['cp']), cp_ci)} (Low-confidence estimate)"
-        if cpk_display_value != 'N/A':
-            cpk_display_value = f"{_append_ci(format_capability_index(cpk_value), cpk_ci)} (Low-confidence estimate)"
 
     table_rows = [
         ('Min', format_measurement_value(summary_stats['minimum'])),
