@@ -132,7 +132,7 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
         self.assertEqual(table[5][1], '1.99')
         self.assertEqual(table[6][0], 'Cpk')
         self.assertEqual(table[6][1], '1.43')
-        self.assertEqual(table[-3], ('NOK', '1 (<LSL: 0, >USL: 1)'))
+        self.assertEqual(table[-3], ('NOK', '1 (U: 1, L: 0)'))
         self.assertEqual(table[-2], ('NOK %', '8.33%'))
         self.assertEqual(table[-1], ('Samples', '12'))
         self.assertNotIn('NOK % (obs vs est)', [label for label, _ in table])

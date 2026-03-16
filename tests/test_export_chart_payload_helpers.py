@@ -288,3 +288,26 @@ def test_build_histogram_table_data_includes_raw_rows_for_full_precision_tooltip
 
     assert ('Min', 1.23456) in payload['raw_rows']
     assert payload['capability_rows']['Cpk']['raw_value'] == 1.2345
+
+
+def test_build_histogram_table_data_formats_nok_side_split_as_u_and_l():
+    payload = build_histogram_table_data(
+        {
+            'minimum': 1.0,
+            'maximum': 3.0,
+            'average': 2.0,
+            'median': 2.0,
+            'sigma': 0.1,
+            'cp': 1.5,
+            'cpk': 1.2,
+            'sample_size': 30,
+            'nok_count': 6,
+            'nok_pct': 0.2,
+            'observed_nok_above_usl_count': 4,
+            'observed_nok_below_lsl_count': 2,
+            'lsl': 1.0,
+            'usl': 3.0,
+        }
+    )
+
+    assert dict(payload['rows'])['NOK'] == '6 (U: 4, L: 2)'

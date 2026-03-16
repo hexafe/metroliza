@@ -1022,6 +1022,34 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(right.get_text().get_text(), '2.0')
         plt.close(fig)
 
+    def test_adjust_histogram_stats_table_geometry_expands_multiline_rows(self):
+        fig, ax = plt.subplots()
+        table_rows = [
+            ('Model', 'Skew Normal'),
+            ('Warning', 'low sample size — capability uncertain\nfit unreliable — use observed NOK only'),
+        ]
+        ax_table = plt.table(
+            cellText=table_rows,
+            colLabels=['Statistic', 'Value'],
+            cellLoc='center',
+            loc='right',
+            bbox=[1, 0, 0.3, 1],
+        )
+
+        base_model_height = ax_table.get_celld()[(1, 0)].get_height()
+        base_warning_height = ax_table.get_celld()[(2, 0)].get_height()
+
+        adjust_histogram_stats_table_geometry(
+            ax_table,
+            row_height_scale=1.1,
+        )
+        fig.canvas.draw()
+
+        self.assertGreater(ax_table.get_celld()[(1, 0)].get_height(), base_model_height)
+        self.assertGreater(ax_table.get_celld()[(2, 0)].get_height(), base_warning_height)
+        self.assertGreater(ax_table.get_celld()[(2, 0)].get_height(), ax_table.get_celld()[(1, 0)].get_height())
+        plt.close(fig)
+
     def test_adjust_histogram_stats_table_geometry_two_column_keeps_rows_unmerged_when_normality_missing(self):
         fig, ax = plt.subplots()
         table_rows = [('Min', '1.0'), ('Max', '2.0')]

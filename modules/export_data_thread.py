@@ -2242,7 +2242,7 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
 
 
 _EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.148
-_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.25
+_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.4
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -2325,6 +2325,22 @@ def adjust_histogram_stats_table_geometry(
             and not table_cells[(row, 2)].get_visible()
         }
 
+    row_line_multipliers = {}
+    for row_index in sorted({row for (row, _col) in table_cells.keys()}):
+        if row_index == 0:
+            row_line_multipliers[row_index] = 1.0
+            continue
+        visible_cells = [
+            table_cells[(row_index, col)]
+            for col in sorted({col for (row, col) in table_cells.keys() if row == row_index})
+            if table_cells.get((row_index, col)) is not None and table_cells[(row_index, col)].get_visible()
+        ]
+        max_line_count = 1
+        for visible_cell in visible_cells:
+            text_value = visible_cell.get_text().get_text()
+            max_line_count = max(max_line_count, len(str(text_value).splitlines()))
+        row_line_multipliers[row_index] = min(2.5, 1.0 + (max_line_count - 1) * 0.75)
+
     for (row_index, col_index), cell in table_cells.items():
         if not cell.get_visible():
             continue
@@ -2351,7 +2367,8 @@ def adjust_histogram_stats_table_geometry(
                 text.set_x(0.94)
 
         if row_index not in full_width_rows:
-            cell.set_height(cell.get_height() * safe_row_scale)
+            row_multiplier = row_line_multipliers.get(row_index, 1.0)
+            cell.set_height(cell.get_height() * safe_row_scale * row_multiplier)
 
         cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
         cell.set_linewidth(border_linewidth)
@@ -2451,7 +2468,12 @@ def render_panel_table(
 
         header_height_px = header_h + (2.0 * cell_padding_px)
         row_height_px = line_h + (2.0 * cell_padding_px)
-        required_height_px = header_height_px + (len(candidate_rows) * row_height_px)
+        required_rows_height_px = 0.0
+        for label, value in candidate_rows:
+            label_line_count = max(1, len(str(label).splitlines()))
+            value_line_count = max(1, len(str(value).splitlines()))
+            required_rows_height_px += row_height_px * max(label_line_count, value_line_count)
+        required_height_px = header_height_px + required_rows_height_px
 
         return {
             'label_fraction': label_fraction,

@@ -136,10 +136,10 @@ def _format_observed_nok_with_side_split(summary_stats, spec_type):
     above_count = summary_stats.get('observed_nok_above_usl_count')
 
     side_parts = []
-    if spec_type in {'two-sided', 'one-sided lower'} and _is_numeric(below_count):
-        side_parts.append(f"<LSL: {format_count(below_count)}")
     if spec_type in {'two-sided', 'one-sided upper'} and _is_numeric(above_count):
-        side_parts.append(f">USL: {format_count(above_count)}")
+        side_parts.append(f"U: {format_count(above_count)}")
+    if spec_type in {'two-sided', 'one-sided lower'} and _is_numeric(below_count):
+        side_parts.append(f"L: {format_count(below_count)}")
 
     if not side_parts:
         return total_nok
