@@ -1048,6 +1048,11 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(ax_table.get_celld()[(1, 0)].get_height(), base_model_height)
         self.assertGreater(ax_table.get_celld()[(2, 0)].get_height(), base_warning_height)
         self.assertGreater(ax_table.get_celld()[(2, 0)].get_height(), ax_table.get_celld()[(1, 0)].get_height())
+        self.assertAlmostEqual(
+            ax_table.get_celld()[(2, 0)].get_height(),
+            ax_table.get_celld()[(1, 0)].get_height() * 2.0,
+            places=5,
+        )
         plt.close(fig)
 
     def test_adjust_histogram_stats_table_geometry_two_column_keeps_rows_unmerged_when_normality_missing(self):
