@@ -66,6 +66,22 @@ def build_table_row_heights(row_line_counts, *, header_row_height_px, base_row_h
     return [height_px / safe_fig_height for height_px in heights_px]
 
 
+def estimate_table_panel_height_px(
+    row_line_counts,
+    *,
+    base_row_height_px,
+    header_row_height_px,
+    extra_line_height_px,
+    panel_padding_px,
+):
+    """Estimate absolute panel height in pixels using shared line-aware row metrics."""
+    total_height_px = float(header_row_height_px) + (2.0 * float(panel_padding_px))
+    for line_count in row_line_counts or []:
+        lines = max(1, int(line_count))
+        total_height_px += float(base_row_height_px) + ((lines - 1) * float(extra_line_height_px))
+    return total_height_px
+
+
 def estimate_table_panel_height(
     row_line_counts,
     *,
@@ -76,11 +92,64 @@ def estimate_table_panel_height(
     fig_height_px,
 ):
     """Estimate normalized panel height using shared line-aware row metrics."""
-    total_height_px = float(header_row_height_px) + (2.0 * float(panel_padding_px))
-    for line_count in row_line_counts or []:
-        lines = max(1, int(line_count))
-        total_height_px += float(base_row_height_px) + ((lines - 1) * float(extra_line_height_px))
+    total_height_px = estimate_table_panel_height_px(
+        row_line_counts,
+        base_row_height_px=base_row_height_px,
+        header_row_height_px=header_row_height_px,
+        extra_line_height_px=extra_line_height_px,
+        panel_padding_px=panel_padding_px,
+    )
     return total_height_px / max(1.0, float(fig_height_px))
+
+
+def resolve_required_histogram_figure_height_for_complete_right_tables(
+    *,
+    fit_rows=None,
+    stats_rows=None,
+    fit_row_count=0,
+    stats_row_count=0,
+    table_fontsize=8.0,
+    dpi=100.0,
+    minimum_height=4.4,
+):
+    """Return figure height (inches) needed to fully render both right-column tables."""
+
+    shared_metrics = resolve_histogram_dashboard_row_metrics(table_fontsize=table_fontsize, dpi=dpi)
+    fit_line_counts = [
+        resolve_table_row_line_count(label, value)
+        for label, value in (fit_rows or [])
+    ] or [1] * max(0, int(fit_row_count))
+    stats_line_counts = [
+        resolve_table_row_line_count(label, value)
+        for label, value in (stats_rows or [])
+    ] or [1] * max(0, int(stats_row_count))
+
+    fit_height_px = estimate_table_panel_height_px(
+        fit_line_counts,
+        base_row_height_px=shared_metrics['base_row_height_px'],
+        header_row_height_px=shared_metrics['header_row_height_px'],
+        extra_line_height_px=shared_metrics['extra_line_height_px'],
+        panel_padding_px=shared_metrics['panel_padding_px'],
+    )
+    stats_height_px = estimate_table_panel_height_px(
+        stats_line_counts,
+        base_row_height_px=shared_metrics['base_row_height_px'],
+        header_row_height_px=shared_metrics['header_row_height_px'],
+        extra_line_height_px=shared_metrics['extra_line_height_px'],
+        panel_padding_px=shared_metrics['panel_padding_px'],
+    )
+
+    usable_height_ratio = (
+        1.0
+        - HISTOGRAM_OUTER_PADDING_TOP
+        - HISTOGRAM_OUTER_PADDING_BOTTOM
+        - HISTOGRAM_TITLE_BAND_HEIGHT
+        - _HISTOGRAM_RIGHT_STACK_GAP
+    )
+    usable_height_ratio = max(1e-6, usable_height_ratio)
+    required_tables_height_px = fit_height_px + stats_height_px
+    required_height_inches = (required_tables_height_px / usable_height_ratio) / max(1e-6, float(dpi))
+    return max(float(minimum_height), required_height_inches)
 
 
 def _clamp(value, lower, upper):
@@ -316,9 +385,6 @@ def compute_histogram_plot_with_right_info_layout(
         panel_padding_px=shared_metrics['panel_padding_px'],
         fig_height_px=fig_height_px,
     )
-    # Prioritize keeping the statistics table complete when both right-column
-    # tables compete for limited vertical space.
-    stats_target *= 1.10
     content_for_tables = max(0.0, content_height - _HISTOGRAM_RIGHT_STACK_GAP)
     total_target = max(1e-9, stats_target + fit_target)
     stats_height = content_for_tables * (stats_target / total_target)

@@ -14,10 +14,12 @@ from modules.export_histogram_layout import (
     compute_row_line_count,
     compute_panel_table_content_height,
     estimate_table_panel_height,
+    estimate_table_panel_height_px,
     assert_non_overlapping_rectangles,
     compute_histogram_panel_layout,
     compute_histogram_plot_with_right_info_layout,
     resolve_histogram_dashboard_row_metrics,
+    resolve_required_histogram_figure_height_for_complete_right_tables,
     resolve_table_row_line_count,
     rectangles_overlap,
     resolve_inner_table_rect,
@@ -331,3 +333,47 @@ def test_histogram_right_info_layout_keeps_plot_dominant_vs_old_composition():
     assert final['plot_rect']['width'] > legacy['plot_rect']['width']
     assert final['plot_rect']['width'] >= HISTOGRAM_MIN_PLOT_WIDTH - 1e-9
     assert final['right_container_rect']['width'] >= 0.30
+
+
+def test_estimate_table_panel_height_px_matches_normalized_helper():
+    metrics = resolve_histogram_dashboard_row_metrics(table_fontsize=8.0, dpi=100)
+    fig_height_px = 400.0
+    line_counts = [1, 2, 1]
+
+    panel_height_px = estimate_table_panel_height_px(
+        line_counts,
+        base_row_height_px=metrics['base_row_height_px'],
+        header_row_height_px=metrics['header_row_height_px'],
+        extra_line_height_px=metrics['extra_line_height_px'],
+        panel_padding_px=metrics['panel_padding_px'],
+    )
+    panel_height_norm = estimate_table_panel_height(
+        line_counts,
+        base_row_height_px=metrics['base_row_height_px'],
+        header_row_height_px=metrics['header_row_height_px'],
+        extra_line_height_px=metrics['extra_line_height_px'],
+        panel_padding_px=metrics['panel_padding_px'],
+        fig_height_px=fig_height_px,
+    )
+
+    assert panel_height_px == pytest.approx(panel_height_norm * fig_height_px)
+
+
+def test_resolve_required_histogram_figure_height_grows_with_more_rows():
+    small_height = resolve_required_histogram_figure_height_for_complete_right_tables(
+        fit_rows=[('A', '1'), ('B', '2')],
+        stats_rows=[('S1', '1'), ('S2', '2')],
+        table_fontsize=8.0,
+        dpi=100.0,
+        minimum_height=4.4,
+    )
+    large_height = resolve_required_histogram_figure_height_for_complete_right_tables(
+        fit_rows=[(f'F{i}', 'value') for i in range(14)],
+        stats_rows=[(f'S{i}', 'value') for i in range(16)],
+        table_fontsize=8.0,
+        dpi=100.0,
+        minimum_height=4.4,
+    )
+
+    assert small_height >= 4.4
+    assert large_height > small_height
