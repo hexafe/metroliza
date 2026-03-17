@@ -1,6 +1,8 @@
 # Changelog (for end users)
 
-## 2026.03rc1(260315) — current version
+## 2026.03rc1(260317) — current version
+- Histogram table polishing improved readability and visual consistency in end-user reports/exports.
+- Grouping analysis prototype v2 was added to extend grouped-data analysis workflows.
 - Histogram dashboards and chart layouts were improved for readability (cleaner side tables, taller rows, clearer title/x-axis visibility).
 - Capability reporting now includes confidence intervals in rendered analytics/exports for better statistical interpretation.
 - Low-sample safeguards were added for capability and distribution-fit metrics to reduce overconfident conclusions.
