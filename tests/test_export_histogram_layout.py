@@ -377,3 +377,26 @@ def test_resolve_required_histogram_figure_height_grows_with_more_rows():
 
     assert small_height >= 4.4
     assert large_height > small_height
+
+
+def test_resolve_required_histogram_figure_height_is_lower_for_single_unified_table_contract():
+    process_rows = [(f'S{i}', 'value') for i in range(10)]
+    model_rows = [(f'F{i}', 'value') for i in range(4)]
+    unified_rows = process_rows + model_rows
+
+    split_height = resolve_required_histogram_figure_height_for_complete_right_tables(
+        fit_rows=model_rows,
+        stats_rows=process_rows,
+        table_fontsize=8.0,
+        dpi=100.0,
+        minimum_height=4.4,
+    )
+    unified_height = resolve_required_histogram_figure_height_for_complete_right_tables(
+        fit_rows=[],
+        stats_rows=unified_rows,
+        table_fontsize=8.0,
+        dpi=100.0,
+        minimum_height=4.4,
+    )
+
+    assert unified_height <= split_height

@@ -121,6 +121,7 @@ from modules.export_data_thread import (  # noqa: E402
     apply_minimal_axis_style,
     _build_distribution_fit_info_note,
     _build_distribution_fit_table_rows,
+    _build_unified_histogram_dashboard_rows,
     _apply_non_normal_cpk_reference_label,
     _build_compact_histogram_note_lines,
     resolve_selected_model_curve_style,
@@ -258,8 +259,42 @@ class TestExportPlotHelpers(unittest.TestCase):
             summary_stats={'sample_size': 20},
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality', 'Warning'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'Est. NOK %', 'Fit quality', 'Warning'])
         self.assertEqual(dict(rows)['Warning'], 'small sample; capability uncertain')
+
+    def test_unified_histogram_dashboard_row_order_contract(self):
+        stats_rows = [
+            ('Min', '1.0'),
+            ('Max', '2.0'),
+            ('Mean', '1.5'),
+            ('Median', '1.5'),
+            ('Std Dev', '0.1'),
+            ('Cp', '1.2'),
+            ('Cpk', '1.1'),
+            ('NOK', '1 (U: 1)'),
+            ('NOK %', '10.00%'),
+            ('Samples', '10'),
+        ]
+        fit_rows = [
+            ('Model', 'Johnson SU'),
+            ('Est. NOK %', '0.5000% (U: 0.5000%)'),
+            ('Fit quality', 'Medium'),
+            ('Warning', 'small sample; capability uncertain'),
+        ]
+
+        unified = _build_unified_histogram_dashboard_rows(
+            statistics_rows=stats_rows,
+            distribution_fit_rows=fit_rows,
+        )
+
+        self.assertEqual(
+            [label for label, _ in unified],
+            [
+                'Min', 'Max', 'Mean', 'Median', 'Std Dev',
+                'Cp', 'Cpk', 'NOK', 'NOK %', 'Samples',
+                'Model', 'Est. NOK %', 'Fit quality', 'Warning',
+            ],
+        )
 
     def test_render_panel_table_in_panel_axes_explicit_row_heights_keep_all_rows(self):
         fig = plt.figure(figsize=(4.0, 3.0))
@@ -383,51 +418,48 @@ class TestExportPlotHelpers(unittest.TestCase):
             measurements = pd.DataFrame(
                 {'MEAS': np.concatenate([np.linspace(9.8, 10.2, 40), np.linspace(10.25, 10.5, 16)])}
             )
-            fit_rows = [
-                ('Model', 'Johnson SU'),
-                ('Family', 'signed/bilateral'),
-                ('GOF p', '0.0712'),
-                ('P(<LSL)', '0.011%'),
-                ('P(>USL)', '0.108%'),
-                ('Est. NOK %', '0.123%'),
-                ('Est. PPM', '1,230'),
-                ('Fit quality', 'Medium'),
-            ]
-            stats_rows = [
-                ('Average', '10.102'),
-                ('Std dev', '0.085'),
+            unified_rows = [
+                ('Min', '9.800'),
+                ('Max', '10.500'),
+                ('Mean', '10.102'),
+                ('Median', '10.091'),
+                ('Std Dev', '0.085'),
                 ('Cp', '1.34'),
                 ('Cpk (ref)', '1.19'),
+                ('NOK', '2 (U: 2)'),
+                ('NOK %', '3.57%'),
+                ('Samples', '56'),
+                ('Model', 'Johnson SU'),
+                ('Est. NOK %', '0.1234% (U: 0.1234%)'),
+                ('Fit quality', 'Medium'),
+                ('Warning', 'small sample; capability uncertain'),
             ]
             rects = compute_histogram_plot_with_right_info_layout(
                 (8.4, 4.0),
                 table_fontsize=8.8,
-                fit_row_count=len(fit_rows),
-                stats_row_count=len(stats_rows),
+                fit_row_count=0,
+                stats_row_count=len(unified_rows),
+                fit_rows=[],
+                stats_rows=unified_rows,
                 note_line_count=0,
                 right_container_width_hint=0.34,
             )
             assert_non_overlapping_rectangles({
                 'plot_rect': rects['plot_rect'],
-                'fit_table_rect': rects['fit_table_rect'],
-                'stats_table_rect': rects['stats_table_rect'],
+                'right_table_rect': rects['right_container_rect'],
                 'footer_rect': rects['footer_rect'],
             })
 
-            fit_ax = fig.add_axes([rects['fit_table_rect']['x'], rects['fit_table_rect']['y'], rects['fit_table_rect']['width'], rects['fit_table_rect']['height']])
             plot_ax = fig.add_axes([rects['plot_rect']['x'], rects['plot_rect']['y'], rects['plot_rect']['width'], rects['plot_rect']['height']])
-            stats_ax = fig.add_axes([rects['stats_table_rect']['x'], rects['stats_table_rect']['y'], rects['stats_table_rect']['width'], rects['stats_table_rect']['height']])
-            fit_ax.set_axis_off()
-            stats_ax.set_axis_off()
+            right_ax = fig.add_axes([rects['right_container_rect']['x'], rects['right_container_rect']['y'], rects['right_container_rect']['width'], rects['right_container_rect']['height']])
+            right_ax.set_axis_off()
 
             render_histogram(plot_ax, measurements, lsl=9.9, usl=10.4)
-            fit_meta = render_panel_table_in_panel_axes(ax=fit_ax, title='Distribution Fit', rows=fit_rows, style_options={'fontsize': 8.2})
-            stats_meta = render_panel_table_in_panel_axes(ax=stats_ax, title='Statistics', rows=stats_rows, style_options={'fontsize': 8.2})
-            self.assertEqual(len(fig.axes), 3)
-            self.assertGreater(rects['plot_rect']['width'], rects['fit_table_rect']['width'])
+            table_meta = render_panel_table_in_panel_axes(ax=right_ax, title='Parameter', rows=unified_rows, style_options={'fontsize': 8.2})
+            self.assertEqual(len(fig.axes), 2)
+            self.assertGreater(rects['plot_rect']['width'], rects['right_container_rect']['width'])
             self.assertEqual(rects['footer_rect']['height'], 0.0)
-            self.assertGreaterEqual(len(fit_meta['rendered_rows']), 1)
-            self.assertGreaterEqual(len(stats_meta['rendered_rows']), 1)
+            self.assertEqual([label for label, _ in table_meta['rendered_rows']], [label for label, _ in unified_rows])
         finally:
             plt.close(fig)
 
@@ -473,7 +505,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=10.0,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'Est. NOK %', 'Fit quality'])
 
     def test_distribution_fit_table_rows_follow_lower_only_contract(self):
         rows = _build_distribution_fit_table_rows(
@@ -489,7 +521,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             usl=None,
         )
 
-        self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality'])
+        self.assertEqual([label for label, _ in rows], ['Model', 'Est. NOK %', 'Fit quality'])
 
     def test_distribution_fit_table_rows_omit_zero_bound_lower_tail_for_positive_support(self):
         rows = _build_distribution_fit_table_rows(
@@ -2334,7 +2366,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        self.assertEqual(dict(payload['rows'])['NOK'], '11 (U: 10, L: 1)')
+        self.assertEqual(dict(payload['rows'])['NOK'], '11 (L: 1, U: 10)')
 
     def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
         payload = {
@@ -3707,7 +3739,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         rows_by_label = dict(rows)
         self.assertEqual(rows_by_label['Fit quality'], 'Medium')
-        self.assertNotIn('Est. NOK %', rows_by_label)
+        self.assertEqual(rows_by_label['Est. NOK %'], '0.0200% (U: 2.0000%)')
         self.assertEqual(rows_by_label['Warning'], 'small sample; capability uncertain')
     def test_distribution_fit_table_rows_hide_modeled_risk_when_fit_weak(self):
         rows = _build_distribution_fit_table_rows(
