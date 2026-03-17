@@ -98,7 +98,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'adjusted_p_value': 0.03,
                             'effect_size': 0.7,
                             'difference': 'YES',
-                            'comment': 'USE CAUTION',
+                            'comment': 'caution',
                             'flags': 'LOW N; IMBALANCED N',
                         }
                     ],
@@ -123,9 +123,9 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Comment', values)
         self.assertIn('adj p-value', values)
         self.assertIn('Delta mean', values)
-        self.assertIn('Difference', values)
+        self.assertIn('difference', values)
         self.assertIn('YES', values)
-        self.assertIn('USE CAUTION', values)
+        self.assertIn('caution', values)
         self.assertIn('Flags', values)
         self.assertIn('LOW N; IMBALANCED N', values)
         self.assertIn('Plots', values)

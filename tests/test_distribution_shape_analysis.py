@@ -31,7 +31,7 @@ class TestDistributionShapeAnalysis(unittest.TestCase):
         pair = result['pairwise_rows'][0]
 
         self.assertGreater(pair['distance metric'], 0.1)
-        self.assertIn(pair['verdict'], {'DISTRIBUTION DIFFERENCE', 'USE CAUTION'})
+        self.assertIn(pair['verdict'], {'difference', 'caution'})
 
     def test_unreliable_fit_does_not_overclaim(self):
         grouped_values = {
@@ -42,16 +42,16 @@ class TestDistributionShapeAnalysis(unittest.TestCase):
         result = compute_distribution_difference('M3', grouped_values)
         pair = result['pairwise_rows'][0]
 
-        self.assertNotEqual(pair['verdict'], 'DISTRIBUTION DIFFERENCE')
-        self.assertIn(pair['verdict'], {'USE CAUTION', 'DESCRIPTIVE ONLY', 'NO SHAPE DIFFERENCE'})
+        self.assertNotEqual(pair['verdict'], 'difference')
+        self.assertIn(pair['verdict'], {'caution', 'descriptive only', 'no difference'})
 
     def test_low_sample_inputs_degrade_gracefully(self):
         grouped_values = {'A': np.array([1.0]), 'B': np.array([2.0])}
         result = compute_distribution_difference('M4', grouped_values)
 
         pair = result['pairwise_rows'][0]
-        self.assertEqual(pair['verdict'], 'DESCRIPTIVE ONLY')
-        self.assertIn('Insufficient data', pair['comment'])
+        self.assertEqual(pair['verdict'], 'descriptive only')
+        self.assertIn('insufficient data', pair['comment'])
 
 
 if __name__ == '__main__':
