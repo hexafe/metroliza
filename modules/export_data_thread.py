@@ -4568,7 +4568,7 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    base_histogram_figsize = (8.8, 4.4)
+                    base_histogram_figsize = (8.8, 4.0)
                     chart_start = time.perf_counter()
 
                     distribution_fit_result = precomputed_distribution_fit
@@ -4602,19 +4602,7 @@ class ExportDataThread(QThread):
                         distribution_fit_rows=distribution_fit_rows,
                     )
 
-                    expected_table_fontsize = compute_histogram_font_sizes(
-                        base_histogram_figsize,
-                        has_table=True,
-                        readability_scale=self.summary_plot_scale,
-                    )['table_fontsize']
-                    resolved_histogram_height = resolve_required_histogram_figure_height_for_complete_right_tables(
-                        fit_rows=[],
-                        stats_rows=unified_rows,
-                        table_fontsize=expected_table_fontsize,
-                        dpi=float(plt.rcParams.get('figure.dpi', 100.0)),
-                        minimum_height=base_histogram_figsize[1],
-                    )
-                    histogram_figsize = (base_histogram_figsize[0], resolved_histogram_height)
+                    histogram_figsize = base_histogram_figsize
                     fig = plt.figure(figsize=histogram_figsize)
                     histogram_font_sizes = compute_histogram_font_sizes(
                         histogram_figsize,

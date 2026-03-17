@@ -16,7 +16,7 @@ def compute_histogram_font_sizes(
     readability_bonus = optional_readability * 0.18
 
     annotation_fontsize = 8.2 * width_scale
-    table_fontsize = 10.3 * width_scale
+    table_fontsize = 10.9 * width_scale
     if has_table:
         annotation_fontsize -= 0.2
     annotation_fontsize += readability_bonus
@@ -24,7 +24,7 @@ def compute_histogram_font_sizes(
 
     return {
         'annotation_fontsize': min(10.5, max(7.0, annotation_fontsize)),
-        'table_fontsize': min(11.5, max(8.0, table_fontsize)),
+        'table_fontsize': min(12.2, max(8.4, table_fontsize)),
     }
 
 

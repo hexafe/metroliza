@@ -48,10 +48,10 @@ def resolve_histogram_dashboard_row_metrics(*, table_fontsize=8.0, dpi=100.0):
     del dpi
     font_scale = max(0.85, min(1.35, float(table_fontsize) / 8.0))
     return {
-        'base_row_height_px': 18.0 * font_scale,
-        'header_row_height_px': 20.0 * font_scale,
-        'extra_line_height_px': 11.0 * font_scale,
-        'panel_padding_px': 7.0 * font_scale,
+        'base_row_height_px': 20.0 * font_scale,
+        'header_row_height_px': 22.0 * font_scale,
+        'extra_line_height_px': 12.0 * font_scale,
+        'panel_padding_px': 8.0 * font_scale,
         'cell_pad': 0.10,
     }
 
