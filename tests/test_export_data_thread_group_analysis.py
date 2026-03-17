@@ -187,19 +187,19 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Diagnostics', sheet_names)
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
-            self.assertNotIn('Standard plot slots', analysis_values)
-            self.assertNotIn('Chart inserted', analysis_values)
-            self.assertNotIn('INSERTED', analysis_values)
+            self.assertNotIn('Plots', analysis_values)
+            self.assertNotIn('Shown below.', analysis_values)
+            self.assertNotIn('Shown', analysis_values)
 
     def test_standard_mode_inserts_plots_and_diagnostics_remain_deterministic(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_path = self._run_export(temp_dir, level='standard')
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
-            self.assertIn('Standard plot slots', analysis_values)
-            self.assertIn('INSERTED', analysis_values)
-            self.assertIn('Chart inserted', analysis_values)
-            self.assertNotIn('asset_missing', analysis_values)
+            self.assertIn('Plots', analysis_values)
+            self.assertIn('Shown', analysis_values)
+            self.assertIn('Shown below.', analysis_values)
+            self.assertNotIn('Plot could not be shown because the image asset is unavailable.', analysis_values)
 
             diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
             self.assertIn('ran', diagnostics_values)
