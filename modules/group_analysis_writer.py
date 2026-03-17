@@ -129,8 +129,8 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
         return
     formats = _build_formats(worksheet)
 
-    difference_col = headers.index('Difference')
-    comment_col = headers.index('Comment')
+    difference_col = headers.index('difference')
+    comment_col = headers.index('caution')
     flags_col = headers.index('Flags') if 'Flags' in headers else None
     pvalue_col = headers.index('adj p-value')
     effect_col = headers.index('effect size')
@@ -138,8 +138,8 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
 
     _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'strong_warning', type='text', criteria='containing', value='YES'))
     _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'neutral', type='text', criteria='containing', value='NO'))
-    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='USE CAUTION'))
-    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='DESCRIPTIVE ONLY'))
+    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='caution'))
+    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='descriptive only'))
 
     if flags_col is not None:
         _apply_conditional(worksheet, first, flags_col, last, flags_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='LOW N'))
@@ -199,7 +199,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
     metric_meta_rows = [
         {'Field': 'Groups', 'Value': metric_row.get('group_count')},
         {'Field': 'Spec status', 'Value': spec_status_label},
-        {'Field': 'Distribution difference', 'Value': (metric_row.get('distribution_difference') or {}).get('comment / verdict')},
+        {'Field': 'distribution shape', 'Value': (metric_row.get('distribution_difference') or {}).get('comment / verdict')},
         {'Field': 'Comment', 'Value': metric_row.get('diagnostics_comment') or (metric_row.get('comparability_summary') or {}).get('summary')},
     ]
     row = _write_table(worksheet, row, ['Field', 'Value'], metric_meta_rows)
@@ -219,9 +219,9 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
             'Cp': entry.get('cp'),
             'Capability': entry.get('capability'),
             'Capability type': entry.get('capability_type'),
-            'Best fit model': entry.get('best_fit_model'),
-            'Fit quality': entry.get('fit_quality'),
-            'Distribution caution': entry.get('distribution_shape_caution'),
+            'best fit model': entry.get('best_fit_model'),
+            'fit quality': entry.get('fit_quality'),
+            'caution': entry.get('distribution_shape_caution'),
             'Flags': entry.get('flags'),
         }
         for entry in metric_row.get('descriptive_stats', [])
@@ -231,7 +231,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
         row,
         [
             'Group', 'n', 'mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability', 'Capability type',
-            'Best fit model', 'Fit quality', 'Distribution caution', 'Flags',
+            'best fit model', 'fit quality', 'caution', 'Flags',
         ],
         desc_rows,
     )
@@ -246,8 +246,8 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
             'effect size': entry.get('effect_size'),
             'test': entry.get('test_used'),
             'Delta mean': entry.get('delta_mean'),
-            'Difference': entry.get('difference'),
-            'Comment': entry.get('comment'),
+            'difference': entry.get('difference'),
+            'caution': entry.get('comment'),
             'Flags': entry.get('flags'),
         }
         for entry in metric_row.get('pairwise_rows', [])
@@ -255,7 +255,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
     row, pairwise_bounds = _write_table_with_bounds(
         worksheet,
         row,
-        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'Difference', 'Comment', 'Flags'],
+        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'difference', 'caution', 'Flags'],
         pairwise_rows,
     )
     _apply_metric_pairwise_formats(worksheet, pairwise_bounds)

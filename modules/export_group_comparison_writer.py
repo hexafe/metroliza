@@ -84,44 +84,42 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
         insights.extend(
             [
                 'Significant pairwise findings: none (no pairwise comparisons were available).',
-                'No-difference outcomes: none (no pairwise comparisons were available).',
-                'Small-sample warning: no pairwise comparisons were available.',
-                'Assumption/test-choice notes: no per-metric test selection was available.',
+                'difference: none (no pairwise comparisons were available).',
+                'caution: no pairwise comparisons were available.',
             ]
         )
-        return insights
-
-    adj_p = pd.to_numeric(pairwise_df['adjusted p-value'], errors='coerce')
-
-    significant = pairwise_df[adj_p < 0.05]
-    if significant.empty:
-        insights.append('Significant pairwise findings: none at adjusted p < 0.05.')
     else:
-        significant_labels = [
-            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
-            for _, row in significant.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
-        ]
-        insights.append('Significant pairwise findings: ' + '; '.join(significant_labels) + '.')
+        adj_p = pd.to_numeric(pairwise_df['adjusted p-value'], errors='coerce')
 
-    no_difference = pairwise_df[adj_p >= 0.05]
-    if no_difference.empty:
-        insights.append('No-difference outcomes: all tested pairs were significant after adjustment.')
-    else:
-        no_diff_labels = [
-            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
-            for _, row in no_difference.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
-        ]
-        insights.append('No-difference outcomes: ' + '; '.join(no_diff_labels) + '.')
+        significant = pairwise_df[adj_p < 0.05]
+        if significant.empty:
+            insights.append('Significant pairwise findings: none at adjusted p < 0.05.')
+        else:
+            significant_labels = [
+                f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
+                for _, row in significant.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
+            ]
+            insights.append('Significant pairwise findings: ' + '; '.join(significant_labels) + '.')
 
-    small_sample_pairs = pairwise_df[(pairwise_df['n(A)'] < 5) | (pairwise_df['n(B)'] < 5)]
-    if small_sample_pairs.empty:
-        insights.append('Small-sample warning: all compared groups had n >= 5.')
-    else:
-        warning_labels = [
-            f"{row['Metric']} ({row['Group A']} n={row['n(A)']}, {row['Group B']} n={row['n(B)']})"
-            for _, row in small_sample_pairs.sort_values(['Metric', 'Group A', 'Group B']).iterrows()
-        ]
-        insights.append('Small-sample warning (n < 5): ' + '; '.join(warning_labels) + '.')
+        no_difference = pairwise_df[adj_p >= 0.05]
+        if no_difference.empty:
+            insights.append('difference: all tested pairs were significant after adjustment.')
+        else:
+            no_diff_labels = [
+                f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
+                for _, row in no_difference.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
+            ]
+            insights.append('difference: ' + '; '.join(no_diff_labels) + '.')
+
+        small_sample_pairs = pairwise_df[(pairwise_df['n(A)'] < 5) | (pairwise_df['n(B)'] < 5)]
+        if small_sample_pairs.empty:
+            insights.append('caution: all compared groups had n >= 5.')
+        else:
+            warning_labels = [
+                f"{row['Metric']} ({row['Group A']} n={row['n(A)']}, {row['Group B']} n={row['n(B)']})"
+                for _, row in small_sample_pairs.sort_values(['Metric', 'Group A', 'Group B']).iterrows()
+            ]
+            insights.append('caution (n < 5): ' + '; '.join(warning_labels) + '.')
 
     if not overall_test_rows:
         insights.append('Assumption/test-choice notes: no per-metric test selection was available.')
@@ -134,16 +132,16 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
 
     distribution_summary_rows = distribution_summary_rows or []
     if not distribution_summary_rows:
-        insights.append('Distribution-shape findings: no distribution-shape tests were available.')
+        insights.append('distribution shape: no distribution-shape tests were available.')
     else:
         shape_significant = [
             row for row in distribution_summary_rows if str(row.get('significant?', '')).strip().upper() == 'YES'
         ]
         if shape_significant:
             labels = [f"{row['Metric']} ({row.get('Test used')}, p={row.get('raw p-value'):.4f})" for row in shape_significant if row.get('raw p-value') is not None]
-            insights.append('Distribution-shape findings: significant differences detected for ' + '; '.join(labels) + '.')
+            insights.append('distribution shape: difference detected for ' + '; '.join(labels) + '.')
         else:
-            insights.append('Distribution-shape findings: no statistically significant shape differences were detected.')
+            insights.append('distribution shape: no statistically significant shape differences were detected.')
 
     return insights
 
@@ -460,10 +458,10 @@ def write_group_comparison_sheet(worksheet, payload):
     row = _write_kv_section(worksheet, row, 'Metadata', payload.get('metadata', []))
     row = _write_kv_section(worksheet, row, 'Overall Test Summary', payload.get('overall_summary', []))
     row = _write_table(worksheet, row, 'Recommended Statistical Tests', payload.get('overall_test_rows', []))
-    row = _write_table(worksheet, row, 'Distribution profile by group', payload.get('distribution_profile_rows', []))
-    row = _write_table(worksheet, row, 'Distribution difference summary', payload.get('distribution_difference_rows', []))
+    row = _write_table(worksheet, row, 'distribution shape profile by group', payload.get('distribution_profile_rows', []))
+    row = _write_table(worksheet, row, 'distribution shape summary', payload.get('distribution_difference_rows', []))
     row = _write_table(worksheet, row, 'Pairwise Tables', payload.get('pairwise_rows', []))
-    row = _write_table(worksheet, row, 'Distribution pairwise tables', payload.get('distribution_pairwise_rows', []))
+    row = _write_table(worksheet, row, 'distribution shape pairwise tables', payload.get('distribution_pairwise_rows', []))
     row = _write_matrix_collection(
         worksheet,
         row,
