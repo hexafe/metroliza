@@ -659,8 +659,14 @@ class ExportDialog(QDialog):
             # Update filter label in export window
             if applied:
                 self.select_group_label.setText("Group data (optional): applied")
+                if hasattr(self, "group_analysis_level_combobox"):
+                    current = self.group_analysis_level_combobox.currentText().strip().lower()
+                    if current == "off":
+                        self.group_analysis_level_combobox.setCurrentText("Standard")
             else:
                 self.select_group_label.setText("Group data (optional): not applied")
+                if hasattr(self, "group_analysis_level_combobox"):
+                    self.group_analysis_level_combobox.setCurrentText("Off")
         except Exception as e:
             self.log_and_exit(e)
 
