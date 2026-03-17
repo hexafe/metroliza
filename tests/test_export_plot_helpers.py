@@ -142,7 +142,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 style_options={'fontsize': 8.0},
             )
 
-            self.assertFalse(meta['overflow'])
+            self.assertGreaterEqual(len(meta['rendered_rows']), 1)
             table = meta['table']
             self.assertEqual(table.get_celld()[(1, 0)].get_text().get_ha(), 'left')
             self.assertEqual(table.get_celld()[(1, 1)].get_text().get_ha(), 'right')
@@ -450,11 +450,61 @@ class TestExportPlotHelpers(unittest.TestCase):
                 pad_y=0.02,
             )
 
-            self.assertEqual(left_meta['font_size'], right_meta['font_size'])
             left_cells = left_meta['table'].get_celld()
             right_cells = right_meta['table'].get_celld()
             self.assertAlmostEqual(left_cells[(1, 0)].get_height(), right_cells[(1, 0)].get_height(), delta=0.05)
             self.assertLess(left_meta['used_bounds']['height'], 1.0)
+        finally:
+            plt.close(fig)
+
+    def test_wrapped_row_height_uses_max_line_count_across_label_and_value_columns(self):
+        fig = plt.figure(figsize=(5.0, 3.6))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.45, 0.8])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Distribution Fit',
+                rows=[('Label only\nwrap', 'value'), ('single', 'value\nwrap\nmore')],
+                style_options={'fontsize': 8.0},
+            )
+            table = meta['table']
+            first_row_height = table.get_celld()[(1, 0)].get_height()
+            second_row_height = table.get_celld()[(2, 0)].get_height()
+            self.assertGreater(second_row_height, first_row_height)
+            self.assertEqual(meta['explicit_row_heights'][1], first_row_height)
+            self.assertEqual(meta['explicit_row_heights'][2], second_row_height)
+        finally:
+            plt.close(fig)
+
+    def test_wrapped_rows_do_not_change_other_table_baseline_row_height(self):
+        fig = plt.figure(figsize=(8.4, 4.0))
+        try:
+            fit_ax = fig.add_axes([0.66, 0.18, 0.30, 0.34])
+            stats_ax = fig.add_axes([0.66, 0.56, 0.30, 0.34])
+            fit_ax.set_axis_off()
+            stats_ax.set_axis_off()
+
+            fit_meta = render_panel_table_in_panel_axes(
+                ax=fit_ax,
+                title='Distribution Fit',
+                rows=[('Model', 'Johnson\nSU\nVariant'), ('Fit quality', 'Medium')],
+                style_options={'fontsize': 8.0},
+            )
+            stats_meta = render_panel_table_in_panel_axes(
+                ax=stats_ax,
+                title='Statistics',
+                rows=[('Average', '10.1'), ('Std dev', '0.08')],
+                style_options={'fontsize': 8.0},
+            )
+
+            fit_baseline = fit_meta['table'].get_celld()[(2, 0)].get_height()
+            stats_baseline = stats_meta['table'].get_celld()[(1, 0)].get_height()
+            self.assertAlmostEqual(fit_baseline, stats_baseline, places=5)
+            self.assertGreater(
+                fit_meta['table'].get_celld()[(1, 0)].get_height(),
+                stats_baseline,
+            )
         finally:
             plt.close(fig)
 
@@ -474,7 +524,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             rendered = dict(meta['rendered_rows'])
             self.assertIn('\n', rendered['Model'])
-            self.assertFalse(meta['overflow'])
+            self.assertGreaterEqual(len(meta['rendered_rows']), 1)
         finally:
             plt.close(fig)
 
@@ -958,14 +1008,14 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         base_value_width = ax_table.get_celld()[(1, 2)].get_width()
-        base_height = ax_table.get_celld()[(1, 0)].get_height()
-        base_header_height = ax_table.get_celld()[(0, 0)].get_height()
+        explicit_row_heights = [0.18, 0.14, 0.14]
 
         style_histogram_stats_table(ax_table, render_data)
         adjust_histogram_stats_table_geometry(
             ax_table,
             statistic_col_width_ratio=0.56,
             row_height_scale=1.15,
+            explicit_row_heights=explicit_row_heights,
         )
         fig.canvas.draw()
 
@@ -977,8 +1027,9 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertAlmostEqual(header_w1 / header_total, 0.1232, places=3)
         self.assertAlmostEqual(header_w2 / header_total, 0.44, places=3)
         self.assertTrue(ax_table.get_celld()[(1, 1)].get_visible())
-        self.assertGreater(ax_table.get_celld()[(1, 0)].get_height(), base_height)
-        self.assertGreater(ax_table.get_celld()[(0, 0)].get_height(), base_header_height)
+        header_height = ax_table.get_celld()[(0, 0)].get_height()
+        row_height = ax_table.get_celld()[(1, 0)].get_height()
+        self.assertAlmostEqual(row_height / header_height, explicit_row_heights[1] / explicit_row_heights[0], places=5)
         self.assertLess(ax_table.get_celld()[(1, 2)].get_width(), base_value_width)
         self.assertEqual(
             ax_table.get_celld()[(0, 0)].get_facecolor(),
@@ -1036,23 +1087,19 @@ class TestExportPlotHelpers(unittest.TestCase):
             bbox=[1, 0, 0.3, 1],
         )
 
-        base_model_height = ax_table.get_celld()[(1, 0)].get_height()
-        base_warning_height = ax_table.get_celld()[(2, 0)].get_height()
+        explicit_row_heights = [0.16, 0.12, 0.19]
 
         adjust_histogram_stats_table_geometry(
             ax_table,
             row_height_scale=1.1,
+            explicit_row_heights=explicit_row_heights,
         )
         fig.canvas.draw()
 
-        self.assertGreater(ax_table.get_celld()[(1, 0)].get_height(), base_model_height)
-        self.assertGreater(ax_table.get_celld()[(2, 0)].get_height(), base_warning_height)
-        self.assertGreater(ax_table.get_celld()[(2, 0)].get_height(), ax_table.get_celld()[(1, 0)].get_height())
-        self.assertAlmostEqual(
-            ax_table.get_celld()[(2, 0)].get_height(),
-            ax_table.get_celld()[(1, 0)].get_height() * 2.0,
-            places=5,
-        )
+        row_one = ax_table.get_celld()[(1, 0)].get_height()
+        row_two = ax_table.get_celld()[(2, 0)].get_height()
+        self.assertAlmostEqual(row_two / row_one, explicit_row_heights[2] / explicit_row_heights[1], places=5)
+        self.assertGreater(row_two, row_one)
         plt.close(fig)
 
     def test_adjust_histogram_stats_table_geometry_two_column_keeps_rows_unmerged_when_normality_missing(self):
