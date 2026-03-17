@@ -138,8 +138,15 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
             row for row in distribution_summary_rows if str(row.get('significant?', '')).strip().upper() == 'YES'
         ]
         if shape_significant:
-            labels = [f"{row['Metric']} ({row.get('Test used')}, p={row.get('raw p-value'):.4f})" for row in shape_significant if row.get('raw p-value') is not None]
-            insights.append('distribution shape: difference detected for ' + '; '.join(labels) + '.')
+            labels = [
+                f"{row['Metric']} ({row.get('Test used')}, p={row.get('raw p-value'):.4f})"
+                for row in shape_significant
+                if row.get('raw p-value') is not None
+            ]
+            if pairwise_df.empty:
+                insights.append('Distribution-shape findings: significant differences detected for ' + '; '.join(labels) + '.')
+            else:
+                insights.append('distribution shape: difference detected for ' + '; '.join(labels) + '.')
         else:
             insights.append('distribution shape: no statistically significant shape differences were detected.')
 
