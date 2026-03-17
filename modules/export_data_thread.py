@@ -1138,7 +1138,7 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
 
     quality_key = str(fit_quality.get('label') or '').strip().lower()
     display_quality = _apply_fit_quality_sample_size_guard(quality_key, sample_size)
-    show_modeled_risk_rows = display_quality == 'strong'
+    show_modeled_risk_rows = display_quality not in {'weak', 'unreliable'}
 
     est_nok_value = None
     if show_modeled_risk_rows:
@@ -1193,6 +1193,36 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
         raw_rows.append(('Warning', '; '.join(warning_parts)))
 
     return [(_compact_distribution_fit_label(label), value) for label, value in raw_rows]
+
+
+def _build_unified_histogram_dashboard_rows(*, statistics_rows, distribution_fit_rows):
+    """Return unified right-panel rows in process-then-model order."""
+
+    return list(statistics_rows or []) + list(distribution_fit_rows or [])
+
+
+def _apply_table_section_separator(ax_table, table_data, *, transition_label='Model'):
+    """Add subtle visual grouping by drawing a mild separator above transition row."""
+
+    if ax_table is None:
+        return
+
+    transition_index = None
+    for idx, row in enumerate(table_data or [], start=1):
+        if str(row[0]).strip() == transition_label:
+            transition_index = idx
+            break
+    if transition_index is None:
+        return
+
+    cell_map = ax_table.get_celld()
+    column_indexes = sorted({col for (row, col) in cell_map.keys() if row == 0}) or [0, 1]
+    for col_index in column_indexes:
+        cell = cell_map.get((transition_index, col_index))
+        if cell is None:
+            continue
+        cell.set_edgecolor('#d5dbe3')
+        cell.set_linewidth(max(0.75, float(cell.get_linewidth())))
 
 
 def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats):
@@ -4539,21 +4569,21 @@ class ExportDataThread(QThread):
                         summary_stats=summary_stats,
                     )
                     non_normal_reference_mode = _is_non_normal_capability_reference_model(distribution_fit_result)
-                    right_rows = histogram_table_payload['rows']
-                    left_rows = _build_distribution_fit_table_rows(
+                    statistics_rows = histogram_table_payload['rows']
+                    distribution_fit_rows = _build_distribution_fit_table_rows(
                         distribution_fit_result,
                         lsl=LSL,
                         usl=USL,
                         summary_stats=summary_stats,
                     )
-                    histogram_content_payload = {
-                        'left_rows': left_rows,
-                        'right_rows': right_rows,
-                    }
+                    unified_rows = _build_unified_histogram_dashboard_rows(
+                        statistics_rows=statistics_rows,
+                        distribution_fit_rows=distribution_fit_rows,
+                    )
 
                     resolved_histogram_height = resolve_required_histogram_figure_height_for_complete_right_tables(
-                        fit_rows=histogram_content_payload['left_rows'],
-                        stats_rows=histogram_content_payload['right_rows'],
+                        fit_rows=[],
+                        stats_rows=unified_rows,
                         table_fontsize=8.0,
                         dpi=float(plt.rcParams.get('figure.dpi', 100.0)),
                         minimum_height=base_histogram_figsize[1],
@@ -4569,10 +4599,10 @@ class ExportDataThread(QThread):
                     panel_rects = compute_histogram_plot_with_right_info_layout(
                         histogram_figsize,
                         table_fontsize=histogram_font_sizes['table_fontsize'],
-                        fit_row_count=len(histogram_content_payload['left_rows']),
-                        stats_row_count=len(histogram_content_payload['right_rows']),
-                        fit_rows=histogram_content_payload['left_rows'],
-                        stats_rows=histogram_content_payload['right_rows'],
+                        fit_row_count=0,
+                        stats_row_count=len(unified_rows),
+                        fit_rows=[],
+                        stats_rows=unified_rows,
                         note_line_count=0,
                         right_container_width_hint=0.34,
                         dpi=fig.dpi,
@@ -4580,36 +4610,27 @@ class ExportDataThread(QThread):
                     assert_non_overlapping_rectangles(
                         {
                             'plot_rect': panel_rects['plot_rect'],
-                            'fit_table_rect': panel_rects['fit_table_rect'],
-                            'stats_table_rect': panel_rects['stats_table_rect'],
+                            'right_table_rect': panel_rects['right_container_rect'],
                             'footer_rect': panel_rects['footer_rect'],
                         }
                     )
 
-                    fit_table_rect = panel_rects['fit_table_rect']
                     plot_rect = panel_rects['plot_rect']
-                    stats_table_rect = panel_rects['stats_table_rect']
+                    right_table_rect = panel_rects['right_container_rect']
 
-                    fit_ax = fig.add_axes([
-                        fit_table_rect['x'],
-                        fit_table_rect['y'],
-                        fit_table_rect['width'],
-                        fit_table_rect['height'],
-                    ])
                     plot_ax = fig.add_axes([
                         plot_rect['x'],
                         plot_rect['y'],
                         plot_rect['width'],
                         plot_rect['height'],
                     ])
-                    stats_ax = fig.add_axes([
-                        stats_table_rect['x'],
-                        stats_table_rect['y'],
-                        stats_table_rect['width'],
-                        stats_table_rect['height'],
+                    right_table_ax = fig.add_axes([
+                        right_table_rect['x'],
+                        right_table_rect['y'],
+                        right_table_rect['width'],
+                        right_table_rect['height'],
                     ])
-                    fit_ax.set_axis_off()
-                    stats_ax.set_axis_off()
+                    right_table_ax.set_axis_off()
 
 
                     histogram_render_meta = render_histogram(
@@ -4631,59 +4652,33 @@ class ExportDataThread(QThread):
                         },
                     }
 
-                    right_table_meta = render_panel_table_in_panel_axes(
-                        ax=stats_ax,
-                        title='Statistics',
-                        rows=histogram_content_payload['right_rows'],
+                    unified_table_meta = render_panel_table_in_panel_axes(
+                        ax=right_table_ax,
+                        title='Parameter',
+                        rows=unified_rows,
                         style_options={
                             **table_style_options,
-                            'min_label_fraction': 0.50,
-                            'min_value_fraction': 0.34,
+                            'min_label_fraction': 0.46,
+                            'min_value_fraction': 0.40,
+                            'value_wrap_width': 26,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
                         row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
                         pad_y=0.02,
                         valign='top',
                     )
-                    ax_table = right_table_meta['table']
+                    unified_table = unified_table_meta['table']
+
                     non_normal_row_badges = dict(histogram_row_badges or {})
                     if non_normal_reference_mode:
                         for label in ('Cp (ref)', 'Cpk (ref)'):
                             non_normal_row_badges[label] = {'palette_key': 'quality_unknown'}
-                    style_histogram_stats_table(
-                        ax_table,
-                        right_table_meta['rendered_rows'],
-                        capability_badge=capability_badge,
-                        capability_row_badges=non_normal_row_badges,
-                    )
-                    adjust_histogram_stats_table_geometry(
-                        ax_table,
-                        statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
-                        row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
-                        explicit_row_heights=right_table_meta.get('explicit_row_heights'),
-                    )
 
-                    distribution_fit_rows = histogram_content_payload['left_rows']
-                    left_table_meta = render_panel_table_in_panel_axes(
-                        ax=fit_ax,
-                        title='Distribution Fit',
-                        rows=distribution_fit_rows,
-                        style_options={
-                            **table_style_options,
-                            'min_label_fraction': 0.38,
-                            'min_value_fraction': 0.52,
-                            'value_wrap_width': 26,
-                            'low_priority_labels': {'Est. PPM'},
-                        },
-                        row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
-                        pad_y=0.02,
-                        valign='top',
-                    )
-                    distribution_fit_table = left_table_meta['table']
                     fit_quality_value = None
-                    for label, value in left_table_meta.get('rendered_rows', []):
+                    for label, value in unified_table_meta.get('rendered_rows', []):
                         if label == 'Fit quality':
                             fit_quality_value = str(value).strip().lower()
+                            break
 
                     fit_quality_palette = None
                     if fit_quality_value in {'weak', 'unreliable'}:
@@ -4692,19 +4687,25 @@ class ExportDataThread(QThread):
                         fit_quality_palette = 'fit_quality_medium'
                     elif fit_quality_value in {'good', 'strong', 'capable'}:
                         fit_quality_palette = 'fit_quality_high'
+                    if fit_quality_palette:
+                        non_normal_row_badges['Fit quality'] = {'palette_key': fit_quality_palette}
 
                     style_histogram_stats_table(
-                        distribution_fit_table,
-                        left_table_meta['rendered_rows'],
-                        capability_row_badges={
-                            **({'Fit quality': {'palette_key': fit_quality_palette}} if fit_quality_palette else {}),
-                        } or None,
+                        unified_table,
+                        unified_table_meta['rendered_rows'],
+                        capability_badge=capability_badge,
+                        capability_row_badges=non_normal_row_badges,
+                    )
+                    _apply_table_section_separator(
+                        unified_table,
+                        unified_table_meta['rendered_rows'],
+                        transition_label='Model',
                     )
                     adjust_histogram_stats_table_geometry(
-                        distribution_fit_table,
+                        unified_table,
                         statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
                         row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
-                        explicit_row_heights=left_table_meta.get('explicit_row_heights'),
+                        explicit_row_heights=unified_table_meta.get('explicit_row_heights'),
                     )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')

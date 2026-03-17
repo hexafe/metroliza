@@ -290,7 +290,7 @@ def test_build_histogram_table_data_includes_raw_rows_for_full_precision_tooltip
     assert payload['capability_rows']['Cpk']['raw_value'] == 1.2345
 
 
-def test_build_histogram_table_data_formats_nok_side_split_as_u_and_l():
+def test_build_histogram_table_data_formats_nok_side_split_as_l_and_u():
     payload = build_histogram_table_data(
         {
             'minimum': 1.0,
@@ -310,4 +310,4 @@ def test_build_histogram_table_data_formats_nok_side_split_as_u_and_l():
         }
     )
 
-    assert dict(payload['rows'])['NOK'] == '6 (U: 4, L: 2)'
+    assert dict(payload['rows'])['NOK'] == '6 (L: 2, U: 4)'
