@@ -662,63 +662,25 @@ class TestDataGroupingReferenceDoubleClick(unittest.TestCase):
 
 
 class TestDataGroupingPartDoubleClick(unittest.TestCase):
-    def _dialog(self):
+    def test_part_double_click_opens_create_group_flow(self):
+        from unittest.mock import Mock
+
         dialog = DataGrouping.__new__(DataGrouping)
-        dialog.default_group = 'POPULATION'
-        dialog.group_color_column = 'GROUP_COLOR'
-        dialog.df = pd.DataFrame(
-            {
-                'GROUP_KEY': ['k1', 'k2', 'k3'],
-                'GROUP': ['POPULATION', 'Ops Team', 'POPULATION'],
-                'GROUP_COLOR': ['#FFFFFF', '#ABCDEF', '#FFFFFF'],
-            }
-        )
-        dialog._selected_group_name = lambda: 'Ops Team'
-        dialog._selected_reference_name = lambda: 'REF-1'
-        dialog.remove_from_group_button = _FakeButton()
-        return dialog
-
-    def test_part_double_click_assigns_part_to_selected_group(self):
-        dialog = self._dialog()
-        dialog.part_list = _FakeListWidget([_FakeListItem(text='1', user_role='k1')])
-        dialog.part_list.selectedItems = lambda: []
-
-        captured = {'preferred_group_name': None, 'preferred_reference_name': None}
-
-        def _capture_populate(preferred_group_name=None, preferred_reference_name=None):
-            captured['preferred_group_name'] = preferred_group_name
-            captured['preferred_reference_name'] = preferred_reference_name
-
-        dialog.populate_list_widgets = _capture_populate
+        dialog.create_group = Mock()
 
         dialog.on_part_item_double_clicked(_FakeListItem(text='1', user_role='k1'))
 
-        self.assertEqual(dialog.df.loc[dialog.df['GROUP_KEY'] == 'k1', 'GROUP'].iloc[0], 'Ops Team')
-        self.assertEqual(dialog.df.loc[dialog.df['GROUP_KEY'] == 'k1', 'GROUP_COLOR'].iloc[0], '#ABCDEF')
-        self.assertEqual(captured['preferred_group_name'], 'Ops Team')
-        self.assertEqual(captured['preferred_reference_name'], 'REF-1')
-        self.assertTrue(dialog.remove_from_group_button.disabled)
+        dialog.create_group.assert_called_once_with()
 
     def test_part_double_click_ignores_none_item(self):
-        dialog = self._dialog()
-        dialog.part_list = _FakeListWidget([_FakeListItem(text='1', user_role='k1')])
-        dialog.part_list.selectedItems = lambda: []
-        dialog.populate_list_widgets = lambda **kwargs: self.fail('populate_list_widgets should not be called')
+        from unittest.mock import Mock
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.create_group = Mock()
 
         dialog.on_part_item_double_clicked(None)
 
-        self.assertEqual(dialog.df.loc[dialog.df['GROUP_KEY'] == 'k1', 'GROUP'].iloc[0], 'POPULATION')
-
-    def test_part_double_click_ignores_when_no_group_selected(self):
-        dialog = self._dialog()
-        dialog._selected_group_name = lambda: None
-        dialog.part_list = _FakeListWidget([_FakeListItem(text='1', user_role='k1')])
-        dialog.part_list.selectedItems = lambda: []
-        dialog.populate_list_widgets = lambda **kwargs: self.fail('populate_list_widgets should not be called')
-
-        dialog.on_part_item_double_clicked(_FakeListItem(text='1', user_role='k1'))
-
-        self.assertEqual(dialog.df.loc[dialog.df['GROUP_KEY'] == 'k1', 'GROUP'].iloc[0], 'POPULATION')
+        dialog.create_group.assert_not_called()
 
 
 class TestDataGroupingSelectionRetention(unittest.TestCase):
