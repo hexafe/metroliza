@@ -2344,7 +2344,7 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
 
 
 _EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.155
-_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.95
+_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 3.15
 _EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO = 0.39
 _UNIFIED_HISTOGRAM_LABEL_FRACTION = 0.44
 _UNIFIED_HISTOGRAM_VALUE_FRACTION = 0.56
@@ -2497,6 +2497,19 @@ def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
         probe.remove()
 
 
+def _wrap_table_value_text(value_text, *, width):
+    """Wrap table values while preserving explicit line breaks."""
+
+    text = str(value_text)
+    if width <= 0:
+        return text
+
+    wrapped_lines = []
+    for line in text.splitlines() or ['']:
+        wrapped_lines.append(textwrap.fill(line, width=width) if line else '')
+    return '\n'.join(wrapped_lines)
+
+
 def render_panel_table(
     *,
     ax,
@@ -2534,7 +2547,7 @@ def render_panel_table(
             label_text = str(row[0])
             value_text = str(row[-1])
             if value_wrap_width > 0:
-                value_text = textwrap.fill(value_text, width=value_wrap_width)
+                value_text = _wrap_table_value_text(value_text, width=value_wrap_width)
             normalized_rows.append((label_text, value_text))
 
     # Ensure renderer-backed text metrics are current.
@@ -2693,7 +2706,7 @@ def render_panel_table_in_panel_axes(
         label_text = str(label)
         value_text = str(value)
         if value_wrap_width > 0:
-            value_text = textwrap.fill(value_text, width=value_wrap_width)
+            value_text = _wrap_table_value_text(value_text, width=value_wrap_width)
         row_line_counts.append(resolve_table_row_line_count(label_text, value_text))
     row_heights = _build_table_row_heights(
         row_line_counts,
@@ -4657,8 +4670,8 @@ class ExportDataThread(QThread):
 
                     table_style_options = {
                         'fontsize': histogram_font_sizes['table_fontsize'],
-                        'min_fontsize': 6.8,
-                        'max_fontsize': 9.2,
+                        'min_fontsize': 7.4,
+                        'max_fontsize': 10.4,
                         'cell_padding_points': 2.2,
                         'compact_label_mapping': {
                             **_DISTRIBUTION_FIT_COMPACT_LABELS,
@@ -4678,7 +4691,7 @@ class ExportDataThread(QThread):
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
                         row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
-                        pad_y=0.02,
+                        pad_y=0.0,
                         valign='top',
                     )
                     unified_table = unified_table_meta['table']

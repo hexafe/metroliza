@@ -608,6 +608,27 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(rows[1][1], '0.1234%\nL: 0.1200%, U: 0.2300%')
         self.assertEqual(rows[2][1], 'Strong')
 
+    def test_panel_table_preserves_explicit_newlines_when_value_wrapping_is_enabled(self):
+        fig = plt.figure(figsize=(6.8, 4.2))
+        try:
+            ax = fig.add_axes([0.62, 0.08, 0.33, 0.84])
+            ax.set_axis_off()
+
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=[('Est. NOK %', '1.4140%\nL: 1.4140%, U: <0.0001%')],
+                style_options={
+                    'fontsize': 9.1,
+                    'value_wrap_width': 26,
+                },
+            )
+
+            rendered_value = meta['table'].get_celld()[(1, 1)].get_text().get_text()
+            self.assertIn('\nL:', rendered_value)
+        finally:
+            plt.close(fig)
+
     def test_distribution_fit_table_rows_follow_upper_only_contract(self):
         rows = _build_distribution_fit_table_rows(
             {
