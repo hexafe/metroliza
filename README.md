@@ -66,11 +66,10 @@ Parity between native and Python backends is enforced through fixture-based test
 
 Excel exports now include a **Group Comparison** worksheet that consolidates:
 
-- Metadata and overall test summary counts.
-- Recommended per-metric omnibus test selection (assumption-driven).
-- Pairwise comparison table with multiple-comparison correction (default: **Holm**).
-- Adjusted p-value significance heatmaps and absolute effect-size heatmaps.
-- Deterministic text insights for central tendency, significant/non-significant pairs, and sample-size warnings.
+- Distribution profile by group, so you can quickly see how each group behaves.
+- Distribution difference summary to highlight where groups diverge overall.
+- Distribution pairwise tables for side-by-side group comparisons.
+- Shape-aware insight interpretation that is separate from location differences.
 
 Interpretation guidance:
 
