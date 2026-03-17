@@ -11,7 +11,7 @@ This directory contains active operational and maintenance documentation.
 - Grouping dialog color policy uses shared semantic tokens from `modules/ui_theme_tokens.py` (base row background, selected-row colors, default group color, and generated group palette) so dialogs stay visually consistent across light/dark themes.
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — **primary active execution tracker** for current RC2 refactor/stabilization sequencing.
 - `roadmaps/exporter_audit_2026_03.md` — focused exporter-path audit with remaining refactor recommendations and priority backlog.
-- `feature/group-analysis/README.md` — temporary planning index for Group Analysis implementation docs (`implementation_plan.md`, `todo.md`, `checklist.md`).
+- `feature/group-analysis/README.md` — **active implementation-cycle workspace** for Group Analysis; start here for current planning/execution docs (`implementation_plan.md`, `todo.md`, `checklist.md`).
 
 ## Historical and superseded planning context
 

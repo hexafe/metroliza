@@ -1,6 +1,15 @@
 # Group Analysis Docs Index
 
-The Group Analysis implementation cycle is complete. The implementation plan and execution runbooks are now archived as historical records.
+This directory is retained as historical context from an earlier Group Analysis implementation cycle.
+
+## Active implementation-cycle workspace (start here)
+
+For current planning and execution docs, use:
+
+- [`../feature/group-analysis/README.md`](../feature/group-analysis/README.md) — active implementation-cycle workspace index.
+- [`../feature/group-analysis/implementation_plan.md`](../feature/group-analysis/implementation_plan.md)
+- [`../feature/group-analysis/todo.md`](../feature/group-analysis/todo.md)
+- [`../feature/group-analysis/checklist.md`](../feature/group-analysis/checklist.md)
 
 ## Archived implementation docs (historical/completed)
 
@@ -12,9 +21,7 @@ The Group Analysis implementation cycle is complete. The implementation plan and
 
 - [`plot_interface_decision.md`](plot_interface_decision.md) — retained design note for Standard-plot asset wiring decisions.
 
-## Current live source for future work
-
-Use active roadmap/release trackers for new work intake and sequencing:
+## Additional live operational trackers
 
 - [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md)
 - [`../release_checks/release_status.md`](../release_checks/release_status.md)
