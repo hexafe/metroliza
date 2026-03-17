@@ -35,7 +35,7 @@ qtcore_stub.QThread = _DummyThread
 qtcore_stub.pyqtSignal = _dummy_signal
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 
 
 class _DummyLogger:
@@ -44,9 +44,9 @@ class _DummyLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.CustomLogger'] = custom_logger_stub
+sys.modules['modules.custom_logger'] = custom_logger_stub
 
-from modules.ExportDataThread import ExportDataThread  # noqa: E402
+from modules.export_data_thread import ExportDataThread  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 from modules.export_grouping_utils import apply_group_assignments, prepare_grouping_dataframe  # noqa: E402
 from modules.chart_render_service import build_violin_payload_vectorized  # noqa: E402
@@ -407,7 +407,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         )
         grouping_df = thread._add_group_key(grouping_df)
 
-        with patch('modules.ExportDataThread.logger.warning') as warning_mock:
+        with patch('modules.export_data_thread.logger.warning') as warning_mock:
             merged, applied = thread._apply_group_assignments(header_group, grouping_df)
 
         self.assertTrue(applied)

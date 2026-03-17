@@ -40,7 +40,7 @@ qtcore_stub.QThread = _DummyThread
 qtcore_stub.pyqtSignal = _dummy_signal
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 
 
 class _DummyLogger:
@@ -49,15 +49,15 @@ class _DummyLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.CustomLogger'] = custom_logger_stub
+sys.modules['modules.custom_logger'] = custom_logger_stub
 
-cmm_parser_stub = types.ModuleType('modules.CMMReportParser')
+cmm_parser_stub = types.ModuleType('modules.cmm_report_parser')
 cmm_parser_stub.CMMReportParser = object
-sys.modules['modules.CMMReportParser'] = cmm_parser_stub
+sys.modules['modules.cmm_report_parser'] = cmm_parser_stub
 
-from modules.ExportDataThread import ExportDataThread, build_export_dataframe, execute_export_query  # noqa: E402
+from modules.export_data_thread import ExportDataThread, build_export_dataframe, execute_export_query  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
-from modules.ParseReportsThread import parse_new_reports  # noqa: E402
+from modules.parse_reports_thread import parse_new_reports  # noqa: E402
 
 
 def _xlsx_sheet_names(xlsx_path):
@@ -235,7 +235,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe', 'execute_export_query'])
+            module = __import__('modules.export_data_thread', fromlist=['read_sql_dataframe', 'execute_export_query'])
             previous_reader = module.read_sql_dataframe
             previous_execute = module.execute_export_query
             calls = {'read_sql_dataframe': 0}
@@ -529,7 +529,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            module = __import__('modules.ExportDataThread', fromlist=['evaluate_group_analysis_readiness'])
+            module = __import__('modules.export_data_thread', fromlist=['evaluate_group_analysis_readiness'])
             previous_readiness = getattr(module, 'evaluate_group_analysis_readiness', None)
             module.evaluate_group_analysis_readiness = lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError('Legacy readiness path should not be called from ExportDataThread.')
@@ -601,7 +601,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            module = __import__('modules.ExportDataThread', fromlist=['evaluate_group_analysis_readiness'])
+            module = __import__('modules.export_data_thread', fromlist=['evaluate_group_analysis_readiness'])
             previous_readiness = getattr(module, 'evaluate_group_analysis_readiness', None)
             module.evaluate_group_analysis_readiness = lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError('Legacy readiness path should not be called from ExportDataThread.')

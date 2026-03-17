@@ -70,9 +70,14 @@ For plugins using native acceleration:
 - Global emergency switch back to compatibility mode.
 
 ## Jira seed checklist
-- [ ] Define plugin conformance CI gate.
-- [ ] Define rollout stage checklist.
-- [ ] Define monitoring dashboards and alerts.
-- [ ] Define incident + rollback runbook.
-- [ ] Define plugin ownership and review policy.
-- [ ] Define legacy deprecation decision rubric.
+- [x] Define plugin conformance CI gate.
+- [x] Define rollout stage checklist.
+- [x] Define monitoring dashboards and alerts.
+- [x] Define incident + rollback runbook.
+- [x] Define plugin ownership and review policy.
+- [x] Define legacy deprecation decision rubric.
+
+Execution artifacts:
+- Conformance gate script: `scripts/validate_parser_plugins.py`
+- Rollout/rollback runbook + ownership checklist: `docs/release_checks/parser_plugin_rollout_runbook.md`
+- PR policy integration: `docs/ci-policy.md` section "Additional checklist for parser plugin changes"

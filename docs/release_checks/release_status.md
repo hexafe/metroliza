@@ -12,9 +12,9 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 ## Active build identity (single source for this status snapshot)
 
 - Branch: `work`
-- Commit SHA: `84a2302475b3559f319eb225b554a7f3bfbbc214`
-- Artifact/build ID: `2026.03-build260305-84a2302`
-- Release line metadata: `RELEASE_VERSION=2026.03`, `VERSION_DATE=260305`
+- Commit SHA: `84a2302475b3559f319eb225b554a7f3bfbbc214` *(snapshot commit for the status evidence below)*
+- Artifact/build ID: `2026.03rc1-build260307-84a2302`
+- Release line metadata (canonical): `RELEASE_VERSION=2026.03rc1`, `VERSION_DATE=260307`
 
 | Track | Status | Notes | Primary doc |
 |---|---|---|---|
@@ -30,9 +30,10 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
   - **Release-blocking manual evidence gates** are defined in [`release_candidate_checklist.md`](./release_candidate_checklist.md) and must be complete for RC Go decisions.
   - Optional/manual workflow-dispatch lanes (`packaging-smoke`, `google-conversion-smoke`) are non-blocking for normal PR CI but may be linked as release confidence evidence when executed.
 - Active release operations are governed by documents under `docs/release_checks/`.
-- RC2 stabilization execution sequencing is tracked in [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md), and this RC2 track is parity-first structural risk reduction, not rewrite scope.
+- Snapshot IDs in runbooks/log evidence may differ from current `VersionDate.py` metadata when they represent earlier captured smoke runs; this is expected if the snapshot date/build context is explicitly documented.
+- Active operational execution tracker: [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md) (RC2 parity-first structural risk reduction, not rewrite scope).
 - During RC2, only small behavior-preserving, test-backed stabilization slices should move forward; larger decomposition/architecture moves remain deferred per triage.
-- Archived planning docs are references only and should not be used as the operational status tracker.
+- Superseded planning docs are references only and should not be used as the operational status tracker (`../roadmaps/2026_03_rc1_test_ci_execution_tracker.md`, `../roadmaps/test_ci_audit_execution.md`).
 - If status changes, update this page first, then update linked runbooks/checklists as needed.
 
 ## Historical context (archive)
