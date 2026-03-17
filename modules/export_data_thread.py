@@ -2497,6 +2497,19 @@ def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
         probe.remove()
 
 
+def _wrap_table_value_text(value_text, *, width):
+    """Wrap table values while preserving explicit line breaks."""
+
+    text = str(value_text)
+    if width <= 0:
+        return text
+
+    wrapped_lines = []
+    for line in text.splitlines() or ['']:
+        wrapped_lines.append(textwrap.fill(line, width=width) if line else '')
+    return '\n'.join(wrapped_lines)
+
+
 def render_panel_table(
     *,
     ax,
@@ -2534,7 +2547,7 @@ def render_panel_table(
             label_text = str(row[0])
             value_text = str(row[-1])
             if value_wrap_width > 0:
-                value_text = textwrap.fill(value_text, width=value_wrap_width)
+                value_text = _wrap_table_value_text(value_text, width=value_wrap_width)
             normalized_rows.append((label_text, value_text))
 
     # Ensure renderer-backed text metrics are current.
@@ -2693,7 +2706,7 @@ def render_panel_table_in_panel_axes(
         label_text = str(label)
         value_text = str(value)
         if value_wrap_width > 0:
-            value_text = textwrap.fill(value_text, width=value_wrap_width)
+            value_text = _wrap_table_value_text(value_text, width=value_wrap_width)
         row_line_counts.append(resolve_table_row_line_count(label_text, value_text))
     row_heights = _build_table_row_heights(
         row_line_counts,
@@ -4568,7 +4581,7 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    base_histogram_figsize = (8.8, 4.0)
+                    base_histogram_figsize = (9.4, 4.6)
                     chart_start = time.perf_counter()
 
                     distribution_fit_result = precomputed_distribution_fit
@@ -4618,7 +4631,7 @@ class ExportDataThread(QThread):
                         fit_rows=[],
                         stats_rows=unified_rows,
                         note_line_count=0,
-                        right_container_width_hint=0.34,
+                        right_container_width_hint=0.38,
                         dpi=fig.dpi,
                     )
                     assert_non_overlapping_rectangles(
@@ -4657,8 +4670,8 @@ class ExportDataThread(QThread):
 
                     table_style_options = {
                         'fontsize': histogram_font_sizes['table_fontsize'],
-                        'min_fontsize': 6.8,
-                        'max_fontsize': 9.2,
+                        'min_fontsize': 7.4,
+                        'max_fontsize': 10.4,
                         'cell_padding_points': 2.2,
                         'compact_label_mapping': {
                             **_DISTRIBUTION_FIT_COMPACT_LABELS,
