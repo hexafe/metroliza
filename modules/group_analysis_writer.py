@@ -8,6 +8,20 @@ SECTION_GAP = 1
 DEFAULT_PLOT_ROW_SPAN = 16
 
 
+_PLOT_SKIP_REASON_LABELS = {
+    'low_group_samples': 'Not enough samples in one or more groups.',
+    'low_total_samples': 'Not enough total samples to show this plot.',
+    'asset_missing': 'Plot could not be shown because the image asset is unavailable.',
+}
+
+
+def _get_plot_skip_reason_label(reason_code):
+    code = str(reason_code or '').strip().lower()
+    if not code:
+        return 'Plot was not shown.'
+    return _PLOT_SKIP_REASON_LABELS.get(code, 'Plot was not shown due to analysis constraints.')
+
+
 def _resolve_metric_plot_assets(plot_assets, metric_name):
     if not isinstance(plot_assets, dict):
         return {}
@@ -261,7 +275,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
     if analysis_level == 'standard':
         metric_assets = _resolve_metric_plot_assets(plot_assets, metric_row.get('metric'))
         row += SECTION_GAP
-        row = _write_section_title(worksheet, row, 'Standard plot slots')
+        row = _write_section_title(worksheet, row, 'Plots')
         worksheet.write(row, 0, 'Plot')
         worksheet.write(row, 1, 'Status')
         worksheet.write(row, 2, 'Detail')
@@ -275,24 +289,24 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
 
             if not eligible:
                 worksheet.write(row, 0, plot_label)
-                worksheet.write(row, 1, 'SKIPPED')
-                worksheet.write(row, 2, skip_reason)
+                worksheet.write(row, 1, 'Not shown')
+                worksheet.write(row, 2, _get_plot_skip_reason_label(skip_reason))
                 row += 1
                 continue
 
             inserted = _insert_plot_image(worksheet, row + 1, asset)
             if inserted:
                 worksheet.write(row, 0, plot_label)
-                worksheet.write(row, 1, 'INSERTED')
-                worksheet.write(row, 2, 'Chart inserted')
+                worksheet.write(row, 1, 'Shown')
+                worksheet.write(row, 2, 'Shown below.')
                 row_span = DEFAULT_PLOT_ROW_SPAN
                 if isinstance(asset, dict) and isinstance(asset.get('row_span'), int) and asset.get('row_span') > 0:
                     row_span = int(asset.get('row_span'))
                 row += 1 + row_span
             else:
                 worksheet.write(row, 0, plot_label)
-                worksheet.write(row, 1, 'SKIPPED')
-                worksheet.write(row, 2, 'asset_missing')
+                worksheet.write(row, 1, 'Not shown')
+                worksheet.write(row, 2, _get_plot_skip_reason_label('asset_missing'))
                 row += 1
 
     row += SECTION_GAP
