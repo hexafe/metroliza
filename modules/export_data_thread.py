@@ -141,6 +141,7 @@ from modules.export_histogram_layout import (
     compute_row_line_count as _compute_row_line_count,
     compute_histogram_panel_layout as _compute_histogram_panel_layout,
     compute_histogram_plot_with_right_info_layout as _compute_histogram_plot_with_right_info_layout,
+    resolve_required_histogram_figure_height_for_complete_right_tables as _resolve_required_histogram_figure_height_for_complete_right_tables,
     resolve_histogram_dashboard_row_metrics as _resolve_histogram_dashboard_row_metrics,
     resolve_inner_table_rect as _resolve_inner_table_rect,
     resolve_table_row_line_count as _resolve_table_row_line_count,
@@ -993,6 +994,28 @@ def resolve_table_row_line_count(label_text, value_text):
 def resolve_histogram_dashboard_row_metrics(*, table_fontsize, dpi):
     """Return shared row metrics for histogram dashboard tables."""
     return _resolve_histogram_dashboard_row_metrics(table_fontsize=table_fontsize, dpi=dpi)
+
+
+def resolve_required_histogram_figure_height_for_complete_right_tables(
+    *,
+    fit_rows=None,
+    stats_rows=None,
+    fit_row_count=0,
+    stats_row_count=0,
+    table_fontsize=8.0,
+    dpi=100.0,
+    minimum_height=4.4,
+):
+    """Return figure height needed to keep both histogram right-column tables complete."""
+    return _resolve_required_histogram_figure_height_for_complete_right_tables(
+        fit_rows=fit_rows,
+        stats_rows=stats_rows,
+        fit_row_count=fit_row_count,
+        stats_row_count=stats_row_count,
+        table_fontsize=table_fontsize,
+        dpi=dpi,
+        minimum_height=minimum_height,
+    )
 
 
 def assert_non_overlapping_rectangles(rectangles):
@@ -4494,15 +4517,9 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    histogram_figsize = (8.8, 4.4)
+                    base_histogram_figsize = (8.8, 4.4)
                     chart_start = time.perf_counter()
-                    fig = plt.figure(figsize=histogram_figsize)
 
-                    histogram_font_sizes = compute_histogram_font_sizes(
-                        histogram_figsize,
-                        has_table=True,
-                        readability_scale=self.summary_plot_scale,
-                    )
                     distribution_fit_result = precomputed_distribution_fit
                     if distribution_fit_result is None:
                         distribution_fit_result = fit_measurement_distribution(
@@ -4533,6 +4550,21 @@ class ExportDataThread(QThread):
                         'left_rows': left_rows,
                         'right_rows': right_rows,
                     }
+
+                    resolved_histogram_height = resolve_required_histogram_figure_height_for_complete_right_tables(
+                        fit_rows=histogram_content_payload['left_rows'],
+                        stats_rows=histogram_content_payload['right_rows'],
+                        table_fontsize=8.0,
+                        dpi=float(plt.rcParams.get('figure.dpi', 100.0)),
+                        minimum_height=base_histogram_figsize[1],
+                    )
+                    histogram_figsize = (base_histogram_figsize[0], resolved_histogram_height)
+                    fig = plt.figure(figsize=histogram_figsize)
+                    histogram_font_sizes = compute_histogram_font_sizes(
+                        histogram_figsize,
+                        has_table=True,
+                        readability_scale=self.summary_plot_scale,
+                    )
 
                     panel_rects = compute_histogram_plot_with_right_info_layout(
                         histogram_figsize,
