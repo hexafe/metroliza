@@ -727,6 +727,167 @@ class TestExportDialogThreadStartupContract(unittest.TestCase):
         self.assertEqual(request.options.summary_plot_scale, 0)
 
 
+class TestExportDialogDatabaseSwitchContext(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_select_db_file_resets_filter_and_grouping_context(self):
+        from modules.export_dialog import DEFAULT_FILTER_QUERY, ExportDialog
+
+        class _FakeButton:
+            def __init__(self):
+                self.enabled = []
+
+            def setEnabled(self, value):
+                self.enabled.append(bool(value))
+
+        class _FakeLabel:
+            def __init__(self):
+                self.value = None
+
+            def setText(self, value):
+                self.value = value
+
+        class _FakeParent:
+            def __init__(self):
+                self.db_file = None
+
+            def set_db_file(self, filename):
+                self.db_file = filename
+
+        class _FakeChildDialog:
+            def __init__(self):
+                self.closed = False
+                self.deleted = False
+
+            def close(self):
+                self.closed = True
+
+            def deleteLater(self):
+                self.deleted = True
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        parent = _FakeParent()
+        dialog.parent = lambda: parent
+        dialog.select_excel_button = _FakeButton()
+        dialog.filter_button = _FakeButton()
+        dialog.group_button = _FakeButton()
+        dialog.database_text_label = _FakeLabel()
+        dialog.select_filter_label = _FakeLabel()
+        dialog.filter_query = "SELECT * FROM REPORTS WHERE REFERENCE='stale'"
+        dialog.df_for_grouping = object()
+        dialog.filter_window = _FakeChildDialog()
+        dialog.grouping_window = _FakeChildDialog()
+        dialog.set_grouping_applied = lambda applied: setattr(dialog, '_grouping_applied', applied)
+
+        fake_file_dialog = type('FakeFileDialog', (), {'getOpenFileName': staticmethod(lambda *_args, **_kwargs: ('/tmp/next.db', 'SQLite database (*.db)'))})
+        with patch('modules.export_dialog.QFileDialog', fake_file_dialog):
+            dialog.select_db_file()
+
+        self.assertEqual(dialog.db_file, '/tmp/next.db')
+        self.assertEqual(parent.db_file, '/tmp/next.db')
+        self.assertEqual(dialog.database_text_label.value, '/tmp/next.db')
+        self.assertEqual(dialog.filter_query, DEFAULT_FILTER_QUERY)
+        self.assertIsNone(dialog.df_for_grouping)
+        self.assertEqual(dialog.select_filter_label.value, 'Select filters (optional): not applied')
+        self.assertFalse(dialog._grouping_applied)
+        self.assertIsNone(dialog.filter_window)
+        self.assertIsNone(dialog.grouping_window)
+
+
+class TestExportDialogGroupingAnalysisDefaults(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_grouping_applied_promotes_off_level_to_standard(self):
+        from modules.export_dialog import ExportDialog
+
+        class _FakeLabel:
+            def __init__(self):
+                self.value = None
+
+            def setText(self, value):
+                self.value = value
+
+        class _FakeCombo:
+            def __init__(self, value):
+                self._value = value
+
+            def currentText(self):
+                return self._value
+
+            def setCurrentText(self, value):
+                self._value = value
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.select_group_label = _FakeLabel()
+        dialog.group_analysis_level_combobox = _FakeCombo('Off')
+
+        dialog.set_grouping_applied(True)
+
+        self.assertEqual(dialog.select_group_label.value, 'Group data (optional): applied')
+        self.assertEqual(dialog.group_analysis_level_combobox.currentText(), 'Standard')
+
+    def test_grouping_applied_keeps_non_off_level(self):
+        from modules.export_dialog import ExportDialog
+
+        class _FakeLabel:
+            def __init__(self):
+                self.value = None
+
+            def setText(self, value):
+                self.value = value
+
+        class _FakeCombo:
+            def __init__(self, value):
+                self._value = value
+
+            def currentText(self):
+                return self._value
+
+            def setCurrentText(self, value):
+                self._value = value
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.select_group_label = _FakeLabel()
+        dialog.group_analysis_level_combobox = _FakeCombo('Light')
+
+        dialog.set_grouping_applied(True)
+
+        self.assertEqual(dialog.group_analysis_level_combobox.currentText(), 'Light')
+
+    def test_grouping_disabled_sets_level_off(self):
+        from modules.export_dialog import ExportDialog
+
+        class _FakeLabel:
+            def __init__(self):
+                self.value = None
+
+            def setText(self, value):
+                self.value = value
+
+        class _FakeCombo:
+            def __init__(self, value):
+                self._value = value
+
+            def currentText(self):
+                return self._value
+
+            def setCurrentText(self, value):
+                self._value = value
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.select_group_label = _FakeLabel()
+        dialog.group_analysis_level_combobox = _FakeCombo('Standard')
+
+        dialog.set_grouping_applied(False)
+
+        self.assertEqual(dialog.select_group_label.value, 'Group data (optional): not applied')
+        self.assertEqual(dialog.group_analysis_level_combobox.currentText(), 'Off')
+
+
 
 if __name__ == '__main__':
     unittest.main()

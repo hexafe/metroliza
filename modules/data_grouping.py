@@ -220,6 +220,7 @@ class DataGrouping(QDialog):
             
             # Connect the itemSelectionChanged signal of the "PART #" list to the on_part_selection_changed method
             self.part_list.itemSelectionChanged.connect(self.on_part_selection_changed)
+            self.part_list.itemDoubleClicked.connect(self.on_part_item_double_clicked)
             
             # Connect the itemSelectionChanged signal of the "PART IN SELECTED GROUP" list to the on_part_group_selection_changed method
             self.part_group_list.itemSelectionChanged.connect(self.on_part_group_selection_changed)
@@ -644,6 +645,16 @@ class DataGrouping(QDialog):
             selected_part = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else (self.part_list.currentItem() is not None)
             selected_reference = self._selected_reference_name()
             self.create_group_button.setEnabled(selected_part or bool(selected_reference))
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def on_part_item_double_clicked(self, item):
+        """Open create-group flow when a part row is double-clicked."""
+
+        try:
+            if item is None:
+                return
+            self.create_group()
         except Exception as e:
             self.log_and_exit(e)
 

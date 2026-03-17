@@ -5,7 +5,6 @@ rows used by downstream grouping and export workflows.
 """
 
 import importlib
-import importlib.metadata
 import importlib.util
 import logging
 from pathlib import Path
@@ -56,15 +55,18 @@ def ensure_schema_indexes(cursor):
 
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
-    if importlib.util.find_spec("pymupdf") is not None:
-        return "pymupdf"
+    for module_name in ("pymupdf", "fitz"):
+        if importlib.util.find_spec(module_name) is None:
+            continue
 
-    fitz_distributions = {
-        name.lower()
-        for name in importlib.metadata.packages_distributions().get("fitz", [])
-    }
-    if "pymupdf" in fitz_distributions and importlib.util.find_spec("fitz") is not None:
-        return "fitz"
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            continue
+
+        open_method = getattr(module, "open", None)
+        if callable(open_method):
+            return module_name
 
     return None
 

@@ -49,6 +49,15 @@ from modules.worker_progress_dialog import create_worker_progress_dialog
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
+DEFAULT_FILTER_QUERY = """
+                SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
+                    MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
+                    MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
+                    REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
+                FROM MEASUREMENTS
+                JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+                WHERE 1=1
+                """
 
 
 def format_message_with_clickable_links(message):
@@ -178,15 +187,7 @@ class ExportDialog(QDialog):
 
         self.db_file = db_file
         self.excel_file = ""
-        self.filter_query = """
-                SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
-                    MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
-                    MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE, 
-                    REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER 
-                FROM MEASUREMENTS
-                JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
-                WHERE 1=1
-                """
+        self.filter_query = DEFAULT_FILTER_QUERY
         self.df_for_grouping = None
         
         self.filter_window = None
@@ -564,14 +565,35 @@ class ExportDialog(QDialog):
                 if not filename.endswith(".db"):
                     filename += ".db"
                 logger.info("Selected database file: %s", filename)
-                self.db_file = filename
-                self.database_text_label.setText(filename)
-                self.select_excel_button.setEnabled(True)
-                self.filter_button.setEnabled(True)
-                self.group_button.setEnabled(True)
+                self._update_database_context(filename)
                 self.parent().set_db_file(filename)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _discard_child_dialog(self, dialog_name):
+        dialog = getattr(self, dialog_name, None)
+        if dialog is None:
+            return
+        if hasattr(dialog, 'close'):
+            dialog.close()
+        if hasattr(dialog, 'deleteLater'):
+            dialog.deleteLater()
+        setattr(self, dialog_name, None)
+
+    def _update_database_context(self, db_file):
+        self.db_file = db_file
+        self.database_text_label.setText(db_file)
+        self.select_excel_button.setEnabled(True)
+        self.filter_button.setEnabled(True)
+        self.group_button.setEnabled(True)
+
+        self.filter_query = DEFAULT_FILTER_QUERY
+        self.df_for_grouping = None
+        self.select_filter_label.setText("Select filters (optional): not applied")
+        self.set_grouping_applied(False)
+
+        self._discard_child_dialog('filter_window')
+        self._discard_child_dialog('grouping_window')
 
     def open_filter_window(self):
         """Open or focus the filter dialog while keeping a single dialog instance."""
@@ -637,8 +659,14 @@ class ExportDialog(QDialog):
             # Update filter label in export window
             if applied:
                 self.select_group_label.setText("Group data (optional): applied")
+                if hasattr(self, "group_analysis_level_combobox"):
+                    current = self.group_analysis_level_combobox.currentText().strip().lower()
+                    if current == "off":
+                        self.group_analysis_level_combobox.setCurrentText("Standard")
             else:
                 self.select_group_label.setText("Group data (optional): not applied")
+                if hasattr(self, "group_analysis_level_combobox"):
+                    self.group_analysis_level_combobox.setCurrentText("Off")
         except Exception as e:
             self.log_and_exit(e)
 

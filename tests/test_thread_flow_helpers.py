@@ -316,7 +316,7 @@ class TestExportHelpers(unittest.TestCase):
     def test_classify_normality_status_maps_one_sided_not_applicable_to_neutral_badge(self):
         badge = classify_normality_status('not_applicable')
 
-        self.assertEqual(badge['label'], 'Normality not applicable')
+        self.assertEqual(badge['label'], '! Normality not applicable')
         self.assertEqual(badge['palette_key'], 'normality_unknown')
 
     def test_run_export_steps_stops_when_canceled(self):
@@ -1036,6 +1036,100 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
+
+    def test_summary_sheet_fill_shifts_iqr_slot_when_distribution_span_grows(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr'}
+        thread.violin_plot_min_samplesize = 1
+
+        # Force a larger calculated span for extended charts to emulate a wide
+        # categorical export and verify iqr placement advances accordingly.
+        thread._resolve_chart_cell_span = lambda _fig: {'col_span': 14, 'row_span': 1}
+
+        worksheet = _FakeSummaryWorksheet()
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        panel_slots = build_summary_image_anchor_plan(5)
+        inserted = worksheet.inserted_images
+        self.assertEqual(inserted[0], panel_slots['distribution'])
+        self.assertGreater(inserted[1][1], panel_slots['iqr'][1])
+
+    def test_summary_sheet_fill_iqr_finalizes_layout_after_scaled_ylim_applied(self):
+        import pandas as pd
+
+        import modules.export_data_thread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'iqr'}
+
+        observed_ylims = []
+        previous_finalize = export_thread_module.finalize_extended_chart_layout
+        previous_scale = export_thread_module.compute_scaled_y_limits
+
+        def _capture_finalize(_fig, ax, **_kwargs):
+            observed_ylims.append(tuple(float(v) for v in ax.get_ylim()))
+
+        export_thread_module.finalize_extended_chart_layout = _capture_finalize
+        export_thread_module.compute_scaled_y_limits = lambda _limits, _scale: (123.0, 456.0)
+        try:
+            header_group = pd.DataFrame(
+                {
+                    'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                    'NOM': [10.0] * 6,
+                    '+TOL': [0.2] * 6,
+                    '-TOL': [-0.2] * 6,
+                    'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                    'DATE': ['2024-01-01'] * 6,
+                }
+            )
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.finalize_extended_chart_layout = previous_finalize
+            export_thread_module.compute_scaled_y_limits = previous_scale
+
+        self.assertIn((123.0, 456.0), observed_ylims)
 
     def test_apply_bottleneck_optimizations_preserves_trend_for_normal_runs(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest

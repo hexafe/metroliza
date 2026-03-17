@@ -58,12 +58,16 @@ from modules.export_logging_service import (
 )
 from modules.export_summary_utils import (
     apply_shared_x_axis_label_strategy as _apply_shared_x_axis_label_strategy,
+    prepare_categorical_x_axis as _prepare_categorical_x_axis,
+    resolve_extended_chart_fig_width as _resolve_extended_chart_fig_width,
     build_histogram_density_curve_payload as _build_histogram_density_curve_payload,
     build_sparse_unique_labels as _build_sparse_unique_labels,
     build_summary_panel_labels as _build_summary_panel_labels,
     build_trend_plot_payload as _build_trend_plot_payload,
     compute_measurement_summary,
     compute_normality_status,
+    compute_estimated_tail_metrics,
+    resolve_histogram_bin_count,
     normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
     render_spec_reference_lines as _render_spec_reference_lines,
@@ -109,7 +113,17 @@ from modules.group_analysis_writer import (
     write_group_analysis_diagnostics_sheet,
     write_group_analysis_sheet,
 )
-from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
+from modules.summary_plot_palette import (
+    SUMMARY_PLOT_PALETTE,
+    EMPHASIS_TABLE_ROWS,
+    STATUS_BORDER_STYLE_BY_PALETTE,
+    STATUS_ICON_PREFIX_BY_PALETTE,
+)
+from modules.stats_number_formatting import (
+    format_probability_percent,
+)
+
+
 from modules.export_chart_payload_helpers import (
     build_histogram_table_data as _build_histogram_table_data,
     build_histogram_table_render_data as _build_histogram_table_render_data,
@@ -119,6 +133,18 @@ from modules.export_chart_payload_helpers import (
 from modules.export_workbook_planning_helpers import (
     compute_histogram_font_sizes as _compute_histogram_font_sizes,
     compute_histogram_table_layout as _compute_histogram_table_layout,
+    compute_histogram_three_region_layout as _compute_histogram_three_region_layout,
+)
+from modules.export_histogram_layout import (
+    assert_non_overlapping_rectangles as _assert_non_overlapping_rectangles,
+    build_table_row_heights as _build_table_row_heights,
+    compute_row_line_count as _compute_row_line_count,
+    compute_histogram_panel_layout as _compute_histogram_panel_layout,
+    compute_histogram_plot_with_right_info_layout as _compute_histogram_plot_with_right_info_layout,
+    resolve_required_histogram_figure_height_for_complete_right_tables as _resolve_required_histogram_figure_height_for_complete_right_tables,
+    resolve_histogram_dashboard_row_metrics as _resolve_histogram_dashboard_row_metrics,
+    resolve_inner_table_rect as _resolve_inner_table_rect,
+    resolve_table_row_line_count as _resolve_table_row_line_count,
 )
 from modules.export_summary_composition_service import (
     build_summary_table_composition as _build_summary_table_composition,
@@ -156,6 +182,7 @@ from modules.chart_render_service import (
     sample_frame_for_chart,
     deterministic_downsample_frame,
 )
+from modules.distribution_fit_service import fit_measurement_distribution
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
 if _HAS_SEABORN:
@@ -167,8 +194,56 @@ logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
 
-_HISTOGRAM_X_PADDING_RATIO = 0.05
-_HISTOGRAM_ZERO_RANGE_ABS_PADDING = 0.05
+def _uses_symbol_font_fallback(text):
+    """Return True when text contains symbols often missing from Arial on Windows."""
+
+    return any(icon in str(text) for icon in ('✓', '×'))
+
+
+_HISTOGRAM_X_MARGIN_RATIO = 0.10
+
+_SELECTED_MODEL_CURVE_STYLE_BY_QUALITY = {
+    'strong': {'alpha': 0.80, 'linewidth': 1.72},
+    'medium': {'alpha': 0.68, 'linewidth': 1.55},
+    'weak': {'alpha': 0.48, 'linewidth': 1.30},
+    'unreliable': {'alpha': 0.28, 'linewidth': 1.05},
+}
+
+
+_DISTRIBUTION_FIT_COMPACT_LABELS = {
+    'Best fit': 'Model',
+    'Selected model': 'Model',
+    'Estimated P(X < LSL)': 'P(<LSL)',
+    'Estimated P(X > USL)': 'P(>USL)',
+    'Estimated NOK %': 'Est. NOK %',
+    'Estimated NOK (PPM)': 'Est. PPM',
+    'NOK % (obs vs est)': 'Obs vs Est NOK %',
+    'NOK % Δ (abs/rel)': 'NOK % Δ',
+    'Model fit quality': 'Fit quality',
+}
+
+
+def _compact_distribution_fit_label(label):
+    """Return compact distribution-fit labels used in tables and notes."""
+    normalized_label = str(label or '').strip()
+    return _DISTRIBUTION_FIT_COMPACT_LABELS.get(normalized_label, normalized_label)
+
+
+def resolve_selected_model_curve_style(distribution_fit_result):
+    """Resolve fitted-model curve style from fit-quality tiers.
+
+    Tiers intentionally maintain histogram visual hierarchy:
+    - strong: dominant model curve style
+    - weak: softened (slightly lighter/thinner)
+    - unreliable: clearly downgraded dominance
+    """
+
+    fit_quality = (distribution_fit_result or {}).get('fit_quality') or {}
+    quality_label = str(fit_quality.get('label') or '').strip().lower()
+    if quality_label not in _SELECTED_MODEL_CURVE_STYLE_BY_QUALITY:
+        quality_label = 'strong'
+    style = _SELECTED_MODEL_CURVE_STYLE_BY_QUALITY[quality_label]
+    return {'alpha': float(style['alpha']), 'linewidth': float(style['linewidth'])}
 
 
 # Query wrappers keep the thread-facing import path stable while delegating
@@ -415,6 +490,18 @@ def apply_shared_x_axis_label_strategy(ax, labels, **kwargs):
     return _apply_shared_x_axis_label_strategy(ax, labels, **kwargs)
 
 
+def prepare_categorical_x_axis(labels, **kwargs):
+    """Resolve shared categorical axis layout metadata for extended charts."""
+
+    return _prepare_categorical_x_axis(labels, **kwargs)
+
+
+def resolve_extended_chart_fig_width(n_groups, **kwargs):
+    """Resolve a dynamic figure width for extended categorical charts."""
+
+    return _resolve_extended_chart_fig_width(n_groups, **kwargs)
+
+
 def render_tolerance_band(ax, nom, lsl, usl, *, one_sided=False, orientation='horizontal'):
     """Render tolerance band shading on summary charts."""
 
@@ -497,26 +584,296 @@ def build_histogram_mean_line_style():
     }
 
 
+def render_histogram_figure_title(
+    fig,
+    title,
+    *,
+    fontsize=12.0,
+    color='#2f3b4a',
+    fontweight='bold',
+    x=0.06,
+    ha='left',
+):
+    """Render histogram title in figure space so layout can reserve a stable top band."""
+
+    if not title:
+        return None
+    return fig.text(
+        x,
+        0.985,
+        str(title),
+        ha=ha,
+        va='top',
+        fontsize=fontsize,
+        fontweight=fontweight,
+        color=color,
+        zorder=14,
+        clip_on=False,
+    )
+
+
+def render_histogram_title(ax, title, *, slot='title_band', fontsize=10.0, fontweight='bold'):
+    """Backward-compatible wrapper for figure-level histogram title rendering."""
+
+    del slot
+    fig = getattr(ax, 'figure', None)
+    if fig is None:
+        return None
+    return render_histogram_figure_title(
+        fig,
+        title,
+        fontsize=fontsize,
+        color=SUMMARY_PLOT_PALETTE['distribution_foreground'],
+        fontweight=fontweight,
+    )
+
+
+def resolve_edge_safe_label_anchor(x_data, x_min, x_max, edge_fraction=0.06):
+    """Resolve alignment and horizontal offset for labels near x-axis edges."""
+    try:
+        x_value = float(x_data)
+        left_edge = float(x_min)
+        right_edge = float(x_max)
+        edge_ratio = max(0.0, float(edge_fraction))
+    except (TypeError, ValueError):
+        return {'ha': 'center', 'x_offset_points': 0.0}
+
+    if right_edge < left_edge:
+        left_edge, right_edge = right_edge, left_edge
+    x_span = right_edge - left_edge
+    if x_span <= 0:
+        return {'ha': 'center', 'x_offset_points': 0.0}
+
+    edge_delta = x_span * edge_ratio
+    if x_value <= (left_edge + edge_delta):
+        return {'ha': 'left', 'x_offset_points': 6.0}
+    if x_value >= (right_edge - edge_delta):
+        return {'ha': 'right', 'x_offset_points': -6.0}
+    return {'ha': 'center', 'x_offset_points': 0.0}
+
+
+def resolve_histogram_x_view(values, *, lsl=None, usl=None, mean_value=None, margin_ratio=_HISTOGRAM_X_MARGIN_RATIO):
+    """Resolve histogram x framing with local span + small fallback safety margin."""
+
+    finite_values = pd.to_numeric(pd.Series(values), errors='coerce').dropna().to_numpy(dtype=float)
+    if finite_values.size == 0:
+        return {'x_min': 0.0, 'x_max': 1.0, 'mode': 'full'}
+
+    data_min = float(np.min(finite_values))
+    data_max = float(np.max(finite_values))
+
+    left_limit = None
+    right_limit = None
+    for raw_limit, side in ((lsl, 'left'), (usl, 'right')):
+        if raw_limit is None:
+            continue
+        try:
+            limit_value = float(raw_limit)
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(limit_value):
+            continue
+        if side == 'left':
+            left_limit = limit_value
+        else:
+            right_limit = limit_value
+
+    left_ref = data_min if left_limit is None else min(data_min, left_limit)
+    right_ref = data_max if right_limit is None else max(data_max, right_limit)
+
+    data_span = max(data_max - data_min, 0.0)
+    if left_limit is not None and right_limit is not None:
+        spec_span = max(right_limit - left_limit, 0.0)
+    else:
+        spec_span = max(right_ref - left_ref, 0.0)
+
+    mean_magnitude = 0.0
+    if mean_value is not None:
+        try:
+            candidate_mean = float(mean_value)
+            if np.isfinite(candidate_mean):
+                mean_magnitude = abs(candidate_mean)
+        except (TypeError, ValueError):
+            pass
+    ref_magnitude = max(mean_magnitude, abs(data_min), abs(data_max), 1.0)
+    fallback_span = max(1e-6, 1e-4 * ref_magnitude)
+
+    effective_span = max(data_span, spec_span, fallback_span)
+    margin = effective_span * max(0.0, float(margin_ratio))
+
+    return {
+        'x_min': left_ref - margin,
+        'x_max': right_ref + margin,
+        'mode': 'full',
+    }
+
+
 def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, annotation_box):
     """Render histogram annotations with consistent font sizing policy."""
+    def _resolve_plot_rect_display_bounds(fig, plot_rect):
+        if not isinstance(plot_rect, dict):
+            return None
+        try:
+            left = float(plot_rect['x']) * float(fig.bbox.width)
+            bottom = float(plot_rect['y']) * float(fig.bbox.height)
+            right = left + (float(plot_rect['width']) * float(fig.bbox.width))
+            top = bottom + (float(plot_rect['height']) * float(fig.bbox.height))
+        except (KeyError, TypeError, ValueError):
+            return None
+        return left, right, bottom, top
+
+    def _resolve_annotation_safe_bounds(fig, plot_rect, *, extra_top_px=92.0, extra_side_px=8.0):
+        bounds = _resolve_plot_rect_display_bounds(fig, plot_rect)
+        if bounds is None:
+            return None
+        left, right, bottom, top = bounds
+        return (
+            left + float(extra_side_px),
+            right - float(extra_side_px),
+            bottom + 2.0,
+            top + float(extra_top_px),
+        )
+
+    def _bbox_fits_plot_rect(bbox, bounds, *, padding_px=2.0):
+        if bbox is None or bounds is None:
+            return True
+        left, right, bottom, top = bounds
+        return (
+            bbox.x0 >= (left + padding_px)
+            and bbox.x1 <= (right - padding_px)
+            and bbox.y0 >= (bottom + padding_px)
+            and bbox.y1 <= (top - padding_px)
+        )
+
+    def _build_candidate_offsets(annotation_kind):
+        if annotation_kind == 'mean':
+            return [(0.0, 0.0), (0.0, -6.0), (0.0, -12.0), (-8.0, -6.0), (8.0, -6.0)]
+        if annotation_kind in {'lsl', 'usl'}:
+            return [
+                (0.0, 0.0),
+                (-8.0, -6.0),
+                (8.0, -6.0),
+                (-12.0, -10.0),
+                (12.0, -10.0),
+                (0.0, -14.0),
+            ]
+        return [(0.0, 0.0), (0.0, -6.0), (0.0, -12.0)]
+
+    def _resolve_ha_from_offset(default_ha, x_offset_points):
+        if x_offset_points > 6.0:
+            return 'left'
+        if x_offset_points < -6.0:
+            return 'right'
+        return default_ha
+
     rendered = []
     transform = ax.get_xaxis_transform()
-    for annotation in annotation_specs:
-        rendered.append(
-            ax.text(
-                annotation['x'],
-                annotation.get('text_y_axes', 1.02),
-                annotation['text'],
-                transform=transform,
-                color=annotation['color'],
-                ha=annotation['ha'],
-                va='bottom',
-                fontsize=annotation_fontsize,
-                bbox=annotation_box,
-                zorder=10,
-                clip_on=False,
+    figure = ax.figure
+    x_min, x_max = ax.get_xlim()
+    plot_rect = annotation_box.get('plot_rect') if isinstance(annotation_box, dict) else None
+    title_artist = annotation_box.get('title_artist') if isinstance(annotation_box, dict) else None
+    plot_rect_bounds = _resolve_annotation_safe_bounds(figure, plot_rect)
+    title_bbox = None
+    if title_artist is not None:
+        figure.canvas.draw()
+        title_bbox = title_artist.get_window_extent(renderer=figure.canvas.get_renderer())
+    priority_sorted = sorted(
+        list(enumerate(annotation_specs or [])),
+        key=lambda item: (-int(item[1].get('priority', 100)), item[0]),
+    )
+    accepted = {}
+    accepted_bboxes = []
+    accepted_rows = []
+    for index, annotation in priority_sorted:
+        annotation_kind = str(annotation.get('kind') or '').lower()
+        resolved_ha = annotation.get('ha', 'center')
+        x_offset_points = 0.0
+        if annotation_kind in {'lsl', 'usl'}:
+            edge_anchor = resolve_edge_safe_label_anchor(
+                annotation.get('x'),
+                x_min,
+                x_max,
             )
-        )
+            edge_ha = edge_anchor.get('ha', 'center')
+            edge_offset_points = float(edge_anchor.get('x_offset_points', 0.0))
+            if edge_offset_points != 0.0:
+                resolved_ha = edge_ha
+                x_offset_points = edge_offset_points
+        placed_artist = None
+        placed_bbox = None
+        annotation_row = annotation.get('row_index')
+        base_y_axes = annotation.get('text_y_axes', 1.02)
+        for extra_x_offset, extra_y_offset in _build_candidate_offsets(annotation_kind):
+            total_x_offset = x_offset_points + float(extra_x_offset)
+            candidate_ha = _resolve_ha_from_offset(resolved_ha, total_x_offset)
+            needs_leader_line = abs(total_x_offset) >= 8.0 or abs(float(extra_y_offset)) >= 6.0
+            candidate_fontfamily = 'DejaVu Sans' if _uses_symbol_font_fallback(annotation['text']) else None
+            if abs(total_x_offset) < 1e-9 and abs(float(extra_y_offset)) < 1e-9:
+                candidate_artist = ax.text(
+                    annotation['x'],
+                    base_y_axes,
+                    annotation['text'],
+                    transform=transform,
+                    color=annotation['color'],
+                    ha=candidate_ha,
+                    va='bottom',
+                    fontsize=annotation_fontsize,
+                    bbox={k: v for k, v in annotation_box.items() if k not in {'plot_rect', 'title_artist'}},
+                    zorder=10,
+                    clip_on=False,
+                    fontfamily=candidate_fontfamily,
+                )
+            else:
+                candidate_artist = ax.annotate(
+                    annotation['text'],
+                    xy=(annotation['x'], base_y_axes),
+                    xycoords=transform,
+                    xytext=(total_x_offset, float(extra_y_offset)),
+                    textcoords='offset points',
+                    color=annotation['color'],
+                    ha=candidate_ha,
+                    va='bottom',
+                    fontsize=annotation_fontsize,
+                    bbox={k: v for k, v in annotation_box.items() if k not in {'plot_rect', 'title_artist'}},
+                    arrowprops=(
+                        {
+                            'arrowstyle': '-',
+                            'color': annotation['color'],
+                            'linewidth': 0.75,
+                            'alpha': 0.65,
+                            'shrinkA': 0,
+                            'shrinkB': 2,
+                        }
+                        if needs_leader_line
+                        else None
+                    ),
+                    zorder=10,
+                    clip_on=False,
+                    fontfamily=candidate_fontfamily,
+                )
+            figure.canvas.draw()
+            candidate_bbox = candidate_artist.get_window_extent(renderer=figure.canvas.get_renderer())
+            is_safe = _bbox_fits_plot_rect(candidate_bbox, plot_rect_bounds)
+            if is_safe and title_bbox is not None and candidate_bbox.overlaps(title_bbox):
+                is_safe = False
+            if is_safe and accepted_bboxes:
+                if any(candidate_bbox.overlaps(existing_bbox) for existing_bbox in accepted_bboxes):
+                    is_safe = False
+            if is_safe:
+                placed_artist = candidate_artist
+                placed_bbox = candidate_bbox
+                break
+            candidate_artist.remove()
+
+        if placed_artist is not None:
+            accepted[index] = placed_artist
+            accepted_bboxes.append(placed_bbox)
+            accepted_rows.append(annotation_row)
+
+    for index, _annotation in enumerate(annotation_specs or []):
+        text_artist = accepted.get(index)
+        if text_artist is not None:
+            rendered.append(text_artist)
     return rendered
 
 
@@ -562,6 +919,579 @@ def compute_histogram_table_layout(
         table_fontsize=table_fontsize,
         has_table=has_table,
     )
+
+
+def compute_histogram_three_region_layout(
+    figure_size=(6, 4),
+    *,
+    table_fontsize=8.0,
+):
+    """Compute compact geometry for left/center/right histogram rendering regions."""
+    return _compute_histogram_three_region_layout(
+        figure_size=figure_size,
+        table_fontsize=table_fontsize,
+    )
+
+
+def compute_histogram_panel_layout(
+    figure_size=(6, 4),
+    *,
+    table_fontsize=8.0,
+    left_row_count=0,
+    right_row_count=0,
+    note_line_count=0,
+    left_panel_width_hint=None,
+    right_panel_width_hint=None,
+):
+    """Compute non-overlapping histogram panel rectangles."""
+    return _compute_histogram_panel_layout(
+        figure_size=figure_size,
+        table_fontsize=table_fontsize,
+        left_row_count=left_row_count,
+        right_row_count=right_row_count,
+        note_line_count=note_line_count,
+        left_panel_width_hint=left_panel_width_hint,
+        right_panel_width_hint=right_panel_width_hint,
+    )
+
+
+def compute_histogram_plot_with_right_info_layout(
+    figure_size=(8.4, 4.0),
+    *,
+    table_fontsize=8.0,
+    fit_row_count=0,
+    stats_row_count=0,
+    fit_rows=None,
+    stats_rows=None,
+    note_line_count=0,
+    right_container_width_hint=None,
+    dpi=100.0,
+):
+    """Compute plot + right info-column rectangles for histogram exports."""
+    return _compute_histogram_plot_with_right_info_layout(
+        figure_size=figure_size,
+        table_fontsize=table_fontsize,
+        fit_row_count=fit_row_count,
+        stats_row_count=stats_row_count,
+        fit_rows=fit_rows,
+        stats_rows=stats_rows,
+        note_line_count=note_line_count,
+        right_container_width_hint=right_container_width_hint,
+        dpi=dpi,
+    )
+
+
+def compute_row_line_count(text):
+    """Return line count for a table cell value."""
+    return _compute_row_line_count(text)
+
+
+def resolve_table_row_line_count(label_text, value_text):
+    """Return row line count based on both label and value text."""
+    return _resolve_table_row_line_count(label_text, value_text)
+
+
+def resolve_histogram_dashboard_row_metrics(*, table_fontsize, dpi):
+    """Return shared row metrics for histogram dashboard tables."""
+    return _resolve_histogram_dashboard_row_metrics(table_fontsize=table_fontsize, dpi=dpi)
+
+
+def resolve_required_histogram_figure_height_for_complete_right_tables(
+    *,
+    fit_rows=None,
+    stats_rows=None,
+    fit_row_count=0,
+    stats_row_count=0,
+    table_fontsize=8.0,
+    dpi=100.0,
+    minimum_height=4.4,
+):
+    """Return figure height needed to keep both histogram right-column tables complete."""
+    return _resolve_required_histogram_figure_height_for_complete_right_tables(
+        fit_rows=fit_rows,
+        stats_rows=stats_rows,
+        fit_row_count=fit_row_count,
+        stats_row_count=stats_row_count,
+        table_fontsize=table_fontsize,
+        dpi=dpi,
+        minimum_height=minimum_height,
+    )
+
+
+def assert_non_overlapping_rectangles(rectangles):
+    """Assert that provided rectangles do not intersect."""
+    return _assert_non_overlapping_rectangles(rectangles)
+
+
+def _format_percent(value, *, decimals=4):
+    if value is None:
+        return 'N/A'
+    try:
+        return f"{float(value):.{int(decimals)}f}%"
+    except (TypeError, ValueError):
+        return 'N/A'
+
+
+def _format_probability_percent(probability, *, decimals=4):
+    return format_probability_percent(probability, decimals=decimals, threshold_percent=0.0001)
+
+
+def _is_effectively_zero(value, tolerance=1e-12):
+    try:
+        return abs(float(value)) <= tolerance
+    except (TypeError, ValueError):
+        return False
+
+
+def _as_float_or_none(value):
+    if isinstance(value, str):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if np.isfinite(numeric) else None
+
+
+def _resolve_capability_status(*, cp=None, cpk=None, ppk=None, nok_ratio=None):
+    capability_values = [
+        value
+        for value in (_as_float_or_none(cp), _as_float_or_none(cpk), _as_float_or_none(ppk))
+        if value is not None
+    ]
+    nok_value = _as_float_or_none(nok_ratio)
+
+    capability_tier = None
+    if capability_values:
+        limiting_index = min(capability_values)
+        if limiting_index >= 1.67:
+            capability_tier = 'capable'
+        elif limiting_index > 1.33:
+            capability_tier = 'good'
+        elif limiting_index >= 1.0:
+            capability_tier = 'marginal'
+        else:
+            capability_tier = 'risk'
+
+    nok_tier = None
+    if nok_value is not None:
+        if nok_value <= 0.003:
+            nok_tier = 'good'
+        elif nok_value <= 0.05:
+            nok_tier = 'marginal'
+        else:
+            nok_tier = 'risk'
+
+    tier_rank = {'capable': 0, 'good': 1, 'marginal': 2, 'risk': 3}
+    selected_tier = None
+    for tier in (capability_tier, nok_tier):
+        if tier is None:
+            continue
+        if selected_tier is None or tier_rank[tier] > tier_rank[selected_tier]:
+            selected_tier = tier
+
+    if selected_tier is None:
+        return {'label': 'N/A', 'palette_key': 'quality_unknown'}
+    if selected_tier in {'capable', 'good'}:
+        return {'label': selected_tier.title(), 'palette_key': 'quality_capable'}
+    if selected_tier == 'marginal':
+        return {'label': 'Marginal', 'palette_key': 'quality_marginal'}
+    return {'label': 'Risk', 'palette_key': 'quality_risk'}
+
+
+def _fit_quality_sample_size_ceiling(sample_size):
+    if sample_size is None:
+        return None
+    n = max(0, int(sample_size or 0))
+    if 0 < n < 10:
+        return 'unreliable'
+    if n < 25:
+        return 'medium'
+    return None
+
+
+def _apply_fit_quality_sample_size_guard(quality_key, sample_size):
+    order = {'unreliable': 0, 'weak': 1, 'medium': 2, 'strong': 3}
+    normalized_quality = quality_key if quality_key in order else quality_key
+    if normalized_quality not in order:
+        return normalized_quality
+    ceiling = _fit_quality_sample_size_ceiling(sample_size)
+    if ceiling is None:
+        return normalized_quality
+    return min(normalized_quality, ceiling, key=lambda item: order[item])
+
+
+def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl=None, summary_stats=None):
+    selected_model = distribution_fit_result.get('selected_model') or {}
+    fit_quality = distribution_fit_result.get('fit_quality') or {}
+    risk_estimates = distribution_fit_result.get('risk_estimates') or {}
+    inferred_support_mode = distribution_fit_result.get('inferred_support_mode')
+
+    spec_type = str(risk_estimates.get('spec_type', 'none'))
+    below_lsl = risk_estimates.get('below_lsl_probability')
+    above_usl = risk_estimates.get('above_usl_probability')
+    sample_size = (summary_stats or {}).get('sample_size')
+
+    raw_rows = [
+        ('Model', selected_model.get('display_name', 'N/A')),
+    ]
+
+    quality_key = str(fit_quality.get('label') or '').strip().lower()
+    display_quality = _apply_fit_quality_sample_size_guard(quality_key, sample_size)
+    show_modeled_risk_rows = display_quality not in {'weak', 'unreliable'}
+
+    est_nok_value = None
+    if show_modeled_risk_rows:
+        side_parts = []
+        allow_lower_tail = spec_type in {'bilateral', 'lower_only'} and lsl is not None
+        if inferred_support_mode == 'one_sided_zero_bound_positive' and _is_effectively_zero(lsl):
+            if _format_probability_percent(below_lsl, decimals=4) == 'N/A' or _is_effectively_zero(below_lsl):
+                allow_lower_tail = False
+        if allow_lower_tail:
+            side_parts.append(f"L: {_format_probability_percent(below_lsl, decimals=4)}")
+        if spec_type in {'bilateral', 'upper_only'} and usl is not None:
+            side_parts.append(f"U: {_format_probability_percent(above_usl, decimals=4)}")
+
+        est_nok_numeric = _as_float_or_none(risk_estimates.get('nok_percent'))
+        est_nok_value = _format_percent(risk_estimates.get('nok_percent'), decimals=4)
+        if side_parts and (est_nok_numeric is None or est_nok_numeric >= 0.0001):
+            est_nok_value = f"{est_nok_value}\n{', '.join(side_parts)}"
+        raw_rows.append(('Estimated NOK %', est_nok_value))
+
+    raw_rows.append(('Model fit quality', display_quality.title()))
+
+    warning_parts = []
+    sample_size_value = int(sample_size) if sample_size is not None else None
+    if sample_size_value is not None and 0 < sample_size_value < 10:
+        warning_parts.append('fit unreliable')
+    elif sample_size_value is not None and sample_size_value < 25:
+        warning_parts.append('small sample')
+
+    if display_quality == 'weak':
+        warning_parts.append('fit weak')
+    elif display_quality == 'unreliable':
+        if 'fit unreliable' not in warning_parts:
+            warning_parts.append('fit unreliable')
+        warning_parts.append('observed NOK only')
+
+    if sample_size_value is not None and 0 < sample_size_value < 25 and display_quality != 'unreliable':
+        if 'small sample' not in warning_parts:
+            warning_parts.insert(0, 'small sample')
+        warning_parts.append('capability uncertain')
+
+    warning_parts = [part for part in warning_parts if part]
+    if len(warning_parts) > 2:
+        if 'fit unreliable' in warning_parts and 'observed NOK only' in warning_parts:
+            warning_parts = ['fit unreliable', 'observed NOK only']
+        elif 'small sample' in warning_parts and 'capability uncertain' in warning_parts:
+            warning_parts = ['small sample', 'capability uncertain']
+        elif 'fit weak' in warning_parts:
+            warning_parts = ['fit weak']
+        else:
+            warning_parts = warning_parts[:2]
+
+    if warning_parts:
+        raw_rows.append(('Warning', '; '.join(warning_parts)))
+
+    return [(_compact_distribution_fit_label(label), value) for label, value in raw_rows]
+
+
+def _build_unified_histogram_dashboard_rows(*, statistics_rows, distribution_fit_rows):
+    """Return unified right-panel rows in process-then-model order."""
+
+    return list(statistics_rows or []) + list(distribution_fit_rows or [])
+
+
+def _apply_table_section_separator(ax_table, table_data, *, transition_label='Model'):
+    """Add subtle visual grouping by drawing a mild separator above transition row."""
+
+    if ax_table is None:
+        return
+
+    transition_index = None
+    for idx, row in enumerate(table_data or [], start=1):
+        if str(row[0]).strip() == transition_label:
+            transition_index = idx
+            break
+    if transition_index is None:
+        return
+
+    cell_map = ax_table.get_celld()
+    column_indexes = sorted({col for (row, col) in cell_map.keys() if row == 0}) or [0, 1]
+    for col_index in column_indexes:
+        cell = cell_map.get((transition_index, col_index))
+        if cell is None:
+            continue
+        cell.set_edgecolor('#d5dbe3')
+        cell.set_linewidth(max(0.75, float(cell.get_linewidth())))
+
+
+def _build_distribution_fit_info_note(distribution_fit_result, *, summary_stats):
+    inferred_support = distribution_fit_result.get('inferred_support_mode') or 'unknown'
+    spec_handling_text = {
+        'one_sided_zero_bound_positive': 'one-sided upper',
+        'one_sided_zero_bound_negative': 'one-sided lower',
+        'bilateral_signed': 'two-sided (both LSL and USL active)',
+    }.get(inferred_support, 'based on active limits')
+    fit_quality = distribution_fit_result.get('fit_quality') or {}
+    fit_warning = distribution_fit_result.get('warning')
+
+    note_items = [
+        {
+            'label': 'Spec handling',
+            'compact_label': 'Spec handling',
+            'value': spec_handling_text,
+            'compact_value': spec_handling_text,
+            'priority': 90,
+            'tooltip': 'How limits are applied when computing estimated NOK and capability metrics.',
+        },
+    ]
+
+    normality_text = summary_stats.get('normality_text')
+    if normality_text:
+        note_items.append({
+            'label': 'Reference normality',
+            'compact_label': 'Normality',
+            'value': normality_text,
+            'compact_value': str(normality_text).splitlines()[-1],
+            'priority': 60,
+        })
+
+    quality_label = str(fit_quality.get('label', '')).lower()
+    is_poor_fit = quality_label in {'weak', 'unreliable'}
+    if is_poor_fit:
+        note_items.append({
+            'label': 'Warning',
+            'compact_label': 'Warning',
+            'value': f'fit {quality_label}',
+            'compact_value': f'fit {quality_label}',
+            'priority': 30,
+        })
+    if fit_warning:
+        note_items.append({
+            'label': 'Warning',
+            'value': 'fit warning',
+            'compact_value': 'fit warning',
+            'priority': 20,
+            'expanded_only': True,
+        })
+
+    return note_items, is_poor_fit
+
+
+
+def _build_compact_histogram_note_lines(distribution_fit_result, *, summary_stats=None):
+    """Build compact right-panel note lines for histogram export context."""
+
+    fit_result = distribution_fit_result or {}
+    lines = []
+
+    mode = fit_result.get('inferred_support_mode')
+    if mode == 'one_sided_zero_bound_positive':
+        lines.append('Spec handling: one-sided upper')
+        lines.append('Tooltip: Uses only USL for tail risk and capability decisions (Cp suppressed; Cpk shown as Cpu)')
+    elif mode == 'one_sided_zero_bound_negative':
+        lines.append('Spec handling: one-sided lower')
+        lines.append('Tooltip: Uses only LSL for tail risk and capability decisions (Cp suppressed; Cpk shown as Cpl)')
+    elif mode == 'bilateral_signed':
+        lines.append('Spec handling: two-sided (both LSL and USL active)')
+        lines.append('Tooltip: Uses both tails; Cp and Cpk summarize spread and centering versus both limits')
+
+    fit_quality = ((fit_result.get('fit_quality') or {}).get('label') or '').strip().lower()
+    is_poor_fit = fit_quality in {'weak', 'unreliable'}
+    sample_size = (summary_stats or {}).get('sample_size')
+    sample_size_value = int(sample_size) if sample_size is not None else 0
+    low_n_severe = 0 < sample_size_value < 10
+    low_n_warning = 10 <= sample_size_value < 25
+
+    if low_n_severe:
+        lines.append(f'Warning: low sample size (n={sample_size_value})')
+    elif low_n_warning:
+        lines.append(f'Warning: limited sample size (n={sample_size_value})')
+
+    if is_poor_fit:
+        lines.append(f'Warning: fit {fit_quality}')
+    elif low_n_severe:
+        lines.append('Fit reliability: low (sample-limited)')
+    elif low_n_warning:
+        lines.append('Fit reliability: guarded (n<25)')
+    elif fit_quality == 'medium':
+        lines.append('Fit reliability: medium')
+    if fit_quality in {'medium', 'good', 'strong'} and not is_poor_fit:
+        lines.append('Tooltip: Fit reliability reflects distribution adequacy; lower reliability increases uncertainty in estimated NOK/PPM')
+
+    gof_metrics = fit_result.get('gof_metrics') or {}
+    reference_normality = str(gof_metrics.get('reference_normality_label') or '').strip()
+    normality_is_concise = reference_normality and len(reference_normality) <= 24
+    normality_adds_context = reference_normality.lower() not in {'normal', 'gaussian-like'}
+    if (not is_poor_fit) and fit_quality not in {'medium'} and normality_is_concise and normality_adds_context:
+        lines.append(f'Normality: {reference_normality}')
+
+    if low_n_severe or low_n_warning:
+        threshold_text = 'n<10 severe instability' if low_n_severe else 'n<25 broad uncertainty'
+        lines.append(f'Rationale: {threshold_text}; capability shown as low-confidence estimate')
+
+    lines.extend([
+        'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data',
+        'Help: model fit quality = statistical adequacy of chosen distribution',
+        'Help: capability status = conformance risk against specs',
+    ])
+
+    return lines[:7]
+
+def _is_non_normal_capability_reference_model(distribution_fit_result):
+    selected_model = (distribution_fit_result or {}).get('selected_model') or {}
+    model_name = str(selected_model.get('model') or '').strip().lower()
+    if not model_name:
+        return False
+    return model_name not in {'norm'}
+
+
+def _should_use_capability_reference_label(distribution_fit_result, *, summary_stats=None):
+    fit_quality = ((distribution_fit_result or {}).get('fit_quality') or {}).get('label')
+    quality_key = str(fit_quality or '').strip().lower()
+    sample_size = (summary_stats or {}).get('sample_size')
+    display_quality = _apply_fit_quality_sample_size_guard(quality_key, sample_size)
+    return _is_non_normal_capability_reference_model(distribution_fit_result) or display_quality in {'weak', 'unreliable'}
+
+
+def _apply_non_normal_cpk_reference_label(histogram_table_payload, distribution_fit_result, *, summary_stats=None):
+    if not _should_use_capability_reference_label(distribution_fit_result, summary_stats=summary_stats):
+        return histogram_table_payload
+
+    payload = dict(histogram_table_payload or {})
+    rows = []
+    for label, value in payload.get('rows', []):
+        if label in {'Cpu', 'Cpl', 'Cpu 95% CI', 'Cpl 95% CI'}:
+            rows.append((f'{label} (ref)', value))
+            continue
+        rows.append(
+            ('Cpk (ref)', value)
+            if label in {'Cpk', 'Cpk+'}
+            else ('Cpk (ref) 95% CI', value)
+            if label in {'Cpk 95% CI', 'Cpk+ 95% CI'}
+            else ('Cp (ref)', value)
+            if label == 'Cp'
+            else ('Cp (ref) 95% CI', value)
+            if label == 'Cp 95% CI'
+            else (label, value)
+        )
+    payload['rows'] = rows
+
+    capability_rows = dict(payload.get('capability_rows') or {})
+    for key in ('Cp', 'Cpk', 'Cpk+', 'Cpu', 'Cpl'):
+        cpk_meta = dict(capability_rows.get(key) or {})
+        if cpk_meta:
+            if key == 'Cp':
+                cpk_meta['label'] = 'Cp (ref)'
+            elif key in {'Cpu', 'Cpl'}:
+                cpk_meta['label'] = f'{key} (ref)'
+            else:
+                cpk_meta['label'] = 'Cpk (ref)'
+            capability_rows[key] = cpk_meta
+
+    if capability_rows:
+        payload['capability_rows'] = capability_rows
+    return payload
+
+
+def render_histogram_note_panel(
+    *,
+    ax,
+    note_items,
+    style_options=None,
+    available_height_px=None,
+):
+    """Render histogram fit note panel as multiline textbox with graceful truncation."""
+
+    options = dict(style_options or {})
+    fontsize = float(options.get('fontsize', 7.0))
+    min_fontsize = float(options.get('min_fontsize', 6.2))
+    max_fontsize = float(options.get('max_fontsize', 9.0))
+    fontsize = min(max(fontsize, min_fontsize), max_fontsize)
+    header_fontweight = options.get('header_fontweight', 'normal')
+    line_spacing = float(options.get('line_spacing', 1.18))
+    pad_x = float(options.get('pad_x', 0.03))
+    pad_y = float(options.get('pad_y', 0.04))
+
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    line_height_px = _measure_text_extent(fig, renderer, 'Ag', fontsize=fontsize, fontweight=header_fontweight)[1]
+    max_height_px = max(1.0, available_height_px if available_height_px is not None else float(ax.bbox.height))
+    usable_height_px = max(1.0, max_height_px - ((pad_y * 2.0) * float(ax.bbox.height)))
+    line_capacity = max(1, int(usable_height_px // max(1.0, line_height_px)))
+
+    normalized_items = []
+    for index, item in enumerate(note_items or []):
+        if not isinstance(item, dict):
+            continue
+        normalized_items.append({
+            'index': index,
+            'label': str(item.get('label', '')).strip(),
+            'value': str(item.get('value', '')).strip(),
+            'compact_label': str(item.get('compact_label', item.get('label', ''))).strip(),
+            'compact_value': str(item.get('compact_value', item.get('value', ''))).strip(),
+            'priority': int(item.get('priority', 0)),
+            'expanded_only': bool(item.get('expanded_only', False)),
+        })
+
+    compact_items = [item for item in normalized_items if not item['expanded_only']]
+    expanded_items = list(normalized_items)
+    using_compact = len(expanded_items) > line_capacity
+    selected_items = compact_items if using_compact else expanded_items
+
+    omitted_items = []
+    if len(selected_items) > line_capacity:
+        to_drop = len(selected_items) - line_capacity
+        ranked_for_drop = sorted(selected_items, key=lambda item: (item['priority'], -item['index']))
+        dropped_keys = {item['index'] for item in ranked_for_drop[:to_drop]}
+        omitted_items = [item for item in selected_items if item['index'] in dropped_keys]
+        selected_items = [item for item in selected_items if item['index'] not in dropped_keys]
+
+    rendered_lines = []
+    for item in selected_items:
+        if using_compact:
+            label = item['compact_label']
+            value = item['compact_value']
+        else:
+            label = item['label']
+            value = item['value']
+        if label and value:
+            rendered_lines.append(f"{label}: {value}")
+        elif value:
+            rendered_lines.append(value)
+
+    if not rendered_lines:
+        rendered_lines = ['N/A']
+
+    ax.set_axis_off()
+    text_artist = ax.text(
+        pad_x,
+        1.0 - pad_y,
+        '\n'.join(rendered_lines),
+        transform=ax.transAxes,
+        ha='left',
+        va='top',
+        fontsize=fontsize,
+        linespacing=line_spacing,
+        color=options.get('text_color', SUMMARY_PLOT_PALETTE['axis_text']),
+        bbox={
+            'boxstyle': 'round,pad=0.25',
+            'facecolor': options.get('box_facecolor', 'white'),
+            'edgecolor': options.get('box_edgecolor', SUMMARY_PLOT_PALETTE['annotation_box_edge']),
+            'linewidth': float(options.get('box_linewidth', 0.6)),
+            'alpha': float(options.get('box_alpha', 0.95)),
+        },
+        clip_on=True,
+    )
+
+    return {
+        'text_artist': text_artist,
+        'rendered_lines': rendered_lines,
+        'omitted_items': omitted_items,
+        'variant': 'compact' if using_compact else 'expanded',
+    }
 
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
@@ -965,9 +1895,9 @@ def move_legend_to_figure(ax):
         labels = [text.get_text() for text in existing_legend.get_texts()]
 
     if not handles:
-        return
+        return None
 
-    fig.legend(
+    figure_legend = fig.legend(
         handles,
         labels,
         loc="upper right",
@@ -975,6 +1905,78 @@ def move_legend_to_figure(ax):
         bbox_transform=fig.transFigure,
     )
     fig.subplots_adjust(top=0.82)
+    return figure_legend
+
+
+def finalize_extended_chart_layout(fig, ax, *, legend=None, strategy=None):
+    """Run a final artist-bounds-driven layout pass for extended charts."""
+
+    if fig is None or ax is None:
+        return
+
+    strategy_bottom_margin = None
+    if strategy and strategy.get('bottom_margin'):
+        strategy_bottom_margin = float(strategy['bottom_margin'])
+        fig.subplots_adjust(bottom=strategy_bottom_margin)
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    artists = []
+    artists.extend(ax.get_xticklabels())
+    artists.extend(ax.get_yticklabels())
+
+    if ax.xaxis.label is not None:
+        artists.append(ax.xaxis.label)
+    if ax.yaxis.label is not None:
+        artists.append(ax.yaxis.label)
+    if ax.title is not None:
+        artists.append(ax.title)
+
+    legend_artist = legend
+    if legend_artist is None and getattr(fig, 'legends', None):
+        legend_artist = fig.legends[-1]
+    if legend_artist is not None:
+        artists.append(legend_artist)
+
+    fig_w_px = max(1.0, fig.get_figwidth() * fig.dpi)
+    fig_h_px = max(1.0, fig.get_figheight() * fig.dpi)
+
+    left_px = 24.0
+    right_px = 22.0
+    top_px = 20.0
+    bottom_px = 20.0
+
+    for artist in artists:
+        if artist is None or not getattr(artist, 'get_visible', lambda: True)():
+            continue
+        try:
+            bbox = artist.get_window_extent(renderer=renderer)
+        except Exception:
+            continue
+        left_px = max(left_px, max(0.0, -bbox.x0) + 8.0)
+        right_px = max(right_px, max(0.0, bbox.x1 - fig_w_px) + 8.0)
+        bottom_px = max(bottom_px, max(0.0, -bbox.y0) + 8.0)
+        top_px = max(top_px, max(0.0, bbox.y1 - fig_h_px) + 8.0)
+
+    proposed_left = min(0.22, max(0.08, left_px / fig_w_px))
+    proposed_right = max(0.76, min(0.98, 1.0 - (right_px / fig_w_px)))
+    proposed_bottom = min(0.36, max(0.14, bottom_px / fig_h_px))
+    if strategy_bottom_margin is not None:
+        proposed_bottom = max(proposed_bottom, strategy_bottom_margin)
+    proposed_top = max(0.68, min(0.95, 1.0 - (top_px / fig_h_px)))
+
+    if proposed_right <= proposed_left + 0.25:
+        proposed_right = min(0.98, proposed_left + 0.25)
+    if proposed_top <= proposed_bottom + 0.20:
+        proposed_top = min(0.98, proposed_bottom + 0.20)
+
+    fig.subplots_adjust(
+        left=proposed_left,
+        right=proposed_right,
+        bottom=proposed_bottom,
+        top=proposed_top,
+    )
 
 
 def build_wrapped_chart_title(title, *, width=42, max_lines=3):
@@ -1066,48 +2068,8 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
     if histogram_values.size == 0:
         return {'is_grouped': False, 'group_labels': []}
 
-    finite_spec_limits = []
-    for raw_limit in (lsl, usl):
-        if raw_limit is None:
-            continue
-        try:
-            limit_value = float(raw_limit)
-        except (TypeError, ValueError):
-            continue
-        if np.isfinite(limit_value):
-            finite_spec_limits.append(limit_value)
-
-    n = histogram_values.size
-    data_min = float(np.min(histogram_values))
-    data_max = float(np.max(histogram_values))
-    x_min_base = min([data_min, *finite_spec_limits])
-    x_max_base = max([data_max, *finite_spec_limits])
-    combined_range = x_max_base - x_min_base
-
-    reference_magnitude = max(abs(x_min_base), abs(x_max_base), 1.0)
-    minimum_margin = max(1e-6, 0.01 * reference_magnitude)
-    if combined_range > 0:
-        x_padding = max(_HISTOGRAM_X_PADDING_RATIO * combined_range, minimum_margin)
-    else:
-        x_padding = max(_HISTOGRAM_ZERO_RANGE_ABS_PADDING * reference_magnitude, minimum_margin)
-
-    data_range = data_max - data_min
-
-    q1, q3 = np.percentile(histogram_values, [25, 75])
-    iqr = float(q3 - q1)
-
-    bins = None
-    if n > 0 and iqr > 0 and data_range > 0:
-        bin_width = 2 * iqr * (n ** (-1 / 3))
-        if np.isfinite(bin_width) and bin_width > 0:
-            fd_bins = np.ceil(data_range / bin_width)
-            if np.isfinite(fd_bins) and fd_bins > 0:
-                bins = int(fd_bins)
-
-    if bins is None:
-        bins = min(int(np.sqrt(n)), 10)
-
-    bin_count = max(3, bins)
+    binning = resolve_histogram_bin_count(histogram_values)
+    bin_count = int(binning['bin_count'])
 
     if _HAS_SEABORN:
         sns.histplot(
@@ -1131,13 +2093,25 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
             linewidth=0.5,
         )
 
-    ax.set_xlim(x_min_base - x_padding, x_max_base + x_padding)
+    x_view = resolve_histogram_x_view(histogram_values, lsl=lsl, usl=usl)
+    ax.set_xlim(x_view['x_min'], x_view['x_max'])
     enforce_minimum_histogram_bar_width(ax)
     lock_histogram_y_axis_to_bar_heights(ax)
+
+    bin_widths = [
+        float(patch.get_width())
+        for patch in ax.patches
+        if np.isfinite(patch.get_width()) and patch.get_width() > 0
+    ]
+    representative_bin_width = float(np.median(bin_widths)) if bin_widths else None
+    count_scale_factor = None
+    if representative_bin_width is not None and histogram_values.size > 0:
+        count_scale_factor = float(histogram_values.size) * representative_bin_width
 
     return {
         'is_grouped': False,
         'group_labels': [],
+        'count_scale_factor': count_scale_factor,
     }
 
 
@@ -1151,16 +2125,22 @@ def lock_histogram_y_axis_to_bar_heights(ax, *, top_padding_ratio=0.08):
     if ax is None:
         return
 
-    bar_heights = []
+    y_candidates = []
     for patch in ax.patches:
         height = patch.get_height()
         if np.isfinite(height) and height >= 0:
-            bar_heights.append(float(height))
+            y_candidates.append(float(height))
 
-    if not bar_heights:
+    for line in ax.lines:
+        y_data = np.asarray(line.get_ydata(), dtype=float)
+        finite_y = y_data[np.isfinite(y_data)]
+        if finite_y.size > 0:
+            y_candidates.append(float(np.max(finite_y)))
+
+    if not y_candidates:
         return
 
-    max_height = max(bar_heights)
+    max_height = max(y_candidates)
     if max_height <= 0:
         max_height = 1.0
 
@@ -1300,50 +2280,75 @@ def add_iqr_boxplot_legend(ax, *, include_tolerance_refs=False):
     )
 
 
-def render_density_line(ax, x, p):
-    """Render a density line on a hidden secondary y-axis.
-
-    Histogram bar counts remain on the primary axis while the density curve uses
-    an independent scale to avoid clipping or extending beyond count bounds.
-    """
+def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, linestyle='-'):
+    """Render a count-scaled reference/model line on the primary y-axis."""
 
     if ax is None:
+        return None
+
+    line_color = color or SUMMARY_PLOT_PALETTE['density_line']
+    if _HAS_SEABORN:
+        sns.lineplot(
+            x=x,
+            y=p,
+            color=line_color,
+            linewidth=linewidth,
+            linestyle=linestyle,
+            alpha=alpha,
+            ax=ax,
+        )
+    else:
+        ax.plot(x, p, color=line_color, linewidth=linewidth, linestyle=linestyle, alpha=alpha)
+
+    return ax
+
+
+def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=None):
+    """Shade count-scaled modeled tails beyond active specification limits."""
+
+    selected_model_curve = (distribution_fit_result or {}).get('selected_model_pdf') or {}
+    x_values = np.asarray(selected_model_curve.get('x', []), dtype=float)
+    density_values = np.asarray(selected_model_curve.get('y', []), dtype=float)
+    if x_values.size < 2 or density_values.size != x_values.size:
         return
 
-    density_axis = ax.twinx()
-    density_axis.set_facecolor('none')
-    density_axis.patch.set_alpha(0.0)
-    density_axis.grid(False)
+    parsed_lsl = None
+    parsed_usl = None
+    try:
+        if lsl is not None:
+            parsed_lsl = float(lsl)
+    except (TypeError, ValueError):
+        parsed_lsl = None
+    try:
+        if usl is not None:
+            parsed_usl = float(usl)
+    except (TypeError, ValueError):
+        parsed_usl = None
 
-    density_axis.tick_params(
-        axis='y',
-        which='both',
-        left=False,
-        right=False,
-        labelleft=False,
-        labelright=False,
-        length=0,
-    )
-    density_axis.set_yticks([])
-    density_axis.yaxis.set_visible(False)
+    for limit_value, mask in (
+        (parsed_lsl, x_values <= parsed_lsl if parsed_lsl is not None else None),
+        (parsed_usl, x_values >= parsed_usl if parsed_usl is not None else None),
+    ):
+        if limit_value is None or mask is None:
+            continue
+        if np.count_nonzero(mask) < 2:
+            continue
+        ax.fill_between(
+            x_values[mask],
+            density_values[mask],
+            0.0,
+            color=SUMMARY_PLOT_PALETTE['spec_limit'],
+            alpha=0.12,
+            linewidth=0.0,
+            zorder=2,
+        )
 
-    for spine_name in ('left', 'right', 'top'):
-        spine = density_axis.spines.get(spine_name)
-        if spine is not None:
-            spine.set_visible(False)
 
-    if _HAS_SEABORN:
-        sns.lineplot(x=x, y=p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4, ax=density_axis)
-    else:
-        density_axis.plot(x, p, color=SUMMARY_PLOT_PALETTE['density_line'], linewidth=1.4)
-
-    density_values = np.asarray(p, dtype=float)
-    finite_density_values = density_values[np.isfinite(density_values)]
-    if finite_density_values.size > 0:
-        density_max = float(np.max(finite_density_values))
-        if density_max <= 0:
-            density_max = 1.0
-        density_axis.set_ylim(0.0, density_max * 1.05)
+_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.155
+_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 3.15
+_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO = 0.39
+_UNIFIED_HISTOGRAM_LABEL_FRACTION = 0.44
+_UNIFIED_HISTOGRAM_VALUE_FRACTION = 0.56
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -1371,7 +2376,7 @@ def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, 
             label, value = row[0], row[1]
         normalized_rows.append((label, value))
 
-    cp_cpk_rows = {'Cp', 'Cpk', 'Cpk+'}
+    cp_cpk_rows = {'Cp', 'Cpk', 'Cpk+', 'Cpu', 'Cpl'}
     for row_index, (label, value) in enumerate(normalized_rows, start=1):
         if capability_row_badges and label in capability_row_badges:
             _apply_table_row_badge(ax_table, row_index, capability_row_badges[label]['palette_key'])
@@ -1396,6 +2401,7 @@ def adjust_histogram_stats_table_geometry(
     *,
     statistic_col_width_ratio=0.72,
     row_height_scale=1.12,
+    explicit_row_heights=None,
 ):
     """Increase histogram stats-table readability via column and row geometry."""
     if ax_table is None:
@@ -1409,7 +2415,7 @@ def adjust_histogram_stats_table_geometry(
     label_col0_ratio = statistic_area_ratio * 0.78
     label_col1_ratio = statistic_area_ratio * 0.22
     value_ratio = 1.0 - statistic_area_ratio
-    safe_row_scale = min(1.4, max(0.9, float(row_height_scale)))
+    del row_height_scale
     border_linewidth = 0.45
     cell_padding = 0.12
 
@@ -1451,17 +2457,288 @@ def adjust_histogram_stats_table_geometry(
                 text.set_ha('right')
                 text.set_x(0.94)
 
-        if row_index >= 1 and row_index not in full_width_rows:
-            cell.set_height(cell.get_height() * safe_row_scale)
-
         cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
         cell.set_linewidth(border_linewidth)
         cell.PAD = cell_padding
 
-    if not has_three_columns:
-        return
+    if explicit_row_heights:
+        apply_explicit_table_row_heights(
+            ax_table,
+            row_heights=list(explicit_row_heights),
+            ncols=(3 if has_three_columns else 2),
+        )
 
-    return
+
+def apply_explicit_table_row_heights(table, *, row_heights, ncols):
+    """Apply explicit heights to every table row/cell."""
+    for row_index, row_height in enumerate(row_heights):
+        for col_index in range(max(1, int(ncols))):
+            cell = table.get_celld().get((row_index, col_index))
+            if cell is None or not cell.get_visible():
+                continue
+            cell.set_height(float(row_height))
+
+
+def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
+    """Measure text extents in display pixels for sizing-aware panel layout."""
+
+    probe_kwargs = {
+        'fontsize': fontsize,
+        'fontweight': fontweight,
+        'alpha': 0.0,
+    }
+    if _uses_symbol_font_fallback(text):
+        probe_kwargs['fontfamily'] = 'DejaVu Sans'
+
+    probe = fig.text(0.0, 0.0, str(text), **probe_kwargs)
+    try:
+        extent = probe.get_window_extent(renderer=renderer)
+        return extent.width, extent.height
+    finally:
+        probe.remove()
+
+
+def _wrap_table_value_text(value_text, *, width):
+    """Wrap table values while preserving explicit line breaks."""
+
+    text = str(value_text)
+    if width <= 0:
+        return text
+
+    wrapped_lines = []
+    for line in text.splitlines() or ['']:
+        wrapped_lines.append(textwrap.fill(line, width=width) if line else '')
+    return '\n'.join(wrapped_lines)
+
+
+def render_panel_table(
+    *,
+    ax,
+    fig,
+    title,
+    rows,
+    rect,
+    style_options=None,
+):
+    """Render a non-overlapping side panel table with dynamic width/height fitting.
+
+    Returns metadata describing used bounds, overflow, deferred rows, and fallbacks.
+    """
+
+    options = dict(style_options or {})
+    base_fontsize = float(options.get('fontsize', 8.0))
+    min_fontsize = float(options.get('min_fontsize', 6.8))
+    max_fontsize = float(options.get('max_fontsize', 9.0))
+    fontsize = min(max(base_fontsize, min_fontsize), max_fontsize)
+
+    min_label_fraction = float(options.get('min_label_fraction', 0.52))
+    min_value_fraction = float(options.get('min_value_fraction', 0.22))
+    header_fontweight = options.get('header_fontweight', 'bold')
+    compact_label_mapping = dict(options.get('compact_label_mapping') or {})
+    value_wrap_width = int(options.get('value_wrap_width', 0) or 0)
+    cell_padding_points = float(options.get('cell_padding_points', 2.2))
+    explicit_row_heights = options.get('explicit_row_heights')
+    shared_row_metrics = options.get('shared_row_metrics')
+    explicit_label_fraction = options.get('explicit_label_fraction')
+    explicit_value_fraction = options.get('explicit_value_fraction')
+
+    normalized_rows = []
+    for row in rows or []:
+        if len(row) >= 2:
+            label_text = str(row[0])
+            value_text = str(row[-1])
+            if value_wrap_width > 0:
+                value_text = _wrap_table_value_text(value_text, width=value_wrap_width)
+            normalized_rows.append((label_text, value_text))
+
+    # Ensure renderer-backed text metrics are current.
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    ax_height_px = max(1.0, float(ax.bbox.height))
+    available_height_px = max(1.0, rect['height'] * ax_height_px)
+    cell_padding_px = cell_padding_points * (fig.dpi / 72.0)
+
+    state_rows = list(normalized_rows)
+    applied_fallbacks = []
+    using_compact_labels = False
+
+    def _measure_layout(candidate_rows, candidate_fontsize):
+        label_header_w, header_h = _measure_text_extent(fig, renderer, title, fontsize=candidate_fontsize, fontweight=header_fontweight)
+        value_header_w, _ = _measure_text_extent(fig, renderer, 'Value', fontsize=candidate_fontsize, fontweight=header_fontweight)
+        line_h = _measure_text_extent(fig, renderer, 'Ag', fontsize=candidate_fontsize)[1]
+
+        label_max = label_header_w
+        value_max = value_header_w
+        for label, value in candidate_rows:
+            label_max = max(label_max, _measure_text_extent(fig, renderer, label, fontsize=candidate_fontsize)[0])
+            value_max = max(value_max, _measure_text_extent(fig, renderer, value, fontsize=candidate_fontsize)[0])
+
+        required_total_w = label_max + value_max + (4.0 * cell_padding_px)
+        dynamic_label_fraction = (label_max + (2.0 * cell_padding_px)) / required_total_w if required_total_w > 0 else 0.5
+        dynamic_value_fraction = (value_max + (2.0 * cell_padding_px)) / required_total_w if required_total_w > 0 else 0.5
+
+        if explicit_label_fraction is not None and explicit_value_fraction is not None:
+            label_fraction = max(0.0, float(explicit_label_fraction))
+            value_fraction = max(0.0, float(explicit_value_fraction))
+        else:
+            label_fraction = max(min_label_fraction, dynamic_label_fraction)
+            value_fraction = max(min_value_fraction, dynamic_value_fraction)
+        total_fraction = label_fraction + value_fraction
+        if total_fraction <= 0.0:
+            label_fraction = 0.5
+            value_fraction = 0.5
+        elif total_fraction != 1.0:
+            label_fraction /= total_fraction
+            value_fraction /= total_fraction
+
+        if shared_row_metrics:
+            header_height_px = float(shared_row_metrics['header_row_height_px'])
+            row_height_px = float(shared_row_metrics['base_row_height_px'])
+            extra_line_height_px = float(shared_row_metrics['extra_line_height_px'])
+        else:
+            header_height_px = header_h + (2.0 * cell_padding_px)
+            row_height_px = line_h + (2.0 * cell_padding_px)
+            extra_line_height_px = row_height_px
+        required_rows_height_px = 0.0
+        for label, value in candidate_rows:
+            line_count = resolve_table_row_line_count(label, value)
+            required_rows_height_px += row_height_px + ((line_count - 1) * extra_line_height_px)
+        required_height_px = header_height_px + required_rows_height_px
+
+        return {
+            'label_fraction': label_fraction,
+            'value_fraction': value_fraction,
+            'required_height_px': required_height_px,
+            'row_height_px': row_height_px,
+        }
+
+    metrics = _measure_layout(state_rows, fontsize)
+
+    if metrics['required_height_px'] > available_height_px and compact_label_mapping:
+        compacted_rows = [(compact_label_mapping.get(label, label), value) for (label, value) in state_rows]
+        compact_metrics = _measure_layout(compacted_rows, fontsize)
+        if compact_metrics['required_height_px'] <= metrics['required_height_px']:
+            state_rows = compacted_rows
+            metrics = compact_metrics
+            using_compact_labels = True
+            applied_fallbacks.append('compact_label_mapping')
+
+    while metrics['required_height_px'] > available_height_px and fontsize > min_fontsize:
+        fontsize = max(min_fontsize, fontsize - 0.4)
+        metrics = _measure_layout(state_rows, fontsize)
+    if fontsize < base_fontsize:
+        applied_fallbacks.append('reduced_fontsize')
+
+    overflow_rows = []
+    deferred_rows = []
+
+    table = ax.table(
+        cellText=state_rows,
+        colLabels=[title, 'Value'],
+        cellLoc='center',
+        colWidths=[metrics['label_fraction'], metrics['value_fraction']],
+        bbox=[rect['x'], rect['y'], rect['width'], rect['height']],
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(fontsize)
+
+    for (row_index, col_index), cell in table.get_celld().items():
+        cell.PAD = max(cell.PAD, cell_padding_points / 10.0)
+        txt = cell.get_text()
+        if row_index == 0:
+            txt.set_fontweight(header_fontweight)
+            txt.set_fontsize(fontsize * 1.05)
+        else:
+            txt.set_fontsize(fontsize)
+        if col_index == 0:
+            txt.set_ha('left')
+        else:
+            txt.set_ha('right')
+        txt.set_va('center')
+        if _uses_symbol_font_fallback(txt.get_text()):
+            txt.set_fontfamily('DejaVu Sans')
+
+    row_heights = None
+    if explicit_row_heights:
+        row_heights = [float(v) for v in explicit_row_heights]
+        apply_explicit_table_row_heights(table, row_heights=row_heights, ncols=2)
+
+    return {
+        'table': table,
+        'used_bounds': dict(rect),
+        'overflow': metrics['required_height_px'] > available_height_px,
+        'overflow_rows': overflow_rows,
+        'deferred_rows': deferred_rows,
+        'rendered_rows': state_rows,
+        'font_size': fontsize,
+        'used_compact_labels': using_compact_labels,
+        'fallbacks_applied': applied_fallbacks,
+        'explicit_row_heights': row_heights,
+    }
+
+
+def render_panel_table_in_panel_axes(
+    *,
+    ax,
+    title,
+    rows,
+    style_options=None,
+    row_height=None,
+    header_rows=1,
+    pad_y=0.02,
+    valign='top',
+):
+    """Render a side-panel table using panel-local axes coordinates.
+
+    The table always fills the provided panel axes (`[0, 0, 1, 1]`).
+    """
+
+    panel_rect = {'x': 0.0, 'y': 0.0, 'width': 1.0, 'height': 1.0}
+    del row_height
+    fig = ax.figure
+    fig.canvas.draw()
+    row_metrics = resolve_histogram_dashboard_row_metrics(
+        table_fontsize=float((style_options or {}).get('fontsize', 8.0)),
+        dpi=float(fig.dpi),
+    )
+    value_wrap_width = int(((style_options or {}).get('value_wrap_width', 0) or 0))
+    row_line_counts = []
+    for label, value in (rows or []):
+        label_text = str(label)
+        value_text = str(value)
+        if value_wrap_width > 0:
+            value_text = _wrap_table_value_text(value_text, width=value_wrap_width)
+        row_line_counts.append(resolve_table_row_line_count(label_text, value_text))
+    row_heights = _build_table_row_heights(
+        row_line_counts,
+        header_row_height_px=row_metrics['header_row_height_px'],
+        base_row_height_px=row_metrics['base_row_height_px'],
+        extra_line_height_px=row_metrics['extra_line_height_px'],
+        fig_height_px=float(ax.bbox.height),
+    )
+    content_height = sum(row_heights)
+    inner_rect = _resolve_inner_table_rect(
+        panel_rect,
+        row_count=len(rows or []),
+        row_height=content_height / max(1, len(row_heights)),
+        header_rows=header_rows,
+        pad_y=pad_y,
+        valign=valign,
+    )
+    inner_rect['height'] = min(1.0, content_height)
+
+    return render_panel_table(
+        ax=ax,
+        fig=ax.figure,
+        title=title,
+        rows=rows,
+        rect=inner_rect,
+        style_options={
+            **(style_options or {}),
+            'shared_row_metrics': row_metrics,
+            'explicit_row_heights': row_heights,
+        },
+    )
 
 def classify_capability_status(cp, cpk):
     """Classify capability readiness into scan-friendly quality tiers."""
@@ -1498,12 +2775,16 @@ def _apply_table_row_badge(ax_table, row_index, palette_key):
     column_indexes = sorted({col for (row, col) in cell_map.keys() if row == 0})
     if not column_indexes:
         column_indexes = [0, 1]
-
     for col_index in column_indexes:
         cell = cell_map.get((row_index, col_index))
         if cell is None:
             continue
         cell.set_facecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'])
+        border_style = STATUS_BORDER_STYLE_BY_PALETTE.get(palette_key, {})
+        cell.set_edgecolor(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
+        cell.set_linestyle(border_style.get('linestyle', 'solid'))
+        cell.set_linewidth(float(border_style.get('linewidth', 0.9)))
+        cell.set_hatch('')
         text = cell.get_text()
         text.set_color(SUMMARY_PLOT_PALETTE[f'{palette_key}_text'])
 
@@ -1545,6 +2826,10 @@ def _merge_table_row_cells(ax_table, row_index, col_index=0, *, col_span, text=N
 
 def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
     """Render a subtle colored quality badge near the chart title area."""
+    prefix = STATUS_ICON_PREFIX_BY_PALETTE.get(palette_key)
+    if prefix and label and not str(label).startswith((f'{prefix} ', '✓ ', '! ', '× ')):
+        label = f'{prefix} {label}'
+    border_style = STATUS_BORDER_STYLE_BY_PALETTE.get(palette_key, {})
     ax.text(
         x,
         y,
@@ -1554,10 +2839,14 @@ def add_quality_title_badge(ax, label, palette_key, *, x=0.01, y=1.02):
         va='bottom',
         fontsize=7.4,
         color=SUMMARY_PLOT_PALETTE[f'{palette_key}_text'],
+        fontfamily='DejaVu Sans' if _uses_symbol_font_fallback(label) else None,
         bbox={
             'boxstyle': 'round,pad=0.16',
             'fc': SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'],
-            'ec': SUMMARY_PLOT_PALETTE[f'{palette_key}_bg'],
+            'ec': SUMMARY_PLOT_PALETTE[f'{palette_key}_text'],
+            'linestyle': border_style.get('linestyle', 'solid'),
+            'linewidth': float(border_style.get('linewidth', 0.9)),
+            'hatch': border_style.get('hatch', ''),
             'alpha': 0.95,
         },
         zorder=6,
@@ -1794,9 +3083,10 @@ class ExportDataThread(QThread):
     @staticmethod
     def _save_summary_chart(fig, mode='workbook'):
         """Persist summary-sheet charts with a workbook-friendly rendering policy."""
+        export_dpi = 150
         save_kwargs = {
             'format': 'png',
-            'dpi': 150,
+            'dpi': export_dpi,
         }
         if mode == 'clipped':
             # Keep a fallback for charts that may require clipping fixes.
@@ -1805,6 +3095,34 @@ class ExportDataThread(QThread):
         image_buffer = BytesIO()
         fig.savefig(image_buffer, **save_kwargs)
         return image_buffer.getvalue()
+
+    @staticmethod
+    def _resolve_chart_cell_span(
+        fig,
+        *,
+        px_per_col=110.0,
+        px_per_row=20.0,
+        padding_cols=0,
+        padding_rows=1,
+        export_dpi=150.0,
+    ):
+        """Translate rendered figure size into worksheet cell spans."""
+
+        if fig is None:
+            return {'col_span': 1, 'row_span': 1}
+        resolved_export_dpi = max(1.0, float(export_dpi))
+        width_px = max(1.0, fig.get_figwidth() * resolved_export_dpi)
+        height_px = max(1.0, fig.get_figheight() * resolved_export_dpi)
+        return {
+            'col_span': max(1, int(np.ceil(width_px / float(px_per_col))) + int(padding_cols)),
+            'row_span': max(1, int(np.ceil(height_px / float(px_per_row))) + int(padding_rows)),
+        }
+
+    @staticmethod
+    def _insert_summary_image(worksheet, slot, image_data):
+        """Insert summary image and guard against missing worksheet backends."""
+
+        worksheet.insert_image(slot['row'], slot['col'], '', {'image_data': image_data})
 
     def _build_iqr_plot_payload(self, labels, values, sampled_group, *, grouping_active=False):
         strategy_labels = build_summary_panel_labels(labels or ['All'], grouping_active=grouping_active)
@@ -2960,6 +4278,11 @@ class ExportDataThread(QThread):
                             'sample_size': sample_size,
                             'nok_count': nok_count,
                             'nok_pct': (nok_count / sample_size),
+                            'observed_nok_count': nok_count,
+                            'observed_nok_pct': (nok_count / sample_size),
+                            'estimated_nok_pct': None,
+                            'estimated_nok_ppm': None,
+                            'estimated_yield_pct': None,
                             'normality_status': normality['status'],
                             'normality_text': normality['text'],
                             'normality_test_name': normality.get('test_name', 'Shapiro'),
@@ -2971,10 +4294,19 @@ class ExportDataThread(QThread):
                 summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
             summary_stats.setdefault('normality_test_name', 'Shapiro')
             summary_stats.setdefault('normality_p_value', None)
+            summary_stats.setdefault('observed_nok_count', summary_stats.get('nok_count', 0))
+            summary_stats.setdefault('observed_nok_pct', summary_stats.get('nok_pct', 0))
+            summary_stats.setdefault('estimated_nok_pct', None)
+            summary_stats.setdefault('estimated_nok_ppm', None)
+            summary_stats.setdefault('estimated_yield_pct', None)
+            meas_series = pd.to_numeric(header_group.get('MEAS'), errors='coerce')
+            if LSL is not None:
+                summary_stats.setdefault('observed_nok_below_lsl_count', int((meas_series < LSL).sum()))
+            if USL is not None:
+                summary_stats.setdefault('observed_nok_above_usl_count', int((meas_series > USL).sum()))
             summary_stats['usl'] = USL
             average = summary_stats['average']
             histogram_table_payload = build_histogram_table_data(summary_stats)
-            table_data = histogram_table_payload['rows']
             summary_table_composition = build_summary_table_composition(summary_stats, histogram_table_payload)
             capability_badge = summary_table_composition['capability_badge']
             histogram_row_badges = summary_table_composition['histogram_row_badges']
@@ -2993,21 +4325,29 @@ class ExportDataThread(QThread):
             scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
 
             chart_mp_enabled = self._chart_executor is not None and len(header_group) >= 2500
-            precomputed_density_curve = None
+            precomputed_distribution_fit = None
             precomputed_trend_payload = None
             if chart_mp_enabled:
                 try:
-                    density_future = self._chart_executor.submit(build_histogram_density_curve_payload, sampled_histogram_group['MEAS'])
+                    distribution_fit_future = self._chart_executor.submit(
+                        fit_measurement_distribution,
+                        sampled_histogram_group['MEAS'],
+                        lsl=LSL,
+                        usl=USL,
+                        nom=nom,
+                        point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                        include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
+                    )
                     trend_future = self._chart_executor.submit(
                         build_trend_plot_payload,
                         sampled_trend_group,
                         grouping_active=grouping_applied,
                         label_column=distribution_key,
                     )
-                    precomputed_density_curve = density_future.result()
+                    precomputed_distribution_fit = distribution_fit_future.result()
                     precomputed_trend_payload = trend_future.result()
                 except Exception:
-                    precomputed_density_curve = None
+                    precomputed_distribution_fit = None
                     precomputed_trend_payload = None
 
             prep_executor = self._summary_prep_executor
@@ -3094,6 +4434,28 @@ class ExportDataThread(QThread):
             summary_anchors = build_summary_image_anchor_plan(col)
             panel_plan = build_summary_panel_write_plan(summary_anchors, header)
             header_cell = panel_plan['header_cell']
+            default_image_slots = panel_plan['image_slots']
+            distribution_overflow_cols = 0
+
+            def _reserve_summary_image_slot(chart_name, fig):
+                nonlocal distribution_overflow_cols
+
+                default_slot = dict(default_image_slots.get(chart_name, default_image_slots['distribution']))
+                if chart_name == 'distribution':
+                    span = self._resolve_chart_cell_span(fig)
+                    distribution_end_col = int(default_slot['col']) + int(span.get('col_span', 1))
+                    default_iqr_col = int(default_image_slots.get('iqr', default_slot)['col'])
+                    distribution_overflow_cols = max(0, distribution_end_col - default_iqr_col)
+                    return default_slot
+
+                if chart_name == 'iqr':
+                    return {
+                        'row': default_slot['row'],
+                        'col': int(default_slot['col']) + int(distribution_overflow_cols),
+                    }
+
+                return default_slot
+
             write_start = time.perf_counter()
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
             summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, panel_subtitle)
@@ -3104,7 +4466,8 @@ class ExportDataThread(QThread):
                     apply_summary_plot_theme()
                     chart_start = time.perf_counter()
 
-                    fig, ax = plt.subplots(figsize=(6, 4))
+                    categorical_strategy = prepare_categorical_x_axis(distribution_labels)
+                    fig, ax = plt.subplots(figsize=(categorical_strategy['recommended_fig_width'], 4))
                     if can_render_violin:
                         render_violin(
                             ax,
@@ -3132,7 +4495,7 @@ class ExportDataThread(QThread):
                             render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
 
                     apply_minimal_axis_style(ax, grid_axis='y')
-                    apply_shared_x_axis_label_strategy(
+                    axis_layout = apply_shared_x_axis_label_strategy(
                         ax,
                         distribution_labels,
                         positions=label_positions,
@@ -3145,14 +4508,14 @@ class ExportDataThread(QThread):
                     ax.set_xlabel(distribution_x_axis_label)
                     ax.set_ylabel('Measurement')
                     ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
-                    move_legend_to_figure(ax)
-                    plt.subplots_adjust(right=0.8)
+                    figure_legend = move_legend_to_figure(ax)
+                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
 
-                    distribution_slot = panel_plan['image_slots']['distribution']
+                    distribution_slot = _reserve_summary_image_slot('distribution', fig)
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(distribution_slot['row'], distribution_slot['col'], '', {'image_data': image_data})
+                    self._insert_summary_image(summary_worksheet, distribution_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     if self._check_canceled():
@@ -3168,13 +4531,14 @@ class ExportDataThread(QThread):
             if self._summary_chart_required('iqr'):
                 try:
                     chart_start = time.perf_counter()
-                    fig, ax = plt.subplots(figsize=(6, 4))
                     boxplot_labels, boxplot_values = self._build_iqr_plot_payload(
                         iqr_labels,
                         iqr_values,
                         sampled_iqr_group,
                         grouping_active=grouping_applied,
                     )
+                    iqr_strategy = prepare_categorical_x_axis(boxplot_labels)
+                    fig, ax = plt.subplots(figsize=(iqr_strategy['recommended_fig_width'], 4))
                     render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
                     render_tolerance_band(
                         ax,
@@ -3185,9 +4549,9 @@ class ExportDataThread(QThread):
                     )
                     render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
                     add_iqr_boxplot_legend(ax, include_tolerance_refs=False)
-                    move_legend_to_figure(ax)
+                    figure_legend = move_legend_to_figure(ax)
                     apply_minimal_axis_style(ax, grid_axis='y')
-                    apply_shared_x_axis_label_strategy(
+                    axis_layout = apply_shared_x_axis_label_strategy(
                         ax,
                         boxplot_labels,
                         positions=list(range(1, len(boxplot_labels) + 1)),
@@ -3196,17 +4560,17 @@ class ExportDataThread(QThread):
                     ax.set_xlabel('Group')
                     ax.set_ylabel('Measurement')
                     ax.set_title(build_wrapped_chart_title(header), pad=20)
-                    plt.subplots_adjust(right=0.8)
 
                     current_y_limits = ax.get_ylim()
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
+                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
 
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    iqr_slot = panel_plan['image_slots']['iqr']
+                    iqr_slot = _reserve_summary_image_slot('iqr', fig)
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(iqr_slot['row'], iqr_slot['col'], '', {'image_data': image_data})
+                    self._insert_summary_image(summary_worksheet, iqr_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     if self._check_canceled():
@@ -3218,122 +4582,270 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    histogram_figsize = (6.2, 4)
+                    base_histogram_figsize = (8.8, 4.0)
                     chart_start = time.perf_counter()
-                    fig, ax = plt.subplots(figsize=histogram_figsize)
+
+                    distribution_fit_result = precomputed_distribution_fit
+                    if distribution_fit_result is None:
+                        distribution_fit_result = fit_measurement_distribution(
+                            sampled_histogram_group['MEAS'],
+                            lsl=LSL,
+                            usl=USL,
+                            nom=nom,
+                            point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                            include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
+                        )
+
+                    summary_stats.update(compute_estimated_tail_metrics(distribution_fit_result, lsl=LSL, usl=USL))
+                    histogram_table_payload = build_histogram_table_data(summary_stats)
+                    histogram_table_payload = _apply_non_normal_cpk_reference_label(
+                        histogram_table_payload,
+                        distribution_fit_result,
+                        summary_stats=summary_stats,
+                    )
+                    non_normal_reference_mode = _is_non_normal_capability_reference_model(distribution_fit_result)
+                    statistics_rows = histogram_table_payload['rows']
+                    distribution_fit_rows = _build_distribution_fit_table_rows(
+                        distribution_fit_result,
+                        lsl=LSL,
+                        usl=USL,
+                        summary_stats=summary_stats,
+                    )
+                    unified_rows = _build_unified_histogram_dashboard_rows(
+                        statistics_rows=statistics_rows,
+                        distribution_fit_rows=distribution_fit_rows,
+                    )
+
+                    histogram_figsize = base_histogram_figsize
+                    fig = plt.figure(figsize=histogram_figsize)
+                    histogram_font_sizes = compute_histogram_font_sizes(
+                        histogram_figsize,
+                        has_table=True,
+                        readability_scale=self.summary_plot_scale,
+                    )
+
+                    panel_rects = compute_histogram_plot_with_right_info_layout(
+                        histogram_figsize,
+                        table_fontsize=histogram_font_sizes['table_fontsize'],
+                        fit_row_count=0,
+                        stats_row_count=len(unified_rows),
+                        fit_rows=[],
+                        stats_rows=unified_rows,
+                        note_line_count=0,
+                        right_container_width_hint=0.34,
+                        dpi=fig.dpi,
+                    )
+                    assert_non_overlapping_rectangles(
+                        {
+                            'plot_rect': panel_rects['plot_rect'],
+                            'right_table_rect': panel_rects['right_container_rect'],
+                            'footer_rect': panel_rects['footer_rect'],
+                        }
+                    )
+
+                    plot_rect = panel_rects['plot_rect']
+                    right_table_rect = panel_rects['right_container_rect']
+
+                    plot_ax = fig.add_axes([
+                        plot_rect['x'],
+                        plot_rect['y'],
+                        plot_rect['width'],
+                        plot_rect['height'],
+                    ])
+                    right_table_ax = fig.add_axes([
+                        right_table_rect['x'],
+                        right_table_rect['y'],
+                        right_table_rect['width'],
+                        right_table_rect['height'],
+                    ])
+                    right_table_ax.set_axis_off()
+
+
                     histogram_render_meta = render_histogram(
-                        ax,
+                        plot_ax,
                         sampled_histogram_group,
                         lsl=LSL,
                         usl=USL,
                         group_column=distribution_key if grouping_applied else None,
                     )
 
-                    histogram_font_sizes = compute_histogram_font_sizes(
-                        histogram_figsize,
-                        has_table=True,
-                        readability_scale=self.summary_plot_scale,
-                    )
-                    histogram_table_layout = compute_histogram_table_layout(
-                        histogram_figsize,
-                        table_fontsize=histogram_font_sizes['table_fontsize'],
-                        has_table=True,
-                    )
+                    table_style_options = {
+                        'fontsize': histogram_font_sizes['table_fontsize'],
+                        'min_fontsize': 7.4,
+                        'max_fontsize': 10.4,
+                        'cell_padding_points': 2.2,
+                        'compact_label_mapping': {
+                            **_DISTRIBUTION_FIT_COMPACT_LABELS,
+                            'Normality': 'Norm.',
+                        },
+                    }
 
-                    table_render_data = build_histogram_table_render_data(table_data)
-                    table_bbox_x = 1.03
-                    table_bbox_width = min(0.56, histogram_table_layout['table_bbox_width'] + 0.06)
-                    ax_table = plt.table(
-                        cellText=table_render_data,
-                        colLabels=['Statistic', 'Value'],
-                        cellLoc='center',
-                        loc='right',
-                        bbox=[table_bbox_x, 0.06, table_bbox_width, 0.94],
+                    unified_table_meta = render_panel_table_in_panel_axes(
+                        ax=right_table_ax,
+                        title='Parameter',
+                        rows=unified_rows,
+                        style_options={
+                            **table_style_options,
+                            'explicit_label_fraction': _UNIFIED_HISTOGRAM_LABEL_FRACTION,
+                            'explicit_value_fraction': _UNIFIED_HISTOGRAM_VALUE_FRACTION,
+                            'value_wrap_width': 26,
+                            'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
+                        },
+                        row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
+                        pad_y=0.0,
+                        valign='top',
                     )
-                    ax_table.auto_set_font_size(False)
-                    ax_table.set_fontsize(histogram_font_sizes['table_fontsize'])
+                    unified_table = unified_table_meta['table']
+
+                    non_normal_row_badges = dict(histogram_row_badges or {})
+                    if non_normal_reference_mode:
+                        for label in ('Cp (ref)', 'Cpk (ref)'):
+                            non_normal_row_badges[label] = {'palette_key': 'quality_unknown'}
+
+                    fit_quality_value = None
+                    for label, value in unified_table_meta.get('rendered_rows', []):
+                        if label == 'Fit quality':
+                            fit_quality_value = str(value).strip().lower()
+                            break
+
+                    fit_quality_palette = None
+                    if fit_quality_value in {'weak', 'unreliable'}:
+                        fit_quality_palette = 'fit_quality_low'
+                    elif fit_quality_value in {'medium', 'marginal'}:
+                        fit_quality_palette = 'fit_quality_medium'
+                    elif fit_quality_value in {'good', 'strong', 'capable'}:
+                        fit_quality_palette = 'fit_quality_high'
+                    if fit_quality_palette:
+                        non_normal_row_badges['Fit quality'] = {'palette_key': fit_quality_palette}
+
                     style_histogram_stats_table(
-                        ax_table,
-                        table_render_data,
+                        unified_table,
+                        unified_table_meta['rendered_rows'],
                         capability_badge=capability_badge,
-                        capability_row_badges=histogram_row_badges,
+                        capability_row_badges=non_normal_row_badges,
+                    )
+                    _apply_table_section_separator(
+                        unified_table,
+                        unified_table_meta['rendered_rows'],
+                        transition_label='Model',
                     )
                     adjust_histogram_stats_table_geometry(
-                        ax_table,
-                        statistic_col_width_ratio=0.54,
-                        row_height_scale=1.15,
+                        unified_table,
+                        statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
+                        row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
+                        explicit_row_heights=unified_table_meta.get('explicit_row_heights'),
                     )
 
-                    normality_note = summary_stats.get('normality_text') or 'Shapiro p = N/A\nUnknown'
-                    normality_table = plt.table(
-                        cellText=[[normality_note]],
-                        cellLoc='center',
-                        loc='right',
-                        bbox=[table_bbox_x, -0.17, table_bbox_width, 0.15],
+                    selected_model_curve = distribution_fit_result.get('selected_model_pdf')
+                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
+                    x_left, x_right = plot_ax.get_xlim()
+                    x_span = abs(float(x_right) - float(x_left))
+                    annotation_specs, _ = compute_histogram_annotation_rows(
+                        annotation_specs,
+                        distance_threshold=0.04,
+                        threshold_mode='axis_fraction',
+                        x_span=x_span,
+                        base_text_y_axes=1.01,
+                        row_step=0.025,
                     )
-                    normality_table.auto_set_font_size(False)
-                    normality_table.set_fontsize(histogram_font_sizes['table_fontsize'])
-                    normality_cell = normality_table.get_celld()[(0, 0)]
-                    normality_badge = classify_normality_status(summary_stats.get('normality_status'))
-                    normality_cell.set_facecolor(SUMMARY_PLOT_PALETTE[f"{normality_badge['palette_key']}_bg"])
-                    normality_cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
-                    normality_cell.set_linewidth(0.45)
-                    normality_cell.PAD = 0.03
-                    normality_cell.get_text().set_color(SUMMARY_PLOT_PALETTE[f"{normality_badge['palette_key']}_text"])
-                    normality_cell.get_text().set_ha('center')
-                    normality_cell.get_text().set_va('center')
 
-                    density_curve_mode = 'normal_fit' if summary_stats.get('normality_status') == 'normal' else 'kde'
-                    density_curve = None
-                    if density_curve_mode == 'normal_fit':
-                        density_curve = precomputed_density_curve
-                    if density_curve is None:
-                        density_curve = build_histogram_density_curve_payload(
-                            sampled_histogram_group['MEAS'],
-                            point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
-                            mode=density_curve_mode,
+                    if selected_model_curve is not None:
+                        model_curve_style = resolve_selected_model_curve_style(distribution_fit_result)
+                        model_curve_y = np.asarray(selected_model_curve['y'], dtype=float)
+                        count_scale_factor = histogram_render_meta.get('count_scale_factor')
+                        if count_scale_factor is not None:
+                            model_curve_y = model_curve_y * float(count_scale_factor)
+                        render_density_line(
+                            plot_ax,
+                            selected_model_curve['x'],
+                            model_curve_y,
+                            alpha=model_curve_style['alpha'],
+                            linewidth=model_curve_style['linewidth'],
                         )
-                    if density_curve is not None:
-                        render_density_line(ax, density_curve['x'], density_curve['y'])
+                        distribution_fit_result['selected_model_pdf'] = {
+                            **selected_model_curve,
+                            'y': model_curve_y,
+                        }
+                        render_modeled_tail_shading(plot_ax, distribution_fit_result, lsl=LSL, usl=USL)
+                    kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
+                    if kde_reference_curve is not None:
+                        kde_curve_y = np.asarray(kde_reference_curve['y'], dtype=float)
+                        count_scale_factor = histogram_render_meta.get('count_scale_factor')
+                        if count_scale_factor is not None:
+                            kde_curve_y = kde_curve_y * float(count_scale_factor)
+                        render_density_line(
+                            plot_ax,
+                            kde_reference_curve['x'],
+                            kde_curve_y,
+                            color=SUMMARY_PLOT_PALETTE['density_line'],
+                            alpha=0.22,
+                            linewidth=0.9,
+                            linestyle='--',
+                        )
+                        plot_ax.text(
+                            0.02,
+                            0.02,
+                            'Dashed KDE: descriptive only',
+                            transform=plot_ax.transAxes,
+                            ha='left',
+                            va='bottom',
+                            fontsize=max(6.5, histogram_font_sizes['table_fontsize'] - 1.0),
+                            color='#4d5968',
+                            bbox={
+                                'boxstyle': 'round,pad=0.16',
+                                'facecolor': (1.0, 1.0, 1.0, 0.74),
+                                'edgecolor': '#c7ced7',
+                                'linewidth': 0.45,
+                            },
+                            zorder=8,
+                        )
+
+                    lock_histogram_y_axis_to_bar_heights(plot_ax)
+
+                    fit_warning = distribution_fit_result.get('warning')
+                    if fit_warning:
+                        logger.warning("%s Header=%s", fit_warning, header)
 
                     mean_line_style = build_histogram_mean_line_style()
-                    ax.axvline(average, **mean_line_style)
+                    plot_ax.axvline(average, **mean_line_style)
                     render_tolerance_band(
-                        ax,
+                        plot_ax,
                         nom,
                         LSL,
                         USL,
                         one_sided=is_one_sided_geometric_tolerance(nom, LSL),
                         orientation='vertical',
                     )
-                    render_spec_reference_lines(ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
-                    ax.set_xlabel('Measurement')
+                    render_spec_reference_lines(plot_ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
+                    plot_ax.set_xlabel('Measurement')
                     if not histogram_render_meta.get('is_grouped'):
-                        ax.set_ylabel('Count')
-                    histogram_title_pad = 26
-                    ax.set_title(build_wrapped_chart_title(header), pad=histogram_title_pad)
-                    apply_minimal_axis_style(ax, grid_axis='y')
-
-                    annotation_box = {'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'], 'alpha': 0.94}
-                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
-                    max_annotation_row = max(
-                        (annotation.get('text_y_axes', 1.01) for annotation in annotation_specs),
-                        default=1.01,
+                        plot_ax.set_ylabel('Count')
+                    title_artist = render_histogram_title(
+                        plot_ax,
+                        build_wrapped_chart_title(header),
+                        fontsize=max(histogram_font_sizes['annotation_fontsize'] + 1.1, 8.8),
                     )
+                    apply_minimal_axis_style(plot_ax, grid_axis='y')
+
+                    annotation_box = {
+                        'boxstyle': 'round,pad=0.15',
+                        'fc': 'white',
+                        'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                        'alpha': 0.94,
+                        'plot_rect': plot_rect,
+                        'title_artist': title_artist,
+                    }
                     render_histogram_annotations(
-                        ax,
+                        plot_ax,
                         annotation_specs,
                         annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
                         annotation_box=annotation_box,
                     )
-
-                    histogram_top_margin = max(0.82, 0.82 + max(0.0, max_annotation_row - 1.01))
-                    plt.subplots_adjust(right=histogram_table_layout['subplot_right'], top=histogram_top_margin, bottom=0.18)
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    histogram_slot = panel_plan['image_slots']['histogram']
+                    histogram_slot = _reserve_summary_image_slot('histogram', fig)
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(histogram_slot['row'], histogram_slot['col'], '', {'image_data': image_data})
+                    self._insert_summary_image(summary_worksheet, histogram_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
                     if self._check_canceled():
@@ -3387,9 +4899,9 @@ class ExportDataThread(QThread):
 
                     image_data = self._register_chart_image(self._save_summary_chart(fig))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    trend_slot = panel_plan['image_slots']['trend']
+                    trend_slot = _reserve_summary_image_slot('trend', fig)
                     write_start = time.perf_counter()
-                    summary_worksheet.insert_image(trend_slot['row'], trend_slot['col'], '', {'image_data': image_data})
+                    self._insert_summary_image(summary_worksheet, trend_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
                     if self._check_canceled():
                         plt.close(fig)

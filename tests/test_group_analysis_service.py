@@ -243,6 +243,27 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(metric['spec_status'], 'NOM_MISMATCH')
         self.assertEqual(len(metric['pairwise_rows']), 0)
         self.assertTrue(all('SPEC?' in row['flags'] for row in metric['descriptive_stats']))
+    def test_build_payload_adds_distribution_summary_fields(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 12,
+                'HEADER - AX': ['M1'] * 12,
+                'GROUP': ['A'] * 6 + ['B'] * 6,
+                'MEAS': [10.0, 10.1, 10.2, 9.9, 10.0, 10.3, 9.0, 9.2, 9.1, 9.3, 9.4, 9.1],
+                'LSL': [8.0] * 12,
+                'NOMINAL': [10.0] * 12,
+                'USL': [12.0] * 12,
+            }
+        )
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+
+        metric = payload['metric_rows'][0]
+        self.assertIn('distribution_difference', metric)
+        self.assertIn('comment / verdict', metric['distribution_difference'])
+        self.assertTrue(all('best_fit_model' in row for row in metric['descriptive_stats']))
+        self.assertTrue(all('fit_quality' in row for row in metric['descriptive_stats']))
+
 
     def test_auto_scope_resolution_uses_reference_cardinality(self):
         self.assertEqual(resolve_group_analysis_scope('auto', 1), 'single_reference')
@@ -365,6 +386,8 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIsNotNone(payload['cp'])
         self.assertIsNotNone(payload['capability'])
         self.assertIsNotNone(payload['cpk'])
+        self.assertIsInstance(payload['capability_ci']['cp'], dict)
+        self.assertIsInstance(payload['capability_ci']['cpk'], dict)
 
     def test_capability_payload_upper_only_mode_returns_cpk_plus(self):
         payload = compute_capability_payload([9.9, 10.0, 10.1, 10.2], {'lsl': None, 'nominal': 10.0, 'usl': 11.0})
@@ -375,6 +398,8 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIsNone(payload['cp'])
         self.assertIsNotNone(payload['capability'])
         self.assertEqual(payload['capability'], payload['cpk'])
+        self.assertIsNone(payload['capability_ci']['cp'])
+        self.assertIsInstance(payload['capability_ci']['cpk'], dict)
 
     def test_capability_payload_lower_only_mode_returns_cpk_minus(self):
         payload = compute_capability_payload([9.9, 10.0, 10.1, 10.2], {'lsl': 9.0, 'nominal': 10.0, 'usl': None})

@@ -22,7 +22,8 @@ import pandas as pd
 from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.export_grouping_utils import normalize_group_labels
-from modules.stats_utils import safe_process_capability
+from modules.distribution_shape_analysis import compute_distribution_difference
+from modules.stats_utils import compute_capability_confidence_intervals, safe_process_capability
 
 _SKIP_REASON_MESSAGES = {
     'forced_single_reference_scope_mismatch': (
@@ -567,6 +568,9 @@ def build_metric_insights(metric_row):
                 )
             )
 
+    distribution_difference = metric_row.get('distribution_difference') or {}
+    shape_verdict = distribution_difference.get('comment / verdict')
+
     if pairwise_rows:
         best = sorted(
             pairwise_rows,
@@ -574,14 +578,17 @@ def build_metric_insights(metric_row):
         )[0]
         lines.append(
             (
-                f"Strongest pairwise signal: {best.get('group_a')} vs {best.get('group_b')} "
+                f"Strongest pairwise location signal: {best.get('group_a')} vs {best.get('group_b')} "
                 f"(adj p={best.get('adjusted_p_value')}, comment={best.get('comment')})."
             )
         )
     elif metric_row.get('analysis_policy', {}).get('allow_pairwise'):
-        lines.append('Pairwise enabled but no valid A/B rows were produced.')
+        lines.append('Pairwise location test enabled but no valid A/B rows were produced.')
     else:
-        lines.append('Pairwise interpretation is disabled for this metric.')
+        lines.append('Pairwise location interpretation is disabled for this metric.')
+
+    if shape_verdict:
+        lines.append(f"Distribution shape: {shape_verdict}")
 
     return lines[:3]
 
@@ -616,6 +623,7 @@ def compute_capability_payload(values, spec_payload):
             'capability': None,
             'capability_type': None,
             'cpk': None,
+            'capability_ci': {'cp': None, 'cpk': None},
             'status': status,
             'sigma': sigma,
             'mean': mean_value,
@@ -701,12 +709,18 @@ def compute_capability_payload(values, spec_payload):
     capability_value = float(cpk_value)
     cpk_value = float(cpk_value)
     status = 'ok' if cp_value is not None or cpk_value is not None else 'not_applicable'
+    capability_ci = compute_capability_confidence_intervals(
+        sample_size=arr.size,
+        cp=cp_value,
+        cpk=cpk_value,
+    )
 
     return {
         'cp': cp_value,
         'capability': capability_value,
         'capability_type': capability_type,
         'cpk': cpk_value,
+        'capability_ci': capability_ci,
         'status': status,
         'sigma': sigma,
         'mean': mean_value,
@@ -1163,6 +1177,22 @@ def build_group_analysis_payload(
                 f"{diagnostics_comment} Histogram omitted: {_plot_skip_reason_message(histogram_meta.get('skip_reason'))}."
             )
 
+        distribution_analysis = compute_distribution_difference(
+            metric_identity,
+            grouped_values,
+            alpha=alpha,
+            correction_method=correction_method,
+        )
+        profile_by_group = {
+            row.get('Group'): row
+            for row in distribution_analysis.get('profile_rows', [])
+        }
+        for desc_row in descriptive_stats:
+            group_profile = profile_by_group.get(desc_row.get('group')) or {}
+            desc_row['best_fit_model'] = group_profile.get('Best fit model')
+            desc_row['fit_quality'] = group_profile.get('Fit quality')
+            desc_row['distribution_shape_caution'] = group_profile.get('Warning / notes summary')
+
         metrics.append(
             {
                 'metric': metric_identity,
@@ -1170,6 +1200,8 @@ def build_group_analysis_payload(
                 'group_count': len(populated_groups),
                 'descriptive_stats': descriptive_stats,
                 'pairwise_rows': pairwise_rows,
+                'distribution_difference': distribution_analysis.get('omnibus_row'),
+                'distribution_pairwise_rows': distribution_analysis.get('pairwise_rows', []),
                 'spec': spec_payload,
                 'spec_status': spec_status,
                 'spec_status_label': get_spec_status_label(spec_status),

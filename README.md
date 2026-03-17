@@ -84,6 +84,20 @@ Effect size caveats:
 - Two-group parametric paths report Cohen's *d*; non-parametric paths report Cliff's delta.
 - Multi-group rows use an omnibus effect (eta-squared by default), so pairwise practical interpretation should consider group imbalance and distribution shape.
 
+## Capability metrics legend (summary report)
+
+Histogram statistics tables now use capability terminology aligned with common SPC notation:
+
+- **Two-sided specs**: `Cp` and `Cpk` are shown.
+- **One-sided upper specs**: `Cp` is shown as not defined (`Cp (not defined for one-sided) ⓘ`), and capability is shown as **`Cpu`**.
+- **One-sided lower specs**: `Cp` is shown as not defined (`Cp (not defined for one-sided) ⓘ`), and capability is shown as **`Cpl`**.
+
+Examples of metric availability by spec type:
+
+- `Spec type: two-sided` → `Cp`, `Cpk`.
+- `Spec type: one-sided upper` → `Cp (not defined for one-sided) ⓘ`, `Cpu`.
+- `Spec type: one-sided lower` → `Cp (not defined for one-sided) ⓘ`, `Cpl`.
+
 ## Documentation map
 
 - Release highlights: [`CHANGELOG.md`](CHANGELOG.md)
@@ -95,11 +109,11 @@ Effect size caveats:
 
 ## Release metadata
 
-Current release highlight (`2026.03rc1(260307)`): UX improvements: faster group renaming, clearer extended-chart visuals, and cleaner workflow readability.
+Current release highlight (`2026.03rc1(260315)`): Major analytics update: histogram/chart readability improvements plus new capability confidence and safeguards for low-sample interpretation.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.03rc1(260307)`)
+### Changelog highlights (release `2026.03rc1(260315)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
