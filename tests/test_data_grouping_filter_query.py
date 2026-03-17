@@ -661,6 +661,28 @@ class TestDataGroupingReferenceDoubleClick(unittest.TestCase):
         self.assertEqual(captured['initial_group_name'], 'REF-42')
 
 
+class TestDataGroupingPartDoubleClick(unittest.TestCase):
+    def test_part_double_click_opens_create_group_flow(self):
+        from unittest.mock import Mock
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.create_group = Mock()
+
+        dialog.on_part_item_double_clicked(_FakeListItem(text='1', user_role='k1'))
+
+        dialog.create_group.assert_called_once_with()
+
+    def test_part_double_click_ignores_none_item(self):
+        from unittest.mock import Mock
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.create_group = Mock()
+
+        dialog.on_part_item_double_clicked(None)
+
+        dialog.create_group.assert_not_called()
+
+
 class TestDataGroupingSelectionRetention(unittest.TestCase):
     def test_populate_list_widgets_prefers_existing_group_name(self):
         from unittest.mock import patch
