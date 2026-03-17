@@ -99,6 +99,22 @@ class TestLicenseHardening(unittest.TestCase):
         self.assertFalse(LicenseKeyManager.validate_license_key(invalid, "00:11:22:33:44:55", public_key=None))
         self.assertIsNone(LicenseKeyManager.get_expiration_date_from_license_key(invalid))
 
+    def test_license_with_non_base64_tampering_is_rejected(self):
+        from modules.license_key_manager import LicenseKeyManager
+        from cryptography.hazmat.primitives import serialization
+
+        private_key, public_key = LicenseKeyManager.generate_rsa_key_pair()
+        private_key_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        hardware_id = "00:11:22:33:44:55"
+        valid_license = LicenseKeyManager.generate_license_key(hardware_id, 7, private_key_pem)
+        tampered = f"{valid_license}!"
+
+        self.assertFalse(LicenseKeyManager.validate_license_key(tampered, hardware_id, public_key))
+
 
 if __name__ == "__main__":
     unittest.main()
