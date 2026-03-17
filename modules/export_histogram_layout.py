@@ -28,6 +28,61 @@ _HISTOGRAM_RIGHT_STACK_GAP = 0.012
 _HISTOGRAM_RIGHT_COLUMN_LEFT_INSET = 0.010
 
 
+def compute_row_line_count(text):
+    """Return rendered line count for a table cell value."""
+    if text is None:
+        return 1
+    return max(1, str(text).count("\n") + 1)
+
+
+def resolve_table_row_line_count(label_text, value_text):
+    """Return per-row line count using both label and value columns."""
+    return max(
+        compute_row_line_count(label_text),
+        compute_row_line_count(value_text),
+    )
+
+
+def resolve_histogram_dashboard_row_metrics(*, table_fontsize=8.0, dpi=100.0):
+    """Resolve shared row-height metrics for histogram dashboard tables in pixels."""
+    del dpi
+    font_scale = max(0.85, min(1.35, float(table_fontsize) / 8.0))
+    return {
+        'base_row_height_px': 18.0 * font_scale,
+        'header_row_height_px': 20.0 * font_scale,
+        'extra_line_height_px': 11.0 * font_scale,
+        'panel_padding_px': 8.0 * font_scale,
+        'cell_pad': 0.12,
+    }
+
+
+def build_table_row_heights(row_line_counts, *, header_row_height_px, base_row_height_px, extra_line_height_px, fig_height_px):
+    """Build normalized row heights for a table (header + body rows)."""
+    safe_fig_height = max(1.0, float(fig_height_px))
+    heights_px = [float(header_row_height_px)]
+    for line_count in row_line_counts or []:
+        lines = max(1, int(line_count))
+        heights_px.append(float(base_row_height_px) + ((lines - 1) * float(extra_line_height_px)))
+    return [height_px / safe_fig_height for height_px in heights_px]
+
+
+def estimate_table_panel_height(
+    row_line_counts,
+    *,
+    base_row_height_px,
+    header_row_height_px,
+    extra_line_height_px,
+    panel_padding_px,
+    fig_height_px,
+):
+    """Estimate normalized panel height using shared line-aware row metrics."""
+    total_height_px = float(header_row_height_px) + (2.0 * float(panel_padding_px))
+    for line_count in row_line_counts or []:
+        lines = max(1, int(line_count))
+        total_height_px += float(base_row_height_px) + ((lines - 1) * float(extra_line_height_px))
+    return total_height_px / max(1.0, float(fig_height_px))
+
+
 def _clamp(value, lower, upper):
     return min(upper, max(lower, value))
 
@@ -170,8 +225,11 @@ def compute_histogram_plot_with_right_info_layout(
     table_fontsize=8.0,
     fit_row_count=0,
     stats_row_count=0,
+    fit_rows=None,
+    stats_rows=None,
     note_line_count=0,
     right_container_width_hint=None,
+    dpi=100.0,
 ):
     """Return non-overlapping rectangles for histogram + stacked right information column layout."""
 
@@ -229,8 +287,35 @@ def compute_histogram_plot_with_right_info_layout(
     del note_line_count
     footer_height = 0.0
 
-    stats_target = compute_panel_table_content_height(int(stats_row_count), row_height=0.056, header_rows=1, pad_y=0.018)
-    fit_target = compute_panel_table_content_height(int(fit_row_count), row_height=0.056, header_rows=1, pad_y=0.018)
+    fig_height = figure_size[1] if isinstance(figure_size, (tuple, list)) and len(figure_size) > 1 else 4.0
+    fig_height_px = max(1.0, float(fig_height) * float(dpi))
+    shared_metrics = resolve_histogram_dashboard_row_metrics(table_fontsize=table_fontsize, dpi=dpi)
+
+    fit_line_counts = [
+        resolve_table_row_line_count(label, value)
+        for label, value in (fit_rows or [])
+    ] or [1] * max(0, int(fit_row_count))
+    stats_line_counts = [
+        resolve_table_row_line_count(label, value)
+        for label, value in (stats_rows or [])
+    ] or [1] * max(0, int(stats_row_count))
+
+    stats_target = estimate_table_panel_height(
+        stats_line_counts,
+        base_row_height_px=shared_metrics['base_row_height_px'],
+        header_row_height_px=shared_metrics['header_row_height_px'],
+        extra_line_height_px=shared_metrics['extra_line_height_px'],
+        panel_padding_px=shared_metrics['panel_padding_px'],
+        fig_height_px=fig_height_px,
+    )
+    fit_target = estimate_table_panel_height(
+        fit_line_counts,
+        base_row_height_px=shared_metrics['base_row_height_px'],
+        header_row_height_px=shared_metrics['header_row_height_px'],
+        extra_line_height_px=shared_metrics['extra_line_height_px'],
+        panel_padding_px=shared_metrics['panel_padding_px'],
+        fig_height_px=fig_height_px,
+    )
     content_for_tables = max(0.0, content_height - _HISTOGRAM_RIGHT_STACK_GAP)
     total_target = max(1e-9, stats_target + fit_target)
     stats_height = content_for_tables * (stats_target / total_target)

@@ -10,10 +10,15 @@ from modules.export_histogram_layout import (
     HISTOGRAM_TITLE_BAND_HEIGHT,
     HISTOGRAM_MIN_NOTE_HEIGHT,
     HISTOGRAM_MIN_PLOT_WIDTH,
+    build_table_row_heights,
+    compute_row_line_count,
     compute_panel_table_content_height,
+    estimate_table_panel_height,
     assert_non_overlapping_rectangles,
     compute_histogram_panel_layout,
     compute_histogram_plot_with_right_info_layout,
+    resolve_histogram_dashboard_row_metrics,
+    resolve_table_row_line_count,
     rectangles_overlap,
     resolve_inner_table_rect,
 )
@@ -256,6 +261,52 @@ def test_compute_histogram_plot_with_right_info_layout_geometry_and_nesting():
         'stats_table_rect': rects['stats_table_rect'],
         'footer_rect': rects['footer_rect'],
     })
+
+
+def test_histogram_dashboard_row_height_helpers_are_line_aware_and_shared():
+    metrics = resolve_histogram_dashboard_row_metrics(table_fontsize=8.0, dpi=100)
+
+    assert compute_row_line_count('a\nb') == 2
+    assert resolve_table_row_line_count('left', 'right\nwrap') == 2
+    assert metrics['base_row_height_px'] < metrics['header_row_height_px']
+    assert metrics['extra_line_height_px'] < metrics['base_row_height_px']
+
+
+def test_estimate_table_panel_height_uses_shared_formula_for_wrapped_rows():
+    metrics = resolve_histogram_dashboard_row_metrics(table_fontsize=8.0, dpi=100)
+    fig_height_px = 400.0
+
+    panel_height = estimate_table_panel_height(
+        [1, 2],
+        base_row_height_px=metrics['base_row_height_px'],
+        header_row_height_px=metrics['header_row_height_px'],
+        extra_line_height_px=metrics['extra_line_height_px'],
+        panel_padding_px=metrics['panel_padding_px'],
+        fig_height_px=fig_height_px,
+    )
+    expected_px = (
+        metrics['header_row_height_px']
+        + (2.0 * metrics['panel_padding_px'])
+        + metrics['base_row_height_px']
+        + (metrics['base_row_height_px'] + metrics['extra_line_height_px'])
+    )
+    assert panel_height == pytest.approx(expected_px / fig_height_px)
+
+
+def test_build_table_row_heights_applies_extra_line_increment_not_full_multiplier():
+    metrics = resolve_histogram_dashboard_row_metrics(table_fontsize=8.0, dpi=100)
+    heights = build_table_row_heights(
+        [1, 2, 3],
+        header_row_height_px=metrics['header_row_height_px'],
+        base_row_height_px=metrics['base_row_height_px'],
+        extra_line_height_px=metrics['extra_line_height_px'],
+        fig_height_px=100.0,
+    )
+    heights_px = [value * 100.0 for value in heights]
+
+    assert heights_px[1] == pytest.approx(metrics['base_row_height_px'])
+    assert heights_px[2] == pytest.approx(metrics['base_row_height_px'] + metrics['extra_line_height_px'])
+    assert heights_px[3] == pytest.approx(metrics['base_row_height_px'] + (2.0 * metrics['extra_line_height_px']))
 
 
 def test_histogram_right_info_layout_keeps_plot_dominant_vs_old_composition():

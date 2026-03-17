@@ -137,9 +137,13 @@ from modules.export_workbook_planning_helpers import (
 )
 from modules.export_histogram_layout import (
     assert_non_overlapping_rectangles as _assert_non_overlapping_rectangles,
+    build_table_row_heights as _build_table_row_heights,
+    compute_row_line_count as _compute_row_line_count,
     compute_histogram_panel_layout as _compute_histogram_panel_layout,
     compute_histogram_plot_with_right_info_layout as _compute_histogram_plot_with_right_info_layout,
+    resolve_histogram_dashboard_row_metrics as _resolve_histogram_dashboard_row_metrics,
     resolve_inner_table_rect as _resolve_inner_table_rect,
+    resolve_table_row_line_count as _resolve_table_row_line_count,
 )
 from modules.export_summary_composition_service import (
     build_summary_table_composition as _build_summary_table_composition,
@@ -956,8 +960,11 @@ def compute_histogram_plot_with_right_info_layout(
     table_fontsize=8.0,
     fit_row_count=0,
     stats_row_count=0,
+    fit_rows=None,
+    stats_rows=None,
     note_line_count=0,
     right_container_width_hint=None,
+    dpi=100.0,
 ):
     """Compute plot + right info-column rectangles for histogram exports."""
     return _compute_histogram_plot_with_right_info_layout(
@@ -965,9 +972,27 @@ def compute_histogram_plot_with_right_info_layout(
         table_fontsize=table_fontsize,
         fit_row_count=fit_row_count,
         stats_row_count=stats_row_count,
+        fit_rows=fit_rows,
+        stats_rows=stats_rows,
         note_line_count=note_line_count,
         right_container_width_hint=right_container_width_hint,
+        dpi=dpi,
     )
+
+
+def compute_row_line_count(text):
+    """Return line count for a table cell value."""
+    return _compute_row_line_count(text)
+
+
+def resolve_table_row_line_count(label_text, value_text):
+    """Return row line count based on both label and value text."""
+    return _resolve_table_row_line_count(label_text, value_text)
+
+
+def resolve_histogram_dashboard_row_metrics(*, table_fontsize, dpi):
+    """Return shared row metrics for histogram dashboard tables."""
+    return _resolve_histogram_dashboard_row_metrics(table_fontsize=table_fontsize, dpi=dpi)
 
 
 def assert_non_overlapping_rectangles(rectangles):
@@ -2320,6 +2345,7 @@ def adjust_histogram_stats_table_geometry(
     *,
     statistic_col_width_ratio=0.72,
     row_height_scale=1.12,
+    explicit_row_heights=None,
 ):
     """Increase histogram stats-table readability via column and row geometry."""
     if ax_table is None:
@@ -2333,7 +2359,7 @@ def adjust_histogram_stats_table_geometry(
     label_col0_ratio = statistic_area_ratio * 0.78
     label_col1_ratio = statistic_area_ratio * 0.22
     value_ratio = 1.0 - statistic_area_ratio
-    safe_row_scale = min(3.1, max(0.9, float(row_height_scale)))
+    del row_height_scale
     border_linewidth = 0.45
     cell_padding = 0.12
 
@@ -2349,22 +2375,6 @@ def adjust_histogram_stats_table_geometry(
             and table_cells.get((row, 2)) is not None
             and not table_cells[(row, 2)].get_visible()
         }
-
-    row_line_multipliers = {}
-    for row_index in sorted({row for (row, _col) in table_cells.keys()}):
-        if row_index == 0:
-            row_line_multipliers[row_index] = 1.0
-            continue
-        visible_cells = [
-            table_cells[(row_index, col)]
-            for col in sorted({col for (row, col) in table_cells.keys() if row == row_index})
-            if table_cells.get((row_index, col)) is not None and table_cells[(row_index, col)].get_visible()
-        ]
-        max_line_count = 1
-        for visible_cell in visible_cells:
-            text_value = visible_cell.get_text().get_text()
-            max_line_count = max(max_line_count, len(str(text_value).splitlines()))
-        row_line_multipliers[row_index] = float(max_line_count)
 
     for (row_index, col_index), cell in table_cells.items():
         if not cell.get_visible():
@@ -2391,13 +2401,26 @@ def adjust_histogram_stats_table_geometry(
                 text.set_ha('right')
                 text.set_x(0.94)
 
-        if row_index not in full_width_rows:
-            row_multiplier = row_line_multipliers.get(row_index, 1.0)
-            cell.set_height(cell.get_height() * safe_row_scale * row_multiplier)
-
         cell.set_edgecolor(SUMMARY_PLOT_PALETTE['annotation_box_edge'])
         cell.set_linewidth(border_linewidth)
         cell.PAD = cell_padding
+
+    if explicit_row_heights:
+        apply_explicit_table_row_heights(
+            ax_table,
+            row_heights=list(explicit_row_heights),
+            ncols=(3 if has_three_columns else 2),
+        )
+
+
+def apply_explicit_table_row_heights(table, *, row_heights, ncols):
+    """Apply explicit heights to every table row/cell."""
+    for row_index, row_height in enumerate(row_heights):
+        for col_index in range(max(1, int(ncols))):
+            cell = table.get_celld().get((row_index, col_index))
+            if cell is None or not cell.get_visible():
+                continue
+            cell.set_height(float(row_height))
 
 
 def _measure_text_extent(fig, renderer, text, *, fontsize, fontweight='normal'):
@@ -2447,6 +2470,8 @@ def render_panel_table(
     low_priority_labels = set(options.get('low_priority_labels') or set())
     low_priority_labels.update(compact_label_mapping.get(label, label) for label in list(low_priority_labels))
     cell_padding_points = float(options.get('cell_padding_points', 2.2))
+    explicit_row_heights = options.get('explicit_row_heights')
+    shared_row_metrics = options.get('shared_row_metrics')
 
     normalized_rows = []
     for row in rows or []:
@@ -2460,8 +2485,8 @@ def render_panel_table(
     # Ensure renderer-backed text metrics are current.
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
-    fig_height_px = float(fig.bbox.height)
-    available_height_px = max(1.0, rect['height'] * fig_height_px)
+    ax_height_px = max(1.0, float(ax.bbox.height))
+    available_height_px = max(1.0, rect['height'] * ax_height_px)
     cell_padding_px = cell_padding_points * (fig.dpi / 72.0)
 
     state_rows = list(normalized_rows)
@@ -2491,13 +2516,18 @@ def render_panel_table(
             label_fraction /= total_fraction
             value_fraction /= total_fraction
 
-        header_height_px = header_h + (2.0 * cell_padding_px)
-        row_height_px = line_h + (2.0 * cell_padding_px)
+        if shared_row_metrics:
+            header_height_px = float(shared_row_metrics['header_row_height_px'])
+            row_height_px = float(shared_row_metrics['base_row_height_px'])
+            extra_line_height_px = float(shared_row_metrics['extra_line_height_px'])
+        else:
+            header_height_px = header_h + (2.0 * cell_padding_px)
+            row_height_px = line_h + (2.0 * cell_padding_px)
+            extra_line_height_px = row_height_px
         required_rows_height_px = 0.0
         for label, value in candidate_rows:
-            label_line_count = max(1, len(str(label).splitlines()))
-            value_line_count = max(1, len(str(value).splitlines()))
-            required_rows_height_px += row_height_px * max(label_line_count, value_line_count)
+            line_count = resolve_table_row_line_count(label, value)
+            required_rows_height_px += row_height_px + ((line_count - 1) * extra_line_height_px)
         required_height_px = header_height_px + required_rows_height_px
 
         return {
@@ -2543,6 +2573,8 @@ def render_panel_table(
         metrics = _measure_layout(state_rows, fontsize)
     if overflow_rows:
         applied_fallbacks.append('truncate_rows_to_prevent_overlap')
+    if not state_rows and overflow_rows:
+        state_rows.append(overflow_rows.pop(0))
 
     table = ax.table(
         cellText=state_rows,
@@ -2567,6 +2599,11 @@ def render_panel_table(
         if _uses_symbol_font_fallback(txt.get_text()):
             txt.set_fontfamily('DejaVu Sans')
 
+    row_heights = None
+    if explicit_row_heights:
+        row_heights = [float(v) for v in explicit_row_heights]
+        apply_explicit_table_row_heights(table, row_heights=row_heights, ncols=2)
+
     return {
         'table': table,
         'used_bounds': dict(rect),
@@ -2577,6 +2614,7 @@ def render_panel_table(
         'font_size': fontsize,
         'used_compact_labels': using_compact_labels,
         'fallbacks_applied': applied_fallbacks,
+        'explicit_row_heights': row_heights,
     }
 
 
@@ -2597,15 +2635,31 @@ def render_panel_table_in_panel_axes(
     """
 
     panel_rect = {'x': 0.0, 'y': 0.0, 'width': 1.0, 'height': 1.0}
-    resolved_row_height = 0.060 if row_height is None else float(row_height)
+    del row_height
+    fig = ax.figure
+    fig.canvas.draw()
+    row_metrics = resolve_histogram_dashboard_row_metrics(
+        table_fontsize=float((style_options or {}).get('fontsize', 8.0)),
+        dpi=float(fig.dpi),
+    )
+    row_line_counts = [resolve_table_row_line_count(label, value) for label, value in (rows or [])]
+    row_heights = _build_table_row_heights(
+        row_line_counts,
+        header_row_height_px=row_metrics['header_row_height_px'],
+        base_row_height_px=row_metrics['base_row_height_px'],
+        extra_line_height_px=row_metrics['extra_line_height_px'],
+        fig_height_px=float(ax.bbox.height),
+    )
+    content_height = sum(row_heights)
     inner_rect = _resolve_inner_table_rect(
         panel_rect,
         row_count=len(rows or []),
-        row_height=resolved_row_height,
+        row_height=content_height / max(1, len(row_heights)),
         header_rows=header_rows,
         pad_y=pad_y,
         valign=valign,
     )
+    inner_rect['height'] = min(1.0, content_height)
 
     return render_panel_table(
         ax=ax,
@@ -2613,7 +2667,11 @@ def render_panel_table_in_panel_axes(
         title=title,
         rows=rows,
         rect=inner_rect,
-        style_options=style_options,
+        style_options={
+            **(style_options or {}),
+            'shared_row_metrics': row_metrics,
+            'explicit_row_heights': row_heights,
+        },
     )
 
 def classify_capability_status(cp, cpk):
@@ -4503,8 +4561,11 @@ class ExportDataThread(QThread):
                         table_fontsize=histogram_font_sizes['table_fontsize'],
                         fit_row_count=len(histogram_content_payload['left_rows']),
                         stats_row_count=len(histogram_content_payload['right_rows']),
+                        fit_rows=histogram_content_payload['left_rows'],
+                        stats_rows=histogram_content_payload['right_rows'],
                         note_line_count=0,
                         right_container_width_hint=0.34,
+                        dpi=fig.dpi,
                     )
                     assert_non_overlapping_rectangles(
                         {
@@ -4589,6 +4650,7 @@ class ExportDataThread(QThread):
                         ax_table,
                         statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
                         row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
+                        explicit_row_heights=right_table_meta.get('explicit_row_heights'),
                     )
 
                     distribution_fit_rows = histogram_content_payload['left_rows']
@@ -4632,6 +4694,7 @@ class ExportDataThread(QThread):
                         distribution_fit_table,
                         statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
                         row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
+                        explicit_row_heights=left_table_meta.get('explicit_row_heights'),
                     )
 
                     selected_model_curve = distribution_fit_result.get('selected_model_pdf')
