@@ -126,6 +126,8 @@ from modules.export_data_thread import (  # noqa: E402
     _build_compact_histogram_note_lines,
     resolve_selected_model_curve_style,
     resolve_histogram_x_view,
+    resolve_histogram_dashboard_row_metrics,
+    resolve_required_histogram_figure_height_for_complete_right_tables,
 )
 
 
@@ -479,13 +481,104 @@ class TestExportPlotHelpers(unittest.TestCase):
             right_ax.set_axis_off()
 
             render_histogram(plot_ax, measurements, lsl=9.9, usl=10.4)
-            table_meta = render_panel_table_in_panel_axes(ax=right_ax, title='Parameter', rows=unified_rows, style_options={'fontsize': 8.2})
+            table_meta = render_panel_table_in_panel_axes(ax=right_ax, title='Parameter', rows=unified_rows, style_options={'fontsize': 9.3})
             self.assertEqual(len(fig.axes), 2)
             self.assertGreater(rects['plot_rect']['width'], rects['right_container_rect']['width'])
             self.assertEqual(rects['footer_rect']['height'], 0.0)
             self.assertEqual([label for label, _ in table_meta['rendered_rows']], [label for label, _ in unified_rows])
         finally:
             plt.close(fig)
+
+    def test_histogram_font_size_baseline_is_larger_for_unified_table_readability(self):
+        font_sizes = compute_histogram_font_sizes((8.8, 4.4), has_table=True, readability_scale=0.0)
+
+        self.assertGreater(font_sizes['table_fontsize'], 10.0)
+
+    def test_resolved_histogram_figure_height_scales_with_updated_table_font(self):
+        rows = [
+            ('Min', '9.800'),
+            ('Max', '10.500'),
+            ('Mean', '10.102'),
+            ('Median', '10.091'),
+            ('Std Dev', '0.085'),
+            ('Cp', '1.34'),
+            ('Cpk (ref)', '1.19'),
+            ('NOK', '2 (U: 2)'),
+            ('NOK %', '3.57%'),
+            ('Samples', '56'),
+            ('Model', 'Johnson SU'),
+            ('Est. NOK %', '0.1234%\nU: 0.1234%'),
+            ('Fit quality', 'Medium'),
+            ('Warning', 'small sample; capability uncertain\nmodel uncertainty due to low n'),
+        ]
+
+        resolved_height = resolve_required_histogram_figure_height_for_complete_right_tables(
+            fit_rows=[],
+            stats_rows=rows,
+            table_fontsize=compute_histogram_font_sizes((8.8, 4.4), has_table=True)['table_fontsize'],
+            minimum_height=4.4,
+        )
+
+        self.assertGreater(resolved_height, 4.4)
+
+    def test_unified_table_multiline_rows_remain_visible_without_clipping_at_larger_font(self):
+        fig = plt.figure(figsize=(8.8, 5.1))
+        try:
+            rows = [
+                ('Min', '9.8000'),
+                ('Est. NOK %', '0.1234%\nL: 0.1200%, U: 0.2300%'),
+                ('Warning', 'small sample; capability uncertain\nverify with additional production lots'),
+            ]
+            ax = fig.add_axes([0.62, 0.1, 0.34, 0.82])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=rows,
+                style_options={
+                    'fontsize': 9.3,
+                    'explicit_label_fraction': 0.44,
+                    'explicit_value_fraction': 0.56,
+                    'value_wrap_width': 26,
+                },
+            )
+
+            self.assertFalse(meta['overflow'])
+            rendered_rows = dict(meta['rendered_rows'])
+            self.assertIn('\n', rendered_rows['Est. NOK %'])
+            self.assertIn('\n', rendered_rows['Warning'])
+
+            row_heights = meta['explicit_row_heights']
+            self.assertGreater(row_heights[2], row_heights[1])
+            self.assertGreater(row_heights[3], row_heights[1])
+        finally:
+            plt.close(fig)
+
+    def test_header_font_remains_proportional_to_body_font_for_unified_table(self):
+        fig = plt.figure(figsize=(6.0, 3.6))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=[('Min', '9.8000'), ('Warning', 'small sample; capability uncertain')],
+                style_options={'fontsize': 9.3},
+            )
+            table = meta['table']
+            header_size = table.get_celld()[(0, 0)].get_text().get_fontsize()
+            body_size = table.get_celld()[(1, 0)].get_text().get_fontsize()
+
+            self.assertGreater(header_size, body_size)
+            self.assertLess(header_size - body_size, 1.0)
+        finally:
+            plt.close(fig)
+
+    def test_histogram_dashboard_row_metrics_scale_for_larger_font_and_multiline_rows(self):
+        metrics = resolve_histogram_dashboard_row_metrics(table_fontsize=9.3, dpi=100.0)
+
+        self.assertGreater(metrics['base_row_height_px'], 16.0)
+        self.assertGreater(metrics['extra_line_height_px'], 9.5)
 
 
     def test_distribution_fit_table_rows_include_expected_payload_and_ordering_for_bilateral_specs(self):
