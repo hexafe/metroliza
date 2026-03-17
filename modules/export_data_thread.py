@@ -1154,7 +1154,7 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
 
         est_nok_value = _format_percent(risk_estimates.get('nok_percent'), decimals=4)
         if side_parts:
-            est_nok_value = f"{est_nok_value} ({', '.join(side_parts)})"
+            est_nok_value = f"{est_nok_value}\n{', '.join(side_parts)}"
         raw_rows.append(('Estimated NOK %', est_nok_value))
 
     raw_rows.append(('Model fit quality', display_quality.title()))
@@ -2346,6 +2346,8 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
 _EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.155
 _EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.95
 _EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO = 0.39
+_UNIFIED_HISTOGRAM_LABEL_FRACTION = 0.44
+_UNIFIED_HISTOGRAM_VALUE_FRACTION = 0.56
 
 
 def style_histogram_stats_table(ax_table, table_data, *, capability_badge=None, capability_row_badges=None):
@@ -2523,6 +2525,8 @@ def render_panel_table(
     cell_padding_points = float(options.get('cell_padding_points', 2.2))
     explicit_row_heights = options.get('explicit_row_heights')
     shared_row_metrics = options.get('shared_row_metrics')
+    explicit_label_fraction = options.get('explicit_label_fraction')
+    explicit_value_fraction = options.get('explicit_value_fraction')
 
     normalized_rows = []
     for row in rows or []:
@@ -2559,10 +2563,17 @@ def render_panel_table(
         dynamic_label_fraction = (label_max + (2.0 * cell_padding_px)) / required_total_w if required_total_w > 0 else 0.5
         dynamic_value_fraction = (value_max + (2.0 * cell_padding_px)) / required_total_w if required_total_w > 0 else 0.5
 
-        label_fraction = max(min_label_fraction, dynamic_label_fraction)
-        value_fraction = max(min_value_fraction, dynamic_value_fraction)
+        if explicit_label_fraction is not None and explicit_value_fraction is not None:
+            label_fraction = max(0.0, float(explicit_label_fraction))
+            value_fraction = max(0.0, float(explicit_value_fraction))
+        else:
+            label_fraction = max(min_label_fraction, dynamic_label_fraction)
+            value_fraction = max(min_value_fraction, dynamic_value_fraction)
         total_fraction = label_fraction + value_fraction
-        if total_fraction > 1.0:
+        if total_fraction <= 0.0:
+            label_fraction = 0.5
+            value_fraction = 0.5
+        elif total_fraction != 1.0:
             label_fraction /= total_fraction
             value_fraction /= total_fraction
 
@@ -2673,7 +2684,14 @@ def render_panel_table_in_panel_axes(
         table_fontsize=float((style_options or {}).get('fontsize', 8.0)),
         dpi=float(fig.dpi),
     )
-    row_line_counts = [resolve_table_row_line_count(label, value) for label, value in (rows or [])]
+    value_wrap_width = int(((style_options or {}).get('value_wrap_width', 0) or 0))
+    row_line_counts = []
+    for label, value in (rows or []):
+        label_text = str(label)
+        value_text = str(value)
+        if value_wrap_width > 0:
+            value_text = textwrap.fill(value_text, width=value_wrap_width)
+        row_line_counts.append(resolve_table_row_line_count(label_text, value_text))
     row_heights = _build_table_row_heights(
         row_line_counts,
         header_row_height_px=row_metrics['header_row_height_px'],
@@ -4658,8 +4676,8 @@ class ExportDataThread(QThread):
                         rows=unified_rows,
                         style_options={
                             **table_style_options,
-                            'min_label_fraction': 0.46,
-                            'min_value_fraction': 0.40,
+                            'explicit_label_fraction': _UNIFIED_HISTOGRAM_LABEL_FRACTION,
+                            'explicit_value_fraction': _UNIFIED_HISTOGRAM_VALUE_FRACTION,
                             'value_wrap_width': 26,
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
