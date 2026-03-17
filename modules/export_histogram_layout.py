@@ -48,11 +48,11 @@ def resolve_histogram_dashboard_row_metrics(*, table_fontsize=8.0, dpi=100.0):
     del dpi
     font_scale = max(0.85, min(1.35, float(table_fontsize) / 8.0))
     return {
-        'base_row_height_px': 18.0 * font_scale,
-        'header_row_height_px': 20.0 * font_scale,
-        'extra_line_height_px': 11.0 * font_scale,
-        'panel_padding_px': 8.0 * font_scale,
-        'cell_pad': 0.12,
+        'base_row_height_px': 16.0 * font_scale,
+        'header_row_height_px': 18.0 * font_scale,
+        'extra_line_height_px': 9.5 * font_scale,
+        'panel_padding_px': 6.0 * font_scale,
+        'cell_pad': 0.10,
     }
 
 
@@ -316,6 +316,9 @@ def compute_histogram_plot_with_right_info_layout(
         panel_padding_px=shared_metrics['panel_padding_px'],
         fig_height_px=fig_height_px,
     )
+    # Prioritize keeping the statistics table complete when both right-column
+    # tables compete for limited vertical space.
+    stats_target *= 1.10
     content_for_tables = max(0.0, content_height - _HISTOGRAM_RIGHT_STACK_GAP)
     total_target = max(1e-9, stats_target + fit_target)
     stats_height = content_for_tables * (stats_target / total_target)
