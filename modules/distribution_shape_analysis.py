@@ -38,8 +38,8 @@ def _fit_profile_row(metric, group_name, values):
         'Metric': metric,
         'Group': group_name,
         'n': int(numeric.size),
-        'Best fit model': selected_model.get('display_name') or 'Not available',
-        'Fit quality': fit_quality or 'unreliable',
+        'best fit model': selected_model.get('display_name') or 'Not available',
+        'fit quality': fit_quality or 'unreliable',
         'AD p-value': gof.get('ad_pvalue'),
         'KS p-value': gof.get('ks_pvalue'),
         'GOF acceptable?': _yes_no(gof.get('is_acceptable')),
@@ -77,23 +77,23 @@ def compute_distribution_difference(metric, grouped_values, *, alpha=0.05, corre
 
         if sample_a.size < 2 or sample_b.size < 2:
             flags.append('LOW N')
-            comment = 'Insufficient data for a stable shape test.'
-            verdict = 'DESCRIPTIVE ONLY'
+            comment = 'descriptive only: insufficient data for a stable distribution shape test.'
+            verdict = 'descriptive only'
         elif np.isclose(np.std(sample_a), 0.0) and np.isclose(np.std(sample_b), 0.0):
             flags.append('LOW VARIATION')
-            comment = 'Both groups are nearly constant; shape test has limited value.'
-            verdict = 'USE CAUTION'
+            comment = 'caution: both groups are nearly constant, so the distribution shape test has limited value.'
+            verdict = 'caution'
         else:
             stat = ks_2samp(sample_a, sample_b, alternative='two-sided', mode='auto')
             p_value = float(stat.pvalue)
             distance = float(wasserstein_distance(sample_a, sample_b))
-            verdict = 'DISTRIBUTION DIFFERENCE' if p_value < alpha else 'NO SHAPE DIFFERENCE'
-            comment = 'Shape difference test is significant.' if p_value < alpha else 'No statistically significant shape difference detected.'
+            verdict = 'difference' if p_value < alpha else 'no difference'
+            comment = 'difference detected in distribution shape.' if p_value < alpha else 'No statistically significant distribution shape difference detected.'
             if weak_fit_present:
                 flags.append('FIT QUALITY CAUTION')
-                if verdict == 'DISTRIBUTION DIFFERENCE':
-                    verdict = 'USE CAUTION'
-                    comment = 'Shape signal detected, but one or more group fits are weak/unreliable.'
+                if verdict == 'difference':
+                    verdict = 'caution'
+                    comment = 'caution: shape signal detected, but one or more group fit quality results are weak/unreliable.'
 
         raw_p_values.append(p_value)
         pairwise_rows.append(
@@ -114,12 +114,12 @@ def compute_distribution_difference(metric, grouped_values, *, alpha=0.05, corre
     adjusted = _adjust_pvalues(raw_p_values, correction_method)
     for row, adj in zip(pairwise_rows, adjusted):
         row['adjusted p-value'] = adj
-        if adj is not None and row['verdict'] not in {'DESCRIPTIVE ONLY', 'USE CAUTION'}:
-            row['verdict'] = 'DISTRIBUTION DIFFERENCE' if adj < alpha else 'NO SHAPE DIFFERENCE'
+        if adj is not None and row['verdict'] not in {'descriptive only', 'caution'}:
+            row['verdict'] = 'difference' if adj < alpha else 'no difference'
             row['comment'] = (
-                'Distribution-shape difference remains significant after multiple-comparison correction.'
+                'difference in distribution shape remains significant after multiple-comparison correction.'
                 if adj < alpha
-                else 'No distribution-shape difference after multiple-comparison correction.'
+                else 'No distribution shape difference after multiple-comparison correction.'
             )
 
     omnibus_warning = 'None'
@@ -146,12 +146,12 @@ def compute_distribution_difference(metric, grouped_values, *, alpha=0.05, corre
         omnibus_warning = 'Interpret with caution: distribution fit is unavailable for one or more groups.'
 
     verdict = (
-        'Distribution-shape differences were detected.'
+        'difference detected in distribution shape.'
         if significant
-        else 'No statistically significant distribution-shape differences were detected.'
+        else 'No statistically significant distribution shape differences were detected.'
     )
     if fit_unavailable:
-        verdict = 'Interpret with caution: distribution fit quality is unreliable for one or more groups.'
+        verdict = 'caution: distribution fit quality is unreliable for one or more groups.'
 
     omnibus_row = {
         'Metric': metric,
