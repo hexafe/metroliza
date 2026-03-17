@@ -83,45 +83,43 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
     if pairwise_df.empty:
         insights.extend(
             [
-                'Significant pairwise findings: none (no pairwise comparisons were available).',
-                'No-difference outcomes: none (no pairwise comparisons were available).',
-                'Small-sample warning: no pairwise comparisons were available.',
-                'Assumption/test-choice notes: no per-metric test selection was available.',
+                'Significant pairwise findings: none (no pairwise location comparisons available).',
+                'No-difference outcomes: none (no pairwise location comparisons available).',
+                'Small-sample warning: no pairwise location comparisons available.',
             ]
         )
-        return insights
-
-    adj_p = pd.to_numeric(pairwise_df['adjusted p-value'], errors='coerce')
-
-    significant = pairwise_df[adj_p < 0.05]
-    if significant.empty:
-        insights.append('Significant pairwise findings: none at adjusted p < 0.05.')
     else:
-        significant_labels = [
-            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
-            for _, row in significant.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
-        ]
-        insights.append('Significant pairwise findings: ' + '; '.join(significant_labels) + '.')
+        adj_p = pd.to_numeric(pairwise_df['adjusted p-value'], errors='coerce')
 
-    no_difference = pairwise_df[adj_p >= 0.05]
-    if no_difference.empty:
-        insights.append('No-difference outcomes: all tested pairs were significant after adjustment.')
-    else:
-        no_diff_labels = [
-            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
-            for _, row in no_difference.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
-        ]
-        insights.append('No-difference outcomes: ' + '; '.join(no_diff_labels) + '.')
+        significant = pairwise_df[adj_p < 0.05]
+        if significant.empty:
+            insights.append('Significant pairwise findings: none at adjusted p < 0.05.')
+        else:
+            significant_labels = [
+                f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
+                for _, row in significant.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
+            ]
+            insights.append('Significant pairwise findings: ' + '; '.join(significant_labels) + '.')
 
-    small_sample_pairs = pairwise_df[(pairwise_df['n(A)'] < 5) | (pairwise_df['n(B)'] < 5)]
-    if small_sample_pairs.empty:
-        insights.append('Small-sample warning: all compared groups had n >= 5.')
-    else:
-        warning_labels = [
-            f"{row['Metric']} ({row['Group A']} n={row['n(A)']}, {row['Group B']} n={row['n(B)']})"
-            for _, row in small_sample_pairs.sort_values(['Metric', 'Group A', 'Group B']).iterrows()
-        ]
-        insights.append('Small-sample warning (n < 5): ' + '; '.join(warning_labels) + '.')
+        no_difference = pairwise_df[adj_p >= 0.05]
+        if no_difference.empty:
+            insights.append('No-difference outcomes: all tested pairs were significant after adjustment.')
+        else:
+            no_diff_labels = [
+                f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
+                for _, row in no_difference.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
+            ]
+            insights.append('No-difference outcomes: ' + '; '.join(no_diff_labels) + '.')
+
+        small_sample_pairs = pairwise_df[(pairwise_df['n(A)'] < 5) | (pairwise_df['n(B)'] < 5)]
+        if small_sample_pairs.empty:
+            insights.append('Small-sample warning: all compared groups had n >= 5.')
+        else:
+            warning_labels = [
+                f"{row['Metric']} ({row['Group A']} n={row['n(A)']}, {row['Group B']} n={row['n(B)']})"
+                for _, row in small_sample_pairs.sort_values(['Metric', 'Group A', 'Group B']).iterrows()
+            ]
+            insights.append('Small-sample warning (n < 5): ' + '; '.join(warning_labels) + '.')
 
     if not overall_test_rows:
         insights.append('Assumption/test-choice notes: no per-metric test selection was available.')

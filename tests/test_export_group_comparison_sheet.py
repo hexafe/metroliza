@@ -281,6 +281,35 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('Distribution-shape findings:', insights[5])
 
 
+    def test_insights_include_distribution_shape_when_pairwise_rows_are_empty(self):
+        working = pd.DataFrame(
+            {
+                'GROUP': ['A', 'A', 'B', 'B'],
+                'MEAS': [10.0, 10.0, 8.0, 8.0],
+            }
+        )
+        pairwise_df = pd.DataFrame()
+        overall_test_rows = []
+        distribution_summary_rows = [
+            {
+                'Metric': 'DIA - X',
+                'Test used': 'K-S',
+                'raw p-value': 0.0123,
+                'significant?': 'YES',
+            }
+        ]
+
+        insights = _build_insights(working, pairwise_df, overall_test_rows, distribution_summary_rows)
+
+        self.assertIn('no pairwise location comparisons available', insights[1])
+        self.assertIn('no pairwise location comparisons available', insights[2])
+        self.assertIn('no pairwise location comparisons available', insights[3])
+        self.assertEqual(
+            insights[5],
+            'Distribution-shape findings: significant differences detected for DIA - X (K-S, p=0.0123).',
+        )
+
+
     def test_insights_skip_nan_adjusted_p_values_without_errors(self):
         working = pd.DataFrame(
             {
