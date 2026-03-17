@@ -277,7 +277,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         ]
         fit_rows = [
             ('Model', 'Johnson SU'),
-            ('Est. NOK %', '0.5000% (U: 0.5000%)'),
+            ('Est. NOK %', '0.5000%\nU: 0.5000%'),
             ('Fit quality', 'Medium'),
             ('Warning', 'small sample; capability uncertain'),
         ]
@@ -295,6 +295,30 @@ class TestExportPlotHelpers(unittest.TestCase):
                 'Model', 'Est. NOK %', 'Fit quality', 'Warning',
             ],
         )
+
+    def test_distribution_fit_estimated_nok_forces_two_line_bilateral_format(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'selected_model': {'display_name': 'Johnson SU'},
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'bilateral',
+                    'below_lsl_probability': 0.135614,
+                    'above_usl_probability': 0.399222,
+                    'nok_percent': 53.4837,
+                },
+            },
+            lsl=9.0,
+            usl=11.0,
+            summary_stats={'sample_size': 40},
+        )
+
+        est_nok_value = dict(rows)['Est. NOK %']
+        self.assertEqual(
+            est_nok_value,
+            '53.4837%\nL: 13.5614%, U: 39.9222%',
+        )
+        self.assertEqual(len(est_nok_value.splitlines()), 2)
 
     def test_render_panel_table_in_panel_axes_explicit_row_heights_keep_all_rows(self):
         fig = plt.figure(figsize=(4.0, 3.0))
@@ -430,7 +454,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ('NOK %', '3.57%'),
                 ('Samples', '56'),
                 ('Model', 'Johnson SU'),
-                ('Est. NOK %', '0.1234% (U: 0.1234%)'),
+                ('Est. NOK %', '0.1234%\nU: 0.1234%'),
                 ('Fit quality', 'Medium'),
                 ('Warning', 'small sample; capability uncertain'),
             ]
@@ -488,7 +512,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             'Fit quality',
         ])
         self.assertEqual(rows[0][1], 'Weibull (Min)')
-        self.assertEqual(rows[1][1], '0.1234% (L: 0.1200%, U: 0.2300%)')
+        self.assertEqual(rows[1][1], '0.1234%\nL: 0.1200%, U: 0.2300%')
         self.assertEqual(rows[2][1], 'Strong')
 
     def test_distribution_fit_table_rows_follow_upper_only_contract(self):
@@ -655,6 +679,50 @@ class TestExportPlotHelpers(unittest.TestCase):
             rendered = dict(meta['rendered_rows'])
             self.assertIn('\n', rendered['Model'])
             self.assertGreaterEqual(len(meta['rendered_rows']), 1)
+        finally:
+            plt.close(fig)
+
+    def test_unified_histogram_table_uses_explicit_parameter_value_width_ratio(self):
+        fig = plt.figure(figsize=(5.6, 3.4))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            rows = [('Min', '9.8000'), ('Warning', 'small sample; capability uncertain')]
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=rows,
+                style_options={
+                    'fontsize': 8.2,
+                    'explicit_label_fraction': 0.44,
+                    'explicit_value_fraction': 0.56,
+                },
+            )
+
+            table = meta['table']
+            self.assertAlmostEqual(table.get_celld()[(1, 0)].get_width(), 0.44, places=2)
+            self.assertAlmostEqual(table.get_celld()[(1, 1)].get_width(), 0.56, places=2)
+            self.assertGreater(table.get_celld()[(1, 1)].get_width(), table.get_celld()[(1, 0)].get_width())
+        finally:
+            plt.close(fig)
+
+    def test_wrapped_value_rows_get_taller_explicit_row_heights(self):
+        fig = plt.figure(figsize=(5.0, 3.2))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=[
+                    ('Model', 'Johnson SU Extended Variant Name'),
+                    ('Min', '9.8000'),
+                ],
+                style_options={'fontsize': 8.2, 'value_wrap_width': 12},
+            )
+
+            row_heights = meta['explicit_row_heights']
+            self.assertGreater(row_heights[1], row_heights[2])
         finally:
             plt.close(fig)
 
@@ -3699,7 +3767,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         rows_by_label = dict(rows)
-        self.assertEqual(rows_by_label['Est. NOK %'], '0.0000% (U: <0.0001%)')
+        self.assertEqual(rows_by_label['Est. NOK %'], '0.0000%\nU: <0.0001%')
 
 
 
@@ -3739,7 +3807,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         rows_by_label = dict(rows)
         self.assertEqual(rows_by_label['Fit quality'], 'Medium')
-        self.assertEqual(rows_by_label['Est. NOK %'], '0.0200% (U: 2.0000%)')
+        self.assertEqual(rows_by_label['Est. NOK %'], '0.0200%\nU: 2.0000%')
         self.assertEqual(rows_by_label['Warning'], 'small sample; capability uncertain')
     def test_distribution_fit_table_rows_hide_modeled_risk_when_fit_weak(self):
         rows = _build_distribution_fit_table_rows(
