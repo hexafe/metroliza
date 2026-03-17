@@ -1152,8 +1152,9 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
         if spec_type in {'bilateral', 'upper_only'} and usl is not None:
             side_parts.append(f"U: {_format_probability_percent(above_usl, decimals=4)}")
 
+        est_nok_numeric = _as_float_or_none(risk_estimates.get('nok_percent'))
         est_nok_value = _format_percent(risk_estimates.get('nok_percent'), decimals=4)
-        if side_parts:
+        if side_parts and (est_nok_numeric is None or est_nok_numeric >= 0.0001):
             est_nok_value = f"{est_nok_value}\n{', '.join(side_parts)}"
         raw_rows.append(('Estimated NOK %', est_nok_value))
 
