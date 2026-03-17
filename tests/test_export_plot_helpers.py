@@ -3881,7 +3881,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         rows_by_label = dict(rows)
-        self.assertEqual(rows_by_label['Est. NOK %'], '0.0000%\nU: <0.0001%')
+        self.assertEqual(rows_by_label['Est. NOK %'], '0.0000%')
 
 
 
