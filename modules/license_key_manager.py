@@ -66,7 +66,7 @@ class LicenseKeyManager:
     def parse_license_payload(license_key):
         """Safely decode a license key payload into (data, signature)."""
         try:
-            decoded = base64.b64decode(license_key.encode())
+            decoded = base64.b64decode(license_key.encode(), validate=True)
             if len(decoded) <= 256:
                 return None, None
             return decoded[:-256], decoded[-256:]
