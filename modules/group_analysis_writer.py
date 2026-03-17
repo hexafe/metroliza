@@ -185,6 +185,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
     metric_meta_rows = [
         {'Field': 'Groups', 'Value': metric_row.get('group_count')},
         {'Field': 'Spec status', 'Value': spec_status_label},
+        {'Field': 'Distribution difference', 'Value': (metric_row.get('distribution_difference') or {}).get('comment / verdict')},
         {'Field': 'Comment', 'Value': metric_row.get('diagnostics_comment') or (metric_row.get('comparability_summary') or {}).get('summary')},
     ]
     row = _write_table(worksheet, row, ['Field', 'Value'], metric_meta_rows)
@@ -204,6 +205,9 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
             'Cp': entry.get('cp'),
             'Capability': entry.get('capability'),
             'Capability type': entry.get('capability_type'),
+            'Best fit model': entry.get('best_fit_model'),
+            'Fit quality': entry.get('fit_quality'),
+            'Distribution caution': entry.get('distribution_shape_caution'),
             'Flags': entry.get('flags'),
         }
         for entry in metric_row.get('descriptive_stats', [])
@@ -211,7 +215,10 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
     row = _write_table(
         worksheet,
         row,
-        ['Group', 'n', 'mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability', 'Capability type', 'Flags'],
+        [
+            'Group', 'n', 'mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability', 'Capability type',
+            'Best fit model', 'Fit quality', 'Distribution caution', 'Flags',
+        ],
         desc_rows,
     )
     row += SECTION_GAP
