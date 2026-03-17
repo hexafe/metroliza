@@ -1,5 +1,5 @@
 RELEASE_VERSION = "2026.03rc1"
-VERSION_DATE = "260315"
+VERSION_DATE = "260317"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
     "Major analytics update: histogram/chart readability improvements plus new capability confidence and safeguards for low-sample interpretation."
@@ -7,6 +7,8 @@ CURRENT_RELEASE_HIGHLIGHT = (
 
 release_notes = f"""
     <br><b>Current version {VERSION_LABEL}:</b><br>
+    - Histogram table polishing improved readability and visual consistency<br>
+    - Grouping analysis prototype v2 extends grouped-data analysis workflows<br>
     - Clearer histogram and chart layouts for easier reading in dense views<br>
     - Capability results now show confidence intervals for better decision-making<br>
     - New low-sample safeguards and NOK discrepancy warnings to avoid misleading quality conclusions<br>
