@@ -220,6 +220,7 @@ class DataGrouping(QDialog):
             
             # Connect the itemSelectionChanged signal of the "PART #" list to the on_part_selection_changed method
             self.part_list.itemSelectionChanged.connect(self.on_part_selection_changed)
+            self.part_list.itemDoubleClicked.connect(self.on_part_item_double_clicked)
             
             # Connect the itemSelectionChanged signal of the "PART IN SELECTED GROUP" list to the on_part_group_selection_changed method
             self.part_group_list.itemSelectionChanged.connect(self.on_part_group_selection_changed)
@@ -644,6 +645,50 @@ class DataGrouping(QDialog):
             selected_part = bool(self.part_list.selectedItems()) if hasattr(self.part_list, 'selectedItems') else (self.part_list.currentItem() is not None)
             selected_reference = self._selected_reference_name()
             self.create_group_button.setEnabled(selected_part or bool(selected_reference))
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def on_part_item_double_clicked(self, item):
+        """Assign selected part rows to the currently selected group on double-click."""
+
+        try:
+            if item is None:
+                return
+
+            selected_group_name = self._selected_group_name()
+            if not selected_group_name:
+                return
+
+            selected_part_keys = [selected_item.data(Qt.ItemDataRole.UserRole) for selected_item in self.part_list.selectedItems()]
+            if not selected_part_keys:
+                selected_key = item.data(Qt.ItemDataRole.UserRole) if hasattr(item, 'data') else None
+                if selected_key is not None:
+                    selected_part_keys = [selected_key]
+
+            if not selected_part_keys:
+                return
+
+            group_exists = bool((self.df['GROUP'] == selected_group_name).any())
+            if not group_exists:
+                return
+
+            group_color = self.df.loc[
+                self.df['GROUP'] == selected_group_name,
+                self.group_color_column,
+            ].iloc[-1]
+
+            self.df.loc[self.df['GROUP_KEY'].isin(selected_part_keys), 'GROUP'] = selected_group_name
+            self.df.loc[self.df['GROUP_KEY'].isin(selected_part_keys), self.group_color_column] = group_color
+
+            try:
+                self.populate_list_widgets(
+                    preferred_group_name=selected_group_name,
+                    preferred_reference_name=self._selected_reference_name(),
+                )
+            except TypeError:
+                self.populate_list_widgets(preferred_group_name=selected_group_name)
+
+            self.remove_from_group_button.setDisabled(True)
         except Exception as e:
             self.log_and_exit(e)
 
