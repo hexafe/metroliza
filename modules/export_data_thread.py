@@ -2344,7 +2344,7 @@ def render_modeled_tail_shading(ax, distribution_fit_result, *, lsl=None, usl=No
 
 
 _EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT = 0.155
-_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 2.95
+_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE = 3.15
 _EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO = 0.39
 _UNIFIED_HISTOGRAM_LABEL_FRACTION = 0.44
 _UNIFIED_HISTOGRAM_VALUE_FRACTION = 0.56
@@ -4581,7 +4581,7 @@ class ExportDataThread(QThread):
 
             if self._summary_chart_required('histogram'):
                 try:
-                    base_histogram_figsize = (9.4, 4.6)
+                    base_histogram_figsize = (8.8, 4.0)
                     chart_start = time.perf_counter()
 
                     distribution_fit_result = precomputed_distribution_fit
@@ -4631,7 +4631,7 @@ class ExportDataThread(QThread):
                         fit_rows=[],
                         stats_rows=unified_rows,
                         note_line_count=0,
-                        right_container_width_hint=0.38,
+                        right_container_width_hint=0.34,
                         dpi=fig.dpi,
                     )
                     assert_non_overlapping_rectangles(
@@ -4691,7 +4691,7 @@ class ExportDataThread(QThread):
                             'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
                         },
                         row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
-                        pad_y=0.02,
+                        pad_y=0.0,
                         valign='top',
                     )
                     unified_table = unified_table_meta['table']
