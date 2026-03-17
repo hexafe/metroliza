@@ -247,11 +247,14 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None):
     _apply_metric_pairwise_formats(worksheet, pairwise_bounds)
     row += SECTION_GAP
 
-    insights = metric_row.get('insights', [])
-    concise_line = insights[0] if insights else 'No insight available.'
-    worksheet.write(row, 0, 'Comment')
-    worksheet.write(row, 1, concise_line)
-    row += 1
+    insights = [line for line in (metric_row.get('insights') or []) if line]
+    if not insights:
+        insights = ['No insight available.']
+
+    for line_idx, insight_line in enumerate(insights):
+        worksheet.write(row, 0, 'Comment' if line_idx == 0 else '')
+        worksheet.write(row, 1, insight_line)
+        row += 1
 
     plot_eligibility = metric_row.get('plot_eligibility') or {}
     analysis_level = str(metric_row.get('analysis_level') or '').strip().lower()

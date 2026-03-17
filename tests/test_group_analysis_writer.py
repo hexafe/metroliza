@@ -106,7 +106,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                         'violin': {'eligible': True, 'skip_reason': ''},
                         'histogram': {'eligible': False, 'skip_reason': 'low_total_samples'},
                     },
-                    'insights': ['Line 1', 'Line 2'],
+                    'insights': ['Line 1', 'Line 2', 'Distribution shape: Distinct tails across groups.'],
                 }
             ],
         }
@@ -132,6 +132,19 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Violin', values)
         self.assertIn('Histogram', values)
         self.assertIn('low_total_samples', values)
+
+        self.assertIn('Line 1', values)
+        self.assertIn('Line 2', values)
+        self.assertIn('Distribution shape: Distinct tails across groups.', values)
+        insight_values = [
+            value
+            for _, col, value in worksheet.writes
+            if col == 1 and value in {'Line 1', 'Line 2', 'Distribution shape: Distinct tails across groups.'}
+        ]
+        self.assertEqual(
+            insight_values,
+            ['Line 1', 'Line 2', 'Distribution shape: Distinct tails across groups.'],
+        )
         text_values = [str(value).upper() for value in values]
         self.assertNotIn('TRUE', text_values)
         self.assertNotIn('FALSE', text_values)

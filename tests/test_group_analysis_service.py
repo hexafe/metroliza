@@ -7,6 +7,7 @@ import pandas as pd
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
 from modules.group_analysis_service import (
     build_group_analysis_payload,
+    build_metric_insights,
     build_pairwise_rows,
     classify_spec_status,
     classify_metric_spec_status,
@@ -616,6 +617,28 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(metric_names, ['AA-C11 - SP', 'AA-C11 - TP'])
         self.assertEqual(payload['diagnostics']['metric_count'], 2)
         self.assertEqual(payload['diagnostics']['status_counts']['EXACT_MATCH'], 2)
+
+
+    def test_build_metric_insights_prioritizes_shape_with_three_line_cap(self):
+        metric_row = {
+            'comparability_summary': {'status': 'EXACT_MATCH', 'interpretation_limits': 'none'},
+            'descriptive_stats': [
+                {'group': 'A', 'mean': 10.2},
+                {'group': 'B', 'mean': 9.7},
+            ],
+            'pairwise_rows': [
+                {'group_a': 'A', 'group_b': 'B', 'adjusted_p_value': 0.0009, 'comment': 'DIFFERENCE'},
+            ],
+            'distribution_difference': {'comment / verdict': 'Clear shape mismatch across groups.'},
+            'analysis_policy': {'allow_pairwise': True},
+        }
+
+        insights = build_metric_insights(metric_row)
+
+        self.assertEqual(len(insights), 3)
+        self.assertTrue(insights[0].startswith('Comparability='))
+        self.assertIn('Strongest pairwise location signal', insights[1])
+        self.assertEqual(insights[2], 'Distribution shape: Clear shape mismatch across groups.')
 
 
 if __name__ == '__main__':
