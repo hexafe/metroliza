@@ -1190,8 +1190,8 @@ def build_group_analysis_payload(
         }
         for desc_row in descriptive_stats:
             group_profile = profile_by_group.get(desc_row.get('group')) or {}
-            desc_row['best_fit_model'] = group_profile.get('Best fit model')
-            desc_row['fit_quality'] = group_profile.get('Fit quality')
+            desc_row['best_fit_model'] = group_profile.get('best fit model') or group_profile.get('Best fit model')
+            desc_row['fit_quality'] = group_profile.get('fit quality') or group_profile.get('Fit quality')
             desc_row['distribution_shape_caution'] = group_profile.get('Warning / notes summary')
 
         metrics.append(
