@@ -149,7 +149,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
-    def test_render_panel_table_fallback_chain_defers_low_priority_rows_before_overlap(self):
+    def test_render_panel_table_overflow_does_not_change_row_membership(self):
         fig, ax = plt.subplots(figsize=(3.0, 2.2))
         try:
             rows = [
@@ -174,9 +174,12 @@ class TestExportPlotHelpers(unittest.TestCase):
             )
 
             self.assertTrue(meta['overflow'])
-            self.assertTrue(meta['deferred_rows'])
+            self.assertFalse(meta['deferred_rows'])
+            self.assertFalse(meta['overflow_rows'])
+            self.assertEqual(len(meta['rendered_rows']), len(rows))
             self.assertIn('reduced_fontsize', meta['fallbacks_applied'])
-            self.assertIn('defer_low_priority_rows', meta['fallbacks_applied'])
+            self.assertNotIn('defer_low_priority_rows', meta['fallbacks_applied'])
+            self.assertNotIn('truncate_rows_to_prevent_overlap', meta['fallbacks_applied'])
         finally:
             plt.close(fig)
 
@@ -212,6 +215,101 @@ class TestExportPlotHelpers(unittest.TestCase):
             self.assertIn('Est. PPM', rendered_labels)
             self.assertNotIn('Estimated NOK (PPM)', rendered_labels)
             self.assertTrue(meta['overflow'])
+            self.assertEqual(len(meta['rendered_rows']), len(rows))
+        finally:
+            plt.close(fig)
+
+    def test_histogram_statistics_row_contract_recovery(self):
+        payload = build_histogram_table_data(
+            {
+                'minimum': 9.8,
+                'maximum': 10.2,
+                'average': 10.0,
+                'median': 10.0,
+                'sigma': 0.1,
+                'cp': 1.2,
+                'cpk': 1.1,
+                'nok_count': 0,
+                'nok_pct': 0.0,
+                'sample_size': 32,
+                'nom': 10.0,
+                'lsl': 9.5,
+                'usl': 10.5,
+                'spec_type': 'two-sided',
+            }
+        )
+
+        labels = [label for label, _ in payload['rows']]
+        self.assertEqual(labels[:7], ['Min', 'Max', 'Mean', 'Median', 'Std Dev', 'Cp', 'Cpk'])
+        self.assertEqual(labels[-3:], ['NOK', 'NOK %', 'Samples'])
+
+    def test_distribution_fit_row_contract_recovery_with_warning(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'selected_model': {'display_name': 'Johnson SU'},
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.005,
+                    'nok_percent': 0.5,
+                },
+            },
+            usl=10.0,
+            summary_stats={'sample_size': 20},
+        )
+
+        self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality', 'Warning'])
+        self.assertEqual(dict(rows)['Warning'], 'small sample; capability uncertain')
+
+    def test_render_panel_table_in_panel_axes_explicit_row_heights_keep_all_rows(self):
+        fig = plt.figure(figsize=(4.0, 3.0))
+        panel_ax = fig.add_axes([0.1, 0.1, 0.35, 0.6])
+        rows = [('Model', 'Johnson\nSU\nVariant'), ('Fit quality', 'Medium'), ('Warning', 'small sample; capability uncertain')]
+        try:
+            meta = render_panel_table_in_panel_axes(
+                ax=panel_ax,
+                title='Distribution Fit',
+                rows=rows,
+                style_options={'fontsize': 8.0},
+            )
+
+            self.assertEqual(meta['rendered_rows'], rows)
+            self.assertEqual(len(meta['explicit_row_heights']), len(rows) + 1)
+        finally:
+            plt.close(fig)
+
+    def test_statistics_and_fit_tables_share_line_aware_row_height_policy(self):
+        fig = plt.figure(figsize=(8.4, 4.0))
+        try:
+            fit_ax = fig.add_axes([0.66, 0.18, 0.30, 0.34])
+            stats_ax = fig.add_axes([0.66, 0.56, 0.30, 0.34])
+            fit_ax.set_axis_off()
+            stats_ax.set_axis_off()
+
+            fit_rows = [('Model', 'Johnson\nSU\nVariant'), ('Fit quality', 'Medium')]
+            stats_rows = [('Min', '9.8'), ('Std Dev', '0.1')]
+
+            fit_meta = render_panel_table_in_panel_axes(
+                ax=fit_ax,
+                title='Distribution Fit',
+                rows=fit_rows,
+                style_options={'fontsize': 8.0},
+            )
+            stats_meta = render_panel_table_in_panel_axes(
+                ax=stats_ax,
+                title='Statistics',
+                rows=stats_rows,
+                style_options={'fontsize': 8.0},
+            )
+
+            fit_header_height = fit_meta['explicit_row_heights'][0]
+            stats_header_height = stats_meta['explicit_row_heights'][0]
+            fit_single_line_height = fit_meta['explicit_row_heights'][2]
+            stats_single_line_height = stats_meta['explicit_row_heights'][1]
+
+            self.assertAlmostEqual(fit_header_height, stats_header_height, places=5)
+            self.assertAlmostEqual(fit_single_line_height, stats_single_line_height, places=5)
+            self.assertGreater(fit_meta['explicit_row_heights'][1], fit_single_line_height)
         finally:
             plt.close(fig)
 

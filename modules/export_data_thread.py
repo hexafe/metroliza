@@ -2467,8 +2467,6 @@ def render_panel_table(
     header_fontweight = options.get('header_fontweight', 'bold')
     compact_label_mapping = dict(options.get('compact_label_mapping') or {})
     value_wrap_width = int(options.get('value_wrap_width', 0) or 0)
-    low_priority_labels = set(options.get('low_priority_labels') or set())
-    low_priority_labels.update(compact_label_mapping.get(label, label) for label in list(low_priority_labels))
     cell_padding_points = float(options.get('cell_padding_points', 2.2))
     explicit_row_heights = options.get('explicit_row_heights')
     shared_row_metrics = options.get('shared_row_metrics')
@@ -2490,7 +2488,6 @@ def render_panel_table(
     cell_padding_px = cell_padding_points * (fig.dpi / 72.0)
 
     state_rows = list(normalized_rows)
-    deferred_rows = []
     applied_fallbacks = []
     using_compact_labels = False
 
@@ -2554,27 +2551,8 @@ def render_panel_table(
     if fontsize < base_fontsize:
         applied_fallbacks.append('reduced_fontsize')
 
-    if metrics['required_height_px'] > available_height_px and state_rows:
-        keep_rows = []
-        for label, value in state_rows:
-            if label in low_priority_labels:
-                deferred_rows.append((label, value))
-                continue
-            keep_rows.append((label, value))
-        if len(keep_rows) != len(state_rows):
-            state_rows = keep_rows
-            metrics = _measure_layout(state_rows, fontsize)
-            applied_fallbacks.append('defer_low_priority_rows')
-
-    # Hard safety: if still overflowing, drop trailing rows to avoid any overlap.
     overflow_rows = []
-    while metrics['required_height_px'] > available_height_px and state_rows:
-        overflow_rows.insert(0, state_rows.pop())
-        metrics = _measure_layout(state_rows, fontsize)
-    if overflow_rows:
-        applied_fallbacks.append('truncate_rows_to_prevent_overlap')
-    if not state_rows and overflow_rows:
-        state_rows.append(overflow_rows.pop(0))
+    deferred_rows = []
 
     table = ax.table(
         cellText=state_rows,
@@ -2607,7 +2585,7 @@ def render_panel_table(
     return {
         'table': table,
         'used_bounds': dict(rect),
-        'overflow': bool(deferred_rows or overflow_rows),
+        'overflow': metrics['required_height_px'] > available_height_px,
         'overflow_rows': overflow_rows,
         'deferred_rows': deferred_rows,
         'rendered_rows': state_rows,
