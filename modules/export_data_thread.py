@@ -2633,6 +2633,9 @@ def render_panel_table(
         txt = cell.get_text()
         if row_index == 0:
             txt.set_fontweight(header_fontweight)
+            txt.set_fontsize(fontsize * 1.05)
+        else:
+            txt.set_fontsize(fontsize)
         if col_index == 0:
             txt.set_ha('left')
         else:
@@ -4599,10 +4602,15 @@ class ExportDataThread(QThread):
                         distribution_fit_rows=distribution_fit_rows,
                     )
 
+                    expected_table_fontsize = compute_histogram_font_sizes(
+                        base_histogram_figsize,
+                        has_table=True,
+                        readability_scale=self.summary_plot_scale,
+                    )['table_fontsize']
                     resolved_histogram_height = resolve_required_histogram_figure_height_for_complete_right_tables(
                         fit_rows=[],
                         stats_rows=unified_rows,
-                        table_fontsize=8.0,
+                        table_fontsize=expected_table_fontsize,
                         dpi=float(plt.rcParams.get('figure.dpi', 100.0)),
                         minimum_height=base_histogram_figsize[1],
                     )

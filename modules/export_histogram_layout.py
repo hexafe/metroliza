@@ -48,10 +48,10 @@ def resolve_histogram_dashboard_row_metrics(*, table_fontsize=8.0, dpi=100.0):
     del dpi
     font_scale = max(0.85, min(1.35, float(table_fontsize) / 8.0))
     return {
-        'base_row_height_px': 16.0 * font_scale,
-        'header_row_height_px': 18.0 * font_scale,
-        'extra_line_height_px': 9.5 * font_scale,
-        'panel_padding_px': 6.0 * font_scale,
+        'base_row_height_px': 18.0 * font_scale,
+        'header_row_height_px': 20.0 * font_scale,
+        'extra_line_height_px': 11.0 * font_scale,
+        'panel_padding_px': 7.0 * font_scale,
         'cell_pad': 0.10,
     }
 
@@ -390,7 +390,7 @@ def compute_histogram_plot_with_right_info_layout(
     stats_height = content_for_tables * (stats_target / total_target)
     fit_height = content_for_tables - stats_height
 
-    min_table_height = 0.24
+    min_table_height = 0.28
     if stats_height < min_table_height:
         delta = min_table_height - stats_height
         stats_height = min_table_height
