@@ -128,10 +128,10 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('USE CAUTION', values)
         self.assertIn('Flags', values)
         self.assertIn('LOW N; IMBALANCED N', values)
-        self.assertIn('Standard plot slots', values)
+        self.assertIn('Plots', values)
         self.assertIn('Violin', values)
         self.assertIn('Histogram', values)
-        self.assertIn('low_total_samples', values)
+        self.assertIn('Not enough total samples to show this plot.', values)
 
         self.assertIn('Line 1', values)
         self.assertIn('Line 2', values)
@@ -315,8 +315,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertEqual(len(worksheet.charts), 0)
 
         values = [value for _, _, value in worksheet.writes]
-        self.assertGreaterEqual(values.count('INSERTED'), 2)
-        self.assertGreaterEqual(values.count('Chart inserted'), 2)
+        self.assertGreaterEqual(values.count('Shown'), 2)
+        self.assertGreaterEqual(values.count('Shown below.'), 2)
 
         m2_metric_row = next(
             row
@@ -326,8 +326,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertGreaterEqual(m2_metric_row, 30)
 
         values = [value for _, _, value in worksheet.writes]
-        self.assertIn('asset_missing', values)
-        self.assertIn('low_group_samples', values)
+        self.assertIn('Plot could not be shown because the image asset is unavailable.', values)
+        self.assertIn('Not enough samples in one or more groups.', values)
 
     def test_standard_level_ineligible_plots_emit_explicit_skip_reasons(self):
         worksheet = FakeWorksheet()
@@ -364,8 +364,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
             for _, detail_col, detail in [next(w for w in worksheet.writes if w[0] == row and w[1] == 2)]
             if status_col == 1 and detail_col == 2
         }
-        self.assertEqual(plot_rows['Violin'], ('SKIPPED', 'low_group_samples'))
-        self.assertEqual(plot_rows['Histogram'], ('SKIPPED', 'low_total_samples'))
+        self.assertEqual(plot_rows['Violin'], ('Not shown', 'Not enough samples in one or more groups.'))
+        self.assertEqual(plot_rows['Histogram'], ('Not shown', 'Not enough total samples to show this plot.'))
 
 
 if __name__ == '__main__':
