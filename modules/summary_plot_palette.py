@@ -28,6 +28,12 @@ SUMMARY_PLOT_PALETTE = {
     'quality_marginal_text': '#92400E',
     'quality_risk_bg': '#FEE2E2',
     'quality_risk_text': '#991B1B',
+    'fit_quality_high_bg': '#DBEAFE',
+    'fit_quality_high_text': '#1E3A8A',
+    'fit_quality_medium_bg': '#E0F2FE',
+    'fit_quality_medium_text': '#0C4A6E',
+    'fit_quality_low_bg': '#EFF6FF',
+    'fit_quality_low_text': '#1D4ED8',
     'normality_normal_bg': '#DCFCE7',
     'normality_normal_text': '#166534',
     'normality_unknown_bg': '#FEF9C3',
@@ -37,3 +43,32 @@ SUMMARY_PLOT_PALETTE = {
 }
 
 EMPHASIS_TABLE_ROWS = {'Cp', 'Cpk', 'Normality'}
+
+# Explicit state cues used for text-first accessibility and grayscale readability.
+STATUS_ICON_PREFIX_BY_PALETTE = {
+    'quality_capable': '✓',
+    'quality_good': '✓',
+    'quality_marginal': '!',
+    'quality_risk': '×',
+    'quality_unknown': '!',
+    'fit_quality_high': '✓',
+    'fit_quality_medium': '!',
+    'fit_quality_low': '×',
+    'normality_normal': '✓',
+    'normality_unknown': '!',
+    'normality_not_normal': '×',
+}
+
+STATUS_BORDER_STYLE_BY_PALETTE = {
+    'quality_capable': {'linestyle': 'solid', 'linewidth': 0.9, 'hatch': ''},
+    'quality_good': {'linestyle': 'solid', 'linewidth': 0.9, 'hatch': ''},
+    'quality_marginal': {'linestyle': '--', 'linewidth': 1.05, 'hatch': '///'},
+    'quality_risk': {'linestyle': 'solid', 'linewidth': 1.2, 'hatch': 'xx'},
+    'quality_unknown': {'linestyle': ':', 'linewidth': 1.0, 'hatch': '..'},
+    'fit_quality_high': {'linestyle': 'solid', 'linewidth': 0.9, 'hatch': ''},
+    'fit_quality_medium': {'linestyle': '--', 'linewidth': 1.05, 'hatch': '///'},
+    'fit_quality_low': {'linestyle': 'solid', 'linewidth': 1.2, 'hatch': 'xx'},
+    'normality_normal': {'linestyle': 'solid', 'linewidth': 0.9, 'hatch': ''},
+    'normality_unknown': {'linestyle': ':', 'linewidth': 1.0, 'hatch': '..'},
+    'normality_not_normal': {'linestyle': 'solid', 'linewidth': 1.2, 'hatch': 'xx'},
+}

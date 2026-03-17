@@ -25,14 +25,14 @@ def _load_runtime_modules():
     try:  # pragma: no cover - runtime environment dependent
         from modules import report_parser_factory
     except Exception:
-        custom_logger_stub = types.ModuleType("modules.CustomLogger")
+        custom_logger_stub = types.ModuleType("modules.custom_logger")
 
         class _DummyCustomLogger:
             def __init__(self, *_args, **_kwargs):
                 pass
 
         custom_logger_stub.CustomLogger = _DummyCustomLogger
-        sys.modules.setdefault("modules.CustomLogger", custom_logger_stub)
+        sys.modules.setdefault("modules.custom_logger", custom_logger_stub)
         from modules import report_parser_factory
 
     from modules.parser_plugin_validation import validate_plugin_contract

@@ -21,6 +21,16 @@ python metroliza.py
 - Keep Google OAuth secrets local only: `credentials.json` and generated `token.json` should stay on your machine and must never be committed.
 - For complete setup, validation, and troubleshooting, use the dedicated runbook: [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md).
 
+### License verification mode
+
+- License verification is **disabled by default** at startup.
+- Configure with `METROLIZA_LICENSE_VERIFICATION`:
+  - truthy values (`1`, `true`, `yes`, `on`) enforce license validation.
+  - falsy values (`0`, `false`, `no`, `off`) bypass license validation.
+  - missing/invalid values fall back to the default (`disabled`).
+- When license verification is enabled and validation fails, the app shows the hardware-id dialog and exits instead of launching the main window.
+- `METROLIZA_STARTUP_SMOKE` remains available for non-interactive startup smoke checks.
+
 Dependency files:
 - `requirements.txt` - runtime
 - `requirements-dev.txt` - development/testing
@@ -74,6 +84,20 @@ Effect size caveats:
 - Two-group parametric paths report Cohen's *d*; non-parametric paths report Cliff's delta.
 - Multi-group rows use an omnibus effect (eta-squared by default), so pairwise practical interpretation should consider group imbalance and distribution shape.
 
+## Capability metrics legend (summary report)
+
+Histogram statistics tables now use capability terminology aligned with common SPC notation:
+
+- **Two-sided specs**: `Cp` and `Cpk` are shown.
+- **One-sided upper specs**: `Cp` is shown as not defined (`Cp (not defined for one-sided) ⓘ`), and capability is shown as **`Cpu`**.
+- **One-sided lower specs**: `Cp` is shown as not defined (`Cp (not defined for one-sided) ⓘ`), and capability is shown as **`Cpl`**.
+
+Examples of metric availability by spec type:
+
+- `Spec type: two-sided` → `Cp`, `Cpk`.
+- `Spec type: one-sided upper` → `Cp (not defined for one-sided) ⓘ`, `Cpu`.
+- `Spec type: one-sided lower` → `Cp (not defined for one-sided) ⓘ`, `Cpl`.
+
 ## Documentation map
 
 - Release highlights: [`CHANGELOG.md`](CHANGELOG.md)
@@ -85,11 +109,11 @@ Effect size caveats:
 
 ## Release metadata
 
-Current release highlight (`2026.03rc1(260307)`): UX improvements: faster group renaming, clearer extended-chart visuals, and cleaner workflow readability.
+Current release highlight (`2026.03rc1(260315)`): Major analytics update: histogram/chart readability improvements plus new capability confidence and safeguards for low-sample interpretation.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.03rc1(260307)`)
+### Changelog highlights (release `2026.03rc1(260315)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

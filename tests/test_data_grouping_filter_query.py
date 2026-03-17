@@ -65,11 +65,11 @@ for name in [
     setattr(qtwidgets_stub, name, type(name, (), {}))
 sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *a, **k: None})
-sys.modules['modules.CustomLogger'] = custom_logger_stub
+sys.modules['modules.custom_logger'] = custom_logger_stub
 
-from modules.DataGrouping import DataGrouping  # noqa: E402
+from modules.data_grouping import DataGrouping  # noqa: E402
 
 
 class TestDataGroupingFilterQuery(unittest.TestCase):
@@ -659,6 +659,28 @@ class TestDataGroupingReferenceDoubleClick(unittest.TestCase):
         dialog.on_reference_item_double_clicked(_FakeListItem(text='REF-42'))
 
         self.assertEqual(captured['initial_group_name'], 'REF-42')
+
+
+class TestDataGroupingPartDoubleClick(unittest.TestCase):
+    def test_part_double_click_opens_create_group_flow(self):
+        from unittest.mock import Mock
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.create_group = Mock()
+
+        dialog.on_part_item_double_clicked(_FakeListItem(text='1', user_role='k1'))
+
+        dialog.create_group.assert_called_once_with()
+
+    def test_part_double_click_ignores_none_item(self):
+        from unittest.mock import Mock
+
+        dialog = DataGrouping.__new__(DataGrouping)
+        dialog.create_group = Mock()
+
+        dialog.on_part_item_double_clicked(None)
+
+        dialog.create_group.assert_not_called()
 
 
 class TestDataGroupingSelectionRetention(unittest.TestCase):

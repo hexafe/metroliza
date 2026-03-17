@@ -35,7 +35,7 @@ qtcore_stub.QThread = _DummyThread
 qtcore_stub.pyqtSignal = _dummy_signal
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 
 
 class _DummyLogger:
@@ -44,10 +44,10 @@ class _DummyLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.CustomLogger'] = custom_logger_stub
+sys.modules['modules.custom_logger'] = custom_logger_stub
 
 
-cmm_parser_stub = types.ModuleType('modules.CMMReportParser')
+cmm_parser_stub = types.ModuleType('modules.cmm_report_parser')
 
 
 class _DummyCmmReportParser:
@@ -56,8 +56,8 @@ class _DummyCmmReportParser:
 
 
 cmm_parser_stub.CMMReportParser = _DummyCmmReportParser
-sys.modules['modules.CMMReportParser'] = cmm_parser_stub
-from modules.ExportDataThread import (  # noqa: E402
+sys.modules['modules.cmm_report_parser'] = cmm_parser_stub
+from modules.export_data_thread import (  # noqa: E402
     ExportDataThread,
     classify_normality_status,
     build_summary_image_anchor_plan,
@@ -72,7 +72,12 @@ from modules.export_google_result_utils import (  # noqa: E402
     build_google_fallback_metadata,
     build_google_stage_message,
 )
-from modules.ParseReportsThread import build_report_fingerprints_from_rows, parse_new_reports  # noqa: E402
+from modules.export_logging_service import (  # noqa: E402
+    build_export_context,
+    log_export_stage,
+    log_google_issue,
+)
+from modules.parse_reports_thread import build_report_fingerprints_from_rows, parse_new_reports  # noqa: E402
 
 
 class TestParseHelpers(unittest.TestCase):
@@ -106,7 +111,7 @@ class TestParseHelpers(unittest.TestCase):
     def test_get_list_of_reports_supports_zip_source(self):
         import zipfile
 
-        from modules.ParseReportsThread import ParseReportsThread
+        from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -129,7 +134,7 @@ class TestParseHelpers(unittest.TestCase):
     def test_get_list_of_reports_supports_tar_source(self):
         import tarfile
 
-        from modules.ParseReportsThread import ParseReportsThread
+        from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -157,9 +162,9 @@ class TestParseHelpers(unittest.TestCase):
 
 
     def test_get_report_fingerprints_uses_selective_batches_and_preserves_semantics(self):
-        from modules.ParseReportsThread import ParseReportsThread
+        from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
-        import modules.ParseReportsThread as parse_thread_module
+        import modules.parse_reports_thread as parse_thread_module
 
         thread = ParseReportsThread(ParseRequest(source_directory='.', db_file='test.db'))
         thread._report_lookup_candidates = {
@@ -203,9 +208,9 @@ class TestParseHelpers(unittest.TestCase):
 
 
     def test_get_report_fingerprints_stops_loading_batches_on_cancel(self):
-        from modules.ParseReportsThread import ParseReportsThread
+        from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
-        import modules.ParseReportsThread as parse_thread_module
+        import modules.parse_reports_thread as parse_thread_module
 
         thread = ParseReportsThread(ParseRequest(source_directory='.', db_file='test.db'))
         thread._report_lookup_candidates = {
@@ -271,7 +276,7 @@ class TestParseHelpers(unittest.TestCase):
         self.assertEqual(progress_updates, [(1, 3), (2, 3)])
 
     def test_parse_label_includes_multiline_progress_details(self):
-        from modules.ParseReportsThread import ParseReportsThread
+        from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
 
         thread = ParseReportsThread(ParseRequest(source_directory='.', db_file='test.db'))
@@ -283,7 +288,7 @@ class TestParseHelpers(unittest.TestCase):
         self.assertIn('ETA --', label)
 
     def test_parse_progress_clamps_and_stays_monotonic(self):
-        from modules.ParseReportsThread import ParseReportsThread
+        from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
 
         captured_values = []
@@ -311,7 +316,7 @@ class TestExportHelpers(unittest.TestCase):
     def test_classify_normality_status_maps_one_sided_not_applicable_to_neutral_badge(self):
         badge = classify_normality_status('not_applicable')
 
-        self.assertEqual(badge['label'], 'Normality not applicable')
+        self.assertEqual(badge['label'], '! Normality not applicable')
         self.assertEqual(badge['palette_key'], 'normality_unknown')
 
     def test_run_export_steps_stops_when_canceled(self):
@@ -384,6 +389,102 @@ class TestExportHelpers(unittest.TestCase):
         self.assertIn('Google export failed; using local .xlsx fallback: out.xlsx', metadata['fallback_message'])
         self.assertEqual(metadata['fallback_reason'], 'network')
         self.assertEqual(metadata['conversion_warnings'], ['temporary outage'])
+
+    def test_build_export_context_builds_structured_fields(self):
+        context = build_export_context(
+            export_target='google_sheets_drive_convert',
+            output_path='out.xlsx',
+            stage='uploading',
+            fallback_reason='network timeout',
+        )
+
+        self.assertEqual(
+            context,
+            {
+                'export_target': 'google_sheets_drive_convert',
+                'output_path': 'out.xlsx',
+                'stage': 'uploading',
+                'fallback_reason': 'network timeout',
+            },
+        )
+
+    def test_log_export_stage_merges_context_and_extra_payload(self):
+        operation_logger = mock.Mock()
+
+        log_export_stage(
+            operation_logger,
+            'Export started',
+            export_target='excel_xlsx',
+            output_path='out.xlsx',
+            stage='started',
+            elapsed_ms=42,
+        )
+
+        operation_logger.info.assert_called_once()
+        _message, kwargs = operation_logger.info.call_args
+        self.assertEqual(kwargs['extra']['export_target'], 'excel_xlsx')
+        self.assertEqual(kwargs['extra']['output_path'], 'out.xlsx')
+        self.assertEqual(kwargs['extra']['stage'], 'started')
+        self.assertEqual(kwargs['extra']['fallback_reason'], '')
+        self.assertEqual(kwargs['extra']['elapsed_ms'], 42)
+
+    def test_log_google_issue_emits_error_with_warning_details_and_fallback_context(self):
+        operation_logger = mock.Mock()
+        err = RuntimeError('upload failed')
+
+        log_google_issue(
+            operation_logger,
+            'conversion failed and fell back to local xlsx',
+            output_path='out.xlsx',
+            export_target='google_sheets_drive_convert',
+            fallback_message='using local file',
+            warnings=['temporary outage'],
+            error=err,
+        )
+
+        operation_logger.error.assert_called_once()
+        args, kwargs = operation_logger.error.call_args
+        self.assertEqual(args[0], 'Google export issue: %s%s')
+        self.assertIn('conversion failed and fell back to local xlsx', args[1])
+        self.assertIn('fallback=using local file', args[2])
+        self.assertIn('warnings=temporary outage', args[2])
+        self.assertIn('error=upload failed', args[2])
+        self.assertEqual(kwargs['extra']['stage'], 'google_issue')
+        self.assertEqual(kwargs['extra']['outcome'], 'fallback')
+
+    def test_thread_log_helpers_delegate_to_export_logging_service(self):
+        request = __import__('modules.contracts', fromlist=['ExportRequest', 'AppPaths', 'ExportOptions'])
+        thread = ExportDataThread(
+            request.ExportRequest(
+                paths=request.AppPaths(db_file=':memory:', excel_file='dummy.xlsx'),
+                options=request.ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+        )
+
+        with mock.patch('modules.export_data_thread._log_export_stage_message') as stage_logger, mock.patch(
+            'modules.export_data_thread._log_google_issue_message'
+        ) as issue_logger:
+            thread._log_export_stage('Export started', stage='started')
+            thread._log_google_issue('conversion warning', fallback_message='local fallback', warnings=['warn'])
+
+        stage_logger.assert_called_once_with(
+            mock.ANY,
+            'Export started',
+            export_target='google_sheets_drive_convert',
+            output_path='dummy.xlsx',
+            stage='started',
+            level='info',
+            fallback_reason='',
+        )
+        issue_logger.assert_called_once_with(
+            mock.ANY,
+            'conversion warning',
+            output_path='dummy.xlsx',
+            export_target='google_sheets_drive_convert',
+            fallback_message='local fallback',
+            warnings=['warn'],
+            error=None,
+        )
 
     def test_check_canceled_emits_cancel_signal_once(self):
         request = __import__('modules.contracts', fromlist=['ExportRequest', 'AppPaths', 'ExportOptions'])
@@ -464,7 +565,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_export_run_emits_monotonic_progress_from_zero_to_hundred_for_multi_header_data(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
-        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        module = __import__('modules.export_data_thread', fromlist=['read_sql_dataframe'])
         previous_reader = module.read_sql_dataframe
         previous_builder = module.build_measurement_export_dataframe
         previous_formats = module.create_measurement_formats
@@ -530,7 +631,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_add_measurements_stops_emitting_progress_when_canceled(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
-        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        module = __import__('modules.export_data_thread', fromlist=['read_sql_dataframe'])
         previous_reader = module.read_sql_dataframe
         previous_builder = module.build_measurement_export_dataframe
         previous_formats = module.create_measurement_formats
@@ -598,7 +699,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_add_measurements_emits_reference_and_header_label_details(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
-        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        module = __import__('modules.export_data_thread', fromlist=['read_sql_dataframe'])
         previous_reader = module.read_sql_dataframe
         previous_builder = module.build_measurement_export_dataframe
         previous_formats = module.create_measurement_formats
@@ -666,7 +767,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_add_measurements_creates_summary_tab_immediately_after_each_reference_tab(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
-        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        module = __import__('modules.export_data_thread', fromlist=['read_sql_dataframe'])
         previous_reader = module.read_sql_dataframe
         previous_builder = module.build_measurement_export_dataframe
         previous_formats = module.create_measurement_formats
@@ -750,7 +851,7 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
-        module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+        module = __import__('modules.export_data_thread', fromlist=['read_sql_dataframe'])
         previous_formats = module.create_measurement_formats
         previous_write_block = module.write_measurement_block
         previous_insert_chart = module.insert_measurement_chart
@@ -936,6 +1037,100 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertIn(panel_slots['histogram'], inserted_positions)
         self.assertIn(panel_slots['trend'], inserted_positions)
 
+    def test_summary_sheet_fill_shifts_iqr_slot_when_distribution_span_grows(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.inserted_images = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, *_args, **_kwargs):
+                self.inserted_images.append((row, col))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr'}
+        thread.violin_plot_min_samplesize = 1
+
+        # Force a larger calculated span for extended charts to emulate a wide
+        # categorical export and verify iqr placement advances accordingly.
+        thread._resolve_chart_cell_span = lambda _fig: {'col_span': 14, 'row_span': 1}
+
+        worksheet = _FakeSummaryWorksheet()
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        panel_slots = build_summary_image_anchor_plan(5)
+        inserted = worksheet.inserted_images
+        self.assertEqual(inserted[0], panel_slots['distribution'])
+        self.assertGreater(inserted[1][1], panel_slots['iqr'][1])
+
+    def test_summary_sheet_fill_iqr_finalizes_layout_after_scaled_ylim_applied(self):
+        import pandas as pd
+
+        import modules.export_data_thread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'iqr'}
+
+        observed_ylims = []
+        previous_finalize = export_thread_module.finalize_extended_chart_layout
+        previous_scale = export_thread_module.compute_scaled_y_limits
+
+        def _capture_finalize(_fig, ax, **_kwargs):
+            observed_ylims.append(tuple(float(v) for v in ax.get_ylim()))
+
+        export_thread_module.finalize_extended_chart_layout = _capture_finalize
+        export_thread_module.compute_scaled_y_limits = lambda _limits, _scale: (123.0, 456.0)
+        try:
+            header_group = pd.DataFrame(
+                {
+                    'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95],
+                    'NOM': [10.0] * 6,
+                    '+TOL': [0.2] * 6,
+                    '-TOL': [-0.2] * 6,
+                    'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                    'DATE': ['2024-01-01'] * 6,
+                }
+            )
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.finalize_extended_chart_layout = previous_finalize
+            export_thread_module.compute_scaled_y_limits = previous_scale
+
+        self.assertIn((123.0, 456.0), observed_ylims)
+
     def test_apply_bottleneck_optimizations_preserves_trend_for_normal_runs(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
@@ -1056,7 +1251,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         thread.update_progress.emit = lambda *_: None
         thread.finished.emit = lambda: None
 
-        module = __import__('modules.ExportDataThread', fromlist=['ProcessPoolExecutor'])
+        module = __import__('modules.export_data_thread', fromlist=['ProcessPoolExecutor'])
         previous_executor = module.ProcessPoolExecutor
 
         calls = {'init': 0, 'shutdown': 0}
@@ -1248,7 +1443,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_render_iqr_boxplot_normalizes_mismatched_inputs_without_raising(self):
         import matplotlib.pyplot as plt
 
-        module = __import__('modules.ExportDataThread', fromlist=['render_iqr_boxplot'])
+        module = __import__('modules.export_data_thread', fromlist=['render_iqr_boxplot'])
         fig, ax = plt.subplots(figsize=(4, 3))
         try:
             module.render_iqr_boxplot(ax, values=[[1, 2, 3], [4, 5, 6]], labels=['One'])
@@ -1299,7 +1494,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_summary_sheet_distribution_scatter_fallback_uses_group_bucket_labels(self):
         import pandas as pd
 
-        import modules.ExportDataThread as export_thread_module
+        import modules.export_data_thread as export_thread_module
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
         class _FakeSummaryWorksheet:
@@ -1351,7 +1546,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_summary_sheet_distribution_scatter_fallback_non_grouped_sample_number_labels(self):
         import pandas as pd
 
-        import modules.ExportDataThread as export_thread_module
+        import modules.export_data_thread as export_thread_module
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
         class _FakeSummaryWorksheet:
@@ -1452,7 +1647,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_summary_sheet_trend_uses_dense_labels_without_thinning(self):
         import pandas as pd
 
-        import modules.ExportDataThread as export_thread_module
+        import modules.export_data_thread as export_thread_module
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
         class _FakeSummaryWorksheet:
@@ -1501,7 +1696,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_summary_sheet_distribution_scatter_fallback_draws_only_lsl_usl_reference_lines(self):
         import pandas as pd
 
-        import modules.ExportDataThread as export_thread_module
+        import modules.export_data_thread as export_thread_module
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
         class _FakeSummaryWorksheet:
@@ -1612,7 +1807,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 captured['writer_type'] = type(excel_writer).__name__
 
             thread.write_data_to_excel = fake_writer
-            module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+            module = __import__('modules.export_data_thread', fromlist=['read_sql_dataframe'])
             previous_reader = module.read_sql_dataframe
             module.read_sql_dataframe = lambda *_args, **_kwargs: pd.DataFrame({'ID': [1], 'LABEL': ['A']})
             try:
@@ -1649,7 +1844,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.export_filtered_data = fake_export_filtered_data
             thread.add_measurements_horizontal_sheet = fake_add_measurements
 
-            module = __import__('modules.ExportDataThread', fromlist=['read_sql_dataframe'])
+            module = __import__('modules.export_data_thread', fromlist=['read_sql_dataframe'])
             previous_reader = module.read_sql_dataframe
             module.read_sql_dataframe = lambda *_args, **_kwargs: __import__('pandas').DataFrame()
             try:
@@ -1689,7 +1884,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.finished.emit = lambda: calls.append('finished')
             thread.error_occurred.emit = lambda message: errors.append(message)
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
             previous_partition_counts = module.fetch_partition_header_counts
             upload_called = {'value': False}
@@ -1734,7 +1929,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda *_: None
             thread.finished.emit = lambda: None
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
             captured = {}
@@ -1794,7 +1989,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda *_: None
             thread.finished.emit = lambda: None
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
             def _fake_upload(*_args, **kwargs):
@@ -1840,7 +2035,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda *_: None
             thread.finished.emit = lambda: None
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
             def _fake_upload(*_args, **kwargs):
@@ -1893,7 +2088,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.canceled.emit = lambda: canceled_calls.append('canceled')
             thread.finished.emit = lambda: finished_calls.append('finished')
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
             def _raise_canceled(*_args, **_kwargs):
@@ -1934,7 +2129,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.finished.emit = lambda: finished_calls.append('finished')
             thread.log_and_exit = lambda exc: logger_calls.append(str(exc))
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
             def _raise_auth_error(*_args, **_kwargs):
@@ -1979,7 +2174,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.finished.emit = lambda: finished_calls.append('finished')
             thread.log_and_exit = lambda exc: logger_calls.append(str(exc))
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
             def _raise_transient(*_args, **_kwargs):
@@ -2022,7 +2217,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda *_: None
             thread.finished.emit = lambda: None
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
             module.upload_and_convert_workbook = lambda *_args, **_kwargs: GoogleDriveConversionResult(
                 file_id='sheet-id',
@@ -2067,7 +2262,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda *_: None
             thread.finished.emit = lambda: None
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
             def _fake_upload(*_args, **kwargs):
@@ -2136,7 +2331,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda *_: None
             thread.finished.emit = lambda: None
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
             def _fake_upload(*_args, **kwargs):
@@ -2215,7 +2410,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda *_: None
             thread.finished.emit = lambda: None
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
             module.upload_and_convert_workbook = lambda *_args, **_kwargs: GoogleDriveConversionResult(
                 file_id='sheet-id',
@@ -2269,7 +2464,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.emit = lambda *_: None
             thread.finished.emit = lambda: None
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
             module.upload_and_convert_workbook = lambda *_args, **_kwargs: GoogleDriveConversionResult(
                 file_id='sheet-id',
@@ -2309,7 +2504,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.finished.emit = lambda: None
             thread.log_and_exit = lambda *_: None
 
-            module = __import__('modules.ExportDataThread', fromlist=['upload_and_convert_workbook'])
+            module = __import__('modules.export_data_thread', fromlist=['upload_and_convert_workbook'])
             previous_upload = module.upload_and_convert_workbook
 
             def _raise_export_error(*_args, **_kwargs):
@@ -2331,7 +2526,7 @@ class TestExportBackendSmoke(unittest.TestCase):
     def test_summary_sheet_grouped_violin_and_iqr_labels_include_sample_counts(self):
         import pandas as pd
 
-        import modules.ExportDataThread as export_thread_module
+        import modules.export_data_thread as export_thread_module
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
         class _FakeSummaryWorksheet:
@@ -2385,6 +2580,63 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         self.assertEqual(captured['violin_labels'], ['A (n=2)', 'B (n=3)'])
         self.assertEqual(captured['iqr_labels'], ['A (n=2)', 'B (n=3)'])
+
+    def test_google_retry_parse_error_logs_warning(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+        import modules.export_data_thread as export_thread_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = os.path.join(tmpdir, 'out.xlsx')
+            request = ExportRequest(
+                paths=AppPaths(db_file='test.db', excel_file=out_file),
+                options=ExportOptions(export_target='google_sheets_drive_convert'),
+            )
+            thread = ExportDataThread(request)
+
+            class _Backend:
+                def run(self, _thread):
+                    return True
+
+            thread.get_export_backend = lambda: _Backend()
+            thread.update_label.emit = lambda *_: None
+            thread.update_progress.emit = lambda *_: None
+            thread.finished.emit = lambda: None
+
+            stage_logs = []
+            original_log_export_stage = thread._log_export_stage
+            thread._log_export_stage = lambda message, **extra: stage_logs.append((message, extra))
+
+            class _FakeMatch:
+                @staticmethod
+                def group(index):
+                    return 'not-an-int' if index == 2 else '2'
+
+            previous_upload = export_thread_module.upload_and_convert_workbook
+            try:
+                def _fake_upload(*_args, **kwargs):
+                    kwargs['status_callback']('uploading retry 2/3, elapsed 01:20: temporary network issue')
+                    return GoogleDriveConversionResult(
+                        file_id='sheet-id',
+                        web_url='https://docs.google.com/spreadsheets/d/sheet-id/edit',
+                        local_xlsx_path=out_file,
+                        fallback_message=f'Use local .xlsx fallback if needed: {out_file}',
+                        warnings=(),
+                    )
+
+                export_thread_module.upload_and_convert_workbook = _fake_upload
+                with mock.patch('modules.export_data_thread.re.match', return_value=_FakeMatch()):
+                    thread.run()
+            finally:
+                export_thread_module.upload_and_convert_workbook = previous_upload
+                thread._log_export_stage = original_log_export_stage
+
+            warning_stages = [
+                extra for message, extra in stage_logs
+                if message == 'Unable to parse Google upload retry attempt total'
+            ]
+            self.assertEqual(len(warning_stages), 1)
+            self.assertEqual(warning_stages[0].get('stage'), 'uploading_retry_parse')
+            self.assertEqual(warning_stages[0].get('level'), 'warning')
 
 
 if __name__ == '__main__':

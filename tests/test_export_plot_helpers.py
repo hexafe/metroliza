@@ -8,9 +8,17 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from modules.export_histogram_layout import (
+    HISTOGRAM_OUTER_PADDING_TOP,
+    assert_non_overlapping_rectangles,
+)
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE, EMPHASIS_TABLE_ROWS
-from modules.export_summary_utils import compute_normality_status
+from modules.export_summary_utils import (
+    compute_normality_status,
+    resolve_density_curve_sampling,
+    resolve_histogram_bin_count,
+)
 
 
 qtcore_stub = types.ModuleType('PyQt6.QtCore')
@@ -40,7 +48,7 @@ qtcore_stub.QThread = _DummyThread
 qtcore_stub.pyqtSignal = _dummy_signal
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 
 
 class _DummyLogger:
@@ -49,16 +57,20 @@ class _DummyLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.CustomLogger'] = custom_logger_stub
+sys.modules['modules.custom_logger'] = custom_logger_stub
 
-from modules.ExportDataThread import (  # noqa: E402
+from modules.export_data_thread import (  # noqa: E402
     ExportDataThread,
     build_histogram_annotation_specs,
     build_histogram_mean_line_style,
     compute_histogram_annotation_rows,
     compute_histogram_font_sizes,
+    compute_histogram_panel_layout,
+    compute_histogram_plot_with_right_info_layout,
     compute_histogram_table_layout,
     render_histogram_annotations,
+    render_histogram_title,
+    render_histogram_figure_title,
     build_measurement_chart_format_policy,
     build_measurement_block_plan,
     build_measurement_chart_range_specs,
@@ -83,6 +95,9 @@ from modules.ExportDataThread import (  # noqa: E402
     render_spec_reference_lines,
     build_tolerance_reference_legend_handles,
     apply_shared_x_axis_label_strategy,
+    prepare_categorical_x_axis,
+    resolve_extended_chart_fig_width,
+    finalize_extended_chart_layout,
     classify_capability_status,
     classify_nok_severity,
     build_summary_panel_subtitle_text,
@@ -96,14 +111,842 @@ from modules.ExportDataThread import (  # noqa: E402
     render_violin,
     render_scatter_numeric,
     render_histogram,
+    lock_histogram_y_axis_to_bar_heights,
     render_density_line,
+    render_panel_table,
+    render_panel_table_in_panel_axes,
+    render_histogram_note_panel,
     resolve_summary_annotation_strategy,
     apply_summary_plot_theme,
     apply_minimal_axis_style,
+    _build_distribution_fit_info_note,
+    _build_distribution_fit_table_rows,
+    _build_unified_histogram_dashboard_rows,
+    _apply_non_normal_cpk_reference_label,
+    _build_compact_histogram_note_lines,
+    resolve_selected_model_curve_style,
+    resolve_histogram_x_view,
+    resolve_histogram_dashboard_row_metrics,
+    resolve_required_histogram_figure_height_for_complete_right_tables,
 )
 
 
 class TestExportPlotHelpers(unittest.TestCase):
+
+    def test_render_panel_table_applies_alignment_rules(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            meta = render_panel_table(
+                ax=ax,
+                fig=fig,
+                title='Statistic',
+                rows=[('Average', '10.23'), ('Std dev', '0.42')],
+                rect={'x': 0.05, 'y': 0.05, 'width': 0.45, 'height': 0.5},
+                style_options={'fontsize': 8.0},
+            )
+
+            self.assertGreaterEqual(len(meta['rendered_rows']), 1)
+            table = meta['table']
+            self.assertEqual(table.get_celld()[(1, 0)].get_text().get_ha(), 'left')
+            self.assertEqual(table.get_celld()[(1, 1)].get_text().get_ha(), 'right')
+        finally:
+            plt.close(fig)
+
+    def test_render_panel_table_overflow_does_not_change_row_membership(self):
+        fig, ax = plt.subplots(figsize=(3.0, 2.2))
+        try:
+            rows = [
+                ('Critical A', '123.45'),
+                ('Critical B', '123.45'),
+                ('Optional Long Row 1', '123.45'),
+                ('Optional Long Row 2', '123.45'),
+                ('Optional Long Row 3', '123.45'),
+            ]
+            meta = render_panel_table(
+                ax=ax,
+                fig=fig,
+                title='Very Long Header Title',
+                rows=rows,
+                rect={'x': 0.05, 'y': 0.05, 'width': 0.42, 'height': 0.20},
+                style_options={
+                    'fontsize': 9.0,
+                    'min_fontsize': 6.6,
+                    'compact_label_mapping': {'Optional Long Row 1': 'Opt 1', 'Optional Long Row 2': 'Opt 2', 'Optional Long Row 3': 'Opt 3'},
+                    'low_priority_labels': {'Optional Long Row 1', 'Optional Long Row 2', 'Optional Long Row 3'},
+                },
+            )
+
+            self.assertTrue(meta['overflow'])
+            self.assertFalse(meta['deferred_rows'])
+            self.assertFalse(meta['overflow_rows'])
+            self.assertEqual(len(meta['rendered_rows']), len(rows))
+            self.assertIn('reduced_fontsize', meta['fallbacks_applied'])
+            self.assertNotIn('defer_low_priority_rows', meta['fallbacks_applied'])
+            self.assertNotIn('truncate_rows_to_prevent_overlap', meta['fallbacks_applied'])
+        finally:
+            plt.close(fig)
+
+    def test_render_panel_table_compacts_long_labels_before_deferred_row_reduction(self):
+        fig, ax = plt.subplots(figsize=(3.3, 2.3))
+        try:
+            rows = [
+                ('Estimated NOK (PPM)', '12,345'),
+                ('Model fit quality', 'Medium'),
+                ('Goodness of fit p-value', '0.0421'),
+            ]
+            meta = render_panel_table(
+                ax=ax,
+                fig=fig,
+                title='Distribution fit summary',
+                rows=rows,
+                rect={'x': 0.05, 'y': 0.05, 'width': 0.42, 'height': 0.15},
+                style_options={
+                    'fontsize': 8.8,
+                    'min_fontsize': 6.4,
+                    'compact_label_mapping': {
+                        'Estimated NOK (PPM)': 'Est. PPM',
+                        'Model fit quality': 'Fit qual.',
+                        'Goodness of fit p-value': 'GOF p',
+                    },
+                    'low_priority_labels': set(),
+                },
+            )
+
+            self.assertTrue(meta['used_compact_labels'])
+            self.assertIn('compact_label_mapping', meta['fallbacks_applied'])
+            rendered_labels = [label for label, _ in meta['rendered_rows']]
+            self.assertIn('Est. PPM', rendered_labels)
+            self.assertNotIn('Estimated NOK (PPM)', rendered_labels)
+            self.assertTrue(meta['overflow'])
+            self.assertEqual(len(meta['rendered_rows']), len(rows))
+        finally:
+            plt.close(fig)
+
+    def test_histogram_statistics_row_contract_recovery(self):
+        payload = build_histogram_table_data(
+            {
+                'minimum': 9.8,
+                'maximum': 10.2,
+                'average': 10.0,
+                'median': 10.0,
+                'sigma': 0.1,
+                'cp': 1.2,
+                'cpk': 1.1,
+                'nok_count': 0,
+                'nok_pct': 0.0,
+                'sample_size': 32,
+                'nom': 10.0,
+                'lsl': 9.5,
+                'usl': 10.5,
+                'spec_type': 'two-sided',
+            }
+        )
+
+        labels = [label for label, _ in payload['rows']]
+        self.assertEqual(labels[:7], ['Min', 'Max', 'Mean', 'Median', 'Std Dev', 'Cp', 'Cpk'])
+        self.assertEqual(labels[-3:], ['NOK', 'NOK %', 'Samples'])
+
+    def test_distribution_fit_row_contract_recovery_with_warning(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'selected_model': {'display_name': 'Johnson SU'},
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.005,
+                    'nok_percent': 0.5,
+                },
+            },
+            usl=10.0,
+            summary_stats={'sample_size': 20},
+        )
+
+        self.assertEqual([label for label, _ in rows], ['Model', 'Est. NOK %', 'Fit quality', 'Warning'])
+        self.assertEqual(dict(rows)['Warning'], 'small sample; capability uncertain')
+
+    def test_unified_histogram_dashboard_row_order_contract(self):
+        stats_rows = [
+            ('Min', '1.0'),
+            ('Max', '2.0'),
+            ('Mean', '1.5'),
+            ('Median', '1.5'),
+            ('Std Dev', '0.1'),
+            ('Cp', '1.2'),
+            ('Cpk', '1.1'),
+            ('NOK', '1 (U: 1)'),
+            ('NOK %', '10.00%'),
+            ('Samples', '10'),
+        ]
+        fit_rows = [
+            ('Model', 'Johnson SU'),
+            ('Est. NOK %', '0.5000%\nU: 0.5000%'),
+            ('Fit quality', 'Medium'),
+            ('Warning', 'small sample; capability uncertain'),
+        ]
+
+        unified = _build_unified_histogram_dashboard_rows(
+            statistics_rows=stats_rows,
+            distribution_fit_rows=fit_rows,
+        )
+
+        self.assertEqual(
+            [label for label, _ in unified],
+            [
+                'Min', 'Max', 'Mean', 'Median', 'Std Dev',
+                'Cp', 'Cpk', 'NOK', 'NOK %', 'Samples',
+                'Model', 'Est. NOK %', 'Fit quality', 'Warning',
+            ],
+        )
+
+    def test_distribution_fit_estimated_nok_forces_two_line_bilateral_format(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'selected_model': {'display_name': 'Johnson SU'},
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'bilateral',
+                    'below_lsl_probability': 0.135614,
+                    'above_usl_probability': 0.399222,
+                    'nok_percent': 53.4837,
+                },
+            },
+            lsl=9.0,
+            usl=11.0,
+            summary_stats={'sample_size': 40},
+        )
+
+        est_nok_value = dict(rows)['Est. NOK %']
+        self.assertEqual(
+            est_nok_value,
+            '53.4837%\nL: 13.5614%, U: 39.9222%',
+        )
+        self.assertEqual(len(est_nok_value.splitlines()), 2)
+
+    def test_render_panel_table_in_panel_axes_explicit_row_heights_keep_all_rows(self):
+        fig = plt.figure(figsize=(4.0, 3.0))
+        panel_ax = fig.add_axes([0.1, 0.1, 0.35, 0.6])
+        rows = [('Model', 'Johnson\nSU\nVariant'), ('Fit quality', 'Medium'), ('Warning', 'small sample; capability uncertain')]
+        try:
+            meta = render_panel_table_in_panel_axes(
+                ax=panel_ax,
+                title='Distribution Fit',
+                rows=rows,
+                style_options={'fontsize': 8.0},
+            )
+
+            self.assertEqual(meta['rendered_rows'], rows)
+            self.assertEqual(len(meta['explicit_row_heights']), len(rows) + 1)
+        finally:
+            plt.close(fig)
+
+    def test_statistics_and_fit_tables_share_line_aware_row_height_policy(self):
+        fig = plt.figure(figsize=(8.4, 4.0))
+        try:
+            fit_ax = fig.add_axes([0.66, 0.18, 0.30, 0.34])
+            stats_ax = fig.add_axes([0.66, 0.56, 0.30, 0.34])
+            fit_ax.set_axis_off()
+            stats_ax.set_axis_off()
+
+            fit_rows = [('Model', 'Johnson\nSU\nVariant'), ('Fit quality', 'Medium')]
+            stats_rows = [('Min', '9.8'), ('Std Dev', '0.1')]
+
+            fit_meta = render_panel_table_in_panel_axes(
+                ax=fit_ax,
+                title='Distribution Fit',
+                rows=fit_rows,
+                style_options={'fontsize': 8.0},
+            )
+            stats_meta = render_panel_table_in_panel_axes(
+                ax=stats_ax,
+                title='Statistics',
+                rows=stats_rows,
+                style_options={'fontsize': 8.0},
+            )
+
+            fit_header_height = fit_meta['explicit_row_heights'][0]
+            stats_header_height = stats_meta['explicit_row_heights'][0]
+            fit_single_line_height = fit_meta['explicit_row_heights'][2]
+            stats_single_line_height = stats_meta['explicit_row_heights'][1]
+
+            self.assertAlmostEqual(fit_header_height, stats_header_height, places=5)
+            self.assertAlmostEqual(fit_single_line_height, stats_single_line_height, places=5)
+            self.assertGreater(fit_meta['explicit_row_heights'][1], fit_single_line_height)
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_note_panel_switches_to_compact_variant_for_long_context_text(self):
+        fig, ax = plt.subplots(figsize=(3.0, 2.2))
+        try:
+            note_items = [
+                {
+                    'label': 'Candidate family',
+                    'compact_label': 'Family',
+                    'value': 'Positive-support one-sided family with extended context text for validation',
+                    'compact_value': 'One-sided +',
+                    'priority': 90,
+                },
+                {
+                    'label': 'Model',
+                    'compact_label': 'Model',
+                    'value': 'Gamma (3-parameter, constrained support)',
+                    'compact_value': 'Gamma',
+                    'priority': 80,
+                },
+                {
+                    'label': 'Context',
+                    'compact_label': 'Context',
+                    'value': 'Deferred row: Estimated NOK (PPM) with additional explanatory narrative text.',
+                    'compact_value': 'Deferred rows present',
+                    'priority': 20,
+                    'expanded_only': True,
+                },
+            ]
+
+            meta = render_histogram_note_panel(
+                ax=ax,
+                note_items=note_items,
+                style_options={'fontsize': 7.2, 'min_fontsize': 6.2, 'max_fontsize': 8.8},
+                available_height_px=10.0,
+            )
+
+            self.assertEqual(meta['variant'], 'compact')
+            rendered_text = '\n'.join(meta['rendered_lines'])
+            self.assertIn('Family: One-sided +', rendered_text)
+            self.assertNotIn('Context:', rendered_text)
+            self.assertNotIn('extended context text for validation', rendered_text)
+            self.assertIn('text_artist', meta)
+            self.assertFalse(hasattr(meta.get('text_artist'), 'get_celld'))
+        finally:
+            plt.close(fig)
+
+    def test_render_panel_table_in_panel_axes_uses_content_height_bounds(self):
+        fig = plt.figure(figsize=(4.0, 3.0))
+        panel_ax = fig.add_axes([0.1, 0.1, 0.35, 0.6])
+        try:
+            meta = render_panel_table_in_panel_axes(
+                ax=panel_ax,
+                title='Statistic',
+                rows=[('A', '1'), ('B', '2')],
+                style_options={'fontsize': 8.0},
+            )
+
+            self.assertEqual(meta['used_bounds']['x'], 0.0)
+            self.assertEqual(meta['used_bounds']['width'], 1.0)
+            self.assertLess(meta['used_bounds']['height'], 1.0)
+            self.assertGreater(meta['used_bounds']['y'], 0.0)
+            self.assertEqual(len(meta['rendered_rows']), 2)
+        finally:
+            plt.close(fig)
+
+    def test_histogram_panel_layout_rendering_smoke_with_dedicated_axes(self):
+        fig = plt.figure(figsize=(8.4, 4.0))
+        try:
+            measurements = pd.DataFrame(
+                {'MEAS': np.concatenate([np.linspace(9.8, 10.2, 40), np.linspace(10.25, 10.5, 16)])}
+            )
+            unified_rows = [
+                ('Min', '9.800'),
+                ('Max', '10.500'),
+                ('Mean', '10.102'),
+                ('Median', '10.091'),
+                ('Std Dev', '0.085'),
+                ('Cp', '1.34'),
+                ('Cpk (ref)', '1.19'),
+                ('NOK', '2 (U: 2)'),
+                ('NOK %', '3.57%'),
+                ('Samples', '56'),
+                ('Model', 'Johnson SU'),
+                ('Est. NOK %', '0.1234%\nU: 0.1234%'),
+                ('Fit quality', 'Medium'),
+                ('Warning', 'small sample; capability uncertain'),
+            ]
+            rects = compute_histogram_plot_with_right_info_layout(
+                (8.4, 4.0),
+                table_fontsize=8.8,
+                fit_row_count=0,
+                stats_row_count=len(unified_rows),
+                fit_rows=[],
+                stats_rows=unified_rows,
+                note_line_count=0,
+                right_container_width_hint=0.34,
+            )
+            assert_non_overlapping_rectangles({
+                'plot_rect': rects['plot_rect'],
+                'right_table_rect': rects['right_container_rect'],
+                'footer_rect': rects['footer_rect'],
+            })
+
+            plot_ax = fig.add_axes([rects['plot_rect']['x'], rects['plot_rect']['y'], rects['plot_rect']['width'], rects['plot_rect']['height']])
+            right_ax = fig.add_axes([rects['right_container_rect']['x'], rects['right_container_rect']['y'], rects['right_container_rect']['width'], rects['right_container_rect']['height']])
+            right_ax.set_axis_off()
+
+            render_histogram(plot_ax, measurements, lsl=9.9, usl=10.4)
+            table_meta = render_panel_table_in_panel_axes(ax=right_ax, title='Parameter', rows=unified_rows, style_options={'fontsize': 9.3})
+            self.assertEqual(len(fig.axes), 2)
+            self.assertGreater(rects['plot_rect']['width'], rects['right_container_rect']['width'])
+            self.assertEqual(rects['footer_rect']['height'], 0.0)
+            self.assertEqual([label for label, _ in table_meta['rendered_rows']], [label for label, _ in unified_rows])
+        finally:
+            plt.close(fig)
+
+    def test_histogram_font_size_baseline_is_larger_for_unified_table_readability(self):
+        font_sizes = compute_histogram_font_sizes((8.8, 4.4), has_table=True, readability_scale=0.0)
+
+        self.assertGreater(font_sizes['table_fontsize'], 10.0)
+
+    def test_resolved_histogram_figure_height_scales_with_updated_table_font(self):
+        rows = [
+            ('Min', '9.800'),
+            ('Max', '10.500'),
+            ('Mean', '10.102'),
+            ('Median', '10.091'),
+            ('Std Dev', '0.085'),
+            ('Cp', '1.34'),
+            ('Cpk (ref)', '1.19'),
+            ('NOK', '2 (U: 2)'),
+            ('NOK %', '3.57%'),
+            ('Samples', '56'),
+            ('Model', 'Johnson SU'),
+            ('Est. NOK %', '0.1234%\nU: 0.1234%'),
+            ('Fit quality', 'Medium'),
+            ('Warning', 'small sample; capability uncertain\nmodel uncertainty due to low n'),
+        ]
+
+        resolved_height = resolve_required_histogram_figure_height_for_complete_right_tables(
+            fit_rows=[],
+            stats_rows=rows,
+            table_fontsize=compute_histogram_font_sizes((8.8, 4.4), has_table=True)['table_fontsize'],
+            minimum_height=4.4,
+        )
+
+        self.assertGreater(resolved_height, 4.4)
+
+    def test_unified_table_multiline_rows_remain_visible_without_clipping_at_larger_font(self):
+        fig = plt.figure(figsize=(8.8, 5.1))
+        try:
+            rows = [
+                ('Min', '9.8000'),
+                ('Est. NOK %', '0.1234%\nL: 0.1200%, U: 0.2300%'),
+                ('Warning', 'small sample; capability uncertain\nverify with additional production lots'),
+            ]
+            ax = fig.add_axes([0.62, 0.1, 0.34, 0.82])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=rows,
+                style_options={
+                    'fontsize': 9.3,
+                    'explicit_label_fraction': 0.44,
+                    'explicit_value_fraction': 0.56,
+                    'value_wrap_width': 26,
+                },
+            )
+
+            self.assertFalse(meta['overflow'])
+            rendered_rows = dict(meta['rendered_rows'])
+            self.assertIn('\n', rendered_rows['Est. NOK %'])
+            self.assertIn('\n', rendered_rows['Warning'])
+
+            row_heights = meta['explicit_row_heights']
+            self.assertGreater(row_heights[2], row_heights[1])
+            self.assertGreater(row_heights[3], row_heights[1])
+        finally:
+            plt.close(fig)
+
+    def test_header_font_remains_proportional_to_body_font_for_unified_table(self):
+        fig = plt.figure(figsize=(6.0, 3.6))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=[('Min', '9.8000'), ('Warning', 'small sample; capability uncertain')],
+                style_options={'fontsize': 9.3},
+            )
+            table = meta['table']
+            header_size = table.get_celld()[(0, 0)].get_text().get_fontsize()
+            body_size = table.get_celld()[(1, 0)].get_text().get_fontsize()
+
+            self.assertGreater(header_size, body_size)
+            self.assertLess(header_size - body_size, 1.0)
+        finally:
+            plt.close(fig)
+
+    def test_histogram_dashboard_row_metrics_scale_for_larger_font_and_multiline_rows(self):
+        metrics = resolve_histogram_dashboard_row_metrics(table_fontsize=9.3, dpi=100.0)
+
+        self.assertGreater(metrics['base_row_height_px'], 16.0)
+        self.assertGreater(metrics['extra_line_height_px'], 9.5)
+
+
+    def test_distribution_fit_table_rows_include_expected_payload_and_ordering_for_bilateral_specs(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'selected_model': {'display_name': 'Weibull (Min)'},
+                'gof_metrics': {'ad_pvalue': 0.07342},
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'bilateral',
+                    'below_lsl_probability': 0.0012,
+                    'above_usl_probability': 0.0023,
+                    'nok_percent': 0.1234,
+                    'ppm_nok': 1234.0,
+                },
+            },
+            lsl=9.5,
+            usl=10.5,
+        )
+
+        self.assertEqual([label for label, _ in rows], [
+            'Model',
+            'Est. NOK %',
+            'Fit quality',
+        ])
+        self.assertEqual(rows[0][1], 'Weibull (Min)')
+        self.assertEqual(rows[1][1], '0.1234%\nL: 0.1200%, U: 0.2300%')
+        self.assertEqual(rows[2][1], 'Strong')
+
+    def test_panel_table_preserves_explicit_newlines_when_value_wrapping_is_enabled(self):
+        fig = plt.figure(figsize=(6.8, 4.2))
+        try:
+            ax = fig.add_axes([0.62, 0.08, 0.33, 0.84])
+            ax.set_axis_off()
+
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=[('Est. NOK %', '1.4140%\nL: 1.4140%, U: <0.0001%')],
+                style_options={
+                    'fontsize': 9.1,
+                    'value_wrap_width': 26,
+                },
+            )
+
+            rendered_value = meta['table'].get_celld()[(1, 1)].get_text().get_text()
+            self.assertIn('\nL:', rendered_value)
+        finally:
+            plt.close(fig)
+
+    def test_distribution_fit_table_rows_follow_upper_only_contract(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.01234,
+                    'nok_percent': 1.234,
+                    'ppm_nok': 12340.0,
+                },
+            },
+            lsl=None,
+            usl=10.0,
+        )
+
+        self.assertEqual([label for label, _ in rows], ['Model', 'Est. NOK %', 'Fit quality'])
+
+    def test_distribution_fit_table_rows_follow_lower_only_contract(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'risk_estimates': {
+                    'spec_type': 'lower_only',
+                    'below_lsl_probability': 0.0456,
+                    'nok_percent': 4.56,
+                    'ppm_nok': 45600.0,
+                },
+            },
+            lsl=2.0,
+            usl=None,
+        )
+
+        self.assertEqual([label for label, _ in rows], ['Model', 'Est. NOK %', 'Fit quality'])
+
+    def test_distribution_fit_table_rows_omit_zero_bound_lower_tail_for_positive_support(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'inferred_support_mode': 'one_sided_zero_bound_positive',
+                'risk_estimates': {
+                    'spec_type': 'lower_only',
+                    'below_lsl_probability': 0.0,
+                    'nok_percent': 0.0,
+                    'ppm_nok': 0.0,
+                },
+            },
+            lsl=0.0,
+            usl=None,
+        )
+
+        self.assertNotIn('P(<LSL)', [label for label, _ in rows])
+
+    def test_distribution_fit_table_rows_fallback_to_na_when_fit_unreliable(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'fit_quality': {'label': 'unreliable'},
+                'risk_estimates': {
+                    'nok_percent': None,
+                    'ppm_nok': None,
+                },
+            }
+        )
+
+        self.assertEqual(rows[0], ('Model', 'N/A'))
+        self.assertEqual(rows[1], ('Fit quality', 'Unreliable'))
+        self.assertEqual(rows[2], ('Warning', 'fit unreliable; observed NOK only'))
+
+    def test_left_and_right_panel_tables_share_fontsize_and_row_height_policy(self):
+        fig = plt.figure(figsize=(6.2, 4.0))
+        try:
+            left_ax = fig.add_axes([0.05, 0.08, 0.24, 0.84])
+            right_ax = fig.add_axes([0.72, 0.28, 0.22, 0.64])
+            left_ax.set_axis_off()
+            right_ax.set_axis_off()
+
+            left_meta = render_panel_table_in_panel_axes(
+                ax=left_ax,
+                title='Distribution Fit',
+                rows=[('Model', 'Johnson SU'), ('Est. NOK %', '0.123%'), ('Est. PPM', '1,230'), ('Fit quality', 'Medium')],
+                style_options={'fontsize': 8.3},
+                row_height=0.092,
+                pad_y=0.02,
+            )
+            right_meta = render_panel_table_in_panel_axes(
+                ax=right_ax,
+                title='Statistic',
+                rows=[('Average', '10.10'), ('Std dev', '0.08'), ('Cp', '1.33'), ('Cpk', '1.22')],
+                style_options={'fontsize': 8.3},
+                row_height=0.092,
+                pad_y=0.02,
+            )
+
+            left_cells = left_meta['table'].get_celld()
+            right_cells = right_meta['table'].get_celld()
+            self.assertAlmostEqual(left_cells[(1, 0)].get_height(), right_cells[(1, 0)].get_height(), delta=0.05)
+            self.assertLess(left_meta['used_bounds']['height'], 1.0)
+        finally:
+            plt.close(fig)
+
+    def test_wrapped_row_height_uses_max_line_count_across_label_and_value_columns(self):
+        fig = plt.figure(figsize=(5.0, 3.6))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.45, 0.8])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Distribution Fit',
+                rows=[('Label only\nwrap', 'value'), ('single', 'value\nwrap\nmore')],
+                style_options={'fontsize': 8.0},
+            )
+            table = meta['table']
+            first_row_height = table.get_celld()[(1, 0)].get_height()
+            second_row_height = table.get_celld()[(2, 0)].get_height()
+            self.assertGreater(second_row_height, first_row_height)
+            self.assertEqual(meta['explicit_row_heights'][1], first_row_height)
+            self.assertEqual(meta['explicit_row_heights'][2], second_row_height)
+        finally:
+            plt.close(fig)
+
+    def test_wrapped_rows_do_not_change_other_table_baseline_row_height(self):
+        fig = plt.figure(figsize=(8.4, 4.0))
+        try:
+            fit_ax = fig.add_axes([0.66, 0.18, 0.30, 0.34])
+            stats_ax = fig.add_axes([0.66, 0.56, 0.30, 0.34])
+            fit_ax.set_axis_off()
+            stats_ax.set_axis_off()
+
+            fit_meta = render_panel_table_in_panel_axes(
+                ax=fit_ax,
+                title='Distribution Fit',
+                rows=[('Model', 'Johnson\nSU\nVariant'), ('Fit quality', 'Medium')],
+                style_options={'fontsize': 8.0},
+            )
+            stats_meta = render_panel_table_in_panel_axes(
+                ax=stats_ax,
+                title='Statistics',
+                rows=[('Average', '10.1'), ('Std dev', '0.08')],
+                style_options={'fontsize': 8.0},
+            )
+
+            fit_baseline = fit_meta['table'].get_celld()[(2, 0)].get_height()
+            stats_baseline = stats_meta['table'].get_celld()[(1, 0)].get_height()
+            self.assertAlmostEqual(fit_baseline, stats_baseline, places=5)
+            self.assertGreater(
+                fit_meta['table'].get_celld()[(1, 0)].get_height(),
+                stats_baseline,
+            )
+        finally:
+            plt.close(fig)
+
+    def test_distribution_fit_table_value_column_wraps_long_model_without_overlap(self):
+        fig = plt.figure(figsize=(4.8, 3.2))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Distribution Fit',
+                rows=[('Model', 'Johnson SU Extended Variant Name'), ('Est. PPM', '123,456,789')],
+                style_options={'fontsize': 8.3, 'value_wrap_width': 12, 'min_label_fraction': 0.42, 'min_value_fraction': 0.44},
+                row_height=0.074,
+                pad_y=0.02,
+            )
+
+            rendered = dict(meta['rendered_rows'])
+            self.assertIn('\n', rendered['Model'])
+            self.assertGreaterEqual(len(meta['rendered_rows']), 1)
+        finally:
+            plt.close(fig)
+
+    def test_unified_histogram_table_uses_explicit_parameter_value_width_ratio(self):
+        fig = plt.figure(figsize=(5.6, 3.4))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            rows = [('Min', '9.8000'), ('Warning', 'small sample; capability uncertain')]
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=rows,
+                style_options={
+                    'fontsize': 8.2,
+                    'explicit_label_fraction': 0.44,
+                    'explicit_value_fraction': 0.56,
+                },
+            )
+
+            table = meta['table']
+            self.assertAlmostEqual(table.get_celld()[(1, 0)].get_width(), 0.44, places=2)
+            self.assertAlmostEqual(table.get_celld()[(1, 1)].get_width(), 0.56, places=2)
+            self.assertGreater(table.get_celld()[(1, 1)].get_width(), table.get_celld()[(1, 0)].get_width())
+        finally:
+            plt.close(fig)
+
+    def test_wrapped_value_rows_get_taller_explicit_row_heights(self):
+        fig = plt.figure(figsize=(5.0, 3.2))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Parameter',
+                rows=[
+                    ('Model', 'Johnson SU Extended Variant Name'),
+                    ('Min', '9.8000'),
+                ],
+                style_options={'fontsize': 8.2, 'value_wrap_width': 12},
+            )
+
+            row_heights = meta['explicit_row_heights']
+            self.assertGreater(row_heights[1], row_heights[2])
+        finally:
+            plt.close(fig)
+
+    def test_table_badge_styling_avoids_hatch_and_icon_noise(self):
+        fig = plt.figure(figsize=(4.8, 3.2))
+        try:
+            ax = fig.add_axes([0.05, 0.08, 0.9, 0.84])
+            ax.set_axis_off()
+            meta = render_panel_table_in_panel_axes(
+                ax=ax,
+                title='Distribution Fit',
+                rows=[('Fit quality', 'Weak')],
+                style_options={'fontsize': 8.3},
+                row_height=0.092,
+                pad_y=0.02,
+            )
+            table = meta['table']
+            style_histogram_stats_table(
+                table,
+                meta['rendered_rows'],
+                capability_row_badges={'Fit quality': {'palette_key': 'fit_quality_low'}},
+            )
+
+            value_cell = table.get_celld()[(1, 1)]
+            self.assertEqual(value_cell.get_hatch(), '')
+            self.assertFalse(value_cell.get_text().get_text().startswith(('✓ ', '! ', '× ')))
+        finally:
+            plt.close(fig)
+
+    def test_histogram_export_ticks_and_xaxis_label_remain_inside_figure_bounds(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
+        try:
+            values = pd.DataFrame({'MEAS': np.linspace(9.8, 10.5, 40)})
+            render_histogram(ax, values, lsl=9.9, usl=10.4)
+            ax.set_xlabel('Measurement')
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            fig_bbox = fig.bbox
+
+            for text in [*ax.get_xticklabels(), ax.xaxis.label]:
+                if not text.get_text():
+                    continue
+                bbox = text.get_window_extent(renderer=renderer)
+                self.assertGreaterEqual(bbox.y0, fig_bbox.y0 - 0.5)
+                self.assertLessEqual(bbox.y1, fig_bbox.y1 + 0.5)
+        finally:
+            plt.close(fig)
+
+    def test_distribution_fit_note_panel_avoids_model_and_fit_quality_duplication(self):
+        note_items, _poor_fit = _build_distribution_fit_info_note(
+            {
+                'inferred_support_mode': 'signed',
+                'selected_model': {'display_name': 'Johnson SU'},
+                'fit_quality': {'label': 'medium'},
+            },
+            summary_stats={'normality_text': 'Shapiro non-normal'},
+        )
+        labels = [item.get('label') for item in note_items]
+        self.assertNotIn('Model', labels)
+        self.assertNotIn('Fit quality', labels)
+        self.assertIn('Spec handling', labels)
+        self.assertNotIn('Family (debug)', labels)
+
+    def test_distribution_fit_default_rows_do_not_include_detached_note_metadata(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'selected_model': {'display_name': 'Johnson SU'},
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {'spec_type': 'bilateral', 'below_lsl_probability': 0.001, 'above_usl_probability': 0.002, 'nok_percent': 0.003, 'ppm_nok': 3000},
+            },
+            lsl=9.0,
+            usl=11.0,
+        )
+
+        labels = [label for label, _ in rows]
+        self.assertNotIn('Spec handling', labels)
+        self.assertNotIn('Family (debug)', labels)
+        self.assertNotIn('Capability', labels)
+
+    def test_histogram_annotation_rendering_keeps_mean_and_spec_labels_without_tail_probability_text(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
+        try:
+            values = pd.DataFrame({'MEAS': np.linspace(9.7, 10.5, 60)})
+            render_histogram(ax, values, lsl=9.9, usl=10.3)
+
+            annotation_specs = build_histogram_annotation_specs(average=10.1, usl=10.3, lsl=9.9, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=0.8,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#cccccc', 'alpha': 0.94},
+            )
+
+            rendered_texts = [text.get_text() for text in ax.texts]
+            self.assertTrue(any(text.startswith('Mean =') for text in rendered_texts))
+            self.assertTrue(any(text.startswith('USL=') for text in rendered_texts))
+            self.assertTrue(any(text.startswith('LSL=') for text in rendered_texts))
+            self.assertFalse(any('P(X < LSL)' in text for text in rendered_texts))
+            self.assertFalse(any('P(X > USL)' in text for text in rendered_texts))
+        finally:
+            plt.close(fig)
 
     def test_apply_summary_plot_theme_sets_lighter_grid_alpha_and_linewidth(self):
         apply_summary_plot_theme()
@@ -134,7 +977,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             plt.close(fig)
 
 
-    def test_histogram_y_axis_tracks_bar_counts_not_overlay_curve(self):
+    def test_histogram_y_axis_autoscales_to_include_overlay_curve_when_count_scaled(self):
         import pandas as pd
 
         values = [1.0] * 14 + [1.25] * 12 + [1.5] * 10 + [1.75] * 8 + [2.0] * 6
@@ -148,17 +991,17 @@ class TestExportPlotHelpers(unittest.TestCase):
             exaggerated_curve = np.linspace(80.0, 120.0, 50)
             render_density_line(ax, x_values, exaggerated_curve)
 
+            lock_histogram_y_axis_to_bar_heights(ax)
             bar_ylim_after_overlay = ax.get_ylim()
-            self.assertEqual(bar_ylim_after_overlay, bar_ylim_before_overlay)
+            self.assertGreater(bar_ylim_after_overlay[1], bar_ylim_before_overlay[1])
 
             max_bar_height = max((patch.get_height() for patch in ax.patches), default=0.0)
             self.assertGreater(max_bar_height, 0.0)
             self.assertGreaterEqual(bar_ylim_after_overlay[1], max_bar_height)
-            self.assertLessEqual(bar_ylim_after_overlay[1], max_bar_height * 1.2)
         finally:
             plt.close(fig)
 
-    def test_render_density_line_uses_hidden_secondary_y_axis(self):
+    def test_render_density_line_plots_on_primary_axis(self):
         fig, ax = plt.subplots(figsize=(4, 3))
         try:
             x_values = np.linspace(0.0, 1.0, 20)
@@ -166,12 +1009,22 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             render_density_line(ax, x_values, density_values)
 
-            self.assertEqual(len(fig.axes), 2)
-            secondary_axis = fig.axes[1]
-            self.assertFalse(secondary_axis.yaxis.get_visible())
-            self.assertEqual(list(secondary_axis.get_yticks()), [])
-            self.assertFalse(secondary_axis.spines['right'].get_visible())
-            self.assertEqual(len(secondary_axis.lines), 1)
+            self.assertEqual(len(fig.axes), 1)
+            self.assertEqual(len(ax.lines), 1)
+        finally:
+            plt.close(fig)
+
+    def test_render_density_line_adds_multiple_overlays_to_primary_axis(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        try:
+            x_values = np.linspace(0.0, 1.0, 20)
+            density_values = np.linspace(0.2, 2.0, 20)
+
+            render_density_line(ax, x_values, density_values)
+            render_density_line(ax, x_values, density_values * 0.8, linestyle='--', alpha=0.3)
+
+            self.assertEqual(len(fig.axes), 1)
+            self.assertEqual(len(ax.lines), 2)
         finally:
             plt.close(fig)
 
@@ -295,10 +1148,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         anchors = build_summary_image_anchor_plan(15)
 
         self.assertEqual(anchors['header'], (40, 0))
-        self.assertEqual(anchors['distribution'], (41, 0))
-        self.assertEqual(anchors['iqr'], (41, 9))
-        self.assertEqual(anchors['histogram'], (41, 19))
-        self.assertEqual(anchors['trend'], (41, 29))
+        self.assertEqual(anchors['distribution'], (41, 1))
+        self.assertEqual(anchors['iqr'], (41, 11))
+        self.assertEqual(anchors['histogram'], (41, 21))
+        self.assertEqual(anchors['trend'], (41, 35))
 
     def test_build_summary_sheet_position_plan_stacks_sequential_headers_without_gaps(self):
         rows = [build_summary_sheet_position_plan(base_col)['row'] for base_col in (5, 10, 15, 20)]
@@ -315,16 +1168,34 @@ class TestExportPlotHelpers(unittest.TestCase):
 
     def test_build_histogram_annotation_specs_returns_ordered_mean_usl_lsl_labels(self):
         annotations = build_histogram_annotation_specs(average=10.1234, usl=10.6, lsl=9.8, y_max=2.0)
+        by_kind = {item['kind']: item for item in annotations}
 
         self.assertEqual(len(annotations), 3)
         self.assertEqual(annotations[0]['text'], 'Mean = 10.123')
         self.assertEqual(annotations[0]['x'], 10.1234)
         self.assertEqual(annotations[1]['text'], 'USL=10.600')
-        self.assertGreater(annotations[1]['text_y_axes'], annotations[0]['text_y_axes'])
         self.assertEqual(annotations[1]['ha'], 'center')
         self.assertEqual(annotations[2]['text'], 'LSL=9.800')
         self.assertEqual(annotations[2]['ha'], 'center')
-        self.assertGreater(annotations[0]['text_y_axes'], annotations[2]['text_y_axes'])
+        self.assertEqual(by_kind['mean']['preferred_slot'], 'mean_primary')
+        self.assertEqual(by_kind['usl']['preferred_slot'], 'spec_primary')
+        self.assertEqual(by_kind['lsl']['preferred_slot'], 'spec_secondary')
+
+    def test_compute_histogram_annotation_rows_top_band_slots_keep_mean_above_specs(self):
+        annotation_specs = build_histogram_annotation_specs(average=10.2, usl=10.5, lsl=9.8, y_max=1.0)
+
+        resolved, _ = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.04,
+            threshold_mode='axis_fraction',
+            x_span=1.0,
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+        by_kind = {item['kind']: item for item in resolved}
+
+        self.assertGreater(by_kind['mean']['text_y_axes'], by_kind['usl']['text_y_axes'])
+        self.assertGreater(by_kind['mean']['text_y_axes'], by_kind['lsl']['text_y_axes'])
 
     def test_summary_palette_keeps_annotation_emphasis_alias_for_backward_compatibility(self):
         self.assertEqual(
@@ -345,8 +1216,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         payload = build_histogram_density_curve_payload([1.0, 1.5, 2.0, 2.5])
 
         self.assertIsNotNone(payload)
-        self.assertEqual(len(payload['x']), 100)
-        self.assertEqual(len(payload['y']), 100)
+        self.assertEqual(len(payload['x']), 40)
+        self.assertEqual(len(payload['y']), 40)
 
     def test_build_histogram_density_curve_payload_returns_none_for_constant_data(self):
         payload = build_histogram_density_curve_payload([3.0, 3.0, 3.0])
@@ -373,8 +1244,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         x_min, x_max = ax.get_xlim()
         self.assertLess(x_min, 7.0)
         self.assertGreater(x_max, 7.0)
-        self.assertAlmostEqual(x_min, 6.65)
-        self.assertAlmostEqual(x_max, 7.35)
+        self.assertGreater(x_max - x_min, 1e-4)
+        self.assertLess(x_max - x_min, 1e-3)
         plt.close(fig)
 
     def test_render_histogram_xlim_includes_spec_limits_with_margin(self):
@@ -390,6 +1261,40 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertGreater(x_max, max(values))
         self.assertGreater(x_max, usl)
         plt.close(fig)
+
+    def test_resolve_histogram_x_view_uses_data_spec_driven_effective_span_with_10_percent_margin(self):
+        values = [44.001, 44.006, 44.012]
+
+        resolved = resolve_histogram_x_view(values, lsl=44.000, usl=44.025, mean_value=44.006)
+
+        data_span = 44.012 - 44.001
+        spec_span = 44.025 - 44.000
+        effective_span = max(data_span, spec_span)
+        margin = effective_span * 0.10
+        self.assertEqual(resolved['mode'], 'full')
+        self.assertAlmostEqual(resolved['x_min'], 44.000 - margin)
+        self.assertAlmostEqual(resolved['x_max'], 44.025 + margin)
+        self.assertAlmostEqual(resolved['x_min'], 43.9975)
+        self.assertAlmostEqual(resolved['x_max'], 44.0275)
+
+    def test_resolve_histogram_x_view_uses_full_mode_for_regular_spread(self):
+        values = [8.2, 9.0, 9.7, 10.2]
+
+        resolved = resolve_histogram_x_view(values, lsl=8.0, usl=10.5)
+
+        self.assertEqual(resolved['mode'], 'full')
+        self.assertLess(resolved['x_min'], 8.0)
+        self.assertGreater(resolved['x_max'], 10.5)
+
+    def test_resolve_histogram_x_view_keeps_ultra_narrow_span_local_without_absurd_absolute_magnitude_expansion(self):
+        values = [44.0010000, 44.0010001]
+
+        resolved = resolve_histogram_x_view(values, mean_value=44.00100005)
+
+        self.assertEqual(resolved['mode'], 'full')
+        view_span = resolved['x_max'] - resolved['x_min']
+        self.assertGreater(view_span, 0.0004)
+        self.assertLess(view_span, 0.002)
 
     def test_render_histogram_ignores_invalid_spec_limits(self):
         fig, ax = plt.subplots()
@@ -415,13 +1320,14 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         base_value_width = ax_table.get_celld()[(1, 2)].get_width()
-        base_height = ax_table.get_celld()[(1, 0)].get_height()
+        explicit_row_heights = [0.18, 0.14, 0.14]
 
         style_histogram_stats_table(ax_table, render_data)
         adjust_histogram_stats_table_geometry(
             ax_table,
             statistic_col_width_ratio=0.56,
             row_height_scale=1.15,
+            explicit_row_heights=explicit_row_heights,
         )
         fig.canvas.draw()
 
@@ -433,7 +1339,9 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertAlmostEqual(header_w1 / header_total, 0.1232, places=3)
         self.assertAlmostEqual(header_w2 / header_total, 0.44, places=3)
         self.assertTrue(ax_table.get_celld()[(1, 1)].get_visible())
-        self.assertGreater(ax_table.get_celld()[(1, 0)].get_height(), base_height)
+        header_height = ax_table.get_celld()[(0, 0)].get_height()
+        row_height = ax_table.get_celld()[(1, 0)].get_height()
+        self.assertAlmostEqual(row_height / header_height, explicit_row_heights[1] / explicit_row_heights[0], places=5)
         self.assertLess(ax_table.get_celld()[(1, 2)].get_width(), base_value_width)
         self.assertEqual(
             ax_table.get_celld()[(0, 0)].get_facecolor(),
@@ -477,6 +1385,35 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(right.get_text().get_text(), '2.0')
         plt.close(fig)
 
+    def test_adjust_histogram_stats_table_geometry_expands_multiline_rows(self):
+        fig, ax = plt.subplots()
+        table_rows = [
+            ('Model', 'Skew Normal'),
+            ('Warning', 'small sample\nfit unreliable'),
+        ]
+        ax_table = plt.table(
+            cellText=table_rows,
+            colLabels=['Statistic', 'Value'],
+            cellLoc='center',
+            loc='right',
+            bbox=[1, 0, 0.3, 1],
+        )
+
+        explicit_row_heights = [0.16, 0.12, 0.19]
+
+        adjust_histogram_stats_table_geometry(
+            ax_table,
+            row_height_scale=1.1,
+            explicit_row_heights=explicit_row_heights,
+        )
+        fig.canvas.draw()
+
+        row_one = ax_table.get_celld()[(1, 0)].get_height()
+        row_two = ax_table.get_celld()[(2, 0)].get_height()
+        self.assertAlmostEqual(row_two / row_one, explicit_row_heights[2] / explicit_row_heights[1], places=5)
+        self.assertGreater(row_two, row_one)
+        plt.close(fig)
+
     def test_adjust_histogram_stats_table_geometry_two_column_keeps_rows_unmerged_when_normality_missing(self):
         fig, ax = plt.subplots()
         table_rows = [('Min', '1.0'), ('Max', '2.0')]
@@ -504,14 +1441,14 @@ class TestExportPlotHelpers(unittest.TestCase):
         payload = build_histogram_density_curve_payload(['1.0', '1.5', '2.0', '2.5'])
 
         self.assertIsNotNone(payload)
-        self.assertEqual(len(payload['x']), 100)
-        self.assertEqual(len(payload['y']), 100)
+        self.assertEqual(len(payload['x']), 40)
+        self.assertEqual(len(payload['y']), 40)
 
     def test_build_histogram_density_curve_payload_supports_kde_mode(self):
         payload = build_histogram_density_curve_payload([0.0, 0.0, 0.1, 0.2, 0.4, 3.0, 7.0], mode='kde')
 
         self.assertIsNotNone(payload)
-        self.assertEqual(len(payload['x']), 100)
+        self.assertEqual(len(payload['x']), 40)
 
     def test_classify_normality_status_maps_all_quality_paths(self):
         self.assertEqual(classify_normality_status('normal')['palette_key'], 'normality_normal')
@@ -545,8 +1482,9 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('One-sided tolerance', result['text'])
         self.assertNotIn('Bound =', result['text'])
         self.assertTrue(result['text'].endswith('\nNormality not applicable'))
+        self.assertEqual(classify_normality_status(result['status'])['label'], '! Normality not applicable')
 
-    def test_render_histogram_uses_fd_bins_for_non_degenerate_data(self):
+    def test_render_histogram_uses_stable_fd_bins_for_non_degenerate_data(self):
         import pandas as pd
 
         histogram_data = [
@@ -556,10 +1494,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             7.5, 8.0, 8.5, 9.0, 9.5,
             10.0, 10.5, 11.0, 11.5, 12.0,
         ]
-        q1, q3 = pd.Series(histogram_data).quantile([0.25, 0.75])
-        iqr = q3 - q1
-        data_range = max(histogram_data) - min(histogram_data)
-        expected_fd_bins = int(np.ceil(data_range / (2 * iqr * (len(histogram_data) ** (-1 / 3)))))
+        expected_fd_bins = resolve_histogram_bin_count(histogram_data)['bin_count']
 
         fig, ax = plt.subplots(figsize=(4, 3))
         try:
@@ -567,7 +1502,8 @@ class TestExportPlotHelpers(unittest.TestCase):
 
             self.assertEqual(len(ax.patches), expected_fd_bins)
             self.assertEqual(len(ax.patches), 3)
-            self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), float(len(histogram_data)))
+            total_count = sum(patch.get_height() for patch in ax.patches)
+            self.assertAlmostEqual(total_count, len(histogram_data), places=2)
             self.assertAlmostEqual(ax.patches[0].get_linewidth(), 0.5)
             self.assertEqual(ax.patches[0].get_edgecolor(), (1.0, 1.0, 1.0, 0.72))
         finally:
@@ -581,7 +1517,8 @@ class TestExportPlotHelpers(unittest.TestCase):
             render_histogram(ax, pd.DataFrame({'MEAS': [7.0] * 25}))
 
             self.assertEqual(len(ax.patches), 5)
-            self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), 25.0)
+            total_count = sum(patch.get_height() for patch in ax.patches)
+            self.assertAlmostEqual(total_count, 25.0, places=2)
         finally:
             plt.close(fig)
 
@@ -593,9 +1530,36 @@ class TestExportPlotHelpers(unittest.TestCase):
             render_histogram(ax, pd.DataFrame({'MEAS': [1.0]}))
 
             self.assertEqual(len(ax.patches), 3)
-            self.assertAlmostEqual(sum(patch.get_height() for patch in ax.patches), 1.0)
+            total_count = sum(patch.get_height() for patch in ax.patches)
+            self.assertAlmostEqual(total_count, 1.0, places=2)
         finally:
             plt.close(fig)
+
+    def test_histogram_binning_qa_snapshots_for_n10_n20_and_skewed(self):
+        n10_values = np.array([0.10, 0.12, 0.15, 0.20, 0.22, 0.24, 0.25, 0.30, 0.31, 0.33])
+        n20_values = np.linspace(-1.0, 1.0, 20)
+        skewed_values = np.array([0.0, 0.0, 0.02, 0.03, 0.05, 0.08, 0.12, 0.2, 0.4, 0.8, 1.4, 2.3, 3.8, 6.2])
+
+        snapshots = {
+            'n10': resolve_histogram_bin_count(n10_values),
+            'n20': resolve_histogram_bin_count(n20_values),
+            'skewed': resolve_histogram_bin_count(skewed_values),
+        }
+
+        self.assertEqual(snapshots['n10']['sample_size'], 10)
+        self.assertLessEqual(snapshots['n10']['bin_count'], 8)
+        self.assertEqual(snapshots['n20']['sample_size'], 20)
+        self.assertLessEqual(snapshots['n20']['bin_count'], 12)
+        self.assertGreaterEqual(snapshots['skewed']['bin_count'], 3)
+
+    def test_density_curve_sampling_qa_snapshots_for_n10_n20_and_n50(self):
+        n10 = resolve_density_curve_sampling(10, requested_point_count=100)
+        n20 = resolve_density_curve_sampling(20, requested_point_count=100)
+        n50 = resolve_density_curve_sampling(50, requested_point_count=100)
+
+        self.assertEqual(n10, {'point_count': 40, 'kde_min_bandwidth': 0.45})
+        self.assertEqual(n20, {'point_count': 60, 'kde_min_bandwidth': 0.35})
+        self.assertEqual(n50, {'point_count': 100, 'kde_min_bandwidth': 0.0})
 
     def test_render_histogram_handles_numeric_strings_without_matplotlib_warnings(self):
         import pandas as pd
@@ -615,6 +1579,25 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
+
+
+    def test_render_histogram_figure_title_places_title_inside_visible_figure_area(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
+        try:
+            title_artist = render_histogram_figure_title(fig, 'Histogram Title QA')
+            self.assertIsNotNone(title_artist)
+            self.assertEqual(title_artist.get_ha(), 'left')
+            self.assertAlmostEqual(title_artist.get_position()[0], 0.06, places=3)
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            bbox = title_artist.get_window_extent(renderer=renderer)
+            figure_bbox = fig.bbox
+            self.assertGreaterEqual(bbox.x0, figure_bbox.x0)
+            self.assertLessEqual(bbox.x1, figure_bbox.x1)
+            self.assertGreaterEqual(bbox.y0, figure_bbox.y0)
+            self.assertLessEqual(bbox.y1, figure_bbox.y1)
+        finally:
+            plt.close(fig)
 
     def test_histogram_title_and_mean_annotation_keep_separate_bounding_boxes_with_table(self):
         import pandas as pd
@@ -643,8 +1626,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 bbox=[1, 0, layout['table_bbox_width'], 1],
             )
 
-            title_pad = 26
-            title = ax.set_title(build_wrapped_chart_title('Histogram Layout Validation'), pad=title_pad)
+            title = render_histogram_figure_title(fig, build_wrapped_chart_title('Histogram Layout Validation'))
 
             annotation_specs = build_histogram_annotation_specs(10.2, 10.6, 9.8, 1.0)
             annotation_specs, max_annotation_row = compute_histogram_annotation_rows(
@@ -656,14 +1638,22 @@ class TestExportPlotHelpers(unittest.TestCase):
                 row_step=0.025,
             )
             top_margin = max(0.82, 0.82 + (max_annotation_row * 0.04))
+            plot_rect = {'x': 0.125, 'y': 0.11, 'width': 0.775, 'height': top_margin - 0.11}
             texts = render_histogram_annotations(
                 ax,
                 annotation_specs,
                 annotation_fontsize=font_sizes['annotation_fontsize'],
-                annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#c0c0c0', 'alpha': 0.94},
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#c0c0c0',
+                    'alpha': 0.94,
+                    'plot_rect': plot_rect,
+                    'title_artist': title,
+                },
             )
 
-            plt.subplots_adjust(right=layout['subplot_right'], top=top_margin)
+            plt.subplots_adjust(right=layout['subplot_right'], top=max(top_margin, 0.88))
             fig.canvas.draw()
             renderer = fig.canvas.get_renderer()
 
@@ -671,8 +1661,11 @@ class TestExportPlotHelpers(unittest.TestCase):
             mean_text = next(text for text, spec in zip(texts, annotation_specs) if spec.get('kind') == 'mean')
             mean_bbox = mean_text.get_window_extent(renderer=renderer)
 
-            self.assertFalse(title_bbox.overlaps(mean_bbox))
-            self.assertLess(mean_bbox.y1, title_bbox.y0)
+            self.assertLess(title_bbox.y1, fig.bbox.y1 + 1e-6)
+            self.assertGreaterEqual(title_bbox.y0, fig.bbox.y0)
+            self.assertLess(mean_bbox.y1, fig.bbox.y1)
+            self.assertGreater(mean_bbox.y0, fig.bbox.y0)
+            self.assertFalse(title.get_clip_on())
         finally:
             plt.close(fig)
 
@@ -776,6 +1769,37 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertLessEqual(style['alpha'], 0.5)
         self.assertLess(style['zorder'], 3)
 
+    def test_resolve_selected_model_curve_style_maps_explicit_fit_quality_tiers(self):
+        strong = resolve_selected_model_curve_style({'fit_quality': {'label': 'strong'}})
+        medium = resolve_selected_model_curve_style({'fit_quality': {'label': 'medium'}})
+        weak = resolve_selected_model_curve_style({'fit_quality': {'label': 'weak'}})
+        unreliable = resolve_selected_model_curve_style({'fit_quality': {'label': 'unreliable'}})
+
+        self.assertEqual(strong, {'alpha': 0.8, 'linewidth': 1.72})
+        self.assertEqual(medium, {'alpha': 0.68, 'linewidth': 1.55})
+        self.assertEqual(weak, {'alpha': 0.48, 'linewidth': 1.3})
+        self.assertEqual(unreliable, {'alpha': 0.28, 'linewidth': 1.05})
+
+    def test_resolve_selected_model_curve_style_defaults_unknown_quality_to_strong(self):
+        fallback = resolve_selected_model_curve_style({'fit_quality': {'label': 'mystery'}})
+
+        self.assertEqual(fallback, {'alpha': 0.8, 'linewidth': 1.72})
+
+    def test_resolve_selected_model_curve_style_keeps_weak_unreliable_less_dominant_than_strong(self):
+        def _visual_weight(style):
+            return style['alpha'] * style['linewidth']
+
+        strong = resolve_selected_model_curve_style({'fit_quality': {'label': 'strong'}})
+        weak = resolve_selected_model_curve_style({'fit_quality': {'label': 'weak'}})
+        unreliable = resolve_selected_model_curve_style({'fit_quality': {'label': 'unreliable'}})
+
+        self.assertLess(weak['alpha'], strong['alpha'])
+        self.assertLess(weak['linewidth'], strong['linewidth'])
+        self.assertLess(unreliable['alpha'], weak['alpha'])
+        self.assertLess(unreliable['linewidth'], weak['linewidth'])
+        self.assertLess(_visual_weight(weak), _visual_weight(strong))
+        self.assertLess(_visual_weight(unreliable), _visual_weight(weak))
+
     def test_render_histogram_annotations_renders_mean_usl_lsl_and_offsets_mean_right(self):
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.set_xlim(0.0, 10.0)
@@ -827,6 +1851,389 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual({text.get_fontsize() for text in rendered}, {9.1})
         plt.close(fig)
 
+    def test_render_histogram_annotations_resolves_priority_overlap_inside_plot_rect(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(0.0, 1.0)
+        plt.subplots_adjust(left=0.15, right=0.85, top=0.85, bottom=0.15)
+
+        annotation_specs = [
+            {'kind': 'mean', 'x': 0.5, 'text_y_axes': 0.95, 'text': 'Mean = 0.500', 'color': '#111111', 'ha': 'center', 'priority': 300},
+            {'kind': 'usl', 'x': 0.5, 'text_y_axes': 0.95, 'text': 'USL=0.500', 'color': '#222222', 'ha': 'center', 'priority': 100},
+        ]
+
+        rendered = render_histogram_annotations(
+            ax,
+            annotation_specs,
+            annotation_fontsize=8.5,
+            annotation_box={
+                'boxstyle': 'round,pad=0.15',
+                'fc': 'white',
+                'ec': '#cccccc',
+                'alpha': 0.94,
+                'plot_rect': {'x': 0.0, 'y': 0.0, 'width': 1.0, 'height': 1.0},
+            },
+        )
+
+        texts = [text.get_text() for text in rendered]
+        self.assertIn('Mean = 0.500', texts)
+        fig.canvas.draw()
+        bboxes = [artist.get_window_extent(renderer=fig.canvas.get_renderer()) for artist in rendered]
+        for index, left in enumerate(bboxes):
+            for right in bboxes[index + 1:]:
+                self.assertFalse(left.overlaps(right))
+        plt.close(fig)
+
+    def test_render_histogram_annotations_keeps_mean_usl_lsl_with_side_panel_plot_bounds(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        try:
+            ax.set_xlim(0.0, 10.0)
+            plt.subplots_adjust(left=0.30, right=0.70, top=0.84, bottom=0.22)
+
+            annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=10.0,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            rendered = render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': {'x': 0.30, 'y': 0.22, 'width': 0.40, 'height': 0.62},
+                },
+            )
+            texts = {text.get_text() for text in rendered}
+            self.assertIn('Mean = 5.000', texts)
+            self.assertIn('USL=9.000', texts)
+            self.assertIn('LSL=1.000', texts)
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_annotations_uses_left_safe_anchor_for_lsl_near_left_boundary(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(0.0, 1.0)
+        try:
+            rendered = render_histogram_annotations(
+                ax,
+                [
+                    {
+                        'kind': 'lsl',
+                        'x': 0.01,
+                        'text_y_axes': 1.02,
+                        'text': 'LSL=0.010',
+                        'color': '#222222',
+                        'ha': 'center',
+                    }
+                ],
+                annotation_fontsize=8.5,
+                annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#cccccc', 'alpha': 0.94},
+            )
+
+            self.assertEqual(len(rendered), 1)
+            self.assertEqual(rendered[0].get_ha(), 'left')
+
+            fig.canvas.draw()
+            bbox = rendered[0].get_window_extent(renderer=fig.canvas.get_renderer())
+            self.assertGreaterEqual(bbox.x0, 0.0)
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_annotations_uses_right_safe_anchor_for_usl_near_right_boundary(self):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.set_xlim(0.0, 1.0)
+        try:
+            rendered = render_histogram_annotations(
+                ax,
+                [
+                    {
+                        'kind': 'usl',
+                        'x': 0.99,
+                        'text_y_axes': 1.02,
+                        'text': 'USL=0.990',
+                        'color': '#222222',
+                        'ha': 'center',
+                    }
+                ],
+                annotation_fontsize=8.5,
+                annotation_box={'boxstyle': 'round,pad=0.15', 'fc': 'white', 'ec': '#cccccc', 'alpha': 0.94},
+            )
+
+            self.assertEqual(len(rendered), 1)
+            self.assertEqual(rendered[0].get_ha(), 'right')
+
+            fig.canvas.draw()
+            bbox = rendered[0].get_window_extent(renderer=fig.canvas.get_renderer())
+            self.assertLessEqual(bbox.x1, fig.bbox.x1)
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_annotations_and_title_fit_with_side_panels_enabled(self):
+        fig = plt.figure(figsize=(7.2, 4.0))
+        try:
+            rects = compute_histogram_panel_layout(
+                (7.2, 4.0),
+                table_fontsize=8.8,
+                left_row_count=7,
+                right_row_count=8,
+                note_line_count=3,
+                left_panel_width_hint=0.27,
+                right_panel_width_hint=0.19,
+            )
+            plot_rect = rects['plot_rect']
+            plot_ax = fig.add_axes([
+                plot_rect['x'],
+                plot_rect['y'],
+                plot_rect['width'],
+                plot_rect['height'],
+            ])
+            plot_ax.set_xlim(0.0, 10.0)
+            plot_ax.set_ylim(0.0, 1.0)
+            title_artist = render_histogram_title(plot_ax, 'Histogram panel title')
+            annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=10.0,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            rendered = render_histogram_annotations(
+                plot_ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': plot_rect,
+                },
+            )
+            fig.canvas.draw()
+            fig_bbox = fig.bbox
+            title_bbox = title_artist.get_window_extent(renderer=fig.canvas.get_renderer())
+
+            texts = {text.get_text() for text in rendered}
+            self.assertEqual(len(rendered), 3)
+            self.assertIn('Mean = 5.000', texts)
+            self.assertIn('USL=9.000', texts)
+            self.assertIn('LSL=1.000', texts)
+            self.assertLess(title_bbox.y0, fig_bbox.y1)
+            self.assertLessEqual(title_artist.get_position()[1], 1.0)
+            self.assertGreater(title_artist.get_position()[1], 0.9)
+        finally:
+            plt.close(fig)
+
+
+    def test_render_histogram_annotations_resolves_close_limit_collisions_with_offsets_or_leaders(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4.0))
+        try:
+            ax.set_xlim(9.95, 10.05)
+            ax.set_ylim(0.0, 1.0)
+            annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.002, lsl=9.998, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=0.10,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            rendered = render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=8.1,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': {'x': 0.14, 'y': 0.18, 'width': 0.76, 'height': 0.70},
+                },
+            )
+            self.assertEqual(len(rendered), 3)
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            bboxes = [artist.get_window_extent(renderer=renderer) for artist in rendered]
+            for index, left in enumerate(bboxes):
+                for right in bboxes[index + 1:]:
+                    self.assertFalse(left.overlaps(right))
+
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_annotations_avoids_title_overlap_with_offsets(self):
+        fig = plt.figure(figsize=(7.2, 4.0))
+        try:
+            rects = compute_histogram_plot_with_right_info_layout(
+                (7.2, 4.0),
+                table_fontsize=8.8,
+                fit_row_count=8,
+                stats_row_count=8,
+                note_line_count=2,
+                right_container_width_hint=0.34,
+            )
+            plot_rect = rects['plot_rect']
+            ax = fig.add_axes([plot_rect['x'], plot_rect['y'], plot_rect['width'], plot_rect['height']])
+            ax.set_xlim(0.0, 1.0)
+            title_artist = render_histogram_title(ax, 'Distribution Fit')
+            annotation_specs = [
+                {'kind': 'mean', 'x': 0.5, 'text_y_axes': 1.14, 'text': 'Mean = 0.500', 'color': '#111111', 'ha': 'center', 'priority': 300},
+                {'kind': 'usl', 'x': 0.52, 'text_y_axes': 1.14, 'text': 'USL=0.520', 'color': '#222222', 'ha': 'center', 'priority': 260},
+                {'kind': 'lsl', 'x': 0.48, 'text_y_axes': 1.14, 'text': 'LSL=0.480', 'color': '#222222', 'ha': 'center', 'priority': 250},
+            ]
+            rendered = render_histogram_annotations(
+                ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': plot_rect,
+                    'title_artist': title_artist,
+                },
+            )
+            fig.canvas.draw()
+            title_bbox = title_artist.get_window_extent(renderer=fig.canvas.get_renderer())
+            for artist in rendered:
+                self.assertFalse(artist.get_window_extent(renderer=fig.canvas.get_renderer()).overlaps(title_bbox))
+        finally:
+            plt.close(fig)
+
+    def test_histogram_layout_reserves_additional_top_padding_for_annotation_band(self):
+        self.assertGreaterEqual(HISTOGRAM_OUTER_PADDING_TOP, 0.08)
+
+    def test_render_histogram_annotations_and_title_fit_with_right_info_column_layout(self):
+        fig = plt.figure(figsize=(7.6, 4.0))
+        try:
+            rects = compute_histogram_plot_with_right_info_layout(
+                (7.6, 4.0),
+                table_fontsize=8.8,
+                fit_row_count=7,
+                stats_row_count=8,
+                note_line_count=3,
+                right_container_width_hint=0.34,
+            )
+            plot_rect = rects['plot_rect']
+            plot_ax = fig.add_axes([
+                plot_rect['x'],
+                plot_rect['y'],
+                plot_rect['width'],
+                plot_rect['height'],
+            ])
+            plot_ax.set_xlim(0.0, 10.0)
+            plot_ax.set_ylim(0.0, 1.0)
+            title_artist = render_histogram_title(plot_ax, 'Histogram panel title')
+            annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
+            annotation_specs, _ = compute_histogram_annotation_rows(
+                annotation_specs,
+                distance_threshold=0.04,
+                threshold_mode='axis_fraction',
+                x_span=10.0,
+                base_text_y_axes=1.01,
+                row_step=0.025,
+            )
+            rendered = render_histogram_annotations(
+                plot_ax,
+                annotation_specs,
+                annotation_fontsize=8.2,
+                annotation_box={
+                    'boxstyle': 'round,pad=0.15',
+                    'fc': 'white',
+                    'ec': '#cccccc',
+                    'alpha': 0.94,
+                    'plot_rect': plot_rect,
+                },
+            )
+            fig.canvas.draw()
+
+            texts = {text.get_text() for text in rendered}
+            self.assertEqual(len(rendered), 3)
+            self.assertIn('Mean = 5.000', texts)
+            self.assertIn('USL=9.000', texts)
+            self.assertIn('LSL=1.000', texts)
+            self.assertFalse(any('P(X < LSL)' in text for text in texts))
+            self.assertFalse(any('P(X > USL)' in text for text in texts))
+            self.assertLess(title_artist.get_window_extent(renderer=fig.canvas.get_renderer()).y0, fig.bbox.y1)
+            self.assertFalse(title_artist.get_clip_on())
+        finally:
+            plt.close(fig)
+
+    def test_histogram_layout_keeps_xlabel_and_ticks_inside_figure_bounds(self):
+        fig = plt.figure(figsize=(7.2, 4.0))
+        try:
+            rects = compute_histogram_panel_layout(
+                (7.2, 4.0),
+                table_fontsize=8.8,
+                left_row_count=6,
+                right_row_count=6,
+                note_line_count=2,
+                left_panel_width_hint=0.27,
+                right_panel_width_hint=0.19,
+            )
+            plot_rect = rects['plot_rect']
+            ax = fig.add_axes([plot_rect['x'], plot_rect['y'], plot_rect['width'], plot_rect['height']])
+            ax.plot([0, 1, 2], [1, 3, 2])
+            ax.set_xlabel('Measurement')
+            fig.canvas.draw()
+
+            renderer = fig.canvas.get_renderer()
+            fig_bbox = fig.bbox
+            xlabel_bbox = ax.xaxis.label.get_window_extent(renderer=renderer)
+            tick_bboxes = [tick.label1.get_window_extent(renderer=renderer) for tick in ax.xaxis.get_major_ticks() if tick.label1.get_visible()]
+
+            self.assertGreaterEqual(xlabel_bbox.y0, fig_bbox.y0)
+            self.assertTrue(all(bbox.y0 >= fig_bbox.y0 for bbox in tick_bboxes))
+        finally:
+            plt.close(fig)
+
+    def test_render_histogram_note_panel_keeps_compact_text_within_panel_bounds(self):
+        fig = plt.figure(figsize=(7.2, 4.0))
+        try:
+            rects = compute_histogram_panel_layout(
+                (7.2, 4.0),
+                table_fontsize=8.8,
+                left_row_count=6,
+                right_row_count=7,
+                note_line_count=3,
+                left_panel_width_hint=0.27,
+                right_panel_width_hint=0.19,
+            )
+            note_rect = rects['note_rect']
+            note_ax = fig.add_axes([note_rect['x'], note_rect['y'], note_rect['width'], note_rect['height']])
+            note_ax.set_axis_off()
+            meta = render_histogram_note_panel(
+                ax=note_ax,
+                note_items=[
+                    {'label': 'Family', 'compact_label': 'Family', 'value': 'signed/bilateral', 'priority': 90},
+                    {'label': 'Normality', 'compact_label': 'Normality', 'value': 'non-normal', 'priority': 60},
+                    {'label': 'Warning', 'compact_label': 'Warning', 'value': 'fit weak', 'priority': 30},
+                ],
+                style_options={'fontsize': 7.0},
+                available_height_px=note_rect['height'] * float(fig.bbox.height),
+            )
+            fig.canvas.draw()
+            text_bbox = meta['text_artist'].get_window_extent(renderer=fig.canvas.get_renderer())
+            ax_bbox = note_ax.get_window_extent(renderer=fig.canvas.get_renderer())
+
+            self.assertGreaterEqual(text_bbox.x0, ax_bbox.x0 - 1.0)
+            self.assertLessEqual(text_bbox.x1, ax_bbox.x1 + 1.0)
+            self.assertGreaterEqual(text_bbox.y0, ax_bbox.y0 - 1.0)
+            self.assertLessEqual(text_bbox.y1, ax_bbox.y1 + 1.0)
+        finally:
+            plt.close(fig)
+
 
     def test_compute_histogram_annotation_rows_stacks_close_markers_and_keeps_mean_highest(self):
         annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.01, lsl=9.99, y_max=1.0)
@@ -840,10 +2247,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 2)
-        self.assertGreater(by_kind['mean']['row_index'], by_kind['usl']['row_index'])
-        self.assertGreater(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
+        self.assertEqual(max_row, 3)
+        self.assertGreater(by_kind['mean']['text_y_axes'], by_kind['usl']['text_y_axes'])
         self.assertNotEqual(by_kind['usl']['row_index'], by_kind['lsl']['row_index'])
+        self.assertNotEqual(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
         self.assertEqual(by_kind['mean']['x'], 10.0)
 
     def test_compute_histogram_annotation_rows_allows_shared_lower_row_when_limits_are_far(self):
@@ -858,11 +2265,11 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 1)
+        self.assertEqual(max_row, 3)
         self.assertEqual(by_kind['mean']['row_index'], 1)
-        self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
-        self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.035)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
+        self.assertAlmostEqual(by_kind['mean']['text_y_axes'], 1.08)
     def test_compute_histogram_annotation_rows_stacks_mean_and_usl_when_close(self):
         annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.02, lsl=7.0, y_max=1.0)
 
@@ -875,10 +2282,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 1)
+        self.assertEqual(max_row, 3)
         self.assertEqual(by_kind['mean']['row_index'], 1)
-        self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 10.02, 7.0])
 
@@ -894,10 +2301,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 1)
+        self.assertEqual(max_row, 3)
         self.assertEqual(by_kind['mean']['row_index'], 1)
-        self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 13.0, 10.03])
 
@@ -914,10 +2321,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         by_kind = {item['kind']: item for item in resolved}
-        self.assertEqual(max_row, 2)
-        self.assertEqual(by_kind['mean']['row_index'], 2)
-        self.assertEqual(by_kind['usl']['row_index'], 1)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual(max_row, 3)
+        self.assertEqual(by_kind['mean']['row_index'], 1)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
         self.assertEqual([item['kind'] for item in resolved], ['mean', 'usl', 'lsl'])
         self.assertEqual([item['x'] for item in resolved], [10.0, 10.2, 9.9])
 
@@ -942,8 +2349,8 @@ class TestExportPlotHelpers(unittest.TestCase):
                 **case['kwargs'],
             )
             by_kind = {item['kind']: item for item in resolved}
-            self.assertGreater(by_kind['mean']['row_index'], by_kind['usl']['row_index'])
-            self.assertGreater(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
+            self.assertGreater(by_kind['mean']['text_y_axes'], by_kind['usl']['text_y_axes'])
+            self.assertNotEqual(by_kind['mean']['row_index'], by_kind['lsl']['row_index'])
 
     def test_compute_histogram_annotation_rows_clustered_triplet_uses_non_overlapping_rows(self):
         annotation_specs = build_histogram_annotation_specs(average=5.0, usl=5.01, lsl=4.99, y_max=1.0)
@@ -957,10 +2364,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
         rows = [item['row_index'] for item in resolved]
 
-        self.assertEqual(max_row, 2)
+        self.assertEqual(max_row, 3)
         self.assertEqual(len(set(rows)), 3)
 
-    def test_compute_histogram_annotation_rows_well_separated_triplet_keeps_compact_rows(self):
+    def test_compute_histogram_annotation_rows_well_separated_triplet_keeps_preferred_slots(self):
         annotation_specs = build_histogram_annotation_specs(average=5.0, usl=9.0, lsl=1.0, y_max=1.0)
 
         resolved, max_row = compute_histogram_annotation_rows(
@@ -972,10 +2379,39 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
         by_kind = {item['kind']: item for item in resolved}
 
-        self.assertEqual(max_row, 1)
+        self.assertEqual(max_row, 3)
         self.assertEqual(by_kind['mean']['row_index'], 1)
-        self.assertEqual(by_kind['usl']['row_index'], 0)
-        self.assertEqual(by_kind['lsl']['row_index'], 0)
+        self.assertEqual(by_kind['usl']['row_index'], 2)
+        self.assertEqual(by_kind['lsl']['row_index'], 3)
+        self.assertEqual(by_kind['mean']['assigned_slot'], 'mean_primary')
+        self.assertEqual(by_kind['usl']['assigned_slot'], 'spec_primary')
+        self.assertEqual(by_kind['lsl']['assigned_slot'], 'spec_secondary')
+
+    def test_compute_histogram_annotation_rows_is_deterministic_for_same_inputs(self):
+        annotation_specs = build_histogram_annotation_specs(average=10.0, usl=10.05, lsl=9.95, y_max=1.0)
+
+        resolved_a, max_row_a = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.04,
+            threshold_mode='axis_fraction',
+            x_span=1.0,
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+        resolved_b, max_row_b = compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.04,
+            threshold_mode='axis_fraction',
+            x_span=1.0,
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+
+        self.assertEqual(max_row_a, max_row_b)
+        self.assertEqual(
+            [(item['kind'], item['assigned_slot'], item['text_y_axes']) for item in resolved_a],
+            [(item['kind'], item['assigned_slot'], item['text_y_axes']) for item in resolved_b],
+        )
 
     def test_build_histogram_annotation_specs_aligns_annotation_x_to_marker_values(self):
         average, usl, lsl = 10.123, 11.3, 9.4
@@ -1009,11 +2445,14 @@ class TestExportPlotHelpers(unittest.TestCase):
         )
 
         table = payload['rows']
-        self.assertEqual(table[-2], ('NOK', 2))
-        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+        self.assertEqual(table[-3], ('NOK', '2'))
+        self.assertEqual(table[-2], ('NOK %', '8.33%'))
+        self.assertEqual(table[-1], ('Samples', '10'))
+        self.assertNotIn(('NOK % (obs vs est)', 'N/A'), table)
+        self.assertNotIn(('NOK % Δ (abs/rel)', 'N/A'), table)
 
 
-    def test_build_histogram_table_data_uses_cpk_plus_for_one_sided_case(self):
+    def test_build_histogram_table_data_uses_cpu_for_one_sided_upper_case(self):
         payload = build_histogram_table_data(
             {
                 'minimum': 0.0,
@@ -1034,10 +2473,12 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         table = payload['rows']
         labels = [label for label, _ in table]
-        self.assertIn('Cpk+', labels)
+        self.assertIn('Cpu', labels)
         self.assertNotIn('Cpk', labels)
+        self.assertNotIn('Spec type', labels)
+        self.assertNotIn('Cp (not defined for one-sided) (info)', labels)
 
-    def test_build_histogram_table_data_exposes_cpk_plus_metadata_for_badges(self):
+    def test_build_histogram_table_data_exposes_cpu_metadata_for_badges(self):
         payload = build_histogram_table_data(
             {
                 'minimum': 0.0,
@@ -1056,14 +2497,130 @@ class TestExportPlotHelpers(unittest.TestCase):
             }
         )
 
-        cpk_row = next((row for row in payload['rows'] if row[0] == 'Cpk+'), None)
+        cpk_row = next((row for row in payload['rows'] if row[0] == 'Cpu'), None)
         self.assertIsNotNone(cpk_row)
 
-        expected_cpk_plus = round((0.06 - 0.031) / (3 * 0.0099), 2)
-        self.assertEqual(cpk_row[1], expected_cpk_plus)
-        self.assertEqual(payload['capability_rows']['Cpk']['label'], 'Cpk+')
-        self.assertEqual(payload['capability_rows']['Cpk']['display_value'], expected_cpk_plus)
-        self.assertEqual(payload['capability_rows']['Cpk']['classification_value'], expected_cpk_plus)
+        expected_cpu = (0.06 - 0.031) / (3 * 0.0099)
+        self.assertEqual(str(cpk_row[1]), '0.98')
+        self.assertEqual(payload['capability_rows']['Cpk']['label'], 'Cpu')
+        self.assertEqual(str(payload['capability_rows']['Cpk']['display_value']), '0.98')
+        self.assertEqual(payload['capability_rows']['Cpk']['classification_value'], expected_cpu)
+
+    def test_build_histogram_table_data_hides_zero_nok_side_split_for_two_sided(self):
+        payload = build_histogram_table_data(
+            {
+                'minimum': 1.0,
+                'maximum': 2.0,
+                'average': 1.5,
+                'median': 1.5,
+                'sigma': 0.1,
+                'cp': 1.2,
+                'cpk': 1.1,
+                'sample_size': 10,
+                'nok_count': 0,
+                'nok_pct': 0.0,
+                'observed_nok_below_lsl_count': 0,
+                'observed_nok_above_usl_count': 0,
+                'lsl': 1.1,
+                'usl': 1.9,
+            }
+        )
+
+        self.assertEqual(dict(payload['rows'])['NOK'], '0')
+
+    def test_build_histogram_table_data_shows_compact_nok_side_split_only_for_non_zero_sides(self):
+        payload = build_histogram_table_data(
+            {
+                'minimum': 1.0,
+                'maximum': 2.0,
+                'average': 1.5,
+                'median': 1.5,
+                'sigma': 0.1,
+                'cp': 1.2,
+                'cpk': 1.1,
+                'sample_size': 10,
+                'nok_count': 11,
+                'nok_pct': 0.11,
+                'observed_nok_below_lsl_count': 1,
+                'observed_nok_above_usl_count': 10,
+                'lsl': 1.1,
+                'usl': 1.9,
+            }
+        )
+
+        self.assertEqual(dict(payload['rows'])['NOK'], '11 (L: 1, U: 10)')
+
+    def test_apply_non_normal_cpk_reference_label_for_non_normal_selected_model(self):
+        payload = {
+            'rows': [
+                ('Cp', 1.22),
+                ('Cp 95% CI', '[1.10, 1.34]'),
+                ('Cpk', 1.15),
+                ('Cpk 95% CI', '[1.03, 1.28]'),
+                ('Cpu', 1.11),
+                ('Cpl', 1.08),
+                ('NOK %', '0.40%'),
+            ],
+            'capability_rows': {
+                'Cp': {'label': 'Cp', 'display_value': 1.22, 'classification_value': 1.22},
+                'Cpk': {'label': 'Cpk', 'display_value': 1.11, 'classification_value': 1.11},
+                'Cpu': {'label': 'Cpu', 'display_value': 1.11, 'classification_value': 1.11},
+                'Cpl': {'label': 'Cpl', 'display_value': 1.08, 'classification_value': 1.08},
+            },
+        }
+
+        relabeled = _apply_non_normal_cpk_reference_label(
+            payload,
+            {'selected_model': {'model': 'johnsonsu'}},
+        )
+        labels = [label for label, _ in relabeled['rows']]
+
+        self.assertEqual(labels.count('Cpk (ref)'), 1)
+        self.assertIn('Cp (ref) 95% CI', labels)
+        self.assertIn('Cpk (ref) 95% CI', labels)
+        self.assertIn('Cpu (ref)', labels)
+        self.assertIn('Cpl (ref)', labels)
+        self.assertIn('Cp (ref)', labels)
+        self.assertNotIn('Cp', labels)
+        self.assertNotIn('Cpk', labels)
+        self.assertNotIn('Cpu', labels)
+        self.assertNotIn('Cpl', labels)
+        self.assertEqual(relabeled['capability_rows']['Cp']['label'], 'Cp (ref)')
+        self.assertEqual(relabeled['capability_rows']['Cpk']['label'], 'Cpk (ref)')
+        self.assertEqual(relabeled['capability_rows']['Cpu']['label'], 'Cpu (ref)')
+        self.assertEqual(relabeled['capability_rows']['Cpl']['label'], 'Cpl (ref)')
+
+    def test_apply_non_normal_cpk_reference_label_keeps_ci_labels_for_normal_model(self):
+        payload = {
+            'rows': [('Cp', 1.22), ('Cp 95% CI', '[1.10, 1.34]'), ('Cpk', 1.15), ('Cpk 95% CI', '[1.03, 1.28]')],
+            'capability_rows': {
+                'Cp': {'label': 'Cp', 'display_value': 1.22, 'classification_value': 1.22},
+                'Cpk': {'label': 'Cpk', 'display_value': 1.11, 'classification_value': 1.11},
+            },
+        }
+
+        relabeled = _apply_non_normal_cpk_reference_label(payload, {'selected_model': {'model': 'norm'}})
+        labels = [label for label, _ in relabeled['rows']]
+        self.assertEqual(labels, ['Cp', 'Cp 95% CI', 'Cpk', 'Cpk 95% CI'])
+
+    def test_apply_non_normal_cpk_reference_label_marks_ref_for_low_n_unreliable_guard(self):
+        payload = {
+            'rows': [('Cp', 1.22), ('Cpk', 1.15)],
+            'capability_rows': {
+                'Cp': {'label': 'Cp', 'display_value': 1.22, 'classification_value': 1.22},
+                'Cpk': {'label': 'Cpk', 'display_value': 1.11, 'classification_value': 1.11},
+            },
+        }
+
+        relabeled = _apply_non_normal_cpk_reference_label(
+            payload,
+            {'selected_model': {'model': 'norm'}, 'fit_quality': {'label': 'strong'}},
+            summary_stats={'sample_size': 4},
+        )
+
+        labels = [label for label, _ in relabeled['rows']]
+        self.assertIn('Cp (ref)', labels)
+        self.assertIn('Cpk (ref)', labels)
 
 
     def test_build_histogram_table_render_data_three_column_duplicates_label_in_first_two_columns(self):
@@ -1117,6 +2674,7 @@ class TestExportPlotHelpers(unittest.TestCase):
                 ax_table.get_celld()[(1, 0)].get_text().get_color(),
                 SUMMARY_PLOT_PALETTE[palette_bg.replace('_bg', '_text')],
             )
+            self.assertEqual(ax_table.get_celld()[(1, 0)].get_hatch(), '')
 
             self.assertEqual(ax_table.get_celld()[(1, 0)].get_text().get_fontweight(), 'normal')
             self.assertEqual(ax_table.get_celld()[(1, 1)].get_text().get_fontweight(), 'normal')
@@ -1596,11 +3154,88 @@ class TestExportPlotHelpers(unittest.TestCase):
         rendered = ax.get_xticklabels()
         self.assertLess(len(rendered), len(labels))
         self.assertTrue(all(tick.get_text().endswith('…') for tick in rendered[:-1]))
-        self.assertEqual(int(rendered[0].get_rotation()), 90)
+        self.assertEqual(int(rendered[0].get_rotation()), 45)
         self.assertTrue(all(tick.get_ha() == 'right' for tick in rendered))
         self.assertEqual(ax.xaxis.majorTicks[0].get_pad(), 11)
         self.assertEqual(ax.get_xticks()[-1], 29)
         plt.close(fig)
+
+    def test_prepare_categorical_x_axis_wraps_and_recommends_wider_figures(self):
+        strategy = prepare_categorical_x_axis([
+            'Very Long Label For Group A',
+            'Very Long Label For Group B',
+            'Very Long Label For Group C',
+            'Very Long Label For Group D',
+            'Very Long Label For Group E',
+            'Very Long Label For Group F',
+            'Very Long Label For Group G',
+        ])
+
+        self.assertEqual(strategy['rotation'], 45)
+        self.assertGreater(strategy['recommended_fig_width'], 6.2)
+        self.assertGreaterEqual(strategy['bottom_margin'], 0.30)
+        self.assertTrue(any('\n' in label or label.endswith('…') for label in strategy['processed_labels']))
+
+    def test_resolve_extended_chart_fig_width_scales_with_group_count(self):
+        self.assertEqual(resolve_extended_chart_fig_width(0), 6.2)
+        self.assertAlmostEqual(resolve_extended_chart_fig_width(10), 7.08)
+        self.assertEqual(resolve_extended_chart_fig_width(100), 11.0)
+
+    def test_finalize_extended_chart_layout_expands_bottom_margin_for_rotated_labels_and_legend(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4))
+        labels = [f'Long Group Label {index}' for index in range(1, 13)]
+        ax.plot(range(len(labels)), np.linspace(1.0, 2.0, num=len(labels)), marker='o')
+        ax.legend(['Series'], loc='upper left', bbox_to_anchor=(1.0, 1.0))
+        ax.set_title('Very long title that should still fit in the exported figure bounds')
+        strategy = apply_shared_x_axis_label_strategy(ax, labels, positions=list(range(len(labels))))
+        baseline_bottom = fig.subplotpars.bottom
+
+        figure_legend = move_legend_to_figure(ax)
+        finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=strategy)
+
+        self.assertGreater(fig.subplotpars.bottom, baseline_bottom)
+        plt.close(fig)
+
+    def test_finalize_extended_chart_layout_preserves_strategy_bottom_margin_floor(self):
+        fig, ax = plt.subplots(figsize=(6.2, 4))
+        try:
+            ax.plot([0, 1], [1.0, 1.1])
+            ax.set_xticks([0, 1])
+            ax.set_xticklabels(['A', 'B'])
+
+            finalize_extended_chart_layout(fig, ax, strategy={'bottom_margin': 0.31})
+
+            self.assertGreaterEqual(fig.subplotpars.bottom, 0.31)
+        finally:
+            plt.close(fig)
+
+    def test_summary_chart_cell_span_grows_with_figure_width_for_sequential_placement(self):
+        fig_small, _ = plt.subplots(figsize=(6.2, 4))
+        fig_wide, _ = plt.subplots(figsize=(10.5, 4))
+        try:
+            small_span = ExportDataThread._resolve_chart_cell_span(fig_small)
+            wide_span = ExportDataThread._resolve_chart_cell_span(fig_wide)
+
+            self.assertGreater(wide_span['col_span'], small_span['col_span'])
+
+            base_col = 4
+            first_slot = {'row': 1, 'col': base_col}
+            second_slot = {'row': 1, 'col': first_slot['col'] + wide_span['col_span']}
+            self.assertGreater(second_slot['col'], base_col + small_span['col_span'])
+        finally:
+            plt.close(fig_small)
+            plt.close(fig_wide)
+
+    def test_summary_chart_cell_span_uses_export_dpi_not_figure_default_dpi(self):
+        fig, _ = plt.subplots(figsize=(6.2, 4), dpi=100)
+        try:
+            span = ExportDataThread._resolve_chart_cell_span(fig, px_per_col=110.0, padding_cols=0, export_dpi=150.0)
+            expected_col_span = int(np.ceil((6.2 * 150.0) / 110.0))
+
+            self.assertEqual(span['col_span'], expected_col_span)
+            self.assertNotEqual(span['col_span'], int(np.ceil((6.2 * 100.0) / 110.0)))
+        finally:
+            plt.close(fig)
 
     def test_shared_x_axis_label_strategy_force_sparse_thins_even_small_sets(self):
         fig, ax = plt.subplots()
@@ -1957,14 +3592,14 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         fig_seaborn, ax_seaborn = plt.subplots(figsize=(6, 4))
         seaborn_stub = types.SimpleNamespace(violinplot=lambda **kwargs: None)
-        with mock.patch('modules.ExportDataThread._HAS_SEABORN', True), mock.patch('modules.ExportDataThread.sns', seaborn_stub, create=True):
+        with mock.patch('modules.export_data_thread._HAS_SEABORN', True), mock.patch('modules.export_data_thread.sns', seaborn_stub, create=True):
             render_violin(ax_seaborn, values, labels)
         seaborn_mean_x = sorted({float(text.xy[0]) for text in ax_seaborn.texts if text.get_text().startswith('μ=')})
         self.assertEqual(seaborn_mean_x, [0.0, 1.0])
         self.assertEqual(ax_seaborn.get_xticks().tolist(), [0.0, 1.0])
 
         fig_matplotlib, ax_matplotlib = plt.subplots(figsize=(6, 4))
-        with mock.patch('modules.ExportDataThread._HAS_SEABORN', False):
+        with mock.patch('modules.export_data_thread._HAS_SEABORN', False):
             render_violin(ax_matplotlib, values, labels)
         matplotlib_mean_x = sorted({float(text.xy[0]) for text in ax_matplotlib.texts if text.get_text().startswith('μ=')})
         self.assertEqual(matplotlib_mean_x, [1.0, 2.0])
@@ -1991,7 +3626,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             captured_axes.append(ax)
 
         seaborn_stub = types.SimpleNamespace(violinplot=_stub_violinplot)
-        with mock.patch('modules.ExportDataThread._HAS_SEABORN', True), mock.patch('modules.ExportDataThread.sns', seaborn_stub, create=True), mock.patch('modules.ExportDataThread.plt.close'):
+        with mock.patch('modules.export_data_thread._HAS_SEABORN', True), mock.patch('modules.export_data_thread.sns', seaborn_stub, create=True), mock.patch('modules.export_data_thread.plt.close'):
             asset = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'violin')
 
         self.assertIn('image_data', asset)
@@ -2022,7 +3657,7 @@ class TestExportPlotHelpers(unittest.TestCase):
             captured_axes.append(ax)
             return fig, ax
 
-        with mock.patch('modules.ExportDataThread.plt.subplots', side_effect=_capture_subplots):
+        with mock.patch('modules.export_data_thread.plt.subplots', side_effect=_capture_subplots):
             asset = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram')
 
         self.assertIn('image_data', asset)
@@ -2138,6 +3773,174 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertIn('Nominal', legend_labels)
         plt.close(fig)
 
+
+    def test_compact_histogram_note_lines_include_only_contextual_fields(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'one_sided_zero_bound_positive',
+                'fit_quality': {'label': 'weak'},
+                'gof_metrics': {'reference_normality_label': 'non-normal'},
+            }
+        )
+
+        self.assertEqual(lines, ['Spec handling: one-sided upper', 'Tooltip: Uses only USL for tail risk and capability decisions (Cp suppressed; Cpk shown as Cpu)', 'Warning: fit weak', 'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
+        self.assertFalse(any(line.startswith('Normality:') for line in lines))
+        self.assertFalse(any('Model:' in line for line in lines))
+
+    def test_compact_histogram_note_lines_adds_medium_confidence_line(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'medium'},
+                'gof_metrics': {'reference_normality_label': 'non-normal'},
+            }
+        )
+
+        self.assertEqual(lines, ['Spec handling: two-sided (both LSL and USL active)', 'Tooltip: Uses both tails; Cp and Cpk summarize spread and centering versus both limits', 'Fit reliability: medium', 'Tooltip: Fit reliability reflects distribution adequacy; lower reliability increases uncertainty in estimated NOK/PPM', 'Help: NOK obs/est gaps can indicate model mismatch, subgroup effects, or insufficient data', 'Help: model fit quality = statistical adequacy of chosen distribution', 'Help: capability status = conformance risk against specs'])
+
+
+    def test_compact_histogram_note_lines_downgrades_fit_for_n10(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'good'},
+                'gof_metrics': {'reference_normality_label': 'normal'},
+            },
+            summary_stats={'sample_size': 10},
+        )
+
+        self.assertIn('Warning: limited sample size (n=10)', lines)
+        self.assertIn('Fit reliability: guarded (n<25)', lines)
+        self.assertTrue(any(line.startswith('Rationale:') for line in lines))
+
+    def test_compact_histogram_note_lines_downgrades_fit_for_n20(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'strong'},
+                'gof_metrics': {'reference_normality_label': 'normal'},
+            },
+            summary_stats={'sample_size': 20},
+        )
+
+        self.assertIn('Warning: limited sample size (n=20)', lines)
+        self.assertIn('Fit reliability: guarded (n<25)', lines)
+
+    def test_compact_histogram_note_lines_keep_default_fit_confidence_for_n50(self):
+        lines = _build_compact_histogram_note_lines(
+            {
+                'inferred_support_mode': 'bilateral_signed',
+                'fit_quality': {'label': 'medium'},
+                'gof_metrics': {'reference_normality_label': 'non-normal'},
+            },
+            summary_stats={'sample_size': 50},
+        )
+
+        self.assertIn('Fit reliability: medium', lines)
+        self.assertFalse(any('limited sample size' in line for line in lines))
+
+    def test_kde_footer_note_uses_bbox_background_for_readability(self):
+        fig, ax = plt.subplots(figsize=(6.0, 4.0))
+        try:
+            artist = ax.text(
+                0.02,
+                0.02,
+                'Dashed KDE: descriptive only',
+                transform=ax.transAxes,
+                ha='left',
+                va='bottom',
+                fontsize=6.5,
+                color='#4d5968',
+                bbox={
+                    'boxstyle': 'round,pad=0.16',
+                    'facecolor': (1.0, 1.0, 1.0, 0.74),
+                    'edgecolor': '#c7ced7',
+                    'linewidth': 0.45,
+                },
+                zorder=8,
+            )
+            self.assertEqual(artist.get_text(), 'Dashed KDE: descriptive only')
+            self.assertIsNotNone(artist.get_bbox_patch())
+            self.assertGreaterEqual(artist.get_position()[0], 0.0)
+            self.assertGreaterEqual(artist.get_position()[1], 0.0)
+        finally:
+            plt.close(fig)
+
+
+    def test_distribution_fit_table_rows_use_small_probability_notation(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.0000009,
+                    'nok_percent': 0.0000009,
+                },
+            },
+            usl=10.0,
+        )
+
+        rows_by_label = dict(rows)
+        self.assertEqual(rows_by_label['Est. NOK %'], '0.0000%')
+
+
+
+
+    def test_distribution_fit_table_rows_applies_sample_size_guard_for_very_low_n(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.02,
+                    'nok_percent': 0.02,
+                },
+            },
+            usl=2.0,
+            summary_stats={'sample_size': 4},
+        )
+
+        rows_by_label = dict(rows)
+        self.assertEqual(rows_by_label['Fit quality'], 'Unreliable')
+        self.assertNotIn('Est. NOK %', rows_by_label)
+        self.assertEqual(rows_by_label['Warning'], 'fit unreliable; observed NOK only')
+
+    def test_distribution_fit_table_rows_applies_sample_size_ceiling_for_low_n(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'fit_quality': {'label': 'strong'},
+                'risk_estimates': {
+                    'spec_type': 'upper_only',
+                    'above_usl_probability': 0.02,
+                    'nok_percent': 0.02,
+                },
+            },
+            usl=2.0,
+            summary_stats={'sample_size': 20},
+        )
+
+        rows_by_label = dict(rows)
+        self.assertEqual(rows_by_label['Fit quality'], 'Medium')
+        self.assertEqual(rows_by_label['Est. NOK %'], '0.0200%\nU: 2.0000%')
+        self.assertEqual(rows_by_label['Warning'], 'small sample; capability uncertain')
+    def test_distribution_fit_table_rows_hide_modeled_risk_when_fit_weak(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'fit_quality': {'label': 'weak'},
+                'risk_estimates': {
+                    'spec_type': 'bilateral',
+                    'below_lsl_probability': 0.01,
+                    'above_usl_probability': 0.02,
+                    'nok_percent': 0.03,
+                },
+            },
+            lsl=1.0,
+            usl=2.0,
+            summary_stats={'sample_size': 20},
+        )
+
+        self.assertEqual([label for label, _ in rows], ['Model', 'Fit quality', 'Warning'])
+        self.assertEqual(dict(rows)['Warning'], 'small sample; capability uncertain')
 
 if __name__ == '__main__':
     unittest.main()

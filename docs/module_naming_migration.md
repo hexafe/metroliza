@@ -1,39 +1,54 @@
-# Python module naming migration plan (`modules/`)
+# Python module naming migration status (`modules/`)
 
 This project is standardizing Python modules on `snake_case.py`.
 
-## Target convention
+## Current state
 
-- **Preferred module filename format:** `snake_case.py`
-- **Import style for new/updated code:** `from modules.some_module import ...`
-- **Temporary transition support:** legacy `CamelCase.py` modules remain importable while call sites are migrated.
+- **Canonical implementation location:** `snake_case.py` modules.
+- **Import style for app/test/script code:** `from modules.some_module import ...`.
+- **Compatibility direction:** legacy `CamelCase.py` modules are temporary shims that re-export from snake_case modules.
+- **First-party CamelCase import policy:** prohibited everywhere except dedicated compatibility tests.
 
-## Staged migration map
+## Shimmed modules (temporary)
 
-| Stage | Legacy module | Canonical snake_case module | Transition strategy |
-| --- | --- | --- | --- |
-| 1 (now) | `ParseReportsThread.py` | `parse_reports_thread.py` | Add shim module and migrate imports opportunistically. |
-| 1 (now) | `ExportDataThread.py` | `export_data_thread.py` | Add shim module and migrate imports opportunistically. |
-| 1 (now) | `ModifyDB.py` | `modify_db.py` | Add shim module and migrate imports opportunistically. |
-| 1 (now) | `CMMReportParser.py` | `cmm_report_parser.py` | Add shim module and migrate imports opportunistically. |
-| 1 (now) | `MainWindow.py` | `main_window.py` | Add shim module and migrate imports in entrypoints first. |
-| 1 (now) | `CustomLogger.py` | `custom_logger.py` | Add shim module and migrate imports opportunistically. |
-| 2 (dialogs) | `ParsingDialog.py` | `parsing_dialog.py` | Keep dialog aliases; migrate UI call sites incrementally. |
-| 2 (dialogs) | `ExportDialog.py` | `export_dialog.py` | Keep dialog aliases; migrate UI call sites incrementally. |
-| 2 (dialogs) | `FilterDialog.py` | `filter_dialog.py` | Keep dialog aliases; migrate UI call sites incrementally. |
-| 2 (dialogs) | `AboutWindow.py` | `about_window.py` | Keep dialog/window aliases; migrate UI call sites incrementally. |
-| 2 (dialogs) | `ReleaseNotesDialog.py` | `release_notes_dialog.py` | Keep dialog aliases; migrate UI call sites incrementally. |
-| 2 (dialogs) | `CSVSummaryDialog.py` | `csv_summary_dialog.py` | Keep dialog aliases; migrate UI call sites incrementally. |
-| 3 (remaining utilities) | `DataGrouping.py` | `data_grouping.py` | Keep compatibility alias until all imports are updated. |
-| 3 (remaining utilities) | `LicenseKeyManager.py` | `license_key_manager.py` | Keep compatibility alias until all imports are updated. |
-| 3 (remaining utilities) | `Base64EncodedFiles.py` | `base64_encoded_files.py` | Keep compatibility alias until all imports are updated. |
+| Legacy module | Canonical snake_case module | Status |
+| --- | --- | --- |
+| `AboutWindow.py` | `about_window.py` | ✅ canonical flipped |
+| `Base64EncodedFiles.py` | `base64_encoded_files.py` | ✅ canonical flipped |
+| `CMMReportParser.py` | `cmm_report_parser.py` | ✅ canonical flipped |
+| `CSVSummaryDialog.py` | `csv_summary_dialog.py` | ✅ canonical flipped |
+| `CustomLogger.py` | `custom_logger.py` | ✅ canonical flipped |
+| `DataGrouping.py` | `data_grouping.py` | ✅ canonical flipped |
+| `ExportDataThread.py` | `export_data_thread.py` | ✅ canonical flipped |
+| `ExportDialog.py` | `export_dialog.py` | ✅ canonical flipped |
+| `FilterDialog.py` | `filter_dialog.py` | ✅ canonical flipped |
+| `LicenseKeyManager.py` | `license_key_manager.py` | ✅ canonical flipped |
+| `MainWindow.py` | `main_window.py` | ✅ canonical flipped |
+| `ModifyDB.py` | `modify_db.py` | ✅ canonical flipped |
+| `ParseReportsThread.py` | `parse_reports_thread.py` | ✅ canonical flipped |
+| `ParsingDialog.py` | `parsing_dialog.py` | ✅ canonical flipped |
+| `ReleaseNotesDialog.py` | `release_notes_dialog.py` | ✅ canonical flipped |
+
+
+## Validation status
+
+- First-party runtime code (`modules/`, `scripts/`, `tests/`) now uses snake_case module imports.
+- `tests/test_no_camelcase_module_imports.py` enforces zero `modules.CamelCaseName` imports in first-party code.
+- `tests/test_module_naming_compat.py` intentionally keeps focused legacy import checks to validate temporary external compatibility shims.
 
 ## Compatibility shim pattern
 
-During migration, snake_case modules can be lightweight wrappers that re-export legacy symbols:
+Legacy files now use this pattern:
 
 ```python
-from modules.LegacyName import *  # noqa: F401,F403
+from modules.snake_case_name import *  # noqa: F401,F403
 ```
 
-Once all imports use snake_case names, we can invert this (legacy module imports from snake_case) and remove legacy modules in a later major cleanup.
+## Final removal criteria for legacy shims
+
+Remove legacy `CamelCase.py` shim files only when **all** criteria are met:
+
+1. A full-repo search plus CI policy test show no remaining `modules.CamelCaseName` imports in first-party runtime code (with compatibility tests explicitly allowlisted).
+2. Compatibility tests prove snake_case imports are in use and no runtime paths depend on legacy module paths.
+3. Release notes communicate the deprecation window and the shim removal release version.
+4. One cleanup PR removes all legacy shims in a single change set and updates migration docs accordingly.

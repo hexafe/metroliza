@@ -31,7 +31,7 @@ qtcore_stub.QThread = _DummyThread
 qtcore_stub.pyqtSignal = _dummy_signal
 sys.modules['PyQt6.QtCore'] = qtcore_stub
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 
 
 class _DummyLogger:
@@ -40,12 +40,12 @@ class _DummyLogger:
 
 
 custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.CustomLogger'] = custom_logger_stub
+sys.modules['modules.custom_logger'] = custom_logger_stub
 
 
 from modules.export_summary_utils import normalize_plot_axis_values  # noqa: E402
 
-from modules.ExportDataThread import (  # noqa: E402
+from modules.export_data_thread import (  # noqa: E402
     ExportDataThread,
     all_measurements_within_limits,
     build_sheet_series_range,
@@ -120,16 +120,23 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
             'sample_size': 12,
             'nok_count': 1,
             'nok_pct': 0.083333,
+            'observed_nok_below_lsl_count': 0,
+            'observed_nok_above_usl_count': 1,
         }
 
         payload = build_histogram_table_data(summary_stats)
         table = payload['rows']
 
-        self.assertEqual(table[0], ('Min', 1.235))
-        self.assertEqual(table[5], ('Cp', 1.99))
-        self.assertEqual(table[6], ('Cpk', 1.43))
-        self.assertEqual(table[-2], ('NOK', 1))
-        self.assertEqual(table[-1], ('NOK %', '8.33%'))
+        self.assertEqual(table[0], ('Min', '1.235'))
+        self.assertEqual(table[5][0], 'Cp')
+        self.assertEqual(table[5][1], '1.99')
+        self.assertEqual(table[6][0], 'Cpk')
+        self.assertEqual(table[6][1], '1.43')
+        self.assertEqual(table[-3], ('NOK', '1 (U: 1)'))
+        self.assertEqual(table[-2], ('NOK %', '8.33%'))
+        self.assertEqual(table[-1], ('Samples', '12'))
+        self.assertNotIn('NOK % (obs vs est)', [label for label, _ in table])
+        self.assertNotIn('NOK % Δ (abs/rel)', [label for label, _ in table])
 
 
     def test_build_histogram_table_render_data_keeps_row_order(self):
@@ -158,6 +165,35 @@ class TestExportThreadSummaryPayloadHelpers(unittest.TestCase):
 
         self.assertEqual(table[5], ('Cp', 'N/A'))
         self.assertEqual(table[6], ('Cpk', 'N/A'))
+
+    def test_build_histogram_table_data_right_stats_capability_rows_remain_intact(self):
+        summary_stats = {
+            'minimum': 1.23456,
+            'maximum': 9.87654,
+            'average': 5.55555,
+            'median': 5.5,
+            'sigma': 0.12345,
+            'cp': 1.9876,
+            'cpk': 1.4321,
+            'sample_size': 12,
+            'nok_count': 1,
+            'nok_pct': 0.083333,
+            'estimated_nok_pct': 0.017,
+            'estimated_nok_ppm': 17000.0,
+            'estimated_yield_pct': 0.983,
+        }
+
+        payload = build_histogram_table_data(summary_stats)
+        labels = [row[0] for row in payload['rows']]
+
+        self.assertEqual(labels[:7], ['Min', 'Max', 'Mean', 'Median', 'Std Dev', 'Cp', 'Cpk'])
+        self.assertNotIn('Cp 95% CI', labels)
+        self.assertNotIn('Cpk 95% CI', labels)
+        self.assertEqual(labels[-3:], ['NOK', 'NOK %', 'Samples'])
+        self.assertNotIn('NOK % (obs vs est)', labels)
+        self.assertNotIn('NOK % Δ (abs/rel)', labels)
+        self.assertIn('Cp', payload['capability_rows'])
+        self.assertIn('Cpk', payload['capability_rows'])
 
     def test_build_trend_plot_payload_builds_dense_x_and_dense_labels(self):
         import pandas as pd
@@ -237,7 +273,7 @@ class TestExportThreadProgressLabelFormatting(unittest.TestCase):
     def test_measurement_label_uses_three_rows_with_eta_placeholder_early(self):
         thread = ExportDataThread.__new__(ExportDataThread)
 
-        import modules.ExportDataThread as export_module
+        import modules.export_data_thread as export_module
         previous_perf_counter = export_module.time.perf_counter
         export_module.time.perf_counter = lambda: 1.0
         try:
@@ -260,7 +296,7 @@ class TestExportThreadProgressLabelFormatting(unittest.TestCase):
     def test_measurement_label_uses_three_rows_with_eta_and_elapsed(self):
         thread = ExportDataThread.__new__(ExportDataThread)
 
-        import modules.ExportDataThread as export_module
+        import modules.export_data_thread as export_module
         previous_perf_counter = export_module.time.perf_counter
         export_module.time.perf_counter = lambda: 10.0
         try:

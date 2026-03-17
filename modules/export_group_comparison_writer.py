@@ -16,6 +16,7 @@ import pandas as pd
 
 from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
+from modules.distribution_shape_analysis import compute_distribution_difference
 from modules.group_stats_tests import select_group_stat_test
 
 
@@ -64,7 +65,7 @@ def _build_pairwise_group_matrices(pairwise_df):
     return significance_matrices, effect_matrices
 
 
-def _build_insights(working, pairwise_df, overall_test_rows):
+def _build_insights(working, pairwise_df, overall_test_rows, distribution_summary_rows=None):
     """Create deterministic insight bullets for the worksheet."""
     if working.empty:
         return ['No grouped measurement rows available for comparison.']
@@ -131,6 +132,19 @@ def _build_insights(working, pairwise_df, overall_test_rows):
             notes.append(f"{item.get('Metric', 'Unknown')}: {item.get('Selected test', 'N/A')} [{note}]")
         insights.append('Assumption/test-choice notes: ' + '; '.join(notes) + '.')
 
+    distribution_summary_rows = distribution_summary_rows or []
+    if not distribution_summary_rows:
+        insights.append('Distribution-shape findings: no distribution-shape tests were available.')
+    else:
+        shape_significant = [
+            row for row in distribution_summary_rows if str(row.get('significant?', '')).strip().upper() == 'YES'
+        ]
+        if shape_significant:
+            labels = [f"{row['Metric']} ({row.get('Test used')}, p={row.get('raw p-value'):.4f})" for row in shape_significant if row.get('raw p-value') is not None]
+            insights.append('Distribution-shape findings: significant differences detected for ' + '; '.join(labels) + '.')
+        else:
+            insights.append('Distribution-shape findings: no statistically significant shape differences were detected.')
+
     return insights
 
 
@@ -185,6 +199,9 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
             'overall_summary': [('Pairwise tests', 0), ('Significant (p < 0.05)', 0), ('Large effects (|d| >= 0.8)', 0)],
             'pairwise_rows': [],
             'overall_test_rows': [],
+            'distribution_profile_rows': [],
+            'distribution_difference_rows': [],
+            'distribution_pairwise_rows': [],
             'significance_matrices': {},
             'effect_matrices': {},
             'insights': ['No grouped measurement rows available for comparison.'],
@@ -202,6 +219,9 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
 
     pairwise_rows = []
     overall_test_rows = []
+    distribution_profile_rows = []
+    distribution_difference_rows = []
+    distribution_pairwise_rows = []
 
     for metric_key, metric_frame in working.groupby('metric_key', sort=False):
         group_series = {
@@ -260,6 +280,16 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
                 }
             )
 
+        distribution_result = compute_distribution_difference(
+            metric_key,
+            group_series,
+            alpha=0.05,
+            correction_method='holm',
+        )
+        distribution_profile_rows.extend(distribution_result.get('profile_rows', []))
+        distribution_difference_rows.append(distribution_result.get('omnibus_row', {}))
+        distribution_pairwise_rows.extend(distribution_result.get('pairwise_rows', []))
+
     pairwise_df = pd.DataFrame(pairwise_rows)
     significance_matrices, effect_matrices = _build_pairwise_group_matrices(pairwise_df)
     significant_count = int(pairwise_df['significant'].sum()) if not pairwise_df.empty else 0
@@ -282,9 +312,14 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
         ],
         'pairwise_rows': pairwise_rows,
         'overall_test_rows': overall_test_rows,
+        'distribution_profile_rows': [
+            {k: v for k, v in row.items() if not k.startswith('_')} for row in distribution_profile_rows
+        ],
+        'distribution_difference_rows': distribution_difference_rows,
+        'distribution_pairwise_rows': distribution_pairwise_rows,
         'significance_matrices': significance_matrices,
         'effect_matrices': effect_matrices,
-        'insights': _build_insights(working, pairwise_df, overall_test_rows),
+        'insights': _build_insights(working, pairwise_df, overall_test_rows, distribution_difference_rows),
     }
 
 
@@ -425,7 +460,10 @@ def write_group_comparison_sheet(worksheet, payload):
     row = _write_kv_section(worksheet, row, 'Metadata', payload.get('metadata', []))
     row = _write_kv_section(worksheet, row, 'Overall Test Summary', payload.get('overall_summary', []))
     row = _write_table(worksheet, row, 'Recommended Statistical Tests', payload.get('overall_test_rows', []))
+    row = _write_table(worksheet, row, 'Distribution profile by group', payload.get('distribution_profile_rows', []))
+    row = _write_table(worksheet, row, 'Distribution difference summary', payload.get('distribution_difference_rows', []))
     row = _write_table(worksheet, row, 'Pairwise Tables', payload.get('pairwise_rows', []))
+    row = _write_table(worksheet, row, 'Distribution pairwise tables', payload.get('distribution_pairwise_rows', []))
     row = _write_matrix_collection(
         worksheet,
         row,

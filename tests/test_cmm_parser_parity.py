@@ -313,9 +313,9 @@ def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
     import types
     from pathlib import Path
 
-    custom_logger_stub = types.ModuleType("modules.CustomLogger")
+    custom_logger_stub = types.ModuleType("modules.custom_logger")
     custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
-    sys.modules["modules.CustomLogger"] = custom_logger_stub
+    sys.modules["modules.custom_logger"] = custom_logger_stub
 
     fitz_stub = types.ModuleType("fitz")
     fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
@@ -372,9 +372,9 @@ def _load_cmm_report_parser_with_test_stubs():
     import sys
     import types
 
-    custom_logger_stub = types.ModuleType("modules.CustomLogger")
+    custom_logger_stub = types.ModuleType("modules.custom_logger")
     custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
-    sys.modules["modules.CustomLogger"] = custom_logger_stub
+    sys.modules["modules.custom_logger"] = custom_logger_stub
 
     fitz_stub = types.ModuleType("fitz")
     fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)

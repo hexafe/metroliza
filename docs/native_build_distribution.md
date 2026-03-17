@@ -62,6 +62,13 @@ python -c "import modules.cmm_native_parser as p; print(p.native_backend_availab
 
 If hidden import resolution fails on a platform, release may proceed only if pure-Python mode is validated.
 
+If packaged Windows executables fail at startup with `ImportError: DLL load failed while importing _ctypes`, verify all of the following before release:
+
+- build with current tooling from `requirements-build.txt` (newer PyInstaller + hooks),
+- the build interpreter is a full CPython install (not embeddable/minimal),
+- Python runtime DLLs under `<python>/DLLs` (including `libffi*.dll`) are bundled into the executable.
+
+
 ## Nuitka inclusion rules and smoke checks
 
 `packaging/build_nuitka.ps1` now conditionally includes the native parser module when available in the build environment and auto-generates output naming from release metadata:
@@ -69,7 +76,9 @@ If hidden import resolution fails on a platform, release may proceed only if pur
 - default output filename is `metroliza_N_<RELEASE_VERSION>(<VERSION_DATE>).exe` from `VersionDate.py`
 - still supports explicit override with `-OutputName`
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
+- always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
 - defaults to pure-Python fallback packaging when native module is absent
+- supports `-EnableConsole` for troubleshooting startup failures by showing a Windows console with traceback
 - supports `-RequireNative` to fail fast if native module is missing
 - bundles `credentials.json` into the executable only when the configured `-CredentialsPath` exists (default: `credentials.json`)
 - always applies `--noinclude-data-files` guards for `token.json` path variants so OAuth tokens are not bundled
@@ -80,6 +89,8 @@ Smoke checks after build:
 ./packaging/build_nuitka.ps1 -FastDev
 # strict mode: require native parser to be present in the build env
 ./packaging/build_nuitka.ps1 -RequireNative
+# troubleshooting mode: show console and traceback if startup fails
+./packaging/build_nuitka.ps1 -EnableConsole
 # run the built executable in a sandbox and verify startup
 ```
 

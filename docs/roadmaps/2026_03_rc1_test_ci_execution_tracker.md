@@ -18,7 +18,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 - Any change that weakens existing blocking CI checks.
 
 ## 4. Current-State Audit Summary
-- Test suite breadth is strong (46 test modules) with targeted regression coverage for export helpers/flows, DB migration behavior, parser behavior, docs hygiene, and policy checks.
+- Test suite breadth is strong, with broad module coverage and targeted regression checks for export helpers/flows, DB migration behavior, parser behavior, docs hygiene, and policy checks.
 - CI has meaningful blocking lanes: static checks, full pytest, native wheel build/smoke, native parser parity tests; plus opt-in manual Google conversion smoke.
 - Native parser confidence exists and parity fixture corpus depth was incrementally improved with interrupted multi-line edge coverage (**addressed by TCI-005**); additional edge-shape expansion remains iterative (**still open**).
 - Coverage visibility baseline is in place (`pytest-cov`, `coverage.xml`, and uploaded CI artifact) (**addressed by TCI-002**), with threshold gating intentionally deferred pending trend/noise governance (**still open; see deferred TCI-007**).
@@ -404,17 +404,21 @@ For each step, include one explicit statement:
 - **TCI-007 (deferred):** coverage threshold decision pending baseline trend and noise profile.
 - Any broad multi-OS packaging matrix expansion is deferred unless incremental smoke lanes show clear value.
 
-### TCI-007 governance criteria (deferred threshold decision)
-- **Observation window:** collect baseline CI evidence for **2-4 weeks** of routine `unit-tests` runs before deciding threshold policy.
+### TCI-007 governance criteria and staged threshold rollout
+- **Observation window:** collect baseline CI evidence for **2-4 weeks** of routine `unit-tests` runs before the blocking-stage decision.
 - **Required evidence sources:**
   - workflow artifact: **`unit-test-coverage`** (`coverage.xml`)
   - job log evidence: **`unit-tests` terminal coverage summary** (`--cov-report=term` output)
-- **Decision owner:** release/test maintainers responsible for RC readiness sign-off (document the specific owner in the decision entry).
-- **Go/no-go criteria for enabling fail-under gating:**
-  - coverage noise rate is low enough to distinguish real regressions from run-to-run variance,
-  - flake profile is stable (no recurring CI-only instability that would mask threshold failures),
-  - a concrete, acceptable fail-under candidate is selected and justified from observed baseline.
-- **Expected output artifact:** add a **dated decision entry** in this tracker progress log recording go/no-go outcome and rationale.
+  - CI summary evidence: **"Coverage threshold status (non-blocking)"** warning/success result emitted by CI.
+- **Decision owner:** **Test/Release Maintainer on duty for RC1 (CODEOWNERS: @metroliza-release-maintainers)** records and signs off the decision entry.
+- **Decision date:** **2026-03-29** (or next business day if release calendar shifts), recorded in this tracker progress log.
+- **Acceptance criteria for stage-3 (blocking fail-under) adoption:**
+  - At least **14 calendar days** of routine CI runs include coverage artifact + CI summary threshold status output.
+  - Coverage warning noise is acceptable: no recurring false-positive warning pattern caused by CI-only flakiness.
+  - `unit-tests` stability baseline is acceptable over the window (no persistent rerun-only passes masking test instability).
+  - A concrete fail-under value is documented with baseline evidence and explicit rationale.
+  - The owner logs an explicit **go/no-go** decision in this tracker before any workflow change to hard enforcement.
+- **Expected output artifact:** add a **dated decision entry** in this tracker progress log recording outcome, owner, selected threshold (if go), and rationale.
 
 ## 15. Next Recommended Step
 Sequencing note: **TCI-005 was intentionally prioritized ahead of/alongside TCI-004** because it delivers faster confidence gain at lower implementation and operational risk; TCI-004 introduces broader CI/workflow surface area and potential runtime/cost noise.

@@ -22,9 +22,9 @@ for name in [
     setattr(qtwidgets_stub, name, type(name, (), {}))
 sys.modules.setdefault('PyQt6.QtWidgets', qtwidgets_stub)
 
-custom_logger_stub = types.ModuleType('modules.CustomLogger')
+custom_logger_stub = types.ModuleType('modules.custom_logger')
 custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *args, **kwargs: None})
-sys.modules.setdefault('modules.CustomLogger', custom_logger_stub)
+sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
 
 fitz_stub = types.ModuleType('fitz')
 fitz_stub.__spec__ = importlib.machinery.ModuleSpec('fitz', loader=None)
@@ -33,8 +33,8 @@ pymupdf_stub = types.ModuleType('pymupdf')
 pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec('pymupdf', loader=None)
 sys.modules.setdefault('pymupdf', pymupdf_stub)
 
-from modules.CMMReportParser import CMMReportParser  # noqa: E402
-from modules.ModifyDB import ModifyDB  # noqa: E402
+from modules.cmm_report_parser import CMMReportParser  # noqa: E402
+from modules.modify_db import ModifyDB  # noqa: E402
 from modules.db import execute_with_retry, run_transaction_with_retry  # noqa: E402
 
 
