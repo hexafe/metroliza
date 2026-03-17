@@ -89,19 +89,8 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
                 'Assumption/test-choice notes: no per-metric test selection was available.',
             ]
         )
-        return insights
-
-    adj_p = pd.to_numeric(pairwise_df['adjusted p-value'], errors='coerce')
-
-    significant = pairwise_df[adj_p < 0.05]
-    if significant.empty:
-        insights.append('Significant pairwise findings: none at adjusted p < 0.05.')
     else:
-        significant_labels = [
-            f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
-            for _, row in significant.sort_values(['Metric', 'adjusted p-value', 'Group A', 'Group B']).iterrows()
-        ]
-        insights.append('Significant pairwise findings: ' + '; '.join(significant_labels) + '.')
+        adj_p = pd.to_numeric(pairwise_df['adjusted p-value'], errors='coerce')
 
     no_difference = pairwise_df[adj_p >= 0.05]
     if no_difference.empty:
