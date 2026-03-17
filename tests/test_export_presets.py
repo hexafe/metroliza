@@ -727,6 +727,75 @@ class TestExportDialogThreadStartupContract(unittest.TestCase):
         self.assertEqual(request.options.summary_plot_scale, 0)
 
 
+class TestExportDialogDatabaseSwitchContext(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_select_db_file_resets_filter_and_grouping_context(self):
+        from modules.export_dialog import DEFAULT_FILTER_QUERY, ExportDialog
+
+        class _FakeButton:
+            def __init__(self):
+                self.enabled = []
+
+            def setEnabled(self, value):
+                self.enabled.append(bool(value))
+
+        class _FakeLabel:
+            def __init__(self):
+                self.value = None
+
+            def setText(self, value):
+                self.value = value
+
+        class _FakeParent:
+            def __init__(self):
+                self.db_file = None
+
+            def set_db_file(self, filename):
+                self.db_file = filename
+
+        class _FakeChildDialog:
+            def __init__(self):
+                self.closed = False
+                self.deleted = False
+
+            def close(self):
+                self.closed = True
+
+            def deleteLater(self):
+                self.deleted = True
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        parent = _FakeParent()
+        dialog.parent = lambda: parent
+        dialog.select_excel_button = _FakeButton()
+        dialog.filter_button = _FakeButton()
+        dialog.group_button = _FakeButton()
+        dialog.database_text_label = _FakeLabel()
+        dialog.select_filter_label = _FakeLabel()
+        dialog.filter_query = "SELECT * FROM REPORTS WHERE REFERENCE='stale'"
+        dialog.df_for_grouping = object()
+        dialog.filter_window = _FakeChildDialog()
+        dialog.grouping_window = _FakeChildDialog()
+        dialog.set_grouping_applied = lambda applied: setattr(dialog, '_grouping_applied', applied)
+
+        fake_file_dialog = type('FakeFileDialog', (), {'getOpenFileName': staticmethod(lambda *_args, **_kwargs: ('/tmp/next.db', 'SQLite database (*.db)'))})
+        with patch('modules.export_dialog.QFileDialog', fake_file_dialog):
+            dialog.select_db_file()
+
+        self.assertEqual(dialog.db_file, '/tmp/next.db')
+        self.assertEqual(parent.db_file, '/tmp/next.db')
+        self.assertEqual(dialog.database_text_label.value, '/tmp/next.db')
+        self.assertEqual(dialog.filter_query, DEFAULT_FILTER_QUERY)
+        self.assertIsNone(dialog.df_for_grouping)
+        self.assertEqual(dialog.select_filter_label.value, 'Select filters (optional): not applied')
+        self.assertFalse(dialog._grouping_applied)
+        self.assertIsNone(dialog.filter_window)
+        self.assertIsNone(dialog.grouping_window)
+
+
 
 if __name__ == '__main__':
     unittest.main()
