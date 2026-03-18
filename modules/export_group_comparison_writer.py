@@ -508,6 +508,14 @@ def _sanitize_matrix_value(value):
     return value
 
 
+def _finite_matrix_max(matrix_df, default):
+    numeric_values = pd.to_numeric(matrix_df.to_numpy().ravel(), errors='coerce')
+    finite_values = numeric_values[np.isfinite(numeric_values)]
+    if finite_values.size == 0:
+        return default
+    return max(float(finite_values.max()), default)
+
+
 def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type, effect_bands=None):
     worksheet.write(row, 0, title)
     row += 1
@@ -535,44 +543,39 @@ def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type, effect_bands
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': '>=', 'value': 0.05},
-        )
-        worksheet.conditional_format(
-            first_data_row,
-            first_col,
-            row - 1,
-            last_col,
-            {'type': 'cell', 'criteria': 'between', 'minimum': 0.01, 'maximum': 0.049999},
-        )
-        worksheet.conditional_format(
-            first_data_row,
-            first_col,
-            row - 1,
-            last_col,
-            {'type': 'cell', 'criteria': '<', 'value': 0.01},
+            {
+                'type': '3_color_scale',
+                'min_type': 'num',
+                'mid_type': 'num',
+                'max_type': 'num',
+                'min_value': 0,
+                'mid_value': 0.01,
+                'max_value': 0.05,
+                'min_color': '#F8696B',
+                'mid_color': '#FFEB84',
+                'max_color': '#63BE7B',
+            },
         )
     else:
         low_band, mid_band = effect_bands or (0.2, 0.5)
+        effect_max = _finite_matrix_max(matrix_df, mid_band)
         worksheet.conditional_format(
             first_data_row,
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': '<', 'value': low_band},
-        )
-        worksheet.conditional_format(
-            first_data_row,
-            first_col,
-            row - 1,
-            last_col,
-            {'type': 'cell', 'criteria': 'between', 'minimum': low_band, 'maximum': mid_band},
-        )
-        worksheet.conditional_format(
-            first_data_row,
-            first_col,
-            row - 1,
-            last_col,
-            {'type': 'cell', 'criteria': '>', 'value': mid_band},
+            {
+                'type': '3_color_scale',
+                'min_type': 'num',
+                'mid_type': 'num',
+                'max_type': 'num',
+                'min_value': 0,
+                'mid_value': low_band,
+                'max_value': effect_max,
+                'min_color': '#FFF2CC',
+                'mid_color': '#9FC5E8',
+                'max_color': '#1C4587',
+            },
         )
     return row + SECTION_GAP
 
