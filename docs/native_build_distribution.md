@@ -77,6 +77,7 @@ If packaged Windows executables fail at startup with `ImportError: DLL load fail
 - still supports explicit override with `-OutputName`
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
+- auto-adds `--include-package=pymupdf` and `--include-package=fitz` when PyMuPDF is installed in the build environment, because PDF parsing loads that backend dynamically via `importlib`
 - defaults to pure-Python fallback packaging when native module is absent
 - supports `-EnableConsole` for troubleshooting startup failures by showing a Windows console with traceback
 - supports `-RequireNative` to fail fast if native module is missing
@@ -94,7 +95,7 @@ Smoke checks after build:
 # run the built executable in a sandbox and verify startup
 ```
 
-If the extension is missing in the executable, parser code must still run in pure-Python mode.
+If the extension is missing in the executable, parser code must still run in pure-Python mode. If PDF parsing is required, ensure PyMuPDF is installed in the build environment before invoking Nuitka; otherwise the packaged executable may start successfully but fail only when a PDF parse path is exercised.
 
 ## Required CI checks for native artifacts
 
