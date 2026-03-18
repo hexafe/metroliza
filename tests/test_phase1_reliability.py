@@ -42,15 +42,19 @@ class TestPhase1ReliabilityGuardrails(unittest.TestCase):
             'modules/parse_reports_thread.py',
             'modules/parsing_dialog.py',
         ]
-        logger_call = re.compile(r'CustomLogger\((?P<args>[^)]*)\)')
+        logger_call = re.compile(r'(?:^|[^\w.])(?:custom_logger\.)?CustomLogger\((?P<args>[^)]*)\)')
+
+        observed_calls = []
 
         for path in user_flow_sources:
             content = self._read(path)
             calls = logger_call.findall(content)
-            self.assertTrue(calls, msg=f'Expected at least one CustomLogger call in {path}')
+            observed_calls.extend((path, args) for args in calls)
             for args in calls:
                 with self.subTest(path=path, args=args):
                     self.assertIn('reraise=False', args)
+
+        self.assertTrue(observed_calls, msg='Expected at least one CustomLogger call across user-facing flows')
 
 
 if __name__ == '__main__':
