@@ -63,7 +63,7 @@ class WorksheetContract(Protocol):
     ) -> None:
         """Configure one or more worksheet columns."""
 
-    def insert_chart(self, row: int, col: int, chart: ChartContract) -> None:
+    def insert_chart(self, row: int, col: int, chart: ChartContract, options: dict[str, Any] | None = None) -> None:
         """Insert a chart object anchored at the provided cell."""
 
     def insert_image(self, row: int, col: int, filename: str, options: dict[str, Any]) -> None:
@@ -183,9 +183,9 @@ class XlsxWorksheetAdapter:
         """Set width and options for one or more columns."""
         self._worksheet.set_column(first_col, last_col, width, cell_format, options)
 
-    def insert_chart(self, row: int, col: int, chart: XlsxChartAdapter) -> None:
+    def insert_chart(self, row: int, col: int, chart: XlsxChartAdapter, options: dict[str, Any] | None = None) -> None:
         """Insert a wrapped chart at the target row/column."""
-        self._worksheet.insert_chart(row, col, chart._chart)
+        self._worksheet.insert_chart(row, col, chart._chart, options or {})
 
     def insert_image(self, row: int, col: int, filename: str, options: dict[str, Any]) -> None:
         """Insert an image file with worksheet-specific options."""
