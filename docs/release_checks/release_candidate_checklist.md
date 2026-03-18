@@ -90,15 +90,7 @@ python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --r
 ```
 
 ```powershell
-python -m nuitka metroliza.py `
-  --onefile `
-  --windows-console-mode=disable `
-  --enable-plugin=pyqt6 `
-  --windows-icon-from-ico=packaging/metroliza_icon2.ico `
-  --output-filename=metroliza.exe `
-  --assume-yes-for-downloads `
-  --remove-output `
-  --jobs=%NUMBER_OF_PROCESSORS%
+./packaging/build_nuitka.ps1
 ```
 
 - [ ] PyInstaller output exists under `dist/` and launches. *(Owner: Release engineer/QA)*

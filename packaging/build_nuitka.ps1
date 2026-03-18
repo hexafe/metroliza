@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$isWindowsHost = $env:OS -eq "Windows_NT"
 
 function Get-DefaultOutputName {
     $versionInfo = python -c "import sys,pathlib;root=pathlib.Path.cwd();vp=root/'VersionDate.py';ns={};exec(vp.read_text(encoding='utf-8'), ns);release=ns.get('RELEASE_VERSION');build=ns.get('VERSION_DATE');sys.stdout.write(f'{release}|{build}' if release and build else '')" 2>$null
@@ -43,11 +44,13 @@ $modeLabel = if ($FastDev) { "standalone (faster dev build)" } else { "onefile (
 $nativeModeLabel = if ($RequireNative) { "required" } else { "optional" }
 $credentialsPathLabel = if ($CredentialsPath) { $CredentialsPath } else { "(disabled)" }
 $consoleMode = if ($EnableConsole) { "force" } else { "disable" }
+$compilerModeLabel = if ($isWindowsHost) { "msvc=latest" } else { "platform default" }
 
 Write-Host "[2/4] Build mode: $modeLabel"
 Write-Host "      Native parser module: $nativeModeLabel"
 Write-Host "      Credentials bundle path: $credentialsPathLabel"
 Write-Host "      Windows console mode: $consoleMode"
+Write-Host "      C compiler selection: $compilerModeLabel"
 
 $nativeModuleAvailable = $false
 python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('_metroliza_cmm_native') else 1)" 2>$null
@@ -84,20 +87,32 @@ $commonArgs = @(
     "--report=nuitka-build-report.xml"
 )
 
+if ($isWindowsHost) {
+    $commonArgs += "--msvc=latest"
+}
+
 if ($nativeModuleAvailable) {
     $commonArgs += "--include-module=_metroliza_cmm_native"
 } else {
     Write-Warning "Native module '_metroliza_cmm_native' not found in this environment. Building with pure-Python parser fallback only."
 }
 
+$pdfBackendPackageAvailable = $pymupdfPackageAvailable -or $fitzPackageAvailable
+
+if (-not $pdfBackendPackageAvailable) {
+    throw "PyMuPDF is required for packaged builds, but neither 'pymupdf' nor 'fitz' is importable in this environment. Install PyMuPDF before invoking Nuitka."
+}
+
 if ($pymupdfPackageAvailable) {
     $commonArgs += "--include-package=pymupdf"
-} else {
-    Write-Warning "PyMuPDF package 'pymupdf' not found in this environment. PDF parsing in the packaged app will fail unless PyMuPDF is installed before building."
 }
 
 if ($fitzPackageAvailable) {
     $commonArgs += "--include-package=fitz"
+}
+
+if ($isWindowsHost) {
+    Write-Warning "Windows build configured to use '--msvc=latest' so bundled PyMuPDF avoids the known MinGW/SCons assembler failure path."
 }
 
 $tokenExcludePatterns = @(

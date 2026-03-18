@@ -75,9 +75,10 @@ If packaged Windows executables fail at startup with `ImportError: DLL load fail
 
 - default output filename is `metroliza_N_<RELEASE_VERSION>(<VERSION_DATE>).exe` from `VersionDate.py`
 - still supports explicit override with `-OutputName`
+- forces `--msvc=latest` on Windows so bundled PyMuPDF avoids the MinGW/SCons assembler failure path seen in some onefile builds
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
-- auto-adds `--include-package=pymupdf` and `--include-package=fitz` when PyMuPDF is installed in the build environment, because PDF parsing loads that backend dynamically via `importlib`
+- requires PyMuPDF to be importable in the build environment and always includes `pymupdf` / `fitz` when available, because PDF parsing is a core packaged-app capability
 - defaults to pure-Python fallback packaging when native module is absent
 - supports `-EnableConsole` for troubleshooting startup failures by showing a Windows console with traceback
 - supports `-RequireNative` to fail fast if native module is missing
@@ -95,7 +96,7 @@ Smoke checks after build:
 # run the built executable in a sandbox and verify startup
 ```
 
-If the extension is missing in the executable, parser code must still run in pure-Python mode. If PDF parsing is required, ensure PyMuPDF is installed in the build environment before invoking Nuitka; otherwise the packaged executable may start successfully but fail only when a PDF parse path is exercised.
+If the extension is missing in the executable, parser code must still run in pure-Python mode. PDF parsing remains required for packaged builds, so `packaging/build_nuitka.ps1` now fails fast when PyMuPDF is not importable in the build environment. On Windows, the script forces `--msvc=latest` so Nuitka uses the Visual Studio toolchain instead of the MinGW path that has been seen to fail while compiling PyMuPDF C sources.
 
 ## Required CI checks for native artifacts
 
