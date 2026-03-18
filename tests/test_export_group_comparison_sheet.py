@@ -224,6 +224,47 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertTrue(pd.isna(effect.loc['A', 'A']))
         self.assertTrue(pd.isna(effect.loc['B', 'B']))
 
+
+    def test_prepare_payload_uses_pairwise_effects_for_rows_and_matrices_in_multi_group_case(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.05, -0.05,
+                    0.4, 0.5, 0.45, 0.55, 0.5,
+                    2.0, 2.1, 1.9, 2.05, 1.95,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        rows_by_pair = {
+            (row['Group A'], row['Group B']): row
+            for row in payload['pairwise_rows']
+            if row['Metric'] == 'DIA - X'
+        }
+        self.assertEqual(set(rows_by_pair), {('A', 'B'), ('A', 'C'), ('B', 'C')})
+
+        ab = rows_by_pair[('A', 'B')]
+        ac = rows_by_pair[('A', 'C')]
+        bc = rows_by_pair[('B', 'C')]
+
+        self.assertNotEqual(ab['effect size'], ac['effect size'])
+        self.assertNotEqual(ab['effect size'], bc['effect size'])
+        self.assertEqual(ab['effect type'], 'cohen_d')
+        self.assertEqual(ab['omnibus effect type'], 'eta_squared')
+        self.assertIsNotNone(ab['omnibus effect size'])
+        self.assertEqual(ab['omnibus effect size'], ac['omnibus effect size'])
+        self.assertEqual(ab['omnibus effect size'], bc['omnibus effect size'])
+
+        effect_matrix = payload['effect_matrices']['DIA - X']
+        self.assertEqual(effect_matrix.loc['A', 'B'], abs(ab['effect size']))
+        self.assertEqual(effect_matrix.loc['A', 'C'], abs(ac['effect size']))
+        self.assertEqual(effect_matrix.loc['B', 'C'], abs(bc['effect size']))
+        self.assertNotEqual(effect_matrix.loc['A', 'B'], effect_matrix.loc['A', 'C'])
+
     def test_write_matrix_renders_nan_diagonal_as_blank_cells(self):
         matrix = pd.DataFrame(
             [[float('nan'), 0.2], [0.2, float('nan')]],
