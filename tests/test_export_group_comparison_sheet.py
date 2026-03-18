@@ -122,10 +122,10 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('Metadata', titles)
         self.assertIn('Overall Test Summary', titles)
         self.assertIn('Recommended Statistical Tests', titles)
-        self.assertIn('Distribution profile by group', titles)
-        self.assertIn('Distribution difference summary', titles)
+        self.assertIn('distribution shape profile by group', titles)
+        self.assertIn('distribution shape summary', titles)
         self.assertIn('Pairwise Tables', titles)
-        self.assertIn('Distribution pairwise tables', titles)
+        self.assertIn('distribution shape pairwise tables', titles)
         self.assertIn('Significance Matrix (adjusted p-values)', titles)
         self.assertIn('Effect Size Matrix (|d|)', titles)
         self.assertIn('Insights', titles)
@@ -275,10 +275,39 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             'Central tendency: highest mean=A (10.000), lowest mean=B (8.000).',
         )
         self.assertIn('Significant pairwise findings:', insights[1])
-        self.assertIn('No-difference outcomes:', insights[2])
-        self.assertIn('Small-sample warning (n < 5):', insights[3])
+        self.assertIn('difference:', insights[2])
+        self.assertIn('caution (n < 5):', insights[3])
         self.assertIn('Assumption/test-choice notes:', insights[4])
-        self.assertIn('Distribution-shape findings:', insights[5])
+        self.assertIn('distribution shape:', insights[5])
+
+
+    def test_insights_include_distribution_shape_when_pairwise_rows_are_empty(self):
+        working = pd.DataFrame(
+            {
+                'GROUP': ['A', 'A', 'B', 'B'],
+                'MEAS': [10.0, 10.0, 8.0, 8.0],
+            }
+        )
+        pairwise_df = pd.DataFrame()
+        overall_test_rows = []
+        distribution_summary_rows = [
+            {
+                'Metric': 'DIA - X',
+                'Test used': 'K-S',
+                'raw p-value': 0.0123,
+                'significant?': 'YES',
+            }
+        ]
+
+        insights = _build_insights(working, pairwise_df, overall_test_rows, distribution_summary_rows)
+
+        self.assertIn('no pairwise location comparisons available', insights[1])
+        self.assertIn('no pairwise location comparisons available', insights[2])
+        self.assertIn('no pairwise location comparisons available', insights[3])
+        self.assertEqual(
+            insights[5],
+            'Distribution-shape findings: significant differences detected for DIA - X (K-S, p=0.0123).',
+        )
 
 
     def test_insights_skip_nan_adjusted_p_values_without_errors(self):
@@ -327,9 +356,9 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         )
         self.assertEqual(
             insights[2],
-            'No-difference outcomes: DIA - Z (B vs C, adj p=0.5200).',
+            'difference: DIA - Z (B vs C, adj p=0.5200).',
         )
-        self.assertIn('Distribution-shape findings:', insights[5])
+        self.assertIn('distribution shape:', insights[5])
 
 
 
@@ -407,10 +436,10 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             'Metadata',
             'Overall Test Summary',
             'Recommended Statistical Tests',
-            'Distribution profile by group',
-            'Distribution difference summary',
+            'distribution shape profile by group',
+            'distribution shape summary',
             'Pairwise Tables',
-            'Distribution pairwise tables',
+            'distribution shape pairwise tables',
             'Significance Matrix (adjusted p-values)',
             'Effect Size Matrix (|d|)',
             'Insights',
@@ -441,7 +470,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertTrue(payload['distribution_difference_rows'])
         self.assertTrue(payload['distribution_pairwise_rows'])
         profile = payload['distribution_profile_rows'][0]
-        for key in ['Metric', 'Group', 'n', 'Best fit model', 'Fit quality', 'AD p-value', 'KS p-value', 'GOF acceptable?', 'Support mode', 'Warning / notes summary']:
+        for key in ['Metric', 'Group', 'n', 'best fit model', 'fit quality', 'AD p-value', 'KS p-value', 'GOF acceptable?', 'Support mode', 'Warning / notes summary']:
             self.assertIn(key, profile)
 
     def test_insights_do_not_claim_no_difference_when_only_shape_differs(self):
@@ -456,7 +485,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         payload = prepare_group_comparison_payload(grouped_df)
         insights_text = ' '.join(payload['insights'])
 
-        self.assertIn('Distribution-shape findings:', insights_text)
+        self.assertIn('distribution shape:', insights_text)
         self.assertNotIn('no differences', insights_text.lower())
 
 

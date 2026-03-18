@@ -546,12 +546,13 @@ def build_metric_insights(metric_row):
     pairwise_rows = metric_row.get('pairwise_rows', [])
     comparability = metric_row.get('comparability_summary', {})
 
-    lines = [
+    required_lines = [
         (
             f"Comparability={comparability.get('status')} "
             f"(limits: {comparability.get('interpretation_limits', 'none')})."
         )
     ]
+    optional_lines = []
 
     if desc_rows:
         sorted_by_mean = sorted(
@@ -561,7 +562,7 @@ def build_metric_insights(metric_row):
         if sorted_by_mean:
             low = sorted_by_mean[0]
             high = sorted_by_mean[-1]
-            lines.append(
+            optional_lines.append(
                 (
                     f"Mean range spans {low.get('group')} ({low.get('mean'):.4g}) to "
                     f"{high.get('group')} ({high.get('mean'):.4g})."
@@ -576,21 +577,21 @@ def build_metric_insights(metric_row):
             pairwise_rows,
             key=lambda row: (row.get('adjusted_p_value') is None, row.get('adjusted_p_value') or float('inf')),
         )[0]
-        lines.append(
+        required_lines.append(
             (
                 f"Strongest pairwise location signal: {best.get('group_a')} vs {best.get('group_b')} "
                 f"(adj p={best.get('adjusted_p_value')}, comment={best.get('comment')})."
             )
         )
     elif metric_row.get('analysis_policy', {}).get('allow_pairwise'):
-        lines.append('Pairwise location test enabled but no valid A/B rows were produced.')
+        required_lines.append('Pairwise location test enabled but no valid A/B rows were produced.')
     else:
-        lines.append('Pairwise location interpretation is disabled for this metric.')
+        required_lines.append('Pairwise location interpretation is disabled for this metric.')
 
     if shape_verdict:
-        lines.append(f"Distribution shape: {shape_verdict}")
+        required_lines.append(f"Distribution shape: {shape_verdict}")
 
-    return lines[:3]
+    return (required_lines + optional_lines)[:3]
 
 
 def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correction_method='holm'):
@@ -1189,8 +1190,8 @@ def build_group_analysis_payload(
         }
         for desc_row in descriptive_stats:
             group_profile = profile_by_group.get(desc_row.get('group')) or {}
-            desc_row['best_fit_model'] = group_profile.get('Best fit model')
-            desc_row['fit_quality'] = group_profile.get('Fit quality')
+            desc_row['best_fit_model'] = group_profile.get('best fit model') or group_profile.get('Best fit model')
+            desc_row['fit_quality'] = group_profile.get('fit quality') or group_profile.get('Fit quality')
             desc_row['distribution_shape_caution'] = group_profile.get('Warning / notes summary')
 
         metrics.append(

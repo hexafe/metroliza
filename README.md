@@ -66,11 +66,10 @@ Parity between native and Python backends is enforced through fixture-based test
 
 Excel exports now include a **Group Comparison** worksheet that consolidates:
 
-- Metadata and overall test summary counts.
-- Recommended per-metric omnibus test selection (assumption-driven).
-- Pairwise comparison table with multiple-comparison correction (default: **Holm**).
-- Adjusted p-value significance heatmaps and absolute effect-size heatmaps.
-- Deterministic text insights for central tendency, significant/non-significant pairs, and sample-size warnings.
+- Distribution profile by group, so you can quickly see how each group behaves.
+- Distribution difference summary to highlight where groups diverge overall.
+- Distribution pairwise tables for side-by-side group comparisons.
+- Shape-aware insight interpretation that is separate from location differences.
 
 Interpretation guidance:
 
@@ -109,11 +108,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.03rc1(260315)`): Major analytics update: histogram/chart readability improvements plus new capability confidence and safeguards for low-sample interpretation.
+Current release highlight (`2026.03rc1(260317)`): Major analytics update: histogram/chart readability improvements plus new capability confidence and safeguards for low-sample interpretation.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.03rc1(260315)`)
+### Changelog highlights (release `2026.03rc1(260317)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
