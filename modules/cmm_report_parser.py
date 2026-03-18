@@ -4,8 +4,6 @@ The parser consumes raw report text, derives metadata from filenames, and writes
 rows used by downstream grouping and export workflows.
 """
 
-import importlib
-import importlib.util
 import logging
 from pathlib import Path
 from time import strftime
@@ -16,6 +14,7 @@ from modules.characteristic_alias_service import (
     ensure_characteristic_alias_table,
 )
 from modules.cmm_native_parser import parse_blocks_with_backend_and_telemetry
+from modules.pdf_backend import require_pdf_backend, resolve_pdf_backend_module_name
 from modules.cmm_parsing import add_tolerances_to_blocks
 from modules.base_report_parser import BaseReportParser
 from modules.db import execute_with_retry, run_transaction_with_retry
@@ -53,34 +52,17 @@ def ensure_schema_indexes(cursor):
         cursor.execute(statement)
 
 
+
+
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
-    for module_name in ("pymupdf", "fitz"):
-        if importlib.util.find_spec(module_name) is None:
-            continue
-
-        try:
-            module = importlib.import_module(module_name)
-        except Exception:
-            continue
-
-        open_method = getattr(module, "open", None)
-        if callable(open_method):
-            return module_name
-
-    return None
+    return resolve_pdf_backend_module_name()
 
 
 
 def _load_pdf_backend():
-    backend_name = _resolve_pymupdf_backend_module()
-    if backend_name is None:
-        return None
+    return require_pdf_backend()
 
-    try:
-        return importlib.import_module(backend_name)
-    except Exception:
-        return None
 
 
 class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
@@ -185,14 +167,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             self.log_and_exit(e)
 
     def _require_pdf_backend(self):
-        fitz = _load_pdf_backend()
-        if fitz is None:
-            raise ImportError(
-                "PyMuPDF is required to parse PDF reports. Install `PyMuPDF` (which "
-                "provides either the `pymupdf` or `fitz` module) and remove any "
-                "conflicting standalone `fitz` package."
-            )
-        return fitz
+        return _load_pdf_backend()
 
     def open_report(self):
         """Handle `cmm_open` for `CMMReportParser`.

@@ -10,12 +10,16 @@ from modules.logging_utils import ensure_application_logging
 
 VERSION_DATE = VersionDate.VERSION_DATE
 STARTUP_SMOKE_ENV = "METROLIZA_STARTUP_SMOKE"
+PDF_PARSER_SMOKE_FIXTURE_ENV = "METROLIZA_PDF_PARSER_SMOKE_FIXTURE"
+PDF_PARSER_SMOKE_EXPECTED_TEXT_ENV = "METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT"
 LICENSE_MODE_ENV = "METROLIZA_LICENSE_VERIFICATION"
 
 
 @dataclass(frozen=True)
 class StartupConfig:
     startup_smoke_mode: bool
+    pdf_parser_smoke_fixture: str | None
+    pdf_parser_smoke_expected_text: str | None
     license_verification_enabled: bool
 
 
@@ -36,6 +40,8 @@ def load_startup_config() -> StartupConfig:
     """Load startup behavior from environment defaults."""
     return StartupConfig(
         startup_smoke_mode=parse_env_flag(os.getenv(STARTUP_SMOKE_ENV), default=False),
+        pdf_parser_smoke_fixture=os.getenv(PDF_PARSER_SMOKE_FIXTURE_ENV),
+        pdf_parser_smoke_expected_text=os.getenv(PDF_PARSER_SMOKE_EXPECTED_TEXT_ENV),
         license_verification_enabled=parse_env_flag(os.getenv(LICENSE_MODE_ENV), default=False),
     )
 
@@ -65,6 +71,21 @@ def run_startup_smoke_mode(logger: logging.Logger) -> int:
     logger.info("Startup smoke mode completed successfully; exiting without showing UI")
     return 0
 
+
+
+
+def run_pdf_parser_smoke_mode(logger: logging.Logger, fixture_path: str, expected_text: str) -> int:
+    """Run packaged PDF parser smoke mode and return process exit code."""
+    from modules.pdf_parser_smoke import run_pdf_parser_smoke
+
+    logger.info(
+        "Packaged PDF parser smoke enabled (%s): parsing fixture %s",
+        PDF_PARSER_SMOKE_FIXTURE_ENV,
+        fixture_path,
+    )
+    run_pdf_parser_smoke(fixture_path, expected_text)
+    logger.info("Packaged PDF parser smoke completed successfully")
+    return 0
 
 def launch_ui(config: StartupConfig) -> int:
     """Launch UI after optional license checks and return process exit code."""
@@ -96,6 +117,13 @@ def bootstrap_application() -> int:
 
     if config.startup_smoke_mode:
         return run_startup_smoke_mode(logger)
+
+    if config.pdf_parser_smoke_fixture:
+        return run_pdf_parser_smoke_mode(
+            logger,
+            config.pdf_parser_smoke_fixture,
+            config.pdf_parser_smoke_expected_text or "",
+        )
 
     return launch_ui(config)
 

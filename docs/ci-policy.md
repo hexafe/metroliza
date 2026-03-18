@@ -50,14 +50,15 @@ These checks are explicitly non-blocking for normal PR CI:
 
 | Check | Workflow job name (`ci.yml`) | Trigger model | Blocking status |
 |---|---|---|---|
-| Packaging smoke build + startup launch check (release-only) | `packaging-smoke` | Manual `workflow_dispatch` with `run_packaging_smoke=1` | **Non-blocking** for regular PRs and pushes |
+| Packaging smoke build + packaged PDF parser check (release-only) | `packaging-smoke` | Manual `workflow_dispatch` with `run_packaging_smoke=1` | **Non-blocking** for regular PRs and pushes |
 | Google conversion smoke (release-only) | `google-conversion-smoke` | Manual `workflow_dispatch` with `run_google_conversion_smoke=1` | **Non-blocking** for regular PRs and pushes |
 
-### Packaging smoke startup semantics
+### Packaging smoke parser semantics
 
-- After PyInstaller builds `dist/metroliza`, the workflow runs a minimal non-interactive launch smoke command against the built artifact with:
-  - `METROLIZA_STARTUP_SMOKE=1` (app-level init-and-exit mode), and
-  - `QT_QPA_PLATFORM=offscreen` (headless runner compatibility).
+- After PyInstaller builds `dist/metroliza`, the workflow runs a non-interactive packaged PDF parser smoke command against the built artifact with:
+  - `METROLIZA_PDF_PARSER_SMOKE_FIXTURE=tests/fixtures/pdf/cmm_smoke_fixture.pdf`,
+  - `METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT=METROLIZA PDF PARSER SMOKE`, and
+  - `QT_QPA_PLATFORM=offscreen` (headless runner compatibility if Qt is touched during startup/imports).
 - The smoke command is bounded with a timeout to prevent hanging CI runners.
 - Startup logs (`stdout`, `stderr`, and discovered `metroliza.log` paths) are gathered into `smoke-artifacts/`.
 - On failure, those artifacts are uploaded as `packaging-smoke-artifacts` for troubleshooting.

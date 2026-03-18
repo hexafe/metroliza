@@ -17,24 +17,28 @@ Guardrail markers (source-inspection compatibility):
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
+import importlib
+import sys
 
 
 def _load_canonical_module():
-    module_path = Path(__file__).with_name('cmm_report_parser.py')
-    spec = importlib.util.spec_from_file_location('modules.cmm_report_parser', module_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f'Unable to load canonical module from {module_path}')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    module_name = "modules.cmm_report_parser"
+    module = sys.modules.get(module_name)
+    parser_cls = getattr(module, "CMMReportParser", None) if module is not None else None
+    if parser_cls is not None and getattr(parser_cls, "__module__", "") == module_name:
+        return module
+
+    if module is not None:
+        sys.modules.pop(module_name, None)
+
+    return importlib.import_module(module_name)
 
 
 _canonical = _load_canonical_module()
 
 for _name in dir(_canonical):
-    if not _name.startswith('_'):
+    if not _name.startswith("_"):
         globals()[_name] = getattr(_canonical, _name)
 
-__all__ = [name for name in globals() if not name.startswith('_')]
+
+__all__ = [name for name in globals() if not name.startswith("_")]

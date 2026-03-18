@@ -20,7 +20,7 @@ Use this runbook to coordinate release-candidate (RC) open testing with internal
 
 Packaging smoke semantics for open-testing evidence review:
 - `packaging-smoke` remains optional/manual (workflow-dispatch) and non-blocking for normal PR CI.
-- When executed, it now includes a packaged-artifact startup smoke launch that runs in non-interactive init-and-exit mode (`METROLIZA_STARTUP_SMOKE=1`) with offscreen Qt.
+- When executed, it now includes a packaged-artifact parser smoke launch that runs a non-interactive PDF parsing check (`METROLIZA_PDF_PARSER_SMOKE_FIXTURE`) with offscreen Qt available if needed.
 - Failures should include uploaded `packaging-smoke-artifacts` (startup stdout/stderr + collected `metroliza.log` files) and should be linked in release evidence.
 
 ### Out of scope

@@ -65,7 +65,8 @@ def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
         "if: github.event_name == 'workflow_dispatch' && inputs.run_google_conversion_smoke == '1'"
         in workflow
     )
-    assert 'METROLIZA_STARTUP_SMOKE: \"1\"' in workflow or "METROLIZA_STARTUP_SMOKE: '1'" in workflow
+    assert 'METROLIZA_PDF_PARSER_SMOKE_FIXTURE: tests/fixtures/pdf/cmm_smoke_fixture.pdf' in workflow
+    assert 'METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT: METROLIZA PDF PARSER SMOKE' in workflow
     assert 'timeout 60s ./dist/metroliza' in workflow
     assert 'name: packaging-smoke-artifacts' in workflow
 
@@ -84,10 +85,10 @@ def test_ci_policy_keeps_manual_smoke_lane_semantics_explicit() -> None:
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
 
     assert 'Optional/manual checks (non-blocking)' in ci_policy
-    assert '| Packaging smoke build + startup launch check (release-only) | `packaging-smoke` |' in ci_policy
+    assert '| Packaging smoke build + packaged PDF parser check (release-only) | `packaging-smoke` |' in ci_policy
     assert '| Google conversion smoke (release-only) | `google-conversion-smoke` |' in ci_policy
     assert '**Non-blocking** for regular PRs and pushes' in ci_policy
-    assert 'Packaging smoke startup semantics' in ci_policy
+    assert 'Packaging smoke parser semantics' in ci_policy
 
 
 def test_release_status_and_runbook_keep_gate_semantics_aligned() -> None:
