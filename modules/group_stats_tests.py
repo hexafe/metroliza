@@ -129,6 +129,12 @@ def select_group_stat_test(
                 'normality': {},
                 'variance_homogeneity': {'test': None, 'p_value': None, 'status': 'not_checked'},
             },
+            'assumption_outcomes': {
+                'normality': 'not_checked',
+                'variance_homogeneity': 'not_checked',
+                'selection_mode': 'unavailable',
+                'selection_detail': 'Assumption checks were not completed because labels and grouped values had different lengths.',
+            },
             'warnings': ['input_length_mismatch'],
             'preprocess': {},
         }
@@ -150,6 +156,12 @@ def select_group_stat_test(
             'normality': {},
             'variance_homogeneity': {'test': None, 'p_value': None, 'status': 'not_checked'},
         },
+        'assumption_outcomes': {
+            'normality': 'not_checked',
+            'variance_homogeneity': 'not_checked',
+            'selection_mode': 'unavailable',
+            'selection_detail': 'Assumption checks were not completed.',
+        },
         'warnings': [],
         'preprocess': preprocess_warnings,
     }
@@ -168,51 +180,85 @@ def select_group_stat_test(
         shapiro_results[group.label] = {'p_value': p_value, 'status': status, 'passed': passed}
 
     result['assumptions']['normality'] = shapiro_results
-    normality_pass = normality_failures == 0 and any(
-        item.get('passed') is not None for item in shapiro_results.values()
-    )
+    any_normality_measured = any(item.get('passed') is not None for item in shapiro_results.values())
+    any_normality_skipped = any(item.get('status') != 'ok' for item in shapiro_results.values())
+    normality_pass = normality_failures == 0 and any_normality_measured
+
+    if normality_failures > 0:
+        normality_outcome = 'failed'
+        normality_detail = 'At least one usable group failed Shapiro-Wilk, so the selection falls back to the non-parametric path.'
+    elif any_normality_measured and not any_normality_skipped:
+        normality_outcome = 'passed'
+        normality_detail = 'All usable groups passed Shapiro-Wilk, so parametric paths remain eligible.'
+    elif any_normality_measured and any_normality_skipped:
+        normality_outcome = 'mixed'
+        normality_detail = 'Some groups passed Shapiro-Wilk but at least one check was skipped, so selection treats normality as unresolved and uses the non-parametric path.'
+    else:
+        normality_outcome = 'skipped'
+        normality_detail = 'All usable normality checks were skipped, so selection treats normality as unresolved and uses the non-parametric path.'
 
     center = 'median' if variance_test == 'brown_forsythe' else 'mean'
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', RuntimeWarning)
         _, lev_p = levene(*(group.values for group in usable), center=center)
     variance_passed = bool(not np.isnan(lev_p) and lev_p >= alpha)
+    variance_outcome = 'passed' if variance_passed else 'failed'
     result['assumptions']['variance_homogeneity'] = {
         'test': 'Brown-Forsythe' if center == 'median' else 'Levene',
         'p_value': None if np.isnan(lev_p) else float(lev_p),
-        'status': 'passed' if variance_passed else 'failed',
+        'status': variance_outcome,
     }
 
     k = len(usable)
     arrays = [group.values for group in usable]
 
     if any(group.sample_size < 2 for group in usable):
+        result['assumption_outcomes'] = {
+            'normality': normality_outcome,
+            'variance_homogeneity': variance_outcome,
+            'selection_mode': 'unavailable',
+            'selection_detail': 'At least one usable group had fewer than 2 values, so no omnibus test was selected.',
+        }
         result['warnings'].append('contains_group_with_n_lt_2')
         return result
 
+    selection_mode = 'non_parametric'
+    selection_detail = normality_detail
     try:
         if k == 2:
             if normality_pass:
                 if variance_passed:
                     _, p_value = ttest_ind(arrays[0], arrays[1], equal_var=True, nan_policy='omit')
                     result['test_name'] = 'Student t-test'
+                    selection_mode = 'parametric_equal_variance'
+                    selection_detail = 'Shapiro-Wilk passed for all usable groups and Brown-Forsythe/Levene passed, so the equal-variance parametric path was used.'
                 else:
                     _, p_value = ttest_ind(arrays[0], arrays[1], equal_var=False, nan_policy='omit')
                     result['test_name'] = 'Welch t-test'
+                    selection_mode = 'parametric_unequal_variance'
+                    selection_detail = 'Shapiro-Wilk passed for all usable groups but Brown-Forsythe/Levene failed, so the unequal-variance parametric path was used.'
             else:
                 _, p_value = mannwhitneyu(arrays[0], arrays[1], alternative='two-sided')
                 result['test_name'] = 'Mann-Whitney U'
+                selection_mode = 'non_parametric'
+                selection_detail = normality_detail
         else:
             if normality_pass:
                 if variance_passed:
                     _, p_value = f_oneway(*arrays)
                     result['test_name'] = 'ANOVA'
+                    selection_mode = 'parametric_equal_variance'
+                    selection_detail = 'Shapiro-Wilk passed for all usable groups and Brown-Forsythe/Levene passed, so ANOVA was used.'
                 else:
                     p_value = _welch_anova_p_value(arrays)
                     result['test_name'] = 'Welch ANOVA'
+                    selection_mode = 'parametric_unequal_variance'
+                    selection_detail = 'Shapiro-Wilk passed for all usable groups but Brown-Forsythe/Levene failed, so Welch ANOVA was used.'
             else:
                 _, p_value = kruskal(*arrays)
                 result['test_name'] = 'Kruskal-Wallis'
+                selection_mode = 'non_parametric'
+                selection_detail = normality_detail
 
         if p_value is None or np.isnan(p_value):
             result['warnings'].append('test_returned_nan')
@@ -220,6 +266,13 @@ def select_group_stat_test(
             result['p_value'] = float(p_value)
     except ValueError as exc:
         result['warnings'].append(f'test_error:{exc}')
+
+    result['assumption_outcomes'] = {
+        'normality': normality_outcome,
+        'variance_homogeneity': variance_outcome,
+        'selection_mode': selection_mode,
+        'selection_detail': selection_detail,
+    }
 
     if any(group.is_constant for group in usable):
         result['warnings'].append('contains_constant_group')

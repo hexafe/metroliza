@@ -161,6 +161,17 @@ def _format_correction_method(method: str) -> str:
     return labels[normalized]
 
 
+def _describe_correction_policy(method: str) -> str:
+    normalized = _normalize_correction_method(method)
+    labels = {
+        'holm': 'Strict family-wise error control (Holm)',
+        'bh': 'Exploratory false-discovery-rate control (Benjamini-Hochberg/FDR)',
+    }
+    if normalized not in labels:
+        raise ValueError(f'Unsupported correction method: {method}')
+    return labels[normalized]
+
+
 def _describe_pairwise_strategy(*, non_parametric: bool, equal_var: bool, correction_method: str) -> str:
     correction_label = _format_correction_method(correction_method)
     if non_parametric:
@@ -223,7 +234,9 @@ def compute_metric_pairwise_stats(
     equal_var = variance_status == 'passed'
     normality_check_used = 'Shapiro-Wilk'
     variance_test_used = variance_assumption.get('test') or 'Brown-Forsythe'
+    assumption_outcomes = selector_result.get('assumption_outcomes', {})
     correction_method_label = _format_correction_method(config.correction_method)
+    correction_policy = _describe_correction_policy(config.correction_method)
     post_hoc_strategy = _describe_pairwise_strategy(
         non_parametric=is_non_parametric,
         equal_var=equal_var,
@@ -289,20 +302,30 @@ def compute_metric_pairwise_stats(
             'group_a': group_a,
             'group_b': group_b,
             'test_used': test_used,
+            'pairwise_test_name': test_used,
             'p_value': p_value,
             'effect_size': effect_size,
             'effect_type': pairwise_effect_type,
+            'pairwise_effect_type': pairwise_effect_type,
             'normality_check_used': normality_check_used,
             'variance_test_used': variance_test_used,
             'omnibus_test_used': selected_test,
+            'omnibus_test_name': selected_test,
             'post_hoc_strategy': post_hoc_strategy,
             'correction_method': correction_method_label,
+            'correction_policy': correction_policy,
+            'assumption_outcomes': assumption_outcomes,
+            'selection_detail': assumption_outcomes.get('selection_detail'),
         }
         if effect_ci is not None:
             row['effect_size_ci'] = effect_ci
         if len(labels) > 2:
             row['omnibus_effect_size'] = overall_effect
             row['omnibus_effect_type'] = omnibus_effect_type
+            row['effect_types'] = {
+                'pairwise': pairwise_effect_type,
+                'omnibus': omnibus_effect_type,
+            }
             if overall_ci is not None:
                 row['omnibus_effect_size_ci'] = overall_ci
         rows.append(row)
@@ -311,6 +334,7 @@ def compute_metric_pairwise_stats(
     for row, adjusted_p in zip(rows, adjusted):
         row['adjusted_p_value'] = adjusted_p
         row['significant'] = bool(adjusted_p is not None and adjusted_p < config.alpha)
+        row.setdefault('effect_types', {'pairwise': pairwise_effect_type, 'omnibus': row.get('omnibus_effect_type')})
 
     return rows
 
@@ -318,6 +342,7 @@ def compute_metric_pairwise_stats(
 __all__ = [
     'ComparisonStatsConfig',
     'compute_metric_pairwise_stats',
+    '_describe_correction_policy',
     '_adjust_pvalues',
     '_describe_pairwise_strategy',
     '_format_correction_method',

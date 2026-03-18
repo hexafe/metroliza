@@ -17,6 +17,7 @@ import pandas as pd
 from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.comparison_stats import (
     ComparisonStatsConfig,
+    _describe_correction_policy,
     _describe_pairwise_strategy,
     _format_correction_method,
     compute_metric_pairwise_stats,
@@ -30,6 +31,7 @@ SECTION_GAP = 2
 BASE_INTERPRETATION_NOTES = [
     'Alpha threshold: 0.05 (results below alpha are treated as statistically significant).',
     'Adjusted p-value: multiple-comparison corrected p-value used for significance decisions.',
+    'If Shapiro-Wilk is skipped for every usable group, normality is treated as unresolved and the non-parametric path is selected.',
     'Location comparisons focus on mean/median shifts; shape differences are reported separately.',
 ]
 
@@ -122,6 +124,7 @@ def _build_interpretation_notes(payload):
     effect_metadata = payload.get('effect_reporting', {})
     pairwise_types = effect_metadata.get('pairwise_effect_types', [])
     omnibus_types = effect_metadata.get('omnibus_effect_types', [])
+    correction_policy = payload.get('correction_policy')
 
     if not pairwise_types:
         notes.append('Pairwise effect sizes: none reported.')
@@ -143,6 +146,9 @@ def _build_interpretation_notes(payload):
         for note in omnibus_notes:
             if note not in notes:
                 notes.append(note)
+
+    if correction_policy:
+        notes.append(f'Correction policy: {correction_policy}.')
 
     return notes
 
@@ -302,7 +308,7 @@ def _resolve_metric_aliases_for_comparison(working: pd.DataFrame, *, alias_db_pa
     return resolved_metric
 
 
-def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
+def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correction_method='holm'):
     """Prepare metadata, summary rows, pairwise rows, matrices, and insights.
 
     Rationale:
@@ -314,9 +320,10 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
         has no usable numeric measurements.
     """
     if not isinstance(grouped_df, pd.DataFrame) or grouped_df.empty:
-        correction_method = _format_correction_method('holm')
+        correction_method = _format_correction_method(correction_method)
+        correction_policy = _describe_correction_policy(correction_method)
         return {
-            'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0), ('Alpha', 0.05), ('Correction method', correction_method), ('Group sample sizes', 'No groups')],
+            'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0), ('Alpha', 0.05), ('Correction method', correction_method), ('Correction policy', correction_policy), ('Group sample sizes', 'No groups')],
             'overall_summary': [('Pairwise tests', 0), ('Significant (p < 0.05)', 0)],
             'pairwise_rows': [],
             'overall_test_rows': [],
@@ -326,6 +333,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
             'significance_matrices': {},
             'effect_matrices': {},
             'effect_reporting': _build_effect_reporting_metadata([]),
+            'correction_policy': correction_policy,
             'insights': ['No grouped measurement rows available for comparison.'],
         }
 
@@ -339,7 +347,8 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
     working = working.assign(MEAS=numeric_meas)
     working = working.dropna(subset=['MEAS'])
 
-    correction_method = _format_correction_method('holm')
+    correction_method = _format_correction_method(correction_method)
+    correction_policy = _describe_correction_policy(correction_method)
     pairwise_rows = []
     overall_test_rows = []
     distribution_profile_rows = []
@@ -369,13 +378,16 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
             {
                 'Metric': metric_key,
                 'Selected test': selected_test,
+                'omnibus test name': selected_test,
                 'p-value': selector_result.get('p_value'),
                 'Sample sizes': ', '.join(f"{key}:{value}" for key, value in selector_result.get('sample_sizes', {}).items()),
                 'normality check used': 'Shapiro-Wilk',
                 'variance test used': variance_test,
                 'omnibus test used': selected_test,
+                'assumption outcomes': selector_result.get('assumption_outcomes', {}),
                 'post-hoc strategy': post_hoc_strategy,
                 'correction method': correction_method,
+                'correction policy': correction_policy,
                 'Assumptions / warnings': '; '.join(selector_result.get('warnings', [])) or 'None',
             }
         )
@@ -397,15 +409,17 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
                     'Group A': group_a,
                     'Group B': group_b,
                     'test used': item.get('test_used'),
+                    'pairwise test name': item.get('pairwise_test_name', item.get('test_used')),
                     'p-value': item.get('p_value'),
                     'adjusted p-value': item.get('adjusted_p_value'),
                     'effect size': item.get('effect_size'),
                     'effect type': item.get('effect_type'),
-                    'pairwise_effect_type': item.get('effect_type'),
+                    'pairwise_effect_type': item.get('pairwise_effect_type', item.get('effect_type')),
                     'effect size ci': item.get('effect_size_ci'),
                     'omnibus effect size': item.get('omnibus_effect_size'),
                     'omnibus effect type': item.get('omnibus_effect_type'),
                     'omnibus_effect_type': item.get('omnibus_effect_type'),
+                    'effect types': item.get('effect_types'),
                     'omnibus effect size ci': item.get('omnibus_effect_size_ci'),
                     'significant': item.get('significant'),
                     'n(A)': len(sample_left),
@@ -414,8 +428,12 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
                     'normality check used': item.get('normality_check_used'),
                     'variance test used': item.get('variance_test_used'),
                     'omnibus test used': item.get('omnibus_test_used'),
+                    'omnibus test name': item.get('omnibus_test_name', item.get('omnibus_test_used')),
+                    'assumption outcomes': item.get('assumption_outcomes'),
+                    'selection detail': item.get('selection_detail'),
                     'post-hoc strategy': item.get('post_hoc_strategy'),
                     'correction method': item.get('correction_method'),
+                    'correction policy': item.get('correction_policy', correction_policy),
                 }
             )
 
@@ -451,6 +469,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
             ('Headers', working['metric_key'].nunique()),
             ('Alpha', 0.05),
             ('Correction method', correction_method),
+            ('Correction policy', correction_policy),
             ('Group sample sizes', _summarize_group_sample_sizes(working)),
         ],
         'overall_summary': overall_summary,
@@ -464,6 +483,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
         'significance_matrices': significance_matrices,
         'effect_matrices': effect_matrices,
         'effect_reporting': effect_reporting,
+        'correction_policy': correction_policy,
         'insights': _build_insights(working, pairwise_df, overall_test_rows, distribution_difference_rows),
     }
 
@@ -510,16 +530,23 @@ def _build_pairwise_display_rows(pairwise_rows):
             comments.append('Adjusted significant')
         assumption_warning = _normalize_comment(row.get('normality check used'))
         variance_warning = _normalize_comment(row.get('variance test used'))
+        correction_policy = _normalize_comment(row.get('correction policy'))
+        assumption_outcomes = row.get('assumption outcomes') or {}
+        selection_detail = _normalize_comment(row.get('selection detail') or assumption_outcomes.get('selection_detail'))
         if assumption_warning != 'None':
             comments.append(f'Normality: {assumption_warning}')
         if variance_warning != 'None':
             comments.append(f'Variance: {variance_warning}')
+        if correction_policy != 'None':
+            comments.append(f'Correction: {correction_policy}')
+        if selection_detail != 'None':
+            comments.append(f'Selection: {selection_detail}')
 
         display_rows.append({
             'Metric': metric,
             'Group A': group_a,
             'Group B': group_b,
-            'Pairwise test': row.get('test used'),
+            'Pairwise test': row.get('pairwise test name', row.get('test used')),
             'Adjusted p-value': row.get('adjusted p-value'),
             'Pairwise effect size': row.get('effect size'),
             'Effect type': _effect_label(effect_type),
@@ -570,6 +597,7 @@ def _build_summary_block(payload):
         ('Metric counts', metadata.get('Headers', 0)),
         ('Groups analyzed', metadata.get('Group sample sizes', metadata.get('Groups', 0))),
         ('Correction method', metadata.get('Correction method', 'N/A')),
+        ('Correction policy', metadata.get('Correction policy', 'N/A')),
         ('Per-metric omnibus test / p-value', omnibus_results),
         ('Significant adjusted pairwise findings', int(sum(bool(row.get('significant')) for row in pairwise_rows))),
         ('Strongest practical effect', strongest_effect),
@@ -754,7 +782,10 @@ def _write_table(worksheet, row, title, rows):
     row += 1
     for data_row in rows:
         for col, header in enumerate(headers):
-            worksheet.write(row, col, data_row.get(header))
+            value = data_row.get(header)
+            if isinstance(value, (dict, list, tuple, set)):
+                value = str(value)
+            worksheet.write(row, col, value)
         row += 1
     return row + SECTION_GAP, header_row
 
