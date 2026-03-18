@@ -259,6 +259,62 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(policy['anchor']['row'], DEFAULT_CHART_ANCHOR_ROW)
         self.assertEqual(policy['legend'], {'position': 'none'})
 
+    def test_insert_measurement_chart_honors_plan_anchor_row_and_hidden_legend_policy(self):
+        workbook = DummyWorkbook()
+        worksheet = DummyWorksheet()
+        plan = {
+            'data_start_row': 10,
+            'last_data_row': 14,
+            'summary_column': 1,
+            'y_column': 2,
+            'usl_column': 3,
+            'lsl_column': 4,
+            'chart_insert_row': 22,
+        }
+
+        insert_measurement_chart(
+            workbook,
+            worksheet,
+            chart_type='scatter',
+            header='Stable Export',
+            sheet_name='Ref',
+            measurement_plan=plan,
+            chart_anchor_col=5,
+        )
+
+        self.assertEqual(worksheet.insert_calls[0][0:2], (22, 5))
+        self.assertEqual(workbook.chart.legend, {'position': 'none'})
+        self.assertEqual(workbook.chart.title, {'name': 'Stable Export', 'name_font': {'size': 10}})
+
+    def test_existing_measurement_chart_export_ranges_remain_unchanged_without_custom_anchor(self):
+        workbook = DummyWorkbook()
+        worksheet = DummyWorksheet()
+        plan = {
+            'data_start_row': 21,
+            'last_data_row': 25,
+            'summary_column': 1,
+            'y_column': 2,
+            'usl_column': 3,
+            'lsl_column': 4,
+        }
+
+        insert_measurement_chart(
+            workbook,
+            worksheet,
+            chart_type='scatter',
+            header='Baseline',
+            sheet_name='Ref',
+            measurement_plan=plan,
+            chart_anchor_col=2,
+        )
+
+        self.assertEqual(worksheet.insert_calls[0][0:2], (DEFAULT_CHART_ANCHOR_ROW, 2))
+        self.assertEqual(workbook.chart.legend, {'position': 'none'})
+        self.assertEqual(workbook.chart.series[0]['categories'], '=Ref!$B22:B26')
+        self.assertEqual(workbook.chart.series[0]['values'], '=Ref!$C22:C26')
+        self.assertEqual(workbook.chart.series[1]['values'], '=Ref!$D22:D26')
+        self.assertEqual(workbook.chart.series[2]['values'], '=Ref!$E22:E26')
+
     def test_chart_format_policy_enables_legend_for_multiple_series(self):
         policy = build_measurement_chart_format_policy('H', chart_anchor_row=15, legend_series_count=3)
 
