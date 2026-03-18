@@ -78,7 +78,8 @@ If packaged Windows executables fail at startup with `ImportError: DLL load fail
 - forces `--msvc=latest` on Windows so bundled PyMuPDF avoids the MinGW/SCons assembler failure path seen in some onefile builds
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
-- requires PyMuPDF to be importable in the build environment and always includes `pymupdf` / `fitz` when available, because PDF parsing is a core packaged-app capability
+- requires PyMuPDF to be importable in the build environment and fails closed by default when it is not available
+- always includes `pymupdf` / `fitz` package contents and validates the generated Nuitka report so packaged PDF parsing cannot silently drop out of the artifact
 - defaults to pure-Python fallback packaging when native module is absent
 - supports `-EnableConsole` for troubleshooting startup failures by showing a Windows console with traceback
 - supports `-RequireNative` to fail fast if native module is missing
@@ -93,10 +94,11 @@ Smoke checks after build:
 ./packaging/build_nuitka.ps1 -RequireNative
 # troubleshooting mode: show console and traceback if startup fails
 ./packaging/build_nuitka.ps1 -EnableConsole
-# run the built executable in a sandbox and verify startup
+# unsafe diagnostics-only override; never acceptable for release artifacts
+./packaging/build_nuitka.ps1 -AllowBrokenPdfParserBuild
 ```
 
-If the extension is missing in the executable, parser code must still run in pure-Python mode. PDF parsing remains required for packaged builds, so `packaging/build_nuitka.ps1` now fails fast when PyMuPDF is not importable in the build environment. On Windows, the script forces `--msvc=latest` so Nuitka uses the Visual Studio toolchain instead of the MinGW path that has been seen to fail while compiling PyMuPDF C sources.
+If the extension is missing in the executable, parser code must still run in pure-Python mode. PDF parsing remains required for packaged builds, so `packaging/build_nuitka.ps1` now fails fast when PyMuPDF is not importable in the build environment and validates `nuitka-build-report.xml` after the build to confirm the packaged artifact still references PyMuPDF backends. On Windows, the script forces `--msvc=latest` so Nuitka uses the Visual Studio toolchain instead of the MinGW path that has been seen to fail while compiling PyMuPDF C sources.
 
 ## Required CI checks for native artifacts
 
