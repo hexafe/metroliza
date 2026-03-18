@@ -7,6 +7,8 @@ Statistical rationale:
     - Reports practical effect magnitudes to complement p-values.
 
 Fallback behavior:
+    - This module currently uses pairwise tests plus multiplicity correction,
+      not dedicated post-hoc procedures such as Tukey/Games-Howell/Dunn.
     - Invalid/insufficient groups propagate ``None`` p-values/effects rather than
       raising, allowing export pipelines to keep deterministic table shape.
 """
@@ -118,15 +120,15 @@ def _adjust_pvalues(p_values: list[float | None], method: str) -> list[float | N
     m = len(indexed)
     sorted_pairs = sorted(indexed, key=lambda x: x[1])
 
-    normalized = method.strip().lower().replace('-', '_')
-    if normalized in {'holm', 'holm_bonferroni'}:
+    normalized = _normalize_correction_method(method)
+    if normalized == 'holm':
         running_max = 0.0
         for rank, (original_idx, p_value) in enumerate(sorted_pairs):
             factor = m - rank
             corrected = min(1.0, p_value * factor)
             running_max = max(running_max, corrected)
             adjusted[original_idx] = float(running_max)
-    elif normalized in {'bh', 'fdr_bh', 'benjamini_hochberg'}:
+    elif normalized == 'bh':
         running_min = 1.0
         for reverse_rank, (original_idx, p_value) in enumerate(reversed(sorted_pairs), start=1):
             rank = m - reverse_rank + 1
@@ -136,6 +138,36 @@ def _adjust_pvalues(p_values: list[float | None], method: str) -> list[float | N
     else:
         raise ValueError(f'Unsupported correction method: {method}')
     return adjusted
+
+
+def _normalize_correction_method(method: str) -> str:
+    normalized = method.strip().lower().replace('-', '_')
+    aliases = {
+        'holm_bonferroni': 'holm',
+        'benjamini_hochberg': 'bh',
+        'fdr_bh': 'bh',
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _format_correction_method(method: str) -> str:
+    normalized = _normalize_correction_method(method)
+    labels = {
+        'holm': 'Holm',
+        'bh': 'Benjamini-Hochberg',
+    }
+    if normalized not in labels:
+        raise ValueError(f'Unsupported correction method: {method}')
+    return labels[normalized]
+
+
+def _describe_pairwise_strategy(*, non_parametric: bool, equal_var: bool, correction_method: str) -> str:
+    correction_label = _format_correction_method(correction_method)
+    if non_parametric:
+        return f'pairwise Mann-Whitney + {correction_label}'
+    if equal_var:
+        return f'pairwise t-tests + {correction_label}'
+    return f'pairwise Welch t-tests + {correction_label}'
 
 
 def _pairwise_p_value(sample_a: np.ndarray, sample_b: np.ndarray, *, non_parametric: bool, equal_var: bool) -> tuple[str, float | None]:
@@ -191,7 +223,12 @@ def compute_metric_pairwise_stats(
     equal_var = variance_status == 'passed'
     normality_check_used = 'Shapiro-Wilk'
     variance_test_used = variance_assumption.get('test') or 'Brown-Forsythe'
-    post_hoc_strategy = 'Dunn' if is_non_parametric else 'Tukey'
+    correction_method_label = _format_correction_method(config.correction_method)
+    post_hoc_strategy = _describe_pairwise_strategy(
+        non_parametric=is_non_parametric,
+        equal_var=equal_var,
+        correction_method=config.correction_method,
+    )
 
     pairwise_effect_type, omnibus_effect_type = _effect_size_metadata(
         non_parametric=is_non_parametric,
@@ -259,6 +296,7 @@ def compute_metric_pairwise_stats(
             'variance_test_used': variance_test_used,
             'omnibus_test_used': selected_test,
             'post_hoc_strategy': post_hoc_strategy,
+            'correction_method': correction_method_label,
         }
         if effect_ci is not None:
             row['effect_size_ci'] = effect_ci
@@ -277,4 +315,10 @@ def compute_metric_pairwise_stats(
     return rows
 
 
-__all__ = ['ComparisonStatsConfig', 'compute_metric_pairwise_stats', '_adjust_pvalues']
+__all__ = [
+    'ComparisonStatsConfig',
+    'compute_metric_pairwise_stats',
+    '_adjust_pvalues',
+    '_describe_pairwise_strategy',
+    '_format_correction_method',
+]
