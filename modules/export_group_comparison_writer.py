@@ -27,14 +27,125 @@ from modules.group_stats_tests import select_group_stat_test
 
 SECTION_GAP = 2
 
-INTERPRETATION_NOTES = [
+BASE_INTERPRETATION_NOTES = [
     'Alpha threshold: 0.05 (results below alpha are treated as statistically significant).',
     'Raw p-value: probability of observing the data assuming no true group difference.',
     'Adjusted p-value: multiple-comparison corrected p-value (correction method shown in metadata and row labels) used for significance decisions.',
     'Significance bands: adjusted p >= 0.05 (green), 0.01 to < 0.05 (yellow), < 0.01 (red).',
-    'Effect size guide (|d|): < 0.2 small/negligible, 0.2 to 0.5 moderate, > 0.5 large.',
 ]
 
+
+EFFECT_TYPE_METADATA = {
+    'cohen_d': {
+        'label': "Cohen's d",
+        'absolute_symbol': '|d|',
+        'matrix_title': "Pairwise Cohen's d Matrix (|d|)",
+        'summary_label': 'Large effects (|d| >= 0.8)',
+        'summary_threshold': 0.8,
+        'bands': (0.2, 0.5),
+        'interpretation': "Pairwise effect guide (Cohen's d, absolute magnitude |d|): < 0.2 negligible, 0.2 to < 0.5 small, 0.5 to < 0.8 medium, >= 0.8 large.",
+    },
+    'cliffs_delta': {
+        'label': "Cliff's delta",
+        'absolute_symbol': '|δ|',
+        'matrix_title': "Pairwise Cliff's delta Matrix (|δ|)",
+        'summary_label': "Large effects (|δ| >= 0.474)",
+        'summary_threshold': 0.474,
+        'bands': (0.147, 0.33),
+        'interpretation': "Pairwise effect guide (Cliff's delta, absolute magnitude |δ|): < 0.147 negligible, 0.147 to < 0.33 small, 0.33 to < 0.474 medium, >= 0.474 large.",
+    },
+    'eta_squared': {
+        'label': 'eta squared',
+        'interpretation': 'Omnibus effect guide (eta squared, η²): proportion of variance explained by group membership for multi-group tests.',
+    },
+    'omega_squared': {
+        'label': 'omega squared',
+        'interpretation': 'Omnibus effect guide (omega squared, ω²): less biased estimate of variance explained by group membership for multi-group tests.',
+    },
+}
+
+
+
+
+def _ordered_effect_types(values):
+    ordered = []
+    for value in values:
+        normalized = str(value or '').strip()
+        if normalized and normalized not in ordered:
+            ordered.append(normalized)
+    return ordered
+
+
+def _effect_label(effect_type):
+    metadata = EFFECT_TYPE_METADATA.get(effect_type, {})
+    return metadata.get('label', effect_type.replace('_', ' ') if effect_type else 'effect size')
+
+
+def _describe_effect_types(effect_types):
+    if not effect_types:
+        return 'not reported'
+    labels = [_effect_label(effect_type) for effect_type in effect_types]
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f'{labels[0]} and {labels[1]}'
+    return ', '.join(labels[:-1]) + f', and {labels[-1]}'
+
+
+def _build_effect_reporting_metadata(pairwise_rows):
+    pairwise_types = _ordered_effect_types(row.get('pairwise_effect_type') or row.get('effect type') for row in pairwise_rows)
+    omnibus_types = _ordered_effect_types(row.get('omnibus_effect_type') or row.get('omnibus effect type') for row in pairwise_rows)
+
+    if len(pairwise_types) == 1 and pairwise_types[0] in EFFECT_TYPE_METADATA:
+        pairwise_meta = EFFECT_TYPE_METADATA[pairwise_types[0]]
+        matrix_title = pairwise_meta['matrix_title']
+        summary_label = pairwise_meta.get('summary_label')
+        summary_threshold = pairwise_meta.get('summary_threshold')
+        effect_bands = pairwise_meta.get('bands')
+    else:
+        matrix_title = 'Pairwise Effect Magnitude Matrix (absolute effect size)'
+        summary_label = None
+        summary_threshold = None
+        effect_bands = None
+
+    return {
+        'pairwise_effect_types': pairwise_types,
+        'omnibus_effect_types': omnibus_types,
+        'pairwise_matrix_title': matrix_title,
+        'pairwise_summary_label': summary_label,
+        'pairwise_summary_threshold': summary_threshold,
+        'pairwise_effect_bands': effect_bands,
+    }
+
+
+def _build_interpretation_notes(payload):
+    notes = list(BASE_INTERPRETATION_NOTES)
+    effect_metadata = payload.get('effect_reporting', {})
+    pairwise_types = effect_metadata.get('pairwise_effect_types', [])
+    omnibus_types = effect_metadata.get('omnibus_effect_types', [])
+
+    if not pairwise_types:
+        notes.append('Pairwise effect sizes: none reported.')
+    elif len(pairwise_types) == 1 and pairwise_types[0] in EFFECT_TYPE_METADATA:
+        notes.append(EFFECT_TYPE_METADATA[pairwise_types[0]]['interpretation'])
+    else:
+        notes.append(
+            'Pairwise effect sizes use mixed statistics ('
+            + _describe_effect_types(pairwise_types)
+            + '); the matrix shows absolute magnitudes, so interpret thresholds from the corresponding effect-type columns.'
+        )
+
+    if omnibus_types:
+        omnibus_notes = [
+            EFFECT_TYPE_METADATA[effect_type]['interpretation']
+            for effect_type in omnibus_types
+            if effect_type in EFFECT_TYPE_METADATA and 'interpretation' in EFFECT_TYPE_METADATA[effect_type]
+        ]
+        for note in omnibus_notes:
+            if note not in notes:
+                notes.append(note)
+
+    return notes
 
 def _build_pairwise_group_matrices(pairwise_df):
     """Build per-metric square matrices for adjusted p-values and effect sizes."""
@@ -207,7 +318,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
         correction_method = _format_correction_method('holm')
         return {
             'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0), ('Alpha', 0.05), ('Correction method', correction_method), ('Group sample sizes', 'No groups')],
-            'overall_summary': [('Pairwise tests', 0), ('Significant (p < 0.05)', 0), ('Large effects (|d| >= 0.8)', 0)],
+            'overall_summary': [('Pairwise tests', 0), ('Significant (p < 0.05)', 0)],
             'pairwise_rows': [],
             'overall_test_rows': [],
             'distribution_profile_rows': [],
@@ -215,6 +326,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
             'distribution_pairwise_rows': [],
             'significance_matrices': {},
             'effect_matrices': {},
+            'effect_reporting': _build_effect_reporting_metadata([]),
             'insights': ['No grouped measurement rows available for comparison.'],
         }
 
@@ -290,9 +402,11 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
                     'adjusted p-value': item.get('adjusted_p_value'),
                     'effect size': item.get('effect_size'),
                     'effect type': item.get('effect_type'),
+                    'pairwise_effect_type': item.get('effect_type'),
                     'effect size ci': item.get('effect_size_ci'),
                     'omnibus effect size': item.get('omnibus_effect_size'),
                     'omnibus effect type': item.get('omnibus_effect_type'),
+                    'omnibus_effect_type': item.get('omnibus_effect_type'),
                     'omnibus effect size ci': item.get('omnibus_effect_size_ci'),
                     'significant': item.get('significant'),
                     'n(A)': len(sample_left),
@@ -319,8 +433,17 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
     pairwise_df = pd.DataFrame(pairwise_rows)
     significance_matrices, effect_matrices = _build_pairwise_group_matrices(pairwise_df)
     significant_count = int(pairwise_df['significant'].sum()) if not pairwise_df.empty else 0
-    large_effect_series = pd.to_numeric(pairwise_df['effect size'], errors='coerce') if not pairwise_df.empty else pd.Series(dtype=float)
-    large_effect_count = int((large_effect_series.abs() >= 0.8).sum()) if not pairwise_df.empty else 0
+    effect_reporting = _build_effect_reporting_metadata(pairwise_rows)
+
+    overall_summary = [
+        ('Pairwise tests', len(pairwise_rows)),
+        ('Significant (p < 0.05)', significant_count),
+    ]
+    summary_threshold = effect_reporting.get('pairwise_summary_threshold')
+    summary_label = effect_reporting.get('pairwise_summary_label')
+    if summary_threshold is not None and summary_label and not pairwise_df.empty:
+        effect_series = pd.to_numeric(pairwise_df['effect size'], errors='coerce')
+        overall_summary.append((summary_label, int((effect_series.abs() >= summary_threshold).sum())))
 
     return {
         'metadata': [
@@ -331,11 +454,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
             ('Correction method', correction_method),
             ('Group sample sizes', _summarize_group_sample_sizes(working)),
         ],
-        'overall_summary': [
-            ('Pairwise tests', len(pairwise_rows)),
-            ('Significant (p < 0.05)', significant_count),
-            ('Large effects (|d| >= 0.8)', large_effect_count),
-        ],
+        'overall_summary': overall_summary,
         'pairwise_rows': pairwise_rows,
         'overall_test_rows': overall_test_rows,
         'distribution_profile_rows': [
@@ -345,6 +464,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
         'distribution_pairwise_rows': distribution_pairwise_rows,
         'significance_matrices': significance_matrices,
         'effect_matrices': effect_matrices,
+        'effect_reporting': effect_reporting,
         'insights': _build_insights(working, pairwise_df, overall_test_rows, distribution_difference_rows),
     }
 
@@ -388,7 +508,7 @@ def _sanitize_matrix_value(value):
     return value
 
 
-def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type):
+def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type, effect_bands=None):
     worksheet.write(row, 0, title)
     row += 1
     if matrix_df.empty:
@@ -432,31 +552,32 @@ def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type):
             {'type': 'cell', 'criteria': '<', 'value': 0.01},
         )
     else:
+        low_band, mid_band = effect_bands or (0.2, 0.5)
         worksheet.conditional_format(
             first_data_row,
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': '<', 'value': 0.2},
+            {'type': 'cell', 'criteria': '<', 'value': low_band},
         )
         worksheet.conditional_format(
             first_data_row,
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': 'between', 'minimum': 0.2, 'maximum': 0.5},
+            {'type': 'cell', 'criteria': 'between', 'minimum': low_band, 'maximum': mid_band},
         )
         worksheet.conditional_format(
             first_data_row,
             first_col,
             row - 1,
             last_col,
-            {'type': 'cell', 'criteria': '>', 'value': 0.5},
+            {'type': 'cell', 'criteria': '>', 'value': mid_band},
         )
     return row + SECTION_GAP
 
 
-def _write_matrix_collection(worksheet, row, title, matrices, *, matrix_type):
+def _write_matrix_collection(worksheet, row, title, matrices, *, matrix_type, effect_bands=None):
     worksheet.write(row, 0, title)
     row += 1
     if not matrices:
@@ -464,7 +585,7 @@ def _write_matrix_collection(worksheet, row, title, matrices, *, matrix_type):
         return row + SECTION_GAP + 1
 
     for metric in sorted(matrices):
-        row = _write_matrix(worksheet, row, f'Metric: {metric}', matrices[metric], matrix_type=matrix_type)
+        row = _write_matrix(worksheet, row, f'Metric: {metric}', matrices[metric], matrix_type=matrix_type, effect_bands=effect_bands)
     return row
 
 
@@ -478,7 +599,7 @@ def write_group_comparison_sheet(worksheet, payload):
     row = 0
     worksheet.write(row, 0, 'How to interpret these results')
     row += 1
-    for note in INTERPRETATION_NOTES:
+    for note in _build_interpretation_notes(payload):
         worksheet.write(row, 0, f'• {note}')
         row += 1
     row += SECTION_GAP
@@ -500,9 +621,10 @@ def write_group_comparison_sheet(worksheet, payload):
     row = _write_matrix_collection(
         worksheet,
         row,
-        'Effect Size Matrix (|d|)',
+        payload.get('effect_reporting', {}).get('pairwise_matrix_title', 'Pairwise Effect Magnitude Matrix (absolute effect size)'),
         payload.get('effect_matrices', {}),
         matrix_type='effect',
+        effect_bands=payload.get('effect_reporting', {}).get('pairwise_effect_bands'),
     )
 
     worksheet.write(row, 0, 'Insights')
