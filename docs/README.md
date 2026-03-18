@@ -12,6 +12,7 @@ This directory contains active operational and maintenance documentation.
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — **primary active execution tracker** for current RC2 refactor/stabilization sequencing.
 - `roadmaps/exporter_audit_2026_03.md` — focused exporter-path audit with remaining refactor recommendations and priority backlog.
 - `feature/group-analysis/README.md` — **active implementation-cycle workspace** for Group Analysis; start here for current planning/execution docs (`implementation_plan.md`, `todo.md`, `checklist.md`).
+- `feature/group-comparison-xlsx/` — active planning workspace for Group Comparison XLSX (`audit.md`, `implementation-plan.md`, `todo.md`, `checklist.md`).
 
 ## Historical and superseded planning context
 
