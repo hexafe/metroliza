@@ -127,10 +127,60 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('Pairwise Tables', titles)
         self.assertIn('distribution shape pairwise tables', titles)
         self.assertIn('Significance Matrix (adjusted p-values)', titles)
-        self.assertIn('Effect Size Matrix (|d|)', titles)
+        self.assertIn("Pairwise Cliff's delta Matrix (|δ|)", titles)
         self.assertIn('Insights', titles)
         self.assertEqual(len(worksheet.conditional_formats), 6)
         self.assertEqual(worksheet.frozen, (1, 0))
+
+    def test_non_parametric_two_group_labels_use_cliffs_delta_metadata(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 10,
+                'MEAS': [0.0, 0.0, 0.0, 10.0, 10.0, 1.0, 1.0, 1.0, 11.0, 11.0],
+                'GROUP': ['A'] * 5 + ['B'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn("Pairwise Cliff's delta Matrix (|δ|)", titles)
+        self.assertIn(('Large effects (|δ| >= 0.474)', 1), payload['overall_summary'])
+        self.assertIn('pairwise_effect_type', payload['pairwise_rows'][0])
+        self.assertEqual(payload['pairwise_rows'][0]['pairwise_effect_type'], 'cliffs_delta')
+        self.assertTrue(any("Cliff's delta" in value for value in titles if value.startswith('• ')))
+
+    def test_multi_group_labels_include_pairwise_and_omnibus_effect_metadata(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.05, -0.05,
+                    0.4, 0.5, 0.45, 0.55, 0.5,
+                    2.0, 2.1, 1.9, 2.05, 1.95,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn("Pairwise Cohen's d Matrix (|d|)", titles)
+        self.assertIn(('Large effects (|d| >= 0.8)', 3), payload['overall_summary'])
+        self.assertEqual(payload['effect_reporting']['pairwise_effect_types'], ['cohen_d'])
+        self.assertEqual(payload['effect_reporting']['omnibus_effect_types'], ['eta_squared'])
+        self.assertIn('pairwise_effect_type', payload['pairwise_rows'][0])
+        self.assertIn('omnibus_effect_type', payload['pairwise_rows'][0])
+        note_lines = [value for _, _, value in worksheet.writes if isinstance(value, str) and value.startswith('• ')]
+        self.assertTrue(any("Cohen's d" in value for value in note_lines))
+        self.assertTrue(any('eta squared' in value for value in note_lines))
 
     def test_writer_registers_conditional_format_thresholds(self):
         matrix = pd.DataFrame([[float('nan'), 0.03], [0.03, float('nan')]], index=['A', 'B'], columns=['A', 'B'])
@@ -144,6 +194,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             'distribution_pairwise_rows': [],
             'significance_matrices': {'M1': matrix},
             'effect_matrices': {'M1': matrix},
+            'effect_reporting': {'pairwise_effect_bands': (0.2, 0.5)},
             'insights': [],
         }
         worksheet = FakeWorksheet()
@@ -491,7 +542,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             'Pairwise Tables',
             'distribution shape pairwise tables',
             'Significance Matrix (adjusted p-values)',
-            'Effect Size Matrix (|d|)',
+            "Pairwise Cliff's delta Matrix (|δ|)",
             'Insights',
         ]:
             self.assertIn(title, shared_strings)
