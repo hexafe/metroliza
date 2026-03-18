@@ -4,6 +4,7 @@ import unittest
 from modules.export_chart_writer import (
     CHART_HEIGHT_CM,
     CHART_WIDTH_CM,
+    DEFAULT_CHART_ANCHOR_ROW,
     build_horizontal_limit_line_specs,
     build_measurement_chart_format_policy,
     build_measurement_chart_range_specs,
@@ -18,6 +19,7 @@ class DummyChart:
         self.series = []
         self.title = None
         self.size = None
+        self.legend = None
 
     def add_series(self, spec):
         self.series.append(spec)
@@ -28,8 +30,8 @@ class DummyChart:
     def set_y_axis(self, _):
         return None
 
-    def set_legend(self, _):
-        return None
+    def set_legend(self, legend):
+        self.legend = legend
 
     def set_size(self, size):
         self.size = size
@@ -57,8 +59,8 @@ class DummyWorksheet:
     def set_column(self, first_col, last_col, width=None, cell_format=None, options=None):
         self.columns.append((first_col, last_col, width, cell_format, options))
 
-    def insert_chart(self, row, col, chart):
-        self.insert_calls.append((row, col, chart))
+    def insert_chart(self, row, col, chart, options=None):
+        self.insert_calls.append((row, col, chart, options or {}))
 
 
 class TestExportChartWriter(unittest.TestCase):
@@ -133,7 +135,8 @@ class TestExportChartWriter(unittest.TestCase):
 
         self.assertEqual(workbook.spec['type'], 'scatter')
         self.assertEqual(len(workbook.chart.series), 3)
-        self.assertEqual(worksheet.insert_calls[0][0:2], (7, 3))
+        self.assertEqual(worksheet.insert_calls[0][0:2], (12, 3))
+        self.assertEqual(worksheet.insert_calls[0][3], {'x_offset': 6, 'y_offset': 2})
         self.assertEqual(workbook.chart.series[1]['categories'], '=Ref!$B22:B26')
         self.assertEqual(workbook.chart.series[1]['values'], '=Ref!$D22:D26')
         self.assertEqual(workbook.chart.series[2]['categories'], '=Ref!$B22:B26')
@@ -249,6 +252,19 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertGreater(uncached_elapsed, 0.0)
         self.assertGreater(cached_elapsed, 0.0)
         self.assertEqual(len(cache.get('range_specs', {})), 1)
+
+    def test_chart_format_policy_uses_default_anchor_and_hides_single_series_legend(self):
+        policy = build_measurement_chart_format_policy('H')
+
+        self.assertEqual(policy['anchor']['row'], DEFAULT_CHART_ANCHOR_ROW)
+        self.assertEqual(policy['legend'], {'position': 'none'})
+
+    def test_chart_format_policy_enables_legend_for_multiple_series(self):
+        policy = build_measurement_chart_format_policy('H', chart_anchor_row=15, legend_series_count=3)
+
+        self.assertEqual(policy['anchor']['row'], 15)
+        self.assertEqual(policy['legend'], {'position': 'bottom'})
+
 
 if __name__ == '__main__':
     unittest.main()
