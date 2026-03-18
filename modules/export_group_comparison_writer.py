@@ -597,6 +597,138 @@ def _set_table_column_widths(worksheet, headers):
     for col, header in enumerate(headers):
         worksheet.set_column(col, col, _column_width_for_header(header))
 
+
+def _get_workbook(worksheet):
+    return getattr(worksheet, 'book', None) or getattr(worksheet, 'workbook', None)
+
+def _safe_chart_series_name(name):
+    text = str(name or '').strip()
+    return text[:120] if text else 'Series'
+
+
+def _build_group_comparison_chart_payload(payload):
+    pairwise_rows = payload.get('pairwise_rows', []) or []
+    if not pairwise_rows:
+        return {}
+
+    pairwise_df = pd.DataFrame(pairwise_rows).copy()
+    if pairwise_df.empty:
+        return {}
+
+    pairwise_df['adjusted p-value'] = pd.to_numeric(pairwise_df.get('adjusted p-value'), errors='coerce')
+    pairwise_df['effect size'] = pd.to_numeric(pairwise_df.get('effect size'), errors='coerce')
+    pairwise_df['abs_effect_size'] = pairwise_df['effect size'].abs()
+    pairwise_df['pair_label'] = pairwise_df['Group A'].astype(str) + ' vs ' + pairwise_df['Group B'].astype(str)
+    pairwise_df['label'] = pairwise_df['Metric'].astype(str) + ' | ' + pairwise_df['pair_label']
+
+    ranked_df = pairwise_df.dropna(subset=['abs_effect_size']).sort_values(
+        ['abs_effect_size', 'adjusted p-value', 'Metric', 'Group A', 'Group B'],
+        ascending=[False, True, True, True, True],
+        kind='mergesort',
+    ).head(8).copy()
+
+    scatter_df = pairwise_df.dropna(subset=['abs_effect_size', 'adjusted p-value']).sort_values(
+        ['Metric', 'adjusted p-value', 'Group A', 'Group B'],
+        kind='mergesort',
+    ).copy()
+    if not scatter_df.empty:
+        clipped = scatter_df['adjusted p-value'].clip(lower=1e-12)
+        scatter_df['neg_log10_adj_p'] = -np.log10(clipped)
+
+    return {
+        'ranked_effects': ranked_df.to_dict('records'),
+        'effect_vs_p': scatter_df.to_dict('records'),
+    }
+
+
+def _render_group_comparison_charts(worksheet, start_row, payload):
+    if not hasattr(worksheet, 'insert_chart'):
+        return start_row
+    workbook = _get_workbook(worksheet)
+    if workbook is None or not hasattr(workbook, 'add_chart'):
+        return start_row
+
+    chart_payload = _build_group_comparison_chart_payload(payload)
+    ranked_rows = chart_payload.get('ranked_effects') or []
+    scatter_rows = chart_payload.get('effect_vs_p') or []
+    if not ranked_rows and not scatter_rows:
+        return start_row
+
+    row = start_row
+    worksheet.write(row, 0, 'Comparison Charts')
+    row += 1
+
+    next_chart_row = row
+    chart_height_rows = 18
+
+    if ranked_rows:
+        worksheet.write(row, 0, 'Ranked Pairwise Effects')
+        data_header_row = row + 1
+        headers = ['Label', 'Absolute effect size']
+        for col, header in enumerate(headers):
+            worksheet.write(data_header_row, col, header)
+        for offset, entry in enumerate(ranked_rows, start=1):
+            worksheet.write(data_header_row + offset, 0, entry['label'])
+            worksheet.write(data_header_row + offset, 1, entry['abs_effect_size'])
+
+        ranked_chart = workbook.add_chart({'type': 'bar'})
+        ranked_chart.add_series({
+            'name': 'Absolute effect size',
+            'categories': [worksheet.name, data_header_row + 1, 0, data_header_row + len(ranked_rows), 0],
+            'values': [worksheet.name, data_header_row + 1, 1, data_header_row + len(ranked_rows), 1],
+            'fill': {'color': '#4F81BD'},
+            'border': {'none': True},
+        })
+        ranked_chart.set_title({'name': 'Ranked pairwise effects'})
+        ranked_chart.set_legend({'position': 'none'})
+        ranked_chart.set_size({'width': 520, 'height': 300})
+        ranked_chart.set_x_axis({'name': 'Absolute effect size', 'major_gridlines': {'visible': False}})
+        ranked_chart.set_y_axis({'reverse': True})
+        worksheet.insert_chart(row, 3, ranked_chart, {'x_offset': 8, 'y_offset': 2})
+        next_chart_row = max(next_chart_row, row + chart_height_rows)
+
+    if scatter_rows:
+        scatter_title_row = row if not ranked_rows else row
+        scatter_col = 11 if ranked_rows else 0
+        worksheet.write(scatter_title_row, scatter_col, 'Effect vs Adjusted p')
+        data_header_row = scatter_title_row + 1
+        headers = ['Metric', 'Pair', '|effect|', '-log10(adj p)']
+        for col, header in enumerate(headers):
+            worksheet.write(data_header_row, scatter_col + col, header)
+
+        metric_positions = {}
+        for entry in scatter_rows:
+            metric_positions.setdefault(entry['Metric'], []).append(entry)
+
+        for index, (metric, entries) in enumerate(metric_positions.items()):
+            base_col = scatter_col + index * 4
+            # Keep metric data contiguous by series while chart remains compact.
+            for offset, entry in enumerate(entries, start=1):
+                worksheet.write(data_header_row + offset, base_col + 0, metric)
+                worksheet.write(data_header_row + offset, base_col + 1, entry['pair_label'])
+                worksheet.write(data_header_row + offset, base_col + 2, entry['abs_effect_size'])
+                worksheet.write(data_header_row + offset, base_col + 3, entry['neg_log10_adj_p'])
+
+        scatter_chart = workbook.add_chart({'type': 'scatter', 'subtype': 'straight_with_markers'})
+        for index, (metric, entries) in enumerate(metric_positions.items()):
+            base_col = scatter_col + index * 4
+            scatter_chart.add_series({
+                'name': _safe_chart_series_name(metric),
+                'categories': [worksheet.name, data_header_row + 1, base_col + 2, data_header_row + len(entries), base_col + 2],
+                'values': [worksheet.name, data_header_row + 1, base_col + 3, data_header_row + len(entries), base_col + 3],
+                'marker': {'type': 'circle', 'size': 6},
+                'line': {'none': True},
+            })
+        scatter_chart.set_title({'name': 'Effect vs adjusted p'})
+        scatter_chart.set_legend({'position': 'bottom'} if len(metric_positions) > 1 else {'position': 'none'})
+        scatter_chart.set_size({'width': 520, 'height': 300})
+        scatter_chart.set_x_axis({'name': '|effect size|', 'major_gridlines': {'visible': False}})
+        scatter_chart.set_y_axis({'name': '-log10(adj p)'})
+        worksheet.insert_chart(scatter_title_row, scatter_col + 5, scatter_chart, {'x_offset': 8, 'y_offset': 2})
+        next_chart_row = max(next_chart_row, scatter_title_row + chart_height_rows)
+
+    return next_chart_row + SECTION_GAP
+
 def _write_kv_section(worksheet, row, title, items):
     worksheet.write(row, 0, title)
     row += 1
@@ -739,6 +871,7 @@ def write_group_comparison_sheet(worksheet, payload):
 
     pairwise_rows = _build_pairwise_display_rows(payload.get('pairwise_rows', []))
     row, pairwise_header_row = _write_table(worksheet, row, 'Main Pairwise Comparison Table', pairwise_rows)
+    row = _render_group_comparison_charts(worksheet, row, payload)
 
     worksheet.write(row, 0, 'Shape-Difference Section')
     row += 1

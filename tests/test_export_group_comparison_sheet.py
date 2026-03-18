@@ -13,12 +13,52 @@ from modules.export_group_comparison_writer import (
 )
 
 
+class FakeChart:
+    def __init__(self, spec):
+        self.spec = spec
+        self.series = []
+        self.legend = None
+        self.size = None
+        self.title = None
+
+    def add_series(self, spec):
+        self.series.append(spec)
+
+    def set_title(self, title):
+        self.title = title
+
+    def set_legend(self, legend):
+        self.legend = legend
+
+    def set_size(self, size):
+        self.size = size
+
+    def set_x_axis(self, axis):
+        self.x_axis = axis
+
+    def set_y_axis(self, axis):
+        self.y_axis = axis
+
+
+class FakeWorkbook:
+    def __init__(self):
+        self.charts = []
+
+    def add_chart(self, spec):
+        chart = FakeChart(spec)
+        self.charts.append(chart)
+        return chart
+
+
 class FakeWorksheet:
     def __init__(self):
         self.writes = []
         self.conditional_formats = []
         self.columns = []
         self.frozen = None
+        self.name = 'Group Comparison'
+        self.book = FakeWorkbook()
+        self.inserted_charts = []
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
@@ -31,6 +71,9 @@ class FakeWorksheet:
 
     def freeze_panes(self, row, col):
         self.frozen = (row, col)
+
+    def insert_chart(self, row, col, chart, options=None):
+        self.inserted_charts.append((row, col, chart, options or {}))
 
 
 class TestExportGroupComparisonSheet(unittest.TestCase):
@@ -640,6 +683,33 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         self.assertIn('distribution shape:', insights_text)
         self.assertNotIn('no differences', insights_text.lower())
+
+
+    def test_writer_renders_group_comparison_chart_section_with_dynamic_anchor(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 6 + ['CYL - Y'] * 6,
+                'MEAS': [10.0, 10.2, 9.8, 9.9, 10.4, 10.6, 5.0, 5.3, 5.4, 5.8, 6.0, 6.1],
+                'GROUP': ['A', 'A', 'B', 'B', 'C', 'C'] * 2,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn('Comparison Charts', titles)
+        self.assertIn('Ranked Pairwise Effects', titles)
+        self.assertIn('Effect vs Adjusted p', titles)
+        self.assertEqual(len(worksheet.inserted_charts), 2)
+        ranked_anchor = worksheet.inserted_charts[0][0]
+        scatter_anchor = worksheet.inserted_charts[1][0]
+        shape_section_row = next(row for row, col, value in worksheet.writes if value == 'Shape-Difference Section')
+        self.assertLess(ranked_anchor, shape_section_row)
+        self.assertLess(scatter_anchor, shape_section_row)
+        self.assertEqual(worksheet.inserted_charts[1][2].legend, {'position': 'bottom'})
 
 
 if __name__ == '__main__':

@@ -90,5 +90,17 @@ class TestChartRenderService(unittest.TestCase):
         self.assertTrue(can_render)
 
 
+    def test_deterministic_downsample_preserves_local_extrema_for_trends(self):
+        frame = pd.DataFrame({'MEAS': [0, 1, 0, 10, 0, -8, 0, 1, 0]})
+
+        sampled = deterministic_downsample_frame(frame, 5, preserve_extrema=True)
+
+        self.assertEqual(sampled['MEAS'].tolist()[0], 0)
+        self.assertEqual(sampled['MEAS'].tolist()[-1], 0)
+        self.assertIn(10, sampled['MEAS'].tolist())
+        self.assertIn(-8, sampled['MEAS'].tolist())
+        self.assertEqual(len(sampled), 5)
+
+
 if __name__ == '__main__':
     unittest.main()
