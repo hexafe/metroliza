@@ -15,7 +15,8 @@ import os
 from pathlib import Path
 from typing import Callable, Type
 
-from modules.cmm_report_parser import CMMReportParser
+import importlib
+import sys
 from modules.parser_plugin_contracts import (
     BaseReportParserPlugin,
     PluginManifest,
@@ -26,6 +27,23 @@ from modules.parser_plugin_contracts import (
 
 
 ParserType = Type[BaseReportParserPlugin]
+
+
+def _load_builtin_cmm_report_parser_class():
+    module_name = "modules.cmm_report_parser"
+    module = sys.modules.get(module_name)
+    parser_cls = getattr(module, "CMMReportParser", None) if module is not None else None
+    if parser_cls is not None and getattr(parser_cls, "__module__", "") == module_name:
+        return parser_cls
+
+    if module is not None:
+        sys.modules.pop(module_name, None)
+
+    module = importlib.import_module(module_name)
+    return module.CMMReportParser
+
+
+CMMReportParser = _load_builtin_cmm_report_parser_class()
 DetectorType = Callable[[str], ProbeResult]
 
 

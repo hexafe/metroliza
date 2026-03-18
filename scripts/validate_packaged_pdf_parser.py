@@ -8,10 +8,15 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
-from modules.pdf_backend import PDF_BACKEND_CANDIDATES, resolve_pdf_backend_module_name
+
+def _load_pdf_backend_helpers():
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+
+    from modules.pdf_backend import PDF_BACKEND_CANDIDATES, resolve_pdf_backend_module_name
+
+    return PDF_BACKEND_CANDIDATES, resolve_pdf_backend_module_name
 
 
 class PackagingValidationError(RuntimeError):
@@ -19,6 +24,7 @@ class PackagingValidationError(RuntimeError):
 
 
 def require_pdf_backend_available(*, allow_broken: bool = False) -> str:
+    _, resolve_pdf_backend_module_name = _load_pdf_backend_helpers()
     backend_name = resolve_pdf_backend_module_name()
     if backend_name is not None:
         return backend_name
@@ -45,6 +51,7 @@ def validate_nuitka_report_has_pdf_backend(report_path: str | Path) -> tuple[str
 
     root = ET.parse(report).getroot()
     haystack = "\n".join(_flatten_report_strings(root))
+    PDF_BACKEND_CANDIDATES, _ = _load_pdf_backend_helpers()
     included = tuple(name for name in PDF_BACKEND_CANDIDATES if name in haystack)
     if not included:
         raise PackagingValidationError(

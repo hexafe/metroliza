@@ -15,4 +15,30 @@ Guardrail markers (source-inspection compatibility):
 - CustomLogger(exception, reraise=False)
 """
 
-from modules.cmm_report_parser import *  # noqa: F401,F403
+from __future__ import annotations
+
+import importlib
+import sys
+
+
+def _load_canonical_module():
+    module_name = "modules.cmm_report_parser"
+    module = sys.modules.get(module_name)
+    parser_cls = getattr(module, "CMMReportParser", None) if module is not None else None
+    if parser_cls is not None and getattr(parser_cls, "__module__", "") == module_name:
+        return module
+
+    if module is not None:
+        sys.modules.pop(module_name, None)
+
+    return importlib.import_module(module_name)
+
+
+_canonical = _load_canonical_module()
+
+for _name in dir(_canonical):
+    if not _name.startswith("_"):
+        globals()[_name] = getattr(_canonical, _name)
+
+
+__all__ = [name for name in globals() if not name.startswith("_")]

@@ -17,19 +17,35 @@ def backend_required_error_message() -> str:
     )
 
 
+def _import_candidate_backend(module_name: str):
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:
+        return None
+
+    if callable(getattr(module, "open", None)):
+        return module
+
+    if module_name in importlib.sys.modules:
+        importlib.sys.modules.pop(module_name, None)
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            return None
+        if callable(getattr(module, "open", None)):
+            return module
+
+    return None
+
+
 def resolve_pdf_backend_module_name() -> str | None:
     """Return the preferred import name for an available PyMuPDF backend."""
     for module_name in PDF_BACKEND_CANDIDATES:
         if importlib.util.find_spec(module_name) is None:
             continue
 
-        try:
-            module = importlib.import_module(module_name)
-        except Exception:
-            continue
-
-        open_method = getattr(module, "open", None)
-        if callable(open_method):
+        module = _import_candidate_backend(module_name)
+        if module is not None:
             return module_name
 
     return None
@@ -41,10 +57,7 @@ def load_pdf_backend():
     if backend_name is None:
         return None
 
-    try:
-        return importlib.import_module(backend_name)
-    except Exception:
-        return None
+    return _import_candidate_backend(backend_name)
 
 
 def require_pdf_backend():
