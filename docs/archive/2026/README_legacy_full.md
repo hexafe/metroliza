@@ -177,15 +177,7 @@ If you use local release scripts, update paths as follows:
 If you package with Nuitka instead of PyInstaller, prefer:
 
 ```powershell
-python -m nuitka metroliza.py `
-  --onefile `
-  --windows-console-mode=disable `
-  --enable-plugin=pyqt6 `
-  --windows-icon-from-ico=packaging/metroliza_icon2.ico `
-  --output-filename=metroliza.exe `
-  --assume-yes-for-downloads `
-  --remove-output `
-  --jobs=%NUMBER_OF_PROCESSORS%
+./packaging/build_nuitka.ps1
 ```
 
 ### What to install/check on your machine (based on your build log)
@@ -201,7 +193,7 @@ python -m nuitka metroliza.py `
 - Use `--report=nuitka-build-report.xml` to inspect unexpectedly included packages and prune imports.
 - For **faster iteration**, use standalone builds while developing (`--standalone` + no `--onefile`), then switch to `--onefile` for release.
 - For **smaller onefile outputs**, keep compression enabled (default) and avoid importing heavy libraries in top-level module scope when possible.
-- For large scientific stacks (`scipy`, `pymupdf`), expect long first full rebuilds; subsequent builds improve if Python/Nuitka/toolchain versions remain stable (better cache hits).
+- For large scientific stacks (`scipy`, `pymupdf`), expect long first full rebuilds; subsequent builds improve if Python/Nuitka/toolchain versions remain stable (better cache hits). For `pymupdf` on Windows, prefer the helper script because it forces `--msvc=latest`, avoiding the MinGW/SCons toolchain path that can fail while compiling its generated C sources.
 
 ## Troubleshooting
 
