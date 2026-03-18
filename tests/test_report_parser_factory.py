@@ -1,10 +1,8 @@
 import importlib
 import importlib.machinery
-import importlib.util
 import os
 import sys
 import types
-from pathlib import Path
 
 
 custom_logger_stub = types.ModuleType("modules.custom_logger")
@@ -28,17 +26,7 @@ base_module = importlib.import_module("modules.base_report_parser")
 contracts_module = importlib.import_module("modules.parser_plugin_contracts")
 
 
-def _load_real_cmm_report_parser_class():
-    module_path = Path("modules/CMMReportParser.py")
-    spec = importlib.util.spec_from_file_location("_real_cmm_report_parser_for_factory_tests", module_path)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module.CMMReportParser
-
-
-CMMReportParser = _load_real_cmm_report_parser_class()
+CMMReportParser = importlib.import_module("modules.cmm_report_parser").CMMReportParser
 BaseReportParser = base_module.BaseReportParser
 BaseReportParserPlugin = contracts_module.BaseReportParserPlugin
 PluginManifest = contracts_module.PluginManifest

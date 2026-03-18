@@ -3,7 +3,7 @@
 ## Scope
 - Audit packaged PDF parsing as a release-blocking core product capability.
 - Focus on Nuitka and PyInstaller preservation of PyMuPDF and parser runtime dependencies.
-- Cover parser refactor effects in `modules/cmm_report_parser.py`, `modules/CMMReportParser.py`, and `modules/report_parser_factory.py`.
+- Cover parser refactor effects in `modules/cmm_report_parser.py` and `modules/report_parser_factory.py`.
 - Cover CI/package smoke evidence for real PDF parsing, not startup-only checks.
 
 ## Owner / role
@@ -29,7 +29,7 @@ Packaged PDF parsing is mandatory. Any build pipeline that can emit a packaged a
 ## Root-cause summary
 ### Direct root causes
 1. Parser backend loading used alias discovery through `importlib` (`pymupdf` vs `fitz`) inside `modules/cmm_report_parser.py`, which weakens static dependency discovery for bundlers.
-2. `modules/CMMReportParser.py` used `importlib.util.spec_from_file_location(...)` to load the canonical parser module dynamically, creating an additional non-standard import path after the refactor.
+2. The legacy `modules/CMMReportParser.py` shim used `importlib.util.spec_from_file_location(...)` to load the canonical parser module dynamically, creating an additional non-standard import path before shim removal.
 3. `packaging/metroliza_onefile.spec` preserved the optional native parser extension but did not explicitly preserve PyMuPDF hidden imports, package data, or dynamic libraries.
 4. `packaging/build_nuitka.ps1` gated only on build-environment importability and did not validate the built artifact/report to ensure PyMuPDF actually made it into the package.
 
