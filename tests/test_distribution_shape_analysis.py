@@ -31,6 +31,8 @@ class TestDistributionShapeAnalysis(unittest.TestCase):
         pair = result['pairwise_rows'][0]
 
         self.assertGreater(pair['distance metric'], 0.1)
+        self.assertEqual(pair['distance metric'], pair['Wasserstein distance'])
+        self.assertIn(pair['Practical severity'], {'Low', 'Moderate', 'High'})
         self.assertIn(pair['verdict'], {'difference', 'caution'})
 
     def test_unreliable_fit_does_not_overclaim(self):

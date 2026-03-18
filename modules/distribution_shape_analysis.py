@@ -116,6 +116,7 @@ def compute_distribution_difference(metric, grouped_values, *, alpha=0.05, corre
                 'distribution test used': test_used,
                 'raw p-value': p_value,
                 'adjusted p-value': None,
+                'distance metric': distance,
                 'Wasserstein distance': distance,
                 'Practical severity': _wasserstein_severity_label(distance) if distance is not None else 'Not reported',
                 'verdict': verdict,
