@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: detect-private-key
+      - id: detect-aws-credentials
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.10
+    hooks:
+      - id: ruff
+
+  - repo: local
+    hooks:
+      - id: detect-basic-credential-patterns
+        name: detect-basic-credential-patterns
+        language: pygrep
+        entry: '(client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*\S+'
+        files: '\.(py|json|ya?ml|toml|ini|env)$'
+        exclude: ^config/google/credentials\.example\.json$

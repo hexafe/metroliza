@@ -1,0 +1,328 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+    inputs:
+      run_packaging_smoke:
+        description: "Set to 1 to run manual packaging smoke build"
+        required: false
+        default: "0"
+      run_google_conversion_smoke:
+        description: "Set to 1 to run release-only Google conversion smoke check"
+        required: false
+        default: "0"
+
+jobs:
+  static-checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Compile check
+        run: python -m compileall -x '^\./\.git/' .
+
+      - name: Ruff lint (full repository)
+        run: ruff check .
+
+      - name: Release metadata consistency
+        run: python scripts/sync_release_metadata.py --check
+
+      - name: Secret scan (diff + repository)
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python - <<'PYCODE'
+          import os
+          import pathlib
+          import re
+          import subprocess
+          import sys
+
+          ALLOWLIST = {
+              'config/google/credentials.example.json',
+          }
+          BANNED_NAME_PATTERNS = [
+              re.compile(r'(^|/)credentials\.json$', re.IGNORECASE),
+              re.compile(r'(^|/)token\.json$', re.IGNORECASE),
+              re.compile(r'(^|/).+\.credentials\.json$', re.IGNORECASE),
+              re.compile(r'(^|/).+\.token\.json$', re.IGNORECASE),
+          ]
+
+          SUSPICIOUS_CONTENT_PATTERNS = [
+              re.compile(r'"(client_secret|api_key|access_token|refresh_token)"\s*:\s*"[^"\n]+"'),
+              re.compile(r'(?i)AIza[0-9A-Za-z\-_]{20,}'),
+          ]
+
+          def check_path(path: str) -> list[str]:
+              if path in ALLOWLIST:
+                  return []
+              return [
+                  f'{path}: filename matches blocked secret pattern'
+                  for pattern in BANNED_NAME_PATTERNS
+                  if pattern.search(path)
+              ]
+
+          errors: list[str] = []
+
+          for p in pathlib.Path('.').rglob('*.json'):
+              rel = p.as_posix()
+              if rel.startswith('.git/'):
+                  continue
+              errors.extend(check_path(rel))
+
+              if rel in ALLOWLIST:
+                  continue
+
+              text = p.read_text(encoding='utf-8', errors='ignore')
+              for pattern in SUSPICIOUS_CONTENT_PATTERNS:
+                  if pattern.search(text):
+                      errors.append(f'{rel}: content matches suspicious secret pattern')
+
+          base_ref = os.getenv('BASE_REF', '')
+          diff_targets: set[str] = set()
+          if base_ref:
+              result = subprocess.run(
+                  ['git', 'diff', '--name-only', f'{base_ref}..HEAD'],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+              if result.returncode == 0:
+                  diff_targets = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+          for rel in sorted(diff_targets):
+              if rel in ALLOWLIST:
+                  continue
+              if pathlib.Path(rel).suffix.lower() != '.json':
+                  continue
+              errors.extend(check_path(rel))
+
+          if errors:
+              print('Secret scan failed:')
+              for error in sorted(set(errors)):
+                  print(f' - {error}')
+              sys.exit(1)
+
+          print('Secret scan passed.')
+          PYCODE
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    env:
+      COVERAGE_WARNING_THRESHOLD: '80'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run test suite with coverage (pytest)
+        run: |
+          PYTHONPATH=. python -m pytest tests -q \
+            --cov=. \
+            --cov-report=term \
+            --cov-report=xml:coverage.xml
+
+      - name: Report coverage threshold status (non-blocking)
+        run: |
+          python - <<'PYCODE'
+          import os
+          import pathlib
+          import sys
+          import xml.etree.ElementTree as ET
+
+          threshold = float(os.environ.get('COVERAGE_WARNING_THRESHOLD', '80'))
+          coverage_path = pathlib.Path('coverage.xml')
+          if not coverage_path.exists():
+              print('::warning title=Coverage threshold status unavailable::coverage.xml was not generated; skipping threshold warning check.')
+              sys.exit(0)
+
+          root = ET.parse(coverage_path).getroot()
+          line_rate = root.attrib.get('line-rate')
+          if line_rate is None:
+              print('::warning title=Coverage threshold status unavailable::line-rate was not found in coverage.xml; skipping threshold warning check.')
+              sys.exit(0)
+
+          coverage_percent = float(line_rate) * 100.0
+          summary = (
+              '### Coverage threshold status (non-blocking)\n\n'
+              f'- Observed line coverage: `{coverage_percent:.2f}%`\n'
+              f'- Warning threshold: `{threshold:.2f}%`\n\n'
+          )
+
+          if coverage_percent < threshold:
+              print(
+                  f'::warning title=Coverage below warning threshold::Observed line coverage {coverage_percent:.2f}% is below warning threshold {threshold:.2f}%. This does not fail CI in the current staged policy.'
+              )
+              summary += '- Result: ⚠️ below warning threshold (informational only; CI remains non-blocking).\n'
+          else:
+              summary += '- Result: ✅ meets or exceeds warning threshold.\n'
+
+          github_step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if github_step_summary:
+              with open(github_step_summary, 'a', encoding='utf-8') as summary_file:
+                  summary_file.write(summary)
+
+          print(summary)
+          PYCODE
+
+      - name: Upload unit test coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-coverage
+          path: |
+            coverage.xml
+
+
+  native-artifacts:
+    name: Native wheel build and smoke checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-build.txt
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-build.txt
+
+      - name: Build native wheel
+        run: |
+          python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release --out dist/native
+
+      - name: Install built native wheel
+        run: |
+          pip install dist/native/*.whl
+
+      - name: Native backend smoke checks
+        run: |
+          METROLIZA_CMM_PARSER_BACKEND=python PYTHONPATH=. python -c "from modules.cmm_native_parser import parse_blocks_with_backend; assert parse_blocks_with_backend([]) == []"
+          METROLIZA_CMM_PARSER_BACKEND=native PYTHONPATH=. python -c "from modules.cmm_native_parser import native_backend_available; assert native_backend_available()"
+
+      - name: Parser parity tests (native enabled)
+        run: PYTHONPATH=. python -m pytest tests/test_cmm_parser_parity.py -q
+
+  packaging-smoke:
+    name: Packaging smoke (manual/opt-in)
+    runs-on: ubuntu-latest
+    needs: [static-checks, unit-tests, native-artifacts]
+    # Intentionally opt-in/release-only: packaging smoke build signal is manual and non-blocking for regular PR CI.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_packaging_smoke == '1'
+    env:
+      METROLIZA_RUN_PACKAGING_SMOKE: ${{ inputs.run_packaging_smoke }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-build.txt
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-build.txt
+
+      - name: Validate packaging smoke gate env flag
+        run: test "${METROLIZA_RUN_PACKAGING_SMOKE}" = "1"
+
+      - name: Build PyInstaller onefile artifact
+        run: pyinstaller packaging/metroliza_onefile.spec
+
+      - name: Verify packaged artifact output exists
+        run: test -f dist/metroliza
+
+      - name: Smoke launch packaged artifact (non-interactive init-and-exit)
+        env:
+          METROLIZA_STARTUP_SMOKE: '1'
+          METROLIZA_CONSOLE_LOG_LEVEL: INFO
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          mkdir -p smoke-artifacts
+          timeout 60s ./dist/metroliza > smoke-artifacts/packaging-smoke-stdout.log 2> smoke-artifacts/packaging-smoke-stderr.log
+
+      - name: Collect startup logs
+        if: always()
+        run: |
+          mkdir -p smoke-artifacts
+          cp -f metroliza.log smoke-artifacts/metroliza.log 2>/dev/null || true
+          cp -f "$HOME/.metroliza/metroliza.log" smoke-artifacts/metroliza-user.log 2>/dev/null || true
+
+      - name: Upload packaging smoke artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaging-smoke-artifacts
+          path: smoke-artifacts
+          if-no-files-found: warn
+
+  google-conversion-smoke:
+    name: Google conversion smoke (manual/opt-in)
+    runs-on: ubuntu-latest
+    needs: [static-checks, unit-tests, native-artifacts]
+    # Intentionally opt-in/release-only: this smoke check is not mandatory for regular PR CI runs.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_google_conversion_smoke == '1'
+    env:
+      METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE: ${{ inputs.run_google_conversion_smoke }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Validate smoke gate env flag
+        run: test "${METROLIZA_RUN_GOOGLE_CONVERSION_SMOKE}" = "1"
+
+      - name: Run Google conversion smoke check
+        run: PYTHONPATH=. python scripts/release_only_google_conversion_smoke.py

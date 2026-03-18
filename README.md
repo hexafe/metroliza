@@ -1,91 +1,129 @@
 # Metroliza
 
-Industrial metrology data analysis and automation tool built in Python.
+[![CI](https://github.com/hexafe/metroliza/actions/workflows/ci.yml/badge.svg)](https://github.com/hexafe/metroliza/actions/workflows/ci.yml)
 
-## Overview
+Metroliza is a Python desktop app for industrial metrology workflows: parsing measurement reports, organizing data in SQLite, and exporting analysis-ready Excel summaries.
 
-**Metroliza** is a Python-based tool designed to automate the processing and analysis of metrology and production measurement data used during component validation and quality investigations.
+## Quickstart
 
-The project started as a learning exercise and gradually evolved into an internal tool used by Quality and R&D engineers to reduce manual analysis effort and improve insight generation.
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows PowerShell: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements-dev.txt
+python metroliza.py
+```
 
-## Problem Statement
+## Configuration essentials
 
-In component validation and production quality analysis, measurement data is often delivered in:
-- PDF measurement reports,
-- compressed archives containing multiple reports,
-- CSV exports from production databases.
+- Google Sheets export is optional. Most users can run local Excel exports only; use Google export only if you need cloud sharing/sync.
+- Google export needs local OAuth setup (Google Cloud project + OAuth client) before first use.
+- Keep Google OAuth secrets local only: `credentials.json` and generated `token.json` should stay on your machine and must never be committed.
+- For complete setup, validation, and troubleshooting, use the dedicated runbook: [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md).
 
-Manual analysis of this data is:
-- time-consuming,
-- error-prone,
-- difficult to compare across OK / NOK parts.
+### License verification mode
 
-## Solution
+- License verification is **disabled by default** at startup.
+- Configure with `METROLIZA_LICENSE_VERIFICATION`:
+  - truthy values (`1`, `true`, `yes`, `on`) enforce license validation.
+  - falsy values (`0`, `false`, `no`, `off`) bypass license validation.
+  - missing/invalid values fall back to the default (`disabled`).
+- When license verification is enabled and validation fails, the app shows the hardware-id dialog and exits instead of launching the main window.
+- `METROLIZA_STARTUP_SMOKE` remains available for non-interactive startup smoke checks.
 
-Metroliza provides an end-to-end data processing pipeline that:
+Dependency files:
+- `requirements.txt` - runtime
+- `requirements-dev.txt` - development/testing
+- `requirements-build.txt` - packaging
 
-- Parses measurement data from **PDF files**, **ZIP archives** - for metrology data, and **CSV files** - for production parameters data
-- Formats and stores processed data in a **SQLite database**
-- Enables **grouping/labeling** of parts (e.g. OK vs NOK)
-- Generates **Excel reports** with:
-  - statistical summaries (min, max, standard deviation, Cp, Cpk, USL and LSL automatically read from report)
-  - violin plots for grouped comparisons (OK vs NOK)
-  - scatter and line charts for all measured characteristics - sample number or timestamp as X-axis
-- Allows filtering and hiding columns with OK parts - for non-conformities analysis and supporting root cause investigations
 
-The output is a clear, visual, and engineer-friendly report that supports decision-making during validation, quality reviews, and process investigations.
+## Core workflow
 
-## Key Features
+1. Parse metrology PDFs/ZIPs and CSV data.
+2. Store normalized records in SQLite.
+3. Apply grouping labels where needed (default POPULATION rows stay white; user-created groups are auto color-coded with persistent pastel backgrounds).
+4. Export Excel reports with summaries and plots.
+5. Optionally generate a Google Sheets version while always keeping a local `.xlsx` fallback.
+   - OAuth uses the minimal Drive scope: `https://www.googleapis.com/auth/drive.file`.
 
-- PDF parsing of metrology reports  
-- Batch processing from directories and compressed archives  
-- SQLite-based data storage and manipulation  
-- Data grouping/labeling (OK / NOK logic)  
-- Automated Excel report generation with statistics and visualizations  
-- Statistical analysis and visualization of production parameters
-- Standalone executable generation using PyInstaller (one-file build) for non-technical stakeholders
 
-## Technologies Used
+## CMM parser backend policy
 
-- **Python**
-- **Pandas**
-- **NumPy**
-- **SQLite**
-- **Matplotlib**
-- **Excel automation**
-- **CSV processing**
-- **PDF parsing libraries**
-- **PyInstaller** (one-file executable packaging)
+- Default (`METROLIZA_CMM_PARSER_BACKEND=auto`): native parser when extension is available.
+- Automatic fallback to pure Python only when extension is missing.
+- Controlled rollback: set `METROLIZA_CMM_PARSER_BACKEND=python`.
+- Strict native mode: set `METROLIZA_CMM_PARSER_BACKEND=native` to fail fast if native extension is unavailable.
 
-## Typical Use Case
+Parity between native and Python backends is enforced through fixture-based tests in `tests/test_cmm_parser_parity.py`.
 
-1. Collect metrology measurement reports (PDF/compressed) from validation or production
-2. Run Parser to extract the data
-3. Store results in SQLite for structured access
-4. Optionally: Group parts (for example as OK/NOK) and/or filter by parts reference/measurement/date
-5. Generate Excel reports with visual and statistical comparisons
-6. Use insights to support quality decisions and root cause analysis (PDCA/FTA)
+## Parser plugin resolver controls
 
-## Users
+- Default selection accepts parser probes with confidence `>=1` and resolves ties by confidence, plugin priority, then plugin id.
+- Optional strict selection: set `PARSER_STRICT_MATCHING=true` to require confidence `>=80`.
+- Probe results are cached per plugin/path during process runtime to reduce repeated probe work in batch parses.
 
-- Quality Engineers  
-- R&D Engineers  
-- Validation Engineers  
+## Group Comparison export sheet
 
-The tool was actively used to support component validation and production quality analysis.
+Excel exports now include a **Group Comparison** worksheet that consolidates:
 
-## Deployment & Usability
+- Distribution profile by group, so you can quickly see how each group behaves.
+- Distribution difference summary to highlight where groups diverge overall.
+- Distribution pairwise tables for side-by-side group comparisons.
+- Shape-aware insight interpretation that is separate from location differences.
 
-To enable usage by non-technical stakeholders (e.g. Quality or Validation teams), the project includes a **PyInstaller configuration** for building a standalone, one-file executable.
+Interpretation guidance:
 
-This allows running the tool without:
-- Python installation
-- virtual environments
-- dependency management
+- Use **adjusted p-values** (not raw p-values) for pairwise significance decisions.
+- Heatmap significance colors are thresholded at 0.05 and 0.01.
+- Effect-size magnitudes are shown as absolute values for ranking practical impact.
+- Effect sizes can indicate practical importance even when p-values are non-significant (e.g., small or imbalanced samples), so read both together.
 
-The executable can be distributed as a single file and executed locally on Windows machines.
+Effect size caveats:
 
-## Project Status
+- Two-group parametric paths report Cohen's *d*; non-parametric paths report Cliff's delta.
+- Multi-group rows use an omnibus effect (eta-squared by default), so pairwise practical interpretation should consider group imbalance and distribution shape.
 
-This project reflects an iterative learning process and real-world usage.  
-Some parts of the codebase are experimental or could be refactored further, but the tool successfully delivered value in an industrial environment.
+## Capability metrics legend (summary report)
+
+Histogram statistics tables now use capability terminology aligned with common SPC notation:
+
+- **Two-sided specs**: `Cp` and `Cpk` are shown.
+- **One-sided upper specs**: `Cp` is shown as not defined (`Cp (not defined for one-sided) ⓘ`), and capability is shown as **`Cpu`**.
+- **One-sided lower specs**: `Cp` is shown as not defined (`Cp (not defined for one-sided) ⓘ`), and capability is shown as **`Cpl`**.
+
+Examples of metric availability by spec type:
+
+- `Spec type: two-sided` → `Cp`, `Cpk`.
+- `Spec type: one-sided upper` → `Cp (not defined for one-sided) ⓘ`, `Cpu`.
+- `Spec type: one-sided lower` → `Cp (not defined for one-sided) ⓘ`, `Cpl`.
+
+## Documentation map
+
+- Release highlights: [`CHANGELOG.md`](CHANGELOG.md)
+- Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Docs policy and lifecycle: [`docs/documentation_policy.md`](docs/documentation_policy.md)
+- Release runbooks/checklists: [`docs/release_checks/`](docs/release_checks/)
+- Google conversion smoke runbook: [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md)
+- Historical plans and retired docs: [`docs/archive/`](docs/archive/)
+
+## Release metadata
+
+Current release highlight (`2026.03rc1(260317)`): Major analytics update: histogram/chart readability improvements plus new capability confidence and safeguards for low-sample interpretation.
+
+Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
+
+### Changelog highlights (release `2026.03rc1(260317)`)
+
+- See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
+
+Sync docs from release metadata:
+
+```bash
+python scripts/sync_release_metadata.py
+```
+
+Validate metadata consistency:
+
+```bash
+python scripts/sync_release_metadata.py --check
+```
