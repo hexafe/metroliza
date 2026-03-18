@@ -87,7 +87,12 @@ def test_multi_group_rows_include_distinct_pairwise_and_omnibus_effect_sizes():
             'post_hoc_strategy',
         ]).issubset(row.keys())
         assert row['normality_check_used'] == 'Shapiro-Wilk'
-        assert row['post_hoc_strategy'] in {'Tukey', 'Dunn'}
+        assert row['post_hoc_strategy'] in {
+            'pairwise t-tests + Benjamini-Hochberg',
+            'pairwise Welch t-tests + Benjamini-Hochberg',
+            'pairwise Mann-Whitney + Benjamini-Hochberg',
+        }
+        assert row['correction_method'] == 'Benjamini-Hochberg'
         assert row['effect_type'] in {'cohen_d', 'cliffs_delta'}
         assert row['effect_size'] is not None
         assert row['effect_size_ci'] is not None
@@ -144,4 +149,5 @@ def test_pairwise_rows_include_method_traceability_for_non_parametric_path():
     assert row['normality_check_used'] == 'Shapiro-Wilk'
     assert row['variance_test_used'] in {'Levene', 'Brown-Forsythe'}
     assert row['omnibus_test_used'] == 'Mann-Whitney U'
-    assert row['post_hoc_strategy'] == 'Dunn'
+    assert row['post_hoc_strategy'] == 'pairwise Mann-Whitney + Holm'
+    assert row['correction_method'] == 'Holm'
