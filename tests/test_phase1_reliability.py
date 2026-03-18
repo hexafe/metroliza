@@ -11,18 +11,18 @@ class TestPhase1ReliabilityGuardrails(unittest.TestCase):
         return (REPO_ROOT / relative_path).read_text(encoding='utf-8')
 
     def test_ui_cancel_handlers_do_not_block_with_wait(self):
-        parsing_dialog = self._read('modules/ParsingDialog.py')
-        export_dialog = self._read('modules/ExportDialog.py')
+        parsing_dialog = self._read('modules/parsing_dialog.py')
+        export_dialog = self._read('modules/export_dialog.py')
 
         self.assertNotIn('.wait(', parsing_dialog)
         self.assertNotIn('.wait(', export_dialog)
 
     def test_no_forced_thread_termination_patterns(self):
         app_sources = [
-            'modules/ParsingDialog.py',
-            'modules/ExportDialog.py',
-            'modules/ParseReportsThread.py',
-            'modules/ExportDataThread.py',
+            'modules/parsing_dialog.py',
+            'modules/export_dialog.py',
+            'modules/parse_reports_thread.py',
+            'modules/export_data_thread.py',
         ]
 
         for path in app_sources:
@@ -32,15 +32,15 @@ class TestPhase1ReliabilityGuardrails(unittest.TestCase):
     def test_user_facing_custom_logger_calls_are_non_reraising(self):
         user_flow_sources = [
             'metroliza.py',
-            'modules/CMMReportParser.py',
-            'modules/DataGrouping.py',
-            'modules/ExportDataThread.py',
-            'modules/ExportDialog.py',
-            'modules/FilterDialog.py',
-            'modules/MainWindow.py',
-            'modules/ModifyDB.py',
-            'modules/ParseReportsThread.py',
-            'modules/ParsingDialog.py',
+            'modules/cmm_report_parser.py',
+            'modules/data_grouping.py',
+            'modules/export_data_thread.py',
+            'modules/export_dialog.py',
+            'modules/filter_dialog.py',
+            'modules/main_window.py',
+            'modules/modify_db.py',
+            'modules/parse_reports_thread.py',
+            'modules/parsing_dialog.py',
         ]
         logger_call = re.compile(r'CustomLogger\((?P<args>[^)]*)\)')
 

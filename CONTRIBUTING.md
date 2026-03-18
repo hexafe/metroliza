@@ -46,10 +46,10 @@ PYTHONPATH=. python -m pytest tests -q
 
 Metroliza's core flow is:
 
-1. **Parse** (`modules/ParseReportsThread.py`) ingests reports/archives and normalizes rows.
+1. **Parse** (`modules/parse_reports_thread.py`) ingests reports/archives and normalizes rows.
 2. **Persist** (`modules/db.py` + DB call sites) stores and queries SQLite data.
-3. **Group/Filter** (`modules/DataGrouping.py`, `modules/FilterDialog.py`) prepares user-selected subsets.
-4. **Export** (`modules/ExportDataThread.py`) creates Excel outputs with summary stats/charts.
+3. **Group/Filter** (`modules/data_grouping.py`, `modules/filter_dialog.py`) prepares user-selected subsets.
+4. **Export** (`modules/export_data_thread.py`) creates Excel outputs with summary stats/charts.
 
 ## Contracts usage
 
@@ -64,7 +64,7 @@ Request/option contracts live in `modules/contracts.py`.
 
 - Use **`snake_case.py`** for all new Python modules under `modules/`.
 - Prefer importing from snake_case module names in new and touched code.
-- Legacy `CamelCase.py` modules are currently transition aliases and should not be used for new module names.
+- CamelCase module filenames are no longer supported; use snake_case paths exclusively.
 - See [`docs/module_naming_migration.md`](docs/module_naming_migration.md) for the staged migration map and compatibility plan.
 
 ## Coding guidance
@@ -110,4 +110,4 @@ When touching Google conversion/auth flows, validate and document:
 3. **Fallback behavior:** conversion degradation/failure messaging still reports the preserved `.xlsx` output path.
 4. **Testing strategy:** baseline automated tests remain passing; optional live smoke check stays release-gated/non-default.
 5. **Troubleshooting notes:** conversion warning guidance stays current in `README.md`.
-6. **PR evidence for Google export surface changes:** any PR touching `modules/google_drive_export.py`, `modules/export_backends.py`, `modules/ExportDataThread.py`, or Google export UI/contract paths (for example `modules/ExportDialog.py`, `modules/contracts.py`) must include Google conversion smoke-check evidence in the PR description using the standard evidence format; if evidence is omitted, include explicit justification.
+6. **PR evidence for Google export surface changes:** any PR touching `modules/google_drive_export.py`, `modules/export_backends.py`, `modules/export_data_thread.py`, or Google export UI/contract paths (for example `modules/export_dialog.py`, `modules/contracts.py`) must include Google conversion smoke-check evidence in the PR description using the standard evidence format; if evidence is omitted, include explicit justification.

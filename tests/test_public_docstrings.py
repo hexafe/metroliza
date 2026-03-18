@@ -6,10 +6,10 @@ import ast
 from pathlib import Path
 
 DOCSTRING_GUARD_FILES = [
-    "modules/ExportDataThread.py",
+    "modules/export_data_thread.py",
     "modules/export_backends.py",
-    "modules/CMMReportParser.py",
-    "modules/DataGrouping.py",
+    "modules/cmm_report_parser.py",
+    "modules/data_grouping.py",
     "modules/bom_manager.py",
 ]
 
