@@ -6,9 +6,7 @@ import pandas as pd
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
 from modules.export_group_comparison_writer import (
     _build_insights,
-    _build_pairwise_display_rows,
     _build_pairwise_group_matrices,
-    _build_summary_block,
     _write_matrix,
     prepare_group_comparison_payload,
     write_group_comparison_sheet,
