@@ -29,9 +29,8 @@ SECTION_GAP = 2
 
 BASE_INTERPRETATION_NOTES = [
     'Alpha threshold: 0.05 (results below alpha are treated as statistically significant).',
-    'Raw p-value: probability of observing the data assuming no true group difference.',
-    'Adjusted p-value: multiple-comparison corrected p-value (correction method shown in metadata and row labels) used for significance decisions.',
-    'Significance bands: adjusted p >= 0.05 (green), 0.01 to < 0.05 (yellow), < 0.01 (red).',
+    'Adjusted p-value: multiple-comparison corrected p-value used for significance decisions.',
+    'Location comparisons focus on mean/median shifts; shape differences are reported separately.',
 ]
 
 
@@ -469,6 +468,135 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
     }
 
 
+
+
+def _normalize_comment(value):
+    text = str(value or '').strip()
+    return text if text else 'None'
+
+
+def _effect_magnitude_label(effect_value, effect_type):
+    numeric_effect = pd.to_numeric(pd.Series([effect_value]), errors='coerce').iloc[0]
+    if pd.isna(numeric_effect):
+        return 'Not reported'
+
+    absolute_effect = abs(float(numeric_effect))
+    bands = EFFECT_TYPE_METADATA.get(effect_type, {}).get('bands')
+    if not bands:
+        return f'{absolute_effect:.3f}'
+
+    low_band, mid_band = bands
+    summary_threshold = EFFECT_TYPE_METADATA.get(effect_type, {}).get('summary_threshold') or mid_band
+    if absolute_effect < low_band:
+        magnitude = 'Negligible'
+    elif absolute_effect < mid_band:
+        magnitude = 'Small'
+    elif absolute_effect < summary_threshold:
+        magnitude = 'Medium'
+    else:
+        magnitude = 'Large'
+    return f'{magnitude} ({absolute_effect:.3f})'
+
+
+def _build_pairwise_display_rows(pairwise_rows):
+    display_rows = []
+    for row in pairwise_rows:
+        metric = row.get('Metric', 'Unknown')
+        group_a = row.get('Group A', 'Unknown')
+        group_b = row.get('Group B', 'Unknown')
+        effect_type = row.get('effect type')
+        comments = []
+        if row.get('significant'):
+            comments.append('Adjusted significant')
+        assumption_warning = _normalize_comment(row.get('normality check used'))
+        variance_warning = _normalize_comment(row.get('variance test used'))
+        if assumption_warning != 'None':
+            comments.append(f'Normality: {assumption_warning}')
+        if variance_warning != 'None':
+            comments.append(f'Variance: {variance_warning}')
+
+        display_rows.append({
+            'Metric': metric,
+            'Group A': group_a,
+            'Group B': group_b,
+            'Pairwise test': row.get('test used'),
+            'Adjusted p-value': row.get('adjusted p-value'),
+            'Pairwise effect size': row.get('effect size'),
+            'Effect type': _effect_label(effect_type),
+            'Delta mean or median': row.get('Mean Δ (A-B)'),
+            'Practical interpretation': _effect_magnitude_label(row.get('effect size'), effect_type),
+            'Flags / comments': '; '.join(comments) if comments else 'None',
+        })
+    return display_rows
+
+
+def _build_summary_block(payload):
+    metadata = dict(payload.get('metadata', []))
+    pairwise_rows = payload.get('pairwise_rows', [])
+    overall_tests = payload.get('overall_test_rows', [])
+    distribution_rows = payload.get('distribution_difference_rows', [])
+
+    strongest_effect = 'None reported'
+    if pairwise_rows:
+        strongest_row = max(
+            pairwise_rows,
+            key=lambda item: abs(pd.to_numeric(pd.Series([item.get('effect size')]), errors='coerce').iloc[0]) if pd.notna(pd.to_numeric(pd.Series([item.get('effect size')]), errors='coerce').iloc[0]) else -1,
+        )
+        strongest_effect = (
+            f"{strongest_row.get('Metric')} ({strongest_row.get('Group A')} vs {strongest_row.get('Group B')}): "
+            f"{_effect_magnitude_label(strongest_row.get('effect size'), strongest_row.get('effect type'))}"
+        )
+
+    omnibus_results = 'None'
+    if overall_tests:
+        omnibus_results = '; '.join(
+            f"{row.get('Metric')}: {row.get('Selected test')} (p={row.get('p-value')})"
+            for row in overall_tests
+        )
+
+    warnings = []
+    for row in overall_tests:
+        warning_text = _normalize_comment(row.get('Assumptions / warnings'))
+        if warning_text != 'None':
+            warnings.append(f"{row.get('Metric')}: {warning_text}")
+    shape_flags = [
+        row for row in distribution_rows
+        if isinstance(row, dict) and pd.to_numeric(pd.Series([row.get('adjusted p-value')]), errors='coerce').notna().iloc[0]
+    ]
+    if shape_flags:
+        warnings.append(f'Shape differences reviewed separately ({len(shape_flags)} metrics).')
+
+    return [
+        ('Metric counts', metadata.get('Headers', 0)),
+        ('Groups analyzed', metadata.get('Group sample sizes', metadata.get('Groups', 0))),
+        ('Correction method', metadata.get('Correction method', 'N/A')),
+        ('Per-metric omnibus test / p-value', omnibus_results),
+        ('Significant adjusted pairwise findings', int(sum(bool(row.get('significant')) for row in pairwise_rows))),
+        ('Strongest practical effect', strongest_effect),
+        ('Warnings / assumptions', '; '.join(warnings) if warnings else 'None'),
+    ]
+
+
+def _column_width_for_header(header):
+    width_map = {
+        'Metric': 22,
+        'Group A': 12,
+        'Group B': 12,
+        'Pairwise test': 18,
+        'Adjusted p-value': 14,
+        'Pairwise effect size': 16,
+        'Effect type': 16,
+        'Delta mean or median': 18,
+        'Practical interpretation': 24,
+        'Flags / comments': 32,
+    }
+    return width_map.get(header, 18)
+
+
+def _set_table_column_widths(worksheet, headers):
+    for col, header in enumerate(headers):
+        worksheet.set_column(col, col, _column_width_for_header(header))
+
 def _write_kv_section(worksheet, row, title, items):
     worksheet.write(row, 0, title)
     row += 1
@@ -484,17 +612,19 @@ def _write_table(worksheet, row, title, rows):
     row += 1
     if not rows:
         worksheet.write(row, 0, 'No rows')
-        return row + SECTION_GAP + 1
+        return row + SECTION_GAP + 1, None
 
     headers = list(rows[0].keys())
     for col, header in enumerate(headers):
         worksheet.write(row, col, header)
+    header_row = row
+    _set_table_column_widths(worksheet, headers)
     row += 1
     for data_row in rows:
         for col, header in enumerate(headers):
             worksheet.write(row, col, data_row.get(header))
         row += 1
-    return row + SECTION_GAP
+    return row + SECTION_GAP, header_row
 
 
 def _sanitize_matrix_value(value):
@@ -600,24 +730,28 @@ def write_group_comparison_sheet(worksheet, payload):
         workbook consumers and tests can rely on a stable report schema.
     """
     row = 0
-    worksheet.write(row, 0, 'How to interpret these results')
-    row += 1
-    for note in _build_interpretation_notes(payload):
-        worksheet.write(row, 0, f'• {note}')
-        row += 1
-    row += SECTION_GAP
+    row = _write_kv_section(worksheet, row, 'Summary Block', _build_summary_block(payload))
 
-    row = _write_kv_section(worksheet, row, 'Metadata', payload.get('metadata', []))
-    row = _write_kv_section(worksheet, row, 'Overall Test Summary', payload.get('overall_summary', []))
-    row = _write_table(worksheet, row, 'Recommended Statistical Tests', payload.get('overall_test_rows', []))
-    row = _write_table(worksheet, row, 'distribution shape profile by group', payload.get('distribution_profile_rows', []))
-    row = _write_table(worksheet, row, 'distribution shape summary', payload.get('distribution_difference_rows', []))
-    row = _write_table(worksheet, row, 'Pairwise Tables', payload.get('pairwise_rows', []))
-    row = _write_table(worksheet, row, 'distribution shape pairwise tables', payload.get('distribution_pairwise_rows', []))
+    worksheet.write(row, 0, 'Omnibus Tests')
+    row += 1
+    row = _write_kv_section(worksheet, row, 'Omnibus Summary', payload.get('overall_summary', []))
+    row, _ = _write_table(worksheet, row, 'Omnibus Test Details', payload.get('overall_test_rows', []))
+
+    pairwise_rows = _build_pairwise_display_rows(payload.get('pairwise_rows', []))
+    row, pairwise_header_row = _write_table(worksheet, row, 'Main Pairwise Comparison Table', pairwise_rows)
+
+    worksheet.write(row, 0, 'Shape-Difference Section')
+    row += 1
+    row, _ = _write_table(worksheet, row, 'Shape Profile By Group', payload.get('distribution_profile_rows', []))
+    row, _ = _write_table(worksheet, row, 'Shape Difference Summary', payload.get('distribution_difference_rows', []))
+    row, _ = _write_table(worksheet, row, 'Shape Difference Pairwise Table', payload.get('distribution_pairwise_rows', []))
+
+    worksheet.write(row, 0, 'Matrices')
+    row += 1
     row = _write_matrix_collection(
         worksheet,
         row,
-        'Significance Matrix (adjusted p-values)',
+        'Significance Matrix (Adjusted P-Values)',
         payload.get('significance_matrices', {}),
         matrix_type='significance',
     )
@@ -630,12 +764,15 @@ def write_group_comparison_sheet(worksheet, payload):
         effect_bands=payload.get('effect_reporting', {}).get('pairwise_effect_bands'),
     )
 
-    worksheet.write(row, 0, 'Insights')
+    worksheet.write(row, 0, 'Notes')
     row += 1
+    for note in _build_interpretation_notes(payload):
+        worksheet.write(row, 0, f'• {note}')
+        row += 1
     for insight in payload.get('insights', []):
         worksheet.write(row, 0, f'• {insight}')
         row += 1
 
-    worksheet.set_column(0, 0, 34)
-    worksheet.set_column(1, 10, 18)
-    worksheet.freeze_panes(1, 0)
+    worksheet.set_column(0, 0, 24)
+    worksheet.set_column(1, 1, 24)
+    worksheet.freeze_panes((pairwise_header_row or 0), 0)

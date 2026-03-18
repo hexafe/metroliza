@@ -103,7 +103,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         self.assertEqual(payload['pairwise_rows'][0]['Metric'], 'CYL - Y')
 
-    def test_writer_renders_expected_sections_and_layout(self):
+    def test_writer_renders_top_down_sections_summary_and_freeze_target(self):
         grouped_df = pd.DataFrame(
             {
                 'HEADER - AX': ['DIA - X'] * 6,
@@ -118,19 +118,58 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         write_group_comparison_sheet(worksheet, payload)
 
         titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
-        self.assertIn('How to interpret these results', titles)
-        self.assertIn('Metadata', titles)
-        self.assertIn('Overall Test Summary', titles)
-        self.assertIn('Recommended Statistical Tests', titles)
-        self.assertIn('distribution shape profile by group', titles)
-        self.assertIn('distribution shape summary', titles)
-        self.assertIn('Pairwise Tables', titles)
-        self.assertIn('distribution shape pairwise tables', titles)
-        self.assertIn('Significance Matrix (adjusted p-values)', titles)
-        self.assertIn("Pairwise Cliff's delta Matrix (|δ|)", titles)
-        self.assertIn('Insights', titles)
+        expected_order = [
+            'Summary Block',
+            'Omnibus Tests',
+            'Omnibus Summary',
+            'Omnibus Test Details',
+            'Main Pairwise Comparison Table',
+            'Shape-Difference Section',
+            'Shape Profile By Group',
+            'Shape Difference Summary',
+            'Shape Difference Pairwise Table',
+            'Matrices',
+            'Significance Matrix (Adjusted P-Values)',
+            "Pairwise Cliff's delta Matrix (|δ|)",
+            'Notes',
+        ]
+        order_positions = [titles.index(title) for title in expected_order]
+        self.assertEqual(order_positions, sorted(order_positions))
+
+        writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
+        self.assertEqual(writes_by_cell[(1, 0)], 'Metric counts')
+        self.assertEqual(writes_by_cell[(2, 0)], 'Groups analyzed')
+        self.assertEqual(writes_by_cell[(3, 0)], 'Correction method')
+        self.assertEqual(writes_by_cell[(4, 0)], 'Per-metric omnibus test / p-value')
+        self.assertEqual(writes_by_cell[(5, 0)], 'Significant adjusted pairwise findings')
+        self.assertEqual(writes_by_cell[(6, 0)], 'Strongest practical effect')
+        self.assertEqual(writes_by_cell[(7, 0)], 'Warnings / assumptions')
+
+        pairwise_header_row = next(
+            row for row, col, value in worksheet.writes
+            if value == 'Metric' and writes_by_cell.get((row - 1, 0)) == 'Main Pairwise Comparison Table'
+        )
+        self.assertEqual(worksheet.frozen, (pairwise_header_row, 0))
         self.assertEqual(len(worksheet.conditional_formats), 2)
-        self.assertEqual(worksheet.frozen, (1, 0))
+
+        pairwise_headers = [
+            writes_by_cell[(pairwise_header_row, col)] for col in range(10)
+        ]
+        self.assertEqual(
+            pairwise_headers,
+            [
+                'Metric',
+                'Group A',
+                'Group B',
+                'Pairwise test',
+                'Adjusted p-value',
+                'Pairwise effect size',
+                'Effect type',
+                'Delta mean or median',
+                'Practical interpretation',
+                'Flags / comments',
+            ],
+        )
 
     def test_non_parametric_two_group_labels_use_cliffs_delta_metadata(self):
         grouped_df = pd.DataFrame(
@@ -544,17 +583,19 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         self.assertIn('Group Comparison', workbook_xml)
         for title in [
-            'How to interpret these results',
-            'Metadata',
-            'Overall Test Summary',
-            'Recommended Statistical Tests',
-            'distribution shape profile by group',
-            'distribution shape summary',
-            'Pairwise Tables',
-            'distribution shape pairwise tables',
-            'Significance Matrix (adjusted p-values)',
+            'Summary Block',
+            'Omnibus Tests',
+            'Omnibus Summary',
+            'Omnibus Test Details',
+            'Main Pairwise Comparison Table',
+            'Shape-Difference Section',
+            'Shape Profile By Group',
+            'Shape Difference Summary',
+            'Shape Difference Pairwise Table',
+            'Matrices',
+            'Significance Matrix (Adjusted P-Values)',
             "Pairwise Cliff's delta Matrix (|δ|)",
-            'Insights',
+            'Notes',
         ]:
             self.assertIn(title, shared_strings)
 
