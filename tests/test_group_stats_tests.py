@@ -59,6 +59,9 @@ class TestGroupStatsTests(unittest.TestCase):
         result = select_group_stat_test(labels, values)
 
         self.assertEqual(result['test_name'], 'ANOVA')
+        self.assertEqual(result['assumption_outcomes']['selection_mode'], 'parametric_equal_variance')
+        self.assertEqual(result['assumption_outcomes']['normality'], 'passed')
+        self.assertEqual(result['assumption_outcomes']['variance_homogeneity'], 'passed')
 
     def test_multi_group_welch_anova_selected_when_variances_differ(self):
         labels = ['A', 'B', 'C']
@@ -71,6 +74,8 @@ class TestGroupStatsTests(unittest.TestCase):
         result = select_group_stat_test(labels, values)
 
         self.assertEqual(result['test_name'], 'Welch ANOVA')
+        self.assertEqual(result['assumption_outcomes']['selection_mode'], 'parametric_unequal_variance')
+        self.assertEqual(result['assumption_outcomes']['variance_homogeneity'], 'failed')
 
     def test_multi_group_kruskal_selected_when_normality_fails(self):
         labels = ['A', 'B', 'C']
@@ -83,6 +88,8 @@ class TestGroupStatsTests(unittest.TestCase):
         result = select_group_stat_test(labels, values)
 
         self.assertEqual(result['test_name'], 'Kruskal-Wallis')
+        self.assertEqual(result['assumption_outcomes']['selection_mode'], 'non_parametric')
+        self.assertEqual(result['assumption_outcomes']['normality'], 'failed')
 
 
     def test_assumption_driven_selection_prefers_non_parametric_when_normality_skipped_or_failed(self):
@@ -96,6 +103,8 @@ class TestGroupStatsTests(unittest.TestCase):
 
         self.assertEqual(result['test_name'], 'Mann-Whitney U')
         self.assertIn('contains_constant_group', result['warnings'])
+        self.assertEqual(result['assumption_outcomes']['normality'], 'skipped')
+        self.assertIn('non-parametric path', result['assumption_outcomes']['selection_detail'])
 
 
     def test_input_length_mismatch_returns_warning_and_no_partial_processing(self):
@@ -114,6 +123,7 @@ class TestGroupStatsTests(unittest.TestCase):
         self.assertEqual(result['preprocess'], {})
         self.assertEqual(result['assumptions']['normality'], {})
         self.assertEqual(result['assumptions']['variance_homogeneity']['status'], 'not_checked')
+        self.assertEqual(result['assumption_outcomes']['selection_mode'], 'unavailable')
 
     def test_edge_case_with_empty_and_nan_groups_returns_no_test(self):
         labels = ['A', 'B']
@@ -142,6 +152,8 @@ class TestGroupStatsTests(unittest.TestCase):
         self.assertIn('B', result['preprocess'])
         self.assertIn('empty_after_nan_drop', result['preprocess']['B'])
         self.assertIn('contains_group_with_n_lt_2', result['warnings'])
+        self.assertEqual(result['assumption_outcomes']['selection_mode'], 'unavailable')
+        self.assertIn('fewer than 2 values', result['assumption_outcomes']['selection_detail'])
 
 
 if __name__ == '__main__':

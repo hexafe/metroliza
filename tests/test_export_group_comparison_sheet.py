@@ -6,6 +6,7 @@ import pandas as pd
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
 from modules.export_group_comparison_writer import (
     _build_insights,
+    _build_pairwise_display_rows,
     _build_pairwise_group_matrices,
     _write_matrix,
     prepare_group_comparison_payload,
@@ -183,10 +184,11 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(writes_by_cell[(1, 0)], 'Metric counts')
         self.assertEqual(writes_by_cell[(2, 0)], 'Groups analyzed')
         self.assertEqual(writes_by_cell[(3, 0)], 'Correction method')
-        self.assertEqual(writes_by_cell[(4, 0)], 'Per-metric omnibus test / p-value')
-        self.assertEqual(writes_by_cell[(5, 0)], 'Significant adjusted pairwise findings')
-        self.assertEqual(writes_by_cell[(6, 0)], 'Strongest practical effect')
-        self.assertEqual(writes_by_cell[(7, 0)], 'Warnings / assumptions')
+        self.assertEqual(writes_by_cell[(4, 0)], 'Correction policy')
+        self.assertEqual(writes_by_cell[(5, 0)], 'Per-metric omnibus test / p-value')
+        self.assertEqual(writes_by_cell[(6, 0)], 'Significant adjusted pairwise findings')
+        self.assertEqual(writes_by_cell[(7, 0)], 'Strongest practical effect')
+        self.assertEqual(writes_by_cell[(8, 0)], 'Warnings / assumptions')
 
         pairwise_header_row = next(
             row for row, col, value in worksheet.writes
@@ -561,6 +563,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn(('Rows', 2), payload['metadata'])
         self.assertIn(('Alpha', 0.05), payload['metadata'])
         self.assertIn(('Correction method', 'Holm'), payload['metadata'])
+        self.assertIn(('Correction policy', 'Strict family-wise error control (Holm)'), payload['metadata'])
         self.assertIn(('Group sample sizes', 'A:1, B:1'), payload['metadata'])
         pairwise_row = payload['pairwise_rows'][0]
         self.assertEqual(pairwise_row['n(A)'], 1)
@@ -592,12 +595,68 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             },
         )
         self.assertEqual(per_metric['correction method'], 'Holm')
+        self.assertEqual(per_metric['correction policy'], 'Strict family-wise error control (Holm)')
+        self.assertIn('omnibus test name', per_metric)
+        self.assertIn('assumption outcomes', per_metric)
 
         self.assertTrue(payload['pairwise_rows'])
         pairwise = payload['pairwise_rows'][0]
         for required in ['Group A', 'Group B', 'test used', 'p-value', 'adjusted p-value', 'effect size', 'significant']:
             self.assertIn(required, pairwise)
         self.assertEqual(pairwise['correction method'], 'Holm')
+        self.assertEqual(pairwise['correction policy'], 'Strict family-wise error control (Holm)')
+        self.assertIn('pairwise test name', pairwise)
+        self.assertIn('omnibus test name', pairwise)
+        self.assertIn('assumption outcomes', pairwise)
+
+    def test_prepare_payload_supports_bh_correction_policy_labels(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.05, -0.05,
+                    0.4, 0.5, 0.45, 0.55, 0.5,
+                    2.0, 2.1, 1.9, 2.05, 1.95,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df, correction_method='bh')
+        summary_rows = dict(payload['metadata'])
+        display_rows = _build_pairwise_display_rows(payload['pairwise_rows'])
+
+        self.assertEqual(summary_rows['Correction method'], 'Benjamini-Hochberg')
+        self.assertEqual(
+            summary_rows['Correction policy'],
+            'Exploratory false-discovery-rate control (Benjamini-Hochberg/FDR)',
+        )
+        self.assertTrue(display_rows)
+        self.assertTrue(
+            all(
+                'Correction: Exploratory false-discovery-rate control (Benjamini-Hochberg/FDR)' in row['Flags / comments']
+                for row in display_rows
+            )
+        )
+
+    def test_prepare_payload_surfaces_selection_details_for_tiny_sample_and_constant_groups(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 7,
+                'MEAS': [1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0],
+                'GROUP': ['A', 'A', 'A', 'B', 'B', 'B', 'C'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        self.assertEqual(payload['overall_test_rows'][0]['assumption outcomes']['selection_mode'], 'unavailable')
+        self.assertIn('fewer than 2 values', payload['overall_test_rows'][0]['assumption outcomes']['selection_detail'])
+        self.assertTrue(payload['pairwise_rows'])
+        display_rows = _build_pairwise_display_rows(payload['pairwise_rows'])
+        self.assertTrue(
+            all('Correction: Strict family-wise error control (Holm)' in row['Flags / comments'] for row in display_rows)
+        )
 
     def test_integration_workbook_contains_group_comparison_sheet_and_headers(self):
         import tempfile

@@ -74,17 +74,24 @@ def test_multi_group_rows_include_distinct_pairwise_and_omnibus_effect_sizes():
             'group_a',
             'group_b',
             'test_used',
+            'pairwise_test_name',
             'p_value',
             'adjusted_p_value',
             'effect_size',
             'effect_type',
+            'pairwise_effect_type',
             'omnibus_effect_size',
             'omnibus_effect_type',
+            'effect_types',
             'significant',
             'normality_check_used',
             'variance_test_used',
             'omnibus_test_used',
+            'omnibus_test_name',
             'post_hoc_strategy',
+            'correction_policy',
+            'assumption_outcomes',
+            'selection_detail',
         ]).issubset(row.keys())
         assert row['normality_check_used'] == 'Shapiro-Wilk'
         assert row['post_hoc_strategy'] in {
@@ -93,12 +100,24 @@ def test_multi_group_rows_include_distinct_pairwise_and_omnibus_effect_sizes():
             'pairwise Mann-Whitney + Benjamini-Hochberg',
         }
         assert row['correction_method'] == 'Benjamini-Hochberg'
+        assert row['correction_policy'] == 'Exploratory false-discovery-rate control (Benjamini-Hochberg/FDR)'
         assert row['effect_type'] in {'cohen_d', 'cliffs_delta'}
+        assert row['pairwise_effect_type'] == row['effect_type']
         assert row['effect_size'] is not None
         assert row['effect_size_ci'] is not None
         assert row['omnibus_effect_size'] is not None
         assert row['omnibus_effect_type'] in {'eta_squared', 'omega_squared', 'cliffs_delta'}
+        assert row['effect_types']['pairwise'] == row['pairwise_effect_type']
+        assert row['effect_types']['omnibus'] == row['omnibus_effect_type']
         assert row['omnibus_effect_size_ci'] is not None
+        assert row['pairwise_test_name'] == row['test_used']
+        assert row['omnibus_test_name'] == row['omnibus_test_used']
+        assert row['selection_detail']
+        assert row['assumption_outcomes']['selection_mode'] in {
+            'parametric_equal_variance',
+            'parametric_unequal_variance',
+            'non_parametric',
+        }
         pairwise_effects[(row['group_a'], row['group_b'])] = row['effect_size']
         omnibus_effects.add(row['omnibus_effect_size'])
 
@@ -149,5 +168,8 @@ def test_pairwise_rows_include_method_traceability_for_non_parametric_path():
     assert row['normality_check_used'] == 'Shapiro-Wilk'
     assert row['variance_test_used'] in {'Levene', 'Brown-Forsythe'}
     assert row['omnibus_test_used'] == 'Mann-Whitney U'
+    assert row['omnibus_test_name'] == 'Mann-Whitney U'
     assert row['post_hoc_strategy'] == 'pairwise Mann-Whitney + Holm'
     assert row['correction_method'] == 'Holm'
+    assert row['correction_policy'] == 'Strict family-wise error control (Holm)'
+    assert row['assumption_outcomes']['normality'] == 'failed'
