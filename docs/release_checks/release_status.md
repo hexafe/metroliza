@@ -12,9 +12,9 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 ## Active build identity (single source for this status snapshot)
 
 - Branch: `work`
-- Commit SHA: `84a2302475b3559f319eb225b554a7f3bfbbc214` *(snapshot commit for the status evidence below)*
-- Artifact/build ID: `2026.03rc1-build260307-84a2302`
-- Release line metadata (canonical): `RELEASE_VERSION=2026.03rc1`, `VERSION_DATE=260307`
+- Commit SHA: `410ab06184cc6f799b217c27eedb3605f61a930d` *(snapshot commit for the status evidence below)*
+- Artifact/build ID: `2026.03rc1-build260317-410ab06`
+- Release line metadata (canonical): `RELEASE_VERSION=2026.03rc1`, `VERSION_DATE=260317`
 
 | Track | Status | Notes | Primary doc |
 |---|---|---|---|
@@ -31,6 +31,7 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
   - Optional/manual workflow-dispatch lanes (`packaging-smoke`, `google-conversion-smoke`) are non-blocking for normal PR CI but may be linked as release confidence evidence when executed.
 - Active release operations are governed by documents under `docs/release_checks/`.
 - Snapshot IDs in runbooks/log evidence may differ from current `VersionDate.py` metadata when they represent earlier captured smoke runs; this is expected if the snapshot date/build context is explicitly documented.
+- Latest local QA/docs audit on this snapshot: `pytest -q` passed (`827 passed, 20 skipped`), and focused docs/policy hygiene checks passed (`tests/test_docs_markdown_links.py`, `tests/test_ci_policy_sync.py`, `tests/test_requirements_hygiene.py`, `tests/test_public_docstrings.py`).
 - Active operational execution tracker: [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md) (RC2 parity-first structural risk reduction, not rewrite scope).
 - During RC2, only small behavior-preserving, test-backed stabilization slices should move forward; larger decomposition/architecture moves remain deferred per triage.
 - Superseded planning docs are references only and should not be used as the operational status tracker (`../roadmaps/2026_03_rc1_test_ci_execution_tracker.md`, `../roadmaps/test_ci_audit_execution.md`).
