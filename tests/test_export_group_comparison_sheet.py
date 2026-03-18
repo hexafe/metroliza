@@ -24,7 +24,7 @@ class FakeWorksheet:
         self.writes.append((row, col, value))
 
     def conditional_format(self, first_row, first_col, last_row, last_col, options):
-        self.conditional_formats.append((first_row, first_col, last_row, last_col, options))
+        self.conditional_formats.append((first_row, first_col, last_row, last_col, dict(options)))
 
     def set_column(self, first_col, last_col, width, *args, **kwargs):
         self.columns.append((first_col, last_col, width))
@@ -129,7 +129,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('Significance Matrix (adjusted p-values)', titles)
         self.assertIn("Pairwise Cliff's delta Matrix (|δ|)", titles)
         self.assertIn('Insights', titles)
-        self.assertEqual(len(worksheet.conditional_formats), 6)
+        self.assertEqual(len(worksheet.conditional_formats), 2)
         self.assertEqual(worksheet.frozen, (1, 0))
 
     def test_non_parametric_two_group_labels_use_cliffs_delta_metadata(self):
@@ -182,7 +182,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertTrue(any("Cohen's d" in value for value in note_lines))
         self.assertTrue(any('eta squared' in value for value in note_lines))
 
-    def test_writer_registers_conditional_format_thresholds(self):
+    def test_writer_registers_visible_conditional_format_palettes(self):
         matrix = pd.DataFrame([[float('nan'), 0.03], [0.03, float('nan')]], index=['A', 'B'], columns=['A', 'B'])
         payload = {
             'metadata': [],
@@ -201,18 +201,29 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         write_group_comparison_sheet(worksheet, payload)
 
-        self.assertEqual(len(worksheet.conditional_formats), 6)
-        significance_rules = [fmt for fmt in worksheet.conditional_formats[:3]]
-        effect_rules = [fmt for fmt in worksheet.conditional_formats[3:]]
-        self.assertEqual(significance_rules[0][4]['criteria'], '>=')
-        self.assertEqual(significance_rules[0][4]['value'], 0.05)
-        self.assertEqual(significance_rules[1][4]['criteria'], 'between')
-        self.assertEqual(significance_rules[1][4]['minimum'], 0.01)
-        self.assertEqual(significance_rules[2][4]['criteria'], '<')
-        self.assertEqual(significance_rules[2][4]['value'], 0.01)
-        self.assertEqual(effect_rules[0][4]['value'], 0.2)
-        self.assertEqual(effect_rules[1][4]['maximum'], 0.5)
-        self.assertEqual(effect_rules[2][4]['value'], 0.5)
+        self.assertEqual(len(worksheet.conditional_formats), 2)
+        significance_rule = worksheet.conditional_formats[0][4]
+        effect_rule = worksheet.conditional_formats[1][4]
+
+        self.assertEqual(significance_rule['type'], '3_color_scale')
+        self.assertEqual(significance_rule['min_value'], 0)
+        self.assertEqual(significance_rule['mid_value'], 0.01)
+        self.assertEqual(significance_rule['max_value'], 0.05)
+        self.assertIn('min_color', significance_rule)
+        self.assertIn('mid_color', significance_rule)
+        self.assertIn('max_color', significance_rule)
+
+        self.assertEqual(effect_rule['type'], '3_color_scale')
+        self.assertEqual(effect_rule['min_value'], 0)
+        self.assertEqual(effect_rule['mid_value'], 0.2)
+        self.assertEqual(effect_rule['max_value'], 0.5)
+        self.assertIn('min_color', effect_rule)
+        self.assertIn('mid_color', effect_rule)
+        self.assertIn('max_color', effect_rule)
+        self.assertNotEqual(
+            (significance_rule['min_color'], significance_rule['mid_color'], significance_rule['max_color']),
+            (effect_rule['min_color'], effect_rule['mid_color'], effect_rule['max_color']),
+        )
 
 
     def test_write_matrix_sanitizes_non_finite_values(self):
@@ -231,7 +242,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIsNone(writes_by_cell[(3, 1)])
         self.assertIsNone(writes_by_cell[(3, 2)])
         self.assertEqual(end_row, 6)
-        self.assertEqual(len(worksheet.conditional_formats), 3)
+        self.assertEqual(len(worksheet.conditional_formats), 1)
 
     def test_write_matrix_with_non_finite_values_is_deterministic(self):
         matrix = pd.DataFrame(
