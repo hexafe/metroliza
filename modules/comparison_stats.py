@@ -148,6 +148,17 @@ def _pairwise_p_value(sample_a: np.ndarray, sample_b: np.ndarray, *, non_paramet
     return ('Student t-test' if equal_var else 'Welch t-test', None if np.isnan(p_value) else float(p_value))
 
 
+def _effect_size_metadata(*, non_parametric: bool, multi_group_effect: str) -> tuple[str, str]:
+    if non_parametric:
+        return ('cliffs_delta', 'cliffs_delta')
+    omnibus_type = 'omega_squared' if multi_group_effect == 'omega_squared' else 'eta_squared'
+    return ('cohen_d', omnibus_type)
+
+
+def _pairwise_effect_size(sample_a: np.ndarray, sample_b: np.ndarray, *, non_parametric: bool) -> float | None:
+    return _cliffs_delta(sample_a, sample_b) if non_parametric else _cohen_d(sample_a, sample_b)
+
+
 def compute_metric_pairwise_stats(
     metric_key: str,
     grouped_values: dict[str, list[float] | np.ndarray],
@@ -182,6 +193,11 @@ def compute_metric_pairwise_stats(
     variance_test_used = variance_assumption.get('test') or 'Brown-Forsythe'
     post_hoc_strategy = 'Dunn' if is_non_parametric else 'Tukey'
 
+    pairwise_effect_type, omnibus_effect_type = _effect_size_metadata(
+        non_parametric=is_non_parametric,
+        multi_group_effect=config.multi_group_effect,
+    )
+
     overall_effect: float | None = None
     overall_ci: tuple[float, float] | None = None
     if len(labels) > 2:
@@ -212,31 +228,24 @@ def compute_metric_pairwise_stats(
         test_used, p_value = _pairwise_p_value(sample_a, sample_b, non_parametric=is_non_parametric, equal_var=equal_var)
         raw_p_values.append(p_value)
 
-        if len(labels) > 2:
-            effect_size = overall_effect
-            effect_ci = overall_ci
-        else:
-            effect_size = _cliffs_delta(sample_a, sample_b) if is_non_parametric else _cohen_d(sample_a, sample_b)
-            effect_ci = None
-            if config.include_effect_size_ci and effect_size is not None:
-                rng = np.random.default_rng(42)
-                if is_non_parametric:
-                    def effect_fn(sampled: list[np.ndarray]) -> float | None:
-                        return _cliffs_delta(sampled[0], sampled[1])
-                else:
-                    def effect_fn(sampled: list[np.ndarray]) -> float | None:
-                        return _cohen_d(sampled[0], sampled[1])
+        effect_size = _pairwise_effect_size(sample_a, sample_b, non_parametric=is_non_parametric)
+        effect_ci = None
+        if config.include_effect_size_ci and effect_size is not None:
+            rng = np.random.default_rng(42)
 
-                effect_ci = _bootstrap_ci(
-                    rng=rng,
-                    sample_builder=lambda: [
-                        sample_a[rng.integers(0, sample_a.size, sample_a.size)],
-                        sample_b[rng.integers(0, sample_b.size, sample_b.size)],
-                    ],
-                    effect_fn=effect_fn,
-                    level=config.ci_level,
-                    iterations=config.ci_bootstrap_iterations,
-                )
+            def effect_fn(sampled: list[np.ndarray]) -> float | None:
+                return _pairwise_effect_size(sampled[0], sampled[1], non_parametric=is_non_parametric)
+
+            effect_ci = _bootstrap_ci(
+                rng=rng,
+                sample_builder=lambda: [
+                    sample_a[rng.integers(0, sample_a.size, sample_a.size)],
+                    sample_b[rng.integers(0, sample_b.size, sample_b.size)],
+                ],
+                effect_fn=effect_fn,
+                level=config.ci_level,
+                iterations=config.ci_bootstrap_iterations,
+            )
 
         row = {
             'metric': metric_key,
@@ -245,6 +254,7 @@ def compute_metric_pairwise_stats(
             'test_used': test_used,
             'p_value': p_value,
             'effect_size': effect_size,
+            'effect_type': pairwise_effect_type,
             'normality_check_used': normality_check_used,
             'variance_test_used': variance_test_used,
             'omnibus_test_used': selected_test,
@@ -252,6 +262,11 @@ def compute_metric_pairwise_stats(
         }
         if effect_ci is not None:
             row['effect_size_ci'] = effect_ci
+        if len(labels) > 2:
+            row['omnibus_effect_size'] = overall_effect
+            row['omnibus_effect_type'] = omnibus_effect_type
+            if overall_ci is not None:
+                row['omnibus_effect_size_ci'] = overall_ci
         rows.append(row)
 
     adjusted = _adjust_pvalues(raw_p_values, config.correction_method)

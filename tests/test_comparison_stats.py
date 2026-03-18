@@ -53,11 +53,11 @@ def test_effect_size_for_two_group_non_parametric_fixture_matches_cliffs_delta()
     assert math.isclose(row['effect_size'], -0.52, rel_tol=1e-9)
 
 
-def test_multi_group_rows_include_overall_effect_and_adjusted_significance():
+def test_multi_group_rows_include_distinct_pairwise_and_omnibus_effect_sizes():
     grouped_values = {
-        'A': [1.0, 1.1, 0.9, 1.0, 1.2],
-        'B': [2.0, 2.1, 2.2, 1.9, 2.0],
-        'C': [3.0, 2.9, 3.1, 3.2, 3.0],
+        'A': [0.0, 0.1, -0.1, 0.05, -0.05],
+        'B': [0.4, 0.5, 0.45, 0.55, 0.5],
+        'C': [2.0, 2.1, 1.9, 2.05, 1.95],
     }
 
     rows = compute_metric_pairwise_stats(
@@ -67,6 +67,8 @@ def test_multi_group_rows_include_overall_effect_and_adjusted_significance():
     )
 
     assert len(rows) == 3
+    pairwise_effects = {}
+    omnibus_effects = set()
     for row in rows:
         assert set([
             'group_a',
@@ -75,6 +77,9 @@ def test_multi_group_rows_include_overall_effect_and_adjusted_significance():
             'p_value',
             'adjusted_p_value',
             'effect_size',
+            'effect_type',
+            'omnibus_effect_size',
+            'omnibus_effect_type',
             'significant',
             'normality_check_used',
             'variance_test_used',
@@ -83,8 +88,19 @@ def test_multi_group_rows_include_overall_effect_and_adjusted_significance():
         ]).issubset(row.keys())
         assert row['normality_check_used'] == 'Shapiro-Wilk'
         assert row['post_hoc_strategy'] in {'Tukey', 'Dunn'}
+        assert row['effect_type'] in {'cohen_d', 'cliffs_delta'}
         assert row['effect_size'] is not None
         assert row['effect_size_ci'] is not None
+        assert row['omnibus_effect_size'] is not None
+        assert row['omnibus_effect_type'] in {'eta_squared', 'omega_squared', 'cliffs_delta'}
+        assert row['omnibus_effect_size_ci'] is not None
+        pairwise_effects[(row['group_a'], row['group_b'])] = row['effect_size']
+        omnibus_effects.add(row['omnibus_effect_size'])
+
+    assert len(omnibus_effects) == 1
+    assert not math.isclose(pairwise_effects[('A', 'B')], pairwise_effects[('A', 'C')], rel_tol=1e-9)
+    assert not math.isclose(pairwise_effects[('A', 'B')], pairwise_effects[('B', 'C')], rel_tol=1e-9)
+    assert not math.isclose(pairwise_effects[('A', 'B')], next(iter(omnibus_effects)), rel_tol=1e-9)
 
 
 def test_pairwise_rows_include_holm_adjustment_for_all_pairs():
