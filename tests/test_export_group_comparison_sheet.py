@@ -168,6 +168,9 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             'Location / Central-Tendency Summary',
             'Location / Central-Tendency Test Details',
             'Location / Central-Tendency Pairwise Comparison Table',
+            'Comparison Charts',
+            'Ranked Pairwise Effects',
+            'Effect vs Adjusted p',
             'Distribution Shape Section',
             'Distribution Shape Profile By Group',
             'Distribution Shape Summary',
@@ -189,6 +192,9 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(writes_by_cell[(6, 0)], 'Significant adjusted pairwise location findings')
         self.assertEqual(writes_by_cell[(7, 0)], 'Strongest practical location effect')
         self.assertEqual(writes_by_cell[(8, 0)], 'Warnings / assumptions')
+        self.assertIn(('Pairwise tests', 3), payload['overall_summary'])
+        self.assertIn(('Significant (p < 0.05)', 0), payload['overall_summary'])
+        self.assertIn(('Large effects (|δ| >= 0.474)', 3), payload['overall_summary'])
 
         pairwise_header_row = next(
             row for row, col, value in worksheet.writes
@@ -657,6 +663,126 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertTrue(
             all('Correction: Strict family-wise error control (Holm)' in row['Flags / comments'] for row in display_rows)
         )
+
+    def test_prepare_payload_post_hoc_strategy_matches_real_pairwise_computation(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.0, 0.05,
+                    0.2, 0.3, 0.25, 0.35, 0.3,
+                    1.4, 1.5, 1.45, 1.55, 1.6,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        expected_strategy = {row['post-hoc strategy'] for row in payload['overall_test_rows']}
+        self.assertEqual(expected_strategy, {'pairwise t-tests + Holm'})
+        self.assertEqual(
+            {row['post-hoc strategy'] for row in payload['pairwise_rows']},
+            {'pairwise t-tests + Holm'},
+        )
+        pairwise_by_pair = {(row['Group A'], row['Group B']): row for row in payload['pairwise_rows']}
+        self.assertEqual(set(pairwise_by_pair), {('A', 'B'), ('A', 'C'), ('B', 'C')})
+        self.assertNotEqual(pairwise_by_pair[('A', 'B')]['effect size'], pairwise_by_pair[('A', 'C')]['effect size'])
+        self.assertNotEqual(pairwise_by_pair[('A', 'B')]['effect size'], pairwise_by_pair[('B', 'C')]['effect size'])
+
+    def test_effect_matrix_title_and_notes_follow_actual_effect_type_metadata(self):
+        non_parametric_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['NP'] * 10,
+                'MEAS': [0.0, 0.0, 0.0, 10.0, 10.0, 1.0, 1.0, 1.0, 11.0, 11.0],
+                'GROUP': ['A'] * 5 + ['B'] * 5,
+            }
+        )
+        parametric_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['P'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.0, 0.05,
+                    0.2, 0.3, 0.25, 0.35, 0.3,
+                    1.4, 1.5, 1.45, 1.55, 1.6,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        for grouped_df, expected_title, note_fragments in [
+            (
+                non_parametric_df,
+                "Pairwise Cliff's delta Matrix (|δ|)",
+                ["Cliff's delta", 'absolute magnitude |δ|'],
+            ),
+            (
+                parametric_df,
+                "Pairwise Cohen's d Matrix (|d|)",
+                ["Cohen's d", 'absolute magnitude |d|', 'eta squared'],
+            ),
+        ]:
+            payload = prepare_group_comparison_payload(grouped_df)
+            worksheet = FakeWorksheet()
+
+            write_group_comparison_sheet(worksheet, payload)
+
+            titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+            note_lines = [value for _, _, value in worksheet.writes if isinstance(value, str) and value.startswith('• ')]
+            self.assertEqual(payload['effect_reporting']['pairwise_matrix_title'], expected_title)
+            self.assertIn(expected_title, titles)
+            for fragment in note_fragments:
+                self.assertTrue(any(fragment in note for note in note_lines), msg=fragment)
+
+    def test_matrix_conditional_formatting_uses_visible_color_scales_for_real_payload(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.0, 0.05,
+                    0.2, 0.3, 0.25, 0.35, 0.3,
+                    1.4, 1.5, 1.45, 1.55, 1.6,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        self.assertGreaterEqual(len(worksheet.conditional_formats), 2)
+        for _, _, _, _, rule in worksheet.conditional_formats[-2:]:
+            self.assertEqual(rule['type'], '3_color_scale')
+            self.assertTrue(any(key.endswith('_color') for key in rule), msg=rule)
+
+    def test_writer_keeps_non_group_comparison_scaffolding_stable_when_payload_has_no_pairwise_rows(self):
+        payload = {
+            'metadata': [('Headers', 0), ('Groups', 0), ('Correction method', 'Holm'), ('Correction policy', 'Strict family-wise error control (Holm)')],
+            'overall_summary': [],
+            'overall_test_rows': [],
+            'pairwise_rows': [],
+            'distribution_profile_rows': [],
+            'distribution_difference_rows': [],
+            'distribution_pairwise_rows': [],
+            'significance_matrices': {},
+            'effect_matrices': {},
+            'effect_reporting': {'pairwise_matrix_title': 'Pairwise Effect Magnitude Matrix (absolute effect size)'},
+            'insights': [],
+        }
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn('Summary Block', titles)
+        self.assertIn('Distribution Shape Section', titles)
+        self.assertIn('Matrices', titles)
+        self.assertIn('Notes', titles)
+        self.assertFalse(any(value == 'Comparison Charts' for value in titles))
+        self.assertTrue(any(value == 'No rows' for value in titles))
+        self.assertTrue(any(value == 'No heatmap data' for value in titles))
 
     def test_integration_workbook_contains_group_comparison_sheet_and_headers(self):
         import tempfile

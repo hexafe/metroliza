@@ -127,6 +127,27 @@ def test_multi_group_rows_include_distinct_pairwise_and_omnibus_effect_sizes():
     assert not math.isclose(pairwise_effects[('A', 'B')], next(iter(omnibus_effects)), rel_tol=1e-9)
 
 
+
+
+def test_multi_group_parametric_fixture_uses_pair_specific_effects_and_shared_strategy():
+    grouped_values = {
+        'A': [0.0, 0.1, -0.1, 0.0, 0.05],
+        'B': [0.2, 0.3, 0.25, 0.35, 0.3],
+        'C': [1.4, 1.5, 1.45, 1.55, 1.6],
+    }
+
+    rows = compute_metric_pairwise_stats('metric_pair_specific', grouped_values)
+
+    assert len(rows) == 3
+    assert {row['post_hoc_strategy'] for row in rows} == {'pairwise t-tests + Holm'}
+    pair_effects = {(row['group_a'], row['group_b']): row['effect_size'] for row in rows}
+
+    assert pair_effects[('A', 'B')] != pair_effects[('A', 'C')]
+    assert pair_effects[('A', 'B')] != pair_effects[('B', 'C')]
+    assert pair_effects[('A', 'C')] != pair_effects[('B', 'C')]
+    assert all(row['pairwise_effect_type'] == 'cohen_d' for row in rows)
+    assert all(row['omnibus_effect_type'] == 'eta_squared' for row in rows)
+
 def test_pairwise_rows_include_holm_adjustment_for_all_pairs():
     grouped_values = {
         'A': [1.0, 1.1, 1.2, 1.3, 1.4],
