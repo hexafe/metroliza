@@ -55,6 +55,18 @@ if ($LASTEXITCODE -eq 0) {
     $nativeModuleAvailable = $true
 }
 
+$pymupdfPackageAvailable = $false
+python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('pymupdf') else 1)" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $pymupdfPackageAvailable = $true
+}
+
+$fitzPackageAvailable = $false
+python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('fitz') else 1)" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $fitzPackageAvailable = $true
+}
+
 if ($RequireNative -and -not $nativeModuleAvailable) {
     throw "Native module '_metroliza_cmm_native' is required but unavailable. Build/install it first: python -m maturin develop --manifest-path modules/native/cmm_parser/Cargo.toml"
 }
@@ -76,6 +88,16 @@ if ($nativeModuleAvailable) {
     $commonArgs += "--include-module=_metroliza_cmm_native"
 } else {
     Write-Warning "Native module '_metroliza_cmm_native' not found in this environment. Building with pure-Python parser fallback only."
+}
+
+if ($pymupdfPackageAvailable) {
+    $commonArgs += "--include-package=pymupdf"
+} else {
+    Write-Warning "PyMuPDF package 'pymupdf' not found in this environment. PDF parsing in the packaged app will fail unless PyMuPDF is installed before building."
+}
+
+if ($fitzPackageAvailable) {
+    $commonArgs += "--include-package=fitz"
 }
 
 $tokenExcludePatterns = @(
