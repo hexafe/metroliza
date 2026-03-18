@@ -20,6 +20,18 @@ def _yes_no(flag):
     return 'YES' if bool(flag) else 'NO'
 
 
+def _wasserstein_severity_label(distance):
+    numeric_distance = float(distance) if distance is not None else None
+    if numeric_distance is None:
+        return 'Not reported'
+    absolute_distance = abs(numeric_distance)
+    if absolute_distance < 0.1:
+        return 'Low'
+    if absolute_distance < 0.5:
+        return 'Moderate'
+    return 'High'
+
+
 def _fit_profile_row(metric, group_name, values):
     numeric = _clean_numeric(values)
     fit = fit_measurement_distribution(numeric.tolist())
@@ -104,7 +116,8 @@ def compute_distribution_difference(metric, grouped_values, *, alpha=0.05, corre
                 'distribution test used': test_used,
                 'raw p-value': p_value,
                 'adjusted p-value': None,
-                'distance metric': distance,
+                'Wasserstein distance': distance,
+                'Practical severity': _wasserstein_severity_label(distance) if distance is not None else 'Not reported',
                 'verdict': verdict,
                 'comment': comment,
                 'flags': '; '.join(flags) if flags else 'none',

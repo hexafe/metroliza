@@ -66,17 +66,18 @@ Parity between native and Python backends is enforced through fixture-based test
 
 Excel exports now include a **Group Comparison** worksheet that consolidates:
 
-- Distribution profile by group, so you can quickly see how each group behaves.
-- Distribution difference summary to highlight where groups diverge overall.
-- Distribution pairwise tables for side-by-side group comparisons.
-- Shape-aware insight interpretation that is separate from location differences.
+- Location / central-tendency summaries and pairwise tables for mean/median-focused comparisons.
+- Distribution shape profile by group, so you can quickly see how each group behaves beyond mean/median shifts.
+- Distribution shape summaries and pairwise tables, including adjusted p-values and Wasserstein distance for side-by-side shape comparisons.
+- Shape-aware interpretation notes explaining that significant shape differences can exist even when location comparisons are not significant.
 
 Interpretation guidance:
 
-- Use **adjusted p-values** (not raw p-values) for pairwise significance decisions.
+- Use **adjusted p-values** (not raw p-values) for both pairwise location and pairwise distribution-shape significance decisions.
 - Heatmap significance colors are thresholded at 0.05 and 0.01.
 - Effect-size magnitudes are shown as absolute values for ranking practical impact.
 - Effect sizes can indicate practical importance even when p-values are non-significant (e.g., small or imbalanced samples), so read both together.
+- Distribution-shape sections also report Wasserstein distance as a descriptive separation measure; if the sheet shows a low/moderate/high severity label, treat it as domain-neutral guidance rather than a specification-based acceptance limit.
 
 Effect size caveats:
 
