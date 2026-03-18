@@ -15,7 +15,12 @@ import numpy as np
 import pandas as pd
 
 from modules.characteristic_alias_service import resolve_characteristic_alias
-from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
+from modules.comparison_stats import (
+    ComparisonStatsConfig,
+    _describe_pairwise_strategy,
+    _format_correction_method,
+    compute_metric_pairwise_stats,
+)
 from modules.distribution_shape_analysis import compute_distribution_difference
 from modules.group_stats_tests import select_group_stat_test
 
@@ -25,7 +30,7 @@ SECTION_GAP = 2
 INTERPRETATION_NOTES = [
     'Alpha threshold: 0.05 (results below alpha are treated as statistically significant).',
     'Raw p-value: probability of observing the data assuming no true group difference.',
-    'Adjusted p-value: multiple-comparison corrected p-value (Holm by default; configurable Holm/BH) used for significance decisions.',
+    'Adjusted p-value: multiple-comparison corrected p-value (correction method shown in metadata and row labels) used for significance decisions.',
     'Significance bands: adjusted p >= 0.05 (green), 0.01 to < 0.05 (yellow), < 0.01 (red).',
     'Effect size guide (|d|): < 0.2 small/negligible, 0.2 to 0.5 moderate, > 0.5 large.',
 ]
@@ -199,8 +204,9 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
         has no usable numeric measurements.
     """
     if not isinstance(grouped_df, pd.DataFrame) or grouped_df.empty:
+        correction_method = _format_correction_method('holm')
         return {
-            'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0), ('Alpha', 0.05), ('Correction method', 'Holm'), ('Group sample sizes', 'No groups')],
+            'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0), ('Alpha', 0.05), ('Correction method', correction_method), ('Group sample sizes', 'No groups')],
             'overall_summary': [('Pairwise tests', 0), ('Significant (p < 0.05)', 0), ('Large effects (|d| >= 0.8)', 0)],
             'pairwise_rows': [],
             'overall_test_rows': [],
@@ -222,6 +228,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
     working = working.assign(MEAS=numeric_meas)
     working = working.dropna(subset=['MEAS'])
 
+    correction_method = _format_correction_method('holm')
     pairwise_rows = []
     overall_test_rows = []
     distribution_profile_rows = []
@@ -239,7 +246,14 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
             grouped_values=list(group_series.values()),
         )
         selected_test = selector_result.get('test_name') or 'N/A'
-        post_hoc_strategy = 'Dunn' if selected_test in {'Mann-Whitney U', 'Kruskal-Wallis'} else 'Tukey'
+        is_non_parametric = selected_test in {'Mann-Whitney U', 'Kruskal-Wallis'}
+        variance_test = selector_result.get('assumptions', {}).get('variance_homogeneity', {}).get('test') or 'Brown-Forsythe'
+        variance_status = selector_result.get('assumptions', {}).get('variance_homogeneity', {}).get('status')
+        post_hoc_strategy = _describe_pairwise_strategy(
+            non_parametric=is_non_parametric,
+            equal_var=variance_status == 'passed',
+            correction_method=correction_method,
+        )
         overall_test_rows.append(
             {
                 'Metric': metric_key,
@@ -247,9 +261,10 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
                 'p-value': selector_result.get('p_value'),
                 'Sample sizes': ', '.join(f"{key}:{value}" for key, value in selector_result.get('sample_sizes', {}).items()),
                 'normality check used': 'Shapiro-Wilk',
-                'variance test used': selector_result.get('assumptions', {}).get('variance_homogeneity', {}).get('test') or 'Brown-Forsythe',
+                'variance test used': variance_test,
                 'omnibus test used': selected_test,
                 'post-hoc strategy': post_hoc_strategy,
+                'correction method': correction_method,
                 'Assumptions / warnings': '; '.join(selector_result.get('warnings', [])) or 'None',
             }
         )
@@ -257,7 +272,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
         comparison_rows = compute_metric_pairwise_stats(
             metric_key,
             group_series,
-            config=ComparisonStatsConfig(alpha=0.05, correction_method='holm'),
+            config=ComparisonStatsConfig(alpha=0.05, correction_method=correction_method),
         )
         for item in comparison_rows:
             group_a = item['group_a']
@@ -287,6 +302,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
                     'variance test used': item.get('variance_test_used'),
                     'omnibus test used': item.get('omnibus_test_used'),
                     'post-hoc strategy': item.get('post_hoc_strategy'),
+                    'correction method': item.get('correction_method'),
                 }
             )
 
@@ -312,7 +328,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None):
             ('Groups', working['GROUP'].nunique()),
             ('Headers', working['metric_key'].nunique()),
             ('Alpha', 0.05),
-            ('Correction method', 'Holm'),
+            ('Correction method', correction_method),
             ('Group sample sizes', _summarize_group_sample_sizes(working)),
         ],
         'overall_summary': [

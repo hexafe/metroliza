@@ -439,12 +439,21 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         per_metric = payload['overall_test_rows'][0]
         self.assertEqual(per_metric['normality check used'], 'Shapiro-Wilk')
         self.assertIn(per_metric['variance test used'], {'Levene', 'Brown-Forsythe'})
-        self.assertIn(per_metric['post-hoc strategy'], {'Tukey', 'Dunn'})
+        self.assertIn(
+            per_metric['post-hoc strategy'],
+            {
+                'pairwise t-tests + Holm',
+                'pairwise Welch t-tests + Holm',
+                'pairwise Mann-Whitney + Holm',
+            },
+        )
+        self.assertEqual(per_metric['correction method'], 'Holm')
 
         self.assertTrue(payload['pairwise_rows'])
         pairwise = payload['pairwise_rows'][0]
         for required in ['Group A', 'Group B', 'test used', 'p-value', 'adjusted p-value', 'effect size', 'significant']:
             self.assertIn(required, pairwise)
+        self.assertEqual(pairwise['correction method'], 'Holm')
 
     def test_integration_workbook_contains_group_comparison_sheet_and_headers(self):
         import tempfile
