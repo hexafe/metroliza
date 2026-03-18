@@ -164,16 +164,16 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
         expected_order = [
             'Summary Block',
-            'Omnibus Tests',
-            'Omnibus Summary',
-            'Omnibus Test Details',
-            'Main Pairwise Comparison Table',
-            'Shape-Difference Section',
-            'Shape Profile By Group',
-            'Shape Difference Summary',
-            'Shape Difference Pairwise Table',
+            'Location / Central-Tendency Tests',
+            'Location / Central-Tendency Summary',
+            'Location / Central-Tendency Test Details',
+            'Location / Central-Tendency Pairwise Comparison Table',
+            'Distribution Shape Section',
+            'Distribution Shape Profile By Group',
+            'Distribution Shape Summary',
+            'Distribution Shape Pairwise Table',
             'Matrices',
-            'Significance Matrix (Adjusted P-Values)',
+            'Location Significance Matrix (Adjusted P-Values)',
             "Pairwise Cliff's delta Matrix (|δ|)",
             'Notes',
         ]
@@ -186,13 +186,13 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(writes_by_cell[(3, 0)], 'Correction method')
         self.assertEqual(writes_by_cell[(4, 0)], 'Correction policy')
         self.assertEqual(writes_by_cell[(5, 0)], 'Per-metric omnibus test / p-value')
-        self.assertEqual(writes_by_cell[(6, 0)], 'Significant adjusted pairwise findings')
-        self.assertEqual(writes_by_cell[(7, 0)], 'Strongest practical effect')
+        self.assertEqual(writes_by_cell[(6, 0)], 'Significant adjusted pairwise location findings')
+        self.assertEqual(writes_by_cell[(7, 0)], 'Strongest practical location effect')
         self.assertEqual(writes_by_cell[(8, 0)], 'Warnings / assumptions')
 
         pairwise_header_row = next(
             row for row, col, value in worksheet.writes
-            if value == 'Metric' and writes_by_cell.get((row - 1, 0)) == 'Main Pairwise Comparison Table'
+            if value == 'Metric' and writes_by_cell.get((row - 1, 0)) == 'Location / Central-Tendency Pairwise Comparison Table'
         )
         self.assertEqual(worksheet.frozen, (pairwise_header_row, 0))
         self.assertEqual(len(worksheet.conditional_formats), 2)
@@ -686,16 +686,16 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('Group Comparison', workbook_xml)
         for title in [
             'Summary Block',
-            'Omnibus Tests',
-            'Omnibus Summary',
-            'Omnibus Test Details',
-            'Main Pairwise Comparison Table',
-            'Shape-Difference Section',
-            'Shape Profile By Group',
-            'Shape Difference Summary',
-            'Shape Difference Pairwise Table',
+            'Location / Central-Tendency Tests',
+            'Location / Central-Tendency Summary',
+            'Location / Central-Tendency Test Details',
+            'Location / Central-Tendency Pairwise Comparison Table',
+            'Distribution Shape Section',
+            'Distribution Shape Profile By Group',
+            'Distribution Shape Summary',
+            'Distribution Shape Pairwise Table',
             'Matrices',
-            'Significance Matrix (Adjusted P-Values)',
+            'Location Significance Matrix (Adjusted P-Values)',
             "Pairwise Cliff's delta Matrix (|δ|)",
             'Notes',
         ]:
@@ -709,6 +709,30 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         self.assertTrue(any(value == 'No rows' for _, _, value in worksheet.writes))
         self.assertTrue(any(value == 'No heatmap data' for _, _, value in worksheet.writes))
+
+    def test_writer_section_names_and_notes_make_location_vs_shape_distinction_explicit(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 8,
+                'MEAS': [0.1, 0.2, 0.3, 0.4, 1.5, 1.7, 1.9, 2.2],
+                'GROUP': ['A', 'A', 'A', 'A', 'B', 'B', 'B', 'B'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn('Location / Central-Tendency Pairwise Comparison Table', titles)
+        self.assertIn('Distribution Shape Pairwise Table', titles)
+        self.assertIn('Location Significance Matrix (Adjusted P-Values)', titles)
+
+        note_lines = [value for _, _, value in worksheet.writes if isinstance(value, str) and value.startswith('• ')]
+        self.assertTrue(any('Shape differences can be statistically significant even when mean/median comparisons are not' in value for value in note_lines))
+        self.assertTrue(any('adjusted p-values and Wasserstein distance' in value for value in note_lines))
+        self.assertTrue(any('Wasserstein practical severity labels' in value for value in note_lines))
 
     def test_prepare_payload_includes_distribution_sections(self):
         grouped_df = pd.DataFrame(
@@ -727,6 +751,11 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         profile = payload['distribution_profile_rows'][0]
         for key in ['Metric', 'Group', 'n', 'best fit model', 'fit quality', 'AD p-value', 'KS p-value', 'GOF acceptable?', 'Support mode', 'Warning / notes summary']:
             self.assertIn(key, profile)
+
+        pairwise = payload['distribution_pairwise_rows'][0]
+        self.assertIn('adjusted p-value', pairwise)
+        self.assertIn('Wasserstein distance', pairwise)
+        self.assertIn('Practical severity', pairwise)
 
     def test_insights_do_not_claim_no_difference_when_only_shape_differs(self):
         grouped_df = pd.DataFrame(
@@ -765,7 +794,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(len(worksheet.inserted_charts), 2)
         ranked_anchor = worksheet.inserted_charts[0][0]
         scatter_anchor = worksheet.inserted_charts[1][0]
-        shape_section_row = next(row for row, col, value in worksheet.writes if value == 'Shape-Difference Section')
+        shape_section_row = next(row for row, col, value in worksheet.writes if value == 'Distribution Shape Section')
         self.assertLess(ranked_anchor, shape_section_row)
         self.assertLess(scatter_anchor, shape_section_row)
         self.assertEqual(worksheet.inserted_charts[1][2].legend, {'position': 'bottom'})

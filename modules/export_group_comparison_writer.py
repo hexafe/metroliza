@@ -33,6 +33,7 @@ BASE_INTERPRETATION_NOTES = [
     'Adjusted p-value: multiple-comparison corrected p-value used for significance decisions.',
     'If Shapiro-Wilk is skipped for every usable group, normality is treated as unresolved and the non-parametric path is selected.',
     'Location comparisons focus on mean/median shifts; shape differences are reported separately.',
+    'Shape differences can be statistically significant even when mean/median comparisons are not, because spread, skew, or multimodality may differ.',
 ]
 
 
@@ -150,10 +151,14 @@ def _build_interpretation_notes(payload):
     if correction_policy:
         notes.append(f'Correction policy: {correction_policy}.')
 
+    if payload.get('distribution_pairwise_rows'):
+        notes.append('Distribution-shape pairwise tables keep both adjusted p-values and Wasserstein distance so statistical evidence and descriptive separation stay visible together.')
+        notes.append('Wasserstein practical severity labels (Low/Moderate/High) are domain-neutral cues based on raw distance magnitude, not specification limits.')
+
     return notes
 
 def _build_pairwise_group_matrices(pairwise_df):
-    """Build per-metric square matrices for adjusted p-values and effect sizes."""
+    """Build per-metric square matrices for adjusted p-values and location-effect magnitudes."""
     if pairwise_df.empty:
         return {}, {}
 
@@ -599,8 +604,8 @@ def _build_summary_block(payload):
         ('Correction method', metadata.get('Correction method', 'N/A')),
         ('Correction policy', metadata.get('Correction policy', 'N/A')),
         ('Per-metric omnibus test / p-value', omnibus_results),
-        ('Significant adjusted pairwise findings', int(sum(bool(row.get('significant')) for row in pairwise_rows))),
-        ('Strongest practical effect', strongest_effect),
+        ('Significant adjusted pairwise location findings', int(sum(bool(row.get('significant')) for row in pairwise_rows))),
+        ('Strongest practical location effect', strongest_effect),
         ('Warnings / assumptions', '; '.join(warnings) if warnings else 'None'),
     ]
 
@@ -617,6 +622,8 @@ def _column_width_for_header(header):
         'Delta mean or median': 18,
         'Practical interpretation': 24,
         'Flags / comments': 32,
+        'Wasserstein distance': 18,
+        'Practical severity': 18,
     }
     return width_map.get(header, 18)
 
@@ -895,27 +902,27 @@ def write_group_comparison_sheet(worksheet, payload):
     row = 0
     row = _write_kv_section(worksheet, row, 'Summary Block', _build_summary_block(payload))
 
-    worksheet.write(row, 0, 'Omnibus Tests')
+    worksheet.write(row, 0, 'Location / Central-Tendency Tests')
     row += 1
-    row = _write_kv_section(worksheet, row, 'Omnibus Summary', payload.get('overall_summary', []))
-    row, _ = _write_table(worksheet, row, 'Omnibus Test Details', payload.get('overall_test_rows', []))
+    row = _write_kv_section(worksheet, row, 'Location / Central-Tendency Summary', payload.get('overall_summary', []))
+    row, _ = _write_table(worksheet, row, 'Location / Central-Tendency Test Details', payload.get('overall_test_rows', []))
 
     pairwise_rows = _build_pairwise_display_rows(payload.get('pairwise_rows', []))
-    row, pairwise_header_row = _write_table(worksheet, row, 'Main Pairwise Comparison Table', pairwise_rows)
+    row, pairwise_header_row = _write_table(worksheet, row, 'Location / Central-Tendency Pairwise Comparison Table', pairwise_rows)
     row = _render_group_comparison_charts(worksheet, row, payload)
 
-    worksheet.write(row, 0, 'Shape-Difference Section')
+    worksheet.write(row, 0, 'Distribution Shape Section')
     row += 1
-    row, _ = _write_table(worksheet, row, 'Shape Profile By Group', payload.get('distribution_profile_rows', []))
-    row, _ = _write_table(worksheet, row, 'Shape Difference Summary', payload.get('distribution_difference_rows', []))
-    row, _ = _write_table(worksheet, row, 'Shape Difference Pairwise Table', payload.get('distribution_pairwise_rows', []))
+    row, _ = _write_table(worksheet, row, 'Distribution Shape Profile By Group', payload.get('distribution_profile_rows', []))
+    row, _ = _write_table(worksheet, row, 'Distribution Shape Summary', payload.get('distribution_difference_rows', []))
+    row, _ = _write_table(worksheet, row, 'Distribution Shape Pairwise Table', payload.get('distribution_pairwise_rows', []))
 
     worksheet.write(row, 0, 'Matrices')
     row += 1
     row = _write_matrix_collection(
         worksheet,
         row,
-        'Significance Matrix (Adjusted P-Values)',
+        'Location Significance Matrix (Adjusted P-Values)',
         payload.get('significance_matrices', {}),
         matrix_type='significance',
     )
