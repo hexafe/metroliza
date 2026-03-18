@@ -39,6 +39,14 @@
 - Treat chart generation as a downstream consumer of validated worksheet/statistical data rather than a separate source of truth.
 - Preserve current export architecture boundaries documented in `docs/README.md` unless a concrete implementation blocker requires refactoring.
 
+
+## Future extension hooks (deferred)
+- Keep the first release focused on deterministic summary statistics and workbook presentation; do not add new anomaly-detection or ML pipelines in the current implementation.
+- Add stable payload metadata hooks alongside existing chart/table summary payloads so future consumers can attach derived signals without changing worksheet contracts. Examples include per-comparison IDs, subgroup cardinality/context, metric families, and reserved fields for future `interestingness_score`, `ranking_reason`, or `discovery_flags` metadata.
+- The most natural future insertion point for ranking/scoring logic is the Group Comparison summary section after core statistics are computed and before workbook summary rows or chart callouts are rendered. That keeps scoring as a downstream consumer of validated comparison outputs rather than a parallel source of truth.
+- Future optional analysis modes can be layered onto that summary-stage hook, including hidden subgroup anomaly detection, clustering or mixture-model discovery, PCA or other multivariate separation views, and automated ranking of the most interesting group differences.
+- If those follow-on modes are pursued later, prefer emitting explainable summary metadata and lightweight workbook annotations first, with heavier modeling kept behind explicit opt-in paths or offline analysis workflows.
+
 ## In scope now vs deferred
 
 ### In scope now
