@@ -545,11 +545,16 @@ if ($nativeModuleAvailable) {
 }
 
 # Section: Nuitka argument assembly
+# Keep parser/runtime imports explicit here because the rc1 plugin/backend refactor
+# introduced dynamic import paths that packagers may not infer reliably on their own.
 $commonArgs = @(
     '-m', 'nuitka', $EntryPoint,
     "--windows-console-mode=$consoleMode",
     '--enable-plugin=pyqt6',
     '--include-package=modules',
+    '--include-module=modules.cmm_report_parser',
+    '--include-module=modules.report_parser_factory',
+    '--include-module=modules.pdf_backend',
     '--include-package-data=pymupdf',
     '--include-package-data=fitz',
     "--windows-icon-from-ico=$IconPath",
@@ -571,6 +576,20 @@ if ($nativeModuleAvailable) {
 if ($pdfBackendPackageAvailable) {
     $commonArgs += '--include-package=pymupdf'
     $commonArgs += '--include-package=fitz'
+
+    $requiredPdfBackendModules = @(
+        'pymupdf._mupdf',
+        'pymupdf._extra',
+        'pymupdf.extra',
+        'pymupdf.mupdf',
+        'pymupdf.table',
+        'pymupdf.utils',
+        'fitz.table',
+        'fitz.utils'
+    )
+    foreach ($moduleName in $requiredPdfBackendModules) {
+        $commonArgs += "--include-module=$moduleName"
+    }
 }
 
 $tokenExcludePatterns = @(

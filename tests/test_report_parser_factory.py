@@ -21,6 +21,12 @@ fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
 fitz_stub.open = lambda *_args, **_kwargs: None
 sys.modules.setdefault("fitz", fitz_stub)
 
+# Some integration tests install a lightweight `modules.cmm_report_parser` stub in
+# `sys.modules` before importing thread modules. This test module needs the real
+# parser implementation, so force a clean import of both the parser and factory.
+sys.modules.pop("modules.report_parser_factory", None)
+sys.modules.pop("modules.cmm_report_parser", None)
+
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
 contracts_module = importlib.import_module("modules.parser_plugin_contracts")
@@ -63,6 +69,10 @@ def _restore_real_cmm_registration():
 def test_detect_format_accepts_pathlike(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.PDF"
     assert detect_format(report_path) == "cmm"
+
+
+def test_factory_uses_statically_imported_builtin_cmm_parser():
+    assert factory_module.CMMReportParser is CMMReportParser
 
 
 def test_get_parser_returns_cmm_parser_for_pdf(tmp_path):

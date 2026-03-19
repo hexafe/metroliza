@@ -8,6 +8,13 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+REQUIRED_PYMUPDF_MODULES = (
+    'pymupdf',
+    'pymupdf._mupdf',
+    'pymupdf._extra',
+    'pymupdf.extra',
+    'pymupdf.mupdf',
+)
 
 
 def _load_pdf_backend_helpers():
@@ -56,6 +63,12 @@ def validate_nuitka_report_has_pdf_backend(report_path: str | Path) -> tuple[str
     if not included:
         raise PackagingValidationError(
             f"Nuitka build report {report} does not reference bundled PyMuPDF backends ({', '.join(PDF_BACKEND_CANDIDATES)})."
+        )
+
+    missing_required_modules = tuple(module_name for module_name in REQUIRED_PYMUPDF_MODULES if module_name not in haystack)
+    if missing_required_modules:
+        raise PackagingValidationError(
+            f"Nuitka build report {report} is missing required PyMuPDF runtime modules: {', '.join(missing_required_modules)}."
         )
     return included
 

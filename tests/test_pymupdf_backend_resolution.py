@@ -1,67 +1,30 @@
 import importlib
-import importlib.util
-import sys
-import types
-from pathlib import Path
 
 
-class _DummyCustomLogger:
-    def __init__(self, *_args, **_kwargs):
-        pass
-
-
-def _load_cmm_report_parser_module():
-    custom_logger_stub = types.ModuleType("modules.custom_logger")
-    custom_logger_stub.CustomLogger = _DummyCustomLogger
-    sys.modules.setdefault("modules.custom_logger", custom_logger_stub)
-
-    module_path = Path("modules/cmm_report_parser.py")
-    spec = importlib.util.spec_from_file_location("_cmm_report_parser_for_backend_tests", module_path)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
-
-class _FakeSpec:  # simple non-None sentinel
-    pass
+pdf_backend = importlib.import_module("modules.pdf_backend")
 
 
 def test_resolve_prefers_pymupdf_when_backend_available(monkeypatch):
-    cmm_report_parser = _load_cmm_report_parser_module()
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: _FakeSpec() if name in {"pymupdf", "fitz"} else None)
+    pymupdf_stub = type("PyMuPDFStub", (), {"open": staticmethod(lambda *_args, **_kwargs: None)})()
+    fitz_stub = type("FitzStub", (), {"open": staticmethod(lambda *_args, **_kwargs: None)})()
 
-    pymupdf_stub = types.SimpleNamespace(open=lambda *_args, **_kwargs: None)
-    fitz_stub = types.SimpleNamespace(open=lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(pdf_backend, "_PYMUPDF_BACKEND", pymupdf_stub)
+    monkeypatch.setattr(pdf_backend, "_FITZ_BACKEND", fitz_stub)
 
-    def fake_import(name):
-        return {"pymupdf": pymupdf_stub, "fitz": fitz_stub}[name]
-
-    monkeypatch.setattr(importlib, "import_module", fake_import)
-
-    assert cmm_report_parser._resolve_pymupdf_backend_module() == "pymupdf"
+    assert pdf_backend.resolve_pdf_backend_module_name() == "pymupdf"
 
 
-def test_resolve_falls_back_to_fitz_when_pymupdf_import_fails(monkeypatch):
-    cmm_report_parser = _load_cmm_report_parser_module()
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: _FakeSpec() if name in {"pymupdf", "fitz"} else None)
+def test_resolve_falls_back_to_fitz_when_pymupdf_backend_missing(monkeypatch):
+    fitz_stub = type("FitzStub", (), {"open": staticmethod(lambda *_args, **_kwargs: None)})()
 
-    fitz_stub = types.SimpleNamespace(open=lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(pdf_backend, "_PYMUPDF_BACKEND", None)
+    monkeypatch.setattr(pdf_backend, "_FITZ_BACKEND", fitz_stub)
 
-    def fake_import(name):
-        if name == "pymupdf":
-            raise ImportError("pymupdf unavailable")
-        return fitz_stub
-
-    monkeypatch.setattr(importlib, "import_module", fake_import)
-
-    assert cmm_report_parser._resolve_pymupdf_backend_module() == "fitz"
+    assert pdf_backend.resolve_pdf_backend_module_name() == "fitz"
 
 
-def test_resolve_rejects_fitz_without_open(monkeypatch):
-    cmm_report_parser = _load_cmm_report_parser_module()
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: _FakeSpec() if name == "fitz" else None)
-    monkeypatch.setattr(importlib, "import_module", lambda _name: types.SimpleNamespace())
+def test_resolve_rejects_backend_without_open(monkeypatch):
+    monkeypatch.setattr(pdf_backend, "_PYMUPDF_BACKEND", object())
+    monkeypatch.setattr(pdf_backend, "_FITZ_BACKEND", object())
 
-    assert cmm_report_parser._resolve_pymupdf_backend_module() is None
+    assert pdf_backend.resolve_pdf_backend_module_name() is None

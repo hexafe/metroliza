@@ -47,6 +47,10 @@ def test_validate_nuitka_report_has_pdf_backend_accepts_report(tmp_path):
             <nuitka-report>
               <module name="modules.cmm_report_parser" />
               <module name="pymupdf" />
+              <module name="pymupdf._mupdf" />
+              <module name="pymupdf._extra" />
+              <module name="pymupdf.extra" />
+              <module name="pymupdf.mupdf" />
             </nuitka-report>
             '''
         ).strip(),
@@ -61,6 +65,17 @@ def test_validate_nuitka_report_has_pdf_backend_rejects_missing_backend(tmp_path
     report.write_text('<nuitka-report><module name="modules.cmm_report_parser" /></nuitka-report>', encoding='utf-8')
 
     with pytest.raises(PackagingValidationError):
+        validate_nuitka_report_has_pdf_backend(report)
+
+
+def test_validate_nuitka_report_has_pdf_backend_rejects_missing_runtime_modules(tmp_path):
+    report = tmp_path / 'nuitka-build-report.xml'
+    report.write_text(
+        '<nuitka-report><module name="modules.cmm_report_parser" /><module name="pymupdf" /></nuitka-report>',
+        encoding='utf-8',
+    )
+
+    with pytest.raises(PackagingValidationError, match='missing required PyMuPDF runtime modules'):
         validate_nuitka_report_has_pdf_backend(report)
 
 
@@ -91,10 +106,16 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
 
     assert "$modeLabel = if ($FastDev) { 'standalone (faster dev build)' } else { 'onefile (release-like build)' }" in script
     assert "'--include-package=modules'" in script
+    assert "'--include-module=modules.cmm_report_parser'" in script
+    assert "'--include-module=modules.report_parser_factory'" in script
+    assert "'--include-module=modules.pdf_backend'" in script
     assert "'--include-package-data=pymupdf'" in script
     assert "'--include-package-data=fitz'" in script
     assert "$commonArgs += '--include-package=pymupdf'" in script
     assert "$commonArgs += '--include-package=fitz'" in script
+    assert "'pymupdf._mupdf'" in script
+    assert "'pymupdf._extra'" in script
+    assert 'foreach ($moduleName in $requiredPdfBackendModules)' in script
     assert "$commonArgs += '--onefile'" in script
     assert "$commonArgs += '--standalone'" in script
     assert 'install Microsoft Visual C++ Redistributable (x64, 2015-2022) on target PCs if needed.' in script
