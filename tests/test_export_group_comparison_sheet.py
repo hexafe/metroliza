@@ -328,7 +328,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(effect_rules[2]['criteria'], 'between')
         self.assertEqual(effect_rules[3]['criteria'], 'between')
         self.assertEqual(effect_rules[4]['criteria'], '>=')
-        self.assertTrue(any('Legend:' in value for _, _, value in worksheet.writes))
+        self.assertTrue(any(isinstance(value, str) and 'Legend:' in value for _, _, value in worksheet.writes))
 
 
     def test_write_matrix_sanitizes_non_finite_values(self):

@@ -854,13 +854,41 @@ def _set_table_column_widths(worksheet, headers, formats=None):
 
 
 def _get_workbook(worksheet):
-    return getattr(worksheet, 'book', None) or getattr(worksheet, 'workbook', None)
+    return (
+        getattr(worksheet, 'book', None)
+        or getattr(worksheet, 'workbook', None)
+        or worksheet
+    )
 
 
 def _safe_add_format(workbook, properties):
-    if workbook is None or not hasattr(workbook, 'add_format'):
+    if workbook is None:
         return properties
-    return workbook.add_format(properties)
+    if hasattr(workbook, 'add_format'):
+        return workbook.add_format(properties)
+    if hasattr(workbook, 'workbook_add_format'):
+        return workbook.workbook_add_format(properties)
+    return properties
+
+
+def _apply_final_column_layout(worksheet, formats):
+    final_widths = {
+        0: 24,
+        1: 14,
+        2: 14,
+        3: 18,
+        4: 14,
+        5: 16,
+        6: 16,
+        7: 18,
+        8: 34,
+        9: 44,
+        10: 36,
+        11: 38,
+    }
+    for col, width in final_widths.items():
+        fmt = formats['wrapped'] if col in {0, 8, 9, 10, 11} else formats['body']
+        worksheet.set_column(col, col, width, fmt)
 
 
 def _build_format_bundle(worksheet):
@@ -1241,6 +1269,5 @@ def write_group_comparison_sheet(worksheet, payload):
         _write_note_line(worksheet, row, f'• {insight}', formats['note'])
         row += 1
 
-    worksheet.set_column(0, 0, 24, formats['wrapped'])
-    worksheet.set_column(1, 1, 24, formats['wrapped'])
+    _apply_final_column_layout(worksheet, formats)
     worksheet.freeze_panes((pairwise_header_row or 0), 0)
