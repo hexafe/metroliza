@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.03rc1(260317) — current version
+## 2026.03rc1(260319) — current version
 - Completed the parser module naming cleanup: parser imports now use canonical snake_case modules only, and legacy CamelCase parser shims were removed.
 - Histogram table polishing improved readability and visual consistency in end-user reports/exports.
 - Grouping analysis prototype v2 was added to extend grouped-data analysis workflows.
