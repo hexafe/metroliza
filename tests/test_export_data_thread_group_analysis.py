@@ -112,6 +112,31 @@ def _xlsx_sheet_text_values(xlsx_path, target_sheet_name):
         return values
 
 
+def _xlsx_sheet_xml_details(xlsx_path, target_sheet_name):
+    ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    ns_rel = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+
+    with zipfile.ZipFile(xlsx_path, 'r') as workbook_zip:
+        workbook_xml = ET.fromstring(workbook_zip.read('xl/workbook.xml'))
+        workbook_rels = ET.fromstring(workbook_zip.read('xl/_rels/workbook.xml.rels'))
+        rel_map = {rel.attrib['Id']: rel.attrib['Target'] for rel in workbook_rels.findall('r:Relationship', ns_rel)}
+
+        sheet_path = None
+        for sheet in workbook_xml.findall('x:sheets/x:sheet', ns_main):
+            if sheet.attrib.get('name') == target_sheet_name:
+                rel_id = sheet.attrib.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+                target = rel_map.get(rel_id, '')
+                sheet_path = f"xl/{target}" if not target.startswith('xl/') else target
+                break
+
+        if sheet_path is None:
+            raise AssertionError(f'Missing worksheet {target_sheet_name}')
+
+        sheet_xml = ET.fromstring(workbook_zip.read(sheet_path))
+        styles_xml = ET.fromstring(workbook_zip.read('xl/styles.xml'))
+        return sheet_xml, styles_xml
+
+
 def _seed_grouped_measurements(db_path):
     execute_with_retry(
         db_path,
@@ -211,6 +236,47 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             with zipfile.ZipFile(out_path, 'r') as workbook_zip:
                 media_files = sorted(name for name in workbook_zip.namelist() if name.startswith('xl/media/'))
             self.assertGreaterEqual(len(media_files), 2)
+
+    def test_standard_mode_group_analysis_sheet_has_layout_pass_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_path = self._run_export(temp_dir, level='standard')
+            sheet_xml, styles_xml = _xlsx_sheet_xml_details(out_path, 'Group Analysis')
+            ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+            cols = {
+                int(col.attrib['min']): float(col.attrib['width'])
+                for col in sheet_xml.findall('x:cols/x:col', ns)
+            }
+            self.assertAlmostEqual(cols[1], 20.7109375, places=3)
+            self.assertAlmostEqual(cols[14], 34.7109375, places=3)
+
+            pane = sheet_xml.find('x:sheetViews/x:sheetView/x:pane', ns)
+            self.assertIsNotNone(pane)
+            self.assertEqual(pane.attrib.get('ySplit'), '4')
+            self.assertEqual(pane.attrib.get('topLeftCell'), 'A5')
+
+            self.assertIsNotNone(sheet_xml.find('x:autoFilter', ns))
+            self.assertGreaterEqual(len(sheet_xml.findall('x:conditionalFormatting', ns)), 1)
+
+            wrapped_row_heights = [
+                float(row.attrib['ht'])
+                for row in sheet_xml.findall('x:sheetData/x:row', ns)
+                if row.attrib.get('ht')
+            ]
+            self.assertTrue(any(height >= 22 for height in wrapped_row_heights))
+
+            alignment_by_style = {}
+            for idx, xf in enumerate(styles_xml.findall('x:cellXfs/x:xf', ns)):
+                alignment = xf.find('x:alignment', ns)
+                alignment_by_style[str(idx)] = alignment.attrib if alignment is not None else {}
+
+            self.assertTrue(any(attrs.get('wrapText') == '1' for attrs in alignment_by_style.values()))
+            styled_rows = [
+                row
+                for row in sheet_xml.findall('x:sheetData/x:row', ns)
+                if row.attrib.get('customHeight') == '1'
+            ]
+            self.assertTrue(styled_rows)
 
     def test_group_analysis_violin_uses_horizontal_spec_lines_with_annotations(self):
         metric_row = {

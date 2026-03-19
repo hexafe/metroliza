@@ -19,20 +19,39 @@ class FakeWorkbook:
 class FakeWorksheet:
     def __init__(self):
         self.writes = []
+        self.write_formats = {}
         self.frozen = None
         self.book = FakeWorkbook()
         self.conditional_formats = []
         self.images = []
         self.charts = []
+        self.columns = []
+        self.rows = []
+        self.gridlines_hidden = None
+        self.autofilters = []
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
+        if args:
+            self.write_formats[(row, col)] = args[0]
 
     def freeze_panes(self, row, col):
         self.frozen = (row, col)
 
     def conditional_format(self, first_row, first_col, last_row, last_col, options):
         self.conditional_formats.append((first_row, first_col, last_row, last_col, dict(options)))
+
+    def set_column(self, first_col, last_col, width=None, cell_format=None, options=None):
+        self.columns.append((first_col, last_col, width, cell_format, dict(options or {})))
+
+    def set_row(self, row, height=None, cell_format=None, options=None):
+        self.rows.append((row, height, cell_format, dict(options or {})))
+
+    def hide_gridlines(self, option):
+        self.gridlines_hidden = option
+
+    def autofilter(self, first_row, first_col, last_row, last_col):
+        self.autofilters.append((first_row, first_col, last_row, last_col))
 
     def insert_image(self, row, col, path, options=None):
         self.images.append((row, col, path, dict(options or {})))
@@ -142,13 +161,33 @@ class TestGroupAnalysisWriter(unittest.TestCase):
             if col == 1 and value in {'Line 1', 'Line 2', 'Distribution shape: Distinct tails across groups.'}
         ]
         self.assertEqual(
-            insight_values,
+            insight_values[:3],
             ['Line 1', 'Line 2', 'Distribution shape: Distinct tails across groups.'],
         )
         text_values = [str(value).upper() for value in values]
         self.assertNotIn('TRUE', text_values)
         self.assertNotIn('FALSE', text_values)
-        self.assertEqual(worksheet.frozen, (1, 0))
+        self.assertEqual(worksheet.frozen, (4, 0))
+        self.assertEqual(worksheet.gridlines_hidden, 2)
+        self.assertEqual(worksheet.columns[0][:3], (0, 0, 20))
+        self.assertEqual(worksheet.columns[-1][:3], (14, 14, 14))
+        self.assertTrue(any(row == 0 and height == 24 for row, height, *_ in worksheet.rows))
+        metric_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Metric: M1')
+        self.assertTrue(worksheet.write_formats[(metric_row, 0)].get('props', {}).get('text_wrap'))
+        distribution_row = next(
+            row
+            for row, col, value in worksheet.writes
+            if col == 1 and value == 'Distribution shape: Distinct tails across groups.'
+        )
+        self.assertTrue(worksheet.write_formats[(distribution_row, 1)].get('props', {}).get('text_wrap'))
+        note_row_heights = [
+            height
+            for row, height, *_ in worksheet.rows
+            if row == distribution_row
+        ]
+        self.assertTrue(note_row_heights)
+        self.assertGreaterEqual(note_row_heights[-1], 30)
+        self.assertGreaterEqual(len(worksheet.autofilters), 4)
 
         pairwise_rules = [
             rule

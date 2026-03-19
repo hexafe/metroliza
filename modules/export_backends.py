@@ -63,6 +63,15 @@ class WorksheetContract(Protocol):
     ) -> None:
         """Configure one or more worksheet columns."""
 
+    def set_row(
+        self,
+        row: int,
+        height: float | None = None,
+        cell_format: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        """Configure a worksheet row height and optional default format."""
+
     def insert_chart(self, row: int, col: int, chart: ChartContract, options: dict[str, Any] | None = None) -> None:
         """Insert a chart object anchored at the provided cell."""
 
@@ -74,6 +83,9 @@ class WorksheetContract(Protocol):
 
     def autofilter(self, first_row: int, first_col: int, last_row: int, last_col: int) -> None:
         """Enable worksheet autofilter over a range."""
+
+    def hide_gridlines(self, option: int = 2) -> None:
+        """Hide worksheet gridlines for report-style sheets."""
 
 
 class WorkbookContract(Protocol):
@@ -187,6 +199,16 @@ class XlsxWorksheetAdapter:
         """Insert a wrapped chart at the target row/column."""
         self._worksheet.insert_chart(row, col, chart._chart, options or {})
 
+    def set_row(
+        self,
+        row: int,
+        height: float | None = None,
+        cell_format: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        """Set height and options for a row."""
+        self._worksheet.set_row(row, height, cell_format, options)
+
     def insert_image(self, row: int, col: int, filename: str, options: dict[str, Any]) -> None:
         """Insert an image file with worksheet-specific options."""
         self._worksheet.insert_image(row, col, filename, options)
@@ -198,6 +220,10 @@ class XlsxWorksheetAdapter:
     def autofilter(self, first_row: int, first_col: int, last_row: int, last_col: int) -> None:
         """Enable worksheet autofilters for the given range."""
         self._worksheet.autofilter(first_row, first_col, last_row, last_col)
+
+    def hide_gridlines(self, option: int = 2) -> None:
+        """Hide gridlines using the wrapped worksheet implementation."""
+        self._worksheet.hide_gridlines(option)
 
 
 @dataclass
