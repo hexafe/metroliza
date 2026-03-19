@@ -148,8 +148,10 @@ def build_measurement_chart_format_policy(header, *, chart_anchor_row=None, lege
         'size': _build_chart_size_policy(),
         'anchor': {
             'row': int(chart_anchor_row) if chart_anchor_row is not None else DEFAULT_CHART_ANCHOR_ROW,
-            'x_offset': 6,
-            'y_offset': 2,
+            # Keep the insertion origin flush with the anchor cell so the
+            # rendered chart doesn't drift relative to the worksheet grid.
+            'x_offset': 0,
+            'y_offset': 0,
         },
     }
 
