@@ -7,7 +7,7 @@ param(
     [switch]$RequireNative,
     [switch]$EnableConsole,
     [switch]$AllowBrokenPdfParserBuild,
-    [ValidateSet('auto', 'msvc', 'clang', 'gcc')]
+    [ValidateSet('auto', 'gcc', 'clang')]
     [string]$CompilerStrategy = 'auto',
     [switch]$AutoInstallCompiler,
     [switch]$OpenInstallHelp
@@ -20,18 +20,17 @@ $isLinuxHost = $PSVersionTable.PSVersion -and $IsLinux
 
 $compilerInstallConfig = @{
     Windows = @{
-        PreferredCompiler = 'msvc'
-        InstallUrl = 'https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022'
-        WingetId = 'Microsoft.VisualStudio.2022.BuildTools'
+        PreferredCompiler = 'gcc'
+        InstallUrl = 'https://www.msys2.org/'
+        WingetId = 'MSYS2.MSYS2'
         WingetArgs = @(
-            'install', '--id', 'Microsoft.VisualStudio.2022.BuildTools', '--exact', '--silent',
-            '--override', '--wait --quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'
+            'install', '--id', 'MSYS2.MSYS2', '--exact', '--silent'
         )
         Guidance = @(
-            'Install Visual Studio 2022 Build Tools.',
-            'Select the "Desktop development with C++" workload.',
-            'Ensure the MSVC v143 build tools and a Windows 10/11 SDK are included.',
-            'If compiler discovery still fails, rerun from Developer PowerShell or x64 Native Tools Command Prompt.'
+            'Install MSYS2 or another MinGW-w64 distribution that provides gcc/g++ on PATH.',
+            'Inside MSYS2, install a MinGW-w64 toolchain such as mingw-w64-ucrt-x86_64-gcc.',
+            'Ensure gcc/g++ are visible on PATH before invoking Nuitka.',
+            'If GCC is unavailable, install LLVM/Clang and rerun with -CompilerStrategy clang.'
         )
     }
     Linux = @{
@@ -121,39 +120,6 @@ function Get-CommandVersionText {
     return (($output | Select-Object -First 1) -as [string])
 }
 
-function Test-MsvcToolchain {
-    $clCommand = Get-Command cl.exe -ErrorAction SilentlyContinue
-    if ($clCommand) {
-        $banner = & $clCommand.Source 2>&1
-        if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 1) {
-            $versionLine = (($banner | Select-Object -First 1) -as [string]).Trim()
-            $reason = "cl.exe responded on PATH"
-            if ($env:VSCMD_VER -or $env:VCINSTALLDIR -or $env:VisualStudioVersion) {
-                $reason += " and Developer Tools environment variables are present"
-            }
-
-            return New-CompilerCandidate -Name 'msvc' -Available $true -Reason $reason -Command $clCommand.Source -Version $versionLine -Priority 10 -NuitkaArgs @('--msvc=latest')
-        }
-    }
-
-    $programFilesX86 = ${env:ProgramFiles(x86)}
-    if (-not $programFilesX86) {
-        return New-CompilerCandidate -Name 'msvc' -Available $false -Reason "ProgramFiles(x86) is unavailable, so Visual Studio discovery could not run" -Priority 10
-    }
-
-    $vswherePath = Join-Path $programFilesX86 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (-not (Test-Path -LiteralPath $vswherePath)) {
-        return New-CompilerCandidate -Name 'msvc' -Available $false -Reason "vswhere.exe was not found and cl.exe is not on PATH" -Priority 10
-    }
-
-    $installationPath = & $vswherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installationPath)) {
-        return New-CompilerCandidate -Name 'msvc' -Available $false -Reason "Visual Studio Build Tools with the MSVC workload were not discovered by vswhere" -Priority 10
-    }
-
-    return New-CompilerCandidate -Name 'msvc' -Available $true -Reason "Visual Studio Build Tools were discovered at '$installationPath', but run from Developer PowerShell if cl.exe is not yet on PATH" -Command $vswherePath -Version ($installationPath.Trim()) -Priority 10 -NuitkaArgs @('--msvc=latest')
-}
-
 function Test-ClangToolchain {
     param(
         [switch]$WindowsMode
@@ -164,12 +130,12 @@ function Test-ClangToolchain {
         $versionLine = Get-CommandVersionText -CommandName $commandName
         if ($versionLine) {
             $reason = if ($WindowsMode) {
-                "LLVM/clang is callable; use only as an explicit fallback when MSVC is unavailable"
+                "LLVM/clang is callable as a non-MSVC fallback for Windows Nuitka packaging"
             } else {
                 "clang is callable and reports a version"
             }
 
-            return New-CompilerCandidate -Name 'clang' -Available $true -Reason $reason -Command $commandName -Version $versionLine.Trim() -Priority ($(if ($WindowsMode) { 30 } else { 10 }))
+            return New-CompilerCandidate -Name 'clang' -Available $true -Reason $reason -Command $commandName -Version $versionLine.Trim() -Priority ($(if ($WindowsMode) { 20 } else { 10 }))
         }
     }
 
@@ -178,7 +144,7 @@ function Test-ClangToolchain {
     } else {
         'clang was not found or did not return a version banner'
     }
-    return New-CompilerCandidate -Name 'clang' -Available $false -Reason $reason -Priority ($(if ($WindowsMode) { 30 } else { 10 }))
+    return New-CompilerCandidate -Name 'clang' -Available $false -Reason $reason -Priority ($(if ($WindowsMode) { 20 } else { 10 }))
 }
 
 function Test-GccToolchain {
@@ -187,7 +153,7 @@ function Test-GccToolchain {
     )
 
     if (-not (Test-CommandAvailable -CommandName 'g++') -and -not (Test-CommandAvailable -CommandName 'gcc')) {
-        return New-CompilerCandidate -Name 'gcc' -Available $false -Reason 'gcc/g++ were not found on PATH' -Priority ($(if ($WindowsMode) { 50 } else { 20 }))
+        return New-CompilerCandidate -Name 'gcc' -Available $false -Reason 'gcc/g++ were not found on PATH' -Priority ($(if ($WindowsMode) { 10 } else { 20 }))
     }
 
     $compilerVersion = Get-CommandVersionText -CommandName 'g++'
@@ -197,22 +163,21 @@ function Test-GccToolchain {
 
     if ($compilerVersion) {
         $reason = if ($WindowsMode) {
-            'gcc/g++ are callable, but MinGW remains a lower-priority fallback for this Windows Nuitka packaging path'
+            'gcc/g++ are callable; prefer MinGW-w64/GCC for this Windows Nuitka packaging path'
         } else {
             'gcc/g++ are callable and report a version'
         }
 
-        return New-CompilerCandidate -Name 'gcc' -Available $true -Reason $reason -Command 'g++' -Version $compilerVersion.Trim() -Priority ($(if ($WindowsMode) { 50 } else { 20 }))
+        return New-CompilerCandidate -Name 'gcc' -Available $true -Reason $reason -Command 'g++' -Version $compilerVersion.Trim() -Priority ($(if ($WindowsMode) { 10 } else { 20 }))
     }
 
-    return New-CompilerCandidate -Name 'gcc' -Available $false -Reason 'gcc/g++ were found but did not return a healthy version banner' -Priority ($(if ($WindowsMode) { 50 } else { 20 }))
+    return New-CompilerCandidate -Name 'gcc' -Available $false -Reason 'gcc/g++ were found but did not return a healthy version banner' -Priority ($(if ($WindowsMode) { 10 } else { 20 }))
 }
 
 function Get-WindowsCompilerCandidates {
     return @(
-        Test-MsvcToolchain
-        Test-ClangToolchain -WindowsMode
         Test-GccToolchain -WindowsMode
+        Test-ClangToolchain -WindowsMode
     )
 }
 
@@ -342,7 +307,7 @@ function Install-PreferredCompiler {
 
     if ($isWindowsHost) {
         if (-not (Test-CommandAvailable -CommandName 'winget')) {
-            Write-Warning 'winget is not available, so automatic Visual Studio Build Tools installation cannot run.'
+            Write-Warning 'winget is not available, so automatic MSYS2/MinGW installation cannot run.'
             return $false
         }
 
@@ -535,9 +500,6 @@ if (-not $compilerResolution.Selected) {
 Write-Host "      Selected compiler: $($compilerResolution.Selected.Name)"
 Write-Host "      Selection reason: $($compilerResolution.SelectionReason)"
 Write-Host "      Auto-install attempted: $($compilerResolution.AutoInstallAttempted)"
-if ($isWindowsHost -and $compilerResolution.Selected.Name -eq 'msvc') {
-    Write-Warning "Windows build is using '--msvc=latest' so bundled PyMuPDF stays on the preferred MSVC toolchain path."
-}
 if ($nativeModuleAvailable) {
     Write-Host '      Native parser packaging: include compiled native module'
 } else {
@@ -564,6 +526,16 @@ $commonArgs = @(
     "--jobs=$jobs",
     '--report=nuitka-build-report.xml'
 )
+
+if ($isWindowsHost) {
+    if ($compilerResolution.Selected.Name -eq 'gcc') {
+        $commonArgs += '--mingw64'
+    } elseif ($compilerResolution.Selected.Name -eq 'clang') {
+        $commonArgs += '--clang'
+    }
+} elseif ($compilerResolution.Selected.Name -eq 'clang') {
+    $commonArgs += '--clang'
+}
 
 if ($compilerResolution.Selected.NuitkaArgs) {
     $commonArgs += $compilerResolution.Selected.NuitkaArgs
@@ -633,4 +605,4 @@ Invoke-CheckedPythonCommand -Arguments $validationArgs -FailureMessage "Packaged
 Write-Host 'Done'
 Write-Host "Build output name: $OutputName"
 Write-Host 'Dependency report: nuitka-build-report.xml'
-Write-Host 'Note: install Microsoft Visual C++ Redistributable (x64, 2015-2022) on target PCs if needed.'
+Write-Host 'Note: this build path intentionally avoids MSVC/Visual Studio Build Tools and prefers MinGW-w64 GCC, with Clang as the non-MSVC fallback.'
