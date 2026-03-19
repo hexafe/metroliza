@@ -913,6 +913,22 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('cellIs', cf_rule_types)
         self.assertIn('containsBlanks', cf_rule_types)
         self.assertNotIn('colorScale', cf_rule_types)
+        sqrefs = {node.attrib.get('sqref') for node in cf_nodes}
+        self.assertTrue(any(sqref and ':' in sqref for sqref in sqrefs))
+        self.assertTrue(any(sqref and sqref.startswith('B') for sqref in sqrefs))
+
+        rules_by_sqref = {
+            cf.attrib.get('sqref', ''): [rule.attrib for rule in cf.findall('x:cfRule', namespace)]
+            for cf in cf_nodes
+        }
+        self.assertTrue(
+            any(
+                any(rule.get('type') == 'containsBlanks' for rule in rules)
+                and any(rule.get('operator') == 'lessThanOrEqual' for rule in rules)
+                for rules in rules_by_sqref.values()
+            ),
+            msg='Expected at least one matrix sqref to retain both blank masking and threshold-based visible formatting rules.',
+        )
 
         styles_root = ET.fromstring(styles_xml)
         dxfs = styles_root.find('x:dxfs', namespace)
