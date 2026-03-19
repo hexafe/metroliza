@@ -425,6 +425,8 @@ def register_parser(
     PROBE_RESULT_CACHE.clear()
     if detector is not None:
         PARSER_DETECTORS[plugin_id] = detector
+    else:
+        PARSER_DETECTORS.pop(plugin_id, None)
 
 
 register_parser(
