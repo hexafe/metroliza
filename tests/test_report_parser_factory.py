@@ -255,6 +255,99 @@ def test_resolver_uses_probe_cache_for_same_plugin_and_path(tmp_path):
         PROBE_RESULT_CACHE.update(original_cache)
 
 
+def test_reregistering_parser_without_detector_clears_stale_detector(tmp_path):
+    class LegacyDetectorParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="detector_swap",
+            display_name="Legacy Detector",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=False, confidence=0)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    class ReregisteredProbeParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="detector_swap",
+            display_name="Reregistered Probe",
+            version="1.1.0",
+            supported_formats=("pdf",),
+        )
+
+        probe_calls = 0
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            cls.probe_calls += 1
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=73)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    try:
+        register_parser(
+            "detector_swap",
+            LegacyDetectorParser,
+            detector=lambda _path: ProbeResult(
+                plugin_id="detector_swap",
+                can_parse=True,
+                confidence=100,
+                reasons=("stale_detector",),
+            ),
+        )
+
+        register_parser(ReregisteredProbeParser)
+        PARSER_MAP.pop("cmm", None)
+        PARSER_MANIFESTS.pop("cmm", None)
+        PARSER_DETECTORS.pop("cmm", None)
+        reset_probe_cache()
+
+        diagnostics = resolve_parser_with_diagnostics(tmp_path / "detector_swap.pdf")
+
+        assert diagnostics.selected is not None
+        assert diagnostics.selected.confidence == 73
+        assert diagnostics.selected.reasons == ()
+        assert ReregisteredProbeParser.probe_calls == 1
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
 def test_strict_matching_rejects_low_confidence_candidate(tmp_path):
     class LowConfidenceParser(BaseReportParser, BaseReportParserPlugin):
         manifest = PluginManifest(
