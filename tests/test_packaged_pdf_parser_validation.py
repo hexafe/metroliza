@@ -83,7 +83,7 @@ def test_build_nuitka_script_fails_closed_by_default_and_names_unsafe_override()
     script = Path('packaging/build_nuitka.ps1').read_text(encoding='utf-8')
 
     assert '[switch]$AllowBrokenPdfParserBuild' in script
-    assert "[ValidateSet('auto', 'msvc', 'clang', 'gcc')]" in script
+    assert "[ValidateSet('auto', 'gcc', 'clang')]" in script
     assert "[string]$CompilerStrategy = 'auto'" in script
     assert '[switch]$AutoInstallCompiler' in script
     assert '[switch]$OpenInstallHelp' in script
@@ -96,7 +96,7 @@ def test_build_nuitka_script_fails_closed_by_default_and_names_unsafe_override()
     assert "Requested compiler strategy: $CompilerStrategy" in script
     assert "Selected compiler: $($compilerResolution.Selected.Name)" in script
     assert "Auto-install attempted: $($compilerResolution.AutoInstallAttempted)" in script
-    assert "Visual Studio 2022 Build Tools" in script
+    assert "Install MSYS2 or another MinGW-w64 distribution that provides gcc/g++ on PATH." in script
     assert 'Nuitka build failed. See the compiler output above. Selected compiler:' in script
     assert 'validate_packaged_pdf_parser.py' in script
 
@@ -118,7 +118,9 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert 'foreach ($moduleName in $requiredPdfBackendModules)' in script
     assert "$commonArgs += '--onefile'" in script
     assert "$commonArgs += '--standalone'" in script
-    assert 'install Microsoft Visual C++ Redistributable (x64, 2015-2022) on target PCs if needed.' in script
+    assert "$commonArgs += '--mingw64'" in script
+    assert "$commonArgs += '--clang'" in script
+    assert 'intentionally avoids MSVC/Visual Studio Build Tools and prefers MinGW-w64 GCC' in script
 
 
 def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies():
