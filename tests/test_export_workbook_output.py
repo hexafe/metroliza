@@ -1,3 +1,4 @@
+import importlib.util
 import sys
 import tempfile
 import types
@@ -5,12 +6,18 @@ import unittest
 import zipfile
 import xml.etree.ElementTree as ET
 
-from pathlib import Path
+import posixpath
 
+from pathlib import Path, PurePosixPath
+from unittest.mock import patch
+
+from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 from modules.db import execute_with_retry  # noqa: E402
 
 
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
+NS_MAIN = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+NS_PACKAGE = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+NS_DRAWING = {'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'}
 
 
 class _DummyThread:
@@ -32,37 +39,47 @@ def _dummy_signal(*args, **kwargs):
     return _Signal()
 
 
-qtcore_stub.QCoreApplication = _DummyCoreApp
-qtcore_stub.QThread = _DummyThread
-qtcore_stub.pyqtSignal = _dummy_signal
-sys.modules['PyQt6.QtCore'] = qtcore_stub
-
-custom_logger_stub = types.ModuleType('modules.custom_logger')
-
-
 class _DummyLogger:
     def __init__(self, *args, **kwargs):
         pass
 
 
-custom_logger_stub.CustomLogger = _DummyLogger
-sys.modules['modules.custom_logger'] = custom_logger_stub
+def _load_export_thread_type():
+    qtcore_stub = types.ModuleType('PyQt6.QtCore')
+    qtcore_stub.QCoreApplication = _DummyCoreApp
+    qtcore_stub.QThread = _DummyThread
+    qtcore_stub.pyqtSignal = _dummy_signal
 
-cmm_parser_stub = types.ModuleType('modules.cmm_report_parser')
-cmm_parser_stub.CMMReportParser = object
-sys.modules['modules.cmm_report_parser'] = cmm_parser_stub
+    custom_logger_stub = types.ModuleType('modules.custom_logger')
+    custom_logger_stub.CustomLogger = _DummyLogger
 
-from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
-from modules.export_data_thread import ExportDataThread  # noqa: E402
+    module_name = '_test_export_data_thread_workbook_output'
+    module_path = Path(__file__).resolve().parents[1] / 'modules' / 'export_data_thread.py'
 
+    with patch.dict(
+        sys.modules,
+        {
+            'PyQt6.QtCore': qtcore_stub,
+            'modules.custom_logger': custom_logger_stub,
+        },
+    ):
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        export_module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = export_module
+        try:
+            spec.loader.exec_module(export_module)
+        finally:
+            sys.modules.pop(module_name, None)
 
-NS_MAIN = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-NS_PACKAGE = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
-NS_DRAWING = {'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'}
+    return export_module.ExportDataThread
 
 
 def _target_to_xl_path(target):
     return f"xl/{target}" if not target.startswith('xl/') else target
+
+
+def _normalize_package_path(base_path, target):
+    return posixpath.normpath(str(PurePosixPath(PurePosixPath(base_path).parent, target)))
 
 
 def _load_package_xml(workbook_zip, xml_path):
@@ -86,6 +103,8 @@ def _resolve_sheet_parts(workbook_zip, target_sheet_name):
 
 class TestExportWorkbookOutput(unittest.TestCase):
     def test_measurement_workbook_package_preserves_conditional_formatting_and_chart_anchor_layout(self):
+        ExportDataThread = _load_export_thread_type()
+
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
@@ -160,8 +179,8 @@ class TestExportWorkbookOutput(unittest.TestCase):
                     for rel in worksheet_rels.findall('r:Relationship', NS_PACKAGE)
                     if rel.attrib['Type'].endswith('/drawing')
                 )
-                drawing_path = f"xl/worksheets/{drawing_target}" if drawing_target.startswith('../') else _target_to_xl_path(drawing_target)
-                drawing_root = _load_package_xml(workbook_zip, drawing_path.replace('xl/worksheets/../', 'xl/'))
+                drawing_path = _normalize_package_path(sheet_path, drawing_target)
+                drawing_root = _load_package_xml(workbook_zip, drawing_path)
 
                 anchor_from = drawing_root.find('xdr:twoCellAnchor/xdr:from', NS_DRAWING)
                 self.assertIsNotNone(anchor_from)
@@ -170,20 +189,18 @@ class TestExportWorkbookOutput(unittest.TestCase):
 
                 col_off = anchor_from.find('xdr:colOff', NS_DRAWING)
                 row_off = anchor_from.find('xdr:rowOff', NS_DRAWING)
-                allowed_col_offsets = {None, '57150'}
-                allowed_row_offsets = {None, '19050'}
-                self.assertIn(None if col_off is None else col_off.text, allowed_col_offsets)
-                self.assertIn(None if row_off is None else row_off.text, allowed_row_offsets)
+                self.assertIn(None if col_off is None else col_off.text, {None, '57150'})
+                self.assertIn(None if row_off is None else row_off.text, {None, '19050'})
 
-                drawing_rels_path = f"{Path(drawing_path.replace('xl/worksheets/../', 'xl/')).parent}/_rels/{Path(drawing_path).name}.rels"
+                drawing_rels_path = _normalize_package_path(drawing_path, f"_rels/{Path(drawing_path).name}.rels")
                 drawing_rels = _load_package_xml(workbook_zip, drawing_rels_path)
                 chart_target = next(
                     rel.attrib['Target']
                     for rel in drawing_rels.findall('r:Relationship', NS_PACKAGE)
                     if rel.attrib['Type'].endswith('/chart')
                 )
-                chart_path = f"xl/drawings/{chart_target}" if chart_target.startswith('../') else _target_to_xl_path(chart_target)
-                chart_xml = workbook_zip.read(chart_path.replace('xl/drawings/../', 'xl/')).decode('utf-8')
+                chart_path = _normalize_package_path(drawing_path, chart_target)
+                chart_xml = workbook_zip.read(chart_path).decode('utf-8')
 
                 self.assertIn('REF-1!$B22:B24', chart_xml)
                 self.assertIn('REF-1!$C22:C24', chart_xml)
