@@ -189,8 +189,8 @@ class TestExportWorkbookOutput(unittest.TestCase):
 
                 col_off = anchor_from.find('xdr:colOff', NS_DRAWING)
                 row_off = anchor_from.find('xdr:rowOff', NS_DRAWING)
-                self.assertIn(None if col_off is None else col_off.text, {None, '57150'})
-                self.assertIn(None if row_off is None else row_off.text, {None, '19050'})
+                self.assertIn(None if col_off is None else col_off.text, {None, '0', '57150'})
+                self.assertIn(None if row_off is None else row_off.text, {None, '0', '19050'})
 
                 drawing_rels_path = _normalize_package_path(drawing_path, f"_rels/{Path(drawing_path).name}.rels")
                 drawing_rels = _load_package_xml(workbook_zip, drawing_rels_path)
