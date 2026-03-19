@@ -4,6 +4,9 @@ from modules.export_summary_utils import resolve_nominal_and_limits
 from modules.stats_utils import is_one_sided_geometric_tolerance
 
 
+LEGACY_MEASUREMENT_CHART_INSERT_ROW = 7
+
+
 def build_spec_limit_anchor_rows(usl, lsl):
     """Deprecated: legacy helper rows are no longer used by chart writers."""
     return []
@@ -91,7 +94,7 @@ def build_measurement_block_plan(*, base_col, sample_size):
             f'{xl_col_to_name(y_column)}{last_data_row + 1}'
         ),
         'nok_percent_row': 6,
-        'chart_insert_row': 12,
+        'chart_insert_row': LEGACY_MEASUREMENT_CHART_INSERT_ROW,
     }
 
 
@@ -327,14 +330,14 @@ def write_measurement_block(worksheet, write_bundle, formats, *, base_col):
         measurement_plan['y_column'],
         measurement_plan['last_data_row'],
         measurement_plan['y_column'],
-        {'type': 'cell', 'criteria': '>', 'value': f'({nom_cell}+{usl_cell})', 'format': formats['red']},
+        {'type': 'cell', 'criteria': '>', 'value': f'=({nom_cell}+{usl_cell})', 'format': formats['red']},
     )
     worksheet.conditional_format(
         measurement_plan['data_start_row'],
         measurement_plan['y_column'],
         measurement_plan['last_data_row'],
         measurement_plan['y_column'],
-        {'type': 'cell', 'criteria': '<', 'value': f'({nom_cell}+{lsl_cell})', 'format': formats['red']},
+        {'type': 'cell', 'criteria': '<', 'value': f'=({nom_cell}+{lsl_cell})', 'format': formats['red']},
     )
     worksheet.conditional_format(
         measurement_plan['nok_percent_row'],
