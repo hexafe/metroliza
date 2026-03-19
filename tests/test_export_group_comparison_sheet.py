@@ -1,5 +1,7 @@
 import unittest
 from tempfile import TemporaryDirectory
+import zipfile
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 
@@ -44,18 +46,26 @@ class FakeChart:
 class FakeWorkbook:
     def __init__(self):
         self.charts = []
+        self.formats = []
 
     def add_chart(self, spec):
         chart = FakeChart(spec)
         self.charts.append(chart)
         return chart
 
+    def add_format(self, spec):
+        fmt = dict(spec)
+        self.formats.append(fmt)
+        return fmt
+
 
 class FakeWorksheet:
     def __init__(self):
         self.writes = []
+        self.write_formats = {}
         self.conditional_formats = []
         self.columns = []
+        self.merges = []
         self.frozen = None
         self.name = 'Group Comparison'
         self.book = FakeWorkbook()
@@ -63,12 +73,21 @@ class FakeWorksheet:
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
+        if args:
+            self.write_formats[(row, col)] = args[0]
 
     def conditional_format(self, first_row, first_col, last_row, last_col, options):
         self.conditional_formats.append((first_row, first_col, last_row, last_col, dict(options)))
 
     def set_column(self, first_col, last_col, width, *args, **kwargs):
-        self.columns.append((first_col, last_col, width))
+        fmt = args[0] if args else None
+        self.columns.append((first_col, last_col, width, fmt))
+
+    def merge_range(self, first_row, first_col, last_row, last_col, value, cell_format=None):
+        self.merges.append((first_row, first_col, last_row, last_col, value, cell_format))
+        self.writes.append((first_row, first_col, value))
+        if cell_format is not None:
+            self.write_formats[(first_row, first_col)] = cell_format
 
     def freeze_panes(self, row, col):
         self.frozen = (row, col)
@@ -165,6 +184,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         expected_order = [
             'Summary Block',
             'Location / Central-Tendency Tests',
+            'Group Profile Summary',
             'Location / Central-Tendency Summary',
             'Location / Central-Tendency Test Details',
             'Location / Central-Tendency Pairwise Comparison Table',
@@ -201,10 +221,10 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             if value == 'Metric' and writes_by_cell.get((row - 1, 0)) == 'Location / Central-Tendency Pairwise Comparison Table'
         )
         self.assertEqual(worksheet.frozen, (pairwise_header_row, 0))
-        self.assertEqual(len(worksheet.conditional_formats), 2)
+        self.assertGreaterEqual(len(worksheet.conditional_formats), 8)
 
         pairwise_headers = [
-            writes_by_cell[(pairwise_header_row, col)] for col in range(10)
+            writes_by_cell[(pairwise_header_row, col)] for col in range(12)
         ]
         self.assertEqual(
             pairwise_headers,
@@ -218,6 +238,8 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
                 'Effect type',
                 'Delta mean or median',
                 'Practical interpretation',
+                'Plain-language takeaway',
+                'Suggested action',
                 'Flags / comments',
             ],
         )
@@ -291,29 +313,22 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         write_group_comparison_sheet(worksheet, payload)
 
-        self.assertEqual(len(worksheet.conditional_formats), 2)
-        significance_rule = worksheet.conditional_formats[0][4]
-        effect_rule = worksheet.conditional_formats[1][4]
+        self.assertGreaterEqual(len(worksheet.conditional_formats), 9)
+        significance_rules = [rule for *_, rule in worksheet.conditional_formats[:4]]
+        effect_rules = [rule for *_, rule in worksheet.conditional_formats[4:9]]
 
-        self.assertEqual(significance_rule['type'], '3_color_scale')
-        self.assertEqual(significance_rule['min_value'], 0)
-        self.assertEqual(significance_rule['mid_value'], 0.01)
-        self.assertEqual(significance_rule['max_value'], 0.05)
-        self.assertIn('min_color', significance_rule)
-        self.assertIn('mid_color', significance_rule)
-        self.assertIn('max_color', significance_rule)
+        self.assertEqual([rule['type'] for rule in significance_rules], ['blanks', 'cell', 'cell', 'cell'])
+        self.assertEqual(significance_rules[1]['criteria'], '<=')
+        self.assertEqual(significance_rules[1]['value'], 0.01)
+        self.assertEqual(significance_rules[2]['criteria'], 'between')
+        self.assertEqual(significance_rules[3]['criteria'], '>')
 
-        self.assertEqual(effect_rule['type'], '3_color_scale')
-        self.assertEqual(effect_rule['min_value'], 0)
-        self.assertEqual(effect_rule['mid_value'], 0.2)
-        self.assertEqual(effect_rule['max_value'], 0.5)
-        self.assertIn('min_color', effect_rule)
-        self.assertIn('mid_color', effect_rule)
-        self.assertIn('max_color', effect_rule)
-        self.assertNotEqual(
-            (significance_rule['min_color'], significance_rule['mid_color'], significance_rule['max_color']),
-            (effect_rule['min_color'], effect_rule['mid_color'], effect_rule['max_color']),
-        )
+        self.assertEqual(effect_rules[0]['type'], 'blanks')
+        self.assertEqual(effect_rules[1]['criteria'], '<')
+        self.assertEqual(effect_rules[2]['criteria'], 'between')
+        self.assertEqual(effect_rules[3]['criteria'], 'between')
+        self.assertEqual(effect_rules[4]['criteria'], '>=')
+        self.assertTrue(any('Legend:' in value for _, _, value in worksheet.writes))
 
 
     def test_write_matrix_sanitizes_non_finite_values(self):
@@ -327,12 +342,12 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         end_row = _write_matrix(worksheet, 0, 'Metric: M1', matrix, matrix_type='effect')
 
         writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
-        self.assertEqual(writes_by_cell[(2, 1)], 0.25)
-        self.assertIsNone(writes_by_cell[(2, 2)])
-        self.assertIsNone(writes_by_cell[(3, 1)])
-        self.assertIsNone(writes_by_cell[(3, 2)])
-        self.assertEqual(end_row, 6)
-        self.assertEqual(len(worksheet.conditional_formats), 1)
+        self.assertEqual(writes_by_cell[(4, 1)], 0.25)
+        self.assertIsNone(writes_by_cell[(4, 2)])
+        self.assertIsNone(writes_by_cell[(5, 1)])
+        self.assertIsNone(writes_by_cell[(5, 2)])
+        self.assertEqual(end_row, 8)
+        self.assertEqual(len(worksheet.conditional_formats), 5)
 
     def test_write_matrix_with_non_finite_values_is_deterministic(self):
         matrix = pd.DataFrame(
@@ -428,10 +443,71 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         _write_matrix(worksheet, 0, 'Metric: M1', matrix, matrix_type='significance')
 
         writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
-        self.assertIsNone(writes_by_cell[(2, 1)])
-        self.assertEqual(writes_by_cell[(2, 2)], 0.2)
-        self.assertEqual(writes_by_cell[(3, 1)], 0.2)
-        self.assertIsNone(writes_by_cell[(3, 2)])
+        self.assertIsNone(writes_by_cell[(4, 1)])
+        self.assertEqual(writes_by_cell[(4, 2)], 0.2)
+        self.assertEqual(writes_by_cell[(5, 1)], 0.2)
+        self.assertIsNone(writes_by_cell[(5, 2)])
+
+    def test_writer_uses_wide_wrapped_columns_for_user_facing_text(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.0, 0.05,
+                    0.2, 0.3, 0.25, 0.35, 0.3,
+                    1.4, 1.5, 1.45, 1.55, 1.6,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
+        pairwise_header_row = next(
+            row for row, col, value in worksheet.writes
+            if value == 'Metric' and writes_by_cell.get((row - 1, 0)) == 'Location / Central-Tendency Pairwise Comparison Table'
+        )
+        self.assertEqual(writes_by_cell[(pairwise_header_row, 9)], 'Plain-language takeaway')
+        self.assertEqual(writes_by_cell[(pairwise_header_row, 10)], 'Suggested action')
+
+        wide_columns = {(first_col, last_col): width for first_col, last_col, width, _ in worksheet.columns}
+        self.assertGreaterEqual(wide_columns[(9, 9)], 34)
+        self.assertGreaterEqual(wide_columns[(10, 10)], 28)
+        self.assertGreaterEqual(wide_columns[(11, 11)], 32)
+        self.assertIn('text_wrap', worksheet.write_formats[(pairwise_header_row + 1, 9)])
+        self.assertIn('text_wrap', worksheet.write_formats[(pairwise_header_row + 1, 10)])
+        self.assertTrue(any(first_col == 0 and last_col == 3 and '• ' in value for _, first_col, _, last_col, value, _ in worksheet.merges))
+
+    def test_group_profile_summary_adds_plain_language_fields(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 6,
+                'MEAS': [10.0, 10.5, 11.1, 11.4, 12.0, 12.2],
+                'GROUP': ['A', 'A', 'B', 'B', 'C', 'C'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
+        profile_header_row = next(
+            row for row, col, value in worksheet.writes
+            if value == 'Metric' and writes_by_cell.get((row - 1, 0)) == 'Group Profile Summary'
+        )
+        headers = [writes_by_cell[(profile_header_row, col)] for col in range(8)]
+        self.assertEqual(
+            headers,
+            ['Metric', 'Group', 'n', 'Mean', 'Median', 'Relative position', 'Plain-language summary', 'Practical process meaning'],
+        )
+        summaries = [value for (row, col), value in writes_by_cell.items() if row > profile_header_row and col in {6, 7}]
+        self.assertTrue(any('middle of the pack' in str(value) or 'candidate for process review' in str(value) for value in summaries))
 
     def test_insights_are_deterministic_and_cover_scaffold_topics(self):
         working = pd.DataFrame(
@@ -465,7 +541,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(len(insights), 6)
         self.assertEqual(
             insights[0],
-            'Central tendency: highest mean=A (10.000), lowest mean=B (8.000).',
+            'Central tendency: highest mean=A (10.000), lowest mean=B (8.000). Use this as a quick ranking, not as proof that every pair is meaningfully different.',
         )
         self.assertIn('Significant pairwise findings:', insights[1])
         self.assertIn('difference:', insights[2])
@@ -752,10 +828,10 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         write_group_comparison_sheet(worksheet, payload)
 
-        self.assertGreaterEqual(len(worksheet.conditional_formats), 2)
-        for _, _, _, _, rule in worksheet.conditional_formats[-2:]:
-            self.assertEqual(rule['type'], '3_color_scale')
-            self.assertTrue(any(key.endswith('_color') for key in rule), msg=rule)
+        self.assertGreaterEqual(len(worksheet.conditional_formats), 8)
+        self.assertTrue(any(rule['type'] == 'blanks' for _, _, _, _, rule in worksheet.conditional_formats))
+        self.assertTrue(any(rule.get('criteria') == '<=' and rule.get('value') == 0.01 for _, _, _, _, rule in worksheet.conditional_formats))
+        self.assertTrue(any(rule.get('criteria') == '>=' for _, _, _, _, rule in worksheet.conditional_formats))
 
     def test_writer_keeps_non_group_comparison_scaffolding_stable_when_payload_has_no_pairwise_rows(self):
         payload = {
@@ -784,9 +860,8 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertTrue(any(value == 'No rows' for value in titles))
         self.assertTrue(any(value == 'No heatmap data' for value in titles))
 
-    def test_integration_workbook_contains_group_comparison_sheet_and_headers(self):
+    def test_integration_workbook_contains_group_comparison_sheet_and_visible_conditional_formats(self):
         import tempfile
-        import zipfile
 
         grouped_df = pd.DataFrame(
             {
@@ -808,11 +883,14 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             with zipfile.ZipFile(workbook_path, 'r') as archive:
                 workbook_xml = archive.read('xl/workbook.xml').decode('utf-8')
                 shared_strings = archive.read('xl/sharedStrings.xml').decode('utf-8')
+                worksheet_xml = archive.read('xl/worksheets/sheet1.xml').decode('utf-8')
+                styles_xml = archive.read('xl/styles.xml').decode('utf-8')
 
         self.assertIn('Group Comparison', workbook_xml)
         for title in [
             'Summary Block',
             'Location / Central-Tendency Tests',
+            'Group Profile Summary',
             'Location / Central-Tendency Summary',
             'Location / Central-Tendency Test Details',
             'Location / Central-Tendency Pairwise Comparison Table',
@@ -826,6 +904,20 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             'Notes',
         ]:
             self.assertIn(title, shared_strings)
+
+        namespace = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+        worksheet_root = ET.fromstring(worksheet_xml)
+        cf_nodes = worksheet_root.findall('x:conditionalFormatting', namespace)
+        self.assertGreaterEqual(len(cf_nodes), 2)
+        cf_rule_types = [node.attrib.get('type') for cf in cf_nodes for node in cf.findall('x:cfRule', namespace)]
+        self.assertIn('cellIs', cf_rule_types)
+        self.assertIn('containsBlanks', cf_rule_types)
+        self.assertNotIn('colorScale', cf_rule_types)
+
+        styles_root = ET.fromstring(styles_xml)
+        dxfs = styles_root.find('x:dxfs', namespace)
+        self.assertIsNotNone(dxfs)
+        self.assertGreater(int(dxfs.attrib.get('count', '0')), 0)
 
     def test_writer_handles_empty_payload(self):
         payload = prepare_group_comparison_payload(pd.DataFrame())
@@ -856,9 +948,9 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn('Location Significance Matrix (Adjusted P-Values)', titles)
 
         note_lines = [value for _, _, value in worksheet.writes if isinstance(value, str) and value.startswith('• ')]
-        self.assertTrue(any('Shape differences can be statistically significant even when mean/median comparisons are not' in value for value in note_lines))
-        self.assertTrue(any('adjusted p-values and Wasserstein distance' in value for value in note_lines))
-        self.assertTrue(any('Wasserstein practical severity labels' in value for value in note_lines))
+        self.assertTrue(any('The location tests focus on whether one group is generally higher or lower than another' in value for value in note_lines))
+        self.assertTrue(any('Distribution-shape pairwise tables keep both adjusted p-values and Wasserstein distance' in value for value in note_lines))
+        self.assertTrue(any('Wasserstein distance is a practical clue about separation between full distributions' in value for value in note_lines))
 
     def test_prepare_payload_includes_distribution_sections(self):
         grouped_df = pd.DataFrame(
