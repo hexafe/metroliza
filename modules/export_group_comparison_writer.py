@@ -29,11 +29,12 @@ from modules.group_stats_tests import select_group_stat_test
 SECTION_GAP = 2
 
 BASE_INTERPRETATION_NOTES = [
-    'Alpha threshold: 0.05 (results below alpha are treated as statistically significant).',
-    'Adjusted p-value: multiple-comparison corrected p-value used for significance decisions.',
-    'If Shapiro-Wilk is skipped for every usable group, normality is treated as unresolved and the non-parametric path is selected.',
-    'Location comparisons focus on mean/median shifts; shape differences are reported separately.',
-    'Shape differences can be statistically significant even when mean/median comparisons are not, because spread, skew, or multimodality may differ.',
+    'Alpha threshold: 0.05. Comparisons below this level are treated as statistically reliable signals.',
+    'Adjusted p-value: this is the comparison p-value after correcting for the fact that many group pairs were checked. Use this value to judge whether a difference is statistically reliable.',
+    'If the normality check cannot be trusted for every usable group, the worksheet falls back to the more cautious non-parametric path.',
+    'The location tests focus on whether one group is generally higher or lower than another. The shape tests separately check whether the groups differ in spread, consistency, or overall pattern.',
+    'Shape differences can matter even when averages look similar, because one group may still be less consistent, more skewed, or split into multiple patterns.',
+    'Use the results as a prioritization aid: monitor small or uncertain gaps, and investigate large or repeatable gaps before changing the process.',
 ]
 
 
@@ -45,7 +46,7 @@ EFFECT_TYPE_METADATA = {
         'summary_label': 'Large effects (|d| >= 0.8)',
         'summary_threshold': 0.8,
         'bands': (0.2, 0.5),
-        'interpretation': "Pairwise effect guide (Cohen's d, absolute magnitude |d|): < 0.2 negligible, 0.2 to < 0.5 small, 0.5 to < 0.8 medium, >= 0.8 large.",
+        'interpretation': "Pairwise effect guide (Cohen's d, absolute magnitude |d|): below 0.2 is negligible, 0.2 to below 0.5 is small, 0.5 to below 0.8 is medium, and 0.8 or above is large. Darker cells mean larger practical differences.",
     },
     'cliffs_delta': {
         'label': "Cliff's delta",
@@ -54,15 +55,15 @@ EFFECT_TYPE_METADATA = {
         'summary_label': "Large effects (|δ| >= 0.474)",
         'summary_threshold': 0.474,
         'bands': (0.147, 0.33),
-        'interpretation': "Pairwise effect guide (Cliff's delta, absolute magnitude |δ|): < 0.147 negligible, 0.147 to < 0.33 small, 0.33 to < 0.474 medium, >= 0.474 large.",
+        'interpretation': "Pairwise effect guide (Cliff's delta, absolute magnitude |δ|): below 0.147 is negligible, 0.147 to below 0.33 is small, 0.33 to below 0.474 is medium, and 0.474 or above is large. Darker cells mean larger practical differences.",
     },
     'eta_squared': {
         'label': 'eta squared',
-        'interpretation': 'Omnibus effect guide (eta squared, η²): proportion of variance explained by group membership for multi-group tests.',
+        'interpretation': 'Omnibus effect guide (eta squared, η²): estimated share of overall variation explained by group membership in the multi-group test.',
     },
     'omega_squared': {
         'label': 'omega squared',
-        'interpretation': 'Omnibus effect guide (omega squared, ω²): less biased estimate of variance explained by group membership for multi-group tests.',
+        'interpretation': 'Omnibus effect guide (omega squared, ω²): a less biased estimate of how much overall variation is tied to group membership in the multi-group test.',
     },
 }
 
@@ -128,14 +129,14 @@ def _build_interpretation_notes(payload):
     correction_policy = payload.get('correction_policy')
 
     if not pairwise_types:
-        notes.append('Pairwise effect sizes: none reported.')
+        notes.append('Pairwise effect sizes: none were reported, so practical gap sizing is limited.')
     elif len(pairwise_types) == 1 and pairwise_types[0] in EFFECT_TYPE_METADATA:
         notes.append(EFFECT_TYPE_METADATA[pairwise_types[0]]['interpretation'])
     else:
         notes.append(
             'Pairwise effect sizes use mixed statistics ('
             + _describe_effect_types(pairwise_types)
-            + '); the matrix shows absolute magnitudes, so interpret thresholds from the corresponding effect-type columns.'
+            + '), so use the effect-type column and practical interpretation text together when judging how large a gap really is.'
         )
 
     if omnibus_types:
@@ -149,13 +150,158 @@ def _build_interpretation_notes(payload):
                 notes.append(note)
 
     if correction_policy:
-        notes.append(f'Correction policy: {correction_policy}.')
+        notes.append(f'Correction policy: {correction_policy}. This keeps the worksheet from over-calling differences just because many pairs were tested.')
 
     if payload.get('distribution_pairwise_rows'):
-        notes.append('Distribution-shape pairwise tables keep both adjusted p-values and Wasserstein distance so statistical evidence and descriptive separation stay visible together.')
-        notes.append('Wasserstein practical severity labels (Low/Moderate/High) are domain-neutral cues based on raw distance magnitude, not specification limits.')
+        notes.append('Distribution-shape pairwise tables keep both adjusted p-values and Wasserstein distance so statistical evidence and practical separation stay visible together.')
+        notes.append('Wasserstein distance is a practical clue about separation between full distributions. It is not, by itself, a spec-limit pass/fail decision.')
+
+    notes.append('Suggested actions are intentionally cautious: large and reliable gaps point to investigation, while weak or small signals point to monitoring or collecting more data first.')
 
     return notes
+
+
+def _safe_numeric(value):
+    numeric = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
+    return None if pd.isna(numeric) else float(numeric)
+
+
+def _sample_size_caution(row):
+    n_a = row.get('n(A)')
+    n_b = row.get('n(B)')
+    if n_a is None or n_b is None:
+        return False
+    return n_a < 5 or n_b < 5
+
+
+def _effect_band_tuple(effect_type):
+    metadata = EFFECT_TYPE_METADATA.get(effect_type, {})
+    low_band, mid_band = metadata.get('bands', (0.2, 0.5))
+    high_band = metadata.get('summary_threshold', mid_band)
+    return low_band, mid_band, high_band
+
+
+def _practical_magnitude(effect_value, effect_type):
+    numeric_effect = _safe_numeric(effect_value)
+    if numeric_effect is None:
+        return 'unknown'
+
+    absolute_effect = abs(numeric_effect)
+    low_band, mid_band, high_band = _effect_band_tuple(effect_type)
+    if absolute_effect < low_band:
+        return 'tiny'
+    if absolute_effect < mid_band:
+        return 'small'
+    if absolute_effect < high_band:
+        return 'moderate'
+    return 'large'
+
+
+def _pairwise_takeaway(row):
+    adjusted_p = _safe_numeric(row.get('adjusted p-value'))
+    effect_type = row.get('effect type')
+    magnitude = _practical_magnitude(row.get('effect size'), effect_type)
+    small_sample = _sample_size_caution(row)
+
+    if adjusted_p is None:
+        base = 'The statistical signal is incomplete, so this comparison should be treated as unresolved.'
+    elif adjusted_p <= 0.01:
+        base = 'The groups differ clearly after multiple-comparison correction.'
+    elif adjusted_p <= 0.05:
+        base = 'The groups show a statistically reliable difference after correction.'
+    else:
+        base = 'There is not enough corrected statistical evidence to call this a clear difference.'
+
+    magnitude_text = {
+        'tiny': 'The practical gap looks tiny.',
+        'small': 'The practical gap looks small.',
+        'moderate': 'The practical gap looks moderate.',
+        'large': 'The practical gap looks large enough to matter in practice.',
+        'unknown': 'The practical gap size was not reported clearly.',
+    }[magnitude]
+
+    if adjusted_p is not None and adjusted_p > 0.05 and magnitude in {'moderate', 'large'}:
+        magnitude_text = 'The practical gap may matter, but the statistical evidence is still weak after correction.'
+    elif adjusted_p is not None and adjusted_p <= 0.05 and magnitude == 'tiny':
+        magnitude_text = 'The result is statistically reliable, but the practical gap looks tiny and may be operationally minor.'
+
+    caution_text = ' Sample sizes are small, so confidence should stay cautious.' if small_sample else ''
+    return f'{base} {magnitude_text}{caution_text}'
+
+
+def _pairwise_action(row):
+    adjusted_p = _safe_numeric(row.get('adjusted p-value'))
+    magnitude = _practical_magnitude(row.get('effect size'), row.get('effect type'))
+    small_sample = _sample_size_caution(row)
+
+    if adjusted_p is not None and adjusted_p <= 0.05 and magnitude == 'large':
+        action = 'Large practical difference; prioritize investigation and check whether setup, operator, tooling, or material changes align with this gap.'
+    elif adjusted_p is not None and adjusted_p <= 0.05 and magnitude in {'moderate', 'small'}:
+        action = 'Review process differences between these groups before changing settings, and confirm whether the gap matters operationally.'
+    elif adjusted_p is not None and adjusted_p <= 0.05:
+        action = 'No immediate process change is required; keep monitoring because the statistical signal may be stronger than the operational impact.'
+    elif magnitude in {'moderate', 'large'}:
+        action = 'Possible meaningful gap without strong corrected evidence; collect more data and verify before changing the process.'
+    else:
+        action = 'No immediate action; continue monitoring.'
+
+    if small_sample:
+        action = 'Statistical signal is weak or sample is small; verify with more data before changing process.'
+        if adjusted_p is not None and adjusted_p <= 0.05 and magnitude == 'large':
+            action += ' This pair is still worth early investigation because the observed gap is large.'
+    return action
+
+
+def _relative_position(values, target_value):
+    ordered = pd.Series(values).sort_values(kind='mergesort')
+    if ordered.empty:
+        return 'unknown'
+    if target_value <= ordered.iloc[0]:
+        return 'lowest'
+    if target_value >= ordered.iloc[-1]:
+        return 'highest'
+    midpoint = ordered.median()
+    if target_value == midpoint:
+        return 'near center'
+    return 'above center' if target_value > midpoint else 'below center'
+
+
+def _build_group_profile_rows(working: pd.DataFrame):
+    if working.empty:
+        return []
+
+    rows = []
+    for metric_key, metric_frame in working.groupby('metric_key', sort=False):
+        group_stats = metric_frame.groupby('GROUP', sort=True)['MEAS'].agg(['mean', 'median', 'count'])
+        means = group_stats['mean'].tolist()
+        for group_name, stats in group_stats.iterrows():
+            position = _relative_position(means, stats['mean'])
+            if position == 'highest':
+                summary = 'This group is currently the highest on this metric.'
+                process_meaning = 'If higher values are undesirable for this metric, this group is a strong candidate for process review.'
+            elif position == 'lowest':
+                summary = 'This group is currently the lowest on this metric.'
+                process_meaning = 'If lower values are undesirable for this metric, this group is a strong candidate for process review.'
+            elif position == 'near center':
+                summary = 'This group sits near the middle of the pack.'
+                process_meaning = 'This group looks comparatively typical on this metric, so monitoring may be enough unless other evidence disagrees.'
+            else:
+                summary = f'This group sits {position.replace("-", " ")} relative to the other groups.'
+                process_meaning = 'This group stands out somewhat, so it is worth checking for setup, tooling, material lot, operator pattern, or measurement-system differences before changing the process.'
+
+            rows.append(
+                {
+                    'Metric': metric_key,
+                    'Group': group_name,
+                    'n': int(stats['count']),
+                    'Mean': round(float(stats['mean']), 4),
+                    'Median': round(float(stats['median']), 4),
+                    'Relative position': position,
+                    'Plain-language summary': summary,
+                    'Practical process meaning': process_meaning,
+                }
+            )
+    return rows
 
 def _build_pairwise_group_matrices(pairwise_df):
     """Build per-metric square matrices for adjusted p-values and location-effect magnitudes."""
@@ -203,7 +349,7 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
         lowest_group = group_means.index[-1]
         insights.append(
             f'Central tendency: highest mean={highest_group} ({group_means.iloc[0]:.3f}), '
-            f'lowest mean={lowest_group} ({group_means.iloc[-1]:.3f}).'
+            f'lowest mean={lowest_group} ({group_means.iloc[-1]:.3f}). Use this as a quick ranking, not as proof that every pair is meaningfully different.'
         )
 
     if pairwise_df.empty:
@@ -219,7 +365,7 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
 
         significant = pairwise_df[adj_p < 0.05]
         if significant.empty:
-            insights.append('Significant pairwise findings: none at adjusted p < 0.05.')
+            insights.append('Significant pairwise findings: none at adjusted p < 0.05, so there is not enough corrected evidence for a clear location difference.')
         else:
             significant_labels = [
                 f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
@@ -229,7 +375,7 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
 
         no_difference = pairwise_df[adj_p >= 0.05]
         if no_difference.empty:
-            insights.append('difference: all tested pairs were significant after adjustment.')
+            insights.append('difference: all tested pairs were significant after adjustment, but use effect size to judge whether the gaps are operationally important.')
         else:
             no_diff_labels = [
                 f"{row['Metric']} ({row['Group A']} vs {row['Group B']}, adj p={row['adjusted p-value']:.4f})"
@@ -239,7 +385,7 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
 
         small_sample_pairs = pairwise_df[(pairwise_df['n(A)'] < 5) | (pairwise_df['n(B)'] < 5)]
         if small_sample_pairs.empty:
-            insights.append('caution: all compared groups had n >= 5.')
+            insights.append('caution: all compared groups had n >= 5, so sample-size risk is lower.')
         else:
             warning_labels = [
                 f"{row['Metric']} ({row['Group A']} n={row['n(A)']}, {row['Group B']} n={row['n(B)']})"
@@ -274,7 +420,7 @@ def _build_insights(working, pairwise_df, overall_test_rows, distribution_summar
             else:
                 insights.append('distribution shape: difference detected for ' + '; '.join(labels) + '.')
         else:
-            insights.append('distribution shape: no statistically significant shape differences were detected.')
+            insights.append('distribution shape: no statistically significant shape differences were detected after correction, so spread/consistency differences are not strongly supported here.')
 
     return insights
 
@@ -331,6 +477,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
             'metadata': [('Rows', 0), ('Groups', 0), ('Headers', 0), ('Alpha', 0.05), ('Correction method', correction_method), ('Correction policy', correction_policy), ('Group sample sizes', 'No groups')],
             'overall_summary': [('Pairwise tests', 0), ('Significant (p < 0.05)', 0)],
             'pairwise_rows': [],
+            'group_profile_rows': [],
             'overall_test_rows': [],
             'distribution_profile_rows': [],
             'distribution_difference_rows': [],
@@ -479,6 +626,7 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
         ],
         'overall_summary': overall_summary,
         'pairwise_rows': pairwise_rows,
+        'group_profile_rows': _build_group_profile_rows(working),
         'overall_test_rows': overall_test_rows,
         'distribution_profile_rows': [
             {k: v for k, v in row.items() if not k.startswith('_')} for row in distribution_profile_rows
@@ -557,8 +705,54 @@ def _build_pairwise_display_rows(pairwise_rows):
             'Effect type': _effect_label(effect_type),
             'Delta mean or median': row.get('Mean Δ (A-B)'),
             'Practical interpretation': _effect_magnitude_label(row.get('effect size'), effect_type),
+            'Plain-language takeaway': _pairwise_takeaway(row),
+            'Suggested action': _pairwise_action(row),
             'Flags / comments': '; '.join(comments) if comments else 'None',
         })
+    return display_rows
+
+
+def _distribution_takeaway(row):
+    adjusted_p = _safe_numeric(row.get('adjusted p-value'))
+    fit_quality = str(row.get('Fit quality') or row.get('fit quality') or '').strip().lower()
+    severity = str(row.get('Practical severity') or row.get('practical severity') or '').strip().lower()
+
+    if adjusted_p is not None and adjusted_p <= 0.05:
+        takeaway = 'These groups may have similar averages, but their spread or pattern differs in a statistically reliable way.'
+    else:
+        takeaway = 'No strong evidence of a shape difference after correction.'
+
+    if severity in {'moderate', 'high'}:
+        takeaway += ' The Wasserstein distance suggests practical separation in the overall distribution shape.'
+    if fit_quality and fit_quality not in {'good', 'strong'}:
+        takeaway += ' Fit quality is not strong, so confirm before acting.'
+    return takeaway
+
+
+def _distribution_action(row):
+    adjusted_p = _safe_numeric(row.get('adjusted p-value'))
+    severity = str(row.get('Practical severity') or row.get('practical severity') or '').strip().lower()
+    fit_quality = str(row.get('Fit quality') or row.get('fit quality') or '').strip().lower()
+
+    if adjusted_p is not None and adjusted_p <= 0.05 and severity == 'high':
+        action = 'Shape difference looks material; review consistency drivers such as setup, tooling, material, operator pattern, or measurement-system differences.'
+    elif adjusted_p is not None and adjusted_p <= 0.05:
+        action = 'Review whether one group is more variable or less predictable before changing the process.'
+    else:
+        action = 'Monitor rather than escalate; there is not enough corrected evidence for a shape-driven change.'
+
+    if fit_quality and fit_quality not in {'good', 'strong'}:
+        action = 'Shape difference is visible, but fit quality is weak, so confirm with more data before acting.'
+    return action
+
+
+def _build_distribution_pairwise_display_rows(rows):
+    display_rows = []
+    for row in rows:
+        display = dict(row)
+        display['Plain-language takeaway'] = _distribution_takeaway(row)
+        display['Suggested action'] = _distribution_action(row)
+        display_rows.append(display)
     return display_rows
 
 
@@ -613,28 +807,117 @@ def _build_summary_block(payload):
 def _column_width_for_header(header):
     width_map = {
         'Metric': 22,
+        'Group': 12,
         'Group A': 12,
         'Group B': 12,
+        'n': 10,
+        'Mean': 12,
+        'Median': 12,
         'Pairwise test': 18,
         'Adjusted p-value': 14,
         'Pairwise effect size': 16,
         'Effect type': 16,
         'Delta mean or median': 18,
-        'Practical interpretation': 24,
-        'Flags / comments': 32,
+        'Relative position': 18,
+        'Practical interpretation': 34,
+        'Plain-language summary': 42,
+        'Practical process meaning': 40,
+        'Plain-language takeaway': 44,
+        'Suggested action': 36,
+        'Flags / comments': 38,
+        'Warning / notes summary': 42,
         'Wasserstein distance': 18,
         'Practical severity': 18,
     }
     return width_map.get(header, 18)
 
 
-def _set_table_column_widths(worksheet, headers):
+LONG_TEXT_HEADERS = {
+    'Practical interpretation',
+    'Plain-language summary',
+    'Practical process meaning',
+    'Plain-language takeaway',
+    'Suggested action',
+    'Flags / comments',
+    'Warning / notes summary',
+    'Notes',
+    'Assumptions / warnings',
+}
+
+
+def _set_table_column_widths(worksheet, headers, formats=None):
+    body_format = (formats or {}).get('body')
+    wrapped_format = (formats or {}).get('wrapped')
     for col, header in enumerate(headers):
-        worksheet.set_column(col, col, _column_width_for_header(header))
+        fmt = wrapped_format if header in LONG_TEXT_HEADERS else body_format
+        worksheet.set_column(col, col, _column_width_for_header(header), fmt)
 
 
 def _get_workbook(worksheet):
-    return getattr(worksheet, 'book', None) or getattr(worksheet, 'workbook', None)
+    return (
+        getattr(worksheet, 'book', None)
+        or getattr(worksheet, 'workbook', None)
+        or worksheet
+    )
+
+
+def _safe_add_format(workbook, properties):
+    if workbook is None:
+        return properties
+    if hasattr(workbook, 'add_format'):
+        return workbook.add_format(properties)
+    if hasattr(workbook, 'workbook_add_format'):
+        return workbook.workbook_add_format(properties)
+    return properties
+
+
+def _apply_final_column_layout(worksheet, formats):
+    final_widths = {
+        0: 24,
+        1: 14,
+        2: 14,
+        3: 18,
+        4: 14,
+        5: 16,
+        6: 16,
+        7: 18,
+        8: 34,
+        9: 44,
+        10: 36,
+        11: 38,
+    }
+    for col, width in final_widths.items():
+        fmt = formats['wrapped'] if col in {0, 8, 9, 10, 11} else formats['body']
+        worksheet.set_column(col, col, width, fmt)
+
+
+def _build_format_bundle(worksheet):
+    cached = getattr(worksheet, '_group_comparison_formats', None)
+    if cached is not None:
+        return cached
+    workbook = _get_workbook(worksheet)
+    bundle = {
+        'section_title': _safe_add_format(workbook, {'bold': True, 'font_size': 13, 'bg_color': '#D9E2F3', 'border': 1}),
+        'table_header': _safe_add_format(workbook, {'bold': True, 'bg_color': '#D9EAD3', 'border': 1, 'text_wrap': True, 'valign': 'top'}),
+        'body': _safe_add_format(workbook, {'border': 1, 'valign': 'top'}),
+        'wrapped': _safe_add_format(workbook, {'border': 1, 'text_wrap': True, 'valign': 'top'}),
+        'numeric': _safe_add_format(workbook, {'border': 1, 'num_format': '0.0000', 'valign': 'top'}),
+        'note': _safe_add_format(workbook, {'text_wrap': True, 'valign': 'top', 'font_color': '#404040'}),
+        'legend': _safe_add_format(workbook, {'bold': True, 'text_wrap': True, 'font_color': '#404040'}),
+        'matrix_header': _safe_add_format(workbook, {'bold': True, 'bg_color': '#EDEDED', 'border': 1, 'align': 'center'}),
+        'matrix_label': _safe_add_format(workbook, {'bold': True, 'border': 1}),
+        'matrix_value': _safe_add_format(workbook, {'border': 1, 'num_format': '0.0000', 'align': 'center'}),
+        'matrix_blank': _safe_add_format(workbook, {'bg_color': '#E7E6E6', 'border': 1}),
+        'sig_strong': _safe_add_format(workbook, {'bg_color': '#F4CCCC', 'font_color': '#7F0000', 'border': 1}),
+        'sig_warn': _safe_add_format(workbook, {'bg_color': '#FFE599', 'font_color': '#7F6000', 'border': 1}),
+        'sig_ok': _safe_add_format(workbook, {'bg_color': '#D9EAD3', 'font_color': '#274E13', 'border': 1}),
+        'effect_low': _safe_add_format(workbook, {'bg_color': '#FFF2CC', 'border': 1}),
+        'effect_mid': _safe_add_format(workbook, {'bg_color': '#F9CB9C', 'border': 1}),
+        'effect_med': _safe_add_format(workbook, {'bg_color': '#9FC5E8', 'border': 1}),
+        'effect_high': _safe_add_format(workbook, {'bg_color': '#6D9EEB', 'font_color': '#FFFFFF', 'border': 1}),
+    }
+    setattr(worksheet, '_group_comparison_formats', bundle)
+    return bundle
 
 def _safe_chart_series_name(name):
     text = str(name or '').strip()
@@ -690,21 +973,22 @@ def _render_group_comparison_charts(worksheet, start_row, payload):
         return start_row
 
     row = start_row
-    worksheet.write(row, 0, 'Comparison Charts')
+    formats = _build_format_bundle(worksheet)
+    worksheet.write(row, 0, 'Comparison Charts', formats['section_title'])
     row += 1
 
     next_chart_row = row
     chart_height_rows = 18
 
     if ranked_rows:
-        worksheet.write(row, 0, 'Ranked Pairwise Effects')
+        worksheet.write(row, 0, 'Ranked Pairwise Effects', formats['section_title'])
         data_header_row = row + 1
         headers = ['Label', 'Absolute effect size']
         for col, header in enumerate(headers):
-            worksheet.write(data_header_row, col, header)
+            worksheet.write(data_header_row, col, header, formats['table_header'])
         for offset, entry in enumerate(ranked_rows, start=1):
-            worksheet.write(data_header_row + offset, 0, entry['label'])
-            worksheet.write(data_header_row + offset, 1, entry['abs_effect_size'])
+            worksheet.write(data_header_row + offset, 0, entry['label'], formats['wrapped'])
+            worksheet.write(data_header_row + offset, 1, entry['abs_effect_size'], formats['numeric'])
 
         ranked_chart = workbook.add_chart({'type': 'bar'})
         ranked_chart.add_series({
@@ -725,11 +1009,11 @@ def _render_group_comparison_charts(worksheet, start_row, payload):
     if scatter_rows:
         scatter_title_row = row if not ranked_rows else row
         scatter_col = 11 if ranked_rows else 0
-        worksheet.write(scatter_title_row, scatter_col, 'Effect vs Adjusted p')
+        worksheet.write(scatter_title_row, scatter_col, 'Effect vs Adjusted p', formats['section_title'])
         data_header_row = scatter_title_row + 1
         headers = ['Metric', 'Pair', '|effect|', '-log10(adj p)']
         for col, header in enumerate(headers):
-            worksheet.write(data_header_row, scatter_col + col, header)
+            worksheet.write(data_header_row, scatter_col + col, header, formats['table_header'])
 
         metric_positions = {}
         for entry in scatter_rows:
@@ -739,10 +1023,10 @@ def _render_group_comparison_charts(worksheet, start_row, payload):
             base_col = scatter_col + index * 4
             # Keep metric data contiguous by series while chart remains compact.
             for offset, entry in enumerate(entries, start=1):
-                worksheet.write(data_header_row + offset, base_col + 0, metric)
-                worksheet.write(data_header_row + offset, base_col + 1, entry['pair_label'])
-                worksheet.write(data_header_row + offset, base_col + 2, entry['abs_effect_size'])
-                worksheet.write(data_header_row + offset, base_col + 3, entry['neg_log10_adj_p'])
+                worksheet.write(data_header_row + offset, base_col + 0, metric, formats['body'])
+                worksheet.write(data_header_row + offset, base_col + 1, entry['pair_label'], formats['wrapped'])
+                worksheet.write(data_header_row + offset, base_col + 2, entry['abs_effect_size'], formats['numeric'])
+                worksheet.write(data_header_row + offset, base_col + 3, entry['neg_log10_adj_p'], formats['numeric'])
 
         scatter_chart = workbook.add_chart({'type': 'scatter', 'subtype': 'straight_with_markers'})
         for index, (metric, entries) in enumerate(metric_positions.items()):
@@ -765,36 +1049,51 @@ def _render_group_comparison_charts(worksheet, start_row, payload):
     return next_chart_row + SECTION_GAP
 
 def _write_kv_section(worksheet, row, title, items):
-    worksheet.write(row, 0, title)
+    formats = _build_format_bundle(worksheet)
+    worksheet.write(row, 0, title, formats['section_title'])
     row += 1
     for key, value in items:
-        worksheet.write(row, 0, key)
-        worksheet.write(row, 1, value)
+        value_format = formats['wrapped'] if isinstance(value, str) and len(value) > 40 else formats['body']
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            value_format = formats['numeric']
+        worksheet.write(row, 0, key, formats['table_header'])
+        worksheet.write(row, 1, value, value_format)
         row += 1
     return row + SECTION_GAP
 
 
 def _write_table(worksheet, row, title, rows):
-    worksheet.write(row, 0, title)
+    formats = _build_format_bundle(worksheet)
+    worksheet.write(row, 0, title, formats['section_title'])
     row += 1
     if not rows:
-        worksheet.write(row, 0, 'No rows')
+        worksheet.write(row, 0, 'No rows', formats['note'])
         return row + SECTION_GAP + 1, None
 
     headers = list(rows[0].keys())
     for col, header in enumerate(headers):
-        worksheet.write(row, col, header)
+        worksheet.write(row, col, header, formats['table_header'])
     header_row = row
-    _set_table_column_widths(worksheet, headers)
+    _set_table_column_widths(worksheet, headers, formats=formats)
     row += 1
     for data_row in rows:
         for col, header in enumerate(headers):
             value = data_row.get(header)
             if isinstance(value, (dict, list, tuple, set)):
                 value = str(value)
-            worksheet.write(row, col, value)
+            cell_format = formats['wrapped'] if header in LONG_TEXT_HEADERS or (isinstance(value, str) and len(value) > 40) else formats['body']
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                cell_format = formats['numeric']
+            worksheet.write(row, col, value, cell_format)
         row += 1
     return row + SECTION_GAP, header_row
+
+
+def _write_note_line(worksheet, row, text, note_format):
+    if hasattr(worksheet, 'merge_range'):
+        worksheet.merge_range(row, 0, row, 3, text, note_format)
+    else:
+        worksheet.write(row, 0, text, note_format)
 
 
 def _sanitize_matrix_value(value):
@@ -816,79 +1115,102 @@ def _finite_matrix_max(matrix_df, default):
     return max(float(finite_values.max()), default)
 
 
-def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type, effect_bands=None):
-    worksheet.write(row, 0, title)
+def _matrix_legend_lines(matrix_type, effect_bands=None, effect_type=None):
+    if matrix_type == 'significance':
+        return [
+            'Legend: gray cells are blank or self-comparisons and should be ignored.',
+            'Red means a very strong statistical signal (adjusted p ≤ 0.01). Yellow means a weaker but still important signal (0.01 < adjusted p ≤ 0.05). Green means no statistically reliable difference after correction (> 0.05).',
+        ]
+
+    low_band, mid_band = effect_bands or (0.2, 0.5)
+    high_band = EFFECT_TYPE_METADATA.get(effect_type or '', {}).get('summary_threshold', mid_band)
+    return [
+        'Legend: darker cells mean larger practical differences between groups. Gray cells are self-comparisons and should be ignored.',
+        f'Light fill: below {low_band:.3f} (smallest tier). Amber: {low_band:.3f} to below {mid_band:.3f}. Blue: {mid_band:.3f} to below {high_band:.3f}. Dark blue: {high_band:.3f} or higher (largest practical tier).',
+    ]
+
+
+def _apply_matrix_conditional_formats(worksheet, first_data_row, first_col, last_row, last_col, *, matrix_type, formats, effect_bands=None, effect_type=None):
+    if matrix_type == 'significance':
+        rules = [
+            {'type': 'blanks', 'format': formats['matrix_blank']},
+            {'type': 'cell', 'criteria': '<=', 'value': 0.01, 'format': formats['sig_strong']},
+            {'type': 'cell', 'criteria': 'between', 'minimum': 0.0100000001, 'maximum': 0.05, 'format': formats['sig_warn']},
+            {'type': 'cell', 'criteria': '>', 'value': 0.05, 'format': formats['sig_ok']},
+        ]
+    else:
+        low_band, mid_band = effect_bands or (0.2, 0.5)
+        high_band = EFFECT_TYPE_METADATA.get(effect_type or '', {}).get('summary_threshold', mid_band)
+        rules = [
+            {'type': 'blanks', 'format': formats['matrix_blank']},
+            {'type': 'cell', 'criteria': '<', 'value': low_band, 'format': formats['effect_low']},
+            {'type': 'cell', 'criteria': 'between', 'minimum': low_band, 'maximum': max(low_band, mid_band - 1e-9), 'format': formats['effect_mid']},
+            {'type': 'cell', 'criteria': 'between', 'minimum': mid_band, 'maximum': max(mid_band, high_band - 1e-9), 'format': formats['effect_med']},
+            {'type': 'cell', 'criteria': '>=', 'value': high_band, 'format': formats['effect_high']},
+        ]
+
+    for rule in rules:
+        worksheet.conditional_format(first_data_row, first_col, last_row, last_col, rule)
+
+
+def _write_matrix(worksheet, row, title, matrix_df, *, matrix_type, effect_bands=None, effect_type=None):
+    formats = _build_format_bundle(worksheet)
+    worksheet.write(row, 0, title, formats['section_title'])
     row += 1
+    for legend_line in _matrix_legend_lines(matrix_type, effect_bands=effect_bands, effect_type=effect_type):
+        worksheet.write(row, 0, legend_line, formats['legend'])
+        row += 1
     if matrix_df.empty:
-        worksheet.write(row, 0, 'No heatmap data')
+        worksheet.write(row, 0, 'No heatmap data', formats['note'])
         return row + SECTION_GAP + 1
 
-    worksheet.write(row, 0, 'Group')
+    worksheet.write(row, 0, 'Group', formats['matrix_header'])
     for col, column_name in enumerate(matrix_df.columns, start=1):
-        worksheet.write(row, col, column_name)
+        worksheet.write(row, col, column_name, formats['matrix_header'])
+        worksheet.set_column(col, col, 12, formats['matrix_value'])
     row += 1
 
     first_data_row = row
     for group, values in matrix_df.iterrows():
-        worksheet.write(row, 0, group)
+        worksheet.write(row, 0, group, formats['matrix_label'])
         for col, value in enumerate(values.tolist(), start=1):
-            worksheet.write(row, col, _sanitize_matrix_value(value))
+            worksheet.write(row, col, _sanitize_matrix_value(value), formats['matrix_value'])
         row += 1
 
     first_col = 1
     last_col = max(1, len(matrix_df.columns))
-    if matrix_type == 'significance':
-        worksheet.conditional_format(
-            first_data_row,
-            first_col,
-            row - 1,
-            last_col,
-            {
-                'type': '3_color_scale',
-                'min_type': 'num',
-                'mid_type': 'num',
-                'max_type': 'num',
-                'min_value': 0,
-                'mid_value': 0.01,
-                'max_value': 0.05,
-                'min_color': '#F8696B',
-                'mid_color': '#FFEB84',
-                'max_color': '#63BE7B',
-            },
-        )
-    else:
-        low_band, mid_band = effect_bands or (0.2, 0.5)
-        effect_max = _finite_matrix_max(matrix_df, mid_band)
-        worksheet.conditional_format(
-            first_data_row,
-            first_col,
-            row - 1,
-            last_col,
-            {
-                'type': '3_color_scale',
-                'min_type': 'num',
-                'mid_type': 'num',
-                'max_type': 'num',
-                'min_value': 0,
-                'mid_value': low_band,
-                'max_value': effect_max,
-                'min_color': '#FFF2CC',
-                'mid_color': '#9FC5E8',
-                'max_color': '#1C4587',
-            },
-        )
+    _apply_matrix_conditional_formats(
+        worksheet,
+        first_data_row,
+        first_col,
+        row - 1,
+        last_col,
+        matrix_type=matrix_type,
+        formats=formats,
+        effect_bands=effect_bands,
+        effect_type=effect_type,
+    )
     return row + SECTION_GAP
 
 
-def _write_matrix_collection(worksheet, row, title, matrices, *, matrix_type, effect_bands=None):
-    worksheet.write(row, 0, title)
+def _write_matrix_collection(worksheet, row, title, matrices, *, matrix_type, effect_bands=None, effect_type=None):
+    formats = _build_format_bundle(worksheet)
+    worksheet.write(row, 0, title, formats['section_title'])
     row += 1
     if not matrices:
-        worksheet.write(row, 0, 'No heatmap data')
+        worksheet.write(row, 0, 'No heatmap data', formats['note'])
         return row + SECTION_GAP + 1
 
     for metric in sorted(matrices):
-        row = _write_matrix(worksheet, row, f'Metric: {metric}', matrices[metric], matrix_type=matrix_type, effect_bands=effect_bands)
+        row = _write_matrix(
+            worksheet,
+            row,
+            f'Metric: {metric}',
+            matrices[metric],
+            matrix_type=matrix_type,
+            effect_bands=effect_bands,
+            effect_type=effect_type,
+        )
     return row
 
 
@@ -899,11 +1221,13 @@ def write_group_comparison_sheet(worksheet, payload):
         Section headers are always emitted even when rows are absent, ensuring
         workbook consumers and tests can rely on a stable report schema.
     """
+    formats = _build_format_bundle(worksheet)
     row = 0
     row = _write_kv_section(worksheet, row, 'Summary Block', _build_summary_block(payload))
 
-    worksheet.write(row, 0, 'Location / Central-Tendency Tests')
+    worksheet.write(row, 0, 'Location / Central-Tendency Tests', formats['section_title'])
     row += 1
+    row, _ = _write_table(worksheet, row, 'Group Profile Summary', payload.get('group_profile_rows', []))
     row = _write_kv_section(worksheet, row, 'Location / Central-Tendency Summary', payload.get('overall_summary', []))
     row, _ = _write_table(worksheet, row, 'Location / Central-Tendency Test Details', payload.get('overall_test_rows', []))
 
@@ -911,13 +1235,13 @@ def write_group_comparison_sheet(worksheet, payload):
     row, pairwise_header_row = _write_table(worksheet, row, 'Location / Central-Tendency Pairwise Comparison Table', pairwise_rows)
     row = _render_group_comparison_charts(worksheet, row, payload)
 
-    worksheet.write(row, 0, 'Distribution Shape Section')
+    worksheet.write(row, 0, 'Distribution Shape Section', formats['section_title'])
     row += 1
     row, _ = _write_table(worksheet, row, 'Distribution Shape Profile By Group', payload.get('distribution_profile_rows', []))
     row, _ = _write_table(worksheet, row, 'Distribution Shape Summary', payload.get('distribution_difference_rows', []))
-    row, _ = _write_table(worksheet, row, 'Distribution Shape Pairwise Table', payload.get('distribution_pairwise_rows', []))
+    row, _ = _write_table(worksheet, row, 'Distribution Shape Pairwise Table', _build_distribution_pairwise_display_rows(payload.get('distribution_pairwise_rows', [])))
 
-    worksheet.write(row, 0, 'Matrices')
+    worksheet.write(row, 0, 'Matrices', formats['section_title'])
     row += 1
     row = _write_matrix_collection(
         worksheet,
@@ -933,17 +1257,17 @@ def write_group_comparison_sheet(worksheet, payload):
         payload.get('effect_matrices', {}),
         matrix_type='effect',
         effect_bands=payload.get('effect_reporting', {}).get('pairwise_effect_bands'),
+        effect_type=(payload.get('effect_reporting', {}).get('pairwise_effect_types') or [None])[0],
     )
 
-    worksheet.write(row, 0, 'Notes')
+    worksheet.write(row, 0, 'Notes', formats['section_title'])
     row += 1
     for note in _build_interpretation_notes(payload):
-        worksheet.write(row, 0, f'• {note}')
+        _write_note_line(worksheet, row, f'• {note}', formats['note'])
         row += 1
     for insight in payload.get('insights', []):
-        worksheet.write(row, 0, f'• {insight}')
+        _write_note_line(worksheet, row, f'• {insight}', formats['note'])
         row += 1
 
-    worksheet.set_column(0, 0, 24)
-    worksheet.set_column(1, 1, 24)
+    _apply_final_column_layout(worksheet, formats)
     worksheet.freeze_panes((pairwise_header_row or 0), 0)
