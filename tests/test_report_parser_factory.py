@@ -21,6 +21,12 @@ fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
 fitz_stub.open = lambda *_args, **_kwargs: None
 sys.modules.setdefault("fitz", fitz_stub)
 
+# Some integration tests install a lightweight `modules.cmm_report_parser` stub in
+# `sys.modules` before importing thread modules. This test module needs the real
+# parser implementation, so force a clean import of both the parser and factory.
+sys.modules.pop("modules.report_parser_factory", None)
+sys.modules.pop("modules.cmm_report_parser", None)
+
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
 contracts_module = importlib.import_module("modules.parser_plugin_contracts")
