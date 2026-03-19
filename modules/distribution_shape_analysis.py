@@ -32,6 +32,17 @@ def _wasserstein_severity_label(distance):
     return 'High'
 
 
+def _summarize_fit_notes(notes):
+    normalized = [str(note or '').strip() for note in (notes or []) if str(note or '').strip()]
+    if not normalized:
+        return 'Use fit quality as guidance only.'
+    if any('monte_carlo_gof_samples>0' in note or 'ks proxy' in note.lower() for note in normalized):
+        return 'Model fit quality is approximate.'
+    if any(note.lower().startswith('skipped ') for note in normalized):
+        return 'Fit quality estimated approximately.'
+    return 'Use fit quality as guidance only.'
+
+
 def _fit_profile_row(metric, group_name, values):
     numeric = _clean_numeric(values)
     fit = fit_measurement_distribution(numeric.tolist())
@@ -44,7 +55,7 @@ def _fit_profile_row(metric, group_name, values):
     if warning:
         warning_text = 'Distribution fit unavailable for this group.'
     else:
-        warning_text = '; '.join(fit.get('notes') or []) or 'None'
+        warning_text = _summarize_fit_notes(fit.get('notes') or [])
 
     return {
         'Metric': metric,

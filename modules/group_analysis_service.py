@@ -441,6 +441,25 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
     return output
 
 
+def _build_pairwise_test_rationale(*, group_count, test_used):
+    test_name = str(test_used or '').strip().lower()
+    if group_count <= 2:
+        if 'mann-whitney' in test_name:
+            return 'Chosen because only two groups are compared and a rank-based comparison is safer here.'
+        if 'welch' in test_name:
+            return 'Chosen because only two groups are compared and unequal-variance assumptions were safer.'
+        if 'student' in test_name or 't-test' in test_name:
+            return 'Chosen because only two groups are compared and the parametric assumptions were acceptable.'
+        return 'Chosen because only two groups are compared.'
+    if 'mann-whitney' in test_name:
+        return 'Chosen because the data are better handled by a rank-based comparison.'
+    if 'welch' in test_name:
+        return 'Chosen because parametric assumptions were not reliable enough for a pooled-variance test.'
+    if 'student' in test_name or 't-test' in test_name:
+        return 'Chosen because the groups were suitable for a standard parametric comparison.'
+    return 'Chosen to provide a consistent pairwise comparison across groups.'
+
+
 def _resolve_pairwise_comment(*, pairwise_eligible, significant, flags):
     """Return standardized pairwise comment vocabulary for worksheet consumers."""
     if not pairwise_eligible:
@@ -480,6 +499,7 @@ def build_pairwise_rows(
     metric_flags = _build_metric_level_flags(counts_by_group.values(), spec_status=spec_status)
 
     output = []
+    group_count = len(grouped_values)
     for row in raw_rows:
         group_a = row.get('group_a')
         group_b = row.get('group_b')
@@ -514,6 +534,7 @@ def build_pairwise_rows(
                 'metric': metric_identity,
                 'p_value': row.get('p_value'),
                 'test_used': row.get('test_used'),
+                'test_rationale': _build_pairwise_test_rationale(group_count=group_count, test_used=row.get('test_used')),
             }
         )
     return output
@@ -599,6 +620,7 @@ def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correc
     config = ComparisonStatsConfig(alpha=alpha, correction_method=correction_method)
     pairwise_rows = compute_metric_pairwise_stats(metric_identity, grouped_values, config=config)
     output = []
+    group_count = len(grouped_values)
     for row in pairwise_rows:
         output.append(
             {
@@ -609,6 +631,7 @@ def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correc
                 'adjusted_p_value': row.get('adjusted_p_value'),
                 'effect_size': row.get('effect_size'),
                 'test_used': row.get('test_used'),
+                'test_rationale': _build_pairwise_test_rationale(group_count=group_count, test_used=row.get('test_used')),
                 'significant': row.get('significant'),
             }
         )

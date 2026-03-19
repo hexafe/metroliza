@@ -29,6 +29,7 @@ class FakeWorksheet:
         self.rows = []
         self.gridlines_hidden = None
         self.autofilters = []
+        self.merges = []
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
@@ -58,6 +59,12 @@ class FakeWorksheet:
 
     def insert_chart(self, row, col, chart):
         self.charts.append((row, col, chart))
+
+    def merge_range(self, first_row, first_col, last_row, last_col, value, cell_format=None):
+        self.merges.append((first_row, first_col, last_row, last_col, value, cell_format))
+        self.writes.append((first_row, first_col, value))
+        if cell_format is not None:
+            self.write_formats[(first_row, first_col)] = cell_format
 
 
 class TestGroupAnalysisWriter(unittest.TestCase):
@@ -119,6 +126,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'difference': 'YES',
                             'comment': 'caution',
                             'flags': 'LOW N; IMBALANCED N',
+                            'test_rationale': 'Chosen because only two groups are compared.',
                         }
                     ],
                     'plot_eligibility': {
@@ -140,6 +148,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Exact match', values)
         self.assertIn('Pairwise comparisons', values)
         self.assertIn('Comment', values)
+        self.assertIn('Why this test', values)
         self.assertIn('adj p-value', values)
         self.assertIn('Delta mean', values)
         self.assertIn('difference', values)
@@ -147,6 +156,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('caution', values)
         self.assertIn('Flags', values)
         self.assertIn('LOW N; IMBALANCED N', values)
+        self.assertIn('Chosen because only two groups are compared.', values)
         self.assertIn('Plots', values)
         self.assertIn('Violin', values)
         self.assertIn('Histogram', values)
@@ -169,11 +179,12 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertNotIn('FALSE', text_values)
         self.assertEqual(worksheet.frozen, (4, 0))
         self.assertEqual(worksheet.gridlines_hidden, 2)
-        self.assertEqual(worksheet.columns[0][:3], (0, 0, 20))
+        self.assertEqual(worksheet.columns[0][:3], (0, 0, 22))
         self.assertEqual(worksheet.columns[-1][:3], (14, 14, 14))
         self.assertTrue(any(row == 0 and height == 24 for row, height, *_ in worksheet.rows))
         metric_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Metric: M1')
-        self.assertTrue(worksheet.write_formats[(metric_row, 0)].get('props', {}).get('text_wrap'))
+        self.assertFalse(worksheet.write_formats[(metric_row, 0)].get('props', {}).get('text_wrap'))
+        self.assertTrue(any(merge[:5] == (metric_row, 0, metric_row, 14, 'Metric: M1') for merge in worksheet.merges))
         distribution_row = next(
             row
             for row, col, value in worksheet.writes
@@ -187,7 +198,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         ]
         self.assertTrue(note_row_heights)
         self.assertGreaterEqual(note_row_heights[-1], 30)
-        self.assertGreaterEqual(len(worksheet.autofilters), 4)
+        self.assertGreaterEqual(len(worksheet.autofilters), 3)
 
         pairwise_rules = [
             rule
