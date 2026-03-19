@@ -120,7 +120,7 @@ class TestExportChartWriter(unittest.TestCase):
             'y_column': 2,
             'usl_column': 3,
             'lsl_column': 4,
-            'chart_insert_row': 12,
+            'chart_insert_row': 7,
         }
 
         insert_measurement_chart(
@@ -135,7 +135,7 @@ class TestExportChartWriter(unittest.TestCase):
 
         self.assertEqual(workbook.spec['type'], 'scatter')
         self.assertEqual(len(workbook.chart.series), 3)
-        self.assertEqual(worksheet.insert_calls[0][0:2], (12, 3))
+        self.assertEqual(worksheet.insert_calls[0][0:2], (7, 3))
         self.assertEqual(worksheet.insert_calls[0][3], {'x_offset': 6, 'y_offset': 2})
         self.assertEqual(workbook.chart.series[1]['categories'], '=Ref!$B22:B26')
         self.assertEqual(workbook.chart.series[1]['values'], '=Ref!$D22:D26')
@@ -259,7 +259,7 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(policy['anchor']['row'], DEFAULT_CHART_ANCHOR_ROW)
         self.assertEqual(policy['legend'], {'position': 'none'})
 
-    def test_insert_measurement_chart_honors_plan_anchor_row_and_hidden_legend_policy(self):
+    def test_insert_measurement_chart_uses_legacy_anchor_row_and_hidden_legend_policy(self):
         workbook = DummyWorkbook()
         worksheet = DummyWorksheet()
         plan = {
@@ -269,7 +269,7 @@ class TestExportChartWriter(unittest.TestCase):
             'y_column': 2,
             'usl_column': 3,
             'lsl_column': 4,
-            'chart_insert_row': 22,
+            'chart_insert_row': 7,
         }
 
         insert_measurement_chart(
@@ -282,7 +282,7 @@ class TestExportChartWriter(unittest.TestCase):
             chart_anchor_col=5,
         )
 
-        self.assertEqual(worksheet.insert_calls[0][0:2], (22, 5))
+        self.assertEqual(worksheet.insert_calls[0][0:2], (7, 5))
         self.assertEqual(workbook.chart.legend, {'position': 'none'})
         self.assertEqual(workbook.chart.title, {'name': 'Stable Export', 'name_font': {'size': 10}})
 
