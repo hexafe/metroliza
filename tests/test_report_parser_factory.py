@@ -65,6 +65,10 @@ def test_detect_format_accepts_pathlike(tmp_path):
     assert detect_format(report_path) == "cmm"
 
 
+def test_factory_uses_statically_imported_builtin_cmm_parser():
+    assert factory_module.CMMReportParser is CMMReportParser
+
+
 def test_get_parser_returns_cmm_parser_for_pdf(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.pdf"
 

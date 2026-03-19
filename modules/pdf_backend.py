@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
-import importlib
 import importlib.util
+
+try:
+    import pymupdf as _PYMUPDF_BACKEND
+except Exception:  # pragma: no cover - depends on optional runtime dependency
+    _PYMUPDF_BACKEND = None
+
+try:
+    import fitz as _FITZ_BACKEND
+except Exception:  # pragma: no cover - depends on optional runtime dependency
+    _FITZ_BACKEND = None
 
 
 PDF_BACKEND_CANDIDATES = ("pymupdf", "fitz")
@@ -18,23 +27,13 @@ def backend_required_error_message() -> str:
 
 
 def _import_candidate_backend(module_name: str):
-    try:
-        module = importlib.import_module(module_name)
-    except Exception:
-        return None
+    module = {
+        "pymupdf": _PYMUPDF_BACKEND,
+        "fitz": _FITZ_BACKEND,
+    }.get(module_name)
 
     if callable(getattr(module, "open", None)):
         return module
-
-    if module_name in importlib.sys.modules:
-        importlib.sys.modules.pop(module_name, None)
-        try:
-            module = importlib.import_module(module_name)
-        except Exception:
-            return None
-        if callable(getattr(module, "open", None)):
-            return module
-
     return None
 
 
