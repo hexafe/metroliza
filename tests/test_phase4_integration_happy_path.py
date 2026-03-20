@@ -1,9 +1,11 @@
+import os
 import sys
 import tempfile
 import types
 import unittest
 import zipfile
 import xml.etree.ElementTree as ET
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -449,7 +451,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             self.assertNotIn('Group Analysis', sheet_names)
             self.assertNotIn('Diagnostics', sheet_names)
 
-    def test_group_analysis_light_and_standard_emit_analysis_and_diagnostics(self):
+    def test_group_analysis_light_and_standard_emit_analysis_without_default_diagnostics(self):
         for level in ('light', 'standard'):
             with self.subTest(level=level), tempfile.TemporaryDirectory() as temp_dir:
                 db_path = str(Path(temp_dir) / 'metroliza.sqlite')
@@ -500,23 +502,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertTrue(completed)
                 sheet_names = _xlsx_sheet_names(out_path)
                 self.assertIn('Group Analysis', sheet_names)
-                self.assertIn('Diagnostics', sheet_names)
-
-                diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
-                self.assertIn('Requested level', diagnostics_values)
-                self.assertIn(level, diagnostics_values)
-                self.assertIn('Execution status', diagnostics_values)
-                self.assertTrue(any(status in diagnostics_values for status in ('ran', 'skipped')))
-                self.assertIn('Warning summary', diagnostics_values)
-                self.assertIn('Histogram skip summary', diagnostics_values)
-                self.assertIn('Reasons', diagnostics_values)
-                if level == 'standard':
-                    self.assertIn('Applies', diagnostics_values)
-                    self.assertIn('1', diagnostics_values)
-                else:
-                    self.assertIn('Applies', diagnostics_values)
-                    self.assertIn('0', diagnostics_values)
-                self.assertIn('Possible unmatched metrics across references', diagnostics_values)
+                self.assertNotIn('Diagnostics', sheet_names)
 
     def test_group_analysis_scope_mismatch_writes_exact_message_and_diagnostics(self):
         scenarios = [
@@ -569,7 +555,8 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                     ),
                 )
                 thread = ExportDataThread(request)
-                completed = thread.get_export_backend().run(thread)
+                with patch.dict(os.environ, {'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS': '1'}):
+                    completed = thread.get_export_backend().run(thread)
 
                 self.assertTrue(completed)
                 sheet_names = _xlsx_sheet_names(out_path)
@@ -624,7 +611,8 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 AssertionError('Legacy readiness path should not be called from ExportDataThread.')
             )
             try:
-                completed = thread.get_export_backend().run(thread)
+                with patch.dict(os.environ, {'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS': '1'}):
+                    completed = thread.get_export_backend().run(thread)
             finally:
                 if previous_readiness is None:
                     delattr(module, 'evaluate_group_analysis_readiness')
@@ -696,7 +684,8 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 AssertionError('Legacy readiness path should not be called from ExportDataThread.')
             )
             try:
-                completed = thread.get_export_backend().run(thread)
+                with patch.dict(os.environ, {'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS': '1'}):
+                    completed = thread.get_export_backend().run(thread)
             finally:
                 if previous_readiness is None:
                     delattr(module, 'evaluate_group_analysis_readiness')

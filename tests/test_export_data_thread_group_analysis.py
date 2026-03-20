@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import types
@@ -210,10 +211,8 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             out_path = self._run_export(temp_dir, level='light')
             sheet_names = _xlsx_sheet_names(out_path)
             self.assertIn('Group Analysis', sheet_names)
-            self.assertIn('Group Comparison', sheet_names)
-            self.assertIn('Diagnostics', sheet_names)
-            self.assertLess(sheet_names.index('Group Analysis'), sheet_names.index('Group Comparison'))
-            self.assertLess(sheet_names.index('Group Comparison'), sheet_names.index('Diagnostics'))
+            self.assertNotIn('Group Comparison', sheet_names)
+            self.assertNotIn('Diagnostics', sheet_names)
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
             self.assertNotIn('Plots', analysis_values)
@@ -226,10 +225,8 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             sheet_names = _xlsx_sheet_names(out_path)
             self.assertIn('Group Analysis', sheet_names)
-            self.assertIn('Group Comparison', sheet_names)
-            self.assertIn('Diagnostics', sheet_names)
-            self.assertLess(sheet_names.index('Group Analysis'), sheet_names.index('Group Comparison'))
-            self.assertLess(sheet_names.index('Group Comparison'), sheet_names.index('Diagnostics'))
+            self.assertNotIn('Group Comparison', sheet_names)
+            self.assertNotIn('Diagnostics', sheet_names)
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
             self.assertIn('Plots', analysis_values)
@@ -242,16 +239,22 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertNotIn('AD p-value estimated via KS proxy; set monte_carlo_gof_samples>0 for bootstrap.', analysis_values)
             self.assertNotIn('Plot could not be shown because the image asset is unavailable.', analysis_values)
 
-            diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
-            self.assertIn('ran', diagnostics_values)
-            self.assertIn('standard', diagnostics_values)
-            self.assertIn('EXACT_MATCH', diagnostics_values)
-            self.assertIn('1', diagnostics_values)
-            self.assertIn('0', diagnostics_values)
-
             with zipfile.ZipFile(out_path, 'r') as workbook_zip:
                 media_files = sorted(name for name in workbook_zip.namelist() if name.startswith('xl/media/'))
             self.assertGreaterEqual(len(media_files), 2)
+
+
+    def test_group_analysis_diagnostics_can_be_enabled_for_internal_exports(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS': '1'}):
+            out_path = self._run_export(temp_dir, level='light')
+            sheet_names = _xlsx_sheet_names(out_path)
+            self.assertIn('Group Analysis', sheet_names)
+            self.assertNotIn('Group Comparison', sheet_names)
+            self.assertIn('Diagnostics', sheet_names)
+
+            diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
+            self.assertIn('ran', diagnostics_values)
+            self.assertIn('light', diagnostics_values)
 
     def test_standard_mode_group_analysis_sheet_has_layout_pass_artifacts(self):
         with tempfile.TemporaryDirectory() as temp_dir:

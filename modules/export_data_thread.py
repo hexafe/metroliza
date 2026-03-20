@@ -3470,7 +3470,7 @@ class ExportDataThread(QThread):
                     self._emit_stage_progress('filtered_sheet_write', 1.0),
                 ),
                 lambda: (
-                    self.update_label.emit(build_three_line_status("Building group analysis...", "Writing Group Analysis and Diagnostics worksheets", "ETA --")),
+                    self.update_label.emit(build_three_line_status("Building group analysis...", "Writing Group Analysis worksheet", "ETA --")),
                     self._write_group_analysis_outputs(excel_writer),
                 ),
             ],
@@ -4098,13 +4098,14 @@ class ExportDataThread(QThread):
             plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode)
             write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
 
-        self._write_group_comparison_sheet(workbook, used_sheet_names)
+        if os.getenv('METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS', '').lower() in {'1', 'true', 'yes', 'on'}:
+            diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
+            diagnostics_worksheet = workbook.add_worksheet(diagnostics_sheet_name)
+            self._record_exported_sheet_name(diagnostics_sheet_name)
+            write_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
 
-        diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
-        diagnostics_worksheet = workbook.add_worksheet(diagnostics_sheet_name)
-        self._record_exported_sheet_name(diagnostics_sheet_name)
-        write_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
-
+    # Legacy/internal migration path only: Group Analysis is the canonical user-facing
+    # grouped statistical worksheet, and Group Comparison remains legacy/internal only.
     def _write_group_comparison_sheet(self, workbook, used_sheet_names):
         grouped_export_df = self._build_export_filtered_dataframe()
         grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
