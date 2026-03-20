@@ -177,10 +177,12 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
 
 def compute_estimated_tail_metrics(distribution_fit_result, *, lsl=None, usl=None):
     """Estimate NOK/yield metrics from selected fitted model CDF tails."""
-    selected_model = (distribution_fit_result or {}).get('selected_model') or {}
+    distribution_fit_result = distribution_fit_result or {}
+    selected_model = distribution_fit_result.get('selected_model') or {}
     model_name = selected_model.get('model')
     params = selected_model.get('params')
     dist = _DISTRIBUTION_BY_NAME.get(model_name)
+    inferred_support_mode = distribution_fit_result.get('inferred_support_mode')
 
     if dist is None or not params:
         return {
@@ -202,6 +204,15 @@ def compute_estimated_tail_metrics(distribution_fit_result, *, lsl=None, usl=Non
             'estimated_tail_below_lsl': None,
             'estimated_tail_above_usl': None,
         }
+
+
+    if inferred_support_mode == 'one_sided_zero_bound_positive' and lsl is not None and np.isclose(lsl, 0.0):
+        below_lsl = 0.0
+        lsl = None
+
+    if inferred_support_mode == 'one_sided_zero_bound_negative' and usl is not None and np.isclose(usl, 0.0):
+        above_usl = 0.0
+        usl = None
 
     if lsl is not None and usl is not None:
         outside_probability = float(np.clip((below_lsl or 0.0) + (above_usl or 0.0), 0.0, 1.0))

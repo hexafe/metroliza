@@ -229,9 +229,17 @@ def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray):
     }
 
 
-def _compute_tail_risk(dist, params, lsl, usl) -> dict:
+def _compute_tail_risk(dist, params, lsl, usl, *, inferred_support_mode=None) -> dict:
     below_lsl = None if lsl is None else float(np.clip(dist.cdf(lsl, *params), 0.0, 1.0))
     above_usl = None if usl is None else float(np.clip(1.0 - dist.cdf(usl, *params), 0.0, 1.0))
+
+    if inferred_support_mode == 'one_sided_zero_bound_positive' and lsl is not None and np.isclose(lsl, 0.0):
+        below_lsl = 0.0
+        lsl = None
+
+    if inferred_support_mode == 'one_sided_zero_bound_negative' and usl is not None and np.isclose(usl, 0.0):
+        above_usl = 0.0
+        usl = None
 
     if lsl is not None and usl is not None:
         nok_probability = float(np.clip((below_lsl or 0.0) + (above_usl or 0.0), 0.0, 1.0))
@@ -444,7 +452,13 @@ def fit_measurement_distribution(
             for idx, c in enumerate(ranked)
         ],
         fit_quality=fit_quality,
-        risk_estimates=_compute_tail_risk(selected_dist, best['params'], lsl_value, usl_value),
+        risk_estimates=_compute_tail_risk(
+            selected_dist,
+            best['params'],
+            lsl_value,
+            usl_value,
+            inferred_support_mode=inferred_mode,
+        ),
         model_candidates=ranked,
         notes=sorted(set(notes)),
     )
