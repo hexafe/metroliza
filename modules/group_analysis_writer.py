@@ -1,4 +1,4 @@
-"""Worksheet writers for the rebuilt Group Analysis export surfaces."""
+"""Worksheet writers for the canonical Group Analysis workbook sheet."""
 
 from __future__ import annotations
 
@@ -583,7 +583,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
 
 
 def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
-    """Write compact metric-level Group Analysis output into a worksheet."""
+    """Write the canonical user-facing Group Analysis worksheet."""
     sheet_state = {
         'title_rows': [],
         'metric_rows': [],
@@ -631,7 +631,7 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
 def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
     """Write internal/debug diagnostics details for scope resolution and metric coverage."""
     row = 0
-    row = _write_section_title(worksheet, row, 'Group Analysis Diagnostics')
+    row = _write_section_title(worksheet, row, 'Group Analysis Internal Diagnostics')
 
     metadata_rows = [
         {'Field': 'Requested scope', 'Value': diagnostics_payload.get('requested_scope')},

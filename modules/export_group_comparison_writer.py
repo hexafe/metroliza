@@ -1,8 +1,9 @@
-"""Legacy/internal Group Comparison worksheet helpers retained for migration support.
+"""Legacy/internal grouped-comparison worksheet helpers pending removal.
 
-This module is no longer part of the default export contract. Canonical
-user-facing workbook output now flows through the Group Analysis
-service/writer path instead.
+This module preserves the old Group Comparison sheet only for migration and
+internal validation paths. It is no longer part of the supported user-facing
+export contract, which now flows through the canonical Group Analysis
+worksheet/service path.
 
 Fallback behavior:
     Empty/invalid inputs still render deterministic legacy scaffolding with
@@ -1217,10 +1218,11 @@ def _write_matrix_collection(worksheet, row, title, matrices, *, matrix_type, ef
 
 
 def write_group_comparison_sheet(worksheet, payload):
-    """Render the legacy Group Comparison worksheet for internal migration checks.
+    """Render the legacy/internal Group Comparison worksheet pending removal.
 
-    This writer is retained only for non-default/internal validation paths and
-    is not part of the canonical user-facing export contract.
+    This writer is retained only for non-default internal migration checks and
+    is not part of the supported user-facing export contract. The canonical
+    grouped-report worksheet is Group Analysis.
 
     Fallback behavior:
         Section headers are always emitted even when rows are absent so legacy

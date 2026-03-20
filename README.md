@@ -64,7 +64,7 @@ Parity between native and Python backends is enforced through fixture-based test
 
 ## Group Analysis
 
-Excel exports now present grouped statistical results in a single **Group Analysis** worksheet.
+Excel exports now present grouped statistical results in a single canonical **Group Analysis** worksheet.
 
 ### What is on the sheet
 
