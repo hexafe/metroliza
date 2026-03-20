@@ -9,20 +9,21 @@ DEFAULT_PLOT_ROW_SPAN = 16
 GROUP_ANALYSIS_COLUMN_WIDTHS = {
     0: 20,
     1: 14,
-    2: 11,
-    3: 11,
-    4: 11,
-    5: 11,
-    6: 11,
-    7: 11,
-    8: 10,
-    9: 14,
+    2: 13,
+    3: 13,
+    4: 20,
+    5: 13,
+    6: 13,
+    7: 28,
+    8: 14,
+    9: 28,
     10: 14,
     11: 18,
     12: 14,
     13: 34,
     14: 14,
 }
+METRIC_TITLE_LAST_COL = 14
 
 
 _PLOT_SKIP_REASON_LABELS = {
@@ -98,7 +99,7 @@ def _build_formats(worksheet):
             'bold': True,
             'align': 'left',
             'valign': 'vcenter',
-            'text_wrap': True,
+            'text_wrap': False,
         }),
         'section_fmt': workbook.add_format({
             'bg_color': '#374151',
@@ -155,8 +156,11 @@ def _apply_conditional(worksheet, first_row, first_col, last_row, last_col, rule
     worksheet.conditional_format(first_row, first_col, last_row, last_col, rule)
 
 
-def _write_section_title(worksheet, row, title):
-    worksheet.write(row, 0, title)
+def _write_section_title(worksheet, row, title, *, merge_to_col=None, cell_format=None):
+    if merge_to_col is not None and hasattr(worksheet, 'merge_range'):
+        worksheet.merge_range(row, 0, row, merge_to_col, title, cell_format)
+    else:
+        worksheet.write(row, 0, title, cell_format)
     return row + 1
 
 
@@ -223,7 +227,7 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
         for row in sheet_state.get('title_rows', []):
             worksheet.set_row(row, 24, header_formats['title'])
         for row in sheet_state.get('metric_rows', []):
-            worksheet.set_row(row, 24, header_formats['metric'])
+            worksheet.set_row(row, 28, header_formats['metric'])
         for row in sheet_state.get('section_rows', []):
             worksheet.set_row(row, 22, header_formats['section'])
         for row in sheet_state.get('header_rows', []):
@@ -322,10 +326,16 @@ def _apply_spec_status_and_flag_formats(worksheet, bounds):
 
 def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet_state=None):
     metric_title_row = row
-    row = _write_section_title(worksheet, row, f"Metric: {metric_row.get('metric', 'Unknown')}")
+    metric_title = f"Metric: {metric_row.get('metric', 'Unknown')}"
+    row = _write_section_title(
+        worksheet,
+        row,
+        metric_title,
+        merge_to_col=METRIC_TITLE_LAST_COL,
+        cell_format=_build_formats(worksheet).get('metric_fmt'),
+    )
     if sheet_state is not None:
         sheet_state['metric_rows'].append(metric_title_row)
-        sheet_state['styled_cells'].append((metric_title_row, 0, f"Metric: {metric_row.get('metric', 'Unknown')}", 'metric'))
 
     spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
     metric_meta_rows = [
@@ -429,13 +439,14 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             'difference': entry.get('difference'),
             'caution': entry.get('comment'),
             'Flags': entry.get('flags'),
+            'Why this test': entry.get('test_rationale'),
         }
         for entry in metric_row.get('pairwise_rows', [])
     ]
     row, pairwise_bounds = _write_table_with_bounds(
         worksheet,
         row,
-        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'difference', 'caution', 'Flags'],
+        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'difference', 'caution', 'Flags', 'Why this test'],
         pairwise_rows,
     )
     if sheet_state is not None:
@@ -459,7 +470,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
                 sheet_state['numeric_cells'].append((data_row, header_lookup['effect size'], entry.get('effect size'), 'num'))
             if 'Delta mean' in header_lookup:
                 sheet_state['numeric_cells'].append((data_row, header_lookup['Delta mean'], entry.get('Delta mean'), 'num'))
-            for header in ('test', 'caution', 'Flags'):
+            for header in ('test', 'caution', 'Flags', 'Why this test'):
                 if header in header_lookup and entry.get(header):
                     fmt_key = 'note' if header == 'caution' else 'wrap'
                     sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), fmt_key))
@@ -491,63 +502,49 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         if sheet_state is not None:
             sheet_state['section_rows'].append(section_row)
             sheet_state['styled_cells'].append((section_row, 0, 'Plots', 'section'))
-        worksheet.write(row, 0, 'Plot')
-        worksheet.write(row, 1, 'Status')
-        worksheet.write(row, 2, 'Detail')
-        plot_header_row = row
-        if sheet_state is not None:
-            sheet_state['header_rows'].append(row)
-            sheet_state['styled_cells'].extend(
-                [
-                    (row, 0, 'Plot', 'header'),
-                    (row, 1, 'Status', 'header'),
-                    (row, 2, 'Detail', 'header'),
-                ]
-            )
-        row += 1
-        plot_data_start = row
-
         for plot_key, plot_label in (('violin', 'Violin'), ('histogram', 'Histogram')):
             eligibility = plot_eligibility.get(plot_key) or {}
             eligible = bool(eligibility.get('eligible'))
             skip_reason = str(eligibility.get('skip_reason') or 'ineligible')
             asset = metric_assets.get(plot_key)
 
+            subsection_row = row
+            worksheet.write(subsection_row, 0, plot_label)
+            if sheet_state is not None:
+                sheet_state['section_rows'].append(subsection_row)
+                sheet_state['styled_cells'].append((subsection_row, 0, plot_label, 'section'))
+
             if not eligible:
-                worksheet.write(row, 0, plot_label)
-                worksheet.write(row, 1, 'Not shown')
-                worksheet.write(row, 2, _get_plot_skip_reason_label(skip_reason))
+                message = _get_plot_skip_reason_label(skip_reason)
+                worksheet.write(subsection_row, 1, 'Not shown')
+                worksheet.write(subsection_row, 2, message)
                 if sheet_state is not None:
-                    sheet_state['styled_cells'].append((row, 2, _get_plot_skip_reason_label(skip_reason), 'note'))
-                    sheet_state['note_rows'].append((row, _get_plot_skip_reason_label(skip_reason)))
+                    sheet_state['styled_cells'].append((subsection_row, 1, 'Not shown', 'wrap'))
+                    sheet_state['styled_cells'].append((subsection_row, 2, message, 'note'))
+                    sheet_state['note_rows'].append((subsection_row, message))
                 row += 1
                 continue
 
             inserted = _insert_plot_image(worksheet, row + 1, asset)
             if inserted:
-                worksheet.write(row, 0, plot_label)
-                worksheet.write(row, 1, 'Shown')
-                worksheet.write(row, 2, 'Shown below.')
+                worksheet.write(subsection_row, 1, 'Shown')
+                worksheet.write(subsection_row, 2, 'Shown below.')
+                if sheet_state is not None:
+                    sheet_state['styled_cells'].append((subsection_row, 1, 'Shown', 'wrap'))
+                    sheet_state['styled_cells'].append((subsection_row, 2, 'Shown below.', 'wrap'))
                 row_span = DEFAULT_PLOT_ROW_SPAN
                 if isinstance(asset, dict) and isinstance(asset.get('row_span'), int) and asset.get('row_span') > 0:
                     row_span = int(asset.get('row_span'))
                 row += 1 + row_span
             else:
-                worksheet.write(row, 0, plot_label)
-                worksheet.write(row, 1, 'Not shown')
-                worksheet.write(row, 2, _get_plot_skip_reason_label('asset_missing'))
+                message = _get_plot_skip_reason_label('asset_missing')
+                worksheet.write(subsection_row, 1, 'Not shown')
+                worksheet.write(subsection_row, 2, message)
                 if sheet_state is not None:
-                    sheet_state['styled_cells'].append((row, 2, _get_plot_skip_reason_label('asset_missing'), 'note'))
-                    sheet_state['note_rows'].append((row, _get_plot_skip_reason_label('asset_missing')))
+                    sheet_state['styled_cells'].append((subsection_row, 1, 'Not shown', 'wrap'))
+                    sheet_state['styled_cells'].append((subsection_row, 2, message, 'note'))
+                    sheet_state['note_rows'].append((subsection_row, message))
                 row += 1
-
-        if sheet_state is not None and row > plot_data_start:
-            sheet_state['autofilter_blocks'].append({
-                'header_row': plot_header_row,
-                'first_col': 0,
-                'last_row': row - 1,
-                'last_col': 2,
-            })
 
     row += SECTION_GAP
     return row
