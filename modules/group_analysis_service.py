@@ -533,7 +533,7 @@ def _recommended_metric_action(*, pairwise_rows, distribution_difference, analys
     if not analysis_policy.get('allow_pairwise'):
         return 'Recommended action: use descriptive results only; direct pairwise interpretation is not supported for this metric.'
 
-    significant_rows = [row for row in pairwise_rows if bool(row.get('significant'))]
+    significant_rows = [row for row in pairwise_rows if str(row.get('difference') or '').strip().upper() == 'YES']
     if significant_rows:
         ranked = sorted(
             significant_rows,
@@ -653,7 +653,6 @@ def build_pairwise_rows(
                 'test_rationale': _build_pairwise_test_rationale(group_count=group_count, test_used=row.get('test_used')),
                 'takeaway': _pairwise_takeaway(adjusted_p_value=rounded_adj_p, effect_size=rounded_effect_size, flags=flags_text),
                 'suggested_action': _pairwise_action(adjusted_p_value=rounded_adj_p, effect_size=rounded_effect_size, flags=flags_text),
-                'significant': significant,
             }
         )
     return output
