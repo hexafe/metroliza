@@ -449,9 +449,10 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             self.assertTrue(completed)
             sheet_names = _xlsx_sheet_names(out_path)
             self.assertNotIn('Group Analysis', sheet_names)
+            self.assertNotIn('Group Comparison', sheet_names)
             self.assertNotIn('Diagnostics', sheet_names)
 
-    def test_group_analysis_light_and_standard_emit_analysis_without_default_diagnostics(self):
+    def test_default_group_analysis_export_contract_uses_group_analysis_only(self):
         for level in ('light', 'standard'):
             with self.subTest(level=level), tempfile.TemporaryDirectory() as temp_dir:
                 db_path = str(Path(temp_dir) / 'metroliza.sqlite')
@@ -487,8 +488,15 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
 
                 grouping_df = pd.DataFrame(
                     [
-                        {'REPORT_ID': report_id, 'GROUP': group}
-                        for report_id, _filename, _report_date, _sample_number, group, _meas, _dev in report_rows
+                        {
+                            'REFERENCE': 'REF-1',
+                            'FILELOC': '/fake/reports',
+                            'FILENAME': filename,
+                            'DATE': report_date,
+                            'SAMPLE_NUMBER': sample_number,
+                            'GROUP': group,
+                        }
+                        for _report_id, filename, report_date, sample_number, group, _meas, _dev in report_rows
                     ]
                 )
                 request = ExportRequest(
@@ -502,7 +510,17 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertTrue(completed)
                 sheet_names = _xlsx_sheet_names(out_path)
                 self.assertIn('Group Analysis', sheet_names)
+                self.assertNotIn('Group Comparison', sheet_names)
                 self.assertNotIn('Diagnostics', sheet_names)
+
+                analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+                self.assertIn('Group Analysis', analysis_values)
+                self.assertIn('Field', analysis_values)
+                self.assertIn('Descriptive stats', analysis_values)
+                self.assertIn('Pairwise comparisons', analysis_values)
+                self.assertIn('Distribution shape: No statistically significant distribution shape differences were detected.', analysis_values)
+                self.assertNotIn('Location / Central-Tendency Pairwise Comparison Table', analysis_values)
+                self.assertNotIn('Distribution Shape Pairwise Table', analysis_values)
 
     def test_group_analysis_scope_mismatch_writes_exact_message_and_diagnostics(self):
         scenarios = [
