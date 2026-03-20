@@ -7,20 +7,20 @@ from modules.group_analysis_service import get_spec_status_label
 SECTION_GAP = 1
 DEFAULT_PLOT_ROW_SPAN = 16
 GROUP_ANALYSIS_COLUMN_WIDTHS = {
-    0: 20,
-    1: 18,
-    2: 12,
-    3: 12,
-    4: 20,
-    5: 12,
-    6: 14,
-    7: 30,
+    0: 18,
+    1: 30,
+    2: 11,
+    3: 11,
+    4: 13,
+    5: 13,
+    6: 20,
+    7: 13,
     8: 14,
-    9: 30,
-    10: 14,
-    11: 20,
+    9: 28,
+    10: 16,
+    11: 28,
     12: 14,
-    13: 30,
+    13: 28,
     14: 16,
 }
 METRIC_TITLE_LAST_COL = 14
@@ -229,6 +229,15 @@ def _estimate_wrapped_row_height(*values):
     return 26
 
 
+def _estimate_metric_title_height(title):
+    return 32 if len(str(title or '')) > 90 else 28
+
+
+def _estimate_header_height(*headers):
+    text = ' '.join(str(value or '') for value in headers if value not in (None, ''))
+    return 30 if len(text) > 120 else 24
+
+
 def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
     if worksheet is None:
         return
@@ -259,15 +268,15 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
 
     if hasattr(worksheet, 'set_row'):
         for row in sheet_state.get('title_rows', []):
-            worksheet.set_row(row, 24, header_formats['title'])
-        for row in sheet_state.get('metric_rows', []):
-            worksheet.set_row(row, 28, header_formats['metric'])
+            worksheet.set_row(row, 26, header_formats['title'])
+        for row, value in sheet_state.get('metric_rows', []):
+            worksheet.set_row(row, _estimate_metric_title_height(value), header_formats['metric'])
         for row in sheet_state.get('section_rows', []):
             worksheet.set_row(row, 22, header_formats['section'])
         for row in sheet_state.get('subsection_rows', []):
             worksheet.set_row(row, 22, header_formats['header'])
-        for row in sheet_state.get('header_rows', []):
-            worksheet.set_row(row, 24, header_formats['header'])
+        for row, headers in sheet_state.get('header_rows', []):
+            worksheet.set_row(row, _estimate_header_height(*headers), header_formats['header'])
         for row, value in sheet_state.get('note_rows', []):
             worksheet.set_row(row, _estimate_note_height(value), header_formats['note'])
         for row, values in sheet_state.get('wrapped_data_rows', []):
@@ -289,6 +298,19 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
         for block in sheet_state.get('autofilter_blocks', []):
             if block['header_row'] < block['last_row']:
                 worksheet.autofilter(block['header_row'], block['first_col'], block['last_row'], block['last_col'])
+
+
+def _write_named_value_rows(worksheet, row, rows, *, sheet_state=None):
+    start_row = row
+    for entry in rows:
+        worksheet.write(row, 0, entry.get('Field'))
+        worksheet.write(row, 1, entry.get('Value'))
+        if sheet_state is not None:
+            sheet_state['styled_cells'].append((row, 0, entry.get('Field'), 'header'))
+            sheet_state['styled_cells'].append((row, 1, entry.get('Value'), 'wrap'))
+            sheet_state['wrapped_data_rows'].append((row, [entry.get('Value')]))
+        row += 1
+    return row, {'first_row': start_row, 'last_row': row - 1}
 
 
 def _apply_metric_pairwise_formats(worksheet, bounds):
@@ -373,9 +395,14 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         cell_format=_build_formats(worksheet).get('metric_fmt'),
     )
     if sheet_state is not None:
-        sheet_state['metric_rows'].append(metric_title_row)
+        sheet_state['metric_rows'].append((metric_title_row, metric_title))
 
     spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
+    section_row = row
+    row = _write_section_title(worksheet, row, 'Metric overview')
+    if sheet_state is not None:
+        sheet_state['section_rows'].append(section_row)
+        sheet_state['styled_cells'].append((section_row, 0, 'Metric overview', 'section'))
     metric_meta_rows = [
         {'Field': 'Groups', 'Value': metric_row.get('group_count')},
         {'Field': 'Spec status', 'Value': spec_status_label},
@@ -386,7 +413,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
     ]
     row, meta_bounds = _write_table_with_bounds(worksheet, row, ['Field', 'Value'], metric_meta_rows)
     if sheet_state is not None:
-        sheet_state['header_rows'].append(meta_bounds['header_row'])
+        sheet_state['header_rows'].append((meta_bounds['header_row'], meta_bounds['headers']))
         sheet_state['styled_cells'].extend(
             (meta_bounds['header_row'], col, header, 'header')
             for col, header in enumerate(meta_bounds['headers'])
@@ -433,7 +460,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         desc_rows,
     )
     if sheet_state is not None:
-        sheet_state['header_rows'].append(desc_bounds['header_row'])
+        sheet_state['header_rows'].append((desc_bounds['header_row'], desc_bounds['headers']))
         sheet_state['styled_cells'].extend(
             (desc_bounds['header_row'], col, header, 'header')
             for col, header in enumerate(desc_bounds['headers'])
@@ -487,7 +514,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         pairwise_rows,
     )
     if sheet_state is not None:
-        sheet_state['header_rows'].append(pairwise_bounds['header_row'])
+        sheet_state['header_rows'].append((pairwise_bounds['header_row'], pairwise_bounds['headers']))
         sheet_state['styled_cells'].extend(
             (pairwise_bounds['header_row'], col, header, 'header')
             for col, header in enumerate(pairwise_bounds['headers'])
@@ -513,7 +540,9 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
                     sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), fmt_key))
             if entry.get('caution'):
                 sheet_state['note_rows'].append((data_row, entry.get('caution')))
-            sheet_state['wrapped_data_rows'].append((data_row, [entry.get('best fit model'), entry.get('fit quality'), entry.get('caution')]))
+            sheet_state['wrapped_data_rows'].append(
+                (data_row, [entry.get('test'), entry.get('caution'), entry.get('Takeaway'), entry.get('Suggested action'), entry.get('Why this test')])
+            )
     _apply_metric_pairwise_formats(worksheet, pairwise_bounds)
     row += SECTION_GAP
 
@@ -612,15 +641,7 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
     ]
     if payload.get('skip_reason'):
         summary_rows.append({'Field': 'Skip reason', 'Value': payload['skip_reason'].get('message')})
-    row, summary_bounds = _write_table_with_bounds(worksheet, row, ['Field', 'Value'], summary_rows)
-    sheet_state['header_rows'].append(summary_bounds['header_row'])
-    sheet_state['styled_cells'].extend(
-        (summary_bounds['header_row'], col, header, 'header')
-        for col, header in enumerate(summary_bounds['headers'])
-    )
-    for data_row_idx, entry in enumerate(summary_rows):
-        data_row = summary_bounds['first_data_row'] + data_row_idx
-        sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'wrap'))
+    row, _summary_bounds = _write_named_value_rows(worksheet, row, summary_rows, sheet_state=sheet_state)
     row += SECTION_GAP
 
     normalized_level = str(payload.get('analysis_level') or 'light').strip().lower()
