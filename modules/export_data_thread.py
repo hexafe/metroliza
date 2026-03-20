@@ -1148,11 +1148,11 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     if show_modeled_risk_rows:
         side_parts = []
         allow_lower_tail = spec_type in {'bilateral', 'lower_only'} and lsl is not None
+        lower_tail_value = below_lsl
         if inferred_support_mode == 'one_sided_zero_bound_positive' and _is_effectively_zero(lsl):
-            if _format_probability_percent(below_lsl, decimals=4) == 'N/A' or _is_effectively_zero(below_lsl):
-                allow_lower_tail = False
+            lower_tail_value = 0.0
         if allow_lower_tail:
-            side_parts.append(f"L: {_format_probability_percent(below_lsl, decimals=4)}")
+            side_parts.append(f"L: {_format_probability_percent(lower_tail_value, decimals=4)}")
         if spec_type in {'bilateral', 'upper_only'} and usl is not None:
             side_parts.append(f"U: {_format_probability_percent(above_usl, decimals=4)}")
 

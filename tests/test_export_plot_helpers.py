@@ -678,6 +678,24 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         self.assertNotIn('P(<LSL)', [label for label, _ in rows])
 
+    def test_distribution_fit_table_rows_force_zero_lower_tail_for_one_sided_zero_bound_positive(self):
+        rows = _build_distribution_fit_table_rows(
+            {
+                'inferred_support_mode': 'one_sided_zero_bound_positive',
+                'risk_estimates': {
+                    'spec_type': 'bilateral',
+                    'below_lsl_probability': 0.0012,
+                    'above_usl_probability': 0.0023,
+                    'nok_percent': 0.1234,
+                    'ppm_nok': 1234.0,
+                },
+            },
+            lsl=0.0,
+            usl=10.5,
+        )
+
+        self.assertEqual(rows[1], ('Est. NOK %', '0.1234%\nL: 0.0000%, U: 0.2300%'))
+
     def test_distribution_fit_table_rows_fallback_to_na_when_fit_unreliable(self):
         rows = _build_distribution_fit_table_rows(
             {
