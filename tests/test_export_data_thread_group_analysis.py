@@ -206,7 +206,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertNotIn('Group Comparison', sheet_names)
             self.assertNotIn('Diagnostics', sheet_names)
 
-    def test_light_mode_does_not_emit_standard_chart_insertion_content(self):
+    def test_light_mode_exports_group_analysis_only_without_default_debug_sheets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_path = self._run_export(temp_dir, level='light')
             sheet_names = _xlsx_sheet_names(out_path)
@@ -215,11 +215,16 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertNotIn('Diagnostics', sheet_names)
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+            self.assertIn('Group Analysis', analysis_values)
+            self.assertIn('Field', analysis_values)
+            self.assertIn('Descriptive stats', analysis_values)
+            self.assertIn('Pairwise comparisons', analysis_values)
+            self.assertIn('Distribution shape: No statistically significant distribution shape differences were detected.', analysis_values)
             self.assertNotIn('Plots', analysis_values)
             self.assertNotIn('Shown below.', analysis_values)
             self.assertNotIn('Shown', analysis_values)
 
-    def test_standard_mode_inserts_plots_and_diagnostics_remain_deterministic(self):
+    def test_standard_mode_exports_group_analysis_only_with_plots_and_no_default_debug_sheets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_path = self._run_export(temp_dir, level='standard')
 
@@ -244,23 +249,33 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertGreaterEqual(len(media_files), 2)
 
 
-    def test_group_analysis_internal_diagnostics_can_be_enabled_for_debug_exports(self):
+    def test_group_analysis_internal_diagnostics_can_be_enabled_only_by_internal_debug_policy(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS': '1'}):
             out_path = self._run_export(temp_dir, level='light')
             sheet_names = _xlsx_sheet_names(out_path)
             self.assertIn('Group Analysis', sheet_names)
-            self.assertNotIn('Group Comparison', sheet_names)
             self.assertIn('Diagnostics', sheet_names)
+            self.assertNotIn('Group Comparison', sheet_names)
 
             diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
             self.assertIn('ran', diagnostics_values)
             self.assertIn('light', diagnostics_values)
 
-    def test_standard_mode_group_analysis_sheet_has_layout_pass_artifacts(self):
+    def test_standard_mode_group_analysis_sheet_has_persisted_layout_and_content_contract(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_path = self._run_export(temp_dir, level='standard')
+            analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
             sheet_xml, styles_xml = _xlsx_sheet_xml_details(out_path, 'Group Analysis')
             ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+
+            self.assertIn('Group Analysis', analysis_values)
+            self.assertIn('Field', analysis_values)
+            self.assertIn('Descriptive stats', analysis_values)
+            self.assertIn('Pairwise comparisons', analysis_values)
+            self.assertIn('Distribution shape: No statistically significant distribution shape differences were detected.', analysis_values)
+            self.assertIn('Plots', analysis_values)
+            self.assertIn('Violin', analysis_values)
+            self.assertIn('Histogram', analysis_values)
 
             cols = {
                 int(col.attrib['min']): float(col.attrib['width'])
@@ -281,12 +296,14 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn(auto_filter.attrib.get('ref'), {'A15:O17', 'A20:J21'})
             self.assertGreaterEqual(len(sheet_xml.findall('x:conditionalFormatting', ns)), 1)
 
-            wrapped_row_heights = [
-                float(row.attrib['ht'])
+            row_heights = {
+                int(row.attrib['r']): float(row.attrib['ht'])
                 for row in sheet_xml.findall('x:sheetData/x:row', ns)
                 if row.attrib.get('ht')
-            ]
-            self.assertTrue(any(height >= 22 for height in wrapped_row_heights))
+            }
+            self.assertGreaterEqual(row_heights.get(1, 0), 24)
+            self.assertTrue(any(height >= 22 for height in row_heights.values()))
+            self.assertTrue(any(height >= 30 for height in row_heights.values()))
 
             alignment_by_style = {}
             for idx, xf in enumerate(styles_xml.findall('x:cellXfs/x:xf', ns)):
@@ -310,8 +327,11 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertTrue(any(font.find('x:b', ns) is not None for font in fonts))
 
             merge_refs = {merge.attrib.get('ref') for merge in sheet_xml.findall('x:mergeCells/x:mergeCell', ns)}
-            self.assertTrue(any(ref.startswith('A1:O1') for ref in merge_refs))
+            self.assertIn('A1:O1', merge_refs)
             self.assertTrue(any(ref.startswith('A7:O7') for ref in merge_refs))
+
+            drawing = sheet_xml.find('x:drawing', ns)
+            self.assertIsNotNone(drawing)
 
     def test_group_analysis_violin_uses_horizontal_spec_lines_with_annotations(self):
         metric_row = {
