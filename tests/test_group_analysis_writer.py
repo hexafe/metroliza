@@ -194,7 +194,12 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIsNone(worksheet.frozen)
         self.assertEqual(worksheet.gridlines_hidden, 2)
         self.assertEqual(worksheet.columns[0][:3], (0, 0, 18))
-        self.assertEqual(worksheet.columns[-1][:3], (14, 14, 16))
+        self.assertEqual(worksheet.columns[2][:3], (2, 2, 16))
+        self.assertEqual(worksheet.columns[13][:3], (13, 13, 24))
+        self.assertEqual(worksheet.columns[-1][:3], (14, 14, 18))
+        index_header_row = next(row for row, col, value in worksheet.writes if col == 2 and value == 'Jump to section')
+        index_header_height = max(height for row, height, *_ in worksheet.rows if row == index_header_row)
+        self.assertGreaterEqual(index_header_height, 24)
         self.assertTrue(any(row == 0 and height == 28 for row, height, *_ in worksheet.rows))
         metric_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Metric: M1')
         self.assertFalse(worksheet.write_formats[(metric_row, 0)].get('props', {}).get('text_wrap'))
@@ -213,11 +218,15 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertTrue(note_row_heights)
         self.assertGreaterEqual(note_row_heights[-1], 30)
         self.assertTrue(any(row == metric_row and height >= 28 for row, height, *_ in worksheet.rows))
+        desc_caution_row = next(row for row, col, value in worksheet.writes if col == 13 and value == 'caution')
+        desc_caution_height = next(height for row, height, *_ in worksheet.rows if row == desc_caution_row)
+        self.assertGreater(desc_caution_height, DEFAULT_SIMPLE_ROW_HEIGHT := 22)
+        pairwise_data_row = next(row for row, col, value in worksheet.writes if col == 8 and value == 'These groups show a reliable difference after correction. The practical gap looks moderate.')
+        pairwise_data_height = next(height for row, height, *_ in worksheet.rows if row == pairwise_data_row)
+        self.assertGreater(pairwise_data_height, DEFAULT_SIMPLE_ROW_HEIGHT)
         self.assertGreaterEqual(len(worksheet.autofilters), 2)
-        self.assertTrue(
-            any("HYPERLINK(" in formula[2] for formula in worksheet.formulas)
-            or any(url[2].startswith("internal:'Group Analysis'!A") for url in worksheet.urls)
-        )
+        index_link_row = next(row for row, col, value in worksheet.writes if col == 2 and value == 'Go to metric')
+        self.assertTrue(any(formula[0] == index_link_row and f'A{metric_row + 1}' in formula[2] for formula in worksheet.formulas))
 
         pairwise_rules = [
             rule

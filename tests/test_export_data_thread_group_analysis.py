@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import tempfile
 import types
@@ -113,6 +114,40 @@ def _xlsx_sheet_text_values(xlsx_path, target_sheet_name):
         return values
 
 
+def _sheet_cell_text_map(sheet_xml, xlsx_path):
+    ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    ns_rel = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+    text_map = {}
+    with zipfile.ZipFile(xlsx_path, 'r') as workbook_zip:
+        shared_strings = []
+        if 'xl/sharedStrings.xml' in workbook_zip.namelist():
+            sst = ET.fromstring(workbook_zip.read('xl/sharedStrings.xml'))
+            for si in sst.findall('x:si', ns_main):
+                text_parts = [node.text or '' for node in si.findall('.//x:t', ns_main)]
+                shared_strings.append(''.join(text_parts))
+        for cell in sheet_xml.findall('x:sheetData/x:row/x:c', ns_main):
+            ref = cell.attrib.get('r')
+            cell_type = cell.attrib.get('t')
+            value = None
+            if cell_type == 's':
+                idx_node = cell.find('x:v', ns_main)
+                if idx_node is not None and idx_node.text and idx_node.text.isdigit():
+                    idx = int(idx_node.text)
+                    if 0 <= idx < len(shared_strings):
+                        value = shared_strings[idx]
+            elif cell_type == 'inlineStr':
+                text_node = cell.find('x:is/x:t', ns_main)
+                if text_node is not None:
+                    value = text_node.text or ''
+            else:
+                value_node = cell.find('x:v', ns_main)
+                if value_node is not None:
+                    value = value_node.text
+            if ref and value is not None:
+                text_map[ref] = value
+    return text_map
+
+
 def _xlsx_sheet_xml_details(xlsx_path, target_sheet_name):
     ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
     ns_rel = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
@@ -174,6 +209,15 @@ def _column_width_for(cols, target_idx):
         if min_idx <= target_idx <= max_idx:
             return width
     raise KeyError(target_idx)
+
+
+def _row_heights(sheet_xml):
+    ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    return {
+        int(row.attrib['r']): float(row.attrib['ht'])
+        for row in sheet_xml.findall('x:sheetData/x:row', ns)
+        if row.attrib.get('ht')
+    }
 
 
 def _seed_grouped_measurements(db_path):
@@ -332,8 +376,12 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             ]
             self.assertAlmostEqual(_column_width_for(cols, 1), 18.7109375, places=3)
             self.assertAlmostEqual(_column_width_for(cols, 2), 18.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 14), 22.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 15), 16.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 3), 16.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 8), 22.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 10), 24.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 12), 28.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 14), 24.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 15), 18.7109375, places=3)
 
             pane = sheet_xml.find('x:sheetViews/x:sheetView/x:pane', ns)
             self.assertIsNone(pane)
@@ -343,11 +391,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertRegex(auto_filter.attrib.get('ref', ''), r'^A\d+:L\d+$|^A\d+:O\d+$')
             self.assertGreaterEqual(len(sheet_xml.findall('x:conditionalFormatting', ns)), 1)
 
-            row_heights = {
-                int(row.attrib['r']): float(row.attrib['ht'])
-                for row in sheet_xml.findall('x:sheetData/x:row', ns)
-                if row.attrib.get('ht')
-            }
+            row_heights = _row_heights(sheet_xml)
             self.assertGreaterEqual(row_heights.get(1, 0), 28)
             self.assertTrue(any(height >= 22 for height in row_heights.values()))
             self.assertTrue(any(height >= 30 for height in row_heights.values()))
@@ -383,6 +427,21 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             formulas = _xlsx_sheet_formulas(out_path, 'Group Analysis')
             self.assertTrue(any(ref.startswith('C') and 'HYPERLINK(' in formula for ref, formula in formulas.items()))
+            cell_text_map = _sheet_cell_text_map(sheet_xml, out_path)
+            metric_title_targets = [
+                int(match.group(1))
+                for row_ref, formula in formulas.items()
+                if row_ref.startswith('C')
+                for match in [re.search(r"#'Group Analysis'!A(\d+)", formula)]
+                if match
+            ]
+            metric_title_rows = {
+                ref
+                for ref, value in cell_text_map.items()
+                if isinstance(value, str) and value.startswith('Metric: FEATURE_1')
+            }
+            self.assertTrue(metric_title_rows)
+            self.assertTrue(any(f'A{target_row}' in metric_title_rows for target_row in metric_title_targets))
 
             styled_cells = sheet_xml.findall('x:sheetData/x:row/x:c', ns)
             wrap_styles = {
@@ -391,6 +450,41 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             }
             self.assertEqual(wrap_styles.get('A1', {}).get('wrapText'), None)
             self.assertTrue(any(ref.startswith('H') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
+            self.assertTrue(any(ref.startswith('I') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
+            self.assertTrue(any(ref.startswith('J') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
+            self.assertTrue(any(ref.startswith('L') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
+
+            jump_header_row = next(int(ref[1:]) for ref, value in cell_text_map.items() if value == 'Jump to section')
+            self.assertGreaterEqual(row_heights.get(jump_header_row, 0), 24)
+
+            feature_metric_row = next(
+                int(ref[1:])
+                for ref, value in cell_text_map.items()
+                if isinstance(value, str) and value.startswith('Metric: FEATURE_1')
+            )
+            linked_targets = [
+                int(match.group(1))
+                for formula in formulas.values()
+                for match in [re.search(r"#'Group Analysis'!A(\d+)", formula)]
+                if match
+            ]
+            self.assertIn(feature_metric_row, linked_targets)
+
+            descriptive_wrapped_rows = [
+                int(ref[1:])
+                for ref, attrs in wrap_styles.items()
+                if ref.startswith(('L', 'M', 'N')) and attrs.get('wrapText') == '1'
+            ]
+            self.assertTrue(descriptive_wrapped_rows)
+            self.assertTrue(any(row_heights.get(row, 0) > 22 for row in descriptive_wrapped_rows))
+
+            pairwise_wrapped_rows = [
+                int(ref[1:])
+                for ref, attrs in wrap_styles.items()
+                if ref.startswith(('E', 'H', 'I', 'J', 'L')) and attrs.get('wrapText') == '1'
+            ]
+            self.assertTrue(pairwise_wrapped_rows)
+            self.assertTrue(any(row_heights.get(row, 0) > 22 for row in pairwise_wrapped_rows))
 
     def test_group_analysis_violin_uses_horizontal_spec_lines_with_annotations(self):
         metric_row = {
