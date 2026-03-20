@@ -202,6 +202,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             out_path = self._run_export(temp_dir, level='off')
             sheet_names = _xlsx_sheet_names(out_path)
             self.assertNotIn('Group Analysis', sheet_names)
+            self.assertNotIn('Group Comparison', sheet_names)
             self.assertNotIn('Diagnostics', sheet_names)
 
     def test_light_mode_does_not_emit_standard_chart_insertion_content(self):
@@ -209,7 +210,10 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             out_path = self._run_export(temp_dir, level='light')
             sheet_names = _xlsx_sheet_names(out_path)
             self.assertIn('Group Analysis', sheet_names)
+            self.assertIn('Group Comparison', sheet_names)
             self.assertIn('Diagnostics', sheet_names)
+            self.assertLess(sheet_names.index('Group Analysis'), sheet_names.index('Group Comparison'))
+            self.assertLess(sheet_names.index('Group Comparison'), sheet_names.index('Diagnostics'))
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
             self.assertNotIn('Plots', analysis_values)
@@ -219,6 +223,13 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
     def test_standard_mode_inserts_plots_and_diagnostics_remain_deterministic(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_path = self._run_export(temp_dir, level='standard')
+
+            sheet_names = _xlsx_sheet_names(out_path)
+            self.assertIn('Group Analysis', sheet_names)
+            self.assertIn('Group Comparison', sheet_names)
+            self.assertIn('Diagnostics', sheet_names)
+            self.assertLess(sheet_names.index('Group Analysis'), sheet_names.index('Group Comparison'))
+            self.assertLess(sheet_names.index('Group Comparison'), sheet_names.index('Diagnostics'))
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
             self.assertIn('Plots', analysis_values)
