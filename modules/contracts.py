@@ -68,13 +68,19 @@ class ExportOptions:
         chart_worker_queue_size: Queue size for chart workers, minimum of ``1``.
         group_analysis_level: Workbook-level Group Analysis mode. Supported
             values are ``"off"``, ``"light"``, and ``"standard"``.
+            ``"light"`` and ``"standard"`` produce a user-facing
+            ``Group Analysis`` worksheet by default; they do not automatically
+            add a separate ``Diagnostics`` worksheet. Internal/debug flows may
+            still opt into diagnostics-only workbook output separately.
         group_analysis_scope: Requested Group Analysis scope. Supported values
             are ``"auto"``, ``"single_reference"``, and
             ``"multi_reference"``.
 
     Usage notes:
         ``validate_export_options`` returns a normalized copy with sanitized
-        casing/aliases and bounded numeric settings.
+        casing/aliases and bounded numeric settings. Group Analysis defaults are
+        user-facing only: Light/Standard do not imply a separate diagnostics
+        worksheet unless an internal/debug export path enables it explicitly.
     """
 
     preset: str = "fast_diagnostics"

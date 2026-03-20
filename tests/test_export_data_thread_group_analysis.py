@@ -244,7 +244,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertGreaterEqual(len(media_files), 2)
 
 
-    def test_group_analysis_diagnostics_can_be_enabled_for_internal_exports(self):
+    def test_group_analysis_internal_diagnostics_can_be_enabled_for_debug_exports(self):
         with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS': '1'}):
             out_path = self._run_export(temp_dir, level='light')
             sheet_names = _xlsx_sheet_names(out_path)
