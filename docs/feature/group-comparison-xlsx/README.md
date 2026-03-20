@@ -11,6 +11,8 @@ This workspace is **not active**.
 
 Its content has been superseded by the canonical Group Analysis documentation in [`../group-analysis/README.md`](../group-analysis/README.md), which is now the only active feature-doc workspace for the grouped statistical export surface.
 
+The current product contract is explicit: normal grouped exports create only the user-facing `Group Analysis` worksheet. A separate `Group Comparison` sheet is legacy/internal history only.
+
 ## What remains relevant
 The files in this folder may still be useful as historical notes about:
 

@@ -71,11 +71,13 @@ Excel exports now present grouped statistical results in a single canonical **Gr
 The worksheet is designed to be read top-to-bottom on one sheet instead of making users jump between separate comparison and chart tabs:
 
 - **Title and context at the top** so users can confirm they are reading the grouped analysis output.
-- A **compact summary** near the top that highlights which metrics and comparisons deserve attention first.
+- A **compact summary** near the top that shows status, effective scope, metric count, and any short export warning.
+- A **metric index with jump links** near the top so users can move directly to a metric block without leaving the single worksheet.
 - Repeated **per-metric blocks** so each metric keeps its descriptive statistics, significance results, effect-size context, and nearby notes together.
 - **Pairwise comparison tables** inside each metric block so users can compare one group against another without leaving the sheet.
 - Short **interpretation and action notes** in plain language to explain what changed, what is statistically meaningful, and what to review next.
 - **Plots on the same sheet** when the selected export level supports them, so the visual distribution view stays next to the numeric results it explains.
+- A **light visual style**: no user-facing freeze panes, hidden gridlines, selective borders, and explicit widths/heights tuned for readability.
 
 ### Light vs Standard
 
@@ -92,6 +94,11 @@ For each metric, the pairwise section answers a practical question: **which spec
 
 - Start with the **adjusted p-value**, because that is the version intended for the final yes/no significance decision after multiple comparisons.
 - Then check the **effect size** to judge whether the observed difference looks small or large in practical terms.
+- Read the text **status label** next to the metric or pair first:
+  - **DIFFERENCE** = the corrected evidence supports a difference.
+  - **NO DIFFERENCE** = the export did not find enough corrected evidence for a difference.
+  - **APPROXIMATE** = the gap may matter, but evidence is not yet firm.
+  - **USE CAUTION** = sample or comparability limits mean the result needs extra care.
 - If the worksheet also shows a **distribution-shape comparison** or Wasserstein distance, treat that as a sign of how differently the full distributions behave, not just whether the averages move.
 - If two groups do **not** show statistical significance, that does not automatically mean they are equivalent; it can also mean the sample is small, noisy, or imbalanced.
 
