@@ -855,7 +855,8 @@ def _set_table_column_widths(worksheet, headers, formats=None):
 
 def _get_workbook(worksheet):
     return (
-        getattr(worksheet, 'book', None)
+        getattr(worksheet, '_workbook', None)
+        or getattr(worksheet, 'book', None)
         or getattr(worksheet, 'workbook', None)
         or worksheet
     )
