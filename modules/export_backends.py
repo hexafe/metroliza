@@ -21,6 +21,9 @@ class ChartContract(Protocol):
     def set_title(self, title_spec: dict[str, Any]) -> None:
         """Set chart title formatting and text."""
 
+    def set_x_axis(self, axis_spec: dict[str, Any]) -> None:
+        """Configure x-axis labels, ranges, and formatting options."""
+
     def set_y_axis(self, axis_spec: dict[str, Any]) -> None:
         """Configure y-axis labels, ranges, and formatting options."""
 
@@ -142,6 +145,10 @@ class XlsxChartAdapter:
         """Delegate title configuration to the wrapped chart."""
         self._chart.set_title(title_spec)
 
+    def set_x_axis(self, axis_spec: dict[str, Any]) -> None:
+        """Delegate x-axis configuration to the wrapped chart."""
+        self._chart.set_x_axis(axis_spec)
+
     def set_y_axis(self, axis_spec: dict[str, Any]) -> None:
         """Delegate y-axis configuration to the wrapped chart."""
         self._chart.set_y_axis(axis_spec)
@@ -160,6 +167,11 @@ class XlsxWorksheetAdapter:
     """Adapter that wraps xlsxwriter worksheets behind `WorksheetContract`."""
 
     _worksheet: Any
+
+    @property
+    def name(self) -> str:
+        """Expose worksheet names for writers that build chart series ranges."""
+        return getattr(self._worksheet, 'name', '')
 
     def write(self, row: int, col: int, value: Any, cell_format: Any = None) -> None:
         """Write a scalar value to a worksheet cell."""

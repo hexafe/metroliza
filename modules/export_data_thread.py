@@ -4098,6 +4098,8 @@ class ExportDataThread(QThread):
             plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode)
             write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
 
+        self._write_group_comparison_sheet(workbook, used_sheet_names)
+
         diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
         diagnostics_worksheet = workbook.add_worksheet(diagnostics_sheet_name)
         self._record_exported_sheet_name(diagnostics_sheet_name)
