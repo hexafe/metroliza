@@ -1,12 +1,13 @@
-"""Build and render the Group Comparison worksheet sections for exports.
+"""Legacy/internal Group Comparison worksheet helpers retained for migration support.
 
-Statistical rationale:
-    The sheet is designed to keep assumption checks, omnibus test choice,
-    pairwise correction, and effect-size context in one deterministic view.
+This module is no longer part of the default export contract. Canonical
+user-facing workbook output now flows through the Group Analysis
+service/writer path instead.
 
 Fallback behavior:
-    Empty/invalid inputs still render all section scaffolding with explicit
-    "no rows/data" markers so users can distinguish missing data from failures.
+    Empty/invalid inputs still render deterministic legacy scaffolding with
+    explicit markers so internal validation can distinguish missing data from
+    failures.
 """
 
 from __future__ import annotations
@@ -1216,11 +1217,14 @@ def _write_matrix_collection(worksheet, row, title, matrices, *, matrix_type, ef
 
 
 def write_group_comparison_sheet(worksheet, payload):
-    """Render the complete Group Comparison worksheet layout.
+    """Render the legacy Group Comparison worksheet for internal migration checks.
+
+    This writer is retained only for non-default/internal validation paths and
+    is not part of the canonical user-facing export contract.
 
     Fallback behavior:
-        Section headers are always emitted even when rows are absent, ensuring
-        workbook consumers and tests can rely on a stable report schema.
+        Section headers are always emitted even when rows are absent so legacy
+        validation callers and tests can rely on a stable schema.
     """
     formats = _build_format_bundle(worksheet)
     row = 0

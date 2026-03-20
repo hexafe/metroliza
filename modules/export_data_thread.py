@@ -97,10 +97,6 @@ from modules.export_query_service import (
     fetch_sql_measurement_summary,
     load_measurement_export_partition_dataframe,
 )
-from modules.export_group_comparison_writer import (
-    prepare_group_comparison_payload,
-    write_group_comparison_sheet,
-)
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
     apply_group_assignments as _apply_group_assignments,
@@ -4114,25 +4110,6 @@ class ExportDataThread(QThread):
             # intentionally keep diagnostics folded into the user-facing Group Analysis
             # content instead of adding a separate worksheet.
             _write_internal_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
-
-    # Legacy/internal migration path only: Group Analysis is the canonical user-facing
-    # grouped statistical worksheet, and Group Comparison remains legacy/internal only.
-    def _write_group_comparison_sheet(self, workbook, used_sheet_names):
-        grouped_export_df = self._build_export_filtered_dataframe()
-        grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
-        grouped_export_df, _ = self._apply_group_assignments(
-            grouped_export_df,
-            self.prepared_grouping_df,
-            group_analysis_mode=True,
-            fallback_group_label='POPULATION',
-        )
-
-        sheet_name = unique_sheet_name('Group Comparison', used_sheet_names)
-        worksheet = workbook.add_worksheet(sheet_name)
-        self._record_exported_sheet_name(sheet_name)
-
-        payload = prepare_group_comparison_payload(grouped_export_df, alias_db_path=self.db_file)
-        write_group_comparison_sheet(worksheet, payload)
 
     def export_filtered_data(self, excel_writer):
         """Handle `export_filtered_data` for `ExportDataThread`.
