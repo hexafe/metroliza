@@ -56,6 +56,17 @@ def test_compute_group_key_for_df_is_stable():
     assert keys.iloc[0] == keys.iloc[1]
 
 
+def test_compute_group_key_for_df_avoids_delimiter_collisions():
+    df = pd.DataFrame([
+        {'REFERENCE': 'A|B', 'FILELOC': 'C', 'FILENAME': 'D', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
+        {'REFERENCE': 'A', 'FILELOC': 'B|C', 'FILENAME': 'D', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
+    ])
+
+    keys = compute_group_key_for_df(df)
+
+    assert keys.iloc[0] != keys.iloc[1]
+
+
 def test_reassign_group_keys_to_default_updates_only_selected_custom_rows():
     df = pd.DataFrame(
         [
