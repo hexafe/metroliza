@@ -8,22 +8,23 @@ SECTION_GAP = 1
 DEFAULT_PLOT_ROW_SPAN = 16
 GROUP_ANALYSIS_COLUMN_WIDTHS = {
     0: 20,
-    1: 14,
-    2: 13,
-    3: 13,
+    1: 18,
+    2: 12,
+    3: 12,
     4: 20,
-    5: 13,
-    6: 13,
-    7: 28,
+    5: 12,
+    6: 14,
+    7: 30,
     8: 14,
-    9: 28,
+    9: 30,
     10: 14,
-    11: 18,
+    11: 20,
     12: 14,
-    13: 34,
-    14: 14,
+    13: 30,
+    14: 16,
 }
 METRIC_TITLE_LAST_COL = 14
+TITLE_LAST_COL = 14
 
 
 _PLOT_SKIP_REASON_LABELS = {
@@ -71,8 +72,19 @@ def _insert_plot_image(worksheet, row, asset):
     return True
 
 
+def _get_native_worksheet(worksheet):
+    return getattr(worksheet, '_worksheet', worksheet)
+
+
 def _get_workbook(worksheet):
-    return getattr(worksheet, 'book', None) or getattr(worksheet, 'workbook', None)
+    native = _get_native_worksheet(worksheet)
+    return (
+        getattr(worksheet, '_workbook', None)
+        or getattr(native, 'book', None)
+        or getattr(native, 'workbook', None)
+        or getattr(worksheet, 'book', None)
+        or getattr(worksheet, 'workbook', None)
+    )
 
 
 def _build_formats(worksheet):
@@ -88,28 +100,35 @@ def _build_formats(worksheet):
     formats = {
         'title_fmt': workbook.add_format({
             'bg_color': '#1F2937',
+            'pattern': 1,
             'font_color': '#FFFFFF',
             'bold': True,
             'align': 'left',
             'valign': 'vcenter',
+            'border': 1,
         }),
         'metric_fmt': workbook.add_format({
             'bg_color': '#1D4E89',
+            'pattern': 1,
             'font_color': '#FFFFFF',
             'bold': True,
             'align': 'left',
             'valign': 'vcenter',
             'text_wrap': False,
+            'border': 1,
         }),
         'section_fmt': workbook.add_format({
             'bg_color': '#374151',
+            'pattern': 1,
             'font_color': '#FFFFFF',
             'bold': True,
             'align': 'left',
             'valign': 'vcenter',
+            'border': 1,
         }),
         'header_fmt': workbook.add_format({
             'bg_color': '#D9EAF7',
+            'pattern': 1,
             'bold': True,
             'align': 'center',
             'valign': 'vcenter',
@@ -120,23 +139,26 @@ def _build_formats(worksheet):
             'align': 'left',
             'valign': 'top',
             'text_wrap': True,
+            'border': 1,
         }),
         'note_fmt': workbook.add_format({
             'bg_color': '#FFF7D6',
+            'pattern': 1,
             'align': 'left',
             'valign': 'top',
             'text_wrap': True,
+            'border': 1,
         }),
-        'num_fmt': workbook.add_format({'num_format': '0.000', 'valign': 'top'}),
-        'pvalue_fmt': workbook.add_format({'num_format': '0.0000', 'valign': 'top'}),
-        'default_data_fmt': workbook.add_format({'valign': 'top'}),
-        'positive': workbook.add_format({'bg_color': '#E6F4EA', 'font_color': '#1E4620'}),
-        'neutral': workbook.add_format({'bg_color': '#EEF2F7', 'font_color': '#334155'}),
-        'warning': workbook.add_format({'bg_color': '#FFF4CC', 'font_color': '#7A4E00'}),
-        'strong_warning': workbook.add_format({'bg_color': '#FDE2E1', 'font_color': '#8B1C13', 'bold': True}),
-        'muted': workbook.add_format({'bg_color': '#F7F7F7', 'font_color': '#8A8F98'}),
-        'yes': workbook.add_format({'bg_color': '#E8F3FF', 'font_color': '#0B4F8C', 'bold': True}),
-        'no': workbook.add_format({'bg_color': '#F3F4F6', 'font_color': '#6B7280'}),
+        'num_fmt': workbook.add_format({'num_format': '0.000', 'valign': 'top', 'border': 1}),
+        'pvalue_fmt': workbook.add_format({'num_format': '0.0000', 'valign': 'top', 'border': 1}),
+        'default_data_fmt': workbook.add_format({'valign': 'top', 'border': 1}),
+        'positive': workbook.add_format({'bg_color': '#E6F4EA', 'font_color': '#1E4620', 'pattern': 1}),
+        'neutral': workbook.add_format({'bg_color': '#EEF2F7', 'font_color': '#334155', 'pattern': 1}),
+        'warning': workbook.add_format({'bg_color': '#FFF4CC', 'font_color': '#7A4E00', 'pattern': 1}),
+        'strong_warning': workbook.add_format({'bg_color': '#FDE2E1', 'font_color': '#8B1C13', 'bold': True, 'pattern': 1}),
+        'muted': workbook.add_format({'bg_color': '#F7F7F7', 'font_color': '#8A8F98', 'pattern': 1}),
+        'yes': workbook.add_format({'bg_color': '#E8F3FF', 'font_color': '#0B4F8C', 'bold': True, 'pattern': 1}),
+        'no': workbook.add_format({'bg_color': '#F3F4F6', 'font_color': '#6B7280', 'pattern': 1}),
         'delta_mean_fixed_3': workbook.add_format({'num_format': '0.000'}),
     }
     setattr(worksheet, '_group_analysis_formats', formats)
@@ -157,8 +179,9 @@ def _apply_conditional(worksheet, first_row, first_col, last_row, last_col, rule
 
 
 def _write_section_title(worksheet, row, title, *, merge_to_col=None, cell_format=None):
-    if merge_to_col is not None and hasattr(worksheet, 'merge_range'):
-        worksheet.merge_range(row, 0, row, merge_to_col, title, cell_format)
+    native = _get_native_worksheet(worksheet)
+    if merge_to_col is not None and hasattr(native, 'merge_range'):
+        native.merge_range(row, 0, row, merge_to_col, title, cell_format)
     else:
         worksheet.write(row, 0, title, cell_format)
     return row + 1
@@ -193,6 +216,17 @@ def _estimate_note_height(value):
     if len(text) > 180:
         return 40
     return 34
+
+
+def _estimate_wrapped_row_height(*values):
+    text = ' '.join(str(value or '') for value in values if value not in (None, ''))
+    if not text:
+        return 22
+    if len(text) > 220:
+        return 42
+    if len(text) > 120:
+        return 34
+    return 26
 
 
 def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
@@ -230,10 +264,14 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
             worksheet.set_row(row, 28, header_formats['metric'])
         for row in sheet_state.get('section_rows', []):
             worksheet.set_row(row, 22, header_formats['section'])
+        for row in sheet_state.get('subsection_rows', []):
+            worksheet.set_row(row, 22, header_formats['header'])
         for row in sheet_state.get('header_rows', []):
             worksheet.set_row(row, 24, header_formats['header'])
         for row, value in sheet_state.get('note_rows', []):
             worksheet.set_row(row, _estimate_note_height(value), header_formats['note'])
+        for row, values in sheet_state.get('wrapped_data_rows', []):
+            worksheet.set_row(row, _estimate_wrapped_row_height(*values), header_formats['default'])
 
     if hasattr(worksheet, 'write'):
         for row, col, value, fmt_key in sheet_state.get('styled_cells', []):
@@ -351,12 +389,6 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             (meta_bounds['header_row'], col, header, 'header')
             for col, header in enumerate(meta_bounds['headers'])
         )
-        sheet_state['autofilter_blocks'].append({
-            'header_row': meta_bounds['header_row'],
-            'first_col': 0,
-            'last_row': meta_bounds['last_data_row'],
-            'last_col': len(meta_bounds['headers']) - 1,
-        })
         for data_row_idx, entry in enumerate(metric_meta_rows):
             data_row = meta_bounds['first_data_row'] + data_row_idx
             sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'wrap'))
@@ -421,6 +453,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
                     sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'wrap'))
             if entry.get('caution'):
                 sheet_state['note_rows'].append((data_row, entry.get('caution')))
+            sheet_state['wrapped_data_rows'].append((data_row, [entry.get('best fit model'), entry.get('fit quality'), entry.get('caution')]))
     row += SECTION_GAP
 
     section_row = row
@@ -476,6 +509,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
                     sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), fmt_key))
             if entry.get('caution'):
                 sheet_state['note_rows'].append((data_row, entry.get('caution')))
+            sheet_state['wrapped_data_rows'].append((data_row, [entry.get('best fit model'), entry.get('fit quality'), entry.get('caution')]))
     _apply_metric_pairwise_formats(worksheet, pairwise_bounds)
     row += SECTION_GAP
 
@@ -509,42 +543,40 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             asset = metric_assets.get(plot_key)
 
             subsection_row = row
-            worksheet.write(subsection_row, 0, plot_label)
+            native = _get_native_worksheet(worksheet)
+            if hasattr(native, 'merge_range'):
+                native.merge_range(subsection_row, 0, subsection_row, 1, plot_label, _build_formats(worksheet).get('header_fmt'))
+            else:
+                worksheet.write(subsection_row, 0, plot_label)
             if sheet_state is not None:
-                sheet_state['section_rows'].append(subsection_row)
-                sheet_state['styled_cells'].append((subsection_row, 0, plot_label, 'section'))
+                sheet_state['subsection_rows'].append(subsection_row)
 
             if not eligible:
                 message = _get_plot_skip_reason_label(skip_reason)
-                worksheet.write(subsection_row, 1, 'Not shown')
-                worksheet.write(subsection_row, 2, message)
+                worksheet.write(subsection_row + 1, 0, 'Note')
+                worksheet.write(subsection_row + 1, 1, message)
                 if sheet_state is not None:
-                    sheet_state['styled_cells'].append((subsection_row, 1, 'Not shown', 'wrap'))
-                    sheet_state['styled_cells'].append((subsection_row, 2, message, 'note'))
-                    sheet_state['note_rows'].append((subsection_row, message))
-                row += 1
+                    sheet_state['styled_cells'].append((subsection_row + 1, 0, 'Note', 'wrap'))
+                    sheet_state['styled_cells'].append((subsection_row + 1, 1, message, 'note'))
+                    sheet_state['note_rows'].append((subsection_row + 1, message))
+                row += 2
                 continue
 
             inserted = _insert_plot_image(worksheet, row + 1, asset)
             if inserted:
-                worksheet.write(subsection_row, 1, 'Shown')
-                worksheet.write(subsection_row, 2, 'Shown below.')
-                if sheet_state is not None:
-                    sheet_state['styled_cells'].append((subsection_row, 1, 'Shown', 'wrap'))
-                    sheet_state['styled_cells'].append((subsection_row, 2, 'Shown below.', 'wrap'))
                 row_span = DEFAULT_PLOT_ROW_SPAN
                 if isinstance(asset, dict) and isinstance(asset.get('row_span'), int) and asset.get('row_span') > 0:
                     row_span = int(asset.get('row_span'))
                 row += 1 + row_span
             else:
                 message = _get_plot_skip_reason_label('asset_missing')
-                worksheet.write(subsection_row, 1, 'Not shown')
-                worksheet.write(subsection_row, 2, message)
+                worksheet.write(subsection_row + 1, 0, 'Note')
+                worksheet.write(subsection_row + 1, 1, message)
                 if sheet_state is not None:
-                    sheet_state['styled_cells'].append((subsection_row, 1, 'Not shown', 'wrap'))
-                    sheet_state['styled_cells'].append((subsection_row, 2, message, 'note'))
-                    sheet_state['note_rows'].append((subsection_row, message))
-                row += 1
+                    sheet_state['styled_cells'].append((subsection_row + 1, 0, 'Note', 'wrap'))
+                    sheet_state['styled_cells'].append((subsection_row + 1, 1, message, 'note'))
+                    sheet_state['note_rows'].append((subsection_row + 1, message))
+                row += 2
 
     row += SECTION_GAP
     return row
@@ -557,17 +589,18 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
         'metric_rows': [],
         'section_rows': [],
         'header_rows': [],
+        'subsection_rows': [],
         'note_rows': [],
+        'wrapped_data_rows': [],
         'styled_cells': [],
         'numeric_cells': [],
         'autofilter_blocks': [],
-        'freeze_row': 4,
+        'freeze_row': 5,
     }
     row = 0
     title_row = row
-    row = _write_section_title(worksheet, row, 'Group Analysis')
+    row = _write_section_title(worksheet, row, 'Group Analysis', merge_to_col=TITLE_LAST_COL, cell_format=_build_formats(worksheet).get('title_fmt'))
     sheet_state['title_rows'].append(title_row)
-    sheet_state['styled_cells'].append((title_row, 0, 'Group Analysis', 'title'))
     summary_rows = [
         {'Field': 'Status', 'Value': payload.get('status')},
         {'Field': 'Effective scope', 'Value': payload.get('effective_scope')},
@@ -584,12 +617,6 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
     for data_row_idx, entry in enumerate(summary_rows):
         data_row = summary_bounds['first_data_row'] + data_row_idx
         sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'wrap'))
-    sheet_state['autofilter_blocks'].append({
-        'header_row': summary_bounds['header_row'],
-        'first_col': 0,
-        'last_row': summary_bounds['last_data_row'],
-        'last_col': len(summary_bounds['headers']) - 1,
-    })
     row += SECTION_GAP
 
     normalized_level = str(payload.get('analysis_level') or 'light').strip().lower()

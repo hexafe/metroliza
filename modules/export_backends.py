@@ -225,6 +225,10 @@ class XlsxWorksheetAdapter:
         """Hide gridlines using the wrapped worksheet implementation."""
         self._worksheet.hide_gridlines(option)
 
+    def merge_range(self, first_row: int, first_col: int, last_row: int, last_col: int, data: Any, cell_format: Any = None) -> None:
+        """Merge a rectangular cell range and write the provided value."""
+        self._worksheet.merge_range(first_row, first_col, last_row, last_col, data, cell_format)
+
 
 @dataclass
 class XlsxWorkbookAdapter:
@@ -234,7 +238,9 @@ class XlsxWorkbookAdapter:
 
     def add_worksheet(self, name: str) -> XlsxWorksheetAdapter:
         """Create and return a worksheet adapter for `name`."""
-        return XlsxWorksheetAdapter(self._workbook.add_worksheet(name))
+        worksheet = XlsxWorksheetAdapter(self._workbook.add_worksheet(name))
+        setattr(worksheet, '_workbook', self)
+        return worksheet
 
     def add_format(self, properties: dict[str, Any]) -> Any:
         """Create a workbook format using xlsxwriter property mappings."""

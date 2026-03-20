@@ -177,10 +177,10 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         text_values = [str(value).upper() for value in values]
         self.assertNotIn('TRUE', text_values)
         self.assertNotIn('FALSE', text_values)
-        self.assertEqual(worksheet.frozen, (4, 0))
+        self.assertEqual(worksheet.frozen, (5, 0))
         self.assertEqual(worksheet.gridlines_hidden, 2)
         self.assertEqual(worksheet.columns[0][:3], (0, 0, 20))
-        self.assertEqual(worksheet.columns[-1][:3], (14, 14, 14))
+        self.assertEqual(worksheet.columns[-1][:3], (14, 14, 16))
         self.assertTrue(any(row == 0 and height == 24 for row, height, *_ in worksheet.rows))
         metric_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Metric: M1')
         self.assertFalse(worksheet.write_formats[(metric_row, 0)].get('props', {}).get('text_wrap'))
@@ -198,7 +198,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         ]
         self.assertTrue(note_row_heights)
         self.assertGreaterEqual(note_row_heights[-1], 30)
-        self.assertGreaterEqual(len(worksheet.autofilters), 3)
+        self.assertGreaterEqual(len(worksheet.autofilters), 2)
 
         pairwise_rules = [
             rule
@@ -365,8 +365,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertEqual(len(worksheet.charts), 0)
 
         values = [value for _, _, value in worksheet.writes]
-        self.assertGreaterEqual(values.count('Shown'), 2)
-        self.assertGreaterEqual(values.count('Shown below.'), 2)
+        self.assertNotIn('Shown', values)
+        self.assertNotIn('Shown below.', values)
 
         m2_metric_row = next(
             row
@@ -406,16 +406,17 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertEqual(worksheet.images, [])
         self.assertEqual(worksheet.charts, [])
 
-        plot_rows = {
-            label: (status, detail)
+        note_rows = {
+            label: next(
+                value
+                for write_row, write_col, value in worksheet.writes
+                if write_row == row + 1 and write_col == 1
+            )
             for row, col, label in worksheet.writes
             if col == 0 and label in {'Violin', 'Histogram'}
-            for _, status_col, status in [next(w for w in worksheet.writes if w[0] == row and w[1] == 1)]
-            for _, detail_col, detail in [next(w for w in worksheet.writes if w[0] == row and w[1] == 2)]
-            if status_col == 1 and detail_col == 2
         }
-        self.assertEqual(plot_rows['Violin'], ('Not shown', 'Not enough samples in one or more groups.'))
-        self.assertEqual(plot_rows['Histogram'], ('Not shown', 'Not enough total samples to show this plot.'))
+        self.assertEqual(note_rows['Violin'], 'Not enough samples in one or more groups.')
+        self.assertEqual(note_rows['Histogram'], 'Not enough total samples to show this plot.')
 
 
 if __name__ == '__main__':

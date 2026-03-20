@@ -222,8 +222,13 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
             self.assertIn('Plots', analysis_values)
-            self.assertIn('Shown', analysis_values)
-            self.assertIn('Shown below.', analysis_values)
+            self.assertIn('Violin', analysis_values)
+            self.assertIn('Histogram', analysis_values)
+            self.assertIn('Why this test', analysis_values)
+            self.assertNotIn('Shown', analysis_values)
+            self.assertNotIn('Shown below.', analysis_values)
+            self.assertNotIn('Detail', analysis_values)
+            self.assertNotIn('AD p-value estimated via KS proxy; set monte_carlo_gof_samples>0 for bootstrap.', analysis_values)
             self.assertNotIn('Plot could not be shown because the image asset is unavailable.', analysis_values)
 
             diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
@@ -248,14 +253,18 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
                 for col in sheet_xml.findall('x:cols/x:col', ns)
             }
             self.assertAlmostEqual(cols[1], 20.7109375, places=3)
-            self.assertAlmostEqual(cols[14], 34.7109375, places=3)
+            self.assertAlmostEqual(cols[2], 18.7109375, places=3)
+            self.assertAlmostEqual(cols[14], 30.7109375, places=3)
+            self.assertAlmostEqual(cols[15], 16.7109375, places=3)
 
             pane = sheet_xml.find('x:sheetViews/x:sheetView/x:pane', ns)
             self.assertIsNotNone(pane)
-            self.assertEqual(pane.attrib.get('ySplit'), '4')
-            self.assertEqual(pane.attrib.get('topLeftCell'), 'A5')
+            self.assertEqual(pane.attrib.get('ySplit'), '5')
+            self.assertEqual(pane.attrib.get('topLeftCell'), 'A6')
 
-            self.assertIsNotNone(sheet_xml.find('x:autoFilter', ns))
+            auto_filter = sheet_xml.find('x:autoFilter', ns)
+            self.assertIsNotNone(auto_filter)
+            self.assertIn(auto_filter.attrib.get('ref'), {'A15:O17', 'A20:J21'})
             self.assertGreaterEqual(len(sheet_xml.findall('x:conditionalFormatting', ns)), 1)
 
             wrapped_row_heights = [
@@ -277,6 +286,18 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
                 if row.attrib.get('customHeight') == '1'
             ]
             self.assertTrue(styled_rows)
+
+            fills = styles_xml.findall('x:fills/x:fill', ns)
+            self.assertGreaterEqual(len(fills), 6)
+            solid_fill_count = sum(1 for fill in fills if fill.find('x:patternFill/x:fgColor', ns) is not None)
+            self.assertGreaterEqual(solid_fill_count, 4)
+
+            fonts = styles_xml.findall('x:fonts/x:font', ns)
+            self.assertTrue(any(font.find('x:b', ns) is not None for font in fonts))
+
+            merge_refs = {merge.attrib.get('ref') for merge in sheet_xml.findall('x:mergeCells/x:mergeCell', ns)}
+            self.assertTrue(any(ref.startswith('A1:O1') for ref in merge_refs))
+            self.assertTrue(any(ref.startswith('A7:O7') for ref in merge_refs))
 
     def test_group_analysis_violin_uses_horizontal_spec_lines_with_annotations(self):
         metric_row = {
