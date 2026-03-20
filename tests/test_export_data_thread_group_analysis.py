@@ -116,7 +116,6 @@ def _xlsx_sheet_text_values(xlsx_path, target_sheet_name):
 
 def _sheet_cell_text_map(sheet_xml, xlsx_path):
     ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-    ns_rel = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
     text_map = {}
     with zipfile.ZipFile(xlsx_path, 'r') as workbook_zip:
         shared_strings = []
