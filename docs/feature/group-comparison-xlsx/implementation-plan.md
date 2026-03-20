@@ -1,10 +1,13 @@
-# Group Comparison XLSX implementation plan
+# Group Comparison XLSX legacy implementation plan
+
+## Legacy note
+This file is preserved as a historical snapshot. Statements below may describe the pre-consolidation Group Comparison framing and should not override the current Group Analysis documentation.
 
 ## Metadata
 - **Owner:** Data Export & Analysis Team
-- **Status:** Active (draft)
-- **Scope:** Define the phased implementation approach for a dedicated Group Comparison XLSX workstream.
-- **Exit criteria:** The scoped phases are either implemented or explicitly deferred with rationale.
+- **Status:** Superseded / legacy reference
+- **Scope:** Historical phased plan from the earlier Group Comparison XLSX workstream.
+- **Exit criteria:** Retained as historical planning context after the move to Group Analysis as the canonical surface.
 
 ## Phased work plan
 

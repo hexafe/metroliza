@@ -1,10 +1,13 @@
-# Group Comparison XLSX audit
+# Group Comparison XLSX legacy audit
+
+## Legacy note
+This file is preserved as a historical snapshot. Statements below may describe the pre-consolidation Group Comparison framing and should not override the current Group Analysis documentation.
 
 ## Metadata
 - **Owner:** Data Export & Analysis Team
-- **Status:** Active (draft)
-- **Scope:** Audit current workbook export behavior and identify the gaps required to support a dedicated Group Comparison XLSX flow.
-- **Exit criteria:** Findings are either resolved in implementation work or converted into tracked follow-up items with clear owners.
+- **Status:** Superseded / legacy reference
+- **Scope:** Historical audit of the earlier Group Comparison XLSX framing before consolidation into Group Analysis.
+- **Exit criteria:** Retained only as background context; active requirements now live under Group Analysis docs.
 
 ## Current behavior
 - Group comparison output is currently documented at a high level from the user perspective, but this folder does not yet have a dedicated implementation workspace for XLSX-specific planning.

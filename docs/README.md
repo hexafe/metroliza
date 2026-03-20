@@ -4,18 +4,19 @@ This directory contains active operational and maintenance documentation.
 
 ## Active docs
 
-- Group Comparison worksheet interpretation and statistical caveats: see root `README.md` section "Group Comparison export sheet".
+- Group Analysis worksheet interpretation and statistical caveats: see root [`README.md`](../README.md) section **"Group Analysis"**.
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
 - Grouping dialog color policy uses shared semantic tokens from `modules/ui_theme_tokens.py` (base row background, selected-row colors, default group color, and generated group palette) so dialogs stay visually consistent across light/dark themes.
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — **primary active execution tracker** for current RC2 refactor/stabilization sequencing.
 - `roadmaps/exporter_audit_2026_03.md` — focused exporter-path audit with remaining refactor recommendations and priority backlog.
-- `feature/group-analysis/README.md` — **active implementation-cycle workspace** for Group Analysis; start here for current planning/execution docs (`implementation_plan.md`, `todo.md`, `checklist.md`).
-- `feature/group-comparison-xlsx/` — active planning workspace for Group Comparison XLSX (`audit.md`, `implementation-plan.md`, `todo.md`, `checklist.md`).
+- `feature/group-analysis/README.md` — **sole active implementation-cycle workspace** for the Group Analysis export surface; start here for current planning/execution docs (`implementation_plan.md`, `todo.md`, `checklist.md`).
+- `group_analysis/README.md` — historical index with links back to the active Group Analysis workspace and retained design notes.
 
 ## Historical and superseded planning context
 
+- `feature/group-comparison-xlsx/` — **legacy/superseded** planning workspace retained only for historical reference after consolidation into Group Analysis.
 - `roadmaps/2026_03_rc1_test_ci_execution_tracker.md` — superseded RC1 execution context (reference-only; no longer the active operational tracker).
 - `roadmaps/test_ci_audit_execution.md` — superseded by the RC1 tracker above and retained only for historical planning context.
 
