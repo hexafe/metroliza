@@ -517,6 +517,20 @@ def _pairwise_action(*, adjusted_p_value, effect_size, flags='none'):
     return 'No immediate action; continue monitoring.'
 
 
+def _difference_status_label(*, adjusted_p_value, effect_size, flags='none'):
+    adjusted_p = _safe_numeric(adjusted_p_value)
+    magnitude = _pairwise_practical_magnitude(effect_size)
+    flags_text = str(flags or '')
+
+    if adjusted_p is not None and adjusted_p <= 0.05:
+        return 'DIFFERENCE'
+    if _FLAG_LOW_N in flags_text or _FLAG_SEVERELY_IMBALANCED_N in flags_text or _FLAG_IMBALANCED_N in flags_text:
+        return 'USE CAUTION'
+    if magnitude in {'moderate', 'large'}:
+        return 'APPROXIMATE'
+    return 'NO DIFFERENCE'
+
+
 def _distribution_metric_note(distribution_difference):
     verdict = str((distribution_difference or {}).get('comment / verdict') or '').strip()
     if not verdict:
@@ -554,6 +568,45 @@ def _recommended_metric_action(*, pairwise_rows, distribution_difference, analys
         return 'Recommended action: averages may be similar, but review variation and consistency by group before changing the process.'
 
     return 'Recommended action: no immediate escalation; keep monitoring and collect more data if the gap still matters.'
+
+
+def _metric_index_status(*, pairwise_rows, diagnostics_comment):
+    labels = [
+        _difference_status_label(
+            adjusted_p_value=row.get('adjusted_p_value'),
+            effect_size=row.get('effect_size'),
+            flags=row.get('flags'),
+        )
+        for row in (pairwise_rows or [])
+    ]
+    if 'DIFFERENCE' in labels:
+        return 'DIFFERENCE'
+    if 'USE CAUTION' in labels or 'Descriptive-only' in str(diagnostics_comment or ''):
+        return 'USE CAUTION'
+    if 'APPROXIMATE' in labels:
+        return 'APPROXIMATE'
+    return 'NO DIFFERENCE'
+
+
+def _metric_takeaway(*, pairwise_rows, diagnostics_comment, distribution_difference):
+    if pairwise_rows:
+        ranked = sorted(
+            pairwise_rows,
+            key=lambda row: (
+                str(row.get('difference_label') or '') != 'DIFFERENCE',
+                _safe_numeric(row.get('adjusted_p_value')) is None,
+                _safe_numeric(row.get('adjusted_p_value')) if _safe_numeric(row.get('adjusted_p_value')) is not None else float('inf'),
+            ),
+        )
+        best = ranked[0]
+        summary = f"{best.get('group_a')} vs {best.get('group_b')}: {best.get('difference_label') or 'REVIEW'}."
+        action = str(best.get('suggested_action') or '').strip()
+        return f'{summary} {action}'.strip()
+
+    shape_note = str((distribution_difference or {}).get('comment / verdict') or '').strip()
+    if shape_note:
+        return shape_note
+    return str(diagnostics_comment or 'Review descriptive statistics only.').strip()
 
 def _build_pairwise_test_rationale(*, group_count, test_used):
     test_name = str(test_used or '').strip().lower()
@@ -645,6 +698,11 @@ def build_pairwise_rows(
                 'adjusted_p_value': rounded_adj_p,
                 'effect_size': rounded_effect_size,
                 'difference': difference,
+                'difference_label': _difference_status_label(
+                    adjusted_p_value=rounded_adj_p,
+                    effect_size=rounded_effect_size,
+                    flags=flags_text,
+                ),
                 'comment': comment,
                 'flags': flags_text,
                 'metric': metric_identity,
@@ -1365,6 +1423,15 @@ def build_group_analysis_payload(
                     analysis_policy=policy,
                 ),
             }
+        )
+        metrics[-1]['index_status'] = _metric_index_status(
+            pairwise_rows=pairwise_rows,
+            diagnostics_comment=diagnostics_comment,
+        )
+        metrics[-1]['metric_takeaway'] = _metric_takeaway(
+            pairwise_rows=pairwise_rows,
+            diagnostics_comment=diagnostics_comment,
+            distribution_difference=distribution_omnibus,
         )
         metrics[-1]['insights'] = build_metric_insights(metrics[-1])
 

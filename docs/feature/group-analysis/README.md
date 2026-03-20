@@ -15,8 +15,10 @@ Current default export contract: Light and Standard create the canonical user-fa
 Group Analysis is the single active grouped statistical export surface.
 
 - The user-facing workbook contract is a **single canonical `Group Analysis` sheet** for both Light and Standard exports.
-- Users should read the **title and compact summary first**, then move into the relevant metric block.
+- Users should read the **title, compact summary, and metric index first**, then jump into the relevant metric block.
 - Each metric block keeps descriptive statistics, pairwise comparisons, interpretation/action notes, and on-sheet visual support together.
+- The sheet stays **single-tab and user-facing**: no parallel `Group Comparison` worksheet and no default diagnostics tab.
+- Layout expectations are explicit: **no freeze panes**, **hidden gridlines**, **selective borders**, and **tuned widths/heights** instead of full-sheet wrapping or full-grid borders.
 - Pairwise results should be interpreted with **adjusted p-values first**, then effect size and any shape/distance context.
 - Cautions are written for end users and should explain uncertainty sources such as small samples, imbalanced groups, or distribution-shape differences in plain language.
 - Standard adds more on-sheet support, especially plots; Light keeps the same reading order with less visual/detail density.

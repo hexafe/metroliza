@@ -30,6 +30,8 @@ class FakeWorksheet:
         self.gridlines_hidden = None
         self.autofilters = []
         self.merges = []
+        self.urls = []
+        self.formulas = []
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
@@ -65,6 +67,18 @@ class FakeWorksheet:
         self.writes.append((first_row, first_col, value))
         if cell_format is not None:
             self.write_formats[(first_row, first_col)] = cell_format
+
+    def write_url(self, row, col, url, cell_format=None, string=None, tip=None):
+        self.urls.append((row, col, url, string, tip))
+        self.writes.append((row, col, string or url))
+        if cell_format is not None:
+            self.write_formats[(row, col)] = cell_format
+
+    def write_formula(self, row, col, formula, cell_format=None, value=None):
+        self.formulas.append((row, col, formula, value))
+        self.writes.append((row, col, value if value is not None else formula))
+        if cell_format is not None:
+            self.write_formats[(row, col)] = cell_format
 
 
 class TestGroupAnalysisWriter(unittest.TestCase):
@@ -146,22 +160,21 @@ class TestGroupAnalysisWriter(unittest.TestCase):
 
         values = [value for _, _, value in worksheet.writes]
         self.assertIn('Group Analysis', values)
+        self.assertIn('Metric index', values)
         self.assertIn('Metric: M1', values)
         self.assertIn('Metric overview', values)
         self.assertIn('Descriptive stats', values)
         self.assertIn('Spec status', values)
         self.assertIn('Exact match', values)
         self.assertIn('Pairwise comparisons', values)
-        self.assertIn('Comment', values)
         self.assertIn('Why this test', values)
         self.assertIn('adj p-value', values)
         self.assertIn('Delta mean', values)
         self.assertIn('difference', values)
-        self.assertIn('YES', values)
+        self.assertIn('DIFFERENCE', values)
         self.assertIn('caution', values)
         self.assertIn('Takeaway', values)
         self.assertIn('Suggested action', values)
-        self.assertIn('Metric note', values)
         self.assertIn('Recommended action', values)
         self.assertIn('Shape note: spread or pattern differs across groups, not just the average.', values)
         self.assertIn('Recommended action: start with A vs B and verify likely process drivers before changing settings.', values)
@@ -175,44 +188,36 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Histogram', values)
         self.assertIn('Not enough total samples to show this plot.', values)
 
-        self.assertIn('Line 1', values)
-        self.assertIn('Line 2', values)
-        self.assertIn('Distribution shape: Distinct tails across groups.', values)
-        insight_values = [
-            value
-            for _, col, value in worksheet.writes
-            if col == 1 and value in {'Line 1', 'Line 2', 'Distribution shape: Distinct tails across groups.'}
-        ]
-        self.assertEqual(
-            insight_values[:3],
-            ['Line 1', 'Line 2', 'Distribution shape: Distinct tails across groups.'],
-        )
         text_values = [str(value).upper() for value in values]
         self.assertNotIn('TRUE', text_values)
         self.assertNotIn('FALSE', text_values)
-        self.assertEqual(worksheet.frozen, (5, 0))
+        self.assertIsNone(worksheet.frozen)
         self.assertEqual(worksheet.gridlines_hidden, 2)
         self.assertEqual(worksheet.columns[0][:3], (0, 0, 18))
         self.assertEqual(worksheet.columns[-1][:3], (14, 14, 16))
-        self.assertTrue(any(row == 0 and height == 26 for row, height, *_ in worksheet.rows))
+        self.assertTrue(any(row == 0 and height == 28 for row, height, *_ in worksheet.rows))
         metric_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Metric: M1')
         self.assertFalse(worksheet.write_formats[(metric_row, 0)].get('props', {}).get('text_wrap'))
         self.assertTrue(any(merge[:5] == (metric_row, 0, metric_row, 14, 'Metric: M1') for merge in worksheet.merges))
-        distribution_row = next(
+        take_row = next(
             row
             for row, col, value in worksheet.writes
-            if col == 1 and value == 'Distribution shape: Distinct tails across groups.'
+            if col == 1 and isinstance(value, str) and value.startswith('A vs B: DIFFERENCE.')
         )
-        self.assertTrue(worksheet.write_formats[(distribution_row, 1)].get('props', {}).get('text_wrap'))
+        self.assertTrue(worksheet.write_formats[(take_row, 1)].get('props', {}).get('text_wrap'))
         note_row_heights = [
             height
             for row, height, *_ in worksheet.rows
-            if row == distribution_row
+            if row == take_row
         ]
         self.assertTrue(note_row_heights)
         self.assertGreaterEqual(note_row_heights[-1], 30)
         self.assertTrue(any(row == metric_row and height >= 28 for row, height, *_ in worksheet.rows))
         self.assertGreaterEqual(len(worksheet.autofilters), 2)
+        self.assertTrue(
+            any("HYPERLINK(" in formula[2] for formula in worksheet.formulas)
+            or any(url[2].startswith("internal:'Group Analysis'!A") for url in worksheet.urls)
+        )
 
         pairwise_rules = [
             rule

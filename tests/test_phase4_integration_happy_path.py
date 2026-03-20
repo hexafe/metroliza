@@ -518,7 +518,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertIn('Field', analysis_values)
                 self.assertIn('Descriptive stats', analysis_values)
                 self.assertIn('Pairwise comparisons', analysis_values)
-                self.assertIn('Distribution shape: No statistically significant distribution shape differences were detected.', analysis_values)
+                self.assertIn('Shape note: no clear distribution-shape difference after correction.', analysis_values)
                 self.assertNotIn('Location / Central-Tendency Pairwise Comparison Table', analysis_values)
                 self.assertNotIn('Distribution Shape Pairwise Table', analysis_values)
 

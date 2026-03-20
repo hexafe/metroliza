@@ -3904,7 +3904,6 @@ class ExportDataThread(QThread):
     def _write_group_analysis_message_sheet(self, worksheet, message):
         worksheet.write(0, 0, 'Group Analysis')
         worksheet.write(1, 0, str(message or 'Group Analysis skipped.'))
-        worksheet.freeze_panes(1, 0)
 
     @staticmethod
     def _render_group_analysis_plot_asset(metric_row, plot_key):

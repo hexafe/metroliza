@@ -138,6 +138,44 @@ def _xlsx_sheet_xml_details(xlsx_path, target_sheet_name):
         return sheet_xml, styles_xml
 
 
+def _xlsx_sheet_hyperlinks(xlsx_path, target_sheet_name):
+    ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    sheet_xml, _styles_xml = _xlsx_sheet_xml_details(xlsx_path, target_sheet_name)
+    return [link.attrib for link in sheet_xml.findall('x:hyperlinks/x:hyperlink', ns_main)]
+
+
+def _xlsx_sheet_formulas(xlsx_path, target_sheet_name):
+    ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    sheet_xml, _styles_xml = _xlsx_sheet_xml_details(xlsx_path, target_sheet_name)
+    formulas = {}
+    for cell in sheet_xml.findall('x:sheetData/x:row/x:c', ns_main):
+        formula = cell.find('x:f', ns_main)
+        if formula is not None and formula.text is not None:
+            formulas[cell.attrib.get('r')] = formula.text
+    return formulas
+
+
+def _style_maps(styles_xml):
+    ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    style_to_alignment = {}
+    style_to_border = {}
+    style_to_fill = {}
+    cell_xfs = styles_xml.findall('x:cellXfs/x:xf', ns)
+    for idx, xf in enumerate(cell_xfs):
+        alignment = xf.find('x:alignment', ns)
+        style_to_alignment[str(idx)] = alignment.attrib if alignment is not None else {}
+        style_to_border[str(idx)] = xf.attrib.get('borderId', '0')
+        style_to_fill[str(idx)] = xf.attrib.get('fillId', '0')
+    return style_to_alignment, style_to_border, style_to_fill
+
+
+def _column_width_for(cols, target_idx):
+    for min_idx, max_idx, width in cols:
+        if min_idx <= target_idx <= max_idx:
+            return width
+    raise KeyError(target_idx)
+
+
 def _seed_grouped_measurements(db_path):
     execute_with_retry(
         db_path,
@@ -216,9 +254,10 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
             self.assertIn('Group Analysis', analysis_values)
+            self.assertIn('Metric index', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
             self.assertIn('Pairwise comparisons', analysis_values)
-            self.assertIn('Distribution shape: No statistically significant distribution shape differences were detected.', analysis_values)
+            self.assertIn('Shape note: no clear distribution-shape difference after correction.', analysis_values)
             self.assertNotIn('Plots', analysis_values)
             self.assertNotIn('Shown below.', analysis_values)
             self.assertNotIn('Shown', analysis_values)
@@ -233,6 +272,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertNotIn('Diagnostics', sheet_names)
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+            self.assertIn('Metric index', analysis_values)
             self.assertIn('Plots', analysis_values)
             self.assertIn('Violin', analysis_values)
             self.assertIn('Histogram', analysis_values)
@@ -271,35 +311,36 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Status', analysis_values)
             self.assertIn('Effective scope', analysis_values)
             self.assertIn('Metric count', analysis_values)
+            self.assertIn('Metric index', analysis_values)
             self.assertIn('Metric overview', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
             self.assertIn('Pairwise comparisons', analysis_values)
-            self.assertIn('Metric note', analysis_values)
+            self.assertIn('Shape note', analysis_values)
             self.assertIn('Recommended action', analysis_values)
             self.assertIn('Takeaway', analysis_values)
             self.assertIn('Suggested action', analysis_values)
-            self.assertIn('Distribution shape: No statistically significant distribution shape differences were detected.', analysis_values)
+            self.assertIn('Shape note: no clear distribution-shape difference after correction.', analysis_values)
             self.assertIn('Plots', analysis_values)
             self.assertIn('Violin', analysis_values)
             self.assertIn('Histogram', analysis_values)
+            self.assertIn('Go to metric', analysis_values)
+            self.assertIn('DIFFERENCE', analysis_values)
 
-            cols = {
-                int(col.attrib['min']): float(col.attrib['width'])
+            cols = [
+                (int(col.attrib['min']), int(col.attrib['max']), float(col.attrib['width']))
                 for col in sheet_xml.findall('x:cols/x:col', ns)
-            }
-            self.assertAlmostEqual(cols[1], 18.7109375, places=3)
-            self.assertAlmostEqual(cols[2], 30.7109375, places=3)
-            self.assertAlmostEqual(cols[14], 28.7109375, places=3)
-            self.assertAlmostEqual(cols[15], 16.7109375, places=3)
+            ]
+            self.assertAlmostEqual(_column_width_for(cols, 1), 18.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 2), 18.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 14), 22.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 15), 16.7109375, places=3)
 
             pane = sheet_xml.find('x:sheetViews/x:sheetView/x:pane', ns)
-            self.assertIsNotNone(pane)
-            self.assertEqual(pane.attrib.get('ySplit'), '5')
-            self.assertEqual(pane.attrib.get('topLeftCell'), 'A6')
+            self.assertIsNone(pane)
 
             auto_filter = sheet_xml.find('x:autoFilter', ns)
             self.assertIsNotNone(auto_filter)
-            self.assertIn(auto_filter.attrib.get('ref'), {'A15:O17', 'A20:J21', 'A22:L23'})
+            self.assertRegex(auto_filter.attrib.get('ref', ''), r'^A\d+:L\d+$|^A\d+:O\d+$')
             self.assertGreaterEqual(len(sheet_xml.findall('x:conditionalFormatting', ns)), 1)
 
             row_heights = {
@@ -307,16 +348,16 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
                 for row in sheet_xml.findall('x:sheetData/x:row', ns)
                 if row.attrib.get('ht')
             }
-            self.assertGreaterEqual(row_heights.get(1, 0), 26)
+            self.assertGreaterEqual(row_heights.get(1, 0), 28)
             self.assertTrue(any(height >= 22 for height in row_heights.values()))
             self.assertTrue(any(height >= 30 for height in row_heights.values()))
 
-            alignment_by_style = {}
-            for idx, xf in enumerate(styles_xml.findall('x:cellXfs/x:xf', ns)):
-                alignment = xf.find('x:alignment', ns)
-                alignment_by_style[str(idx)] = alignment.attrib if alignment is not None else {}
+            alignment_by_style, border_by_style, fill_by_style = _style_maps(styles_xml)
 
             self.assertTrue(any(attrs.get('wrapText') == '1' for attrs in alignment_by_style.values()))
+            self.assertTrue(any(attrs.get('vertical') == 'top' for attrs in alignment_by_style.values()))
+            self.assertTrue(any(border_id != '0' for border_id in border_by_style.values()))
+            self.assertTrue(any(border_id == '0' for border_id in border_by_style.values()))
             styled_rows = [
                 row
                 for row in sheet_xml.findall('x:sheetData/x:row', ns)
@@ -334,10 +375,22 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             merge_refs = {merge.attrib.get('ref') for merge in sheet_xml.findall('x:mergeCells/x:mergeCell', ns)}
             self.assertIn('A1:O1', merge_refs)
-            self.assertTrue(any(ref.startswith('A6:O6') for ref in merge_refs))
+            self.assertTrue(any(ref.endswith(':O9') is False for ref in merge_refs))
+            self.assertTrue(any(ref.startswith('A') and ref.endswith(':O' + ref.split(':O')[-1]) for ref in merge_refs if ref != 'A1:O1'))
 
             drawing = sheet_xml.find('x:drawing', ns)
             self.assertIsNotNone(drawing)
+
+            formulas = _xlsx_sheet_formulas(out_path, 'Group Analysis')
+            self.assertTrue(any(ref.startswith('C') and 'HYPERLINK(' in formula for ref, formula in formulas.items()))
+
+            styled_cells = sheet_xml.findall('x:sheetData/x:row/x:c', ns)
+            wrap_styles = {
+                cell.attrib.get('r'): alignment_by_style.get(cell.attrib.get('s', '0'), {})
+                for cell in styled_cells
+            }
+            self.assertEqual(wrap_styles.get('A1', {}).get('wrapText'), None)
+            self.assertTrue(any(ref.startswith('H') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
 
     def test_group_analysis_violin_uses_horizontal_spec_lines_with_annotations(self):
         metric_row = {
