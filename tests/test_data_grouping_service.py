@@ -1,3 +1,5 @@
+import sqlite3
+
 import pandas as pd
 
 from modules.data_grouping_service import (
@@ -27,6 +29,20 @@ def test_load_grouping_dataframe_delegates_to_reader():
     assert isinstance(frame, pd.DataFrame)
     assert calls['db_file'] == 'db.sqlite'
     assert 'FILTERED_DATA' in calls['query']
+
+
+def test_build_grouping_query_strips_trailing_semicolons_from_filter_query():
+    connection = sqlite3.connect(':memory:')
+    connection.execute(
+        'CREATE TABLE REPORTS (REFERENCE text, FILELOC text, FILENAME text, DATE text, SAMPLE_NUMBER text)'
+    )
+
+    query = build_grouping_query('SELECT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS;  ')
+    rows = connection.execute(query).fetchall()
+
+    assert rows == []
+    assert 'FROM REPORTS;' not in query
+
 
 
 def test_compute_group_key_for_df_is_stable():

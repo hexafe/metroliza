@@ -3,16 +3,26 @@
 import hashlib
 
 
+def _normalize_filter_query(filter_query):
+    """Return a subquery-safe filter query string or an empty string."""
+    if not isinstance(filter_query, str):
+        return ""
+
+    normalized = filter_query.strip()
+    return normalized.rstrip(';').rstrip()
+
+
 def build_grouping_query(filter_query):
     """Build the grouping dataset query, optionally wrapping a caller filter query."""
     default_query = "SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS"
-    if not isinstance(filter_query, str) or not filter_query.strip():
+    normalized_filter_query = _normalize_filter_query(filter_query)
+    if not normalized_filter_query:
         return default_query
 
     return f"""
             SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER
             FROM (
-                {filter_query.strip()}
+                {normalized_filter_query}
             ) AS FILTERED_DATA
         """
 
