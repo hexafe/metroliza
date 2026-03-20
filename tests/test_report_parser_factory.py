@@ -544,3 +544,68 @@ def test_load_external_plugins_registers_plugins_from_entry_points(monkeypatch):
         PARSER_DETECTORS.update(original_detectors)
         PROBE_RESULT_CACHE.clear()
         PROBE_RESULT_CACHE.update(original_cache)
+
+
+def test_resolve_parser_auto_loads_entry_point_plugins_without_path_env(monkeypatch, tmp_path):
+    class EntryPointOnlyParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="entry_point_only",
+            display_name="Entry Point Only",
+            version="1.0.0",
+            supported_formats=("pdf",),
+            priority=500,
+        )
+
+        @classmethod
+        def probe(cls, _input_ref, _context):
+            return ProbeResult(plugin_id="entry_point_only", can_parse=True, confidence=95)
+
+        def open_report(self):
+            self.raw_text = []
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    class _DummyEntryPoint:
+        name = "entry_point_only"
+
+        @staticmethod
+        def load():
+            return EntryPointOnlyParser
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    original_loaded_flag = factory_module._EXTERNAL_PLUGINS_LOADED
+    try:
+        monkeypatch.delenv("PARSER_EXTERNAL_PLUGIN_PATHS", raising=False)
+        monkeypatch.setattr(factory_module, "_iter_external_plugin_entry_points", lambda: (_DummyEntryPoint(),))
+        factory_module._EXTERNAL_PLUGINS_LOADED = False
+        PARSER_MAP.pop("cmm", None)
+        PARSER_MANIFESTS.pop("cmm", None)
+        PARSER_DETECTORS.pop("cmm", None)
+        reset_probe_cache()
+
+        diagnostics = resolve_parser_with_diagnostics(tmp_path / "entry_point.pdf")
+
+        assert diagnostics.selected is not None
+        assert diagnostics.selected.plugin_id == "entry_point_only"
+        assert factory_module._EXTERNAL_PLUGINS_LOADED is True
+    finally:
+        factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded_flag
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
