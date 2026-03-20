@@ -147,6 +147,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         values = [value for _, _, value in worksheet.writes]
         self.assertIn('Group Analysis', values)
         self.assertIn('Metric: M1', values)
+        self.assertIn('Metric overview', values)
         self.assertIn('Descriptive stats', values)
         self.assertIn('Spec status', values)
         self.assertIn('Exact match', values)
@@ -191,9 +192,9 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertNotIn('FALSE', text_values)
         self.assertEqual(worksheet.frozen, (5, 0))
         self.assertEqual(worksheet.gridlines_hidden, 2)
-        self.assertEqual(worksheet.columns[0][:3], (0, 0, 20))
+        self.assertEqual(worksheet.columns[0][:3], (0, 0, 18))
         self.assertEqual(worksheet.columns[-1][:3], (14, 14, 16))
-        self.assertTrue(any(row == 0 and height == 24 for row, height, *_ in worksheet.rows))
+        self.assertTrue(any(row == 0 and height == 26 for row, height, *_ in worksheet.rows))
         metric_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Metric: M1')
         self.assertFalse(worksheet.write_formats[(metric_row, 0)].get('props', {}).get('text_wrap'))
         self.assertTrue(any(merge[:5] == (metric_row, 0, metric_row, 14, 'Metric: M1') for merge in worksheet.merges))
@@ -210,6 +211,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         ]
         self.assertTrue(note_row_heights)
         self.assertGreaterEqual(note_row_heights[-1], 30)
+        self.assertTrue(any(row == metric_row and height >= 28 for row, height, *_ in worksheet.rows))
         self.assertGreaterEqual(len(worksheet.autofilters), 2)
 
         pairwise_rules = [

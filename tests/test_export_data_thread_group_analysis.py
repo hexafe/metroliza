@@ -216,7 +216,6 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
             self.assertIn('Group Analysis', analysis_values)
-            self.assertIn('Field', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
             self.assertIn('Pairwise comparisons', analysis_values)
             self.assertIn('Distribution shape: No statistically significant distribution shape differences were detected.', analysis_values)
@@ -269,7 +268,10 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 
             self.assertIn('Group Analysis', analysis_values)
-            self.assertIn('Field', analysis_values)
+            self.assertIn('Status', analysis_values)
+            self.assertIn('Effective scope', analysis_values)
+            self.assertIn('Metric count', analysis_values)
+            self.assertIn('Metric overview', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
             self.assertIn('Pairwise comparisons', analysis_values)
             self.assertIn('Metric note', analysis_values)
@@ -285,9 +287,9 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
                 int(col.attrib['min']): float(col.attrib['width'])
                 for col in sheet_xml.findall('x:cols/x:col', ns)
             }
-            self.assertAlmostEqual(cols[1], 20.7109375, places=3)
-            self.assertAlmostEqual(cols[2], 18.7109375, places=3)
-            self.assertAlmostEqual(cols[14], 30.7109375, places=3)
+            self.assertAlmostEqual(cols[1], 18.7109375, places=3)
+            self.assertAlmostEqual(cols[2], 30.7109375, places=3)
+            self.assertAlmostEqual(cols[14], 28.7109375, places=3)
             self.assertAlmostEqual(cols[15], 16.7109375, places=3)
 
             pane = sheet_xml.find('x:sheetViews/x:sheetView/x:pane', ns)
@@ -305,7 +307,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
                 for row in sheet_xml.findall('x:sheetData/x:row', ns)
                 if row.attrib.get('ht')
             }
-            self.assertGreaterEqual(row_heights.get(1, 0), 24)
+            self.assertGreaterEqual(row_heights.get(1, 0), 26)
             self.assertTrue(any(height >= 22 for height in row_heights.values()))
             self.assertTrue(any(height >= 30 for height in row_heights.values()))
 
@@ -332,7 +334,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             merge_refs = {merge.attrib.get('ref') for merge in sheet_xml.findall('x:mergeCells/x:mergeCell', ns)}
             self.assertIn('A1:O1', merge_refs)
-            self.assertTrue(any(ref.startswith('A7:O7') for ref in merge_refs))
+            self.assertTrue(any(ref.startswith('A6:O6') for ref in merge_refs))
 
             drawing = sheet_xml.find('x:drawing', ns)
             self.assertIsNotNone(drawing)
