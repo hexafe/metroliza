@@ -380,6 +380,8 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         {'Field': 'Groups', 'Value': metric_row.get('group_count')},
         {'Field': 'Spec status', 'Value': spec_status_label},
         {'Field': 'distribution shape', 'Value': (metric_row.get('distribution_difference') or {}).get('comment / verdict')},
+        {'Field': 'Metric note', 'Value': metric_row.get('metric_note')},
+        {'Field': 'Recommended action', 'Value': metric_row.get('recommended_action')},
         {'Field': 'Comment', 'Value': metric_row.get('diagnostics_comment') or (metric_row.get('comparability_summary') or {}).get('summary')},
     ]
     row, meta_bounds = _write_table_with_bounds(worksheet, row, ['Field', 'Value'], metric_meta_rows)
@@ -392,7 +394,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         for data_row_idx, entry in enumerate(metric_meta_rows):
             data_row = meta_bounds['first_data_row'] + data_row_idx
             sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'wrap'))
-            if entry.get('Field') in {'distribution shape', 'Comment'} and entry.get('Value'):
+            if entry.get('Field') in {'distribution shape', 'Metric note', 'Recommended action', 'Comment'} and entry.get('Value'):
                 sheet_state['note_rows'].append((data_row, entry.get('Value')))
     row += SECTION_GAP
 
@@ -471,6 +473,8 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             'Delta mean': entry.get('delta_mean'),
             'difference': entry.get('difference'),
             'caution': entry.get('comment'),
+            'Takeaway': entry.get('takeaway'),
+            'Suggested action': entry.get('suggested_action'),
             'Flags': entry.get('flags'),
             'Why this test': entry.get('test_rationale'),
         }
@@ -479,7 +483,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
     row, pairwise_bounds = _write_table_with_bounds(
         worksheet,
         row,
-        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'difference', 'caution', 'Flags', 'Why this test'],
+        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'difference', 'caution', 'Takeaway', 'Suggested action', 'Flags', 'Why this test'],
         pairwise_rows,
     )
     if sheet_state is not None:
@@ -503,7 +507,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
                 sheet_state['numeric_cells'].append((data_row, header_lookup['effect size'], entry.get('effect size'), 'num'))
             if 'Delta mean' in header_lookup:
                 sheet_state['numeric_cells'].append((data_row, header_lookup['Delta mean'], entry.get('Delta mean'), 'num'))
-            for header in ('test', 'caution', 'Flags', 'Why this test'):
+            for header in ('test', 'caution', 'Takeaway', 'Suggested action', 'Flags', 'Why this test'):
                 if header in header_lookup and entry.get(header):
                     fmt_key = 'note' if header == 'caution' else 'wrap'
                     sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), fmt_key))

@@ -272,6 +272,10 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Field', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
             self.assertIn('Pairwise comparisons', analysis_values)
+            self.assertIn('Metric note', analysis_values)
+            self.assertIn('Recommended action', analysis_values)
+            self.assertIn('Takeaway', analysis_values)
+            self.assertIn('Suggested action', analysis_values)
             self.assertIn('Distribution shape: No statistically significant distribution shape differences were detected.', analysis_values)
             self.assertIn('Plots', analysis_values)
             self.assertIn('Violin', analysis_values)
@@ -293,7 +297,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             auto_filter = sheet_xml.find('x:autoFilter', ns)
             self.assertIsNotNone(auto_filter)
-            self.assertIn(auto_filter.attrib.get('ref'), {'A15:O17', 'A20:J21'})
+            self.assertIn(auto_filter.attrib.get('ref'), {'A15:O17', 'A20:J21', 'A22:L23'})
             self.assertGreaterEqual(len(sheet_xml.findall('x:conditionalFormatting', ns)), 1)
 
             row_heights = {
