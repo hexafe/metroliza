@@ -1,8 +1,10 @@
-"""Immutable request/config contracts plus validation and normalization entry points.
+"""Immutable request/config contracts plus validation entry points.
 
 This module defines frozen dataclasses used to pass parse and export configuration
 through the application. It also provides validator helpers that enforce required
-fields, normalize supported option values, and return validated request objects.
+fields, normalize supported option values, and return validated request objects
+for the canonical export workflows, including the single-sheet Group Analysis
+contract.
 """
 
 from dataclasses import dataclass
@@ -68,10 +70,10 @@ class ExportOptions:
         chart_worker_queue_size: Queue size for chart workers, minimum of ``1``.
         group_analysis_level: Workbook-level Group Analysis mode. Supported
             values are ``"off"``, ``"light"``, and ``"standard"``.
-            ``"light"`` and ``"standard"`` produce a user-facing
+            ``"light"`` and ``"standard"`` produce the user-facing
             ``Group Analysis`` worksheet by default; they do not automatically
-            add a separate ``Diagnostics`` worksheet. Internal/debug flows may
-            still opt into diagnostics-only workbook output separately.
+            add a separate diagnostics worksheet. Internal/debug flows may
+            still opt into a separate internal diagnostics worksheet explicitly.
         group_analysis_scope: Requested Group Analysis scope. Supported values
             are ``"auto"``, ``"single_reference"``, and
             ``"multi_reference"``.
@@ -79,8 +81,9 @@ class ExportOptions:
     Usage notes:
         ``validate_export_options`` returns a normalized copy with sanitized
         casing/aliases and bounded numeric settings. Group Analysis defaults are
-        user-facing only: Light/Standard do not imply a separate diagnostics
-        worksheet unless an internal/debug export path enables it explicitly.
+        user-facing only: Light/Standard target the canonical Group Analysis
+        worksheet and do not imply a separate diagnostics worksheet unless an
+        internal/debug export path enables it explicitly.
     """
 
     preset: str = "fast_diagnostics"

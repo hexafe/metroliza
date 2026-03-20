@@ -260,7 +260,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         write_group_analysis_diagnostics_sheet(worksheet, payload)
 
         values = [value for _, _, value in worksheet.writes]
-        self.assertIn('Group Analysis Diagnostics', values)
+        self.assertIn('Group Analysis Internal Diagnostics', values)
         self.assertIn('Spec status counts', values)
         self.assertIn('Status key', values)
         self.assertIn('Status', values)
