@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from itertools import combinations
+import inspect
+import warnings
 
 import numpy as np
 from scipy.stats import anderson_ksamp, ks_2samp, wasserstein_distance
@@ -41,6 +44,22 @@ def _summarize_fit_notes(notes):
     if any(note.lower().startswith('skipped ') for note in normalized):
         return 'Fit quality estimated approximately.'
     return 'Use fit quality as guidance only.'
+
+
+@lru_cache(maxsize=1)
+def _anderson_ksamp_supports_variant():
+    return 'variant' in inspect.signature(anderson_ksamp).parameters
+
+
+def _run_anderson_ksamp(samples):
+    kwargs = {'variant': True} if _anderson_ksamp_supports_variant() else {'midrank': True}
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            'ignore',
+            message=r'p-value (?:floored|capped): .*',
+            category=UserWarning,
+        )
+        return anderson_ksamp(samples, **kwargs)
 
 
 def _fit_profile_row(metric, group_name, values):
@@ -161,7 +180,7 @@ def compute_distribution_difference(metric, grouped_values, *, alpha=0.05, corre
             omnibus_warning = 'Too few samples for k-sample distribution test.'
         else:
             try:
-                ad_result = anderson_ksamp(valid_samples)
+                ad_result = _run_anderson_ksamp(valid_samples)
                 omnibus_p = float(getattr(ad_result, 'pvalue', np.nan))
             except Exception:
                 omnibus_warning = 'Distribution difference test was not reliable for this metric.'
