@@ -364,8 +364,8 @@ class ExportDialog(QDialog):
             self.group_analysis_level_label.setToolTip(
                 "Controls workbook-level Group Analysis output.\n"
                 "Off: disabled.\n"
-                "Light: compact statistical report + Diagnostics.\n"
-                "Standard: Light plus additional supported plots."
+                "Light: compact statistical report in the Group Analysis worksheet.\n"
+                "Standard: Light plus additional supported plots in the same worksheet."
             )
             self.group_analysis_level_combobox.setToolTip(self.group_analysis_level_label.toolTip())
             self.group_analysis_level_combobox.currentTextChanged.connect(lambda _: self._update_group_analysis_scope_enabled_state())

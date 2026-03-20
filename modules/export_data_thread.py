@@ -110,7 +110,7 @@ from modules.export_grouping_utils import (
 )
 from modules.group_analysis_service import build_group_analysis_payload
 from modules.group_analysis_writer import (
-    write_group_analysis_diagnostics_sheet,
+    write_group_analysis_diagnostics_sheet as _write_internal_group_analysis_diagnostics_sheet,
     write_group_analysis_sheet,
 )
 from modules.summary_plot_palette import (
@@ -192,6 +192,14 @@ if _HAS_SEABORN:
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
+
+
+_INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
+
+
+def _internal_group_analysis_diagnostics_enabled():
+    """Return True when internal-only Group Analysis diagnostics sheet emission is enabled."""
+    return os.getenv(_INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR, '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 def _uses_symbol_font_fallback(text):
@@ -4098,11 +4106,14 @@ class ExportDataThread(QThread):
             plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode)
             write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
 
-        if os.getenv('METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS', '').lower() in {'1', 'true', 'yes', 'on'}:
+        if _internal_group_analysis_diagnostics_enabled():
             diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
             diagnostics_worksheet = workbook.add_worksheet(diagnostics_sheet_name)
             self._record_exported_sheet_name(diagnostics_sheet_name)
-            write_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
+            # Internal/debug-only worksheet for payload verification. Normal exports
+            # intentionally keep diagnostics folded into the user-facing Group Analysis
+            # content instead of adding a separate worksheet.
+            _write_internal_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
 
     # Legacy/internal migration path only: Group Analysis is the canonical user-facing
     # grouped statistical worksheet, and Group Comparison remains legacy/internal only.

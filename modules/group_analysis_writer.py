@@ -629,7 +629,7 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
 
 
 def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
-    """Write diagnostics details for scope resolution and metric coverage."""
+    """Write internal/debug diagnostics details for scope resolution and metric coverage."""
     row = 0
     row = _write_section_title(worksheet, row, 'Group Analysis Diagnostics')
 

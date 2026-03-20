@@ -571,7 +571,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertIn(scenario['expected_message'], diagnostics_values)
 
 
-    def test_group_analysis_scope_mismatch_uses_payload_readiness_only(self):
+    def test_group_analysis_scope_mismatch_internal_diagnostics_use_payload_readiness_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
@@ -624,7 +624,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             self.assertIn('forced_multi_reference_scope_mismatch', diagnostics_values)
             self.assertIn('Multi-reference group analysis skipped: grouped rows span only one reference.', diagnostics_values)
 
-    def test_group_analysis_runnable_path_uses_payload_readiness_only(self):
+    def test_group_analysis_runnable_path_internal_diagnostics_use_payload_readiness_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')

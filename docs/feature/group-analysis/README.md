@@ -9,6 +9,8 @@
 ## Purpose
 This folder contains the temporary planning and execution documentation for Group Analysis work.
 
+Current default export contract: Light and Standard create the user-facing `Group Analysis` worksheet without automatically adding a separate `Diagnostics` worksheet. Internal/debug exports may still enable diagnostics output explicitly.
+
 ## Documents
 - `implementation_plan.md` — implementation approach and sequencing.
 - `todo.md` — actionable task list.
