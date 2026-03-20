@@ -490,6 +490,82 @@ def test_load_external_plugins_reports_skipped_paths_for_missing_input(tmp_path)
     assert missing_path in result.skipped_paths
 
 
+def test_resolver_reloads_external_plugins_when_path_config_changes(tmp_path):
+    plugin_file = tmp_path / "late_external_plugin.py"
+    plugin_file.write_text(
+        """
+from modules.base_report_parser import BaseReportParser
+from modules.parser_plugin_contracts import BaseReportParserPlugin, PluginManifest, ProbeResult
+
+class LateExternalParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id=\"late_external\",
+        display_name=\"Late External\",
+        version=\"1.0.0\",
+        supported_formats=(\"pdf\",),
+        priority=1000,
+    )
+
+    @classmethod
+    def probe(cls, _input_ref, _context):
+        return ProbeResult(plugin_id=\"late_external\", can_parse=True, confidence=101)
+
+    def open_report(self):
+        self.raw_text = [\"ok\"]
+
+    def split_text_to_blocks(self):
+        self.blocks_text = []
+
+    def parse_to_v2(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def to_legacy_blocks(_parse_result_v2):
+        return []
+"""
+    )
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    original_loaded = factory_module._EXTERNAL_PLUGINS_LOADED
+    original_signature = factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    original_env = os.environ.get("PARSER_EXTERNAL_PLUGIN_PATHS")
+    try:
+        os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+        factory_module._EXTERNAL_PLUGINS_LOADED = False
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = None
+        reset_probe_cache()
+        _restore_real_cmm_registration()
+
+        initial = resolve_parser_with_diagnostics(tmp_path / "before_config.pdf")
+        assert initial.selected is not None
+        assert initial.selected.plugin_id == "cmm"
+
+        os.environ["PARSER_EXTERNAL_PLUGIN_PATHS"] = str(plugin_file)
+        updated = resolve_parser_with_diagnostics(tmp_path / "after_config.pdf")
+
+        assert updated.selected is not None
+        assert updated.selected.plugin_id == "late_external"
+        assert "late_external" in PARSER_MAP
+    finally:
+        if original_env is None:
+            os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+        else:
+            os.environ["PARSER_EXTERNAL_PLUGIN_PATHS"] = original_env
+        factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
 def test_load_external_plugins_registers_plugins_from_entry_points(monkeypatch):
     class DemoEntryPointParser(BaseReportParser, BaseReportParserPlugin):
         manifest = PluginManifest(
