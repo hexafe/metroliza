@@ -275,8 +275,11 @@ def _ensure_external_plugins_loaded_once() -> None:
     if _EXTERNAL_PLUGINS_LOADED:
         return
 
-    # No-op when no env config is provided.
-    if not os.getenv("PARSER_EXTERNAL_PLUGIN_PATHS", "").strip():
+    has_path_config = bool(os.getenv("PARSER_EXTERNAL_PLUGIN_PATHS", "").strip())
+    has_entry_points = bool(_iter_external_plugin_entry_points())
+
+    # No-op only when neither file-based paths nor package entry points are available.
+    if not has_path_config and not has_entry_points:
         _EXTERNAL_PLUGINS_LOADED = True
         return
 
