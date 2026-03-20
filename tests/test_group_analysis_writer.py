@@ -125,10 +125,14 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'effect_size': 0.7,
                             'difference': 'YES',
                             'comment': 'caution',
+                            'takeaway': 'These groups show a reliable difference after correction. The practical gap looks moderate.',
+                            'suggested_action': 'Review process differences, then confirm the gap matters operationally before changing settings.',
                             'flags': 'LOW N; IMBALANCED N',
                             'test_rationale': 'Chosen because only two groups are compared.',
                         }
                     ],
+                    'metric_note': 'Shape note: spread or pattern differs across groups, not just the average.',
+                    'recommended_action': 'Recommended action: start with A vs B and verify likely process drivers before changing settings.',
                     'plot_eligibility': {
                         'violin': {'eligible': True, 'skip_reason': ''},
                         'histogram': {'eligible': False, 'skip_reason': 'low_total_samples'},
@@ -154,6 +158,14 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('difference', values)
         self.assertIn('YES', values)
         self.assertIn('caution', values)
+        self.assertIn('Takeaway', values)
+        self.assertIn('Suggested action', values)
+        self.assertIn('Metric note', values)
+        self.assertIn('Recommended action', values)
+        self.assertIn('Shape note: spread or pattern differs across groups, not just the average.', values)
+        self.assertIn('Recommended action: start with A vs B and verify likely process drivers before changing settings.', values)
+        self.assertIn('These groups show a reliable difference after correction. The practical gap looks moderate.', values)
+        self.assertIn('Review process differences, then confirm the gap matters operationally before changing settings.', values)
         self.assertIn('Flags', values)
         self.assertIn('LOW N; IMBALANCED N', values)
         self.assertIn('Chosen because only two groups are compared.', values)
@@ -203,7 +215,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         pairwise_rules = [
             rule
             for rule in worksheet.conditional_formats
-            if rule[1] in {2, 3, 6, 7, 8}
+            if rule[1] in {2, 3, 6, 7, 10}
         ]
         self.assertGreaterEqual(len(pairwise_rules), 10)
         self.assertTrue(any(r[4].get('criteria') == 'containing' and r[4].get('value') == 'YES' for r in pairwise_rules))
