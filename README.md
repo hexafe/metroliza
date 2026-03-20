@@ -62,27 +62,58 @@ Parity between native and Python backends is enforced through fixture-based test
 - Optional strict selection: set `PARSER_STRICT_MATCHING=true` to require confidence `>=80`.
 - Probe results are cached per plugin/path during process runtime to reduce repeated probe work in batch parses.
 
-## Group Comparison export sheet
+## Group Analysis
 
-Excel exports now include a **Group Comparison** worksheet that consolidates:
+Excel exports now present grouped statistical results in a single **Group Analysis** worksheet.
 
-- Location / central-tendency summaries and pairwise tables for mean/median-focused comparisons.
-- Distribution shape profile by group, so you can quickly see how each group behaves beyond mean/median shifts.
-- Distribution shape summaries and pairwise tables, including adjusted p-values and Wasserstein distance for side-by-side shape comparisons.
-- Shape-aware interpretation notes explaining that significant shape differences can exist even when location comparisons are not significant.
+### What is on the sheet
 
-Interpretation guidance:
+The worksheet is designed to be read top-to-bottom on one sheet instead of making users jump between separate comparison and chart tabs:
 
-- Use **adjusted p-values** (not raw p-values) for both pairwise location and pairwise distribution-shape significance decisions.
-- Heatmap significance colors are thresholded at 0.05 and 0.01.
-- Effect-size magnitudes are shown as absolute values for ranking practical impact.
-- Effect sizes can indicate practical importance even when p-values are non-significant (e.g., small or imbalanced samples), so read both together.
-- Distribution-shape sections also report Wasserstein distance as a descriptive separation measure; if the sheet shows a low/moderate/high severity label, treat it as domain-neutral guidance rather than a specification-based acceptance limit.
+- **Title and context at the top** so users can confirm they are reading the grouped analysis output.
+- A **compact summary** near the top that highlights which metrics and comparisons deserve attention first.
+- Repeated **per-metric blocks** so each metric keeps its descriptive statistics, significance results, effect-size context, and nearby notes together.
+- **Pairwise comparison tables** inside each metric block so users can compare one group against another without leaving the sheet.
+- Short **interpretation and action notes** in plain language to explain what changed, what is statistically meaningful, and what to review next.
+- **Plots on the same sheet** when the selected export level supports them, so the visual distribution view stays next to the numeric results it explains.
 
-Effect size caveats:
+### Light vs Standard
 
-- Two-group parametric paths report Cohen's *d*; non-parametric paths report Cliff's delta.
-- Multi-group rows use an omnibus effect (eta-squared by default), so pairwise practical interpretation should consider group imbalance and distribution shape.
+Both export levels use the same single-sheet Group Analysis layout, but they differ in how much supporting detail is shown:
+
+- **Light** is the faster, more compact read. Start here when you want the worksheet title, the summary, the key per-metric comparison blocks, and concise interpretation notes without extra visual density.
+- **Standard** keeps the same reading order but adds more on-sheet support, especially the plot area and other detail that helps users inspect how the distributions differ.
+
+A simple rule for users: **read the top summary first, then move into the metric block for the measurement you care about, and only then use the pairwise table and plot for deeper inspection**.
+
+### How to read pairwise results
+
+For each metric, the pairwise section answers a practical question: **which specific groups differ from which other groups?**
+
+- Start with the **adjusted p-value**, because that is the version intended for the final yes/no significance decision after multiple comparisons.
+- Then check the **effect size** to judge whether the observed difference looks small or large in practical terms.
+- If the worksheet also shows a **distribution-shape comparison** or Wasserstein distance, treat that as a sign of how differently the full distributions behave, not just whether the averages move.
+- If two groups do **not** show statistical significance, that does not automatically mean they are equivalent; it can also mean the sample is small, noisy, or imbalanced.
+
+### What users should read first
+
+For most users, the recommended order is:
+
+1. The sheet title and top summary.
+2. The metric block for the characteristic you are evaluating.
+3. The pairwise table for the exact groups you need to compare.
+4. The nearby interpretation note.
+5. The plot, if present, to visually confirm whether the numeric result matches the distribution pattern.
+
+### What cautions mean in user-facing language
+
+Cautions are there to slow down overconfident conclusions, not to hide results.
+
+- A caution about **small samples** means the result may swing more than usual if you collect a little more data.
+- A caution about **imbalanced groups** means one group has much more data than another, so comparisons may be less stable.
+- A caution about **non-significant p-values with visible effect size** means the worksheet sees a meaningful-looking difference, but the data is not strong enough yet for a confident significance claim.
+- A caution about **distribution shape** means the groups may differ in spread, skew, or tails even if the centers look similar.
+- Severity labels or descriptive distance cues should be read as **general interpretation help**, not as automatic pass/fail limits.
 
 ## Capability metrics legend (summary report)
 

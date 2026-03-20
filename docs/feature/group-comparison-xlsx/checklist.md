@@ -1,10 +1,13 @@
-# Group Comparison XLSX checklist
+# Group Comparison XLSX legacy checklist
+
+## Legacy note
+This file is preserved as a historical snapshot. Statements below may describe the pre-consolidation Group Comparison framing and should not override the current Group Analysis documentation.
 
 ## Metadata
 - **Owner:** Data Export & Analysis Team
-- **Status:** Active (draft)
-- **Scope:** Final validation gates for correctness, usability, and release readiness.
-- **Exit criteria:** All required items are checked or have documented exceptions with owner and follow-up.
+- **Status:** Superseded / legacy reference
+- **Scope:** Historical validation ideas from the earlier Group Comparison XLSX framing.
+- **Exit criteria:** Preserved as legacy reference; active validation now belongs to Group Analysis docs.
 
 ## Stats correctness
 - [ ] Comparison outputs match the approved statistical definitions.

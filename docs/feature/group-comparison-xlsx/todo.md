@@ -1,10 +1,13 @@
-# Group Comparison XLSX TODO
+# Group Comparison XLSX legacy TODO
+
+## Legacy note
+This file is preserved as a historical snapshot. Statements below may describe the pre-consolidation Group Comparison framing and should not override the current Group Analysis documentation.
 
 ## Metadata
 - **Owner:** Data Export & Analysis Team
-- **Status:** Active (draft)
-- **Scope:** Track the minimum actionable work needed to audit, implement, validate, and document Group Comparison XLSX.
-- **Exit criteria:** Remaining items are complete, explicitly deferred, or linked to follow-up work.
+- **Status:** Superseded / legacy reference
+- **Scope:** Historical task list from the earlier Group Comparison XLSX framing.
+- **Exit criteria:** Retained only as background context; active work now tracks in Group Analysis docs.
 
 ## P0
 - [ ] Confirm feature requirements, acceptance criteria, and first-release statistical outputs.
