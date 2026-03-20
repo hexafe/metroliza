@@ -179,7 +179,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertNotIn('FALSE', text_values)
         self.assertEqual(worksheet.frozen, (4, 0))
         self.assertEqual(worksheet.gridlines_hidden, 2)
-        self.assertEqual(worksheet.columns[0][:3], (0, 0, 22))
+        self.assertEqual(worksheet.columns[0][:3], (0, 0, 20))
         self.assertEqual(worksheet.columns[-1][:3], (14, 14, 14))
         self.assertTrue(any(row == 0 and height == 24 for row, height, *_ in worksheet.rows))
         metric_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Metric: M1')

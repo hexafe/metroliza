@@ -7,33 +7,21 @@ from modules.group_analysis_service import get_spec_status_label
 SECTION_GAP = 1
 DEFAULT_PLOT_ROW_SPAN = 16
 GROUP_ANALYSIS_COLUMN_WIDTHS = {
-    0: 22,
+    0: 20,
     1: 14,
-    2: 12,
-    3: 12,
-    4: 12,
-    5: 12,
-    6: 12,
-    7: 12,
-    8: 12,
-    9: 16,
+    2: 13,
+    3: 13,
+    4: 20,
+    5: 13,
+    6: 13,
+    7: 28,
+    8: 14,
+    9: 28,
     10: 14,
-    11: 20,
+    11: 18,
     12: 14,
-    13: 30,
+    13: 34,
     14: 14,
-}
-PAIRWISE_COLUMN_WIDTHS = {
-    'Group A': 11,
-    'Group B': 11,
-    'adj p-value': 13,
-    'effect size': 13,
-    'test': 20,
-    'Delta mean': 13,
-    'difference': 13,
-    'caution': 28,
-    'Flags': 14,
-    'Why this test': 28,
 }
 METRIC_TITLE_LAST_COL = 14
 
@@ -230,11 +218,6 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
     if hasattr(worksheet, 'set_column'):
         for col, width in GROUP_ANALYSIS_COLUMN_WIDTHS.items():
             worksheet.set_column(col, col, width, header_formats['default'])
-        for bounds in sheet_state.get('pairwise_bounds', []):
-            for header, width in PAIRWISE_COLUMN_WIDTHS.items():
-                if header in bounds['headers']:
-                    col = bounds['headers'].index(header)
-                    worksheet.set_column(col, col, width, header_formats['default'])
 
     if hasattr(worksheet, 'freeze_panes'):
         freeze_row = int(sheet_state.get('freeze_row', 4))
@@ -353,7 +336,6 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
     )
     if sheet_state is not None:
         sheet_state['metric_rows'].append(metric_title_row)
-        sheet_state['merged_metric_rows'] = sheet_state.get('merged_metric_rows', []) + [(metric_title_row, metric_title)]
 
     spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
     metric_meta_rows = [
@@ -494,8 +476,6 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
                     sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), fmt_key))
             if entry.get('caution'):
                 sheet_state['note_rows'].append((data_row, entry.get('caution')))
-    if sheet_state is not None:
-        sheet_state.setdefault('pairwise_bounds', []).append(pairwise_bounds)
     _apply_metric_pairwise_formats(worksheet, pairwise_bounds)
     row += SECTION_GAP
 
@@ -533,29 +513,37 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             if sheet_state is not None:
                 sheet_state['section_rows'].append(subsection_row)
                 sheet_state['styled_cells'].append((subsection_row, 0, plot_label, 'section'))
-            row += 1
 
             if not eligible:
-                worksheet.write(row, 0, _get_plot_skip_reason_label(skip_reason))
+                message = _get_plot_skip_reason_label(skip_reason)
+                worksheet.write(subsection_row, 1, 'Not shown')
+                worksheet.write(subsection_row, 2, message)
                 if sheet_state is not None:
-                    message = _get_plot_skip_reason_label(skip_reason)
-                    sheet_state['styled_cells'].append((row, 0, message, 'note'))
-                    sheet_state['note_rows'].append((row, message))
+                    sheet_state['styled_cells'].append((subsection_row, 1, 'Not shown', 'wrap'))
+                    sheet_state['styled_cells'].append((subsection_row, 2, message, 'note'))
+                    sheet_state['note_rows'].append((subsection_row, message))
                 row += 1
                 continue
 
-            inserted = _insert_plot_image(worksheet, row, asset)
+            inserted = _insert_plot_image(worksheet, row + 1, asset)
             if inserted:
+                worksheet.write(subsection_row, 1, 'Shown')
+                worksheet.write(subsection_row, 2, 'Shown below.')
+                if sheet_state is not None:
+                    sheet_state['styled_cells'].append((subsection_row, 1, 'Shown', 'wrap'))
+                    sheet_state['styled_cells'].append((subsection_row, 2, 'Shown below.', 'wrap'))
                 row_span = DEFAULT_PLOT_ROW_SPAN
                 if isinstance(asset, dict) and isinstance(asset.get('row_span'), int) and asset.get('row_span') > 0:
                     row_span = int(asset.get('row_span'))
-                row += row_span
+                row += 1 + row_span
             else:
                 message = _get_plot_skip_reason_label('asset_missing')
-                worksheet.write(row, 0, message)
+                worksheet.write(subsection_row, 1, 'Not shown')
+                worksheet.write(subsection_row, 2, message)
                 if sheet_state is not None:
-                    sheet_state['styled_cells'].append((row, 0, message, 'note'))
-                    sheet_state['note_rows'].append((row, message))
+                    sheet_state['styled_cells'].append((subsection_row, 1, 'Not shown', 'wrap'))
+                    sheet_state['styled_cells'].append((subsection_row, 2, message, 'note'))
+                    sheet_state['note_rows'].append((subsection_row, message))
                 row += 1
 
     row += SECTION_GAP
@@ -574,7 +562,6 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
         'numeric_cells': [],
         'autofilter_blocks': [],
         'freeze_row': 4,
-        'merged_metric_rows': [],
     }
     row = 0
     title_row = row
