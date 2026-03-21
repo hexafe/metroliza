@@ -36,6 +36,7 @@ from modules.csv_summary_utils import (
 from modules.csv_summary_worker import DataProcessingThread
 from modules.progress_status import build_three_line_status
 from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules.help_menu import build_help_menu
 
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ class FilterDialog(QDialog):
 
         # Initialize the layout
         main_layout = QVBoxLayout()
+        dialog_menu_bar, _ = build_help_menu(self, [("CSV Summary manual", 'csv_summary')])
+        main_layout.setMenuBar(dialog_menu_bar)
 
         # Create horizontal layout for the list widgets
         horizontal_layout = QHBoxLayout()
@@ -152,6 +155,8 @@ class SpecLimitsDialog(QDialog):
         self.data_columns = data_columns
 
         layout = QVBoxLayout()
+        dialog_menu_bar, _ = build_help_menu(self, [("CSV Summary manual", 'csv_summary')])
+        layout.setMenuBar(dialog_menu_bar)
         self.table = QTableWidget(len(data_columns), 4, self)
         self.table.setHorizontalHeaderLabels(["Column", "NOM", "USL", "LSL"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -229,6 +234,8 @@ class CSVSummaryDialog(QDialog):
 
         # Initialize the layout
         layout = QVBoxLayout()
+        dialog_menu_bar, _ = build_help_menu(self, [("CSV Summary manual", 'csv_summary')])
+        layout.setMenuBar(dialog_menu_bar)
 
         # Add the buttons to the layout
         self.input_button = QPushButton("Select input file (CSV)")

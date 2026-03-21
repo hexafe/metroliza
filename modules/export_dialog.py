@@ -46,6 +46,7 @@ import subprocess
 import sys
 from pathlib import Path
 from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules.help_menu import build_help_menu
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
@@ -432,6 +433,11 @@ class ExportDialog(QDialog):
             """Initialize the layout"""
             self.layout = QVBoxLayout()
             self.layout.setSpacing(10)
+            dialog_menu_bar, _ = build_help_menu(
+                self,
+                [("Export overview manual", 'export_overview'), ("Filtering manual", 'export_filtering'), ("Grouping manual", 'export_grouping')],
+            )
+            self.layout.setMenuBar(dialog_menu_bar)
 
             def build_section_widget(title, content_layout):
                 section_widget = QWidget()
