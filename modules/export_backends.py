@@ -181,6 +181,18 @@ class XlsxWorksheetAdapter:
         """Write an Excel formula to a worksheet cell."""
         self._worksheet.write_formula(row, col, formula, cell_format)
 
+    def write_url(
+        self,
+        row: int,
+        col: int,
+        url: str,
+        cell_format: Any = None,
+        string: str | None = None,
+        tip: str | None = None,
+    ) -> None:
+        """Write a hyperlink cell when the wrapped worksheet supports it."""
+        self._worksheet.write_url(row, col, url, cell_format, string, tip)
+
     def write_column(self, row: int, col: int, data: Any) -> None:
         """Write a vertical data sequence starting at the given position."""
         self._worksheet.write_column(row, col, data)
