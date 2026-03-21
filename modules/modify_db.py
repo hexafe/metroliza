@@ -9,7 +9,8 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMessageBox,
 )
-from PyQt6.QtCore import Qt, QItemSelection, QItemSelectionModel
+import PyQt6.QtCore as QtCore
+from PyQt6.QtCore import Qt
 import PyQt6.QtWidgets as QtWidgets
 import logging
 from modules.custom_logger import CustomLogger
@@ -17,6 +18,8 @@ from modules.db import execute_select_with_columns, run_transaction_with_retry
 
 
 logger = logging.getLogger(__name__)
+QItemSelection = getattr(QtCore, "QItemSelection", None)
+QItemSelectionModel = getattr(QtCore, "QItemSelectionModel", None)
 
 
 class ModifyDB(QDialog):
@@ -56,6 +59,11 @@ class ModifyDB(QDialog):
         if app_cls is None or not hasattr(app_cls, "keyboardModifiers"):
             return 0
         return app_cls.keyboardModifiers()
+
+    @staticmethod
+    def _shift_modifier_flag():
+        keyboard_modifier_enum = getattr(Qt, "KeyboardModifier", None)
+        return getattr(keyboard_modifier_enum, "ShiftModifier", 0)
 
     def setup_ui(self):
         try:
@@ -138,7 +146,13 @@ class ModifyDB(QDialog):
     def _handle_table_cell_pressed(self, table_widget, row, column):
         del column
         previous_row = self._last_clicked_row_by_table.get(table_widget)
-        is_shift_pressed = bool(self._keyboard_modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        keyboard_modifiers = self._keyboard_modifiers()
+        shift_modifier_flag = self._shift_modifier_flag()
+        is_shift_pressed = (
+            bool(keyboard_modifiers & shift_modifier_flag)
+            if shift_modifier_flag
+            else bool(keyboard_modifiers)
+        )
 
         if is_shift_pressed and previous_row is not None:
             start_row = min(previous_row, row)
@@ -147,13 +161,22 @@ class ModifyDB(QDialog):
             table_model = table_widget.model()
             last_column = max(table_widget.columnCount() - 1, 0)
 
-            selection = QItemSelection(
-                table_model.index(start_row, 0),
-                table_model.index(end_row, last_column),
-            )
-            selection_flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
-            selection_model.select(selection, selection_flags)
-            selection_model.select(table_model.index(previous_row, 0), selection_flags)
+            selection_flag_enum = getattr(QItemSelectionModel, "SelectionFlag", None)
+            select_flag = getattr(selection_flag_enum, "Select", 0)
+            rows_flag = getattr(selection_flag_enum, "Rows", 0)
+            selection_flags = select_flag | rows_flag
+
+            if QItemSelection is not None and QItemSelectionModel is not None:
+                selection = QItemSelection(
+                    table_model.index(start_row, 0),
+                    table_model.index(end_row, last_column),
+                )
+                selection_model.select(selection, selection_flags)
+                selection_model.select(table_model.index(previous_row, 0), selection_flags)
+            else:
+                for selected_row in range(start_row, end_row + 1):
+                    selection_model.select(table_model.index(selected_row, 0), selection_flags)
+
             table_widget.setCurrentCell(row, 0)
             return
 
