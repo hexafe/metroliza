@@ -119,7 +119,8 @@ class ParsingDialog(QDialog):
                 self.directory = selected_source
                 self.directory_text_label.setText(selected_source)
                 self.database_button.setEnabled(True)
-                self.parent().set_directory(selected_source)
+                if self.parent() is not None and hasattr(self.parent(), "set_directory"):
+                    self.parent().set_directory(selected_source)
 
                 if self.db_file and self.directory:
                     self.parse_button.setEnabled(True)
@@ -146,7 +147,8 @@ class ParsingDialog(QDialog):
                 logger.info("Selected parse database file: %s", filename)
                 self.db_file = filename
                 self.database_text_label.setText(filename)
-                self.parent().set_db_file(filename)
+                if self.parent() is not None and hasattr(self.parent(), "set_db_file"):
+                    self.parent().set_db_file(filename)
 
                 if self.db_file and self.directory:
                     self.parse_button.setEnabled(True)
