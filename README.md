@@ -66,6 +66,8 @@ Parity between native and Python backends is enforced through fixture-based test
 
 Excel exports now present grouped statistical results in a single canonical **Group Analysis** worksheet.
 
+For a plain-English guide to the exported Group Analysis worksheet, see [`docs/group_analysis/user_manual.md`](docs/group_analysis/user_manual.md). Printable companion: [`docs/group_analysis/user_manual.pdf`](docs/group_analysis/user_manual.pdf).
+
 ### What is on the sheet
 
 The worksheet is designed to be read top-to-bottom on one sheet instead of making users jump between separate comparison and chart tabs:
@@ -143,6 +145,8 @@ Examples of metric availability by spec type:
 - Docs policy and lifecycle: [`docs/documentation_policy.md`](docs/documentation_policy.md)
 - Release runbooks/checklists: [`docs/release_checks/`](docs/release_checks/)
 - Google conversion smoke runbook: [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md)
+- Group Analysis end-user guide: [`docs/group_analysis/user_manual.md`](docs/group_analysis/user_manual.md) — plain-English end-user guide for interpreting the exported Groups Analysis sheet
+- Group Analysis printable companion: [`docs/group_analysis/user_manual.pdf`](docs/group_analysis/user_manual.pdf) — printable companion version
 - Historical plans and retired docs: [`docs/archive/`](docs/archive/)
 
 ## Release metadata

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from modules.group_analysis_service import get_spec_status_label
 
 SECTION_GAP = 1
@@ -27,6 +29,13 @@ GROUP_ANALYSIS_COLUMN_WIDTHS = {
 }
 METRIC_TITLE_LAST_COL = 14
 TITLE_LAST_COL = 14
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+GROUP_ANALYSIS_MANUAL_PDF_PATH = REPO_ROOT / 'docs' / 'group_analysis' / 'user_manual.pdf'
+GROUP_ANALYSIS_MANUAL_GITHUB_URL = (
+    'https://github.com/hexafe/metroliza/blob/main/docs/group_analysis/user_manual.md'
+)
 
 
 _PLOT_SKIP_REASON_LABELS = {
@@ -371,6 +380,61 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
         for block in sheet_state.get('autofilter_blocks', []):
             if block['header_row'] < block['last_row']:
                 worksheet.autofilter(block['header_row'], block['first_col'], block['last_row'], block['last_col'])
+
+
+def _write_manual_links(worksheet, row, *, sheet_state=None):
+    section_row = row
+    row = _write_section_title(worksheet, row, 'User manual')
+    if sheet_state is not None:
+        sheet_state['section_rows'].append(section_row)
+        sheet_state['styled_cells'].append((section_row, 0, 'User manual', 'section'))
+
+    manual_rows = [
+        {
+            'Field': 'Markdown guide (GitHub)',
+            'Label': 'Open Markdown manual',
+            'Target': GROUP_ANALYSIS_MANUAL_GITHUB_URL,
+            'Tip': 'Open the plain-English Group Analysis guide in the GitHub repository.',
+        },
+        {
+            'Field': 'Printable companion (local PDF)',
+            'Label': 'Open local PDF companion',
+            'Target': f"external:{GROUP_ANALYSIS_MANUAL_PDF_PATH}",
+            'Tip': f'Open the local PDF manual at {GROUP_ANALYSIS_MANUAL_PDF_PATH}.',
+        },
+    ]
+
+    for entry in manual_rows:
+        current_row = row
+        worksheet.write(current_row, 0, entry['Field'])
+        if sheet_state is not None:
+            sheet_state['styled_cells'].append((current_row, 0, entry['Field'], 'summary_label'))
+            sheet_state['summary_rows'].append(current_row)
+
+        if hasattr(worksheet, 'write_url'):
+            worksheet.write_url(
+                current_row,
+                1,
+                entry['Target'],
+                _build_formats(worksheet).get('hyperlink_fmt'),
+                entry['Label'],
+                entry['Tip'],
+            )
+        else:
+            worksheet.write(current_row, 1, entry['Label'])
+
+        if sheet_state is not None:
+            sheet_state['styled_cells'].append((current_row, 1, entry['Label'], 'hyperlink'))
+            sheet_state['wrapped_data_rows'].append((
+                current_row,
+                [
+                    {'value': entry['Field'], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(0, 18), 'wrap': True},
+                    {'value': entry['Label'], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': True},
+                ],
+            ))
+        row += 1
+
+    return row + SECTION_GAP
 
 
 def _write_named_value_rows(worksheet, row, rows, *, sheet_state=None):
@@ -782,6 +846,7 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
         summary_rows.append({'Field': 'Skip reason', 'Value': payload['skip_reason'].get('message')})
     row, _summary_bounds = _write_named_value_rows(worksheet, row, summary_rows, sheet_state=sheet_state)
     row += SECTION_GAP
+    row = _write_manual_links(worksheet, row, sheet_state=sheet_state)
 
     normalized_level = str(payload.get('analysis_level') or 'light').strip().lower()
     metric_rows = [dict(metric_row) for metric_row in payload.get('metric_rows', [])]

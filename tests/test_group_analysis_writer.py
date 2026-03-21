@@ -1,6 +1,8 @@
 import unittest
 
 from modules.group_analysis_writer import (
+    GROUP_ANALYSIS_MANUAL_GITHUB_URL,
+    GROUP_ANALYSIS_MANUAL_PDF_PATH,
     write_group_analysis_diagnostics_sheet,
     write_group_analysis_sheet,
 )
@@ -160,6 +162,11 @@ class TestGroupAnalysisWriter(unittest.TestCase):
 
         values = [value for _, _, value in worksheet.writes]
         self.assertIn('Group Analysis', values)
+        self.assertIn('User manual', values)
+        self.assertIn('Markdown guide (GitHub)', values)
+        self.assertIn('Printable companion (local PDF)', values)
+        self.assertIn('Open Markdown manual', values)
+        self.assertIn('Open local PDF companion', values)
         self.assertIn('Metric index', values)
         self.assertIn('Metric: M1', values)
         self.assertIn('Metric overview', values)
@@ -197,6 +204,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertEqual(worksheet.columns[2][:3], (2, 2, 16))
         self.assertEqual(worksheet.columns[13][:3], (13, 13, 24))
         self.assertEqual(worksheet.columns[-1][:3], (14, 14, 18))
+        self.assertTrue(any(url[2] == GROUP_ANALYSIS_MANUAL_GITHUB_URL and url[3] == 'Open Markdown manual' for url in worksheet.urls))
+        self.assertTrue(any(url[2] == f'external:{GROUP_ANALYSIS_MANUAL_PDF_PATH}' and url[3] == 'Open local PDF companion' for url in worksheet.urls))
         index_header_row = next(row for row, col, value in worksheet.writes if col == 2 and value == 'Jump to section')
         index_header_height = max(height for row, height, *_ in worksheet.rows if row == index_header_row)
         self.assertGreaterEqual(index_header_height, 24)

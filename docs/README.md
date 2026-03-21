@@ -4,7 +4,8 @@ This directory contains active operational and maintenance documentation.
 
 ## Active docs
 
-- Group Analysis worksheet interpretation and statistical caveats: see root [`README.md`](../README.md) section **"Group Analysis"**.
+- `group_analysis/user_manual.md` — plain-English end-user guide for interpreting the exported Group Analysis worksheet.
+- `group_analysis/user_manual.pdf` — optional printable companion version.
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.

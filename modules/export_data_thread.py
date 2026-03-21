@@ -3902,8 +3902,29 @@ class ExportDataThread(QThread):
             raise
 
     def _write_group_analysis_message_sheet(self, worksheet, message):
+        from modules.group_analysis_writer import (
+            GROUP_ANALYSIS_MANUAL_GITHUB_URL,
+            GROUP_ANALYSIS_MANUAL_PDF_PATH,
+        )
+
         worksheet.write(0, 0, 'Group Analysis')
         worksheet.write(1, 0, str(message or 'Group Analysis skipped.'))
+        worksheet.write(3, 0, 'Markdown guide (GitHub)')
+        worksheet.write_url(
+            3,
+            1,
+            GROUP_ANALYSIS_MANUAL_GITHUB_URL,
+            string='Open Markdown manual',
+            tip='Open the plain-English Group Analysis guide in the GitHub repository.',
+        )
+        worksheet.write(4, 0, 'Printable companion (local PDF)')
+        worksheet.write_url(
+            4,
+            1,
+            f'external:{GROUP_ANALYSIS_MANUAL_PDF_PATH}',
+            string='Open local PDF companion',
+            tip=f'Open the local PDF manual at {GROUP_ANALYSIS_MANUAL_PDF_PATH}.',
+        )
 
     @staticmethod
     def _render_group_analysis_plot_asset(metric_row, plot_key):

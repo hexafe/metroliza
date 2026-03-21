@@ -2,6 +2,11 @@
 
 This directory is retained as historical context from an earlier Group Analysis implementation cycle.
 
+## End-user manual
+
+- [`user_manual.md`](user_manual.md) — end-user manual for the exported Group Analysis worksheet.
+- [`user_manual.pdf`](user_manual.pdf) — printable companion version.
+
 ## Active implementation-cycle workspace (start here)
 
 For current planning and execution docs, use:
