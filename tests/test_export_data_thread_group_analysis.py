@@ -114,6 +114,33 @@ def _xlsx_sheet_text_values(xlsx_path, target_sheet_name):
         return values
 
 
+def _xlsx_sheet_relationships(xlsx_path, target_sheet_name):
+    ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    ns_rel = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+
+    with zipfile.ZipFile(xlsx_path, 'r') as workbook_zip:
+        workbook_xml = ET.fromstring(workbook_zip.read('xl/workbook.xml'))
+        workbook_rels = ET.fromstring(workbook_zip.read('xl/_rels/workbook.xml.rels'))
+        rel_map = {rel.attrib['Id']: rel.attrib['Target'] for rel in workbook_rels.findall('r:Relationship', ns_rel)}
+        sheet_path = None
+        for sheet in workbook_xml.findall('x:sheets/x:sheet', ns_main):
+            if sheet.attrib.get('name') != target_sheet_name:
+                continue
+            rel_id = sheet.attrib.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+            target = rel_map.get(rel_id, '')
+            sheet_path = f"xl/{target}" if not target.startswith('xl/') else target
+            break
+
+        if not sheet_path:
+            return ''
+
+        sheet_rel_name = sheet_path.rsplit('/', 1)[-1] + '.rels'
+        sheet_rel_path = f"xl/worksheets/_rels/{sheet_rel_name}"
+        if sheet_rel_path not in workbook_zip.namelist():
+            return ''
+        return workbook_zip.read(sheet_rel_path).decode('utf-8', errors='replace')
+
+
 def _sheet_cell_text_map(sheet_xml, xlsx_path):
     ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
     text_map = {}
@@ -354,6 +381,11 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Status', analysis_values)
             self.assertIn('Effective scope', analysis_values)
             self.assertIn('Metric count', analysis_values)
+            self.assertIn('User manual', analysis_values)
+            self.assertIn('Markdown guide (GitHub)', analysis_values)
+            self.assertIn('Printable companion (local PDF)', analysis_values)
+            self.assertIn('Open Markdown manual', analysis_values)
+            self.assertIn('Open local PDF companion', analysis_values)
             self.assertIn('Metric index', analysis_values)
             self.assertIn('Metric overview', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
