@@ -1,4 +1,4 @@
-"""Helpers for attaching dialog/main-window Help menus to local user manuals."""
+"""Helpers for attaching dialog/main-window Help menus to GitHub-rendered manuals."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ import PyQt6.QtWidgets as QtWidgets
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 USER_MANUAL_ROOT = REPO_ROOT / 'docs' / 'user_manual'
+GITHUB_REPOSITORY_BASE_URL = 'https://github.com/hexafe/metroliza'
+GITHUB_RENDERED_MANUAL_BRANCH = 'main'
 
 MANUAL_PATHS = {
     'main_window': USER_MANUAL_ROOT / 'main_window.md',
@@ -23,7 +25,6 @@ MANUAL_PATHS = {
     'csv_summary': USER_MANUAL_ROOT / 'csv_summary.md',
     'characteristic_name_matching': USER_MANUAL_ROOT / 'characteristic_name_matching.md',
 }
-
 
 class _FallbackAction:
     def __init__(self, *_args, **_kwargs):
@@ -61,15 +62,18 @@ class _FallbackDesktopServices:
 
 
 class _FallbackUrl:
-    def __init__(self, local_file=''):
-        self._local_file = str(local_file or '')
+    def __init__(self, url=''):
+        self._url = str(url or '')
 
     @classmethod
     def fromLocalFile(cls, local_file):
         return cls(local_file)
 
     def toLocalFile(self):
-        return self._local_file
+        return self._url
+
+    def toString(self):
+        return self._url
 
 
 QAction = getattr(QtGui, 'QAction', _FallbackAction)
@@ -84,14 +88,25 @@ def manual_path(manual_key: str) -> Path:
     return MANUAL_PATHS[manual_key]
 
 
+def manual_url(manual_key: str) -> str:
+    """Return the GitHub rendered-file URL for a known manual key.
+
+    GitHub's normal HTML page for a repository file uses a ``/blob/<ref>/...``
+    path segment. That page is what gives the browser-friendly rendered Markdown
+    view instead of downloading raw file contents.
+    """
+    relative_path = manual_path(manual_key).relative_to(REPO_ROOT).as_posix()
+    return f'{GITHUB_REPOSITORY_BASE_URL}/blob/{GITHUB_RENDERED_MANUAL_BRANCH}/{relative_path}'
+
+
 
 def open_manual(parent, manual_key: str) -> bool:
-    """Open a local user manual and warn if it is unavailable."""
+    """Open a user manual in the default browser via GitHub."""
     path = manual_path(manual_key)
     if not path.exists():
         QMessageBox.warning(parent, 'Manual not found', f'Could not find the user manual at:\n{path}')
         return False
-    return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve()))))
+    return bool(QDesktopServices.openUrl(QUrl(manual_url(manual_key))))
 
 
 
@@ -123,4 +138,12 @@ def attach_help_menu_to_layout(layout, parent, entries):
     return dialog_menu_bar, help_menu
 
 
-__all__ = ['MANUAL_PATHS', 'USER_MANUAL_ROOT', 'attach_help_menu_to_layout', 'build_help_menu', 'manual_path', 'open_manual']
+__all__ = [
+    'MANUAL_PATHS',
+    'USER_MANUAL_ROOT',
+    'attach_help_menu_to_layout',
+    'build_help_menu',
+    'manual_path',
+    'manual_url',
+    'open_manual',
+]

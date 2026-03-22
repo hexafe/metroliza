@@ -32,15 +32,18 @@ class _FakeMenuBar:
 
 
 class _FakeQUrl:
-    def __init__(self, path=''):
-        self._path = path
+    def __init__(self, url=''):
+        self._url = url
 
     @classmethod
     def fromLocalFile(cls, path):
         return cls(path)
 
     def toLocalFile(self):
-        return self._path
+        return self._url
+
+    def toString(self):
+        return self._url
 
 
 class _FakeMessageBox:
@@ -74,14 +77,23 @@ class TestHelpMenu(unittest.TestCase):
                 self.assertEqual(self.help_menu.manual_path(key), path)
                 self.assertTrue(Path(path).exists(), f'Manual for {key} should exist: {path}')
 
-    def test_open_manual_opens_local_manual_url(self):
+    def test_manual_url_keys_point_to_github_markdown(self):
+        for key, path in self.help_menu.MANUAL_PATHS.items():
+            with self.subTest(key=key):
+                expected = (
+                    'https://github.com/hexafe/metroliza/blob/main/'
+                    f'{path.relative_to(self.help_menu.REPO_ROOT).as_posix()}'
+                )
+                self.assertEqual(self.help_menu.manual_url(key), expected)
+
+    def test_open_manual_opens_github_manual_url(self):
         with patch.object(self.help_menu.QDesktopServices, 'openUrl', return_value=True) as open_url_mock:
             result = self.help_menu.open_manual(None, 'parsing')
 
         self.assertTrue(result)
         open_url_mock.assert_called_once()
         opened_url = open_url_mock.call_args.args[0]
-        self.assertEqual(opened_url.toLocalFile(), str(self.help_menu.manual_path('parsing').resolve()))
+        self.assertEqual(opened_url.toString(), self.help_menu.manual_url('parsing'))
 
     def test_open_manual_warns_when_manual_missing(self):
         with patch.object(self.help_menu, 'manual_path', return_value=Path('/tmp/definitely-missing-manual.md')):
