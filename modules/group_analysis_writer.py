@@ -32,12 +32,12 @@ TITLE_LAST_COL = 14
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GROUP_ANALYSIS_MANUAL_PDF_PATH = REPO_ROOT / 'docs' / 'group_analysis' / 'user_manual.pdf'
+GROUP_ANALYSIS_MANUAL_PDF_PATH = REPO_ROOT / 'docs' / 'user_manual' / 'group_analysis' / 'user_manual.pdf'
 GROUP_ANALYSIS_MANUAL_GITHUB_URL = (
-    'https://github.com/hexafe/metroliza/blob/main/docs/user_manual/group_analysis/user_manual.md'
+    'https://github.com/hexafe/metroliza/blob/master/docs/user_manual/group_analysis/user_manual.md'
 )
 GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL = (
-    'https://github.com/hexafe/metroliza/blob/main/docs/user_manual/group_analysis/user_manual.pdf'
+    'https://github.com/hexafe/metroliza/blob/master/docs/user_manual/group_analysis/user_manual.pdf'
 )
 
 

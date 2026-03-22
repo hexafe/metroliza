@@ -13,7 +13,7 @@ import PyQt6.QtWidgets as QtWidgets
 REPO_ROOT = Path(__file__).resolve().parent.parent
 USER_MANUAL_ROOT = REPO_ROOT / 'docs' / 'user_manual'
 GITHUB_REPOSITORY_BASE_URL = 'https://github.com/hexafe/metroliza'
-GITHUB_RENDERED_MANUAL_BRANCH = 'main'
+GITHUB_RENDERED_MANUAL_BRANCH = 'master'
 
 MANUAL_PATHS = {
     'main_window': USER_MANUAL_ROOT / 'main_window.md',
