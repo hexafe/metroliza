@@ -3904,7 +3904,7 @@ class ExportDataThread(QThread):
     def _write_group_analysis_message_sheet(self, worksheet, message):
         from modules.group_analysis_writer import (
             GROUP_ANALYSIS_MANUAL_GITHUB_URL,
-            GROUP_ANALYSIS_MANUAL_PDF_PATH,
+            GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL,
         )
 
         worksheet.write(0, 0, 'Group Analysis')
@@ -3921,9 +3921,9 @@ class ExportDataThread(QThread):
         worksheet.write_url(
             4,
             1,
-            f'external:{GROUP_ANALYSIS_MANUAL_PDF_PATH}',
+            GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL,
             string='Open local PDF companion',
-            tip=f'Open the local PDF manual at {GROUP_ANALYSIS_MANUAL_PDF_PATH}.',
+            tip='Open the printable Group Analysis PDF companion in the GitHub repository.',
         )
 
     @staticmethod

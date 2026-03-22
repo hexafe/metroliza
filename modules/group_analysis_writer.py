@@ -36,6 +36,9 @@ GROUP_ANALYSIS_MANUAL_PDF_PATH = REPO_ROOT / 'docs' / 'group_analysis' / 'user_m
 GROUP_ANALYSIS_MANUAL_GITHUB_URL = (
     'https://github.com/hexafe/metroliza/blob/main/docs/user_manual/group_analysis/user_manual.md'
 )
+GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL = (
+    'https://github.com/hexafe/metroliza/blob/main/docs/user_manual/group_analysis/user_manual.pdf'
+)
 
 
 _PLOT_SKIP_REASON_LABELS = {
@@ -399,8 +402,8 @@ def _write_manual_links(worksheet, row, *, sheet_state=None):
         {
             'Field': 'Printable companion (local PDF)',
             'Label': 'Open local PDF companion',
-            'Target': f"external:{GROUP_ANALYSIS_MANUAL_PDF_PATH}",
-            'Tip': f'Open the local PDF manual at {GROUP_ANALYSIS_MANUAL_PDF_PATH}.',
+            'Target': GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL,
+            'Tip': 'Open the printable Group Analysis PDF companion in the GitHub repository.',
         },
     ]
 
