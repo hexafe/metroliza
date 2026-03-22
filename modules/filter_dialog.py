@@ -2,6 +2,7 @@ from modules.custom_logger import CustomLogger
 from modules.db import execute_with_retry
 from modules.list_selection_utils import ListSelectionUtils
 from modules import ui_theme_tokens
+from modules.help_menu import attach_help_menu_to_layout
 from PyQt6.QtCore import QDate, Qt
 import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtWidgets import(
@@ -111,6 +112,7 @@ class FilterDialog(QDialog):
     def arrange_layout(self):
         try:
             self.layout = QGridLayout(self)
+            attach_help_menu_to_layout(self.layout, self, [("Filtering manual", 'export_filtering')])
             self.layout.addWidget(self.ax_label, 0, 0)
             self.layout.addWidget(self.ax_search_input, 1, 0)
             self.layout.addWidget(self.ax_list, 2, 0)

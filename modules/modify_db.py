@@ -15,6 +15,7 @@ import PyQt6.QtWidgets as QtWidgets
 import logging
 from modules.custom_logger import CustomLogger
 from modules.db import execute_select_with_columns, run_transaction_with_retry
+from modules.help_menu import attach_help_menu_to_layout
 
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ class ModifyDB(QDialog):
     def arrange_layout(self):
         try:
             layout = QGridLayout(self)
+            attach_help_menu_to_layout(layout, self, [("Modify Database manual", 'modify_database')])
 
             # Add table widgets and buttons to the layout
             layout.addWidget(self.reference_table, 0, 0)

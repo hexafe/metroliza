@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QDialog, QFileDialog, QGridLayout, QLabel, QMessageB
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules.help_menu import attach_help_menu_to_layout
 import shutil
 
 
@@ -74,6 +75,7 @@ class ParsingDialog(QDialog):
 
         # Initialize the layout
         self.layout = QGridLayout()
+        attach_help_menu_to_layout(self.layout, self, [("Parsing manual", 'parsing')])
         self.layout.addWidget(self.directory_label, 0, 0)
         self.layout.addWidget(self.directory_text_label, 1, 0)
         self.layout.addWidget(self.directory_button, 2, 0, 1, 2)
