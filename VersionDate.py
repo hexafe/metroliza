@@ -1,5 +1,5 @@
 RELEASE_VERSION = "2026.03rc1"
-VERSION_DATE = "260317"
+VERSION_DATE = "260319"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
     "Major analytics update: histogram/chart readability improvements plus new capability confidence and safeguards for low-sample interpretation."

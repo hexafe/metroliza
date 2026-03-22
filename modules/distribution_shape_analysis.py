@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from itertools import combinations
+import inspect
+import warnings
 
 import numpy as np
 from scipy.stats import anderson_ksamp, ks_2samp, wasserstein_distance
@@ -20,6 +23,45 @@ def _yes_no(flag):
     return 'YES' if bool(flag) else 'NO'
 
 
+def _wasserstein_severity_label(distance):
+    numeric_distance = float(distance) if distance is not None else None
+    if numeric_distance is None:
+        return 'Not reported'
+    absolute_distance = abs(numeric_distance)
+    if absolute_distance < 0.1:
+        return 'Low'
+    if absolute_distance < 0.5:
+        return 'Moderate'
+    return 'High'
+
+
+def _summarize_fit_notes(notes):
+    normalized = [str(note or '').strip() for note in (notes or []) if str(note or '').strip()]
+    if not normalized:
+        return 'Use fit quality as guidance only.'
+    if any('monte_carlo_gof_samples>0' in note or 'ks proxy' in note.lower() for note in normalized):
+        return 'Model fit quality is approximate.'
+    if any(note.lower().startswith('skipped ') for note in normalized):
+        return 'Fit quality estimated approximately.'
+    return 'Use fit quality as guidance only.'
+
+
+@lru_cache(maxsize=1)
+def _anderson_ksamp_supports_variant():
+    return 'variant' in inspect.signature(anderson_ksamp).parameters
+
+
+def _run_anderson_ksamp(samples):
+    kwargs = {'variant': True} if _anderson_ksamp_supports_variant() else {'midrank': True}
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            'ignore',
+            message=r'p-value (?:floored|capped): .*',
+            category=UserWarning,
+        )
+        return anderson_ksamp(samples, **kwargs)
+
+
 def _fit_profile_row(metric, group_name, values):
     numeric = _clean_numeric(values)
     fit = fit_measurement_distribution(numeric.tolist())
@@ -32,7 +74,7 @@ def _fit_profile_row(metric, group_name, values):
     if warning:
         warning_text = 'Distribution fit unavailable for this group.'
     else:
-        warning_text = '; '.join(fit.get('notes') or []) or 'None'
+        warning_text = _summarize_fit_notes(fit.get('notes') or [])
 
     return {
         'Metric': metric,
@@ -105,6 +147,8 @@ def compute_distribution_difference(metric, grouped_values, *, alpha=0.05, corre
                 'raw p-value': p_value,
                 'adjusted p-value': None,
                 'distance metric': distance,
+                'Wasserstein distance': distance,
+                'Practical severity': _wasserstein_severity_label(distance) if distance is not None else 'Not reported',
                 'verdict': verdict,
                 'comment': comment,
                 'flags': '; '.join(flags) if flags else 'none',
@@ -136,7 +180,7 @@ def compute_distribution_difference(metric, grouped_values, *, alpha=0.05, corre
             omnibus_warning = 'Too few samples for k-sample distribution test.'
         else:
             try:
-                ad_result = anderson_ksamp(valid_samples)
+                ad_result = _run_anderson_ksamp(valid_samples)
                 omnibus_p = float(getattr(ad_result, 'pvalue', np.nan))
             except Exception:
                 omnibus_warning = 'Distribution difference test was not reliable for this metric.'

@@ -23,3 +23,4 @@
 ## Assumptions
 - Group Analysis changes should preserve backward compatibility unless explicitly approved otherwise.
 - Existing workbook/export contracts remain authoritative unless requirement updates are documented.
+- Current default contract: Light and Standard export a user-facing `Group Analysis` worksheet only; a separate `Diagnostics` worksheet is reserved for internal/debug runs.

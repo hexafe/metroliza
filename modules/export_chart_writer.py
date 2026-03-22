@@ -3,7 +3,7 @@ from xlsxwriter.utility import xl_range
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
-CHART_ANCHOR_ROW = 7  # Excel row 8, zero-based for xlsxwriter.
+DEFAULT_CHART_ANCHOR_ROW = 7  # Excel row 8, zero-based for xlsxwriter.
 CHART_WIDTH_CM = 11.09
 CHART_HEIGHT_CM = 6.35
 CM_PER_INCH = 2.54
@@ -138,13 +138,21 @@ def build_measurement_chart_series_specs_from_plan(*, header, sheet_name, measur
     )
 
 
-def build_measurement_chart_format_policy(header):
+def build_measurement_chart_format_policy(header, *, chart_anchor_row=None, legend_series_count=0):
     """Return chart formatting and insertion policy for one measurement block."""
+    show_legend = int(legend_series_count or 0) > 1
     return {
         'title': {'name': f'{header}', 'name_font': {'size': 10}},
         'y_axis': {'major_gridlines': {'visible': False}},
-        'legend': {'position': 'none'},
+        'legend': {'position': 'bottom'} if show_legend else {'position': 'none'},
         'size': _build_chart_size_policy(),
+        'anchor': {
+            'row': int(chart_anchor_row) if chart_anchor_row is not None else DEFAULT_CHART_ANCHOR_ROW,
+            # Keep the insertion origin flush with the anchor cell so the
+            # rendered chart doesn't drift relative to the worksheet grid.
+            'x_offset': 0,
+            'y_offset': 0,
+        },
     }
 
 
@@ -183,9 +191,14 @@ def insert_measurement_chart(
     for series_spec in series_specs:
         chart.add_series(series_spec)
 
-    chart_policy = build_measurement_chart_format_policy(header)
+    chart_policy = build_measurement_chart_format_policy(
+        header,
+        chart_anchor_row=measurement_plan.get('chart_insert_row'),
+        legend_series_count=1,
+    )
     chart.set_title(chart_policy['title'])
     chart.set_y_axis(chart_policy['y_axis'])
     chart.set_legend(chart_policy['legend'])
     chart.set_size(chart_policy['size'])
-    worksheet.insert_chart(CHART_ANCHOR_ROW, chart_anchor_col, chart)
+    anchor = chart_policy['anchor']
+    worksheet.insert_chart(anchor['row'], chart_anchor_col, chart, {'x_offset': anchor['x_offset'], 'y_offset': anchor['y_offset']})

@@ -1,11 +1,14 @@
 import unittest
 from tempfile import TemporaryDirectory
+import zipfile
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 
 from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
 from modules.export_group_comparison_writer import (
     _build_insights,
+    _build_pairwise_display_rows,
     _build_pairwise_group_matrices,
     _write_matrix,
     prepare_group_comparison_payload,
@@ -13,24 +16,84 @@ from modules.export_group_comparison_writer import (
 )
 
 
+class FakeChart:
+    def __init__(self, spec):
+        self.spec = spec
+        self.series = []
+        self.legend = None
+        self.size = None
+        self.title = None
+
+    def add_series(self, spec):
+        self.series.append(spec)
+
+    def set_title(self, title):
+        self.title = title
+
+    def set_legend(self, legend):
+        self.legend = legend
+
+    def set_size(self, size):
+        self.size = size
+
+    def set_x_axis(self, axis):
+        self.x_axis = axis
+
+    def set_y_axis(self, axis):
+        self.y_axis = axis
+
+
+class FakeWorkbook:
+    def __init__(self):
+        self.charts = []
+        self.formats = []
+
+    def add_chart(self, spec):
+        chart = FakeChart(spec)
+        self.charts.append(chart)
+        return chart
+
+    def add_format(self, spec):
+        fmt = dict(spec)
+        self.formats.append(fmt)
+        return fmt
+
+
 class FakeWorksheet:
     def __init__(self):
         self.writes = []
+        self.write_formats = {}
         self.conditional_formats = []
         self.columns = []
+        self.merges = []
         self.frozen = None
+        self.name = 'Legacy Group Comparison'
+        self.book = FakeWorkbook()
+        self.inserted_charts = []
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
+        if args:
+            self.write_formats[(row, col)] = args[0]
 
     def conditional_format(self, first_row, first_col, last_row, last_col, options):
-        self.conditional_formats.append((first_row, first_col, last_row, last_col, options))
+        self.conditional_formats.append((first_row, first_col, last_row, last_col, dict(options)))
 
     def set_column(self, first_col, last_col, width, *args, **kwargs):
-        self.columns.append((first_col, last_col, width))
+        fmt = args[0] if args else None
+        self.columns.append((first_col, last_col, width, fmt))
+
+    def merge_range(self, first_row, first_col, last_row, last_col, value, cell_format=None):
+        self.merges.append((first_row, first_col, last_row, last_col, value, cell_format))
+        self.writes.append((first_row, first_col, value))
+        if cell_format is not None:
+            self.write_formats[(first_row, first_col)] = cell_format
 
     def freeze_panes(self, row, col):
         self.frozen = (row, col)
+
+    def insert_chart(self, row, col, chart, options=None):
+        self.inserted_charts.append((row, col, chart, options or {}))
 
 
 class TestExportGroupComparisonSheet(unittest.TestCase):
@@ -103,7 +166,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         self.assertEqual(payload['pairwise_rows'][0]['Metric'], 'CYL - Y')
 
-    def test_writer_renders_expected_sections_and_layout(self):
+    def test_writer_renders_top_down_sections_summary_and_freeze_target(self):
         grouped_df = pd.DataFrame(
             {
                 'HEADER - AX': ['DIA - X'] * 6,
@@ -118,21 +181,120 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         write_group_comparison_sheet(worksheet, payload)
 
         titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
-        self.assertIn('How to interpret these results', titles)
-        self.assertIn('Metadata', titles)
-        self.assertIn('Overall Test Summary', titles)
-        self.assertIn('Recommended Statistical Tests', titles)
-        self.assertIn('distribution shape profile by group', titles)
-        self.assertIn('distribution shape summary', titles)
-        self.assertIn('Pairwise Tables', titles)
-        self.assertIn('distribution shape pairwise tables', titles)
-        self.assertIn('Significance Matrix (adjusted p-values)', titles)
-        self.assertIn('Effect Size Matrix (|d|)', titles)
-        self.assertIn('Insights', titles)
-        self.assertEqual(len(worksheet.conditional_formats), 6)
-        self.assertEqual(worksheet.frozen, (1, 0))
+        expected_order = [
+            'Summary Block',
+            'Location / Central-Tendency Tests',
+            'Group Profile Summary',
+            'Location / Central-Tendency Summary',
+            'Location / Central-Tendency Test Details',
+            'Location / Central-Tendency Pairwise Comparison Table',
+            'Comparison Charts',
+            'Ranked Pairwise Effects',
+            'Effect vs Adjusted p',
+            'Distribution Shape Section',
+            'Distribution Shape Profile By Group',
+            'Distribution Shape Summary',
+            'Distribution Shape Pairwise Table',
+            'Matrices',
+            'Location Significance Matrix (Adjusted P-Values)',
+            "Pairwise Cliff's delta Matrix (|δ|)",
+            'Notes',
+        ]
+        order_positions = [titles.index(title) for title in expected_order]
+        self.assertEqual(order_positions, sorted(order_positions))
 
-    def test_writer_registers_conditional_format_thresholds(self):
+        writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
+        self.assertEqual(writes_by_cell[(1, 0)], 'Metric counts')
+        self.assertEqual(writes_by_cell[(2, 0)], 'Groups analyzed')
+        self.assertEqual(writes_by_cell[(3, 0)], 'Correction method')
+        self.assertEqual(writes_by_cell[(4, 0)], 'Correction policy')
+        self.assertEqual(writes_by_cell[(5, 0)], 'Per-metric omnibus test / p-value')
+        self.assertEqual(writes_by_cell[(6, 0)], 'Significant adjusted pairwise location findings')
+        self.assertEqual(writes_by_cell[(7, 0)], 'Strongest practical location effect')
+        self.assertEqual(writes_by_cell[(8, 0)], 'Warnings / assumptions')
+        self.assertIn(('Pairwise tests', 3), payload['overall_summary'])
+        self.assertIn(('Significant (p < 0.05)', 0), payload['overall_summary'])
+        self.assertIn(('Large effects (|δ| >= 0.474)', 3), payload['overall_summary'])
+
+        pairwise_header_row = next(
+            row for row, col, value in worksheet.writes
+            if value == 'Metric' and writes_by_cell.get((row - 1, 0)) == 'Location / Central-Tendency Pairwise Comparison Table'
+        )
+        self.assertEqual(worksheet.frozen, (pairwise_header_row, 0))
+        self.assertGreaterEqual(len(worksheet.conditional_formats), 8)
+
+        pairwise_headers = [
+            writes_by_cell[(pairwise_header_row, col)] for col in range(12)
+        ]
+        self.assertEqual(
+            pairwise_headers,
+            [
+                'Metric',
+                'Group A',
+                'Group B',
+                'Pairwise test',
+                'Adjusted p-value',
+                'Pairwise effect size',
+                'Effect type',
+                'Delta mean or median',
+                'Practical interpretation',
+                'Plain-language takeaway',
+                'Suggested action',
+                'Flags / comments',
+            ],
+        )
+
+    def test_non_parametric_two_group_labels_use_cliffs_delta_metadata(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 10,
+                'MEAS': [0.0, 0.0, 0.0, 10.0, 10.0, 1.0, 1.0, 1.0, 11.0, 11.0],
+                'GROUP': ['A'] * 5 + ['B'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn("Pairwise Cliff's delta Matrix (|δ|)", titles)
+        self.assertIn(('Large effects (|δ| >= 0.474)', 1), payload['overall_summary'])
+        self.assertIn('pairwise_effect_type', payload['pairwise_rows'][0])
+        self.assertEqual(payload['pairwise_rows'][0]['pairwise_effect_type'], 'cliffs_delta')
+        self.assertTrue(any("Cliff's delta" in value for value in titles if value.startswith('• ')))
+
+    def test_multi_group_labels_include_pairwise_and_omnibus_effect_metadata(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.05, -0.05,
+                    0.4, 0.5, 0.45, 0.55, 0.5,
+                    2.0, 2.1, 1.9, 2.05, 1.95,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn("Pairwise Cohen's d Matrix (|d|)", titles)
+        self.assertIn(('Large effects (|d| >= 0.8)', 3), payload['overall_summary'])
+        self.assertEqual(payload['effect_reporting']['pairwise_effect_types'], ['cohen_d'])
+        self.assertEqual(payload['effect_reporting']['omnibus_effect_types'], ['eta_squared'])
+        self.assertIn('pairwise_effect_type', payload['pairwise_rows'][0])
+        self.assertIn('omnibus_effect_type', payload['pairwise_rows'][0])
+        note_lines = [value for _, _, value in worksheet.writes if isinstance(value, str) and value.startswith('• ')]
+        self.assertTrue(any("Cohen's d" in value for value in note_lines))
+        self.assertTrue(any('eta squared' in value for value in note_lines))
+
+    def test_writer_registers_visible_conditional_format_palettes(self):
         matrix = pd.DataFrame([[float('nan'), 0.03], [0.03, float('nan')]], index=['A', 'B'], columns=['A', 'B'])
         payload = {
             'metadata': [],
@@ -144,24 +306,29 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
             'distribution_pairwise_rows': [],
             'significance_matrices': {'M1': matrix},
             'effect_matrices': {'M1': matrix},
+            'effect_reporting': {'pairwise_effect_bands': (0.2, 0.5)},
             'insights': [],
         }
         worksheet = FakeWorksheet()
 
         write_group_comparison_sheet(worksheet, payload)
 
-        self.assertEqual(len(worksheet.conditional_formats), 6)
-        significance_rules = [fmt for fmt in worksheet.conditional_formats[:3]]
-        effect_rules = [fmt for fmt in worksheet.conditional_formats[3:]]
-        self.assertEqual(significance_rules[0][4]['criteria'], '>=')
-        self.assertEqual(significance_rules[0][4]['value'], 0.05)
-        self.assertEqual(significance_rules[1][4]['criteria'], 'between')
-        self.assertEqual(significance_rules[1][4]['minimum'], 0.01)
-        self.assertEqual(significance_rules[2][4]['criteria'], '<')
-        self.assertEqual(significance_rules[2][4]['value'], 0.01)
-        self.assertEqual(effect_rules[0][4]['value'], 0.2)
-        self.assertEqual(effect_rules[1][4]['maximum'], 0.5)
-        self.assertEqual(effect_rules[2][4]['value'], 0.5)
+        self.assertGreaterEqual(len(worksheet.conditional_formats), 9)
+        significance_rules = [rule for *_, rule in worksheet.conditional_formats[:4]]
+        effect_rules = [rule for *_, rule in worksheet.conditional_formats[4:9]]
+
+        self.assertEqual([rule['type'] for rule in significance_rules], ['blanks', 'cell', 'cell', 'cell'])
+        self.assertEqual(significance_rules[1]['criteria'], '<=')
+        self.assertEqual(significance_rules[1]['value'], 0.01)
+        self.assertEqual(significance_rules[2]['criteria'], 'between')
+        self.assertEqual(significance_rules[3]['criteria'], '>')
+
+        self.assertEqual(effect_rules[0]['type'], 'blanks')
+        self.assertEqual(effect_rules[1]['criteria'], '<')
+        self.assertEqual(effect_rules[2]['criteria'], 'between')
+        self.assertEqual(effect_rules[3]['criteria'], 'between')
+        self.assertEqual(effect_rules[4]['criteria'], '>=')
+        self.assertTrue(any(isinstance(value, str) and 'Legend:' in value for _, _, value in worksheet.writes))
 
 
     def test_write_matrix_sanitizes_non_finite_values(self):
@@ -175,12 +342,12 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         end_row = _write_matrix(worksheet, 0, 'Metric: M1', matrix, matrix_type='effect')
 
         writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
-        self.assertEqual(writes_by_cell[(2, 1)], 0.25)
-        self.assertIsNone(writes_by_cell[(2, 2)])
-        self.assertIsNone(writes_by_cell[(3, 1)])
-        self.assertIsNone(writes_by_cell[(3, 2)])
-        self.assertEqual(end_row, 6)
-        self.assertEqual(len(worksheet.conditional_formats), 3)
+        self.assertEqual(writes_by_cell[(4, 1)], 0.25)
+        self.assertIsNone(writes_by_cell[(4, 2)])
+        self.assertIsNone(writes_by_cell[(5, 1)])
+        self.assertIsNone(writes_by_cell[(5, 2)])
+        self.assertEqual(end_row, 8)
+        self.assertEqual(len(worksheet.conditional_formats), 5)
 
     def test_write_matrix_with_non_finite_values_is_deterministic(self):
         matrix = pd.DataFrame(
@@ -224,6 +391,47 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertTrue(pd.isna(effect.loc['A', 'A']))
         self.assertTrue(pd.isna(effect.loc['B', 'B']))
 
+
+    def test_prepare_payload_uses_pairwise_effects_for_rows_and_matrices_in_multi_group_case(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.05, -0.05,
+                    0.4, 0.5, 0.45, 0.55, 0.5,
+                    2.0, 2.1, 1.9, 2.05, 1.95,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        rows_by_pair = {
+            (row['Group A'], row['Group B']): row
+            for row in payload['pairwise_rows']
+            if row['Metric'] == 'DIA - X'
+        }
+        self.assertEqual(set(rows_by_pair), {('A', 'B'), ('A', 'C'), ('B', 'C')})
+
+        ab = rows_by_pair[('A', 'B')]
+        ac = rows_by_pair[('A', 'C')]
+        bc = rows_by_pair[('B', 'C')]
+
+        self.assertNotEqual(ab['effect size'], ac['effect size'])
+        self.assertNotEqual(ab['effect size'], bc['effect size'])
+        self.assertEqual(ab['effect type'], 'cohen_d')
+        self.assertEqual(ab['omnibus effect type'], 'eta_squared')
+        self.assertIsNotNone(ab['omnibus effect size'])
+        self.assertEqual(ab['omnibus effect size'], ac['omnibus effect size'])
+        self.assertEqual(ab['omnibus effect size'], bc['omnibus effect size'])
+
+        effect_matrix = payload['effect_matrices']['DIA - X']
+        self.assertEqual(effect_matrix.loc['A', 'B'], abs(ab['effect size']))
+        self.assertEqual(effect_matrix.loc['A', 'C'], abs(ac['effect size']))
+        self.assertEqual(effect_matrix.loc['B', 'C'], abs(bc['effect size']))
+        self.assertNotEqual(effect_matrix.loc['A', 'B'], effect_matrix.loc['A', 'C'])
+
     def test_write_matrix_renders_nan_diagonal_as_blank_cells(self):
         matrix = pd.DataFrame(
             [[float('nan'), 0.2], [0.2, float('nan')]],
@@ -235,10 +443,71 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         _write_matrix(worksheet, 0, 'Metric: M1', matrix, matrix_type='significance')
 
         writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
-        self.assertIsNone(writes_by_cell[(2, 1)])
-        self.assertEqual(writes_by_cell[(2, 2)], 0.2)
-        self.assertEqual(writes_by_cell[(3, 1)], 0.2)
-        self.assertIsNone(writes_by_cell[(3, 2)])
+        self.assertIsNone(writes_by_cell[(4, 1)])
+        self.assertEqual(writes_by_cell[(4, 2)], 0.2)
+        self.assertEqual(writes_by_cell[(5, 1)], 0.2)
+        self.assertIsNone(writes_by_cell[(5, 2)])
+
+    def test_writer_uses_wide_wrapped_columns_for_user_facing_text(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.0, 0.05,
+                    0.2, 0.3, 0.25, 0.35, 0.3,
+                    1.4, 1.5, 1.45, 1.55, 1.6,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
+        pairwise_header_row = next(
+            row for row, col, value in worksheet.writes
+            if value == 'Metric' and writes_by_cell.get((row - 1, 0)) == 'Location / Central-Tendency Pairwise Comparison Table'
+        )
+        self.assertEqual(writes_by_cell[(pairwise_header_row, 9)], 'Plain-language takeaway')
+        self.assertEqual(writes_by_cell[(pairwise_header_row, 10)], 'Suggested action')
+
+        wide_columns = {(first_col, last_col): width for first_col, last_col, width, _ in worksheet.columns}
+        self.assertGreaterEqual(wide_columns[(9, 9)], 34)
+        self.assertGreaterEqual(wide_columns[(10, 10)], 28)
+        self.assertGreaterEqual(wide_columns[(11, 11)], 32)
+        self.assertIn('text_wrap', worksheet.write_formats[(pairwise_header_row + 1, 9)])
+        self.assertIn('text_wrap', worksheet.write_formats[(pairwise_header_row + 1, 10)])
+        self.assertTrue(any(first_col == 0 and last_col == 3 and '• ' in value for _, first_col, _, last_col, value, _ in worksheet.merges))
+
+    def test_group_profile_summary_adds_plain_language_fields(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 6,
+                'MEAS': [10.0, 10.5, 11.1, 11.4, 12.0, 12.2],
+                'GROUP': ['A', 'A', 'B', 'B', 'C', 'C'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        writes_by_cell = {(row, col): value for row, col, value in worksheet.writes}
+        profile_header_row = next(
+            row for row, col, value in worksheet.writes
+            if value == 'Metric' and writes_by_cell.get((row - 1, 0)) == 'Group Profile Summary'
+        )
+        headers = [writes_by_cell[(profile_header_row, col)] for col in range(8)]
+        self.assertEqual(
+            headers,
+            ['Metric', 'Group', 'n', 'Mean', 'Median', 'Relative position', 'Plain-language summary', 'Practical process meaning'],
+        )
+        summaries = [value for (row, col), value in writes_by_cell.items() if row > profile_header_row and col in {6, 7}]
+        self.assertTrue(any('middle of the pack' in str(value) or 'candidate for process review' in str(value) for value in summaries))
 
     def test_insights_are_deterministic_and_cover_scaffold_topics(self):
         working = pd.DataFrame(
@@ -272,7 +541,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertEqual(len(insights), 6)
         self.assertEqual(
             insights[0],
-            'Central tendency: highest mean=A (10.000), lowest mean=B (8.000).',
+            'Central tendency: highest mean=A (10.000), lowest mean=B (8.000). Use this as a quick ranking, not as proof that every pair is meaningfully different.',
         )
         self.assertIn('Significant pairwise findings:', insights[1])
         self.assertIn('difference:', insights[2])
@@ -376,6 +645,7 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertIn(('Rows', 2), payload['metadata'])
         self.assertIn(('Alpha', 0.05), payload['metadata'])
         self.assertIn(('Correction method', 'Holm'), payload['metadata'])
+        self.assertIn(('Correction policy', 'Strict family-wise error control (Holm)'), payload['metadata'])
         self.assertIn(('Group sample sizes', 'A:1, B:1'), payload['metadata'])
         pairwise_row = payload['pairwise_rows'][0]
         self.assertEqual(pairwise_row['n(A)'], 1)
@@ -398,16 +668,200 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         per_metric = payload['overall_test_rows'][0]
         self.assertEqual(per_metric['normality check used'], 'Shapiro-Wilk')
         self.assertIn(per_metric['variance test used'], {'Levene', 'Brown-Forsythe'})
-        self.assertIn(per_metric['post-hoc strategy'], {'Tukey', 'Dunn'})
+        self.assertIn(
+            per_metric['post-hoc strategy'],
+            {
+                'pairwise t-tests + Holm',
+                'pairwise Welch t-tests + Holm',
+                'pairwise Mann-Whitney + Holm',
+            },
+        )
+        self.assertEqual(per_metric['correction method'], 'Holm')
+        self.assertEqual(per_metric['correction policy'], 'Strict family-wise error control (Holm)')
+        self.assertIn('omnibus test name', per_metric)
+        self.assertIn('assumption outcomes', per_metric)
 
         self.assertTrue(payload['pairwise_rows'])
         pairwise = payload['pairwise_rows'][0]
         for required in ['Group A', 'Group B', 'test used', 'p-value', 'adjusted p-value', 'effect size', 'significant']:
             self.assertIn(required, pairwise)
+        self.assertEqual(pairwise['correction method'], 'Holm')
+        self.assertEqual(pairwise['correction policy'], 'Strict family-wise error control (Holm)')
+        self.assertIn('pairwise test name', pairwise)
+        self.assertIn('omnibus test name', pairwise)
+        self.assertIn('assumption outcomes', pairwise)
 
-    def test_integration_workbook_contains_group_comparison_sheet_and_headers(self):
+    def test_prepare_payload_supports_bh_correction_policy_labels(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.05, -0.05,
+                    0.4, 0.5, 0.45, 0.55, 0.5,
+                    2.0, 2.1, 1.9, 2.05, 1.95,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df, correction_method='bh')
+        summary_rows = dict(payload['metadata'])
+        display_rows = _build_pairwise_display_rows(payload['pairwise_rows'])
+
+        self.assertEqual(summary_rows['Correction method'], 'Benjamini-Hochberg')
+        self.assertEqual(
+            summary_rows['Correction policy'],
+            'Exploratory false-discovery-rate control (Benjamini-Hochberg/FDR)',
+        )
+        self.assertTrue(display_rows)
+        self.assertTrue(
+            all(
+                'Correction: Exploratory false-discovery-rate control (Benjamini-Hochberg/FDR)' in row['Flags / comments']
+                for row in display_rows
+            )
+        )
+
+    def test_prepare_payload_surfaces_selection_details_for_tiny_sample_and_constant_groups(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 7,
+                'MEAS': [1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0],
+                'GROUP': ['A', 'A', 'A', 'B', 'B', 'B', 'C'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        self.assertEqual(payload['overall_test_rows'][0]['assumption outcomes']['selection_mode'], 'unavailable')
+        self.assertIn('fewer than 2 values', payload['overall_test_rows'][0]['assumption outcomes']['selection_detail'])
+        self.assertTrue(payload['pairwise_rows'])
+        display_rows = _build_pairwise_display_rows(payload['pairwise_rows'])
+        self.assertTrue(
+            all('Correction: Strict family-wise error control (Holm)' in row['Flags / comments'] for row in display_rows)
+        )
+
+    def test_prepare_payload_post_hoc_strategy_matches_real_pairwise_computation(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.0, 0.05,
+                    0.2, 0.3, 0.25, 0.35, 0.3,
+                    1.4, 1.5, 1.45, 1.55, 1.6,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        expected_strategy = {row['post-hoc strategy'] for row in payload['overall_test_rows']}
+        self.assertEqual(expected_strategy, {'pairwise t-tests + Holm'})
+        self.assertEqual(
+            {row['post-hoc strategy'] for row in payload['pairwise_rows']},
+            {'pairwise t-tests + Holm'},
+        )
+        pairwise_by_pair = {(row['Group A'], row['Group B']): row for row in payload['pairwise_rows']}
+        self.assertEqual(set(pairwise_by_pair), {('A', 'B'), ('A', 'C'), ('B', 'C')})
+        self.assertNotEqual(pairwise_by_pair[('A', 'B')]['effect size'], pairwise_by_pair[('A', 'C')]['effect size'])
+        self.assertNotEqual(pairwise_by_pair[('A', 'B')]['effect size'], pairwise_by_pair[('B', 'C')]['effect size'])
+
+    def test_effect_matrix_title_and_notes_follow_actual_effect_type_metadata(self):
+        non_parametric_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['NP'] * 10,
+                'MEAS': [0.0, 0.0, 0.0, 10.0, 10.0, 1.0, 1.0, 1.0, 11.0, 11.0],
+                'GROUP': ['A'] * 5 + ['B'] * 5,
+            }
+        )
+        parametric_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['P'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.0, 0.05,
+                    0.2, 0.3, 0.25, 0.35, 0.3,
+                    1.4, 1.5, 1.45, 1.55, 1.6,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        for grouped_df, expected_title, note_fragments in [
+            (
+                non_parametric_df,
+                "Pairwise Cliff's delta Matrix (|δ|)",
+                ["Cliff's delta", 'absolute magnitude |δ|'],
+            ),
+            (
+                parametric_df,
+                "Pairwise Cohen's d Matrix (|d|)",
+                ["Cohen's d", 'absolute magnitude |d|', 'eta squared'],
+            ),
+        ]:
+            payload = prepare_group_comparison_payload(grouped_df)
+            worksheet = FakeWorksheet()
+
+            write_group_comparison_sheet(worksheet, payload)
+
+            titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+            note_lines = [value for _, _, value in worksheet.writes if isinstance(value, str) and value.startswith('• ')]
+            self.assertEqual(payload['effect_reporting']['pairwise_matrix_title'], expected_title)
+            self.assertIn(expected_title, titles)
+            for fragment in note_fragments:
+                self.assertTrue(any(fragment in note for note in note_lines), msg=fragment)
+
+    def test_matrix_conditional_formatting_uses_visible_color_scales_for_real_payload(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.0, 0.05,
+                    0.2, 0.3, 0.25, 0.35, 0.3,
+                    1.4, 1.5, 1.45, 1.55, 1.6,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        self.assertGreaterEqual(len(worksheet.conditional_formats), 8)
+        self.assertTrue(any(rule['type'] == 'blanks' for _, _, _, _, rule in worksheet.conditional_formats))
+        self.assertTrue(any(rule.get('criteria') == '<=' and rule.get('value') == 0.01 for _, _, _, _, rule in worksheet.conditional_formats))
+        self.assertTrue(any(rule.get('criteria') == '>=' for _, _, _, _, rule in worksheet.conditional_formats))
+
+    def test_writer_keeps_non_group_comparison_scaffolding_stable_when_payload_has_no_pairwise_rows(self):
+        payload = {
+            'metadata': [('Headers', 0), ('Groups', 0), ('Correction method', 'Holm'), ('Correction policy', 'Strict family-wise error control (Holm)')],
+            'overall_summary': [],
+            'overall_test_rows': [],
+            'pairwise_rows': [],
+            'distribution_profile_rows': [],
+            'distribution_difference_rows': [],
+            'distribution_pairwise_rows': [],
+            'significance_matrices': {},
+            'effect_matrices': {},
+            'effect_reporting': {'pairwise_matrix_title': 'Pairwise Effect Magnitude Matrix (absolute effect size)'},
+            'insights': [],
+        }
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn('Summary Block', titles)
+        self.assertIn('Distribution Shape Section', titles)
+        self.assertIn('Matrices', titles)
+        self.assertIn('Notes', titles)
+        self.assertFalse(any(value == 'Comparison Charts' for value in titles))
+        self.assertTrue(any(value == 'No rows' for value in titles))
+        self.assertTrue(any(value == 'No heatmap data' for value in titles))
+
+    def test_integration_workbook_persists_legacy_writer_output_without_asserting_default_export_contract(self):
         import tempfile
-        import zipfile
 
         grouped_df = pd.DataFrame(
             {
@@ -419,32 +873,67 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         payload = prepare_group_comparison_payload(grouped_df)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            workbook_path = f"{tmpdir}/group_comparison.xlsx"
+            workbook_path = f"{tmpdir}/legacy_group_comparison.xlsx"
             import xlsxwriter
             workbook = xlsxwriter.Workbook(workbook_path)
-            worksheet = workbook.add_worksheet('Group Comparison')
+            worksheet = workbook.add_worksheet('Legacy Group Comparison')
             write_group_comparison_sheet(worksheet, payload)
             workbook.close()
 
             with zipfile.ZipFile(workbook_path, 'r') as archive:
                 workbook_xml = archive.read('xl/workbook.xml').decode('utf-8')
                 shared_strings = archive.read('xl/sharedStrings.xml').decode('utf-8')
+                worksheet_xml = archive.read('xl/worksheets/sheet1.xml').decode('utf-8')
+                styles_xml = archive.read('xl/styles.xml').decode('utf-8')
 
-        self.assertIn('Group Comparison', workbook_xml)
+        self.assertIn('Legacy Group Comparison', workbook_xml)
         for title in [
-            'How to interpret these results',
-            'Metadata',
-            'Overall Test Summary',
-            'Recommended Statistical Tests',
-            'distribution shape profile by group',
-            'distribution shape summary',
-            'Pairwise Tables',
-            'distribution shape pairwise tables',
-            'Significance Matrix (adjusted p-values)',
-            'Effect Size Matrix (|d|)',
-            'Insights',
+            'Summary Block',
+            'Location / Central-Tendency Tests',
+            'Group Profile Summary',
+            'Location / Central-Tendency Summary',
+            'Location / Central-Tendency Test Details',
+            'Location / Central-Tendency Pairwise Comparison Table',
+            'Distribution Shape Section',
+            'Distribution Shape Profile By Group',
+            'Distribution Shape Summary',
+            'Distribution Shape Pairwise Table',
+            'Matrices',
+            'Location Significance Matrix (Adjusted P-Values)',
+            "Pairwise Cliff's delta Matrix (|δ|)",
+            'Notes',
         ]:
             self.assertIn(title, shared_strings)
+
+        namespace = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+        worksheet_root = ET.fromstring(worksheet_xml)
+        cf_nodes = worksheet_root.findall('x:conditionalFormatting', namespace)
+        self.assertGreaterEqual(len(cf_nodes), 2)
+        cf_rule_types = [node.attrib.get('type') for cf in cf_nodes for node in cf.findall('x:cfRule', namespace)]
+        self.assertIn('cellIs', cf_rule_types)
+        self.assertIn('containsBlanks', cf_rule_types)
+        self.assertNotIn('colorScale', cf_rule_types)
+        sqrefs = {node.attrib.get('sqref') for node in cf_nodes}
+        self.assertTrue(any(sqref and ':' in sqref for sqref in sqrefs))
+        self.assertTrue(any(sqref and sqref.startswith('B') for sqref in sqrefs))
+
+        rules_by_sqref = {
+            cf.attrib.get('sqref', ''): [rule.attrib for rule in cf.findall('x:cfRule', namespace)]
+            for cf in cf_nodes
+        }
+        self.assertTrue(
+            any(
+                any(rule.get('type') == 'containsBlanks' for rule in rules)
+                and any(rule.get('operator') == 'lessThanOrEqual' for rule in rules)
+                for rules in rules_by_sqref.values()
+            ),
+            msg='Expected at least one matrix sqref to retain both blank masking and threshold-based visible formatting rules.',
+        )
+
+        styles_root = ET.fromstring(styles_xml)
+        dxfs = styles_root.find('x:dxfs', namespace)
+        self.assertIsNotNone(dxfs)
+        self.assertGreater(int(dxfs.attrib.get('count', '0')), 0)
 
     def test_writer_handles_empty_payload(self):
         payload = prepare_group_comparison_payload(pd.DataFrame())
@@ -454,6 +943,30 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         self.assertTrue(any(value == 'No rows' for _, _, value in worksheet.writes))
         self.assertTrue(any(value == 'No heatmap data' for _, _, value in worksheet.writes))
+
+    def test_writer_section_names_and_notes_make_location_vs_shape_distinction_explicit(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 8,
+                'MEAS': [0.1, 0.2, 0.3, 0.4, 1.5, 1.7, 1.9, 2.2],
+                'GROUP': ['A', 'A', 'A', 'A', 'B', 'B', 'B', 'B'],
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn('Location / Central-Tendency Pairwise Comparison Table', titles)
+        self.assertIn('Distribution Shape Pairwise Table', titles)
+        self.assertIn('Location Significance Matrix (Adjusted P-Values)', titles)
+
+        note_lines = [value for _, _, value in worksheet.writes if isinstance(value, str) and value.startswith('• ')]
+        self.assertTrue(any('The location tests focus on whether one group is generally higher or lower than another' in value for value in note_lines))
+        self.assertTrue(any('Distribution-shape pairwise tables keep both adjusted p-values and Wasserstein distance' in value for value in note_lines))
+        self.assertTrue(any('Wasserstein distance is a practical clue about separation between full distributions' in value for value in note_lines))
 
     def test_prepare_payload_includes_distribution_sections(self):
         grouped_df = pd.DataFrame(
@@ -473,6 +986,11 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         for key in ['Metric', 'Group', 'n', 'best fit model', 'fit quality', 'AD p-value', 'KS p-value', 'GOF acceptable?', 'Support mode', 'Warning / notes summary']:
             self.assertIn(key, profile)
 
+        pairwise = payload['distribution_pairwise_rows'][0]
+        self.assertIn('adjusted p-value', pairwise)
+        self.assertIn('Wasserstein distance', pairwise)
+        self.assertIn('Practical severity', pairwise)
+
     def test_insights_do_not_claim_no_difference_when_only_shape_differs(self):
         grouped_df = pd.DataFrame(
             {
@@ -487,6 +1005,33 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
 
         self.assertIn('distribution shape:', insights_text)
         self.assertNotIn('no differences', insights_text.lower())
+
+
+    def test_writer_renders_group_comparison_chart_section_with_dynamic_anchor(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['DIA - X'] * 6 + ['CYL - Y'] * 6,
+                'MEAS': [10.0, 10.2, 9.8, 9.9, 10.4, 10.6, 5.0, 5.3, 5.4, 5.8, 6.0, 6.1],
+                'GROUP': ['A', 'A', 'B', 'B', 'C', 'C'] * 2,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+        worksheet = FakeWorksheet()
+
+        write_group_comparison_sheet(worksheet, payload)
+
+        titles = [value for _, _, value in worksheet.writes if isinstance(value, str)]
+        self.assertIn('Comparison Charts', titles)
+        self.assertIn('Ranked Pairwise Effects', titles)
+        self.assertIn('Effect vs Adjusted p', titles)
+        self.assertEqual(len(worksheet.inserted_charts), 2)
+        ranked_anchor = worksheet.inserted_charts[0][0]
+        scatter_anchor = worksheet.inserted_charts[1][0]
+        shape_section_row = next(row for row, col, value in worksheet.writes if value == 'Distribution Shape Section')
+        self.assertLess(ranked_anchor, shape_section_row)
+        self.assertLess(scatter_anchor, shape_section_row)
+        self.assertEqual(worksheet.inserted_charts[1][2].legend, {'position': 'bottom'})
 
 
 if __name__ == '__main__':

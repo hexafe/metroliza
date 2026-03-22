@@ -598,7 +598,6 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_label.emit = lambda *_: None
             thread.finished.emit = lambda: None
             thread._active_backend = fake_backend
-            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
 
             measurement_df = self._build_multi_header_measurement_dataframe()
             module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
@@ -651,7 +650,6 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_cache = object()
             thread._export_df_column_order = ()
             thread._active_backend = self._build_fake_measurement_backend()
-            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
 
             progress_values = []
             cancellation_state = {'triggered': False}
@@ -720,7 +718,6 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_cache = object()
             thread._export_df_column_order = ()
             thread._active_backend = self._build_fake_measurement_backend()
-            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
 
             labels = []
             counter = {'value': 0.0}
@@ -813,7 +810,6 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_column_order = ()
             workbook = _RecordingWorkbook()
             thread._active_backend = _Backend(workbook)
-            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
             thread.update_progress.emit = lambda *_: None
             thread.update_label.emit = lambda *_: None
 
@@ -899,7 +895,6 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._export_df_column_order = ()
             workbook = _RecordingWorkbook()
             thread._active_backend = _Backend(workbook)
-            thread._write_group_comparison_sheet = lambda *_args, **_kwargs: None
             thread.update_progress.emit = lambda *_: None
             thread.update_label.emit = lambda *_: None
 

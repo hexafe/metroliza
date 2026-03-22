@@ -1,6 +1,8 @@
 import unittest
 
 from modules.group_analysis_writer import (
+    GROUP_ANALYSIS_MANUAL_GITHUB_URL,
+    GROUP_ANALYSIS_MANUAL_PDF_PATH,
     write_group_analysis_diagnostics_sheet,
     write_group_analysis_sheet,
 )
@@ -19,14 +21,24 @@ class FakeWorkbook:
 class FakeWorksheet:
     def __init__(self):
         self.writes = []
+        self.write_formats = {}
         self.frozen = None
         self.book = FakeWorkbook()
         self.conditional_formats = []
         self.images = []
         self.charts = []
+        self.columns = []
+        self.rows = []
+        self.gridlines_hidden = None
+        self.autofilters = []
+        self.merges = []
+        self.urls = []
+        self.formulas = []
 
     def write(self, row, col, value, *args, **kwargs):
         self.writes.append((row, col, value))
+        if args:
+            self.write_formats[(row, col)] = args[0]
 
     def freeze_panes(self, row, col):
         self.frozen = (row, col)
@@ -34,11 +46,41 @@ class FakeWorksheet:
     def conditional_format(self, first_row, first_col, last_row, last_col, options):
         self.conditional_formats.append((first_row, first_col, last_row, last_col, dict(options)))
 
+    def set_column(self, first_col, last_col, width=None, cell_format=None, options=None):
+        self.columns.append((first_col, last_col, width, cell_format, dict(options or {})))
+
+    def set_row(self, row, height=None, cell_format=None, options=None):
+        self.rows.append((row, height, cell_format, dict(options or {})))
+
+    def hide_gridlines(self, option):
+        self.gridlines_hidden = option
+
+    def autofilter(self, first_row, first_col, last_row, last_col):
+        self.autofilters.append((first_row, first_col, last_row, last_col))
+
     def insert_image(self, row, col, path, options=None):
         self.images.append((row, col, path, dict(options or {})))
 
     def insert_chart(self, row, col, chart):
         self.charts.append((row, col, chart))
+
+    def merge_range(self, first_row, first_col, last_row, last_col, value, cell_format=None):
+        self.merges.append((first_row, first_col, last_row, last_col, value, cell_format))
+        self.writes.append((first_row, first_col, value))
+        if cell_format is not None:
+            self.write_formats[(first_row, first_col)] = cell_format
+
+    def write_url(self, row, col, url, cell_format=None, string=None, tip=None):
+        self.urls.append((row, col, url, string, tip))
+        self.writes.append((row, col, string or url))
+        if cell_format is not None:
+            self.write_formats[(row, col)] = cell_format
+
+    def write_formula(self, row, col, formula, cell_format=None, value=None):
+        self.formulas.append((row, col, formula, value))
+        self.writes.append((row, col, value if value is not None else formula))
+        if cell_format is not None:
+            self.write_formats[(row, col)] = cell_format
 
 
 class TestGroupAnalysisWriter(unittest.TestCase):
@@ -99,9 +141,14 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'effect_size': 0.7,
                             'difference': 'YES',
                             'comment': 'caution',
+                            'takeaway': 'These groups show a reliable difference after correction. The practical gap looks moderate.',
+                            'suggested_action': 'Review process differences, then confirm the gap matters operationally before changing settings.',
                             'flags': 'LOW N; IMBALANCED N',
+                            'test_rationale': 'Chosen because only two groups are compared.',
                         }
                     ],
+                    'metric_note': 'Shape note: spread or pattern differs across groups, not just the average.',
+                    'recommended_action': 'Recommended action: start with A vs B and verify likely process drivers before changing settings.',
                     'plot_eligibility': {
                         'violin': {'eligible': True, 'skip_reason': ''},
                         'histogram': {'eligible': False, 'skip_reason': 'low_total_samples'},
@@ -115,45 +162,85 @@ class TestGroupAnalysisWriter(unittest.TestCase):
 
         values = [value for _, _, value in worksheet.writes]
         self.assertIn('Group Analysis', values)
+        self.assertIn('User manual', values)
+        self.assertIn('Markdown guide (GitHub)', values)
+        self.assertIn('Printable companion (local PDF)', values)
+        self.assertIn('Open Markdown manual', values)
+        self.assertIn('Open local PDF companion', values)
+        self.assertIn('Metric index', values)
         self.assertIn('Metric: M1', values)
+        self.assertIn('Metric overview', values)
         self.assertIn('Descriptive stats', values)
         self.assertIn('Spec status', values)
         self.assertIn('Exact match', values)
         self.assertIn('Pairwise comparisons', values)
-        self.assertIn('Comment', values)
+        self.assertIn('Why this test', values)
         self.assertIn('adj p-value', values)
         self.assertIn('Delta mean', values)
         self.assertIn('difference', values)
-        self.assertIn('YES', values)
+        self.assertIn('DIFFERENCE', values)
         self.assertIn('caution', values)
+        self.assertIn('Takeaway', values)
+        self.assertIn('Suggested action', values)
+        self.assertIn('Recommended action', values)
+        self.assertIn('Shape note: spread or pattern differs across groups, not just the average.', values)
+        self.assertIn('Recommended action: start with A vs B and verify likely process drivers before changing settings.', values)
+        self.assertIn('These groups show a reliable difference after correction. The practical gap looks moderate.', values)
+        self.assertIn('Review process differences, then confirm the gap matters operationally before changing settings.', values)
         self.assertIn('Flags', values)
         self.assertIn('LOW N; IMBALANCED N', values)
+        self.assertIn('Chosen because only two groups are compared.', values)
         self.assertIn('Plots', values)
         self.assertIn('Violin', values)
         self.assertIn('Histogram', values)
         self.assertIn('Not enough total samples to show this plot.', values)
 
-        self.assertIn('Line 1', values)
-        self.assertIn('Line 2', values)
-        self.assertIn('Distribution shape: Distinct tails across groups.', values)
-        insight_values = [
-            value
-            for _, col, value in worksheet.writes
-            if col == 1 and value in {'Line 1', 'Line 2', 'Distribution shape: Distinct tails across groups.'}
-        ]
-        self.assertEqual(
-            insight_values,
-            ['Line 1', 'Line 2', 'Distribution shape: Distinct tails across groups.'],
-        )
         text_values = [str(value).upper() for value in values]
         self.assertNotIn('TRUE', text_values)
         self.assertNotIn('FALSE', text_values)
-        self.assertEqual(worksheet.frozen, (1, 0))
+        self.assertIsNone(worksheet.frozen)
+        self.assertEqual(worksheet.gridlines_hidden, 2)
+        self.assertEqual(worksheet.columns[0][:3], (0, 0, 18))
+        self.assertEqual(worksheet.columns[2][:3], (2, 2, 16))
+        self.assertEqual(worksheet.columns[13][:3], (13, 13, 24))
+        self.assertEqual(worksheet.columns[-1][:3], (14, 14, 18))
+        self.assertTrue(any(url[2] == GROUP_ANALYSIS_MANUAL_GITHUB_URL and url[3] == 'Open Markdown manual' for url in worksheet.urls))
+        self.assertTrue(any(url[2] == f'external:{GROUP_ANALYSIS_MANUAL_PDF_PATH}' and url[3] == 'Open local PDF companion' for url in worksheet.urls))
+        index_header_row = next(row for row, col, value in worksheet.writes if col == 2 and value == 'Jump to section')
+        index_header_height = max(height for row, height, *_ in worksheet.rows if row == index_header_row)
+        self.assertGreaterEqual(index_header_height, 24)
+        self.assertTrue(any(row == 0 and height == 28 for row, height, *_ in worksheet.rows))
+        metric_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Metric: M1')
+        self.assertFalse(worksheet.write_formats[(metric_row, 0)].get('props', {}).get('text_wrap'))
+        self.assertTrue(any(merge[:5] == (metric_row, 0, metric_row, 14, 'Metric: M1') for merge in worksheet.merges))
+        take_row = next(
+            row
+            for row, col, value in worksheet.writes
+            if col == 1 and isinstance(value, str) and value.startswith('A vs B: DIFFERENCE.')
+        )
+        self.assertTrue(worksheet.write_formats[(take_row, 1)].get('props', {}).get('text_wrap'))
+        note_row_heights = [
+            height
+            for row, height, *_ in worksheet.rows
+            if row == take_row
+        ]
+        self.assertTrue(note_row_heights)
+        self.assertGreaterEqual(note_row_heights[-1], 30)
+        self.assertTrue(any(row == metric_row and height >= 28 for row, height, *_ in worksheet.rows))
+        desc_caution_row = next(row for row, col, value in worksheet.writes if col == 13 and value == 'caution')
+        desc_caution_height = next(height for row, height, *_ in worksheet.rows if row == desc_caution_row)
+        self.assertGreater(desc_caution_height, DEFAULT_SIMPLE_ROW_HEIGHT := 22)
+        pairwise_data_row = next(row for row, col, value in worksheet.writes if col == 8 and value == 'These groups show a reliable difference after correction. The practical gap looks moderate.')
+        pairwise_data_height = next(height for row, height, *_ in worksheet.rows if row == pairwise_data_row)
+        self.assertGreater(pairwise_data_height, DEFAULT_SIMPLE_ROW_HEIGHT)
+        self.assertGreaterEqual(len(worksheet.autofilters), 2)
+        index_link_row = next(row for row, col, value in worksheet.writes if col == 2 and value == 'Go to metric')
+        self.assertTrue(any(formula[0] == index_link_row and f'A{metric_row + 1}' in formula[2] for formula in worksheet.formulas))
 
         pairwise_rules = [
             rule
             for rule in worksheet.conditional_formats
-            if rule[1] in {2, 3, 6, 7, 8}
+            if rule[1] in {2, 3, 6, 7, 10}
         ]
         self.assertGreaterEqual(len(pairwise_rules), 10)
         self.assertTrue(any(r[4].get('criteria') == 'containing' and r[4].get('value') == 'YES' for r in pairwise_rules))
@@ -210,7 +297,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         write_group_analysis_diagnostics_sheet(worksheet, payload)
 
         values = [value for _, _, value in worksheet.writes]
-        self.assertIn('Group Analysis Diagnostics', values)
+        self.assertIn('Group Analysis Internal Diagnostics', values)
         self.assertIn('Spec status counts', values)
         self.assertIn('Status key', values)
         self.assertIn('Status', values)
@@ -315,8 +402,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertEqual(len(worksheet.charts), 0)
 
         values = [value for _, _, value in worksheet.writes]
-        self.assertGreaterEqual(values.count('Shown'), 2)
-        self.assertGreaterEqual(values.count('Shown below.'), 2)
+        self.assertNotIn('Shown', values)
+        self.assertNotIn('Shown below.', values)
 
         m2_metric_row = next(
             row
@@ -356,16 +443,17 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertEqual(worksheet.images, [])
         self.assertEqual(worksheet.charts, [])
 
-        plot_rows = {
-            label: (status, detail)
+        note_rows = {
+            label: next(
+                value
+                for write_row, write_col, value in worksheet.writes
+                if write_row == row + 1 and write_col == 1
+            )
             for row, col, label in worksheet.writes
             if col == 0 and label in {'Violin', 'Histogram'}
-            for _, status_col, status in [next(w for w in worksheet.writes if w[0] == row and w[1] == 1)]
-            for _, detail_col, detail in [next(w for w in worksheet.writes if w[0] == row and w[1] == 2)]
-            if status_col == 1 and detail_col == 2
         }
-        self.assertEqual(plot_rows['Violin'], ('Not shown', 'Not enough samples in one or more groups.'))
-        self.assertEqual(plot_rows['Histogram'], ('Not shown', 'Not enough total samples to show this plot.'))
+        self.assertEqual(note_rows['Violin'], 'Not enough samples in one or more groups.')
+        self.assertEqual(note_rows['Histogram'], 'Not enough total samples to show this plot.')
 
 
 if __name__ == '__main__':

@@ -97,10 +97,6 @@ from modules.export_query_service import (
     fetch_sql_measurement_summary,
     load_measurement_export_partition_dataframe,
 )
-from modules.export_group_comparison_writer import (
-    prepare_group_comparison_payload,
-    write_group_comparison_sheet,
-)
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
     apply_group_assignments as _apply_group_assignments,
@@ -110,7 +106,7 @@ from modules.export_grouping_utils import (
 )
 from modules.group_analysis_service import build_group_analysis_payload
 from modules.group_analysis_writer import (
-    write_group_analysis_diagnostics_sheet,
+    write_group_analysis_diagnostics_sheet as _write_internal_group_analysis_diagnostics_sheet,
     write_group_analysis_sheet,
 )
 from modules.summary_plot_palette import (
@@ -192,6 +188,14 @@ if _HAS_SEABORN:
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
+
+
+_INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
+
+
+def _internal_group_analysis_diagnostics_enabled():
+    """Return True when internal-only Group Analysis diagnostics sheet emission is enabled."""
+    return os.getenv(_INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR, '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
 def _uses_symbol_font_fallback(text):
@@ -1144,11 +1148,11 @@ def _build_distribution_fit_table_rows(distribution_fit_result, *, lsl=None, usl
     if show_modeled_risk_rows:
         side_parts = []
         allow_lower_tail = spec_type in {'bilateral', 'lower_only'} and lsl is not None
+        lower_tail_value = below_lsl
         if inferred_support_mode == 'one_sided_zero_bound_positive' and _is_effectively_zero(lsl):
-            if _format_probability_percent(below_lsl, decimals=4) == 'N/A' or _is_effectively_zero(below_lsl):
-                allow_lower_tail = False
+            lower_tail_value = 0.0
         if allow_lower_tail:
-            side_parts.append(f"L: {_format_probability_percent(below_lsl, decimals=4)}")
+            side_parts.append(f"L: {_format_probability_percent(lower_tail_value, decimals=4)}")
         if spec_type in {'bilateral', 'upper_only'} and usl is not None:
             side_parts.append(f"U: {_format_probability_percent(above_usl, decimals=4)}")
 
@@ -3470,7 +3474,7 @@ class ExportDataThread(QThread):
                     self._emit_stage_progress('filtered_sheet_write', 1.0),
                 ),
                 lambda: (
-                    self.update_label.emit(build_three_line_status("Building group analysis...", "Writing Group Analysis and Diagnostics worksheets", "ETA --")),
+                    self.update_label.emit(build_three_line_status("Building group analysis...", "Writing Group Analysis worksheet", "ETA --")),
                     self._write_group_analysis_outputs(excel_writer),
                 ),
             ],
@@ -3898,9 +3902,29 @@ class ExportDataThread(QThread):
             raise
 
     def _write_group_analysis_message_sheet(self, worksheet, message):
+        from modules.group_analysis_writer import (
+            GROUP_ANALYSIS_MANUAL_GITHUB_URL,
+            GROUP_ANALYSIS_MANUAL_PDF_PATH,
+        )
+
         worksheet.write(0, 0, 'Group Analysis')
         worksheet.write(1, 0, str(message or 'Group Analysis skipped.'))
-        worksheet.freeze_panes(1, 0)
+        worksheet.write(3, 0, 'Markdown guide (GitHub)')
+        worksheet.write_url(
+            3,
+            1,
+            GROUP_ANALYSIS_MANUAL_GITHUB_URL,
+            string='Open Markdown manual',
+            tip='Open the plain-English Group Analysis guide in the GitHub repository.',
+        )
+        worksheet.write(4, 0, 'Printable companion (local PDF)')
+        worksheet.write_url(
+            4,
+            1,
+            f'external:{GROUP_ANALYSIS_MANUAL_PDF_PATH}',
+            string='Open local PDF companion',
+            tip=f'Open the local PDF manual at {GROUP_ANALYSIS_MANUAL_PDF_PATH}.',
+        )
 
     @staticmethod
     def _render_group_analysis_plot_asset(metric_row, plot_key):
@@ -4098,27 +4122,14 @@ class ExportDataThread(QThread):
             plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode)
             write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
 
-        diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
-        diagnostics_worksheet = workbook.add_worksheet(diagnostics_sheet_name)
-        self._record_exported_sheet_name(diagnostics_sheet_name)
-        write_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
-
-    def _write_group_comparison_sheet(self, workbook, used_sheet_names):
-        grouped_export_df = self._build_export_filtered_dataframe()
-        grouped_export_df = self._ensure_sample_number_column(grouped_export_df)
-        grouped_export_df, _ = self._apply_group_assignments(
-            grouped_export_df,
-            self.prepared_grouping_df,
-            group_analysis_mode=True,
-            fallback_group_label='POPULATION',
-        )
-
-        sheet_name = unique_sheet_name('Group Comparison', used_sheet_names)
-        worksheet = workbook.add_worksheet(sheet_name)
-        self._record_exported_sheet_name(sheet_name)
-
-        payload = prepare_group_comparison_payload(grouped_export_df, alias_db_path=self.db_file)
-        write_group_comparison_sheet(worksheet, payload)
+        if _internal_group_analysis_diagnostics_enabled():
+            diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
+            diagnostics_worksheet = workbook.add_worksheet(diagnostics_sheet_name)
+            self._record_exported_sheet_name(diagnostics_sheet_name)
+            # Internal/debug-only worksheet for payload verification. Normal exports
+            # intentionally keep diagnostics folded into the user-facing Group Analysis
+            # content instead of adding a separate worksheet.
+            _write_internal_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
 
     def export_filtered_data(self, excel_writer):
         """Handle `export_filtered_data` for `ExportDataThread`.

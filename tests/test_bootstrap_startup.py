@@ -12,6 +12,8 @@ class TestBootstrapStartup(unittest.TestCase):
             config = metroliza.load_startup_config()
 
         self.assertFalse(config.startup_smoke_mode)
+        self.assertIsNone(config.pdf_parser_smoke_fixture)
+        self.assertIsNone(config.pdf_parser_smoke_expected_text)
         self.assertFalse(config.license_verification_enabled)
 
     def test_load_startup_config_can_disable_license_verification(self):
@@ -55,7 +57,12 @@ class TestBootstrapStartup(unittest.TestCase):
         self.assertEqual(result.days_until_expiration, 12)
 
     def test_bootstrap_application_uses_smoke_mode_when_enabled(self):
-        smoke_config = metroliza.StartupConfig(startup_smoke_mode=True, license_verification_enabled=True)
+        smoke_config = metroliza.StartupConfig(
+            startup_smoke_mode=True,
+            pdf_parser_smoke_fixture=None,
+            pdf_parser_smoke_expected_text=None,
+            license_verification_enabled=True,
+        )
         with patch("metroliza.initialize_logging") as init_logging, patch(
             "metroliza.load_startup_config", return_value=smoke_config
         ), patch("metroliza.run_startup_smoke_mode", return_value=0) as smoke_mode, patch(
@@ -65,6 +72,30 @@ class TestBootstrapStartup(unittest.TestCase):
 
         self.assertEqual(result, 0)
         smoke_mode.assert_called_once_with(init_logging.return_value)
+        launch_ui.assert_not_called()
+
+
+
+    def test_bootstrap_application_uses_pdf_parser_smoke_when_fixture_is_set(self):
+        smoke_config = metroliza.StartupConfig(
+            startup_smoke_mode=False,
+            pdf_parser_smoke_fixture='tests/fixtures/pdf/cmm_smoke_fixture.pdf',
+            pdf_parser_smoke_expected_text='METROLIZA PDF PARSER SMOKE',
+            license_verification_enabled=True,
+        )
+        with patch("metroliza.initialize_logging") as init_logging, patch(
+            "metroliza.load_startup_config", return_value=smoke_config
+        ), patch("metroliza.run_pdf_parser_smoke_mode", return_value=0) as parser_smoke_mode, patch(
+            "metroliza.launch_ui"
+        ) as launch_ui:
+            result = metroliza.bootstrap_application()
+
+        self.assertEqual(result, 0)
+        parser_smoke_mode.assert_called_once_with(
+            init_logging.return_value,
+            'tests/fixtures/pdf/cmm_smoke_fixture.pdf',
+            'METROLIZA PDF PARSER SMOKE',
+        )
         launch_ui.assert_not_called()
 
     def test_run_application_logs_and_returns_error_on_startup_exception(self):

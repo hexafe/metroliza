@@ -17,6 +17,7 @@ from modules.data_grouping_service import (
 )
 from modules.list_selection_utils import ListSelectionUtils
 from modules import ui_theme_tokens
+from modules.help_menu import attach_help_menu_to_layout
 from PyQt6.QtCore import Qt
 import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtGui import QColor, QBrush
@@ -155,6 +156,7 @@ class DataGrouping(QDialog):
 
         try:
             self.layout = QGridLayout(self)
+            attach_help_menu_to_layout(self.layout, self, [("Grouping manual", 'export_grouping')])
 
             self.layout.addWidget(self.reference_label, 0, 0)
             self.layout.addWidget(self.reference_search_input, 1, 0)

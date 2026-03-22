@@ -53,6 +53,23 @@ class TestExportSummaryUtils(unittest.TestCase):
         self.assertAlmostEqual(metrics['estimated_yield_pct'], 0.818595, places=4)
         self.assertAlmostEqual(metrics['estimated_nok_ppm'], 181405.0, delta=2.0)
 
+
+    def test_compute_estimated_tail_metrics_ignores_impossible_lower_tail_for_zero_bound_positive_support(self):
+        distribution_fit_result = {
+            'inferred_support_mode': 'one_sided_zero_bound_positive',
+            'selected_model': {
+                'model': 'norm',
+                'params': (0.0, 1.0),
+            },
+        }
+
+        metrics = compute_estimated_tail_metrics(distribution_fit_result, lsl=0.0, usl=2.0)
+
+        self.assertEqual(metrics['estimated_tail_below_lsl'], 0.0)
+        self.assertAlmostEqual(metrics['estimated_nok_pct'], 0.022750, places=4)
+        self.assertAlmostEqual(metrics['estimated_yield_pct'], 0.977250, places=4)
+        self.assertAlmostEqual(metrics['estimated_nok_ppm'], 22750.0, delta=2.0)
+
     def test_build_trend_plot_payload_keeps_repeated_sample_labels_dense(self):
         header_group = pd.DataFrame(
             {

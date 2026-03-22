@@ -9,7 +9,7 @@
 ## Checklist
 - [ ] Code changes completed.
 - [ ] Tests added/updated.
-- [ ] Workbook schema verified.
+- [ ] Workbook schema verified (default Group Analysis exports should not add a separate `Diagnostics` worksheet).
 - [ ] `docs/README.md` updated.
 - [ ] Root `README.md` updated if user-facing behavior changed.
 - [ ] Final docs cleanup performed.

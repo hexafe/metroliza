@@ -46,6 +46,7 @@ import subprocess
 import sys
 from pathlib import Path
 from modules.worker_progress_dialog import create_worker_progress_dialog
+from modules.help_menu import attach_help_menu_to_layout
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
@@ -362,10 +363,10 @@ class ExportDialog(QDialog):
             self.group_analysis_level_combobox.addItem("Light")
             self.group_analysis_level_combobox.addItem("Standard")
             self.group_analysis_level_label.setToolTip(
-                "Controls workbook-level Group Analysis output.\n"
-                "Off: disabled.\n"
-                "Light: compact statistical report + Diagnostics.\n"
-                "Standard: Light plus additional supported plots."
+                "Controls whether the canonical Group Analysis worksheet is added.\n"
+                "Off: do not add grouped statistical output.\n"
+                "Light: add the compact Group Analysis worksheet.\n"
+                "Standard: add the same worksheet with additional supported on-sheet plots."
             )
             self.group_analysis_level_combobox.setToolTip(self.group_analysis_level_label.toolTip())
             self.group_analysis_level_combobox.currentTextChanged.connect(lambda _: self._update_group_analysis_scope_enabled_state())
@@ -376,9 +377,9 @@ class ExportDialog(QDialog):
             self.group_analysis_scope_combobox.addItem("Single-reference")
             self.group_analysis_scope_combobox.addItem("Multi-reference")
             self.group_analysis_scope_label.setToolTip(
-                "Choose how Group Analysis resolves references.\n"
-                "Auto uses filtered grouped rows.\n"
-                "Single-reference and Multi-reference force scope checks."
+                "Choose how the Group Analysis worksheet resolves references.\n"
+                "Auto uses the filtered grouped rows.\n"
+                "Single-reference and Multi-reference enforce the corresponding scope check for that worksheet."
             )
             self.group_analysis_scope_combobox.setToolTip(self.group_analysis_scope_label.toolTip())
             self._update_group_analysis_scope_enabled_state()
@@ -432,6 +433,11 @@ class ExportDialog(QDialog):
             """Initialize the layout"""
             self.layout = QVBoxLayout()
             self.layout.setSpacing(10)
+            attach_help_menu_to_layout(
+                self.layout,
+                self,
+                [("Export overview manual", 'export_overview'), ("Filtering manual", 'export_filtering'), ("Grouping manual", 'export_grouping')],
+            )
 
             def build_section_widget(title, content_layout):
                 section_widget = QWidget()

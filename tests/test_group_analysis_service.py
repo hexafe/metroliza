@@ -264,6 +264,9 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIn('comment / verdict', metric['distribution_difference'])
         self.assertTrue(all('best_fit_model' in row for row in metric['descriptive_stats']))
         self.assertTrue(all('fit_quality' in row for row in metric['descriptive_stats']))
+        self.assertTrue(all('distribution_shape_caution' in row for row in metric['descriptive_stats']))
+        self.assertTrue(all(row['distribution_shape_caution'] != 'AD p-value estimated via KS proxy; set monte_carlo_gof_samples>0 for bootstrap.' for row in metric['descriptive_stats']))
+        self.assertTrue(all('test_rationale' in row for row in metric['pairwise_rows']))
 
 
     def test_auto_scope_resolution_uses_reference_cardinality(self):

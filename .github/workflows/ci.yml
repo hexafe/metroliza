@@ -273,9 +273,10 @@ jobs:
       - name: Verify packaged artifact output exists
         run: test -f dist/metroliza
 
-      - name: Smoke launch packaged artifact (non-interactive init-and-exit)
+      - name: Smoke parse PDF fixture with packaged artifact
         env:
-          METROLIZA_STARTUP_SMOKE: '1'
+          METROLIZA_PDF_PARSER_SMOKE_FIXTURE: tests/fixtures/pdf/cmm_smoke_fixture.pdf
+          METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT: METROLIZA PDF PARSER SMOKE
           METROLIZA_CONSOLE_LOG_LEVEL: INFO
           QT_QPA_PLATFORM: offscreen
         run: |

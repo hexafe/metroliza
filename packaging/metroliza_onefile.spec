@@ -3,6 +3,8 @@
 from pathlib import Path
 import sys
 
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+
 block_cipher = None
 SPEC_DIR = Path(SPECPATH).resolve()
 ROOT_DIR = SPEC_DIR.parent
@@ -43,15 +45,27 @@ def _collect_windows_python_runtime_binaries() -> list[tuple[str, str]]:
     return binaries
 
 
+def _collect_optional_runtime_assets(package_name: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
+    try:
+        datas = collect_data_files(package_name)
+        binaries = collect_dynamic_libs(package_name)
+        hiddenimports = collect_submodules(package_name)
+    except Exception:
+        return [], [], []
+    return datas, binaries, hiddenimports
+
+
 windows_runtime_binaries = _collect_windows_python_runtime_binaries()
+pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = _collect_optional_runtime_assets('pymupdf')
+fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets('fitz')
 
 
 a = Analysis(
     [str(ROOT_DIR / 'metroliza.py')],
     pathex=[],
-    binaries=windows_runtime_binaries,
-    datas=[],
-    hiddenimports=['_metroliza_cmm_native'],
+    binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries,
+    datas=pymupdf_datas + fitz_datas,
+    hiddenimports=['_metroliza_cmm_native', 'pymupdf', 'fitz', 'modules.cmm_report_parser', *pymupdf_hiddenimports, *fitz_hiddenimports],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

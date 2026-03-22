@@ -8,6 +8,7 @@ from modules.release_notes_dialog import ReleaseNotesDialog
 from modules.custom_logger import CustomLogger
 from modules.csv_summary_dialog import CSVSummaryDialog
 from modules.characteristic_mapping_dialog import CharacteristicMappingDialog
+from modules.help_menu import build_help_menu
 from VersionDate import release_notes
 from PyQt6.QtCore import QByteArray
 from PyQt6.QtGui import QIcon, QPixmap, QAction
@@ -98,6 +99,7 @@ class MainWindow(QMainWindow):
         self.release_notes_action.triggered.connect(self.open_release_notes_dialog)
         self.menuBar().addAction(self.about_button)
         self.menuBar().addAction(self.release_notes_action)
+        build_help_menu(self, [("Main window manual", 'main_window')], menu_bar=self.menuBar())
 
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""

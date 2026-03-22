@@ -57,6 +57,7 @@ PARSER_DETECTORS: dict[str, DetectorType] = {}
 PROBE_RESULT_CACHE: dict[tuple[str, str], ProbeResult] = {}
 
 _EXTERNAL_PLUGINS_LOADED = False
+_EXTERNAL_PLUGIN_CONFIG_SIGNATURE: tuple[str, tuple[str, ...]] | None = None
 _EXTERNAL_PLUGIN_MODULE_COUNTER = 0
 
 
@@ -271,17 +272,27 @@ def load_external_plugins(paths: str | tuple[str, ...] | None = None) -> Externa
 
 
 def _ensure_external_plugins_loaded_once() -> None:
-    global _EXTERNAL_PLUGINS_LOADED
-    if _EXTERNAL_PLUGINS_LOADED:
+    global _EXTERNAL_PLUGINS_LOADED, _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+
+    path_config = os.getenv("PARSER_EXTERNAL_PLUGIN_PATHS", "").strip()
+    entry_point_names = tuple(entry_point.name for entry_point in _iter_external_plugin_entry_points())
+    config_signature = (path_config, entry_point_names)
+
+    if _EXTERNAL_PLUGINS_LOADED and _EXTERNAL_PLUGIN_CONFIG_SIGNATURE == config_signature:
         return
 
-    # No-op when no env config is provided.
-    if not os.getenv("PARSER_EXTERNAL_PLUGIN_PATHS", "").strip():
+    has_path_config = bool(path_config)
+    has_entry_points = bool(entry_point_names)
+
+    # No-op only when neither file-based paths nor package entry points are available.
+    if not has_path_config and not has_entry_points:
         _EXTERNAL_PLUGINS_LOADED = True
+        _EXTERNAL_PLUGIN_CONFIG_SIGNATURE = config_signature
         return
 
     load_external_plugins()
     _EXTERNAL_PLUGINS_LOADED = True
+    _EXTERNAL_PLUGIN_CONFIG_SIGNATURE = config_signature
 
 
 def resolve_parser_with_diagnostics(file_path: str | Path) -> ResolverDiagnostics:
@@ -425,6 +436,8 @@ def register_parser(
     PROBE_RESULT_CACHE.clear()
     if detector is not None:
         PARSER_DETECTORS[plugin_id] = detector
+    else:
+        PARSER_DETECTORS.pop(plugin_id, None)
 
 
 register_parser(

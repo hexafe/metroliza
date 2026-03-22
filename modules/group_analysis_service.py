@@ -441,6 +441,192 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
     return output
 
 
+
+
+def _safe_numeric(value):
+    parsed = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
+    return None if pd.isna(parsed) else float(parsed)
+
+
+def _pairwise_practical_magnitude(effect_value):
+    numeric_effect = _safe_numeric(effect_value)
+    if numeric_effect is None:
+        return 'unknown'
+
+    absolute_effect = abs(numeric_effect)
+    if absolute_effect < 0.2:
+        return 'tiny'
+    if absolute_effect < 0.5:
+        return 'small'
+    if absolute_effect < 0.8:
+        return 'moderate'
+    return 'large'
+
+
+def _pairwise_takeaway(*, adjusted_p_value, effect_size, flags='none'):
+    adjusted_p = _safe_numeric(adjusted_p_value)
+    magnitude = _pairwise_practical_magnitude(effect_size)
+    has_small_sample = _FLAG_LOW_N in str(flags or '')
+
+    if adjusted_p is None:
+        base = 'Statistical signal is incomplete, so treat this pair as unresolved.'
+    elif adjusted_p <= 0.01:
+        base = 'These groups differ clearly after correction.'
+    elif adjusted_p <= 0.05:
+        base = 'These groups show a reliable difference after correction.'
+    else:
+        base = 'There is not enough corrected evidence to call this a clear difference.'
+
+    magnitude_text = {
+        'tiny': 'The practical gap looks tiny.',
+        'small': 'The practical gap looks small.',
+        'moderate': 'The practical gap looks moderate.',
+        'large': 'The practical gap looks large enough to matter.',
+        'unknown': 'The practical gap was not reported clearly.',
+    }[magnitude]
+
+    if adjusted_p is not None and adjusted_p > 0.05 and magnitude in {'moderate', 'large'}:
+        magnitude_text = 'The observed gap may matter, but the corrected evidence is still weak.'
+    elif adjusted_p is not None and adjusted_p <= 0.05 and magnitude == 'tiny':
+        magnitude_text = 'The result is statistically reliable, but the practical gap looks tiny.'
+
+    if has_small_sample:
+        magnitude_text += ' Low sample size means extra caution is needed.'
+    return f'{base} {magnitude_text}'
+
+
+def _pairwise_action(*, adjusted_p_value, effect_size, flags='none'):
+    adjusted_p = _safe_numeric(adjusted_p_value)
+    magnitude = _pairwise_practical_magnitude(effect_size)
+    has_small_sample = _FLAG_LOW_N in str(flags or '')
+
+    if has_small_sample:
+        action = 'Verify with more data before changing the process.'
+        if adjusted_p is not None and adjusted_p <= 0.05 and magnitude == 'large':
+            action += ' This pair is still worth early investigation.'
+        return action
+
+    if adjusted_p is not None and adjusted_p <= 0.05 and magnitude == 'large':
+        return 'Prioritize investigation; check setup, operator, tooling, or material differences.'
+    if adjusted_p is not None and adjusted_p <= 0.05 and magnitude in {'moderate', 'small'}:
+        return 'Review process differences, then confirm the gap matters operationally before changing settings.'
+    if adjusted_p is not None and adjusted_p <= 0.05:
+        return 'Keep monitoring; the signal is real but the practical gap looks small.'
+    if magnitude in {'moderate', 'large'}:
+        return 'Collect more data and verify before making a process change.'
+    return 'No immediate action; continue monitoring.'
+
+
+def _difference_status_label(*, adjusted_p_value, effect_size, flags='none'):
+    adjusted_p = _safe_numeric(adjusted_p_value)
+    magnitude = _pairwise_practical_magnitude(effect_size)
+    flags_text = str(flags or '')
+
+    if adjusted_p is not None and adjusted_p <= 0.05:
+        return 'DIFFERENCE'
+    if _FLAG_LOW_N in flags_text or _FLAG_SEVERELY_IMBALANCED_N in flags_text or _FLAG_IMBALANCED_N in flags_text:
+        return 'USE CAUTION'
+    if magnitude in {'moderate', 'large'}:
+        return 'APPROXIMATE'
+    return 'NO DIFFERENCE'
+
+
+def _distribution_metric_note(distribution_difference):
+    verdict = str((distribution_difference or {}).get('comment / verdict') or '').strip()
+    if not verdict:
+        return ''
+    lowered = verdict.lower()
+    if 'no statistically significant' in lowered:
+        return 'Shape note: no clear distribution-shape difference after correction.'
+    if 'statistically significant' in lowered or 'difference' in lowered:
+        return 'Shape note: spread or pattern differs across groups, not just the average.'
+    return f'Shape note: {verdict}'
+
+
+def _recommended_metric_action(*, pairwise_rows, distribution_difference, analysis_policy):
+    if not analysis_policy.get('allow_pairwise'):
+        return 'Recommended action: use descriptive results only; direct pairwise interpretation is not supported for this metric.'
+
+    significant_rows = [row for row in pairwise_rows if str(row.get('difference') or '').strip().upper() == 'YES']
+    if significant_rows:
+        ranked = sorted(
+            significant_rows,
+            key=lambda row: (
+                _safe_numeric(row.get('adjusted_p_value')) is None,
+                _safe_numeric(row.get('adjusted_p_value')) if _safe_numeric(row.get('adjusted_p_value')) is not None else float('inf'),
+                -abs(_safe_numeric(row.get('effect_size')) or 0.0),
+            ),
+        )
+        strongest = ranked[0]
+        return (
+            'Recommended action: start with '
+            f"{strongest.get('group_a')} vs {strongest.get('group_b')} and verify likely process drivers before changing settings."
+        )
+
+    verdict = str((distribution_difference or {}).get('comment / verdict') or '').lower()
+    if 'statistically significant' in verdict and 'no statistically significant' not in verdict:
+        return 'Recommended action: averages may be similar, but review variation and consistency by group before changing the process.'
+
+    return 'Recommended action: no immediate escalation; keep monitoring and collect more data if the gap still matters.'
+
+
+def _metric_index_status(*, pairwise_rows, diagnostics_comment):
+    labels = [
+        _difference_status_label(
+            adjusted_p_value=row.get('adjusted_p_value'),
+            effect_size=row.get('effect_size'),
+            flags=row.get('flags'),
+        )
+        for row in (pairwise_rows or [])
+    ]
+    if 'DIFFERENCE' in labels:
+        return 'DIFFERENCE'
+    if 'USE CAUTION' in labels or 'Descriptive-only' in str(diagnostics_comment or ''):
+        return 'USE CAUTION'
+    if 'APPROXIMATE' in labels:
+        return 'APPROXIMATE'
+    return 'NO DIFFERENCE'
+
+
+def _metric_takeaway(*, pairwise_rows, diagnostics_comment, distribution_difference):
+    if pairwise_rows:
+        ranked = sorted(
+            pairwise_rows,
+            key=lambda row: (
+                str(row.get('difference_label') or '') != 'DIFFERENCE',
+                _safe_numeric(row.get('adjusted_p_value')) is None,
+                _safe_numeric(row.get('adjusted_p_value')) if _safe_numeric(row.get('adjusted_p_value')) is not None else float('inf'),
+            ),
+        )
+        best = ranked[0]
+        summary = f"{best.get('group_a')} vs {best.get('group_b')}: {best.get('difference_label') or 'REVIEW'}."
+        action = str(best.get('suggested_action') or '').strip()
+        return f'{summary} {action}'.strip()
+
+    shape_note = str((distribution_difference or {}).get('comment / verdict') or '').strip()
+    if shape_note:
+        return shape_note
+    return str(diagnostics_comment or 'Review descriptive statistics only.').strip()
+
+def _build_pairwise_test_rationale(*, group_count, test_used):
+    test_name = str(test_used or '').strip().lower()
+    if group_count <= 2:
+        if 'mann-whitney' in test_name:
+            return 'Chosen because only two groups are compared and a rank-based comparison is safer here.'
+        if 'welch' in test_name:
+            return 'Chosen because only two groups are compared and unequal-variance assumptions were safer.'
+        if 'student' in test_name or 't-test' in test_name:
+            return 'Chosen because only two groups are compared and the parametric assumptions were acceptable.'
+        return 'Chosen because only two groups are compared.'
+    if 'mann-whitney' in test_name:
+        return 'Chosen because the data are better handled by a rank-based comparison.'
+    if 'welch' in test_name:
+        return 'Chosen because parametric assumptions were not reliable enough for a pooled-variance test.'
+    if 'student' in test_name or 't-test' in test_name:
+        return 'Chosen because the groups were suitable for a standard parametric comparison.'
+    return 'Chosen to provide a consistent pairwise comparison across groups.'
+
+
 def _resolve_pairwise_comment(*, pairwise_eligible, significant, flags):
     """Return standardized pairwise comment vocabulary for worksheet consumers."""
     if not pairwise_eligible:
@@ -480,6 +666,7 @@ def build_pairwise_rows(
     metric_flags = _build_metric_level_flags(counts_by_group.values(), spec_status=spec_status)
 
     output = []
+    group_count = len(grouped_values)
     for row in raw_rows:
         group_a = row.get('group_a')
         group_b = row.get('group_b')
@@ -501,19 +688,29 @@ def build_pairwise_rows(
             flags=flags_text,
         )
 
+        rounded_adj_p = _round_display_value_adj_p(adj_p)
+        rounded_effect_size = _round_display_value(row.get('effect_size'))
         output.append(
             {
                 'group_a': group_a,
                 'group_b': group_b,
                 'delta_mean': delta_mean,
-                'adjusted_p_value': _round_display_value_adj_p(adj_p),
-                'effect_size': _round_display_value(row.get('effect_size')),
+                'adjusted_p_value': rounded_adj_p,
+                'effect_size': rounded_effect_size,
                 'difference': difference,
+                'difference_label': _difference_status_label(
+                    adjusted_p_value=rounded_adj_p,
+                    effect_size=rounded_effect_size,
+                    flags=flags_text,
+                ),
                 'comment': comment,
                 'flags': flags_text,
                 'metric': metric_identity,
                 'p_value': row.get('p_value'),
                 'test_used': row.get('test_used'),
+                'test_rationale': _build_pairwise_test_rationale(group_count=group_count, test_used=row.get('test_used')),
+                'takeaway': _pairwise_takeaway(adjusted_p_value=rounded_adj_p, effect_size=rounded_effect_size, flags=flags_text),
+                'suggested_action': _pairwise_action(adjusted_p_value=rounded_adj_p, effect_size=rounded_effect_size, flags=flags_text),
             }
         )
     return output
@@ -599,6 +796,7 @@ def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correc
     config = ComparisonStatsConfig(alpha=alpha, correction_method=correction_method)
     pairwise_rows = compute_metric_pairwise_stats(metric_identity, grouped_values, config=config)
     output = []
+    group_count = len(grouped_values)
     for row in pairwise_rows:
         output.append(
             {
@@ -609,6 +807,7 @@ def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correc
                 'adjusted_p_value': row.get('adjusted_p_value'),
                 'effect_size': row.get('effect_size'),
                 'test_used': row.get('test_used'),
+                'test_rationale': _build_pairwise_test_rationale(group_count=group_count, test_used=row.get('test_used')),
                 'significant': row.get('significant'),
             }
         )
@@ -1194,6 +1393,7 @@ def build_group_analysis_payload(
             desc_row['fit_quality'] = group_profile.get('fit quality') or group_profile.get('Fit quality')
             desc_row['distribution_shape_caution'] = group_profile.get('Warning / notes summary')
 
+        distribution_omnibus = distribution_analysis.get('omnibus_row')
         metrics.append(
             {
                 'metric': metric_identity,
@@ -1201,7 +1401,7 @@ def build_group_analysis_payload(
                 'group_count': len(populated_groups),
                 'descriptive_stats': descriptive_stats,
                 'pairwise_rows': pairwise_rows,
-                'distribution_difference': distribution_analysis.get('omnibus_row'),
+                'distribution_difference': distribution_omnibus,
                 'distribution_pairwise_rows': distribution_analysis.get('pairwise_rows', []),
                 'spec': spec_payload,
                 'spec_status': spec_status,
@@ -1216,7 +1416,22 @@ def build_group_analysis_payload(
                 ),
                 'diagnostics_comment': diagnostics_comment,
                 'metric_flags': metric_level_flags,
+                'metric_note': _distribution_metric_note(distribution_omnibus),
+                'recommended_action': _recommended_metric_action(
+                    pairwise_rows=pairwise_rows,
+                    distribution_difference=distribution_omnibus,
+                    analysis_policy=policy,
+                ),
             }
+        )
+        metrics[-1]['index_status'] = _metric_index_status(
+            pairwise_rows=pairwise_rows,
+            diagnostics_comment=diagnostics_comment,
+        )
+        metrics[-1]['metric_takeaway'] = _metric_takeaway(
+            pairwise_rows=pairwise_rows,
+            diagnostics_comment=diagnostics_comment,
+            distribution_difference=distribution_omnibus,
         )
         metrics[-1]['insights'] = build_metric_insights(metrics[-1])
 

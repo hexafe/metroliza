@@ -1,9 +1,11 @@
+import os
 import sys
 import tempfile
 import types
 import unittest
 import zipfile
 import xml.etree.ElementTree as ET
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -115,6 +117,26 @@ def _xlsx_sheet_text_values(xlsx_path, target_sheet_name):
                     values.append(value_node.text)
 
         return values
+
+
+def _xlsx_sheet_xml(xlsx_path, target_sheet_name):
+    ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    ns_rel = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+
+    with zipfile.ZipFile(xlsx_path, 'r') as workbook_zip:
+        workbook_xml = ET.fromstring(workbook_zip.read('xl/workbook.xml'))
+        workbook_rels = ET.fromstring(workbook_zip.read('xl/_rels/workbook.xml.rels'))
+        rel_map = {rel.attrib['Id']: rel.attrib['Target'] for rel in workbook_rels.findall('r:Relationship', ns_rel)}
+
+        for sheet in workbook_xml.findall('x:sheets/x:sheet', ns_main):
+            if sheet.attrib.get('name') != target_sheet_name:
+                continue
+            rel_id = sheet.attrib.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+            target = rel_map.get(rel_id, '')
+            sheet_path = f"xl/{target}" if not target.startswith('xl/') else target
+            return workbook_zip.read(sheet_path).decode('utf-8')
+
+    raise AssertionError(f"Worksheet '{target_sheet_name}' not found in workbook: {xlsx_path}")
 
 
 
@@ -323,6 +345,75 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 msg='Expected exported measurement values were not found in worksheet XML payload.',
             )
 
+    def test_measurement_sheet_workbook_xml_keeps_conditional_formatting_ranges_visible(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+            out_path = str(Path(temp_dir) / 'export.xlsx')
+
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
+            )
+            execute_with_retry(
+                db_path,
+                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
+            )
+
+            rows = [
+                (1, 'REF-1', 'part_1.pdf', '2024-01-01', '1', 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
+                (2, 'REF-1', 'part_2.pdf', '2024-01-02', '2', 'X', 10.0, 0.5, -0.5, 0.0, 10.7, 0.7, 1, 'FEATURE_1'),
+                (3, 'REF-1', 'part_3.pdf', '2024-01-03', '3', 'X', 10.0, 0.5, -0.5, 0.0, 9.2, -0.8, 1, 'FEATURE_1'),
+            ]
+            for report_id, reference, filename, report_date, sample_number, ax, nom, plus_tol, minus_tol, bonus, meas, dev, outtol, header in rows:
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO REPORTS (ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?, ?)',
+                    (report_id, reference, '/fake/reports', filename, report_date, sample_number),
+                )
+                execute_with_retry(
+                    db_path,
+                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    (report_id, ax, nom, plus_tol, minus_tol, bonus, meas, dev, outtol, header),
+                )
+
+            request = ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file=out_path),
+                options=ExportOptions(generate_summary_sheet=False),
+            )
+            thread = ExportDataThread(request)
+            completed = thread.get_export_backend().run(thread)
+
+            self.assertTrue(completed)
+
+            worksheet_xml = _xlsx_sheet_xml(out_path, 'REF-1')
+            namespace = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            worksheet_root = ET.fromstring(worksheet_xml)
+            cf_nodes = worksheet_root.findall('x:conditionalFormatting', namespace)
+            self.assertTrue(cf_nodes, msg='Expected measurement worksheet XML to contain conditionalFormatting nodes.')
+
+            sqrefs = [node.attrib.get('sqref', '') for node in cf_nodes]
+            cf_rules = [rule for node in cf_nodes for rule in node.findall('x:cfRule', namespace)]
+            self.assertGreaterEqual(
+                len(cf_rules),
+                3,
+                msg='Expected measurement worksheet XML to preserve the three visible conditional-formatting rules.',
+            )
+            self.assertIn('C22:C24', sqrefs)
+            self.assertIn('B7', sqrefs)
+
+            formulas_by_sqref = {
+                node.attrib.get('sqref', ''): [
+                    formula.text or ''
+                    for rule in node.findall('x:cfRule', namespace)
+                    for formula in rule.findall('x:formula', namespace)
+                ]
+                for node in cf_nodes
+            }
+            self.assertGreaterEqual(len(formulas_by_sqref.get('C22:C24', [])), 2)
+            self.assertTrue(any('$B$1+$B$2' in formula for formula in formulas_by_sqref.get('C22:C24', [])))
+            self.assertTrue(any('$B$1+$B$3' in formula for formula in formulas_by_sqref.get('C22:C24', [])))
+            self.assertIn('0', formulas_by_sqref.get('B7', []))
+
 
     def test_group_analysis_level_off_emits_no_group_analysis_sheets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -358,9 +449,10 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             self.assertTrue(completed)
             sheet_names = _xlsx_sheet_names(out_path)
             self.assertNotIn('Group Analysis', sheet_names)
+            self.assertNotIn('Group Comparison', sheet_names)
             self.assertNotIn('Diagnostics', sheet_names)
 
-    def test_group_analysis_light_and_standard_emit_analysis_and_diagnostics(self):
+    def test_default_group_analysis_export_contract_uses_group_analysis_only(self):
         for level in ('light', 'standard'):
             with self.subTest(level=level), tempfile.TemporaryDirectory() as temp_dir:
                 db_path = str(Path(temp_dir) / 'metroliza.sqlite')
@@ -396,8 +488,15 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
 
                 grouping_df = pd.DataFrame(
                     [
-                        {'REPORT_ID': report_id, 'GROUP': group}
-                        for report_id, _filename, _report_date, _sample_number, group, _meas, _dev in report_rows
+                        {
+                            'REFERENCE': 'REF-1',
+                            'FILELOC': '/fake/reports',
+                            'FILENAME': filename,
+                            'DATE': report_date,
+                            'SAMPLE_NUMBER': sample_number,
+                            'GROUP': group,
+                        }
+                        for _report_id, filename, report_date, sample_number, group, _meas, _dev in report_rows
                     ]
                 )
                 request = ExportRequest(
@@ -411,23 +510,17 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertTrue(completed)
                 sheet_names = _xlsx_sheet_names(out_path)
                 self.assertIn('Group Analysis', sheet_names)
-                self.assertIn('Diagnostics', sheet_names)
+                self.assertNotIn('Group Comparison', sheet_names)
+                self.assertNotIn('Diagnostics', sheet_names)
 
-                diagnostics_values = _xlsx_sheet_text_values(out_path, 'Diagnostics')
-                self.assertIn('Requested level', diagnostics_values)
-                self.assertIn(level, diagnostics_values)
-                self.assertIn('Execution status', diagnostics_values)
-                self.assertTrue(any(status in diagnostics_values for status in ('ran', 'skipped')))
-                self.assertIn('Warning summary', diagnostics_values)
-                self.assertIn('Histogram skip summary', diagnostics_values)
-                self.assertIn('Reasons', diagnostics_values)
-                if level == 'standard':
-                    self.assertIn('Applies', diagnostics_values)
-                    self.assertIn('1', diagnostics_values)
-                else:
-                    self.assertIn('Applies', diagnostics_values)
-                    self.assertIn('0', diagnostics_values)
-                self.assertIn('Possible unmatched metrics across references', diagnostics_values)
+                analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+                self.assertIn('Group Analysis', analysis_values)
+                self.assertIn('Field', analysis_values)
+                self.assertIn('Descriptive stats', analysis_values)
+                self.assertIn('Pairwise comparisons', analysis_values)
+                self.assertIn('Shape note: no clear distribution-shape difference after correction.', analysis_values)
+                self.assertNotIn('Location / Central-Tendency Pairwise Comparison Table', analysis_values)
+                self.assertNotIn('Distribution Shape Pairwise Table', analysis_values)
 
     def test_group_analysis_scope_mismatch_writes_exact_message_and_diagnostics(self):
         scenarios = [
@@ -480,7 +573,8 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                     ),
                 )
                 thread = ExportDataThread(request)
-                completed = thread.get_export_backend().run(thread)
+                with patch.dict(os.environ, {'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS': '1'}):
+                    completed = thread.get_export_backend().run(thread)
 
                 self.assertTrue(completed)
                 sheet_names = _xlsx_sheet_names(out_path)
@@ -495,7 +589,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 self.assertIn(scenario['expected_message'], diagnostics_values)
 
 
-    def test_group_analysis_scope_mismatch_uses_payload_readiness_only(self):
+    def test_group_analysis_scope_mismatch_internal_diagnostics_use_payload_readiness_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
@@ -535,7 +629,8 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 AssertionError('Legacy readiness path should not be called from ExportDataThread.')
             )
             try:
-                completed = thread.get_export_backend().run(thread)
+                with patch.dict(os.environ, {'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS': '1'}):
+                    completed = thread.get_export_backend().run(thread)
             finally:
                 if previous_readiness is None:
                     delattr(module, 'evaluate_group_analysis_readiness')
@@ -547,7 +642,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             self.assertIn('forced_multi_reference_scope_mismatch', diagnostics_values)
             self.assertIn('Multi-reference group analysis skipped: grouped rows span only one reference.', diagnostics_values)
 
-    def test_group_analysis_runnable_path_uses_payload_readiness_only(self):
+    def test_group_analysis_runnable_path_internal_diagnostics_use_payload_readiness_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
@@ -607,7 +702,8 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 AssertionError('Legacy readiness path should not be called from ExportDataThread.')
             )
             try:
-                completed = thread.get_export_backend().run(thread)
+                with patch.dict(os.environ, {'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS': '1'}):
+                    completed = thread.get_export_backend().run(thread)
             finally:
                 if previous_readiness is None:
                     delattr(module, 'evaluate_group_analysis_readiness')

@@ -21,6 +21,9 @@ class ChartContract(Protocol):
     def set_title(self, title_spec: dict[str, Any]) -> None:
         """Set chart title formatting and text."""
 
+    def set_x_axis(self, axis_spec: dict[str, Any]) -> None:
+        """Configure x-axis labels, ranges, and formatting options."""
+
     def set_y_axis(self, axis_spec: dict[str, Any]) -> None:
         """Configure y-axis labels, ranges, and formatting options."""
 
@@ -63,7 +66,16 @@ class WorksheetContract(Protocol):
     ) -> None:
         """Configure one or more worksheet columns."""
 
-    def insert_chart(self, row: int, col: int, chart: ChartContract) -> None:
+    def set_row(
+        self,
+        row: int,
+        height: float | None = None,
+        cell_format: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        """Configure a worksheet row height and optional default format."""
+
+    def insert_chart(self, row: int, col: int, chart: ChartContract, options: dict[str, Any] | None = None) -> None:
         """Insert a chart object anchored at the provided cell."""
 
     def insert_image(self, row: int, col: int, filename: str, options: dict[str, Any]) -> None:
@@ -74,6 +86,9 @@ class WorksheetContract(Protocol):
 
     def autofilter(self, first_row: int, first_col: int, last_row: int, last_col: int) -> None:
         """Enable worksheet autofilter over a range."""
+
+    def hide_gridlines(self, option: int = 2) -> None:
+        """Hide worksheet gridlines for report-style sheets."""
 
 
 class WorkbookContract(Protocol):
@@ -130,6 +145,10 @@ class XlsxChartAdapter:
         """Delegate title configuration to the wrapped chart."""
         self._chart.set_title(title_spec)
 
+    def set_x_axis(self, axis_spec: dict[str, Any]) -> None:
+        """Delegate x-axis configuration to the wrapped chart."""
+        self._chart.set_x_axis(axis_spec)
+
     def set_y_axis(self, axis_spec: dict[str, Any]) -> None:
         """Delegate y-axis configuration to the wrapped chart."""
         self._chart.set_y_axis(axis_spec)
@@ -149,6 +168,11 @@ class XlsxWorksheetAdapter:
 
     _worksheet: Any
 
+    @property
+    def name(self) -> str:
+        """Expose worksheet names for writers that build chart series ranges."""
+        return getattr(self._worksheet, 'name', '')
+
     def write(self, row: int, col: int, value: Any, cell_format: Any = None) -> None:
         """Write a scalar value to a worksheet cell."""
         self._worksheet.write(row, col, value, cell_format)
@@ -156,6 +180,18 @@ class XlsxWorksheetAdapter:
     def write_formula(self, row: int, col: int, formula: str, cell_format: Any = None) -> None:
         """Write an Excel formula to a worksheet cell."""
         self._worksheet.write_formula(row, col, formula, cell_format)
+
+    def write_url(
+        self,
+        row: int,
+        col: int,
+        url: str,
+        cell_format: Any = None,
+        string: str | None = None,
+        tip: str | None = None,
+    ) -> None:
+        """Write a hyperlink cell when the wrapped worksheet supports it."""
+        self._worksheet.write_url(row, col, url, cell_format, string, tip)
 
     def write_column(self, row: int, col: int, data: Any) -> None:
         """Write a vertical data sequence starting at the given position."""
@@ -183,9 +219,19 @@ class XlsxWorksheetAdapter:
         """Set width and options for one or more columns."""
         self._worksheet.set_column(first_col, last_col, width, cell_format, options)
 
-    def insert_chart(self, row: int, col: int, chart: XlsxChartAdapter) -> None:
+    def insert_chart(self, row: int, col: int, chart: XlsxChartAdapter, options: dict[str, Any] | None = None) -> None:
         """Insert a wrapped chart at the target row/column."""
-        self._worksheet.insert_chart(row, col, chart._chart)
+        self._worksheet.insert_chart(row, col, chart._chart, options or {})
+
+    def set_row(
+        self,
+        row: int,
+        height: float | None = None,
+        cell_format: Any = None,
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        """Set height and options for a row."""
+        self._worksheet.set_row(row, height, cell_format, options)
 
     def insert_image(self, row: int, col: int, filename: str, options: dict[str, Any]) -> None:
         """Insert an image file with worksheet-specific options."""
@@ -199,6 +245,14 @@ class XlsxWorksheetAdapter:
         """Enable worksheet autofilters for the given range."""
         self._worksheet.autofilter(first_row, first_col, last_row, last_col)
 
+    def hide_gridlines(self, option: int = 2) -> None:
+        """Hide gridlines using the wrapped worksheet implementation."""
+        self._worksheet.hide_gridlines(option)
+
+    def merge_range(self, first_row: int, first_col: int, last_row: int, last_col: int, data: Any, cell_format: Any = None) -> None:
+        """Merge a rectangular cell range and write the provided value."""
+        self._worksheet.merge_range(first_row, first_col, last_row, last_col, data, cell_format)
+
 
 @dataclass
 class XlsxWorkbookAdapter:
@@ -208,7 +262,9 @@ class XlsxWorkbookAdapter:
 
     def add_worksheet(self, name: str) -> XlsxWorksheetAdapter:
         """Create and return a worksheet adapter for `name`."""
-        return XlsxWorksheetAdapter(self._workbook.add_worksheet(name))
+        worksheet = XlsxWorksheetAdapter(self._workbook.add_worksheet(name))
+        setattr(worksheet, '_workbook', self)
+        return worksheet
 
     def add_format(self, properties: dict[str, Any]) -> Any:
         """Create a workbook format using xlsxwriter property mappings."""

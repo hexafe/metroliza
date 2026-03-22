@@ -41,7 +41,7 @@ Drive a controlled, iterative test/CI confidence-improvement workflow for `relea
 - **Coverage governance gap (still open):** quantitative coverage visibility and artifacts are now established (**addressed by TCI-002**), but threshold policy remains intentionally deferred pending trend/noise data (**deferred TCI-007**).
 - **Critical-flow mapping gap (partially addressed):** export golden-path regression assertions were strengthened for user-visible workbook payloads (**addressed by TCI-003**), but no single maintainable critical-flow matrix exists yet (**still open**).
 - **Parity depth risk (partially addressed):** parser parity corpus gained a realistic interrupted multi-line edge fixture and intent assertion (**addressed by TCI-005**), but additional divergence edge shapes remain unrepresented (**still open**).
-- **Packaging confidence gap (partially addressed):** manual/dispatch packaging smoke now exists for build/artifact evidence (**addressed by TCI-004**), but startup/runtime confidence is still checklist/manual rather than routine automated CI (**still open**).
+- **Packaging confidence gap (partially addressed):** manual/dispatch packaging smoke now exists for build/artifact evidence and packaged PDF parser execution, but broader packaged runtime confidence is still checklist/manual rather than routine automated CI (**partially open**).
 - **Docs-semantics drift risk (still open):** CI/manual gate boundary language was improved in policy/checklist/runbook updates (**addressed by TCI-004**), but explicit drift-resistant alignment across release-status semantics is still pending (**targeted by TCI-006**).
 
 ## 7. High-Priority Recommendations

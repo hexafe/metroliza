@@ -1,10 +1,8 @@
 import importlib
 import importlib.machinery
-import importlib.util
 import os
 import sys
 import types
-from pathlib import Path
 
 
 custom_logger_stub = types.ModuleType("modules.custom_logger")
@@ -23,22 +21,18 @@ fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
 fitz_stub.open = lambda *_args, **_kwargs: None
 sys.modules.setdefault("fitz", fitz_stub)
 
+# Some integration tests install a lightweight `modules.cmm_report_parser` stub in
+# `sys.modules` before importing thread modules. This test module needs the real
+# parser implementation, so force a clean import of both the parser and factory.
+sys.modules.pop("modules.report_parser_factory", None)
+sys.modules.pop("modules.cmm_report_parser", None)
+
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
 contracts_module = importlib.import_module("modules.parser_plugin_contracts")
 
 
-def _load_real_cmm_report_parser_class():
-    module_path = Path("modules/CMMReportParser.py")
-    spec = importlib.util.spec_from_file_location("_real_cmm_report_parser_for_factory_tests", module_path)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module.CMMReportParser
-
-
-CMMReportParser = _load_real_cmm_report_parser_class()
+CMMReportParser = importlib.import_module("modules.cmm_report_parser").CMMReportParser
 BaseReportParser = base_module.BaseReportParser
 BaseReportParserPlugin = contracts_module.BaseReportParserPlugin
 PluginManifest = contracts_module.PluginManifest
@@ -75,6 +69,10 @@ def _restore_real_cmm_registration():
 def test_detect_format_accepts_pathlike(tmp_path):
     report_path = tmp_path / "A1234_2024-01-01_001.PDF"
     assert detect_format(report_path) == "cmm"
+
+
+def test_factory_uses_statically_imported_builtin_cmm_parser():
+    assert factory_module.CMMReportParser is CMMReportParser
 
 
 def test_get_parser_returns_cmm_parser_for_pdf(tmp_path):
@@ -257,6 +255,99 @@ def test_resolver_uses_probe_cache_for_same_plugin_and_path(tmp_path):
         PROBE_RESULT_CACHE.update(original_cache)
 
 
+def test_reregistering_parser_without_detector_clears_stale_detector(tmp_path):
+    class LegacyDetectorParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="detector_swap",
+            display_name="Legacy Detector",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=False, confidence=0)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    class ReregisteredProbeParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="detector_swap",
+            display_name="Reregistered Probe",
+            version="1.1.0",
+            supported_formats=("pdf",),
+        )
+
+        probe_calls = 0
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            cls.probe_calls += 1
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=73)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    try:
+        register_parser(
+            "detector_swap",
+            LegacyDetectorParser,
+            detector=lambda _path: ProbeResult(
+                plugin_id="detector_swap",
+                can_parse=True,
+                confidence=100,
+                reasons=("stale_detector",),
+            ),
+        )
+
+        register_parser(ReregisteredProbeParser)
+        PARSER_MAP.pop("cmm", None)
+        PARSER_MANIFESTS.pop("cmm", None)
+        PARSER_DETECTORS.pop("cmm", None)
+        reset_probe_cache()
+
+        diagnostics = resolve_parser_with_diagnostics(tmp_path / "detector_swap.pdf")
+
+        assert diagnostics.selected is not None
+        assert diagnostics.selected.confidence == 73
+        assert diagnostics.selected.reasons == ()
+        assert ReregisteredProbeParser.probe_calls == 1
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
 def test_strict_matching_rejects_low_confidence_candidate(tmp_path):
     class LowConfidenceParser(BaseReportParser, BaseReportParserPlugin):
         manifest = PluginManifest(
@@ -399,6 +490,82 @@ def test_load_external_plugins_reports_skipped_paths_for_missing_input(tmp_path)
     assert missing_path in result.skipped_paths
 
 
+def test_resolver_reloads_external_plugins_when_path_config_changes(tmp_path):
+    plugin_file = tmp_path / "late_external_plugin.py"
+    plugin_file.write_text(
+        """
+from modules.base_report_parser import BaseReportParser
+from modules.parser_plugin_contracts import BaseReportParserPlugin, PluginManifest, ProbeResult
+
+class LateExternalParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id=\"late_external\",
+        display_name=\"Late External\",
+        version=\"1.0.0\",
+        supported_formats=(\"pdf\",),
+        priority=1000,
+    )
+
+    @classmethod
+    def probe(cls, _input_ref, _context):
+        return ProbeResult(plugin_id=\"late_external\", can_parse=True, confidence=101)
+
+    def open_report(self):
+        self.raw_text = [\"ok\"]
+
+    def split_text_to_blocks(self):
+        self.blocks_text = []
+
+    def parse_to_v2(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def to_legacy_blocks(_parse_result_v2):
+        return []
+"""
+    )
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    original_loaded = factory_module._EXTERNAL_PLUGINS_LOADED
+    original_signature = factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    original_env = os.environ.get("PARSER_EXTERNAL_PLUGIN_PATHS")
+    try:
+        os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+        factory_module._EXTERNAL_PLUGINS_LOADED = False
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = None
+        reset_probe_cache()
+        _restore_real_cmm_registration()
+
+        initial = resolve_parser_with_diagnostics(tmp_path / "before_config.pdf")
+        assert initial.selected is not None
+        assert initial.selected.plugin_id == "cmm"
+
+        os.environ["PARSER_EXTERNAL_PLUGIN_PATHS"] = str(plugin_file)
+        updated = resolve_parser_with_diagnostics(tmp_path / "after_config.pdf")
+
+        assert updated.selected is not None
+        assert updated.selected.plugin_id == "late_external"
+        assert "late_external" in PARSER_MAP
+    finally:
+        if original_env is None:
+            os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+        else:
+            os.environ["PARSER_EXTERNAL_PLUGIN_PATHS"] = original_env
+        factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
 def test_load_external_plugins_registers_plugins_from_entry_points(monkeypatch):
     class DemoEntryPointParser(BaseReportParser, BaseReportParserPlugin):
         manifest = PluginManifest(
@@ -445,6 +612,71 @@ def test_load_external_plugins_registers_plugins_from_entry_points(monkeypatch):
         assert "demo_ep" in result.loaded_plugin_ids
         assert "demo_ep" in result.loaded_entry_points
     finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
+def test_resolve_parser_auto_loads_entry_point_plugins_without_path_env(monkeypatch, tmp_path):
+    class EntryPointOnlyParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="entry_point_only",
+            display_name="Entry Point Only",
+            version="1.0.0",
+            supported_formats=("pdf",),
+            priority=500,
+        )
+
+        @classmethod
+        def probe(cls, _input_ref, _context):
+            return ProbeResult(plugin_id="entry_point_only", can_parse=True, confidence=95)
+
+        def open_report(self):
+            self.raw_text = []
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    class _DummyEntryPoint:
+        name = "entry_point_only"
+
+        @staticmethod
+        def load():
+            return EntryPointOnlyParser
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    original_loaded_flag = factory_module._EXTERNAL_PLUGINS_LOADED
+    try:
+        monkeypatch.delenv("PARSER_EXTERNAL_PLUGIN_PATHS", raising=False)
+        monkeypatch.setattr(factory_module, "_iter_external_plugin_entry_points", lambda: (_DummyEntryPoint(),))
+        factory_module._EXTERNAL_PLUGINS_LOADED = False
+        PARSER_MAP.pop("cmm", None)
+        PARSER_MANIFESTS.pop("cmm", None)
+        PARSER_DETECTORS.pop("cmm", None)
+        reset_probe_cache()
+
+        diagnostics = resolve_parser_with_diagnostics(tmp_path / "entry_point.pdf")
+
+        assert diagnostics.selected is not None
+        assert diagnostics.selected.plugin_id == "entry_point_only"
+        assert factory_module._EXTERNAL_PLUGINS_LOADED is True
+    finally:
+        factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded_flag
         PARSER_MAP.clear()
         PARSER_MAP.update(original_map)
         PARSER_MANIFESTS.clear()

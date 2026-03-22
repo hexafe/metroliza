@@ -90,5 +90,34 @@ class TestChartRenderService(unittest.TestCase):
         self.assertTrue(can_render)
 
 
+    def test_unknown_chart_type_falls_back_to_distribution_limit_for_existing_exports(self):
+        frame = pd.DataFrame({'MEAS': list(range(2000))})
+        policy = resolve_chart_sampling_policy(density_mode='reduced')
+
+        sampled = sample_frame_for_chart(frame, 'summary_scatter', policy)
+
+        self.assertEqual(len(sampled), policy.distribution_limit)
+
+    def test_vectorized_violin_payload_non_grouped_behavior_remains_unchanged(self):
+        frame = pd.DataFrame({'MEAS': [1.0, '2.0', None, 3.5]})
+
+        labels, values, can_render = build_violin_payload_vectorized(frame, 'MISSING_GROUP', 3)
+
+        self.assertEqual(labels, ['All'])
+        self.assertEqual(values, [[1.0, 2.0, 3.5]])
+        self.assertTrue(can_render)
+
+    def test_deterministic_downsample_preserves_local_extrema_for_trends(self):
+        frame = pd.DataFrame({'MEAS': [0, 1, 0, 10, 0, -8, 0, 1, 0]})
+
+        sampled = deterministic_downsample_frame(frame, 5, preserve_extrema=True)
+
+        self.assertEqual(sampled['MEAS'].tolist()[0], 0)
+        self.assertEqual(sampled['MEAS'].tolist()[-1], 0)
+        self.assertIn(10, sampled['MEAS'].tolist())
+        self.assertIn(-8, sampled['MEAS'].tolist())
+        self.assertEqual(len(sampled), 5)
+
+
 if __name__ == '__main__':
     unittest.main()

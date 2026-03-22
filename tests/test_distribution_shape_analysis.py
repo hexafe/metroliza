@@ -1,4 +1,6 @@
 import unittest
+import warnings
+from unittest.mock import patch
 
 import numpy as np
 
@@ -31,6 +33,8 @@ class TestDistributionShapeAnalysis(unittest.TestCase):
         pair = result['pairwise_rows'][0]
 
         self.assertGreater(pair['distance metric'], 0.1)
+        self.assertEqual(pair['distance metric'], pair['Wasserstein distance'])
+        self.assertIn(pair['Practical severity'], {'Low', 'Moderate', 'High'})
         self.assertIn(pair['verdict'], {'difference', 'caution'})
 
     def test_unreliable_fit_does_not_overclaim(self):
@@ -52,6 +56,36 @@ class TestDistributionShapeAnalysis(unittest.TestCase):
         pair = result['pairwise_rows'][0]
         self.assertEqual(pair['verdict'], 'descriptive only')
         self.assertIn('insufficient data', pair['comment'])
+
+    def test_omnibus_anderson_ksamp_uses_supported_keyword_and_suppresses_known_user_warnings(self):
+        grouped_values = {
+            'A': np.array([1.0, 2.0, 3.0]),
+            'B': np.array([2.0, 3.0, 4.0]),
+            'C': np.array([3.0, 4.0, 5.0]),
+        }
+
+        with patch('modules.distribution_shape_analysis._anderson_ksamp_supports_variant', return_value=False), \
+             patch('modules.distribution_shape_analysis.anderson_ksamp') as mock_anderson:
+            def fake_anderson(samples, **kwargs):
+                warnings.warn(
+                    'p-value floored: true value smaller than 0.001. Consider specifying `method` (e.g. `method=stats.PermutationMethod()`.)',
+                    UserWarning,
+                )
+
+                class Result:
+                    pvalue = 0.0005
+
+                return Result()
+
+            mock_anderson.side_effect = fake_anderson
+
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                result = compute_distribution_difference('M5', grouped_values)
+
+        self.assertEqual(mock_anderson.call_args.kwargs, {'midrank': True})
+        self.assertEqual(result['omnibus_row']['significant?'], 'YES')
+        self.assertFalse(any('p-value floored' in str(item.message) for item in caught))
 
 
 if __name__ == '__main__':

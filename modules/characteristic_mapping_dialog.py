@@ -32,6 +32,7 @@ from modules.characteristic_alias_service import (
     upsert_characteristic_alias,
 )
 from modules.custom_logger import CustomLogger
+from modules.help_menu import attach_help_menu_to_layout
 
 
 ALL_REFERENCES_LABEL = 'All references'
@@ -122,6 +123,7 @@ class CharacteristicAliasEditorDialog(QDialog):
             self.reference_input.setText(str(initial_values.get('scope_value') or ''))
 
         layout = QGridLayout(self)
+        attach_help_menu_to_layout(layout, self, [("Characteristic matching manual", 'characteristic_name_matching')])
 
         row = 0
         layout.addWidget(QLabel('Name found in report'), row, 0)
@@ -297,6 +299,7 @@ class CharacteristicMappingDialog(QDialog):
         db_row.addWidget(self.select_db_button)
 
         layout = QVBoxLayout(self)
+        attach_help_menu_to_layout(layout, self, [("Characteristic matching manual", 'characteristic_name_matching')])
         layout.addWidget(self.subtitle_label)
         layout.addLayout(db_row)
         layout.addWidget(self.table_title_label)

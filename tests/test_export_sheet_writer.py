@@ -81,7 +81,10 @@ class TestExportSheetWriter(unittest.TestCase):
         measurement_plan = write_measurement_block(worksheet, bundle, formats, base_col=0)
 
         self.assertEqual(measurement_plan['data_start_row'], 21)
+        self.assertEqual(measurement_plan['chart_insert_row'], 7)
         self.assertEqual(len(worksheet.conditional_formats), 3)
+        self.assertEqual(worksheet.conditional_formats[0][4]['value'], '=($B$1+$B$2)')
+        self.assertEqual(worksheet.conditional_formats[1][4]['value'], '=($B$1+$B$3)')
         self.assertTrue(any(w[2] == 'NOK %' for w in worksheet.writes if isinstance(w[2], str)))
         self.assertTrue(any((w[0], w[1], w[2]) == (0, 2, 'MIN') for w in worksheet.writes))
 

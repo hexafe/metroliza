@@ -7,6 +7,8 @@ Statistical rationale:
     - Reports practical effect magnitudes to complement p-values.
 
 Fallback behavior:
+    - This module currently uses pairwise tests plus multiplicity correction,
+      not dedicated post-hoc procedures such as Tukey/Games-Howell/Dunn.
     - Invalid/insufficient groups propagate ``None`` p-values/effects rather than
       raising, allowing export pipelines to keep deterministic table shape.
 """
@@ -118,15 +120,15 @@ def _adjust_pvalues(p_values: list[float | None], method: str) -> list[float | N
     m = len(indexed)
     sorted_pairs = sorted(indexed, key=lambda x: x[1])
 
-    normalized = method.strip().lower().replace('-', '_')
-    if normalized in {'holm', 'holm_bonferroni'}:
+    normalized = _normalize_correction_method(method)
+    if normalized == 'holm':
         running_max = 0.0
         for rank, (original_idx, p_value) in enumerate(sorted_pairs):
             factor = m - rank
             corrected = min(1.0, p_value * factor)
             running_max = max(running_max, corrected)
             adjusted[original_idx] = float(running_max)
-    elif normalized in {'bh', 'fdr_bh', 'benjamini_hochberg'}:
+    elif normalized == 'bh':
         running_min = 1.0
         for reverse_rank, (original_idx, p_value) in enumerate(reversed(sorted_pairs), start=1):
             rank = m - reverse_rank + 1
@@ -138,6 +140,47 @@ def _adjust_pvalues(p_values: list[float | None], method: str) -> list[float | N
     return adjusted
 
 
+def _normalize_correction_method(method: str) -> str:
+    normalized = method.strip().lower().replace('-', '_')
+    aliases = {
+        'holm_bonferroni': 'holm',
+        'benjamini_hochberg': 'bh',
+        'fdr_bh': 'bh',
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _format_correction_method(method: str) -> str:
+    normalized = _normalize_correction_method(method)
+    labels = {
+        'holm': 'Holm',
+        'bh': 'Benjamini-Hochberg',
+    }
+    if normalized not in labels:
+        raise ValueError(f'Unsupported correction method: {method}')
+    return labels[normalized]
+
+
+def _describe_correction_policy(method: str) -> str:
+    normalized = _normalize_correction_method(method)
+    labels = {
+        'holm': 'Strict family-wise error control (Holm)',
+        'bh': 'Exploratory false-discovery-rate control (Benjamini-Hochberg/FDR)',
+    }
+    if normalized not in labels:
+        raise ValueError(f'Unsupported correction method: {method}')
+    return labels[normalized]
+
+
+def _describe_pairwise_strategy(*, non_parametric: bool, equal_var: bool, correction_method: str) -> str:
+    correction_label = _format_correction_method(correction_method)
+    if non_parametric:
+        return f'pairwise Mann-Whitney + {correction_label}'
+    if equal_var:
+        return f'pairwise t-tests + {correction_label}'
+    return f'pairwise Welch t-tests + {correction_label}'
+
+
 def _pairwise_p_value(sample_a: np.ndarray, sample_b: np.ndarray, *, non_parametric: bool, equal_var: bool) -> tuple[str, float | None]:
     if sample_a.size < 2 or sample_b.size < 2:
         return ('insufficient_n', None)
@@ -146,6 +189,17 @@ def _pairwise_p_value(sample_a: np.ndarray, sample_b: np.ndarray, *, non_paramet
         return ('Mann-Whitney U', None if np.isnan(p_value) else float(p_value))
     _, p_value = ttest_ind(sample_a, sample_b, equal_var=equal_var, nan_policy='omit')
     return ('Student t-test' if equal_var else 'Welch t-test', None if np.isnan(p_value) else float(p_value))
+
+
+def _effect_size_metadata(*, non_parametric: bool, multi_group_effect: str) -> tuple[str, str]:
+    if non_parametric:
+        return ('cliffs_delta', 'cliffs_delta')
+    omnibus_type = 'omega_squared' if multi_group_effect == 'omega_squared' else 'eta_squared'
+    return ('cohen_d', omnibus_type)
+
+
+def _pairwise_effect_size(sample_a: np.ndarray, sample_b: np.ndarray, *, non_parametric: bool) -> float | None:
+    return _cliffs_delta(sample_a, sample_b) if non_parametric else _cohen_d(sample_a, sample_b)
 
 
 def compute_metric_pairwise_stats(
@@ -180,7 +234,19 @@ def compute_metric_pairwise_stats(
     equal_var = variance_status == 'passed'
     normality_check_used = 'Shapiro-Wilk'
     variance_test_used = variance_assumption.get('test') or 'Brown-Forsythe'
-    post_hoc_strategy = 'Dunn' if is_non_parametric else 'Tukey'
+    assumption_outcomes = selector_result.get('assumption_outcomes', {})
+    correction_method_label = _format_correction_method(config.correction_method)
+    correction_policy = _describe_correction_policy(config.correction_method)
+    post_hoc_strategy = _describe_pairwise_strategy(
+        non_parametric=is_non_parametric,
+        equal_var=equal_var,
+        correction_method=config.correction_method,
+    )
+
+    pairwise_effect_type, omnibus_effect_type = _effect_size_metadata(
+        non_parametric=is_non_parametric,
+        multi_group_effect=config.multi_group_effect,
+    )
 
     overall_effect: float | None = None
     overall_ci: tuple[float, float] | None = None
@@ -212,54 +278,72 @@ def compute_metric_pairwise_stats(
         test_used, p_value = _pairwise_p_value(sample_a, sample_b, non_parametric=is_non_parametric, equal_var=equal_var)
         raw_p_values.append(p_value)
 
-        if len(labels) > 2:
-            effect_size = overall_effect
-            effect_ci = overall_ci
-        else:
-            effect_size = _cliffs_delta(sample_a, sample_b) if is_non_parametric else _cohen_d(sample_a, sample_b)
-            effect_ci = None
-            if config.include_effect_size_ci and effect_size is not None:
-                rng = np.random.default_rng(42)
-                if is_non_parametric:
-                    def effect_fn(sampled: list[np.ndarray]) -> float | None:
-                        return _cliffs_delta(sampled[0], sampled[1])
-                else:
-                    def effect_fn(sampled: list[np.ndarray]) -> float | None:
-                        return _cohen_d(sampled[0], sampled[1])
+        effect_size = _pairwise_effect_size(sample_a, sample_b, non_parametric=is_non_parametric)
+        effect_ci = None
+        if config.include_effect_size_ci and effect_size is not None:
+            rng = np.random.default_rng(42)
 
-                effect_ci = _bootstrap_ci(
-                    rng=rng,
-                    sample_builder=lambda: [
-                        sample_a[rng.integers(0, sample_a.size, sample_a.size)],
-                        sample_b[rng.integers(0, sample_b.size, sample_b.size)],
-                    ],
-                    effect_fn=effect_fn,
-                    level=config.ci_level,
-                    iterations=config.ci_bootstrap_iterations,
-                )
+            def effect_fn(sampled: list[np.ndarray]) -> float | None:
+                return _pairwise_effect_size(sampled[0], sampled[1], non_parametric=is_non_parametric)
+
+            effect_ci = _bootstrap_ci(
+                rng=rng,
+                sample_builder=lambda: [
+                    sample_a[rng.integers(0, sample_a.size, sample_a.size)],
+                    sample_b[rng.integers(0, sample_b.size, sample_b.size)],
+                ],
+                effect_fn=effect_fn,
+                level=config.ci_level,
+                iterations=config.ci_bootstrap_iterations,
+            )
 
         row = {
             'metric': metric_key,
             'group_a': group_a,
             'group_b': group_b,
             'test_used': test_used,
+            'pairwise_test_name': test_used,
             'p_value': p_value,
             'effect_size': effect_size,
+            'effect_type': pairwise_effect_type,
+            'pairwise_effect_type': pairwise_effect_type,
             'normality_check_used': normality_check_used,
             'variance_test_used': variance_test_used,
             'omnibus_test_used': selected_test,
+            'omnibus_test_name': selected_test,
             'post_hoc_strategy': post_hoc_strategy,
+            'correction_method': correction_method_label,
+            'correction_policy': correction_policy,
+            'assumption_outcomes': assumption_outcomes,
+            'selection_detail': assumption_outcomes.get('selection_detail'),
         }
         if effect_ci is not None:
             row['effect_size_ci'] = effect_ci
+        if len(labels) > 2:
+            row['omnibus_effect_size'] = overall_effect
+            row['omnibus_effect_type'] = omnibus_effect_type
+            row['effect_types'] = {
+                'pairwise': pairwise_effect_type,
+                'omnibus': omnibus_effect_type,
+            }
+            if overall_ci is not None:
+                row['omnibus_effect_size_ci'] = overall_ci
         rows.append(row)
 
     adjusted = _adjust_pvalues(raw_p_values, config.correction_method)
     for row, adjusted_p in zip(rows, adjusted):
         row['adjusted_p_value'] = adjusted_p
         row['significant'] = bool(adjusted_p is not None and adjusted_p < config.alpha)
+        row.setdefault('effect_types', {'pairwise': pairwise_effect_type, 'omnibus': row.get('omnibus_effect_type')})
 
     return rows
 
 
-__all__ = ['ComparisonStatsConfig', 'compute_metric_pairwise_stats', '_adjust_pvalues']
+__all__ = [
+    'ComparisonStatsConfig',
+    'compute_metric_pairwise_stats',
+    '_describe_correction_policy',
+    '_adjust_pvalues',
+    '_describe_pairwise_strategy',
+    '_format_correction_method',
+]

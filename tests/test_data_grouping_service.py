@@ -1,3 +1,5 @@
+import sqlite3
+
 import pandas as pd
 
 from modules.data_grouping_service import (
@@ -29,6 +31,20 @@ def test_load_grouping_dataframe_delegates_to_reader():
     assert 'FILTERED_DATA' in calls['query']
 
 
+def test_build_grouping_query_strips_trailing_semicolons_from_filter_query():
+    connection = sqlite3.connect(':memory:')
+    connection.execute(
+        'CREATE TABLE REPORTS (REFERENCE text, FILELOC text, FILENAME text, DATE text, SAMPLE_NUMBER text)'
+    )
+
+    query = build_grouping_query('SELECT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS;  ')
+    rows = connection.execute(query).fetchall()
+
+    assert rows == []
+    assert 'FROM REPORTS;' not in query
+
+
+
 def test_compute_group_key_for_df_is_stable():
     df = pd.DataFrame([
         {'REFERENCE': 'R1', 'FILELOC': 'a', 'FILENAME': 'f1', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
@@ -38,6 +54,17 @@ def test_compute_group_key_for_df_is_stable():
     keys = compute_group_key_for_df(df)
 
     assert keys.iloc[0] == keys.iloc[1]
+
+
+def test_compute_group_key_for_df_avoids_delimiter_collisions():
+    df = pd.DataFrame([
+        {'REFERENCE': 'A|B', 'FILELOC': 'C', 'FILENAME': 'D', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
+        {'REFERENCE': 'A', 'FILELOC': 'B|C', 'FILENAME': 'D', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
+    ])
+
+    keys = compute_group_key_for_df(df)
+
+    assert keys.iloc[0] != keys.iloc[1]
 
 
 def test_reassign_group_keys_to_default_updates_only_selected_custom_rows():

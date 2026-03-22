@@ -1,18 +1,29 @@
 """Database/query and dataframe mutation helpers for data-grouping UI."""
 
 import hashlib
+import json
+
+
+def _normalize_filter_query(filter_query):
+    """Return a subquery-safe filter query string or an empty string."""
+    if not isinstance(filter_query, str):
+        return ""
+
+    normalized = filter_query.strip()
+    return normalized.rstrip(';').rstrip()
 
 
 def build_grouping_query(filter_query):
     """Build the grouping dataset query, optionally wrapping a caller filter query."""
     default_query = "SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS"
-    if not isinstance(filter_query, str) or not filter_query.strip():
+    normalized_filter_query = _normalize_filter_query(filter_query)
+    if not normalized_filter_query:
         return default_query
 
     return f"""
             SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER
             FROM (
-                {filter_query.strip()}
+                {normalized_filter_query}
             ) AS FILTERED_DATA
         """
 
@@ -26,7 +37,11 @@ def load_grouping_dataframe(read_sql_dataframe, db_file, filter_query):
 def compute_group_key_for_df(df):
     """Return a stable SHA1 key per row based on grouping identity columns."""
     key_columns = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
-    raw_key = df[key_columns].fillna('').astype(str).agg('|'.join, axis=1)
+    normalized_values = df[key_columns].fillna('').astype(str)
+    raw_key = normalized_values.apply(
+        lambda row: json.dumps(list(row), ensure_ascii=False, separators=(',', ':')),
+        axis=1,
+    )
     return raw_key.apply(lambda value: hashlib.sha1(value.encode('utf-8')).hexdigest())
 
 

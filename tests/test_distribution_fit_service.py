@@ -123,6 +123,22 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertAlmostEqual(upper_only['outside_probability'], expected_one_tail, places=6)
         self.assertAlmostEqual(lower_only['outside_probability'], expected_one_tail, places=6)
 
+    def test_tail_risk_treats_zero_lsl_positive_support_as_upper_only(self):
+        params = (0.0, 1.0)
+
+        result = _compute_tail_risk(
+            norm,
+            params,
+            0.0,
+            1.0,
+            inferred_support_mode='one_sided_zero_bound_positive',
+        )
+
+        expected_upper_tail = float(1.0 - norm.cdf(1.0, *params))
+        self.assertEqual(result['spec_type'], 'upper_only')
+        self.assertEqual(result['below_lsl_probability'], 0.0)
+        self.assertAlmostEqual(result['outside_probability'], expected_upper_tail, places=6)
+
     def test_one_sided_zero_bound_forces_loc_zero_for_positive_candidates(self):
         result = fit_measurement_distribution([0.0, 0.05, 0.2, 0.4, 0.8, 1.1, 1.5, 2.0], usl=2.5)
 

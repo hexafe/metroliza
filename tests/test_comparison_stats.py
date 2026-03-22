@@ -53,11 +53,11 @@ def test_effect_size_for_two_group_non_parametric_fixture_matches_cliffs_delta()
     assert math.isclose(row['effect_size'], -0.52, rel_tol=1e-9)
 
 
-def test_multi_group_rows_include_overall_effect_and_adjusted_significance():
+def test_multi_group_rows_include_distinct_pairwise_and_omnibus_effect_sizes():
     grouped_values = {
-        'A': [1.0, 1.1, 0.9, 1.0, 1.2],
-        'B': [2.0, 2.1, 2.2, 1.9, 2.0],
-        'C': [3.0, 2.9, 3.1, 3.2, 3.0],
+        'A': [0.0, 0.1, -0.1, 0.05, -0.05],
+        'B': [0.4, 0.5, 0.45, 0.55, 0.5],
+        'C': [2.0, 2.1, 1.9, 2.05, 1.95],
     }
 
     rows = compute_metric_pairwise_stats(
@@ -67,25 +67,86 @@ def test_multi_group_rows_include_overall_effect_and_adjusted_significance():
     )
 
     assert len(rows) == 3
+    pairwise_effects = {}
+    omnibus_effects = set()
     for row in rows:
         assert set([
             'group_a',
             'group_b',
             'test_used',
+            'pairwise_test_name',
             'p_value',
             'adjusted_p_value',
             'effect_size',
+            'effect_type',
+            'pairwise_effect_type',
+            'omnibus_effect_size',
+            'omnibus_effect_type',
+            'effect_types',
             'significant',
             'normality_check_used',
             'variance_test_used',
             'omnibus_test_used',
+            'omnibus_test_name',
             'post_hoc_strategy',
+            'correction_policy',
+            'assumption_outcomes',
+            'selection_detail',
         ]).issubset(row.keys())
         assert row['normality_check_used'] == 'Shapiro-Wilk'
-        assert row['post_hoc_strategy'] in {'Tukey', 'Dunn'}
+        assert row['post_hoc_strategy'] in {
+            'pairwise t-tests + Benjamini-Hochberg',
+            'pairwise Welch t-tests + Benjamini-Hochberg',
+            'pairwise Mann-Whitney + Benjamini-Hochberg',
+        }
+        assert row['correction_method'] == 'Benjamini-Hochberg'
+        assert row['correction_policy'] == 'Exploratory false-discovery-rate control (Benjamini-Hochberg/FDR)'
+        assert row['effect_type'] in {'cohen_d', 'cliffs_delta'}
+        assert row['pairwise_effect_type'] == row['effect_type']
         assert row['effect_size'] is not None
         assert row['effect_size_ci'] is not None
+        assert row['omnibus_effect_size'] is not None
+        assert row['omnibus_effect_type'] in {'eta_squared', 'omega_squared', 'cliffs_delta'}
+        assert row['effect_types']['pairwise'] == row['pairwise_effect_type']
+        assert row['effect_types']['omnibus'] == row['omnibus_effect_type']
+        assert row['omnibus_effect_size_ci'] is not None
+        assert row['pairwise_test_name'] == row['test_used']
+        assert row['omnibus_test_name'] == row['omnibus_test_used']
+        assert row['selection_detail']
+        assert row['assumption_outcomes']['selection_mode'] in {
+            'parametric_equal_variance',
+            'parametric_unequal_variance',
+            'non_parametric',
+        }
+        pairwise_effects[(row['group_a'], row['group_b'])] = row['effect_size']
+        omnibus_effects.add(row['omnibus_effect_size'])
 
+    assert len(omnibus_effects) == 1
+    assert not math.isclose(pairwise_effects[('A', 'B')], pairwise_effects[('A', 'C')], rel_tol=1e-9)
+    assert not math.isclose(pairwise_effects[('A', 'B')], pairwise_effects[('B', 'C')], rel_tol=1e-9)
+    assert not math.isclose(pairwise_effects[('A', 'B')], next(iter(omnibus_effects)), rel_tol=1e-9)
+
+
+
+
+def test_multi_group_parametric_fixture_uses_pair_specific_effects_and_shared_strategy():
+    grouped_values = {
+        'A': [0.0, 0.1, -0.1, 0.0, 0.05],
+        'B': [0.2, 0.3, 0.25, 0.35, 0.3],
+        'C': [1.4, 1.5, 1.45, 1.55, 1.6],
+    }
+
+    rows = compute_metric_pairwise_stats('metric_pair_specific', grouped_values)
+
+    assert len(rows) == 3
+    assert {row['post_hoc_strategy'] for row in rows} == {'pairwise t-tests + Holm'}
+    pair_effects = {(row['group_a'], row['group_b']): row['effect_size'] for row in rows}
+
+    assert pair_effects[('A', 'B')] != pair_effects[('A', 'C')]
+    assert pair_effects[('A', 'B')] != pair_effects[('B', 'C')]
+    assert pair_effects[('A', 'C')] != pair_effects[('B', 'C')]
+    assert all(row['pairwise_effect_type'] == 'cohen_d' for row in rows)
+    assert all(row['omnibus_effect_type'] == 'eta_squared' for row in rows)
 
 def test_pairwise_rows_include_holm_adjustment_for_all_pairs():
     grouped_values = {
@@ -128,4 +189,8 @@ def test_pairwise_rows_include_method_traceability_for_non_parametric_path():
     assert row['normality_check_used'] == 'Shapiro-Wilk'
     assert row['variance_test_used'] in {'Levene', 'Brown-Forsythe'}
     assert row['omnibus_test_used'] == 'Mann-Whitney U'
-    assert row['post_hoc_strategy'] == 'Dunn'
+    assert row['omnibus_test_name'] == 'Mann-Whitney U'
+    assert row['post_hoc_strategy'] == 'pairwise Mann-Whitney + Holm'
+    assert row['correction_method'] == 'Holm'
+    assert row['correction_policy'] == 'Strict family-wise error control (Holm)'
+    assert row['assumption_outcomes']['normality'] == 'failed'

@@ -51,6 +51,14 @@ Runtime fallback from native execution errors is intentionally disabled so backe
 `packaging/metroliza_onefile.spec` includes:
 
 - `hiddenimports=['_metroliza_cmm_native']`
+- Windows Python runtime DLL collection (`libffi`, `python3*.dll`, `vcruntime`, `msvcp`) so onefile startup does not depend on a fragile ambient interpreter layout
+- PyMuPDF/`fitz` data files, native libraries, and discovered submodules so packaged PDF parsing survives frozen builds
+
+Distribution audit status:
+
+- `pyinstaller packaging/metroliza_onefile.spec` produces a single-file artifact (`EXE(...)` with no `COLLECT(...)` stage), so it is configured as a onefile build rather than an onedir bundle.
+- The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
+- Confidence is still release-evidence based rather than absolute: the generated artifact must be smoke-launched on a clean target environment before calling it ready for non-technical users.
 
 Smoke checks after build:
 
@@ -68,17 +76,26 @@ If packaged Windows executables fail at startup with `ImportError: DLL load fail
 - the build interpreter is a full CPython install (not embeddable/minimal),
 - Python runtime DLLs under `<python>/DLLs` (including `libffi*.dll`) are bundled into the executable.
 
+PyInstaller is the closest current path to a turnkey single-file distribution for non-technical users because it bundles the Python runtime into one artifact. Even so, treat "ready for distribution" as contingent on the packaged-artifact smoke run and at least one clean-machine launch check.
+
 
 ## Nuitka inclusion rules and smoke checks
 
-`packaging/build_nuitka.ps1` now conditionally includes the native parser module when available in the build environment and auto-generates output naming from release metadata:
+`packaging/build_nuitka.ps1` now conditionally includes the native parser module when available in the build environment, auto-generates output naming from release metadata, and selects a healthy compiler strategy before invoking Nuitka:
 
 - default output filename is `metroliza_N_<RELEASE_VERSION>(<VERSION_DATE>).exe` from `VersionDate.py`
 - still supports explicit override with `-OutputName`
-- forces `--msvc=latest` on Windows so bundled PyMuPDF avoids the MinGW/SCons assembler failure path seen in some onefile builds
+- supports `-CompilerStrategy auto|msvc|clang|gcc` plus opt-in `-AutoInstallCompiler` / `-OpenInstallHelp`
+- prefers MSVC first on Windows, keeps GCC as a lower-priority fallback there, and prefers healthy clang/gcc toolchains on Linux/macOS
+- maps the detected MSVC path to `--msvc=latest` so bundled PyMuPDF avoids the MinGW/SCons assembler failure path seen in some onefile builds
+- prints candidate diagnostics, selected compiler, selection reason, and whether an auto-install attempt ran before the build starts
+- can try an opt-in compiler install flow (`winget` on Windows, conventional package-manager flows on Linux/macOS when available), otherwise prints exact install guidance
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
-- requires PyMuPDF to be importable in the build environment and always includes `pymupdf` / `fitz` when available, because PDF parsing is a core packaged-app capability
+- explicitly includes `modules.cmm_report_parser`, `modules.report_parser_factory`, and `modules.pdf_backend` because the rc1 parser/plugin refactor introduced dynamic paths that packagers may otherwise under-detect
+- requires PyMuPDF to be importable in the build environment and fails closed by default when it is not available
+- always includes `pymupdf` / `fitz` package contents plus explicit PyMuPDF runtime submodules (`pymupdf._mupdf`, `pymupdf._extra`, `pymupdf.extra`, `pymupdf.mupdf`, table/utils helpers) so onefile builds do not silently omit parser internals
+- validates the generated Nuitka report for both backend presence and required PyMuPDF runtime module references so packaged PDF parsing cannot silently drop out of the artifact
 - defaults to pure-Python fallback packaging when native module is absent
 - supports `-EnableConsole` for troubleshooting startup failures by showing a Windows console with traceback
 - supports `-RequireNative` to fail fast if native module is missing
@@ -93,10 +110,19 @@ Smoke checks after build:
 ./packaging/build_nuitka.ps1 -RequireNative
 # troubleshooting mode: show console and traceback if startup fails
 ./packaging/build_nuitka.ps1 -EnableConsole
-# run the built executable in a sandbox and verify startup
+# compiler auto-detect (default)
+./packaging/build_nuitka.ps1 -CompilerStrategy auto
+# force MSVC on Windows and open install guidance if missing
+./packaging/build_nuitka.ps1 -CompilerStrategy msvc -OpenInstallHelp
+# opt-in attempt to install the preferred compiler if none is healthy
+./packaging/build_nuitka.ps1 -AutoInstallCompiler
+# unsafe diagnostics-only override; never acceptable for release artifacts
+./packaging/build_nuitka.ps1 -AllowBrokenPdfParserBuild
 ```
 
-If the extension is missing in the executable, parser code must still run in pure-Python mode. PDF parsing remains required for packaged builds, so `packaging/build_nuitka.ps1` now fails fast when PyMuPDF is not importable in the build environment. On Windows, the script forces `--msvc=latest` so Nuitka uses the Visual Studio toolchain instead of the MinGW path that has been seen to fail while compiling PyMuPDF C sources.
+If the extension is missing in the executable, parser code must still run in pure-Python mode. PDF parsing remains required for packaged builds, so `packaging/build_nuitka.ps1` still fails fast when PyMuPDF is not importable in the build environment and validates `nuitka-build-report.xml` after the build to confirm the packaged artifact still references PyMuPDF backends. On Windows, the script now auto-detects compiler health, prefers MSVC, and only applies `--msvc=latest` when MSVC is the selected path. If no healthy compiler is available, it either attempts an opt-in install flow or prints actionable guidance for Visual Studio 2022 Build Tools / Desktop development with C++ / MSVC toolset / Windows SDK. If the Nuitka compile step fails, the script throws immediately and does not continue to parser validation or misleading success output.
+
+Nuitka release mode is also configured as onefile (`--onefile` by default, `--standalone` only for `-FastDev`). However, it is not yet a guaranteed zero-touch Windows distribution path because target machines may still need the Microsoft Visual C++ Redistributable installed. For non-technical-user releases, treat that prerequisite as a deployment risk unless your installer/bootstrapper handles it.
 
 ## Required CI checks for native artifacts
 
