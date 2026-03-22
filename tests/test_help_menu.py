@@ -81,7 +81,7 @@ class TestHelpMenu(unittest.TestCase):
         for key, path in self.help_menu.MANUAL_PATHS.items():
             with self.subTest(key=key):
                 expected = (
-                    'https://github.com/hexafe/metroliza/blob/main/'
+                    'https://github.com/hexafe/metroliza/blob/master/'
                     f'{path.relative_to(self.help_menu.REPO_ROOT).as_posix()}'
                 )
                 self.assertEqual(self.help_menu.manual_url(key), expected)
