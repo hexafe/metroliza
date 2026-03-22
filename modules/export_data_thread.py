@@ -3917,12 +3917,12 @@ class ExportDataThread(QThread):
             string='Open Markdown manual',
             tip='Open the plain-English Group Analysis guide in the GitHub repository.',
         )
-        worksheet.write(4, 0, 'Printable companion (GitHub PDF)')
+        worksheet.write(4, 0, 'Printable companion (local PDF)')
         worksheet.write_url(
             4,
             1,
             GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL,
-            string='Open PDF companion',
+            string='Open local PDF companion',
             tip='Open the printable Group Analysis PDF companion in the GitHub repository.',
         )
 

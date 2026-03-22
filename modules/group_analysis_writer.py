@@ -400,8 +400,8 @@ def _write_manual_links(worksheet, row, *, sheet_state=None):
             'Tip': 'Open the plain-English Group Analysis guide in the GitHub repository.',
         },
         {
-            'Field': 'Printable companion (GitHub PDF)',
-            'Label': 'Open PDF companion',
+            'Field': 'Printable companion (local PDF)',
+            'Label': 'Open local PDF companion',
             'Target': GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL,
             'Tip': 'Open the printable Group Analysis PDF companion in the GitHub repository.',
         },
