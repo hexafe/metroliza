@@ -13,7 +13,8 @@ This manual set helps you:
 - learn the normal app workflow in a simple order,
 - open the right tool for the job,
 - understand what each button and field does,
-- avoid common mistakes, and
+- avoid common mistakes,
+- understand how to read the Group Analysis worksheet safely, and
 - find the right reference page when you need details later.
 
 ## Recommended reading order
@@ -30,6 +31,14 @@ If you are new to the app, start here:
 8. [Group Analysis worksheet manual](group_analysis/README.md) — learn how to read the exported worksheet after export.
 
 If you are using CSV Summary instead of the database workflow, jump to [CSV Summary](csv_summary.md).
+
+## Current documentation focus
+
+The current release focuses especially on **Group Analysis** and the user manuals around it. If you work with grouped exports, read these pages first after the export setup guides:
+
+- [Export grouping](export_grouping.md) — how to prepare the groups that feed the worksheet.
+- [Group Analysis worksheet manual](group_analysis/README.md) — how to read the exported worksheet in plain English.
+- [Group Analysis Markdown manual](group_analysis/user_manual.md) — the detailed reading guide.
 
 ## Workflow manuals
 

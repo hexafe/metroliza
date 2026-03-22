@@ -1,6 +1,12 @@
 # Changelog (for end users)
 
-## 2026.03rc1(260319) — current version
+## 2026.03rc2(260322) — current version
+- Group Analysis is now the main release focus, with the grouped export presented as the primary worksheet for comparing groups metric-by-metric.
+- Expanded user manuals now cover Group Analysis reading order, plain-English interpretation, and the surrounding export workflow more clearly for end users.
+- The Group Analysis manual set now more explicitly supports non-technical readers who need to understand adjusted p-values, effect size, Delta mean, and caution notes.
+- Existing grouped-analysis, chart-readability, and capability-safeguard improvements remain part of the current release-candidate baseline.
+
+## 2026.03rc1(260319)
 - Completed the parser module naming cleanup: parser imports now use canonical snake_case modules only, and legacy CamelCase parser shims were removed.
 - Histogram table polishing improved readability and visual consistency in end-user reports/exports.
 - Grouping analysis prototype v2 was added to extend grouped-data analysis workflows.
