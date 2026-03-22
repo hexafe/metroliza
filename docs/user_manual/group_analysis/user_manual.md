@@ -1,8 +1,10 @@
 # Group Analysis User Manual
 
-This guide explains how to read the exported **Group Analysis** worksheet in plain English.
+This guide explains how to read the exported **Group Analysis** worksheet in plain English. It is the main end-user reading guide for the current Group Analysis-focused release.
 
 Printable companion: [`user_manual.pdf`](user_manual.pdf).
+
+If you are not sure where to start, read the worksheet top summary first, then move to the metric block you care about, then use the pairwise table and caution notes before acting on the result.
 
 ## A quick real-world example
 

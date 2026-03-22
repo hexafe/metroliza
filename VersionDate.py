@@ -1,12 +1,16 @@
-RELEASE_VERSION = "2026.03rc1"
-VERSION_DATE = "260319"
+RELEASE_VERSION = "2026.03rc2"
+VERSION_DATE = "260322"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Major analytics update: histogram/chart readability improvements plus new capability confidence and safeguards for low-sample interpretation."
+    "Group Analysis is now easier to read, with updated user manuals for grouped export workflows."
 )
 
 release_notes = f"""
     <br><b>Current version {VERSION_LABEL}:</b><br>
+    - Group Analysis is easier to read and interpret in the grouped export workflow<br>
+    - Updated user manuals help users understand grouped export setup and worksheet reading<br>
+
+    <br><b>Version 2026.03rc1 (build 260319):</b><br>
     - Histogram table polishing improved readability and visual consistency<br>
     - Grouping analysis prototype v2 extends grouped-data analysis workflows<br>
     - Clearer histogram and chart layouts for easier reading in dense views<br>
