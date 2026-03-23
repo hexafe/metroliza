@@ -227,14 +227,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
             for row, col, value in worksheet.writes
             if col == 1 and isinstance(value, str) and value.startswith('A vs B: DIFFERENCE.')
         )
-        self.assertTrue(worksheet.write_formats[(take_row, 1)].get('props', {}).get('text_wrap'))
-        note_row_heights = [
-            height
-            for row, height, *_ in worksheet.rows
-            if row == take_row
-        ]
-        self.assertTrue(note_row_heights)
-        self.assertGreaterEqual(note_row_heights[-1], 30)
+        self.assertFalse(worksheet.write_formats[(take_row, 1)].get('props', {}).get('text_wrap'))
         self.assertTrue(any(row == metric_row and height >= 28 for row, height, *_ in worksheet.rows))
         metric_index_data_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'M1')
         self.assertEqual(worksheet.write_formats[(metric_index_data_row, 0)].get('props', {}).get('align'), 'center')
@@ -246,6 +239,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertEqual(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('align'), 'left')
         self.assertEqual(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('valign'), 'vcenter')
         self.assertFalse(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('text_wrap'))
+        self.assertEqual(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('bg_color'), '#FFF7D6')
         desc_caution_row = next(row for row, col, value in worksheet.writes if col == 13 and value == 'caution')
         desc_caution_height = next(height for row, height, *_ in worksheet.rows if row == desc_caution_row)
         self.assertGreater(desc_caution_height, DEFAULT_SIMPLE_ROW_HEIGHT := 22)
@@ -257,6 +251,13 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertGreater(pairwise_data_height, DEFAULT_SIMPLE_ROW_HEIGHT)
         self.assertEqual(worksheet.write_formats[(pairwise_data_row, 8)].get('props', {}).get('align'), 'center')
         self.assertEqual(worksheet.write_formats[(pairwise_data_row, 8)].get('props', {}).get('valign'), 'vcenter')
+        takeaway_label_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Takeaway')
+        self.assertEqual(worksheet.write_formats[(takeaway_label_row, 0)].get('props', {}).get('align'), 'center')
+        self.assertEqual(worksheet.write_formats[(takeaway_label_row, 0)].get('props', {}).get('valign'), 'vcenter')
+        self.assertFalse(worksheet.write_formats[(takeaway_label_row, 0)].get('props', {}).get('text_wrap'))
+        self.assertEqual(worksheet.write_formats[(takeaway_label_row, 1)].get('props', {}).get('align'), 'center')
+        self.assertEqual(worksheet.write_formats[(takeaway_label_row, 1)].get('props', {}).get('valign'), 'vcenter')
+        self.assertFalse(worksheet.write_formats[(takeaway_label_row, 1)].get('props', {}).get('text_wrap'))
         self.assertGreaterEqual(len(worksheet.autofilters), 2)
         index_link_row = next(row for row, col, value in worksheet.writes if col == 2 and value == 'Go to metric')
         self.assertTrue(any(formula[0] == index_link_row and f'A{metric_row + 1}' in formula[2] for formula in worksheet.formulas))
