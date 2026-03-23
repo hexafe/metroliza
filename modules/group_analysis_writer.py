@@ -171,6 +171,14 @@ def _build_formats(worksheet):
             'pattern': 1,
             'bottom': 1,
         }),
+        'summary_label_wrap_fmt': workbook.add_format({
+            'bold': True,
+            'bg_color': '#EEF2F7',
+            'pattern': 1,
+            'bottom': 1,
+            'text_wrap': True,
+            'valign': 'top',
+        }),
         'summary_value_fmt': workbook.add_format({
             'valign': 'top',
             'bottom': 1,
@@ -336,6 +344,7 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
         'num': formats.get('num_fmt'),
         'pvalue': formats.get('pvalue_fmt'),
         'summary_label': formats.get('summary_label_fmt'),
+        'summary_label_wrap': formats.get('summary_label_wrap_fmt'),
         'summary_value': formats.get('summary_value_fmt'),
         'hyperlink': formats.get('hyperlink_fmt'),
     }
@@ -401,7 +410,7 @@ def _write_manual_links(worksheet, row, *, sheet_state=None):
         },
         {
             'Field': 'Printable companion (local PDF)',
-            'Label': 'Open local PDF companion',
+            'Label': 'Open PDF manual',
             'Target': GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL,
             'Tip': 'Open the printable Group Analysis PDF companion in the GitHub repository.',
         },
@@ -411,7 +420,7 @@ def _write_manual_links(worksheet, row, *, sheet_state=None):
         current_row = row
         worksheet.write(current_row, 0, entry['Field'])
         if sheet_state is not None:
-            sheet_state['styled_cells'].append((current_row, 0, entry['Field'], 'summary_label'))
+            sheet_state['styled_cells'].append((current_row, 0, entry['Field'], 'summary_label_wrap'))
             sheet_state['summary_rows'].append(current_row)
 
         if hasattr(worksheet, 'write_url'):
