@@ -155,6 +155,61 @@ def test_measurement_rows_parse_for_inline_code_and_numbers_format():
     assert any([line[0] for line in block[1]] == ["X", "Y"] for block in parsed)
 
 
+def test_multiline_tp_rows_preserve_semantic_tokens_and_tolerance_propagation():
+    raw_lines = [
+        "#TP MULTILINE",
+        "DIM",
+        "X 10 0.1 -0.1 10.0 0 0",
+        "TP",
+        "MMC",
+        "+TOL",
+        "0.4",
+        "BONUS",
+        "0.1",
+        "MEAS",
+        "0.25",
+        "DEV",
+        "0.25",
+        "OUTTOL",
+        "0",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed[0][1][1] == ["TP", 0.0, 0.4, 0, 0.1, 0.25, 0.25, 0.0]
+    assert parsed[0][1][0] == ["X", 10.0, 0.1, -0.1, "", 10.0, 0.0, 0.0]
+
+
+def test_interrupted_block_starts_new_header_after_measurement_gap():
+    raw_lines = [
+        "#BLOCK ONE",
+        "DIM",
+        "X 1 0.1 -0.1 1.0 0 0",
+        "#BLOCK TWO",
+        "DIM",
+        "Y 2 0.2 -0.2 2.0 0 0",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert [block[0] for block in parsed] == [[["BLOCK ONE"]], [["BLOCK TWO"]]]
+    assert parsed[0][1] == [["X", 1.0, 0.1, -0.1, 0.0, 1.0, 0.0, 0.0]]
+    assert parsed[1][1] == []
+
+
+def test_malformed_numeric_tokens_are_dropped_without_breaking_following_rows():
+    raw_lines = [
+        "#MALFORMED",
+        "DIM",
+        "X 10 BAD -0.2 10.1 0.1 0",
+        "Y 5 0.1 -0.1 5.05 0.05 0",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed == [[[ ["MALFORMED"] ], []]]
+
+
 def test_add_tolerances_keeps_explicit_zero_values_for_tp_blocks():
     pdf_blocks_text = [
         [
