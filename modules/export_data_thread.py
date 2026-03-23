@@ -3061,12 +3061,6 @@ class ExportDataThread(QThread):
                 partition_column='REFERENCE',
                 connection=self._db_connection,
             )
-            self._sql_measurement_summary_cache[partition_value] = fetch_sql_measurement_summaries(
-                self.db_file,
-                self._active_export_query,
-                reference=partition_value,
-                connection=self._db_connection,
-            )
             yield partition_value, partition_df
 
     def _build_export_filtered_dataframe(self):
