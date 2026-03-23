@@ -11,12 +11,21 @@ from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from modules.distribution_fit_service import (
     build_fit_curve_payload,
     compute_estimated_tail_metrics as compute_fit_tail_metrics,
+    resolve_density_curve_sampling as _resolve_density_curve_sampling,
 )
 
 from modules.stats_utils import compute_capability_confidence_intervals, is_one_sided_geometric_tolerance, safe_process_capability
 
 
 _INTEGER_PATTERN = re.compile(r'^[+-]?\d+$')
+
+
+def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
+    """Backward-compatible export of canonical density sampling policy."""
+    return _resolve_density_curve_sampling(
+        sample_size,
+        requested_point_count=requested_point_count,
+    )
 
 
 def resolve_histogram_bin_count(values, *, min_bins=3, max_bins=48):
