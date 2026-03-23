@@ -476,7 +476,7 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
         sheet_state['styled_cells'].append((section_row, 0, 'Metric index', 'section'))
 
     header_row = row
-    headers = ['Metric', 'Status', 'Jump to section']
+    headers = ['Metric', 'Status', 'Jump to section', 'Spec status', 'Analysis mode / restrictions']
     for col, header in enumerate(headers):
         worksheet.write(row, col, header)
         if sheet_state is not None:
@@ -485,21 +485,38 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
         sheet_state['header_rows'].append((header_row, headers))
         sheet_state['wrapped_data_rows'].append((
             header_row,
-            [{'value': headers[2], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(2, 16), 'wrap': True}],
+            [
+                {'value': headers[2], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(2, 16), 'wrap': True},
+                {'value': headers[3], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 12), 'wrap': True},
+                {'value': headers[4], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(4, 18), 'wrap': True},
+            ],
         ))
     row += 1
 
     for metric_row in metric_rows:
         metric_name = str(metric_row.get('metric') or 'Unknown')
         status_label = metric_row.get('index_status') or 'REVIEW'
+        spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
+        restriction_label = metric_row.get('analysis_restriction_label') or 'Review'
         worksheet.write(row, 0, metric_name)
         worksheet.write(row, 1, status_label)
         worksheet.write(row, 2, 'Go to metric')
+        worksheet.write(row, 3, spec_status_label)
+        worksheet.write(row, 4, restriction_label)
         if sheet_state is not None:
             sheet_state['index_rows'].append(row)
             sheet_state['styled_cells'].append((row, 0, metric_name, 'text'))
             sheet_state['styled_cells'].append((row, 1, status_label, 'text'))
+            sheet_state['styled_cells'].append((row, 3, spec_status_label, 'text'))
+            sheet_state['styled_cells'].append((row, 4, restriction_label, 'wrap'))
             sheet_state['metric_index_links'].append((row, 2, metric_name))
+            sheet_state['wrapped_data_rows'].append((
+                row,
+                [
+                    {'value': spec_status_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 12), 'wrap': True},
+                    {'value': restriction_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(4, 18), 'wrap': True},
+                ],
+            ))
         row += 1
     return row + SECTION_GAP
 
@@ -597,6 +614,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         sheet_state['styled_cells'].append((section_row, 0, 'Metric overview', 'section'))
     metric_meta_rows = [
         {'Field': 'Spec status', 'Value': spec_status_label},
+        {'Field': 'Analysis mode / restrictions', 'Value': metric_row.get('analysis_restriction_label') or 'Review'},
         {'Field': 'Shape note', 'Value': metric_row.get('metric_note') or (metric_row.get('distribution_difference') or {}).get('comment / verdict')},
         {'Field': 'Recommended action', 'Value': metric_row.get('recommended_action')},
         {'Field': 'Use caution', 'Value': metric_row.get('diagnostics_comment') or (metric_row.get('comparability_summary') or {}).get('summary')},

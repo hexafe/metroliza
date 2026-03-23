@@ -47,7 +47,7 @@ _SPEC_STATUS_LABELS = {
 
 _PLOT_SKIP_REASON_MESSAGES = {
     'standard_only': 'Standard-level plotting is disabled for Light mode.',
-    'metric_excluded': 'Metric is excluded from Standard analysis by comparability policy.',
+    'metric_excluded': 'Metric is excluded from analysis by comparability policy.',
     'insufficient_groups': 'At least 2 groups with numeric data are required.',
     'low_group_samples': 'At least 3 numeric samples per group are required for violin plots.',
     'low_total_samples': 'At least 6 total numeric samples are required for histogram plots.',
@@ -110,24 +110,22 @@ def build_diagnostics_comment(*, include_metric, allow_pairwise, allow_capabilit
         reason = str(skipped_reason).strip().lower()
         if reason == 'insufficient_groups':
             return 'Skipped: fewer than 2 groups have numeric data.'
-        if reason == 'nom_mismatch':
-            return 'Skipped in Standard: nominal values differ across groups.'
-        if reason == 'limit_mismatch':
-            return 'Skipped in Standard: specification limits differ across groups.'
-        if reason == 'invalid_spec':
-            return 'Skipped in Standard: spec missing / invalid.'
         return f'Skipped: {reason.replace("_", " ")}.'
 
-    status_label = get_spec_status_label(spec_status)
+    status = _normalize_spec_status_key(spec_status)
     if not include_metric:
-        return f'Skipped by policy for status: {status_label}.'
-    if not allow_pairwise:
-        return 'Descriptive-only: pairwise comparisons disabled by spec comparability policy.'
+        return f'Skipped by policy for status: {get_spec_status_label(status)}.'
+    if status == 'LIMIT_MISMATCH':
+        return 'Analyzed with caution: limits differ across groups; pairwise comparison is allowed, capability metrics are disabled.'
+    if status == 'NOM_MISMATCH':
+        return 'Descriptive-only: nominal differs across groups; direct pairwise interpretation is disabled.'
+    if status == 'INVALID_SPEC':
+        return 'Descriptive-only: spec missing/invalid; capability metrics are disabled.'
     if pairwise_rows_count == 0:
-        return f'Analyzed: {status_label}; pairwise enabled but no valid group pairs produced results.'
+        return 'Analyzed: exact match; pairwise enabled but no valid group pairs produced results.'
     if not allow_capability:
-        return f'Analyzed with caution: {status_label}; capability metrics are disabled.'
-    return f'Analyzed: {status_label}; pairwise and capability checks enabled.'
+        return 'Analyzed with caution: exact match; capability metrics are disabled.'
+    return 'Analyzed: exact match; pairwise and capability checks enabled.'
 
 
 def _plot_skip_reason_message(reason):
@@ -347,19 +345,30 @@ def classify_metric_spec_status(metric_rows_df, spec_columns):
 
 def _resolve_analysis_policy(spec_status, analysis_level):
     """Resolve level-aware comparability behavior for a metric."""
-    normalized_level = str(analysis_level or 'light').strip().lower()
-    if normalized_level == 'standard':
-        return {
-            'include_metric': spec_status == 'EXACT_MATCH',
-            'allow_pairwise': spec_status == 'EXACT_MATCH',
-            'allow_capability': spec_status == 'EXACT_MATCH',
-        }
-
-    return {
-        'include_metric': True,
-        'allow_pairwise': spec_status in {'EXACT_MATCH', 'LIMIT_MISMATCH'},
-        'allow_capability': spec_status == 'EXACT_MATCH',
+    status = _normalize_spec_status_key(spec_status)
+    shared_policy = {
+        'EXACT_MATCH': {
+            'include_metric': True,
+            'allow_pairwise': True,
+            'allow_capability': True,
+        },
+        'LIMIT_MISMATCH': {
+            'include_metric': True,
+            'allow_pairwise': True,
+            'allow_capability': False,
+        },
+        'NOM_MISMATCH': {
+            'include_metric': True,
+            'allow_pairwise': False,
+            'allow_capability': False,
+        },
+        'INVALID_SPEC': {
+            'include_metric': True,
+            'allow_pairwise': False,
+            'allow_capability': False,
+        },
     }
+    return dict(shared_policy.get(status, shared_policy['INVALID_SPEC']))
 
 
 def compute_group_descriptive_stats(grouped_values):
@@ -718,11 +727,12 @@ def build_pairwise_rows(
 
 def build_comparability_summary(spec_status, analysis_policy):
     """Build comparability/spec summary block for metric section rendering."""
+    status = _normalize_spec_status_key(spec_status)
     interpretation_by_status = {
         'EXACT_MATCH': 'Specs are aligned across groups; direct capability and pairwise interpretation is valid.',
-        'LIMIT_MISMATCH': 'Nominals align but limits differ; compare central tendency carefully across groups.',
-        'NOM_MISMATCH': 'Nominals differ across groups; avoid direct between-group interpretation.',
-        'INVALID_SPEC': 'One or more spec values are invalid/missing; capability is limited or unavailable.',
+        'LIMIT_MISMATCH': 'Analyzed with caution: limits differ across groups; pairwise comparison is allowed, capability metrics are disabled.',
+        'NOM_MISMATCH': 'Descriptive-only: nominal differs across groups; direct pairwise interpretation is disabled.',
+        'INVALID_SPEC': 'Descriptive-only: spec missing/invalid; capability metrics are disabled.',
     }
     limitations = []
     if not analysis_policy.get('allow_pairwise'):
@@ -731,9 +741,27 @@ def build_comparability_summary(spec_status, analysis_policy):
         limitations.append('capability disabled')
 
     return {
-        'status': spec_status,
+        'status': status,
         'interpretation_limits': '; '.join(limitations) if limitations else 'none',
-        'summary': interpretation_by_status.get(spec_status, 'Spec comparability could not be determined.'),
+        'summary': interpretation_by_status.get(status, 'Spec comparability could not be determined.'),
+    }
+
+
+def _build_analysis_restriction_fields(spec_status, analysis_policy):
+    """Return stable worksheet labels/flags for metric index and overview rendering."""
+    status = _normalize_spec_status_key(spec_status)
+    pairwise_allowed = bool((analysis_policy or {}).get('allow_pairwise'))
+    capability_allowed = bool((analysis_policy or {}).get('allow_capability'))
+    restriction_label_by_status = {
+        'EXACT_MATCH': 'Full analysis',
+        'LIMIT_MISMATCH': 'Pairwise yes; capability off',
+        'NOM_MISMATCH': 'Descriptive only',
+        'INVALID_SPEC': 'Descriptive only',
+    }
+    return {
+        'pairwise_allowed': pairwise_allowed,
+        'capability_allowed': capability_allowed,
+        'analysis_restriction_label': restriction_label_by_status.get(status, 'Descriptive only'),
     }
 
 
@@ -1320,7 +1348,7 @@ def build_group_analysis_payload(
         spec_status, spec_payload = classify_metric_spec_status(metric_rows_df, spec_columns)
         policy = _resolve_analysis_policy(spec_status, analysis_level)
         if not policy['include_metric']:
-            skipped_metrics.append({'metric': metric_identity, 'reason': spec_status.lower()})
+            skipped_metrics.append({'metric': metric_identity, 'reason': spec_status.lower(), 'group_count': len(populated_groups)})
             continue
 
         descriptive_stats = build_group_descriptive_rows(
@@ -1358,6 +1386,7 @@ def build_group_analysis_payload(
         metric_level_flags = _join_flags(_build_metric_level_flags((row.get('n', 0) for row in descriptive_stats), spec_status=spec_status))
 
         comparability_summary = build_comparability_summary(spec_status, policy)
+        restriction_fields = _build_analysis_restriction_fields(spec_status, policy)
         plot_eligibility = _build_metric_plot_eligibility(
             grouped_values=grouped_values,
             analysis_level=normalized_level,
@@ -1407,6 +1436,9 @@ def build_group_analysis_payload(
                 'spec_status': spec_status,
                 'spec_status_label': get_spec_status_label(spec_status),
                 'analysis_policy': policy,
+                'pairwise_allowed': restriction_fields['pairwise_allowed'],
+                'capability_allowed': restriction_fields['capability_allowed'],
+                'analysis_restriction_label': restriction_fields['analysis_restriction_label'],
                 'capability': capability,
                 'comparability_summary': comparability_summary,
                 'plot_eligibility': plot_eligibility,
@@ -1428,6 +1460,8 @@ def build_group_analysis_payload(
             pairwise_rows=pairwise_rows,
             diagnostics_comment=diagnostics_comment,
         )
+        if not policy.get('allow_pairwise') and metrics[-1]['index_status'] == 'NO DIFFERENCE':
+            metrics[-1]['index_status'] = 'USE CAUTION'
         metrics[-1]['metric_takeaway'] = _metric_takeaway(
             pairwise_rows=pairwise_rows,
             diagnostics_comment=diagnostics_comment,

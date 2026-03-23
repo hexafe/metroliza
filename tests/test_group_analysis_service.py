@@ -488,35 +488,154 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(diagnostics_row['included_in_standard'], 'YES')
         self.assertIn('Analyzed', diagnostics_row['comment'])
 
-    def test_standard_level_skips_non_exact_match_metrics(self):
+    def test_standard_level_limit_mismatch_is_included_with_pairwise_and_capability_disabled(self):
         grouped_df = pd.DataFrame(
             {
-                'REFERENCE': ['R1', 'R1', 'R1', 'R1'],
-                'HEADER - AX': ['M1', 'M1', 'M1', 'M1'],
-                'GROUP': ['A', 'A', 'B', 'B'],
-                'MEAS': [10.0, 10.2, 9.7, 9.6],
-                'LSL': [9.0, 9.0, 9.0, 9.0],
-                'NOMINAL': [10.0, 10.0, 10.1, 10.1],
-                'USL': [11.0, 11.0, 11.0, 11.0],
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['C-F2'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [10.0, 10.2, 10.1, 10.3, 9.7, 9.8, 9.9, 9.6],
+                'LSL': [9.0] * 8,
+                'NOMINAL': [10.0] * 8,
+                'USL': [11.0] * 4 + [11.5] * 4,
             }
         )
 
         payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='standard')
 
         self.assertEqual(payload['status'], 'ready')
-        self.assertEqual(len(payload['metric_rows']), 0)
-        self.assertEqual(payload['diagnostics']['skipped_metric_count'], 1)
-        self.assertEqual(payload['diagnostics']['status_counts']['EXACT_MATCH'], 0)
-        self.assertEqual(payload['diagnostics']['requested_level'], 'standard')
-        self.assertEqual(payload['diagnostics']['execution_status'], 'ran')
-        self.assertEqual(payload['diagnostics']['histogram_skip_summary']['applies'], True)
-        self.assertEqual(payload['diagnostics']['histogram_skip_summary']['count'], 1)
-        self.assertEqual(payload['diagnostics']['histogram_skip_summary']['reason_counts'], {'nom_mismatch': 1})
-        skipped_row = payload['diagnostics']['metric_diagnostics_rows'][0]
-        self.assertEqual(skipped_row['spec_status_label'], 'Nominal differs')
-        self.assertEqual(skipped_row['included_in_light'], 'YES')
-        self.assertEqual(skipped_row['included_in_standard'], 'NO')
-        self.assertIn('Skipped in Standard', skipped_row['comment'])
+        self.assertEqual(len(payload['metric_rows']), 1)
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['spec_status'], 'LIMIT_MISMATCH')
+        self.assertTrue(metric['analysis_policy']['include_metric'])
+        self.assertTrue(metric['analysis_policy']['allow_pairwise'])
+        self.assertFalse(metric['analysis_policy']['allow_capability'])
+        self.assertEqual(metric['spec_status_label'], 'Limits differ')
+        self.assertEqual(metric['analysis_restriction_label'], 'Pairwise yes; capability off')
+        self.assertTrue(metric['pairwise_allowed'])
+        self.assertFalse(metric['capability_allowed'])
+        self.assertGreater(len(metric['pairwise_rows']), 0)
+        self.assertEqual(len(metric['descriptive_stats']), 2)
+        self.assertTrue(all(row['cp'] is None for row in metric['descriptive_stats']))
+        self.assertTrue(all(row['capability'] is None for row in metric['descriptive_stats']))
+        self.assertEqual(metric['capability']['status'], 'not_applicable')
+        self.assertIsNone(metric['capability']['cp'])
+        self.assertIsNone(metric['capability']['capability'])
+        diagnostics_row = payload['diagnostics']['metric_diagnostics_rows'][0]
+        self.assertEqual(diagnostics_row['included_in_standard'], 'YES')
+        self.assertIn('capability metrics are disabled', diagnostics_row['comment'])
+        self.assertNotIn('Skipped in Standard', diagnostics_row['comment'])
+
+    def test_standard_level_nominal_mismatch_remains_descriptive_only(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['M1'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [10.0, 10.2, 10.1, 10.3, 9.7, 9.8, 9.9, 9.6],
+                'LSL': [9.0] * 8,
+                'NOMINAL': [10.0] * 4 + [10.1] * 4,
+                'USL': [11.0] * 8,
+            }
+        )
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='standard')
+
+        self.assertEqual(payload['status'], 'ready')
+        self.assertEqual(len(payload['metric_rows']), 1)
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['spec_status'], 'NOM_MISMATCH')
+        self.assertTrue(metric['analysis_policy']['include_metric'])
+        self.assertFalse(metric['analysis_policy']['allow_pairwise'])
+        self.assertFalse(metric['analysis_policy']['allow_capability'])
+        self.assertEqual(metric['analysis_restriction_label'], 'Descriptive only')
+        self.assertEqual(metric['pairwise_rows'], [])
+        self.assertEqual(len(metric['descriptive_stats']), 2)
+        diagnostics_row = payload['diagnostics']['metric_diagnostics_rows'][0]
+        self.assertEqual(diagnostics_row['spec_status_label'], 'Nominal differs')
+        self.assertEqual(diagnostics_row['included_in_light'], 'YES')
+        self.assertEqual(diagnostics_row['included_in_standard'], 'YES')
+        self.assertIn('Descriptive-only', diagnostics_row['comment'])
+
+
+    def test_metric_index_helper_fields_reflect_analysis_restrictions(self):
+        limit_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['C-F2'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [10.0, 10.2, 10.1, 10.3, 9.7, 9.8, 9.9, 9.6],
+                'LSL': [9.0] * 8,
+                'NOMINAL': [10.0] * 8,
+                'USL': [11.0] * 4 + [11.5] * 4,
+            }
+        )
+        nom_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['NOM-ONLY'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7],
+                'LSL': [4.0] * 8,
+                'NOMINAL': [5.0] * 4 + [5.2] * 4,
+                'USL': [6.0] * 8,
+            }
+        )
+
+        limit_metric = build_group_analysis_payload(limit_df, requested_scope='auto', analysis_level='standard')['metric_rows'][0]
+        nom_metric = build_group_analysis_payload(nom_df, requested_scope='auto', analysis_level='standard')['metric_rows'][0]
+
+        self.assertEqual(limit_metric['spec_status_label'], 'Limits differ')
+        self.assertEqual(limit_metric['analysis_restriction_label'], 'Pairwise yes; capability off')
+        self.assertEqual(nom_metric['spec_status_label'], 'Nominal differs')
+        self.assertEqual(nom_metric['analysis_restriction_label'], 'Descriptive only')
+
+    def test_diagnostics_comments_match_spec_policy_language(self):
+        limit_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['LIMIT'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [10.0, 10.2, 10.1, 10.3, 9.7, 9.8, 9.9, 9.6],
+                'LSL': [9.0] * 8,
+                'NOMINAL': [10.0] * 8,
+                'USL': [11.0] * 4 + [11.5] * 4,
+            }
+        )
+        nom_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['NOM'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7],
+                'LSL': [4.0] * 8,
+                'NOMINAL': [5.0] * 4 + [5.2] * 4,
+                'USL': [6.0] * 8,
+            }
+        )
+        invalid_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['INVALID'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [3.0, 3.1, 3.2, 3.3, 2.8, 2.9, 3.0, 3.1],
+                'LSL': [None] * 8,
+                'NOMINAL': [None] * 8,
+                'USL': [None] * 8,
+            }
+        )
+
+        limit_comment = build_group_analysis_payload(limit_df, requested_scope='auto', analysis_level='standard')['metric_rows'][0]['diagnostics_comment']
+        nom_comment = build_group_analysis_payload(nom_df, requested_scope='auto', analysis_level='standard')['metric_rows'][0]['diagnostics_comment']
+        invalid_comment = build_group_analysis_payload(invalid_df, requested_scope='auto', analysis_level='standard')['metric_rows'][0]['diagnostics_comment']
+
+        self.assertNotIn('Skipped in Standard', limit_comment)
+        self.assertIn('pairwise comparison is allowed', limit_comment)
+        self.assertIn('capability metrics are disabled', limit_comment)
+        self.assertIn('Descriptive-only', nom_comment)
+        self.assertIn('nominal differs across groups', nom_comment)
+        self.assertIn('Descriptive-only', invalid_comment)
+        self.assertIn('spec missing/invalid', invalid_comment)
 
     def test_standard_level_includes_histogram_skip_reason_for_included_metrics(self):
         grouped_df = pd.DataFrame(
