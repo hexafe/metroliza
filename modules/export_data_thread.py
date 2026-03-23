@@ -92,6 +92,7 @@ from modules.export_query_service import (
     fetch_partition_header_counts,
     fetch_partition_values,
     fetch_sql_measurement_summary,
+    fetch_sql_measurement_summaries,
     load_measurement_export_partition_dataframe,
 )
 from modules.export_grouping_utils import (
@@ -2953,7 +2954,7 @@ class ExportDataThread(QThread):
         self._snapshot_table_name = None
         self._active_export_query = self.filter_query
         self._cached_export_filtered_df = None
-        self._distribution_fit_memo: dict[tuple, dict] = {}
+        self._sql_measurement_summary_cache = {}
 
     def _register_chart_image(self, payload: bytes):
         image_data = BytesIO(payload)
@@ -3043,6 +3044,7 @@ class ExportDataThread(QThread):
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
+            self._sql_measurement_summary_cache.clear()
 
     def _iter_reference_partitions(self):
         partition_values = fetch_partition_values(
@@ -3093,6 +3095,32 @@ class ExportDataThread(QThread):
     def _summary_chart_required(self, chart_name):
         required_charts = self._optimization_toggles.get('summary_sheet_minimum_charts', set())
         return chart_name in required_charts
+
+    def _lookup_sql_measurement_summary(self, *, reference, header, ax, usl, lsl):
+        if reference is not None:
+            reference_cache = self._sql_measurement_summary_cache.get(reference)
+            if reference_cache is None:
+                reference_cache = fetch_sql_measurement_summaries(
+                    self.db_file,
+                    self._active_export_query,
+                    reference=reference,
+                    connection=self._db_connection,
+                )
+                self._sql_measurement_summary_cache[reference] = reference_cache
+            cached_summary = reference_cache.get((reference, header, ax))
+            if cached_summary is not None:
+                return cached_summary
+
+        return fetch_sql_measurement_summary(
+            self.db_file,
+            self._active_export_query,
+            reference=reference,
+            header=header,
+            ax=ax,
+            usl=usl,
+            lsl=lsl,
+            connection=self._db_connection,
+        )
 
     @staticmethod
     def _save_summary_chart(fig, mode='workbook'):
@@ -4236,15 +4264,12 @@ class ExportDataThread(QThread):
             axis_value = header_group['AX'].iloc[0] if 'AX' in header_group.columns and not header_group.empty else None
             sql_summary = None
             if reference_value is not None and header_value is not None and axis_value is not None:
-                sql_summary = fetch_sql_measurement_summary(
-                    self.db_file,
-                    self._active_export_query,
+                sql_summary = self._lookup_sql_measurement_summary(
                     reference=reference_value,
                     header=header_value,
                     ax=axis_value,
                     usl=USL,
                     lsl=LSL,
-                    connection=self._db_connection,
                 )
             summary_stats = _retrieve_summary_statistics_compute(
                 header_group,
