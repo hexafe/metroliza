@@ -20,7 +20,7 @@ from itertools import combinations
 from typing import Any, Callable
 
 import numpy as np
-from scipy.stats import mannwhitneyu, ttest_ind
+from scipy.stats import mannwhitneyu, rankdata, ttest_ind
 
 from modules.group_stats_tests import select_group_stat_test
 
@@ -53,12 +53,14 @@ def _cohen_d(sample_a: np.ndarray, sample_b: np.ndarray) -> float | None:
 def _cliffs_delta(sample_a: np.ndarray, sample_b: np.ndarray) -> float | None:
     if sample_a.size == 0 or sample_b.size == 0:
         return None
-    greater = 0
-    lesser = 0
-    for left in sample_a:
-        greater += int(np.sum(left > sample_b))
-        lesser += int(np.sum(left < sample_b))
-    return float((greater - lesser) / (sample_a.size * sample_b.size))
+
+    n_a = sample_a.size
+    n_b = sample_b.size
+    pooled = np.concatenate((sample_a, sample_b))
+    ranks = rankdata(pooled, method='average')
+    rank_sum_a = float(np.sum(ranks[:n_a], dtype=np.float64))
+    u_statistic = rank_sum_a - (n_a * (n_a + 1) / 2.0)
+    return float((2.0 * u_statistic) / (n_a * n_b) - 1.0)
 
 
 def _eta_or_omega_squared(groups: list[np.ndarray], *, use_omega: bool) -> float | None:

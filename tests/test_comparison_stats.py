@@ -1,6 +1,9 @@
 import math
+import time
 
-from modules.comparison_stats import ComparisonStatsConfig, _adjust_pvalues, compute_metric_pairwise_stats
+import numpy as np
+
+from modules.comparison_stats import ComparisonStatsConfig, _adjust_pvalues, _cliffs_delta, compute_metric_pairwise_stats
 
 
 def _is_monotone_non_decreasing(values):
@@ -194,3 +197,49 @@ def test_pairwise_rows_include_method_traceability_for_non_parametric_path():
     assert row['correction_method'] == 'Holm'
     assert row['correction_policy'] == 'Strict family-wise error control (Holm)'
     assert row['assumption_outcomes']['normality'] == 'failed'
+
+
+def _legacy_cliffs_delta(sample_a, sample_b):
+    greater = 0
+    lesser = 0
+    for left in sample_a:
+        greater += int(np.sum(left > sample_b))
+        lesser += int(np.sum(left < sample_b))
+    return float((greater - lesser) / (sample_a.size * sample_b.size))
+
+
+def test_cliffs_delta_rank_based_path_matches_legacy_loop_with_ties():
+    rng = np.random.default_rng(1234)
+    sample_a = rng.integers(-3, 4, size=257).astype(float)
+    sample_b = rng.integers(-3, 4, size=211).astype(float)
+
+    effect_size = _cliffs_delta(sample_a, sample_b)
+    legacy_effect_size = _legacy_cliffs_delta(sample_a, sample_b)
+
+    assert effect_size is not None
+    assert math.isclose(effect_size, legacy_effect_size, rel_tol=1e-12, abs_tol=1e-12)
+
+
+def test_cliffs_delta_rank_based_path_scales_better_on_large_arrays():
+    rng = np.random.default_rng(99)
+    sample_a = rng.integers(0, 101, size=4000).astype(float)
+    sample_b = rng.integers(0, 101, size=4000).astype(float)
+
+    optimized_durations = []
+    legacy_durations = []
+    for _ in range(3):
+        start = time.perf_counter()
+        optimized = _cliffs_delta(sample_a, sample_b)
+        optimized_durations.append(time.perf_counter() - start)
+
+        start = time.perf_counter()
+        legacy = _legacy_cliffs_delta(sample_a, sample_b)
+        legacy_durations.append(time.perf_counter() - start)
+
+    optimized_time = min(optimized_durations)
+    legacy_time = min(legacy_durations)
+
+    assert optimized is not None
+    assert legacy is not None
+    assert math.isclose(optimized, legacy, rel_tol=1e-12, abs_tol=1e-12)
+    assert optimized_time < legacy_time
