@@ -158,6 +158,20 @@ def _build_formats(worksheet):
             'align': 'left',
             'valign': 'top',
         }),
+        'text_left_middle_fmt': workbook.add_format({
+            'align': 'left',
+            'valign': 'vcenter',
+            'text_wrap': False,
+        }),
+        'table_center_fmt': workbook.add_format({
+            'align': 'center',
+            'valign': 'vcenter',
+        }),
+        'table_center_wrap_fmt': workbook.add_format({
+            'align': 'center',
+            'valign': 'vcenter',
+            'text_wrap': True,
+        }),
         'note_fmt': workbook.add_format({
             'bg_color': '#FFF7D6',
             'pattern': 1,
@@ -180,12 +194,14 @@ def _build_formats(worksheet):
             'valign': 'top',
         }),
         'summary_value_fmt': workbook.add_format({
-            'valign': 'top',
+            'align': 'left',
+            'valign': 'vcenter',
+            'text_wrap': False,
             'bottom': 1,
         }),
-        'num_fmt': workbook.add_format({'num_format': '0.000', 'valign': 'top'}),
-        'pvalue_fmt': workbook.add_format({'num_format': '0.0000', 'valign': 'top'}),
-        'default_data_fmt': workbook.add_format({'valign': 'top'}),
+        'num_fmt': workbook.add_format({'num_format': '0.000', 'align': 'center', 'valign': 'vcenter'}),
+        'pvalue_fmt': workbook.add_format({'num_format': '0.0000', 'align': 'center', 'valign': 'vcenter'}),
+        'default_data_fmt': workbook.add_format({'align': 'center', 'valign': 'vcenter'}),
         'positive': workbook.add_format({'bg_color': '#E6F4EA', 'font_color': '#1E4620', 'pattern': 1}),
         'neutral': workbook.add_format({'bg_color': '#EEF2F7', 'font_color': '#334155', 'pattern': 1}),
         'warning': workbook.add_format({'bg_color': '#FFF4CC', 'font_color': '#7A4E00', 'pattern': 1}),
@@ -340,6 +356,9 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
         'note': formats.get('note_fmt'),
         'wrap': formats.get('text_wrap_fmt'),
         'text': formats.get('text_top_fmt'),
+        'text_left_middle': formats.get('text_left_middle_fmt'),
+        'table_center': formats.get('table_center_fmt'),
+        'table_center_wrap': formats.get('table_center_wrap_fmt'),
         'default': formats.get('default_data_fmt'),
         'num': formats.get('num_fmt'),
         'pvalue': formats.get('pvalue_fmt'),
@@ -418,11 +437,6 @@ def _write_manual_links(worksheet, row, *, sheet_state=None):
 
     for entry in manual_rows:
         current_row = row
-        worksheet.write(current_row, 0, entry['Field'])
-        if sheet_state is not None:
-            sheet_state['styled_cells'].append((current_row, 0, entry['Field'], 'summary_label_wrap'))
-            sheet_state['summary_rows'].append(current_row)
-
         if hasattr(worksheet, 'write_url'):
             worksheet.write_url(
                 current_row,
@@ -437,12 +451,10 @@ def _write_manual_links(worksheet, row, *, sheet_state=None):
 
         if sheet_state is not None:
             sheet_state['styled_cells'].append((current_row, 1, entry['Label'], 'hyperlink'))
+            sheet_state['summary_rows'].append(current_row)
             sheet_state['wrapped_data_rows'].append((
                 current_row,
-                [
-                    {'value': entry['Field'], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(0, 18), 'wrap': True},
-                    {'value': entry['Label'], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': True},
-                ],
+                [{'value': entry['Label'], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': True}],
             ))
         row += 1
 
@@ -456,14 +468,8 @@ def _write_named_value_rows(worksheet, row, rows, *, sheet_state=None):
         worksheet.write(row, 1, entry.get('Value'))
         if sheet_state is not None:
             sheet_state['styled_cells'].append((row, 0, entry.get('Field'), 'summary_label'))
-            fmt_key = 'wrap' if len(str(entry.get('Value') or '')) > 50 else 'summary_value'
-            sheet_state['styled_cells'].append((row, 1, entry.get('Value'), fmt_key))
+            sheet_state['styled_cells'].append((row, 1, entry.get('Value'), 'summary_value'))
             sheet_state['summary_rows'].append(row)
-            if fmt_key == 'wrap':
-                sheet_state['wrapped_data_rows'].append((
-                    row,
-                    [{'value': entry.get('Value'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': True}],
-                ))
         row += 1
     return row, {'first_row': start_row, 'last_row': row - 1}
 
@@ -505,10 +511,10 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
         worksheet.write(row, 4, restriction_label)
         if sheet_state is not None:
             sheet_state['index_rows'].append(row)
-            sheet_state['styled_cells'].append((row, 0, metric_name, 'text'))
-            sheet_state['styled_cells'].append((row, 1, status_label, 'text'))
-            sheet_state['styled_cells'].append((row, 3, spec_status_label, 'text'))
-            sheet_state['styled_cells'].append((row, 4, restriction_label, 'wrap'))
+            sheet_state['styled_cells'].append((row, 0, metric_name, 'table_center'))
+            sheet_state['styled_cells'].append((row, 1, status_label, 'table_center'))
+            sheet_state['styled_cells'].append((row, 3, spec_status_label, 'table_center_wrap'))
+            sheet_state['styled_cells'].append((row, 4, restriction_label, 'table_center_wrap'))
             sheet_state['metric_index_links'].append((row, 2, metric_name))
             sheet_state['wrapped_data_rows'].append((
                 row,
@@ -628,7 +634,8 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         )
         for data_row_idx, entry in enumerate(metric_meta_rows):
             data_row = meta_bounds['first_data_row'] + data_row_idx
-            sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'wrap'))
+            sheet_state['styled_cells'].append((data_row, 0, entry.get('Field'), 'text_left_middle'))
+            sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'text_left_middle'))
             if entry.get('Field') in {'Shape note', 'Recommended action', 'Use caution'} and entry.get('Value'):
                 sheet_state['note_rows'].append((data_row, entry.get('Value'), GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18)))
     row += SECTION_GAP
@@ -685,9 +692,12 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             for header in ('mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability'):
                 if header in header_lookup:
                     sheet_state['numeric_cells'].append((data_row, header_lookup[header], entry.get(header), 'num'))
+            for header in ('Group', 'n', 'Capability type', 'Flags'):
+                if header in header_lookup:
+                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center'))
             for header in ('caution', 'best fit model', 'fit quality'):
                 if header in header_lookup and entry.get(header):
-                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'wrap'))
+                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center_wrap'))
             if entry.get('caution'):
                 sheet_state['note_rows'].append((data_row, entry.get('caution'), GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup['caution'], 24)))
             sheet_state['wrapped_data_rows'].append((
@@ -749,10 +759,12 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
                 sheet_state['numeric_cells'].append((data_row, header_lookup['effect size'], entry.get('effect size'), 'num'))
             if 'Delta mean' in header_lookup:
                 sheet_state['numeric_cells'].append((data_row, header_lookup['Delta mean'], entry.get('Delta mean'), 'num'))
+            for header in ('Group A', 'Group B', 'difference'):
+                if header in header_lookup:
+                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center'))
             for header in ('test', 'caution', 'Takeaway', 'Suggested action', 'Flags', 'Why this test'):
                 if header in header_lookup and entry.get(header):
-                    fmt_key = 'note' if header == 'caution' else 'wrap'
-                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), fmt_key))
+                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center_wrap'))
             if entry.get('caution'):
                 sheet_state['note_rows'].append((data_row, entry.get('caution'), GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup['caution'], 22)))
             sheet_state['wrapped_data_rows'].append(

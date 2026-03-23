@@ -163,8 +163,6 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         values = [value for _, _, value in worksheet.writes]
         self.assertIn('Group Analysis', values)
         self.assertIn('User manual', values)
-        self.assertIn('Markdown guide (GitHub)', values)
-        self.assertIn('Printable companion (local PDF)', values)
         self.assertIn('Open Markdown manual', values)
         self.assertIn('Open PDF manual', values)
         self.assertIn('Metric index', values)
@@ -206,10 +204,17 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertEqual(worksheet.columns[-1][:3], (14, 14, 18))
         self.assertTrue(any(url[2] == GROUP_ANALYSIS_MANUAL_GITHUB_URL and url[3] == 'Open Markdown manual' for url in worksheet.urls))
         self.assertTrue(any(url[2] == GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL and url[3] == 'Open PDF manual' for url in worksheet.urls))
-        markdown_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Markdown guide (GitHub)')
-        pdf_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Printable companion (local PDF)')
-        self.assertTrue(worksheet.write_formats[(markdown_row, 0)].get('props', {}).get('text_wrap'))
-        self.assertTrue(worksheet.write_formats[(pdf_row, 0)].get('props', {}).get('text_wrap'))
+        self.assertFalse(any(col == 0 and value == 'Markdown guide (GitHub)' for row, col, value in worksheet.writes))
+        self.assertFalse(any(col == 0 and value == 'Printable companion (local PDF)' for row, col, value in worksheet.writes))
+        summary_metric_count_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Metric count')
+        self.assertEqual(
+            worksheet.write_formats[(summary_metric_count_row, 1)].get('props', {}).get('align'),
+            'left',
+        )
+        self.assertEqual(
+            worksheet.write_formats[(summary_metric_count_row, 1)].get('props', {}).get('valign'),
+            'vcenter',
+        )
         index_header_row = next(row for row, col, value in worksheet.writes if col == 2 and value == 'Jump to section')
         index_header_height = max(height for row, height, *_ in worksheet.rows if row == index_header_row)
         self.assertGreaterEqual(index_header_height, 24)
@@ -231,12 +236,27 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertTrue(note_row_heights)
         self.assertGreaterEqual(note_row_heights[-1], 30)
         self.assertTrue(any(row == metric_row and height >= 28 for row, height, *_ in worksheet.rows))
+        metric_index_data_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'M1')
+        self.assertEqual(worksheet.write_formats[(metric_index_data_row, 0)].get('props', {}).get('align'), 'center')
+        self.assertEqual(worksheet.write_formats[(metric_index_data_row, 0)].get('props', {}).get('valign'), 'vcenter')
+        overview_value_row = next(
+            row for row, col, value in worksheet.writes
+            if col == 0 and value == 'Recommended action'
+        )
+        self.assertEqual(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('align'), 'left')
+        self.assertEqual(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('valign'), 'vcenter')
+        self.assertFalse(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('text_wrap'))
         desc_caution_row = next(row for row, col, value in worksheet.writes if col == 13 and value == 'caution')
         desc_caution_height = next(height for row, height, *_ in worksheet.rows if row == desc_caution_row)
         self.assertGreater(desc_caution_height, DEFAULT_SIMPLE_ROW_HEIGHT := 22)
+        desc_group_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'A')
+        self.assertEqual(worksheet.write_formats[(desc_group_row, 0)].get('props', {}).get('align'), 'center')
+        self.assertEqual(worksheet.write_formats[(desc_group_row, 0)].get('props', {}).get('valign'), 'vcenter')
         pairwise_data_row = next(row for row, col, value in worksheet.writes if col == 8 and value == 'These groups show a reliable difference after correction. The practical gap looks moderate.')
         pairwise_data_height = next(height for row, height, *_ in worksheet.rows if row == pairwise_data_row)
         self.assertGreater(pairwise_data_height, DEFAULT_SIMPLE_ROW_HEIGHT)
+        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 8)].get('props', {}).get('align'), 'center')
+        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 8)].get('props', {}).get('valign'), 'vcenter')
         self.assertGreaterEqual(len(worksheet.autofilters), 2)
         index_link_row = next(row for row, col, value in worksheet.writes if col == 2 and value == 'Go to metric')
         self.assertTrue(any(formula[0] == index_link_row and f'A{metric_row + 1}' in formula[2] for formula in worksheet.formulas))
