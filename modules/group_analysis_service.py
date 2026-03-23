@@ -22,7 +22,7 @@ import pandas as pd
 from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.export_grouping_utils import normalize_group_labels
-from modules.distribution_shape_analysis import compute_distribution_difference
+from modules.distribution_shape_analysis import compute_distribution_difference, resolve_distribution_fit_policy
 from modules.stats_utils import compute_capability_confidence_intervals, safe_process_capability
 
 _SKIP_REASON_MESSAGES = {
@@ -1244,6 +1244,168 @@ def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eli
     }
 
 
+def _partition_metric_analysis_inputs(metric_rows_df, *, metric_identity, effective_scope, reference_column, spec_columns, analysis_level):
+    reference_value = None
+    if effective_scope == 'multi_reference' and reference_column is not None and reference_column in metric_rows_df.columns:
+        reference_candidates = metric_rows_df[reference_column].dropna().astype(str).str.strip()
+        reference_value = reference_candidates.iloc[0] if not reference_candidates.empty else None
+
+    grouped_values = {
+        group_name: group_df['MEAS'].to_numpy(dtype=float)
+        for group_name, group_df in metric_rows_df.groupby('GROUP', sort=True)
+    }
+    populated_groups = [name for name, values in grouped_values.items() if np.isfinite(values).sum() > 0]
+    spec_status, spec_payload = classify_metric_spec_status(metric_rows_df, spec_columns)
+    policy = _resolve_analysis_policy(spec_status, analysis_level)
+    return {
+        'metric': metric_identity,
+        'reference': reference_value,
+        'grouped_values': grouped_values,
+        'populated_groups': populated_groups,
+        'spec_status': spec_status,
+        'spec_payload': spec_payload,
+        'analysis_policy': policy,
+    }
+
+
+def _build_metric_descriptive_stage(*, metric_partition):
+    grouped_values = metric_partition['grouped_values']
+    spec_payload = metric_partition['spec_payload']
+    policy = metric_partition['analysis_policy']
+    descriptive_stats = build_group_descriptive_rows(
+        grouped_values,
+        spec_payload=spec_payload,
+        allow_capability=policy['allow_capability'],
+        spec_status=metric_partition['spec_status'],
+    )
+    all_metric_values = np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
+    capability = (
+        compute_capability_payload(all_metric_values, spec_payload)
+        if policy['allow_capability']
+        else {
+            'cp': None,
+            'capability': None,
+            'capability_type': None,
+            'cpk': None,
+            'status': 'not_applicable',
+            'sigma': float(np.std(all_metric_values, ddof=1)) if all_metric_values.size > 1 else 0.0,
+            'mean': float(np.mean(all_metric_values)) if all_metric_values.size else None,
+        }
+    )
+    return {
+        'descriptive_stats': descriptive_stats,
+        'capability': capability,
+    }
+
+
+def _build_metric_pairwise_stage(*, metric_partition, alpha, correction_method):
+    policy = metric_partition['analysis_policy']
+    pairwise_rows = (
+        build_pairwise_rows(
+            metric_partition['metric'],
+            metric_partition['grouped_values'],
+            alpha=alpha,
+            correction_method=correction_method,
+            spec_status=metric_partition['spec_status'],
+        )
+        if policy['allow_pairwise']
+        else []
+    )
+    return {'pairwise_rows': pairwise_rows}
+
+
+def _build_metric_distribution_stage(*, metric_partition, alpha, correction_method, fit_cache, fit_policy):
+    return compute_distribution_difference(
+        metric_partition['metric'],
+        metric_partition['grouped_values'],
+        alpha=alpha,
+        correction_method=correction_method,
+        fit_cache=fit_cache,
+        fit_policy=fit_policy,
+    )
+
+
+def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_stage, distribution_stage, normalized_level):
+    descriptive_stats = descriptive_stage['descriptive_stats']
+    pairwise_rows = pairwise_stage['pairwise_rows']
+    distribution_omnibus = distribution_stage.get('omnibus_row')
+    profile_by_group = {row.get('Group'): row for row in distribution_stage.get('profile_rows', [])}
+    for desc_row in descriptive_stats:
+        group_profile = profile_by_group.get(desc_row.get('group')) or {}
+        desc_row['best_fit_model'] = group_profile.get('best fit model') or group_profile.get('Best fit model')
+        desc_row['fit_quality'] = group_profile.get('fit quality') or group_profile.get('Fit quality')
+        desc_row['distribution_shape_caution'] = group_profile.get('Warning / notes summary')
+
+    spec_status = metric_partition['spec_status']
+    spec_payload = metric_partition['spec_payload']
+    policy = metric_partition['analysis_policy']
+    metric_level_flags = _join_flags(_build_metric_level_flags((row.get('n', 0) for row in descriptive_stats), spec_status=spec_status))
+    comparability_summary = build_comparability_summary(spec_status, policy)
+    restriction_fields = _build_analysis_restriction_fields(spec_status, policy)
+    plot_eligibility = _build_metric_plot_eligibility(
+        grouped_values=metric_partition['grouped_values'],
+        analysis_level=normalized_level,
+        include_metric=policy.get('include_metric', True),
+    )
+    diagnostics_comment = build_diagnostics_comment(
+        include_metric=policy.get('include_metric', True),
+        allow_pairwise=policy.get('allow_pairwise', False),
+        allow_capability=policy.get('allow_capability', False),
+        spec_status=spec_status,
+        pairwise_rows_count=len(pairwise_rows),
+    )
+    histogram_meta = plot_eligibility.get('histogram') or {}
+    if normalized_level == 'standard' and not bool(histogram_meta.get('eligible')):
+        diagnostics_comment = (
+            f"{diagnostics_comment} Histogram omitted: {_plot_skip_reason_message(histogram_meta.get('skip_reason'))}."
+        )
+
+    metric_payload = {
+        'metric': metric_partition['metric'],
+        'reference': metric_partition['reference'],
+        'group_count': len(metric_partition['populated_groups']),
+        'descriptive_stats': descriptive_stats,
+        'pairwise_rows': pairwise_rows,
+        'distribution_difference': distribution_omnibus,
+        'distribution_pairwise_rows': distribution_stage.get('pairwise_rows', []),
+        'spec': spec_payload,
+        'spec_status': spec_status,
+        'spec_status_label': get_spec_status_label(spec_status),
+        'analysis_policy': policy,
+        'pairwise_allowed': restriction_fields['pairwise_allowed'],
+        'capability_allowed': restriction_fields['capability_allowed'],
+        'analysis_restriction_label': restriction_fields['analysis_restriction_label'],
+        'capability': descriptive_stage['capability'],
+        'comparability_summary': comparability_summary,
+        'plot_eligibility': plot_eligibility,
+        'chart_payload': _build_metric_chart_payload(
+            grouped_values=metric_partition['grouped_values'],
+            spec_payload=spec_payload,
+        ),
+        'diagnostics_comment': diagnostics_comment,
+        'metric_flags': metric_level_flags,
+        'metric_note': _distribution_metric_note(distribution_omnibus),
+        'recommended_action': _recommended_metric_action(
+            pairwise_rows=pairwise_rows,
+            distribution_difference=distribution_omnibus,
+            analysis_policy=policy,
+        ),
+    }
+    metric_payload['index_status'] = _metric_index_status(
+        pairwise_rows=pairwise_rows,
+        diagnostics_comment=diagnostics_comment,
+    )
+    if not policy.get('allow_pairwise') and metric_payload['index_status'] == 'NO DIFFERENCE':
+        metric_payload['index_status'] = 'USE CAUTION'
+    metric_payload['metric_takeaway'] = _metric_takeaway(
+        pairwise_rows=pairwise_rows,
+        diagnostics_comment=diagnostics_comment,
+        distribution_difference=distribution_omnibus,
+    )
+    metric_payload['insights'] = build_metric_insights(metric_payload)
+    return metric_payload
+
+
 def build_group_analysis_payload(
     grouped_df,
     *,
@@ -1253,6 +1415,7 @@ def build_group_analysis_payload(
     correction_method='holm',
     analysis_level='light',
     alias_db_path=None,
+    distribution_fit_policy=None,
 ):
     """Assemble metric-level Group Analysis payload for writer modules."""
     if not isinstance(grouped_df, pd.DataFrame):
@@ -1329,6 +1492,9 @@ def build_group_analysis_payload(
     if effective_scope == 'multi_reference' and reference_column is not None:
         grouping_columns.append(reference_column)
 
+    distribution_fit_policy = resolve_distribution_fit_policy(distribution_fit_policy)
+    distribution_fit_cache = {}
+
     for key_tuple, metric_rows_df in metric_frame.groupby(grouping_columns, dropna=False, sort=True):
         if not isinstance(key_tuple, tuple):
             key_tuple = (key_tuple,)
@@ -1336,138 +1502,44 @@ def build_group_analysis_payload(
         reference_value = key_tuple[1] if len(key_tuple) > 1 else None
         metric_identity = normalize_metric_identity(metric_name, reference_value, scope=effective_scope)
 
-        grouped_values = {
-            group_name: group_df['MEAS'].to_numpy(dtype=float)
-            for group_name, group_df in metric_rows_df.groupby('GROUP', sort=True)
-        }
-        populated_groups = [name for name, values in grouped_values.items() if np.isfinite(values).sum() > 0]
-        if len(populated_groups) < 2:
-            skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups', 'group_count': len(populated_groups)})
+        metric_partition = _partition_metric_analysis_inputs(
+            metric_rows_df,
+            metric_identity=metric_identity,
+            effective_scope=effective_scope,
+            reference_column=reference_column,
+            spec_columns=spec_columns,
+            analysis_level=analysis_level,
+        )
+        if len(metric_partition['populated_groups']) < 2:
+            skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups', 'group_count': len(metric_partition['populated_groups'])})
             continue
 
-        spec_status, spec_payload = classify_metric_spec_status(metric_rows_df, spec_columns)
-        policy = _resolve_analysis_policy(spec_status, analysis_level)
-        if not policy['include_metric']:
-            skipped_metrics.append({'metric': metric_identity, 'reason': spec_status.lower(), 'group_count': len(populated_groups)})
+        if not metric_partition['analysis_policy']['include_metric']:
+            skipped_metrics.append({'metric': metric_identity, 'reason': metric_partition['spec_status'].lower(), 'group_count': len(metric_partition['populated_groups'])})
             continue
 
-        descriptive_stats = build_group_descriptive_rows(
-            grouped_values,
-            spec_payload=spec_payload,
-            allow_capability=policy['allow_capability'],
-            spec_status=spec_status,
-        )
-        all_metric_values = np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
-        capability = (
-            compute_capability_payload(all_metric_values, spec_payload)
-            if policy['allow_capability']
-            else {
-                'cp': None,
-                'capability': None,
-                'capability_type': None,
-                'cpk': None,
-                'status': 'not_applicable',
-                'sigma': float(np.std(all_metric_values, ddof=1)) if all_metric_values.size > 1 else 0.0,
-                'mean': float(np.mean(all_metric_values)) if all_metric_values.size else None,
-            }
-        )
-        pairwise_rows = (
-            build_pairwise_rows(
-                metric_identity,
-                grouped_values,
-                alpha=alpha,
-                correction_method=correction_method,
-                spec_status=spec_status,
-            )
-            if policy['allow_pairwise']
-            else []
-        )
-
-        metric_level_flags = _join_flags(_build_metric_level_flags((row.get('n', 0) for row in descriptive_stats), spec_status=spec_status))
-
-        comparability_summary = build_comparability_summary(spec_status, policy)
-        restriction_fields = _build_analysis_restriction_fields(spec_status, policy)
-        plot_eligibility = _build_metric_plot_eligibility(
-            grouped_values=grouped_values,
-            analysis_level=normalized_level,
-            include_metric=policy.get('include_metric', True),
-        )
-
-        diagnostics_comment = build_diagnostics_comment(
-            include_metric=policy.get('include_metric', True),
-            allow_pairwise=policy.get('allow_pairwise', False),
-            allow_capability=policy.get('allow_capability', False),
-            spec_status=spec_status,
-            pairwise_rows_count=len(pairwise_rows),
-        )
-        histogram_meta = plot_eligibility.get('histogram') or {}
-        if normalized_level == 'standard' and not bool(histogram_meta.get('eligible')):
-            diagnostics_comment = (
-                f"{diagnostics_comment} Histogram omitted: {_plot_skip_reason_message(histogram_meta.get('skip_reason'))}."
-            )
-
-        distribution_analysis = compute_distribution_difference(
-            metric_identity,
-            grouped_values,
+        descriptive_stage = _build_metric_descriptive_stage(metric_partition=metric_partition)
+        pairwise_stage = _build_metric_pairwise_stage(
+            metric_partition=metric_partition,
             alpha=alpha,
             correction_method=correction_method,
         )
-        profile_by_group = {
-            row.get('Group'): row
-            for row in distribution_analysis.get('profile_rows', [])
-        }
-        for desc_row in descriptive_stats:
-            group_profile = profile_by_group.get(desc_row.get('group')) or {}
-            desc_row['best_fit_model'] = group_profile.get('best fit model') or group_profile.get('Best fit model')
-            desc_row['fit_quality'] = group_profile.get('fit quality') or group_profile.get('Fit quality')
-            desc_row['distribution_shape_caution'] = group_profile.get('Warning / notes summary')
-
-        distribution_omnibus = distribution_analysis.get('omnibus_row')
+        distribution_stage = _build_metric_distribution_stage(
+            metric_partition=metric_partition,
+            alpha=alpha,
+            correction_method=correction_method,
+            fit_cache=distribution_fit_cache,
+            fit_policy=distribution_fit_policy,
+        )
         metrics.append(
-            {
-                'metric': metric_identity,
-                'reference': reference_value,
-                'group_count': len(populated_groups),
-                'descriptive_stats': descriptive_stats,
-                'pairwise_rows': pairwise_rows,
-                'distribution_difference': distribution_omnibus,
-                'distribution_pairwise_rows': distribution_analysis.get('pairwise_rows', []),
-                'spec': spec_payload,
-                'spec_status': spec_status,
-                'spec_status_label': get_spec_status_label(spec_status),
-                'analysis_policy': policy,
-                'pairwise_allowed': restriction_fields['pairwise_allowed'],
-                'capability_allowed': restriction_fields['capability_allowed'],
-                'analysis_restriction_label': restriction_fields['analysis_restriction_label'],
-                'capability': capability,
-                'comparability_summary': comparability_summary,
-                'plot_eligibility': plot_eligibility,
-                'chart_payload': _build_metric_chart_payload(
-                    grouped_values=grouped_values,
-                    spec_payload=spec_payload,
-                ),
-                'diagnostics_comment': diagnostics_comment,
-                'metric_flags': metric_level_flags,
-                'metric_note': _distribution_metric_note(distribution_omnibus),
-                'recommended_action': _recommended_metric_action(
-                    pairwise_rows=pairwise_rows,
-                    distribution_difference=distribution_omnibus,
-                    analysis_policy=policy,
-                ),
-            }
+            _assemble_metric_payload(
+                metric_partition=metric_partition,
+                descriptive_stage=descriptive_stage,
+                pairwise_stage=pairwise_stage,
+                distribution_stage=distribution_stage,
+                normalized_level=normalized_level,
+            )
         )
-        metrics[-1]['index_status'] = _metric_index_status(
-            pairwise_rows=pairwise_rows,
-            diagnostics_comment=diagnostics_comment,
-        )
-        if not policy.get('allow_pairwise') and metrics[-1]['index_status'] == 'NO DIFFERENCE':
-            metrics[-1]['index_status'] = 'USE CAUTION'
-        metrics[-1]['metric_takeaway'] = _metric_takeaway(
-            pairwise_rows=pairwise_rows,
-            diagnostics_comment=diagnostics_comment,
-            distribution_difference=distribution_omnibus,
-        )
-        metrics[-1]['insights'] = build_metric_insights(metrics[-1])
 
     diagnostics = build_group_analysis_diagnostics_payload(
         effective_scope=effective_scope,

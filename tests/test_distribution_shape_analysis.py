@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from modules.distribution_shape_analysis import compute_distribution_difference
+from modules.distribution_shape_analysis import build_distribution_profile_rows, compute_distribution_difference
 
 
 class TestDistributionShapeAnalysis(unittest.TestCase):
@@ -56,6 +56,37 @@ class TestDistributionShapeAnalysis(unittest.TestCase):
         pair = result['pairwise_rows'][0]
         self.assertEqual(pair['verdict'], 'descriptive only')
         self.assertIn('insufficient data', pair['comment'])
+
+
+    def test_build_distribution_profile_rows_accepts_precleaned_arrays(self):
+        grouped_values = {
+            'A': np.array([1.0, 2.0, 3.0], dtype=float),
+            'B': np.array([4.0, 5.0, 6.0], dtype=float),
+        }
+
+        baseline = build_distribution_profile_rows('M-clean', grouped_values)
+        precleaned = build_distribution_profile_rows('M-clean', grouped_values, values_are_clean=True)
+
+        self.assertEqual(baseline, precleaned)
+
+    def test_skip_large_export_policy_preserves_pairwise_nonparametric_comparison(self):
+        grouped_values = {
+            'A': np.array([0.0] * 40 + [1.0] * 40),
+            'B': np.array([0.5] * 80),
+        }
+
+        result = compute_distribution_difference(
+            'M-policy',
+            grouped_values,
+            fit_policy={'mode': 'skip_large_exports', 'max_fit_samples_per_metric': 100},
+        )
+
+        profile_row = result['profile_rows'][0]
+        pairwise_row = result['pairwise_rows'][0]
+        self.assertEqual(profile_row['_fit_status'], 'skipped_policy')
+        self.assertEqual(profile_row['best fit model'], 'Skipped by policy')
+        self.assertIsNotNone(pairwise_row['raw p-value'])
+        self.assertIsNotNone(pairwise_row['Wasserstein distance'])
 
     def test_omnibus_anderson_ksamp_uses_supported_keyword_and_suppresses_known_user_warnings(self):
         grouped_values = {

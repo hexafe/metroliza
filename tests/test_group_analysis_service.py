@@ -762,6 +762,61 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIn('Strongest pairwise location signal', insights[1])
         self.assertEqual(insights[2], 'Distribution shape: Clear shape mismatch across groups.')
 
+    def test_build_group_analysis_payload_cache_hits_preserve_payload_parity(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1'] * 8,
+                'HEADER - AX': ['DIA - X'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [10.0, 10.1, 10.2, 10.3, 9.7, 9.8, 9.9, 10.0],
+                'LSL': [9.0] * 8,
+                'NOMINAL': [10.0] * 8,
+                'USL': [11.0] * 8,
+            }
+        )
+
+        fit_result = {
+            'status': 'ok',
+            'fit_quality': {'label': 'good'},
+            'gof_metrics': {'ad_pvalue': 0.2, 'ks_pvalue': 0.3, 'is_acceptable': True},
+            'selected_model': {'display_name': 'Normal'},
+            'inferred_support_mode': 'unbounded',
+            'notes': ['Use fit quality as guidance only.'],
+        }
+
+        with patch('modules.distribution_shape_analysis.fit_measurement_distribution', return_value=fit_result) as mock_fit:
+            first = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+            second = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+
+        self.assertEqual(first, second)
+        self.assertEqual(mock_fit.call_count, 4)
+
+    def test_build_group_analysis_payload_can_skip_distribution_fits_for_large_exports(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1'] * 120,
+                'HEADER - AX': ['DIA - X'] * 120,
+                'GROUP': ['A'] * 60 + ['B'] * 60,
+                'MEAS': [10.0 + (i / 100.0) for i in range(60)] + [9.4 + (i / 100.0) for i in range(60)],
+                'LSL': [9.0] * 120,
+                'NOMINAL': [10.0] * 120,
+                'USL': [11.0] * 120,
+            }
+        )
+
+        payload = build_group_analysis_payload(
+            grouped_df,
+            requested_scope='auto',
+            analysis_level='light',
+            distribution_fit_policy={'mode': 'skip_large_exports', 'max_fit_samples_per_metric': 100},
+        )
+
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['descriptive_stats'][0]['best_fit_model'], 'Skipped by policy')
+        self.assertEqual(metric['descriptive_stats'][0]['fit_quality'], 'not run')
+        self.assertTrue(metric['distribution_pairwise_rows'])
+        self.assertIsNotNone(metric['distribution_pairwise_rows'][0]['Wasserstein distance'])
+
 
 if __name__ == '__main__':
     unittest.main()
