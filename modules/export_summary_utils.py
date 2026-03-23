@@ -11,7 +11,6 @@ from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from modules.distribution_fit_service import (
     build_fit_curve_payload,
     compute_estimated_tail_metrics as compute_fit_tail_metrics,
-    resolve_density_curve_sampling,
 )
 
 from modules.stats_utils import compute_capability_confidence_intervals, is_one_sided_geometric_tolerance, safe_process_capability
