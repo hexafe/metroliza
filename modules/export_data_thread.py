@@ -64,9 +64,6 @@ from modules.export_summary_utils import (
     build_sparse_unique_labels as _build_sparse_unique_labels,
     build_summary_panel_labels as _build_summary_panel_labels,
     build_trend_plot_payload as _build_trend_plot_payload,
-    compute_measurement_summary,
-    compute_normality_status,
-    compute_estimated_tail_metrics,
     resolve_histogram_bin_count,
     normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
@@ -177,15 +174,13 @@ from modules.export_sheet_writer import (
     build_spec_limit_anchor_rows as _build_spec_limit_anchor_rows,
     create_measurement_formats,
     write_measurement_block,
-    build_summary_panel_write_plan,
 )
-from modules.stats_utils import is_one_sided_geometric_tolerance, safe_process_capability
+from modules.stats_utils import is_one_sided_geometric_tolerance
 # Canonical violin payload builder lives in `modules/chart_render_service.py`.
 from modules.chart_render_service import (
     BoundedWorkerPool,
     build_violin_payload_vectorized,
     resolve_chart_sampling_policy,
-    sample_frame_for_chart,
     deterministic_downsample_frame,
 )
 from modules.distribution_fit_service import fit_measurement_distribution
