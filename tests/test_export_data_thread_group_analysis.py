@@ -385,7 +385,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Markdown guide (GitHub)', analysis_values)
             self.assertIn('Printable companion (local PDF)', analysis_values)
             self.assertIn('Open Markdown manual', analysis_values)
-            self.assertIn('Open local PDF companion', analysis_values)
+            self.assertIn('Open PDF manual', analysis_values)
             self.assertIn('Metric index', analysis_values)
             self.assertIn('Metric overview', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
