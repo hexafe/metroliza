@@ -4572,6 +4572,7 @@ class ExportDataThread(QThread):
                             nom=nom,
                             point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
                             include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
+                            memoization_cache=self._distribution_fit_memo,
                         )
 
                     histogram_summary_payload = _finalize_histogram_summary_payload_compute(
