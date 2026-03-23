@@ -42,3 +42,64 @@ def test_native_mode_raises_when_native_is_unavailable(monkeypatch):
     except Exception:
         return
     raise AssertionError("native backend mode must raise when native parser is unavailable")
+
+
+def test_parse_blocks_with_backend_and_telemetry_reports_python_backend(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CMM_PARSER_BACKEND", "python")
+    parser = importlib.reload(cmm_native_parser)
+
+    result = parser.parse_blocks_with_backend_and_telemetry(_sample_lines(), use_native=False)
+
+    assert result.backend == "python"
+    assert result.blocks == parser.parse_raw_lines_to_blocks(_sample_lines())
+
+
+def test_parse_blocks_with_backend_and_telemetry_reports_native_backend(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CMM_PARSER_BACKEND", "native")
+    parser = importlib.reload(cmm_native_parser)
+
+    if parser._native_parse_blocks is None:
+        try:
+            parser.parse_blocks_with_backend_and_telemetry(_sample_lines())
+        except RuntimeError:
+            return
+        raise AssertionError("native backend mode must raise when native parser is unavailable")
+
+    result = parser.parse_blocks_with_backend_and_telemetry(
+        [
+            "#TP MULTILINE",
+            "DIM",
+            "TP",
+            "MMC",
+            "+TOL",
+            "0.4",
+            "BONUS",
+            "0.1",
+            "MEAS",
+            "0.25",
+            "DEV",
+            "0.25",
+            "OUTTOL",
+            "0",
+        ]
+    )
+
+    assert result.backend == "native"
+    assert result.blocks == parser.parse_raw_lines_to_blocks(
+        [
+            "#TP MULTILINE",
+            "DIM",
+            "TP",
+            "MMC",
+            "+TOL",
+            "0.4",
+            "BONUS",
+            "0.1",
+            "MEAS",
+            "0.25",
+            "DEV",
+            "0.25",
+            "OUTTOL",
+            "0",
+        ]
+    )
