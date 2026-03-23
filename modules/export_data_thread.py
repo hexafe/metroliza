@@ -64,9 +64,6 @@ from modules.export_summary_utils import (
     build_sparse_unique_labels as _build_sparse_unique_labels,
     build_summary_panel_labels as _build_summary_panel_labels,
     build_trend_plot_payload as _build_trend_plot_payload,
-    compute_measurement_summary,
-    compute_normality_status,
-    compute_estimated_tail_metrics,
     resolve_histogram_bin_count,
     normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
@@ -150,6 +147,16 @@ from modules.export_summary_composition_service import (
     classify_nok_severity as _classify_nok_severity,
     classify_normality_status as _classify_normality_status,
 )
+from modules.export_summary_sheet_compute import (
+    append_group_sample_counts as _append_group_sample_counts_compute,
+    build_summary_worksheet_plan as _build_summary_worksheet_plan_compute,
+    compute_group_sample_counts as _compute_group_sample_counts_compute,
+    finalize_histogram_summary_payload as _finalize_histogram_summary_payload_compute,
+    normalize_summary_group_frame as _normalize_summary_group_frame_compute,
+    prepare_summary_chart_payloads as _prepare_summary_chart_payloads_compute,
+    resolve_sampling_context as _resolve_sampling_context_compute,
+    retrieve_summary_statistics as _retrieve_summary_statistics_compute,
+)
 from modules.export_group_analysis_annotation_service import (
     build_violin_group_annotation_payload as _build_violin_group_annotation_payload,
 )
@@ -167,15 +174,13 @@ from modules.export_sheet_writer import (
     build_spec_limit_anchor_rows as _build_spec_limit_anchor_rows,
     create_measurement_formats,
     write_measurement_block,
-    build_summary_panel_write_plan,
 )
-from modules.stats_utils import is_one_sided_geometric_tolerance, safe_process_capability
+from modules.stats_utils import is_one_sided_geometric_tolerance
 # Canonical violin payload builder lives in `modules/chart_render_service.py`.
 from modules.chart_render_service import (
     BoundedWorkerPool,
     build_violin_payload_vectorized,
     resolve_chart_sampling_policy,
-    sample_frame_for_chart,
     deterministic_downsample_frame,
 )
 from modules.distribution_fit_service import fit_measurement_distribution
@@ -2925,9 +2930,13 @@ class ExportDataThread(QThread):
         self._exported_sheet_name_set = set()
         self._last_emitted_progress = -1
         self._stage_timings = {
+            'summary_stat_retrieval': 0.0,
             'transform_grouping': 0.0,
-            'chart_rendering': 0.0,
+            'sampling_plan_resolution': 0.0,
+            'chart_payload_preparation': 0.0,
+            'worksheet_write_planning': 0.0,
             'worksheet_writes': 0.0,
+            'chart_rendering': 0.0,
         }
         self._optimization_toggles = {
             'chart_density_mode': 'full',
@@ -3162,30 +3171,11 @@ class ExportDataThread(QThread):
 
     @staticmethod
     def _compute_group_sample_counts(sampled_group, grouping_key):
-        if sampled_group is None or sampled_group.empty:
-            return {}
-        if grouping_key not in sampled_group.columns or 'MEAS' not in sampled_group.columns:
-            return {}
-
-        count_frame = sampled_group[[grouping_key, 'MEAS']].dropna(subset=[grouping_key, 'MEAS']).copy()
-        if count_frame.empty:
-            return {}
-
-        count_frame[grouping_key] = count_frame[grouping_key].astype(str)
-        grouped_counts = count_frame.groupby(grouping_key, sort=False)['MEAS'].size()
-        return {str(label): int(count) for label, count in grouped_counts.items()}
+        return _compute_group_sample_counts_compute(sampled_group, grouping_key)
 
     @staticmethod
     def _append_group_sample_counts(labels, sample_counts):
-        if not labels:
-            return []
-
-        formatted_labels = []
-        for label in labels:
-            normalized_label = str(label)
-            count = int(sample_counts.get(normalized_label, 0))
-            formatted_labels.append(f"{normalized_label} (n={count})")
-        return formatted_labels
+        return _append_group_sample_counts_compute(labels, sample_counts)
 
     @staticmethod
     def _downsample_frame(df, sample_limit):
@@ -3876,12 +3866,13 @@ class ExportDataThread(QThread):
                         chart_insert_elapsed,
                         header_count,
                     )
+                    dominant_stage = max(self._stage_timings, key=self._stage_timings.get)
                     logger.debug(
-                        "Export stage totals [ref=%s]: transform=%.3fs chart=%.3fs worksheet=%.3fs toggles=%s",
+                        "Export stage totals [ref=%s]: timings=%s dominant_stage=%s dominant_elapsed=%.3fs toggles=%s",
                         ref,
-                        self._stage_timings['transform_grouping'],
-                        self._stage_timings['chart_rendering'],
-                        self._stage_timings['worksheet_writes'],
+                        self._stage_timings,
+                        dominant_stage,
+                        self._stage_timings.get(dominant_stage, 0.0),
                         self._optimization_toggles,
                     )
                     if self._stage_timings['chart_rendering'] > (self._stage_timings['transform_grouping'] * 2) and self._stage_timings['chart_rendering'] > self._stage_timings['worksheet_writes']:
@@ -4231,18 +4222,18 @@ class ExportDataThread(QThread):
         try:
             if self._check_canceled():
                 return
-            transform_start = time.perf_counter()
+
             header_group = self._ensure_sample_number_column(header_group)
+
+            summary_start = time.perf_counter()
             limits = resolve_nominal_and_limits(header_group)
             nom = limits['nom']
             USL = limits['usl']
             LSL = limits['lsl']
-
             reference_value = header_group['REFERENCE'].iloc[0] if 'REFERENCE' in header_group.columns and not header_group.empty else None
             header_value = header_group['HEADER'].iloc[0] if 'HEADER' in header_group.columns and not header_group.empty else None
             axis_value = header_group['AX'].iloc[0] if 'AX' in header_group.columns and not header_group.empty else None
-
-            summary_stats = None
+            sql_summary = None
             if reference_value is not None and header_value is not None and axis_value is not None:
                 sql_summary = fetch_sql_measurement_summary(
                     self.db_file,
@@ -4254,95 +4245,47 @@ class ExportDataThread(QThread):
                     lsl=LSL,
                     connection=self._db_connection,
                 )
-                if sql_summary is not None:
-                    sample_size = int(sql_summary.get('sample_size') or 0)
-                    average_raw = sql_summary.get('average')
-                    minimum_raw = sql_summary.get('minimum')
-                    maximum_raw = sql_summary.get('maximum')
-                    sigma_raw = sql_summary.get('sigma')
-                    nok_count = int(sql_summary.get('nok_count') or 0)
-
-                    has_complete_sql_summary = (
-                        sample_size > 0
-                        and average_raw is not None
-                        and minimum_raw is not None
-                        and maximum_raw is not None
-                    )
-                    if has_complete_sql_summary:
-                        average = float(average_raw)
-                        sigma = float(sigma_raw or 0.0)
-                        cp, cpk = safe_process_capability(nom, USL, LSL, sigma, average)
-                        one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, LSL))
-                        normality = compute_normality_status(
-                            header_group['MEAS'],
-                            one_sided=one_sided_mode,
-                            location_bound=LSL,
-                        )
-                        summary_stats = {
-                            'minimum': float(minimum_raw),
-                            'maximum': float(maximum_raw),
-                            'sigma': sigma,
-                            'average': average,
-                            'median': float(header_group['MEAS'].median()),
-                            'cp': cp,
-                            'cpk': cpk,
-                            'sample_size': sample_size,
-                            'nok_count': nok_count,
-                            'nok_pct': (nok_count / sample_size),
-                            'observed_nok_count': nok_count,
-                            'observed_nok_pct': (nok_count / sample_size),
-                            'estimated_nok_pct': None,
-                            'estimated_nok_ppm': None,
-                            'estimated_yield_pct': None,
-                            'normality_status': normality['status'],
-                            'normality_text': normality['text'],
-                            'normality_test_name': normality.get('test_name', 'Shapiro'),
-                            'normality_p_value': normality.get('p_value'),
-                            'usl': USL,
-                        }
-
-            if summary_stats is None:
-                summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
-            summary_stats.setdefault('normality_test_name', 'Shapiro')
-            summary_stats.setdefault('normality_p_value', None)
-            summary_stats.setdefault('observed_nok_count', summary_stats.get('nok_count', 0))
-            summary_stats.setdefault('observed_nok_pct', summary_stats.get('nok_pct', 0))
-            summary_stats.setdefault('estimated_nok_pct', None)
-            summary_stats.setdefault('estimated_nok_ppm', None)
-            summary_stats.setdefault('estimated_yield_pct', None)
-            meas_series = pd.to_numeric(header_group.get('MEAS'), errors='coerce')
-            if LSL is not None:
-                summary_stats.setdefault('observed_nok_below_lsl_count', int((meas_series < LSL).sum()))
-            if USL is not None:
-                summary_stats.setdefault('observed_nok_above_usl_count', int((meas_series > USL).sum()))
-            summary_stats['usl'] = USL
+            summary_stats = _retrieve_summary_statistics_compute(
+                header_group,
+                sql_summary=sql_summary,
+                nom=nom,
+                usl=USL,
+                lsl=LSL,
+            )
             average = summary_stats['average']
-            histogram_table_payload = build_histogram_table_data(summary_stats)
-            summary_table_composition = build_summary_table_composition(summary_stats, histogram_table_payload)
-            capability_badge = summary_table_composition['capability_badge']
-            histogram_row_badges = summary_table_composition['histogram_row_badges']
-            panel_subtitle = summary_table_composition['panel_subtitle']
+            self._record_stage_timing('summary_stat_retrieval', time.perf_counter() - summary_start)
 
+            grouping_start = time.perf_counter()
             grouping_df = self.prepared_grouping_df
             header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
-            sampling_policy = resolve_chart_sampling_policy(density_mode=self._optimization_toggles['chart_density_mode'])
-            sampled_distribution_group = sample_frame_for_chart(header_group, 'distribution', sampling_policy)
-            sampled_iqr_group = sample_frame_for_chart(header_group, 'iqr', sampling_policy)
-            sampled_histogram_group = sample_frame_for_chart(header_group, 'histogram', sampling_policy)
-            sampled_trend_group = sample_frame_for_chart(header_group, 'trend', sampling_policy)
-            self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
-
             distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
-            scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
+            scatter_key = distribution_key
+            normalized_group = _normalize_summary_group_frame_compute(header_group, grouping_key=distribution_key)
+            self._record_stage_timing('transform_grouping', time.perf_counter() - grouping_start)
 
-            chart_mp_enabled = self._chart_executor is not None and len(header_group) >= 2500
+            sampling_start = time.perf_counter()
+            sampling_policy = resolve_chart_sampling_policy(density_mode=self._optimization_toggles['chart_density_mode'])
+            sampling_context = _resolve_sampling_context_compute(
+                normalized_group,
+                grouping_applied=grouping_applied,
+                sampling_policy=sampling_policy,
+                violin_plot_min_samplesize=self.violin_plot_min_samplesize,
+            )
+            sampled_distribution_group = sampling_context['sampled_frames']['distribution']
+            sampled_iqr_group = sampling_context['sampled_frames']['iqr']
+            sampled_histogram_group = sampling_context['sampled_frames']['histogram']
+            sampled_trend_group = sampling_context['sampled_frames']['trend']
+            self._record_stage_timing('sampling_plan_resolution', time.perf_counter() - sampling_start)
+
+            chart_prep_start = time.perf_counter()
+            chart_mp_enabled = self._chart_executor is not None and len(normalized_group) >= 2500
             precomputed_distribution_fit = None
-            precomputed_trend_payload = None
+            precomputed_trend_payload = sampling_context['trend_payload']['payload']
             if chart_mp_enabled:
                 try:
                     distribution_fit_future = self._chart_executor.submit(
                         fit_measurement_distribution,
-                        sampled_histogram_group['MEAS'],
+                        sampling_context['histogram_payload']['measurements'],
                         lsl=LSL,
                         usl=USL,
                         nom=nom,
@@ -4359,7 +4302,12 @@ class ExportDataThread(QThread):
                     precomputed_trend_payload = trend_future.result()
                 except Exception:
                     precomputed_distribution_fit = None
-                    precomputed_trend_payload = None
+
+            distribution_labels = sampling_context['distribution_payload']['labels']
+            distribution_values = sampling_context['distribution_payload']['values']
+            can_render_violin = sampling_context['distribution_payload']['can_render_violin']
+            iqr_labels = sampling_context['iqr_payload']['labels']
+            iqr_values = sampling_context['iqr_payload']['values']
 
             prep_executor = self._summary_prep_executor
             if prep_executor is not None:
@@ -4378,52 +4326,45 @@ class ExportDataThread(QThread):
                     )
                     distribution_labels, distribution_values, can_render_violin = distribution_future.result()
                     iqr_labels, iqr_values, _ = iqr_future.result()
+                    sampling_context['distribution_payload'] = {
+                        'labels': distribution_labels,
+                        'values': distribution_values,
+                        'can_render_violin': can_render_violin,
+                    }
+                    sampling_context['iqr_payload'] = {
+                        'labels': iqr_labels,
+                        'values': iqr_values,
+                    }
                 except Exception:
                     logger.debug(
                         "Summary prep executor failed; falling back to in-process payload generation.",
                         exc_info=True,
                     )
-                    distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
-                        sampled_distribution_group,
-                        distribution_key,
-                        self.violin_plot_min_samplesize,
-                    )
-                    iqr_labels, iqr_values, _ = build_violin_payload_vectorized(
-                        sampled_iqr_group,
-                        distribution_key,
-                        self.violin_plot_min_samplesize,
-                    )
-            else:
-                distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
-                    sampled_distribution_group,
-                    distribution_key,
-                    self.violin_plot_min_samplesize,
-                )
-                iqr_labels, iqr_values, _ = build_violin_payload_vectorized(
-                    sampled_iqr_group,
-                    distribution_key,
-                    self.violin_plot_min_samplesize,
-                )
 
-            if grouping_applied:
-                distribution_counts = self._compute_group_sample_counts(sampled_distribution_group, distribution_key)
-                iqr_counts = self._compute_group_sample_counts(sampled_iqr_group, distribution_key)
-                distribution_labels = self._append_group_sample_counts(distribution_labels, distribution_counts)
-                iqr_labels = self._append_group_sample_counts(iqr_labels, iqr_counts)
-
-            distribution_labels = build_summary_panel_labels(
-                distribution_labels,
-                grouping_active=grouping_applied,
+            chart_payloads = _prepare_summary_chart_payloads_compute(
+                header=header,
+                grouping_applied=grouping_applied,
+                sampling_context=sampling_context,
+                summary_stats=summary_stats,
             )
-            iqr_labels = build_summary_panel_labels(
-                iqr_labels,
-                grouping_active=grouping_applied,
-            )
+            histogram_table_payload = chart_payloads['histogram']['histogram_table_payload']
+            summary_table_composition = chart_payloads['composition']
+            capability_badge = summary_table_composition['capability_badge']
+            histogram_row_badges = summary_table_composition['histogram_row_badges']
+            panel_subtitle = summary_table_composition['panel_subtitle']
+            distribution_labels = chart_payloads['distribution']['labels']
+            distribution_values = chart_payloads['distribution']['values']
+            can_render_violin = chart_payloads['distribution']['can_render_violin']
+            iqr_labels = chart_payloads['iqr']['labels']
+            iqr_values = chart_payloads['iqr']['values']
+            trend_payload = precomputed_trend_payload or chart_payloads['trend']
+            self._record_stage_timing('chart_payload_preparation', time.perf_counter() - chart_prep_start)
 
             label_positions = None
             x_values = None
             y_values = None
             distribution_x_axis_label = 'Group' if grouping_applied else 'Sample #'
+            distribution_title = chart_payloads['distribution']['title']
             if not can_render_violin:
                 x_values, y_values, distribution_labels = self._build_grouped_summary_scatter_payload(
                     sampled_distribution_group,
@@ -4432,21 +4373,21 @@ class ExportDataThread(QThread):
                 )
                 label_positions = list(x_values)
 
-            distribution_title = header
-            if not can_render_violin:
-                distribution_title = f"{header} (means)"
-
-            summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
-            annotation_strategy = resolve_summary_annotation_strategy(x_point_count=summary_point_count)
+            annotation_strategy = chart_payloads['annotation_strategy']
             force_sparse_x_labels = annotation_strategy['label_mode'] == 'sparse'
             use_dynamic_annotation_offsets = annotation_strategy['annotation_mode'] == 'dynamic'
             show_violin_annotation_legend = annotation_strategy['show_violin_legend']
 
-            summary_anchors = build_summary_image_anchor_plan(col)
-            panel_plan = build_summary_panel_write_plan(summary_anchors, header)
-            header_cell = panel_plan['header_cell']
-            default_image_slots = panel_plan['image_slots']
+            write_plan_start = time.perf_counter()
+            worksheet_plan = _build_summary_worksheet_plan_compute(
+                header=header,
+                col=col,
+                panel_subtitle=panel_subtitle,
+            )
+            header_cell = worksheet_plan['header_cell']
+            default_image_slots = worksheet_plan['image_slots']
             distribution_overflow_cols = 0
+            self._record_stage_timing('worksheet_write_planning', time.perf_counter() - write_plan_start)
 
             def _reserve_summary_image_slot(chart_name, fig):
                 nonlocal distribution_overflow_cols
@@ -4469,7 +4410,7 @@ class ExportDataThread(QThread):
 
             write_start = time.perf_counter()
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
-            summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, panel_subtitle)
+            summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, worksheet_plan['subtitle_value'])
             self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
             if self._summary_chart_required('distribution'):
@@ -4599,7 +4540,7 @@ class ExportDataThread(QThread):
                     distribution_fit_result = precomputed_distribution_fit
                     if distribution_fit_result is None:
                         distribution_fit_result = fit_measurement_distribution(
-                            sampled_histogram_group['MEAS'],
+                            sampling_context['histogram_payload']['measurements'],
                             lsl=LSL,
                             usl=USL,
                             nom=nom,
@@ -4607,8 +4548,17 @@ class ExportDataThread(QThread):
                             include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
                         )
 
-                    summary_stats.update(compute_estimated_tail_metrics(distribution_fit_result, lsl=LSL, usl=USL))
-                    histogram_table_payload = build_histogram_table_data(summary_stats)
+                    histogram_summary_payload = _finalize_histogram_summary_payload_compute(
+                        summary_stats,
+                        distribution_fit_result,
+                        lsl=LSL,
+                        usl=USL,
+                    )
+                    summary_stats = histogram_summary_payload['summary_stats']
+                    histogram_table_payload = histogram_summary_payload['histogram_table_payload']
+                    summary_table_composition = histogram_summary_payload['summary_table_composition']
+                    histogram_row_badges = summary_table_composition['histogram_row_badges']
+                    capability_badge = summary_table_composition['capability_badge']
                     histogram_table_payload = _apply_non_normal_cpk_reference_label(
                         histogram_table_payload,
                         distribution_fit_result,
@@ -4670,7 +4620,6 @@ class ExportDataThread(QThread):
                         right_table_rect['height'],
                     ])
                     right_table_ax.set_axis_off()
-
 
                     histogram_render_meta = render_histogram(
                         plot_ax,
@@ -4871,11 +4820,6 @@ class ExportDataThread(QThread):
                     apply_summary_plot_theme()
 
                     chart_start = time.perf_counter()
-                    trend_payload = precomputed_trend_payload or build_trend_plot_payload(
-                        sampled_trend_group,
-                        grouping_active=grouping_applied,
-                        label_column=distribution_key,
-                    )
                     data_x = trend_payload['x']
                     data_y = trend_payload['y']
                     unique_labels = trend_payload['labels']
