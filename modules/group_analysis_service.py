@@ -346,7 +346,6 @@ def classify_metric_spec_status(metric_rows_df, spec_columns):
 def _resolve_analysis_policy(spec_status, analysis_level):
     """Resolve level-aware comparability behavior for a metric."""
     status = _normalize_spec_status_key(spec_status)
-    normalized_level = str(analysis_level or 'light').strip().lower()
     shared_policy = {
         'EXACT_MATCH': {
             'include_metric': True,

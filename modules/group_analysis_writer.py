@@ -11,10 +11,10 @@ DEFAULT_PLOT_ROW_SPAN = 16
 DEFAULT_ROW_HEIGHT = 22
 DEFAULT_LINE_HEIGHT = 14
 GROUP_ANALYSIS_COLUMN_WIDTHS = {
-    0: 22,
+    0: 18,
     1: 18,
-    2: 18,
-    3: 28,
+    2: 16,
+    3: 12,
     4: 18,
     5: 12,
     6: 15,
@@ -476,7 +476,7 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
         sheet_state['styled_cells'].append((section_row, 0, 'Metric index', 'section'))
 
     header_row = row
-    headers = ['Metric', 'Status', 'Spec status', 'Analysis mode / restrictions', 'Jump to section']
+    headers = ['Metric', 'Status', 'Jump to section', 'Spec status', 'Analysis mode / restrictions']
     for col, header in enumerate(headers):
         worksheet.write(row, col, header)
         if sheet_state is not None:
@@ -486,8 +486,8 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
         sheet_state['wrapped_data_rows'].append((
             header_row,
             [
-                {'value': headers[2], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(2, 18), 'wrap': True},
-                {'value': headers[3], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 28), 'wrap': True},
+                {'value': headers[2], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(2, 16), 'wrap': True},
+                {'value': headers[3], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 12), 'wrap': True},
                 {'value': headers[4], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(4, 18), 'wrap': True},
             ],
         ))
@@ -500,21 +500,21 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
         restriction_label = metric_row.get('analysis_restriction_label') or 'Review'
         worksheet.write(row, 0, metric_name)
         worksheet.write(row, 1, status_label)
-        worksheet.write(row, 2, spec_status_label)
-        worksheet.write(row, 3, restriction_label)
-        worksheet.write(row, 4, 'Go to metric')
+        worksheet.write(row, 2, 'Go to metric')
+        worksheet.write(row, 3, spec_status_label)
+        worksheet.write(row, 4, restriction_label)
         if sheet_state is not None:
             sheet_state['index_rows'].append(row)
             sheet_state['styled_cells'].append((row, 0, metric_name, 'text'))
             sheet_state['styled_cells'].append((row, 1, status_label, 'text'))
-            sheet_state['styled_cells'].append((row, 2, spec_status_label, 'text'))
-            sheet_state['styled_cells'].append((row, 3, restriction_label, 'wrap'))
-            sheet_state['metric_index_links'].append((row, 4, metric_name))
+            sheet_state['styled_cells'].append((row, 3, spec_status_label, 'text'))
+            sheet_state['styled_cells'].append((row, 4, restriction_label, 'wrap'))
+            sheet_state['metric_index_links'].append((row, 2, metric_name))
             sheet_state['wrapped_data_rows'].append((
                 row,
                 [
-                    {'value': spec_status_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(2, 18), 'wrap': True},
-                    {'value': restriction_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 28), 'wrap': True},
+                    {'value': spec_status_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 12), 'wrap': True},
+                    {'value': restriction_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(4, 18), 'wrap': True},
                 ],
             ))
         row += 1
