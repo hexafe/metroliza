@@ -199,6 +199,31 @@ def _build_formats(worksheet):
             'text_wrap': False,
             'bottom': 1,
         }),
+        'overview_value_fmt': workbook.add_format({
+            'align': 'left',
+            'valign': 'vcenter',
+            'text_wrap': False,
+            'bottom': 1,
+            'bg_color': '#FFF7D6',
+            'pattern': 1,
+        }),
+        'takeaway_label_fmt': workbook.add_format({
+            'bold': True,
+            'bg_color': '#EEF2F7',
+            'pattern': 1,
+            'bottom': 1,
+            'align': 'center',
+            'valign': 'vcenter',
+            'text_wrap': False,
+        }),
+        'takeaway_value_fmt': workbook.add_format({
+            'bg_color': '#FFF7D6',
+            'pattern': 1,
+            'align': 'center',
+            'valign': 'vcenter',
+            'text_wrap': False,
+            'bottom': 1,
+        }),
         'num_fmt': workbook.add_format({'num_format': '0.000', 'align': 'center', 'valign': 'vcenter'}),
         'pvalue_fmt': workbook.add_format({'num_format': '0.0000', 'align': 'center', 'valign': 'vcenter'}),
         'default_data_fmt': workbook.add_format({'align': 'center', 'valign': 'vcenter'}),
@@ -365,6 +390,9 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
         'summary_label': formats.get('summary_label_fmt'),
         'summary_label_wrap': formats.get('summary_label_wrap_fmt'),
         'summary_value': formats.get('summary_value_fmt'),
+        'overview_value': formats.get('overview_value_fmt'),
+        'takeaway_label': formats.get('takeaway_label_fmt'),
+        'takeaway_value': formats.get('takeaway_value_fmt'),
         'hyperlink': formats.get('hyperlink_fmt'),
     }
 
@@ -635,7 +663,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         for data_row_idx, entry in enumerate(metric_meta_rows):
             data_row = meta_bounds['first_data_row'] + data_row_idx
             sheet_state['styled_cells'].append((data_row, 0, entry.get('Field'), 'text_left_middle'))
-            sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'text_left_middle'))
+            sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'overview_value'))
             if entry.get('Field') in {'Shape note', 'Recommended action', 'Use caution'} and entry.get('Value'):
                 sheet_state['note_rows'].append((data_row, entry.get('Value'), GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18)))
     row += SECTION_GAP
@@ -796,9 +824,8 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         worksheet.write(row, 0, 'Takeaway')
         worksheet.write(row, 1, takeaway)
         if sheet_state is not None:
-            sheet_state['styled_cells'].append((row, 0, 'Takeaway', 'summary_label'))
-            sheet_state['styled_cells'].append((row, 1, takeaway, 'note'))
-            sheet_state['note_rows'].append((row, takeaway, GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18)))
+            sheet_state['styled_cells'].append((row, 0, 'Takeaway', 'takeaway_label'))
+            sheet_state['styled_cells'].append((row, 1, takeaway, 'takeaway_value'))
         row += 1
 
     plot_eligibility = metric_row.get('plot_eligibility') or {}
