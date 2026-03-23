@@ -10,6 +10,8 @@ from modules.distribution_fit_service import (
     _POSITIVE_CANDIDATES,
     _candidate_pool_for_mode,
     _compute_tail_risk,
+    build_fit_curve_payload,
+    compute_estimated_tail_metrics,
     fit_measurement_distribution,
 )
 
@@ -138,6 +140,58 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertEqual(result['spec_type'], 'upper_only')
         self.assertEqual(result['below_lsl_probability'], 0.0)
         self.assertAlmostEqual(result['outside_probability'], expected_upper_tail, places=6)
+
+    def test_build_fit_curve_payload_matches_fit_overlay_payload_for_selected_model_and_kde(self):
+        measurements = [0.0, 0.0, 0.1, 0.2, 0.4, 3.0, 7.0]
+        fit_result = fit_measurement_distribution(measurements, usl=7.5)
+
+        model_curve = build_fit_curve_payload(
+            measurements,
+            point_count=100,
+            distribution_fit_result=fit_result,
+        )
+        kde_curve = build_fit_curve_payload(
+            measurements,
+            point_count=100,
+            mode='kde',
+            distribution_fit_result=fit_result,
+        )
+
+        np.testing.assert_allclose(model_curve['x'], fit_result['selected_model_pdf']['x'])
+        np.testing.assert_allclose(model_curve['y'], fit_result['selected_model_pdf']['y'])
+        np.testing.assert_allclose(kde_curve['x'], fit_result['kde_reference_pdf']['x'])
+        np.testing.assert_allclose(kde_curve['y'], fit_result['kde_reference_pdf']['y'])
+
+    def test_compute_estimated_tail_metrics_matches_selected_model_risk_estimates(self):
+        fit_result = fit_measurement_distribution([-2, -1, -0.2, 0.1, 0.6, 1.3, 2.1], lsl=-1.5, usl=1.5)
+
+        metrics = compute_estimated_tail_metrics(fit_result, lsl=-1.5, usl=1.5)
+
+        self.assertAlmostEqual(metrics['estimated_nok_pct'], fit_result['risk_estimates']['outside_probability'])
+        self.assertAlmostEqual(metrics['estimated_nok_ppm'], fit_result['risk_estimates']['ppm_nok'])
+        self.assertAlmostEqual(
+            metrics['estimated_tail_below_lsl'],
+            fit_result['risk_estimates']['below_lsl_probability'],
+        )
+        self.assertAlmostEqual(
+            metrics['estimated_tail_above_usl'],
+            fit_result['risk_estimates']['above_usl_probability'],
+        )
+
+    def test_fit_measurement_distribution_memoizes_identical_requests_within_cache(self):
+        measurements = [1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15]
+        memo = {}
+
+        with mock.patch.object(distribution_fit_service, '_fit_candidate', wraps=distribution_fit_service._fit_candidate) as wrapped_fit:
+            first = fit_measurement_distribution(measurements, usl=1.4, memoization_cache=memo)
+            second = fit_measurement_distribution(measurements, usl=1.4, memoization_cache=memo)
+
+        self.assertEqual(first['status'], 'ok')
+        self.assertEqual(second['status'], 'ok')
+        self.assertEqual(wrapped_fit.call_count, len(_BILATERAL_CANDIDATES))
+        self.assertEqual(len(memo), 1)
+        self.assertIsNot(first, second)
+        self.assertIsNot(first['selected_model_pdf'], second['selected_model_pdf'])
 
     def test_one_sided_zero_bound_forces_loc_zero_for_positive_candidates(self):
         result = fit_measurement_distribution([0.0, 0.05, 0.2, 0.4, 0.8, 1.1, 1.5, 2.0], usl=2.5)

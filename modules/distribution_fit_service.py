@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import MutableMapping
 from dataclasses import asdict, dataclass, field
+from hashlib import blake2b
 from typing import Callable
 
 import numpy as np
@@ -75,6 +77,29 @@ _POSITIVE_CANDIDATES: tuple[_CandidateDistribution, ...] = (
     _CandidateDistribution('lognorm', 'Lognormal', lognorm, lognorm.fit, True, True),
 )
 
+_DISTRIBUTION_BY_NAME = {
+    'norm': norm,
+    'skewnorm': skewnorm,
+    'johnsonsu': johnsonsu,
+    'halfnorm': halfnorm,
+    'foldnorm': foldnorm,
+    'gamma': gamma,
+    'weibull_min': weibull_min,
+    'lognorm': lognorm,
+}
+
+
+def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
+    """Resolve curve point density and KDE smoothing safeguards for low sample sizes."""
+    n = max(0, int(sample_size))
+    if n <= 10:
+        return {'point_count': min(int(requested_point_count), 40), 'kde_min_bandwidth': 0.45}
+    if n <= 20:
+        return {'point_count': min(int(requested_point_count), 60), 'kde_min_bandwidth': 0.35}
+    if n <= 40:
+        return {'point_count': min(int(requested_point_count), 80), 'kde_min_bandwidth': 0.25}
+    return {'point_count': max(20, int(requested_point_count)), 'kde_min_bandwidth': 0.0}
+
 
 def _safe_float(value):
     if value is None:
@@ -99,6 +124,80 @@ def _candidate_pool_for_mode(mode: str) -> tuple[_CandidateDistribution, ...]:
     if mode == 'one_sided_zero_bound_positive':
         return _POSITIVE_CANDIDATES
     return _BILATERAL_CANDIDATES
+
+
+def _resolve_curve_x_values(values: np.ndarray, *, point_count: int, coverage_padding: float = 0.03):
+    x_min = float(np.min(values))
+    x_max = float(np.max(values))
+    if np.isclose(x_min, x_max):
+        return None
+    spread = x_max - x_min
+    sampling = resolve_density_curve_sampling(int(values.size), requested_point_count=point_count)
+    resolved_point_count = max(20, int(sampling['point_count']))
+    return np.linspace(x_min - (coverage_padding * spread), x_max + (coverage_padding * spread), resolved_point_count)
+
+
+def _measurement_fingerprint(values: np.ndarray):
+    normalized = np.ascontiguousarray(np.asarray(values, dtype=float))
+    digest = blake2b(normalized.tobytes(), digest_size=16).hexdigest()
+    return (int(normalized.size), digest)
+
+
+def _fit_cache_key(
+    *,
+    values: np.ndarray,
+    lsl,
+    usl,
+    point_count: int,
+    include_kde_reference: bool,
+    gof_acceptance_alpha: float,
+    monte_carlo_gof_samples: int,
+    monte_carlo_seed: int | None,
+):
+    return (
+        _measurement_fingerprint(values),
+        _safe_float(lsl),
+        _safe_float(usl),
+        int(point_count),
+        bool(include_kde_reference),
+        float(gof_acceptance_alpha),
+        int(monte_carlo_gof_samples),
+        None if monte_carlo_seed is None else int(monte_carlo_seed),
+    )
+
+
+def _clone_curve_payload(curve: dict | None):
+    if not isinstance(curve, dict):
+        return curve
+    cloned = dict(curve)
+    if curve.get('x') is not None:
+        cloned['x'] = np.asarray(curve['x'], dtype=float).copy()
+    if curve.get('y') is not None:
+        cloned['y'] = np.asarray(curve['y'], dtype=float).copy()
+    return cloned
+
+
+def clone_fit_payload(payload: dict | None):
+    if not isinstance(payload, dict):
+        return payload
+    cloned = dict(payload)
+    for key in ('selected_model_pdf', 'selected_model_cdf', 'kde_reference_pdf'):
+        cloned[key] = _clone_curve_payload(payload.get(key))
+    if isinstance(payload.get('selected_model'), dict):
+        cloned['selected_model'] = dict(payload['selected_model'])
+    if isinstance(payload.get('gof_metrics'), dict):
+        cloned['gof_metrics'] = dict(payload['gof_metrics'])
+    if isinstance(payload.get('fit_quality'), dict):
+        cloned['fit_quality'] = dict(payload['fit_quality'])
+    if isinstance(payload.get('risk_estimates'), dict):
+        cloned['risk_estimates'] = dict(payload['risk_estimates'])
+    if isinstance(payload.get('ranking_metrics'), list):
+        cloned['ranking_metrics'] = [dict(item) if isinstance(item, dict) else item for item in payload['ranking_metrics']]
+    if isinstance(payload.get('model_candidates'), list):
+        cloned['model_candidates'] = [dict(item) if isinstance(item, dict) else item for item in payload['model_candidates']]
+    if isinstance(payload.get('notes'), list):
+        cloned['notes'] = list(payload['notes'])
+    return cloned
 
 
 def _build_density_curve(dist, params, x_values: np.ndarray):
@@ -126,14 +225,8 @@ def _build_kde_reference_curve(values: np.ndarray, x_values: np.ndarray):
         return None
     try:
         kde = gaussian_kde(values)
-        sample_size = int(values.size)
-        min_bandwidth = 0.0
-        if sample_size <= 10:
-            min_bandwidth = 0.45
-        elif sample_size <= 20:
-            min_bandwidth = 0.35
-        elif sample_size <= 40:
-            min_bandwidth = 0.25
+        sampling = resolve_density_curve_sampling(int(values.size), requested_point_count=int(np.asarray(x_values).size))
+        min_bandwidth = float(sampling.get('kde_min_bandwidth', 0.0))
         if min_bandwidth > 0:
             kde.set_bandwidth(bw_method=max(float(kde.factor), min_bandwidth))
         y_values = kde(x_values)
@@ -229,6 +322,94 @@ def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray):
     }
 
 
+def build_fit_curve_payload(
+    measurements,
+    *,
+    point_count: int = 100,
+    mode: str = 'normal_fit',
+    distribution_fit_result: dict | None = None,
+):
+    """Return canonical histogram overlay curve payloads for export/render callers."""
+    values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
+    if values.size == 0:
+        return None
+
+    if distribution_fit_result:
+        if mode == 'kde':
+            kde_curve = distribution_fit_result.get('kde_reference_pdf')
+            if kde_curve is not None:
+                return _clone_curve_payload(kde_curve)
+        else:
+            selected_curve = distribution_fit_result.get('selected_model_pdf')
+            if selected_curve is not None:
+                return _clone_curve_payload(selected_curve)
+
+    x_values = _resolve_curve_x_values(values, point_count=point_count, coverage_padding=0.0)
+    if x_values is None:
+        return None
+
+    if mode == 'kde':
+        return _build_kde_reference_curve(values, x_values)
+
+    if distribution_fit_result:
+        selected_model = distribution_fit_result.get('selected_model') or {}
+        model_name = selected_model.get('name') or selected_model.get('model')
+        params = selected_model.get('params')
+        dist = _DISTRIBUTION_BY_NAME.get(model_name)
+        if dist is not None and params:
+            return _build_density_curve(dist, params, x_values)
+
+    mu, std = norm.fit(values)
+    if std <= 0:
+        return None
+    return _build_density_curve(norm, (mu, std), x_values)
+
+
+def compute_estimated_tail_metrics(distribution_fit_result, *, lsl=None, usl=None):
+    """Return export-friendly tail metrics derived from canonical fit risk estimates."""
+    distribution_fit_result = distribution_fit_result or {}
+    risk_estimates = distribution_fit_result.get('risk_estimates') or {}
+    outside_probability = risk_estimates.get('outside_probability')
+    if outside_probability is None:
+        selected_model = distribution_fit_result.get('selected_model') or {}
+        model_name = selected_model.get('name') or selected_model.get('model')
+        params = selected_model.get('params')
+        dist = _DISTRIBUTION_BY_NAME.get(model_name)
+        inferred_support_mode = distribution_fit_result.get('inferred_support_mode')
+        if dist is None or not params:
+            return {
+                'estimated_nok_pct': None,
+                'estimated_nok_ppm': None,
+                'estimated_yield_pct': None,
+                'estimated_tail_below_lsl': None,
+                'estimated_tail_above_usl': None,
+            }
+        recomputed = _compute_tail_risk(
+            dist,
+            params,
+            lsl,
+            usl,
+            inferred_support_mode=inferred_support_mode,
+        )
+        outside_probability = recomputed.get('outside_probability')
+        risk_estimates = recomputed
+        if outside_probability is None:
+            return {
+                'estimated_nok_pct': None,
+                'estimated_nok_ppm': None,
+                'estimated_yield_pct': None,
+                'estimated_tail_below_lsl': None,
+                'estimated_tail_above_usl': None,
+            }
+    return {
+        'estimated_nok_pct': outside_probability,
+        'estimated_nok_ppm': risk_estimates.get('ppm_nok'),
+        'estimated_yield_pct': 1.0 - outside_probability,
+        'estimated_tail_below_lsl': risk_estimates.get('below_lsl_probability'),
+        'estimated_tail_above_usl': risk_estimates.get('above_usl_probability'),
+    }
+
+
 def _compute_tail_risk(dist, params, lsl, usl, *, inferred_support_mode=None) -> dict:
     below_lsl = None if lsl is None else float(np.clip(dist.cdf(lsl, *params), 0.0, 1.0))
     above_usl = None if usl is None else float(np.clip(1.0 - dist.cdf(usl, *params), 0.0, 1.0))
@@ -319,6 +500,7 @@ def fit_measurement_distribution(
     gof_acceptance_alpha: float = 0.05,
     monte_carlo_gof_samples: int = 0,
     monte_carlo_seed: int | None = None,
+    memoization_cache: MutableMapping | None = None,
 ):
     """Fit distributions, score GOF, classify quality, and estimate tail risk.
 
@@ -329,6 +511,22 @@ def fit_measurement_distribution(
 
     values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
     sample_size = int(values.size)
+
+    cache_key = None
+    if memoization_cache is not None and sample_size > 0:
+        cache_key = _fit_cache_key(
+            values=values,
+            lsl=lsl,
+            usl=usl,
+            point_count=point_count,
+            include_kde_reference=include_kde_reference,
+            gof_acceptance_alpha=gof_acceptance_alpha,
+            monte_carlo_gof_samples=monte_carlo_gof_samples,
+            monte_carlo_seed=monte_carlo_seed,
+        )
+        cached = memoization_cache.get(cache_key)
+        if cached is not None:
+            return clone_fit_payload(cached)
 
     inferred_mode = 'unknown'
     if sample_size >= 1:
@@ -353,15 +551,7 @@ def fit_measurement_distribution(
     lsl_value = _safe_float(lsl)
     usl_value = _safe_float(usl)
 
-    spread = x_max - x_min
-    resolved_point_count = max(20, int(point_count))
-    if sample_size <= 10:
-        resolved_point_count = min(resolved_point_count, 40)
-    elif sample_size <= 20:
-        resolved_point_count = min(resolved_point_count, 60)
-    elif sample_size <= 40:
-        resolved_point_count = min(resolved_point_count, 80)
-    x_values = np.linspace(x_min - 0.03 * spread, x_max + 0.03 * spread, resolved_point_count)
+    x_values = _resolve_curve_x_values(values, point_count=point_count)
 
     notes: list[str] = []
     candidates = []
@@ -462,4 +652,7 @@ def fit_measurement_distribution(
         model_candidates=ranked,
         notes=sorted(set(notes)),
     )
-    return result.to_dict()
+    payload = result.to_dict()
+    if memoization_cache is not None and cache_key is not None:
+        memoization_cache[cache_key] = clone_fit_payload(payload)
+    return payload

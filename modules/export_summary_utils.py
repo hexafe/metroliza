@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import gaussian_kde, norm, shapiro, johnsonsu, skewnorm, halfnorm, foldnorm, gamma, weibull_min, lognorm
+from scipy.stats import shapiro
 import math
 import re
 import textwrap
@@ -8,22 +8,16 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
+from modules.distribution_fit_service import (
+    build_fit_curve_payload,
+    compute_estimated_tail_metrics as compute_fit_tail_metrics,
+    resolve_density_curve_sampling,
+)
 
 from modules.stats_utils import compute_capability_confidence_intervals, is_one_sided_geometric_tolerance, safe_process_capability
 
 
 _INTEGER_PATTERN = re.compile(r'^[+-]?\d+$')
-
-_DISTRIBUTION_BY_NAME = {
-    'norm': norm,
-    'skewnorm': skewnorm,
-    'johnsonsu': johnsonsu,
-    'halfnorm': halfnorm,
-    'foldnorm': foldnorm,
-    'gamma': gamma,
-    'weibull_min': weibull_min,
-    'lognorm': lognorm,
-}
 
 
 def resolve_histogram_bin_count(values, *, min_bins=3, max_bins=48):
@@ -73,18 +67,6 @@ def resolve_histogram_bin_count(values, *, min_bins=3, max_bins=48):
         'method': chosen_method,
         'sample_size': n,
     }
-
-
-def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
-    """Resolve curve point density and KDE smoothing safeguards for low sample sizes."""
-    n = max(0, int(sample_size))
-    if n <= 10:
-        return {'point_count': min(int(requested_point_count), 40), 'kde_min_bandwidth': 0.45}
-    if n <= 20:
-        return {'point_count': min(int(requested_point_count), 60), 'kde_min_bandwidth': 0.35}
-    if n <= 40:
-        return {'point_count': min(int(requested_point_count), 80), 'kde_min_bandwidth': 0.25}
-    return {'point_count': max(20, int(requested_point_count)), 'kde_min_bandwidth': 0.0}
 
 
 def normalize_plot_axis_values(values):
@@ -176,60 +158,8 @@ def compute_measurement_summary(header_group: pd.DataFrame, usl: float, lsl: flo
 
 
 def compute_estimated_tail_metrics(distribution_fit_result, *, lsl=None, usl=None):
-    """Estimate NOK/yield metrics from selected fitted model CDF tails."""
-    distribution_fit_result = distribution_fit_result or {}
-    selected_model = distribution_fit_result.get('selected_model') or {}
-    model_name = selected_model.get('model')
-    params = selected_model.get('params')
-    dist = _DISTRIBUTION_BY_NAME.get(model_name)
-    inferred_support_mode = distribution_fit_result.get('inferred_support_mode')
-
-    if dist is None or not params:
-        return {
-            'estimated_nok_pct': None,
-            'estimated_nok_ppm': None,
-            'estimated_yield_pct': None,
-            'estimated_tail_below_lsl': None,
-            'estimated_tail_above_usl': None,
-        }
-
-    try:
-        below_lsl = None if lsl is None else float(np.clip(dist.cdf(lsl, *params), 0.0, 1.0))
-        above_usl = None if usl is None else float(np.clip(1.0 - dist.cdf(usl, *params), 0.0, 1.0))
-    except Exception:
-        return {
-            'estimated_nok_pct': None,
-            'estimated_nok_ppm': None,
-            'estimated_yield_pct': None,
-            'estimated_tail_below_lsl': None,
-            'estimated_tail_above_usl': None,
-        }
-
-
-    if inferred_support_mode == 'one_sided_zero_bound_positive' and lsl is not None and np.isclose(lsl, 0.0):
-        below_lsl = 0.0
-        lsl = None
-
-    if inferred_support_mode == 'one_sided_zero_bound_negative' and usl is not None and np.isclose(usl, 0.0):
-        above_usl = 0.0
-        usl = None
-
-    if lsl is not None and usl is not None:
-        outside_probability = float(np.clip((below_lsl or 0.0) + (above_usl or 0.0), 0.0, 1.0))
-    elif usl is not None:
-        outside_probability = float(np.clip(above_usl or 0.0, 0.0, 1.0))
-    elif lsl is not None:
-        outside_probability = float(np.clip(below_lsl or 0.0, 0.0, 1.0))
-    else:
-        outside_probability = None
-
-    return {
-        'estimated_nok_pct': outside_probability,
-        'estimated_nok_ppm': None if outside_probability is None else outside_probability * 1_000_000.0,
-        'estimated_yield_pct': None if outside_probability is None else (1.0 - outside_probability),
-        'estimated_tail_below_lsl': below_lsl,
-        'estimated_tail_above_usl': above_usl,
-    }
+    """Adapter layer for export summary consumers of canonical fit metrics."""
+    return compute_fit_tail_metrics(distribution_fit_result, lsl=lsl, usl=usl)
 
 
 def compute_normality_status(measurements, *, one_sided=False, location_bound=None):
@@ -314,42 +244,14 @@ def build_trend_plot_payload(header_group: pd.DataFrame, *, grouping_active=Fals
     }
 
 
-def build_histogram_density_curve_payload(measurements, point_count=100, *, mode='normal_fit'):
-    """Return x/y density curve data for histogram overlays, if available."""
-    normalized_measurements = normalize_plot_axis_values(list(measurements))
-    numeric_measurements = pd.to_numeric(pd.Series(normalized_measurements), errors='coerce').dropna().to_numpy(dtype=float)
-    if numeric_measurements.size == 0:
-        return None
-
-    x_min = float(np.min(numeric_measurements))
-    x_max = float(np.max(numeric_measurements))
-    if np.isclose(x_min, x_max):
-        return None
-
-    sampling = resolve_density_curve_sampling(int(numeric_measurements.size), requested_point_count=point_count)
-    resolved_point_count = max(20, int(sampling['point_count']))
-    x_values = np.linspace(x_min, x_max, resolved_point_count)
-    if mode == 'kde':
-        if numeric_measurements.size < 2:
-            return None
-        try:
-            kde = gaussian_kde(numeric_measurements)
-            min_bandwidth = float(sampling.get('kde_min_bandwidth', 0.0))
-            if min_bandwidth > 0:
-                kde.set_bandwidth(bw_method=max(float(kde.factor), min_bandwidth))
-            y_values = kde(x_values)
-        except Exception:
-            return None
-    else:
-        mu, std = norm.fit(numeric_measurements)
-        if std <= 0:
-            return None
-        y_values = norm.pdf(x_values, mu, std)
-
-    return {
-        'x': x_values,
-        'y': y_values,
-    }
+def build_histogram_density_curve_payload(measurements, point_count=100, *, mode='normal_fit', distribution_fit_result=None):
+    """Adapter layer for histogram overlay payload formatting."""
+    return build_fit_curve_payload(
+        measurements,
+        point_count=point_count,
+        mode=mode,
+        distribution_fit_result=distribution_fit_result,
+    )
 
 
 def apply_shared_x_axis_label_strategy(
