@@ -2955,6 +2955,7 @@ class ExportDataThread(QThread):
         self._active_export_query = self.filter_query
         self._cached_export_filtered_df = None
         self._sql_measurement_summary_cache = {}
+        self._distribution_fit_memo = {}
 
     def _register_chart_image(self, payload: bytes):
         image_data = BytesIO(payload)
