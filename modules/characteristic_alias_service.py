@@ -337,6 +337,84 @@ def resolve_characteristic_alias(
     return normalized_metric_name
 
 
+def resolve_characteristic_aliases_bulk(
+    keys: list[tuple[str, str | None]],
+    alias_db_path: str,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> dict[tuple[str, str | None], str]:
+    """Resolve many ``(metric_name, reference)`` keys with reference->global priority."""
+    normalized_keys: list[tuple[str, str | None]] = []
+    for metric_name, reference in keys:
+        normalized_metric_name = str(metric_name or '').strip()
+        if reference is None or reference != reference:
+            normalized_reference = None
+        else:
+            normalized_reference = str(reference).strip() or None
+        if not normalized_metric_name:
+            continue
+        normalized_keys.append((normalized_metric_name, normalized_reference))
+
+    unique_keys = list(dict.fromkeys(normalized_keys))
+    if not unique_keys:
+        return {}
+
+    alias_names = sorted({metric_name for metric_name, _ in unique_keys})
+    references = sorted({reference for _, reference in unique_keys if reference})
+
+    alias_name_placeholders = ', '.join('?' for _ in alias_names)
+    params: list[str] = list(alias_names)
+    if references:
+        reference_placeholders = ', '.join('?' for _ in references)
+        scope_where = f"(scope_type = 'global' OR (scope_type = 'reference' AND scope_value IN ({reference_placeholders})))"
+        params.extend(references)
+    else:
+        scope_where = "scope_type = 'global'"
+
+    query = f'''
+        SELECT alias_name, canonical_name, scope_type, scope_value
+        FROM CHARACTERISTIC_ALIASES
+        WHERE alias_name IN ({alias_name_placeholders})
+          AND {scope_where}
+        ORDER BY id ASC
+    '''
+
+    try:
+        rows = execute_with_retry(
+            alias_db_path,
+            query,
+            params=tuple(params),
+            connection=connection,
+        )
+    except sqlite3.OperationalError as exc:
+        if 'no such table: CHARACTERISTIC_ALIASES' in str(exc):
+            return {key: key[0] for key in unique_keys}
+        raise
+
+    aliases_by_name: dict[str, list[tuple[str, str | None, str]]] = {}
+    for alias_name, canonical_name, scope_type, scope_value in rows:
+        aliases_by_name.setdefault(str(alias_name), []).append(
+            (
+                str(scope_type or '').strip().lower(),
+                str(scope_value or '').strip() or None,
+                str(canonical_name or '').strip(),
+            )
+        )
+
+    resolved: dict[tuple[str, str | None], str] = {}
+    for metric_name, reference in unique_keys:
+        selected: str | None = None
+        for scope_type, scope_value, canonical_name in aliases_by_name.get(metric_name, []):
+            if scope_type == 'reference' and reference and scope_value == reference:
+                selected = canonical_name or metric_name
+                break
+            if scope_type == 'global' and selected is None:
+                selected = canonical_name or metric_name
+        resolved[(metric_name, reference)] = selected or metric_name
+
+    return resolved
+
+
 def _normalize_alias_mapping_payload(payload: dict[str, str | None], *, row_number: int | None = None) -> dict[str, str | None]:
     """Validate and normalize one mapping payload for batch workflows."""
     alias_name = str(payload.get('alias_name') or '').strip()
