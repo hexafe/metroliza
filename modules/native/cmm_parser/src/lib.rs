@@ -1,5 +1,9 @@
 use pyo3::prelude::*;
 use pyo3::types::PyList;
+use pyo3::types::PyTuple;
+use rusqlite::params;
+use rusqlite::types::Value as SqlValue;
+use rusqlite::Connection;
 
 const TP_QUALIFIERS: &[&str] = &["RFS", "MMC", "LMC", "MMB", "LMB", "TANGENT", "PROJECTED"];
 const TP_SEMANTIC_LABELS: &[&str] = &[
@@ -23,6 +27,24 @@ enum Field {
 struct Block {
     header_comment: Vec<HeaderEntry>,
     dimensions: Vec<Vec<Field>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct FlatMeasurementRow {
+    ax: String,
+    nom: SqlValue,
+    tol_plus: SqlValue,
+    tol_minus: SqlValue,
+    bonus: SqlValue,
+    meas: SqlValue,
+    dev: SqlValue,
+    outtol: SqlValue,
+    header: String,
+    reference: String,
+    fileloc: String,
+    filename: String,
+    date: String,
+    sample_number: String,
 }
 
 fn measurement_line_map(code: &str) -> usize {
@@ -550,6 +572,144 @@ fn blocks_to_pyobject(py: Python<'_>, blocks: &[Block]) -> PyResult<PyObject> {
     Ok(py_blocks.into_py(py))
 }
 
+fn header_to_string(entries: &[HeaderEntry]) -> String {
+    let mut tokens: Vec<String> = Vec::new();
+    for entry in entries {
+        if let HeaderEntry::Text(value) = entry {
+            if !value.is_empty() {
+                tokens.push(value.clone());
+            }
+        }
+    }
+    tokens.join(", ").replace('\"', "")
+}
+
+fn field_to_sql_value(field: Option<&Field>) -> SqlValue {
+    match field {
+        Some(Field::Float(value)) => SqlValue::Real(*value),
+        Some(Field::Text(value)) => SqlValue::Text(value.clone()),
+        Some(Field::Empty) | None => SqlValue::Text(String::new()),
+    }
+}
+
+fn flatten_blocks_to_rows(
+    blocks: &[Block],
+    reference: &str,
+    fileloc: &str,
+    filename: &str,
+    date: &str,
+    sample_number: &str,
+) -> Vec<FlatMeasurementRow> {
+    let mut rows: Vec<FlatMeasurementRow> = Vec::new();
+    for block in blocks {
+        let header = header_to_string(&block.header_comment);
+        for measurement_line in &block.dimensions {
+            let ax = match measurement_line.first() {
+                Some(Field::Text(value)) => value.clone(),
+                Some(Field::Float(value)) => value.to_string(),
+                _ => String::new(),
+            };
+            rows.push(FlatMeasurementRow {
+                ax,
+                nom: field_to_sql_value(measurement_line.get(1)),
+                tol_plus: field_to_sql_value(measurement_line.get(2)),
+                tol_minus: field_to_sql_value(measurement_line.get(3)),
+                bonus: field_to_sql_value(measurement_line.get(4)),
+                meas: field_to_sql_value(measurement_line.get(5)),
+                dev: field_to_sql_value(measurement_line.get(6)),
+                outtol: field_to_sql_value(measurement_line.get(7)),
+                header: header.clone(),
+                reference: reference.to_string(),
+                fileloc: fileloc.to_string(),
+                filename: filename.to_string(),
+                date: date.to_string(),
+                sample_number: sample_number.to_string(),
+            });
+        }
+    }
+    rows
+}
+
+fn sql_value_to_py(py: Python<'_>, value: &SqlValue) -> PyObject {
+    match value {
+        SqlValue::Integer(v) => v.into_py(py),
+        SqlValue::Real(v) => v.into_py(py),
+        SqlValue::Text(v) => v.into_py(py),
+        SqlValue::Null => "".into_py(py),
+        SqlValue::Blob(v) => String::from_utf8_lossy(v).to_string().into_py(py),
+    }
+}
+
+fn flat_rows_to_pyobject(py: Python<'_>, rows: &[FlatMeasurementRow]) -> PyResult<PyObject> {
+    let py_rows = PyList::empty_bound(py);
+    for row in rows {
+        let tuple = PyTuple::new_bound(
+            py,
+            [
+                row.ax.as_str().into_py(py),
+                sql_value_to_py(py, &row.nom),
+                sql_value_to_py(py, &row.tol_plus),
+                sql_value_to_py(py, &row.tol_minus),
+                sql_value_to_py(py, &row.bonus),
+                sql_value_to_py(py, &row.meas),
+                sql_value_to_py(py, &row.dev),
+                sql_value_to_py(py, &row.outtol),
+                row.header.as_str().into_py(py),
+                row.reference.as_str().into_py(py),
+                row.fileloc.as_str().into_py(py),
+                row.filename.as_str().into_py(py),
+                row.date.as_str().into_py(py),
+                row.sample_number.as_str().into_py(py),
+            ],
+        );
+        py_rows.append(tuple)?;
+    }
+    Ok(py_rows.into_py(py))
+}
+
+fn py_scalar_to_sql_value(value: &PyAny) -> PyResult<SqlValue> {
+    if let Ok(v) = value.extract::<f64>() {
+        return Ok(SqlValue::Real(v));
+    }
+    if let Ok(v) = value.extract::<i64>() {
+        return Ok(SqlValue::Real(v as f64));
+    }
+    if let Ok(v) = value.extract::<String>() {
+        return Ok(SqlValue::Text(v));
+    }
+    Ok(SqlValue::Text(String::new()))
+}
+
+fn py_rows_to_flat_rows(rows: &PyAny) -> PyResult<Vec<FlatMeasurementRow>> {
+    let py_rows = rows.downcast::<PyList>()?;
+    let mut normalized: Vec<FlatMeasurementRow> = Vec::with_capacity(py_rows.len());
+    for item in py_rows.iter() {
+        let tuple = item.downcast::<PyTuple>()?;
+        if tuple.len() != 14 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "measurement row must have 14 columns",
+            ));
+        }
+        normalized.push(FlatMeasurementRow {
+            ax: tuple.get_item(0)?.extract::<String>()?,
+            nom: py_scalar_to_sql_value(tuple.get_item(1)?)?,
+            tol_plus: py_scalar_to_sql_value(tuple.get_item(2)?)?,
+            tol_minus: py_scalar_to_sql_value(tuple.get_item(3)?)?,
+            bonus: py_scalar_to_sql_value(tuple.get_item(4)?)?,
+            meas: py_scalar_to_sql_value(tuple.get_item(5)?)?,
+            dev: py_scalar_to_sql_value(tuple.get_item(6)?)?,
+            outtol: py_scalar_to_sql_value(tuple.get_item(7)?)?,
+            header: tuple.get_item(8)?.extract::<String>()?,
+            reference: tuple.get_item(9)?.extract::<String>()?,
+            fileloc: tuple.get_item(10)?.extract::<String>()?,
+            filename: tuple.get_item(11)?.extract::<String>()?,
+            date: tuple.get_item(12)?.extract::<String>()?,
+            sample_number: tuple.get_item(13)?.extract::<String>()?,
+        });
+    }
+    Ok(normalized)
+}
+
 #[pyfunction]
 fn parse_blocks(py: Python<'_>, raw_lines: &PyAny) -> PyResult<PyObject> {
     let lines = raw_lines.downcast::<PyList>()?;
@@ -562,9 +722,196 @@ fn parse_blocks(py: Python<'_>, raw_lines: &PyAny) -> PyResult<PyObject> {
     blocks_to_pyobject(py, &blocks)
 }
 
+#[pyfunction]
+fn normalize_measurement_rows(
+    py: Python<'_>,
+    blocks: &PyAny,
+    reference: String,
+    fileloc: String,
+    filename: String,
+    date: String,
+    sample_number: String,
+) -> PyResult<PyObject> {
+    let lines = blocks.downcast::<PyList>()?;
+    let mut rust_blocks: Vec<Block> = Vec::with_capacity(lines.len());
+    for block_any in lines.iter() {
+        let block = block_any.downcast::<PyList>()?;
+        let header_py = block.get_item(0)?;
+        let dims_py = block.get_item(1)?;
+
+        let mut header_comment: Vec<HeaderEntry> = Vec::new();
+        for header_entry in header_py.downcast::<PyList>()?.iter() {
+            if let Ok(value) = header_entry.extract::<String>() {
+                if value == "NO HEADER" {
+                    header_comment.push(HeaderEntry::NoHeader);
+                } else {
+                    header_comment.push(HeaderEntry::Text(value));
+                }
+            } else if let Ok(nested) = header_entry.downcast::<PyList>() {
+                for token in nested.iter() {
+                    if let Ok(text) = token.extract::<String>() {
+                        header_comment.push(HeaderEntry::Text(text));
+                    }
+                }
+            }
+        }
+
+        let mut dimensions: Vec<Vec<Field>> = Vec::new();
+        for row_any in dims_py.downcast::<PyList>()?.iter() {
+            let row = row_any.downcast::<PyList>()?;
+            let mut fields: Vec<Field> = Vec::new();
+            for token in row.iter() {
+                if let Ok(text) = token.extract::<String>() {
+                    if text.is_empty() {
+                        fields.push(Field::Empty);
+                    } else {
+                        fields.push(Field::Text(text));
+                    }
+                } else if let Ok(value) = token.extract::<f64>() {
+                    fields.push(Field::Float(value));
+                } else if let Ok(value) = token.extract::<i64>() {
+                    fields.push(Field::Float(value as f64));
+                } else {
+                    fields.push(Field::Empty);
+                }
+            }
+            dimensions.push(fields);
+        }
+
+        rust_blocks.push(Block {
+            header_comment,
+            dimensions,
+        });
+    }
+
+    let rows = flatten_blocks_to_rows(
+        &rust_blocks,
+        &reference,
+        &fileloc,
+        &filename,
+        &date,
+        &sample_number,
+    );
+    flat_rows_to_pyobject(py, &rows)
+}
+
+#[pyfunction]
+fn persist_measurement_rows(database: String, rows: &PyAny) -> PyResult<bool> {
+    let normalized_rows = py_rows_to_flat_rows(rows)?;
+    if normalized_rows.is_empty() {
+        return Ok(false);
+    }
+
+    let first = &normalized_rows[0];
+    let mut conn = Connection::open(database)
+        .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
+    let tx = conn
+        .transaction()
+        .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
+
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS MEASUREMENTS (
+            ID INTEGER PRIMARY KEY,
+            AX TEXT,
+            NOM REAL,
+            "+TOL" REAL,
+            "-TOL" REAL,
+            BONUS REAL,
+            MEAS REAL,
+            DEV REAL,
+            OUTTOL REAL,
+            HEADER TEXT,
+            REPORT_ID INTEGER,
+            FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
+        );
+        CREATE TABLE IF NOT EXISTS REPORTS (
+            ID INTEGER PRIMARY KEY,
+            REFERENCE TEXT,
+            FILELOC TEXT,
+            FILENAME TEXT,
+            DATE TEXT,
+            SAMPLE_NUMBER TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_reports_reference ON REPORTS(REFERENCE);
+        CREATE INDEX IF NOT EXISTS idx_reports_filename ON REPORTS(FILENAME);
+        CREATE INDEX IF NOT EXISTS idx_reports_date ON REPORTS(DATE);
+        CREATE INDEX IF NOT EXISTS idx_reports_sample_number ON REPORTS(SAMPLE_NUMBER);
+        CREATE INDEX IF NOT EXISTS idx_reports_identity ON REPORTS(REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER);
+        CREATE INDEX IF NOT EXISTS idx_measurements_report_id ON MEASUREMENTS(REPORT_ID);
+        CREATE INDEX IF NOT EXISTS idx_measurements_report_header_ax ON MEASUREMENTS(REPORT_ID, HEADER, AX);
+        CREATE INDEX IF NOT EXISTS idx_measurements_header ON MEASUREMENTS(HEADER);
+        CREATE INDEX IF NOT EXISTS idx_measurements_ax ON MEASUREMENTS(AX);
+        "#,
+    )
+    .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
+
+    let duplicate_count: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ?1 AND FILELOC = ?2 AND FILENAME = ?3 AND DATE = ?4 AND SAMPLE_NUMBER = ?5",
+            params![
+                first.reference,
+                first.fileloc,
+                first.filename,
+                first.date,
+                first.sample_number
+            ],
+            |row| row.get(0),
+        )
+        .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
+
+    if duplicate_count > 0 {
+        tx.commit()
+            .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
+        return Ok(false);
+    }
+
+    tx.execute(
+        "INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            first.reference,
+            first.fileloc,
+            first.filename,
+            first.date,
+            first.sample_number
+        ],
+    )
+    .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
+    let report_id = tx.last_insert_rowid();
+
+    let mut stmt = tx
+        .prepare(
+            "INSERT INTO MEASUREMENTS VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        )
+        .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
+    for row in &normalized_rows {
+        stmt.execute(params![
+            Option::<i64>::None,
+            row.ax,
+            row.nom,
+            row.tol_plus,
+            row.tol_minus,
+            row.bonus,
+            row.meas,
+            row.dev,
+            row.outtol,
+            row.header,
+            report_id,
+        ])
+        .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
+    }
+    drop(stmt);
+
+    tx.commit()
+        .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
+    Ok(true)
+}
+
 #[pymodule]
 fn _metroliza_cmm_native(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_blocks, m)?)?;
+    m.add_function(wrap_pyfunction!(normalize_measurement_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(persist_measurement_rows, m)?)?;
     let _ = py;
     Ok(())
 }
