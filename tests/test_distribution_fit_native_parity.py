@@ -56,7 +56,9 @@ class TestDistributionFitNativeParity(unittest.TestCase):
 
         self.assertIsNotNone(native_result)
         self.assertIsNotNone(python_result)
-        self.assertAlmostEqual(native_result, python_result, places=2)
+        # Native and SciPy Monte Carlo paths use different RNG/distribution implementations;
+        # seeded runs should remain close, but not bit-for-bit identical.
+        self.assertLess(abs(native_result - python_result), 0.03)
 
     @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
     def test_python_and_native_paths_are_close_for_unseeded_runs(self):

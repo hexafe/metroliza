@@ -1,9 +1,31 @@
+use numpy::PyReadonlyArray1;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyAny, PyDict};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use statrs::distribution::{ContinuousCDF, Normal, StudentsT};
+
+
+fn normalize_groups(py: Python<'_>, groups: Vec<PyObject>) -> PyResult<Vec<Vec<f64>>> {
+    groups
+        .into_iter()
+        .map(|group_obj| {
+            let group_any: &Bound<'_, PyAny> = group_obj.bind(py);
+
+            if let Ok(readonly) = group_any.extract::<PyReadonlyArray1<f64>>() {
+                return readonly
+                    .as_slice()
+                    .map(|slice| slice.to_vec())
+                    .map_err(|_| PyValueError::new_err("groups must be contiguous float64 arrays"));
+            }
+
+            group_any
+                .extract::<Vec<f64>>()
+                .map_err(|_| PyValueError::new_err("groups must be sequences of float-compatible values"))
+        })
+        .collect()
+}
 
 fn cohen_d(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
     if sample_a.len() < 2 || sample_b.len() < 2 {
@@ -272,8 +294,9 @@ fn mann_whitney_pvalue(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
 #[pyfunction]
 #[pyo3(signature = (effect_kernel, groups, level, iterations, seed))]
 fn bootstrap_percentile_ci(
+    py: Python<'_>,
     effect_kernel: &str,
-    groups: Vec<Vec<f64>>,
+    groups: Vec<PyObject>,
     level: f64,
     iterations: usize,
     seed: u64,
@@ -281,6 +304,8 @@ fn bootstrap_percentile_ci(
     if !(0.0 < level && level < 1.0) {
         return Err(PyValueError::new_err("level must be between 0 and 1"));
     }
+    let groups = normalize_groups(py, groups)?;
+
     if iterations == 0 || groups.is_empty() || groups.iter().any(|g| g.is_empty()) {
         return Ok(None);
     }
@@ -325,12 +350,14 @@ fn bootstrap_percentile_ci(
 fn pairwise_stats(
     py: Python<'_>,
     labels: Vec<String>,
-    groups: Vec<Vec<f64>>,
+    groups: Vec<PyObject>,
     alpha: f64,
     correction_method: &str,
     non_parametric: bool,
     equal_var: bool,
 ) -> PyResult<Vec<PyObject>> {
+    let groups = normalize_groups(py, groups)?;
+
     if labels.len() != groups.len() {
         return Err(PyValueError::new_err("labels and groups must have equal length"));
     }
