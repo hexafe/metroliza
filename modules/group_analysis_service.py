@@ -266,15 +266,19 @@ def _resolve_canonical_metric_aliases(frame, canonical_metric_series, *, alias_d
     if not non_empty_metric_mask.any():
         return resolved_metric_series
 
+    def _normalize_reference_key(value):
+        if pd.isna(value):
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
     if 'REFERENCE' in frame.columns:
-        reference_series = frame['REFERENCE'].map(
-            lambda value: None if pd.isna(value) or str(value).strip() == '' else str(value).strip()
-        )
+        reference_values = [_normalize_reference_key(value) for value in frame['REFERENCE'].tolist()]
     else:
-        reference_series = pd.Series([None] * len(resolved_metric_series), index=resolved_metric_series.index, dtype=object)
+        reference_values = [None] * len(resolved_metric_series)
 
     lookup_key_series = pd.Series(
-        list(zip(resolved_metric_series, reference_series)),
+        list(zip(resolved_metric_series.tolist(), reference_values)),
         index=resolved_metric_series.index,
         dtype=object,
     )
