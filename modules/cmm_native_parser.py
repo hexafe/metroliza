@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from typing import Any, Literal, NamedTuple
 
 from modules.cmm_parsing import parse_raw_lines_to_blocks
+from modules.db import run_transaction_with_retry
 
 try:
     from _metroliza_cmm_native import (  # type: ignore
@@ -201,8 +201,8 @@ def persist_measurement_rows_python(database: str, rows: list[tuple[Any, ...]]) 
 
     first = rows[0]
     report_identity = (first[9], first[10], first[11], first[12], first[13])
-    with sqlite3.connect(database) as conn:
-        cursor = conn.cursor()
+
+    def _insert(cursor):
         cursor.execute(
             '''CREATE TABLE IF NOT EXISTS MEASUREMENTS (
                         ID INTEGER PRIMARY KEY,
@@ -233,9 +233,9 @@ def persist_measurement_rows_python(database: str, rows: list[tuple[Any, ...]]) 
             'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
             report_identity,
         )
-        count = cursor.fetchone()[0]
+        count_rows = cursor.fetchall()
+        count = count_rows[0][0] if count_rows else 0
         if count > 0:
-            conn.commit()
             return False
 
         cursor.execute(
@@ -250,8 +250,9 @@ def persist_measurement_rows_python(database: str, rows: list[tuple[Any, ...]]) 
                 for r in rows
             ],
         )
-        conn.commit()
-    return True
+        return True
+
+    return run_transaction_with_retry(database, _insert, retries=4, retry_delay_s=1)
 
 
 def persist_measurement_rows_with_backend_and_telemetry(
