@@ -22,6 +22,7 @@ from typing import Any, Callable
 import numpy as np
 from scipy.stats import mannwhitneyu, rankdata, ttest_ind
 
+from modules.comparison_stats_native import bootstrap_percentile_ci_native
 from modules.group_stats_tests import select_group_stat_test
 
 
@@ -111,6 +112,60 @@ def _bootstrap_ci(
     lower_q = ((1.0 - level) / 2.0) * 100.0
     upper_q = (1.0 - (1.0 - level) / 2.0) * 100.0
     return (float(np.percentile(estimates, lower_q)), float(np.percentile(estimates, upper_q)))
+
+
+def _bootstrap_effect_percentile_ci(
+    *,
+    effect_kernel: str,
+    groups: list[np.ndarray],
+    level: float,
+    iterations: int,
+    seed: int = 42,
+) -> tuple[float, float] | None:
+    native_ci = bootstrap_percentile_ci_native(
+        effect_kernel=effect_kernel,
+        groups=[group.astype(float).tolist() for group in groups],
+        level=level,
+        iterations=iterations,
+        seed=seed,
+    )
+    if native_ci is not None:
+        return native_ci
+
+    rng = np.random.default_rng(seed)
+    if effect_kernel in {'cohen_d', 'cliffs_delta'}:
+        if len(groups) != 2:
+            return None
+        sample_a = groups[0]
+        sample_b = groups[1]
+        if sample_a.size == 0 or sample_b.size == 0:
+            return None
+        return _bootstrap_ci(
+            rng=rng,
+            sample_builder=lambda: [
+                sample_a[rng.integers(0, sample_a.size, sample_a.size)],
+                sample_b[rng.integers(0, sample_b.size, sample_b.size)],
+            ],
+            effect_fn=lambda sampled: _pairwise_effect_size(
+                sampled[0],
+                sampled[1],
+                non_parametric=effect_kernel == 'cliffs_delta',
+            ),
+            level=level,
+            iterations=iterations,
+        )
+
+    if effect_kernel in {'eta_squared', 'omega_squared'}:
+        if len(groups) < 2 or any(group.size == 0 for group in groups):
+            return None
+        return _bootstrap_ci(
+            rng=rng,
+            sample_builder=lambda: [group[rng.integers(0, group.size, group.size)] for group in groups],
+            effect_fn=lambda sampled: _eta_or_omega_squared(sampled, use_omega=effect_kernel == 'omega_squared'),
+            level=level,
+            iterations=iterations,
+        )
+    raise ValueError(f'Unsupported effect kernel: {effect_kernel}')
 
 
 def _adjust_pvalues(p_values: list[float | None], method: str) -> list[float | None]:
@@ -258,16 +313,9 @@ def compute_metric_pairwise_stats(
             use_omega=config.multi_group_effect == 'omega_squared',
         )
         if config.include_effect_size_ci and overall_effect is not None:
-            rng = np.random.default_rng(42)
-            arrays = [numeric_groups[label] for label in labels]
-
-            def sample_builder() -> list[np.ndarray]:
-                return [arr[rng.integers(0, arr.size, arr.size)] for arr in arrays]
-
-            overall_ci = _bootstrap_ci(
-                rng=rng,
-                sample_builder=sample_builder,
-                effect_fn=lambda sampled: _eta_or_omega_squared(sampled, use_omega=config.multi_group_effect == 'omega_squared'),
+            overall_ci = _bootstrap_effect_percentile_ci(
+                effect_kernel='omega_squared' if config.multi_group_effect == 'omega_squared' else 'eta_squared',
+                groups=[numeric_groups[label] for label in labels],
                 level=config.ci_level,
                 iterations=config.ci_bootstrap_iterations,
             )
@@ -283,18 +331,9 @@ def compute_metric_pairwise_stats(
         effect_size = _pairwise_effect_size(sample_a, sample_b, non_parametric=is_non_parametric)
         effect_ci = None
         if config.include_effect_size_ci and effect_size is not None:
-            rng = np.random.default_rng(42)
-
-            def effect_fn(sampled: list[np.ndarray]) -> float | None:
-                return _pairwise_effect_size(sampled[0], sampled[1], non_parametric=is_non_parametric)
-
-            effect_ci = _bootstrap_ci(
-                rng=rng,
-                sample_builder=lambda: [
-                    sample_a[rng.integers(0, sample_a.size, sample_a.size)],
-                    sample_b[rng.integers(0, sample_b.size, sample_b.size)],
-                ],
-                effect_fn=effect_fn,
+            effect_ci = _bootstrap_effect_percentile_ci(
+                effect_kernel='cliffs_delta' if is_non_parametric else 'cohen_d',
+                groups=[sample_a, sample_b],
                 level=config.ci_level,
                 iterations=config.ci_bootstrap_iterations,
             )
