@@ -1,0 +1,53 @@
+{
+  "name": "unusual token/layout variants preserve parser semantics",
+  "raw_lines": [
+    "#TOKEN LABELS",
+    "DIM",
+    "X NOMINAL 10 +TOL 0.2 TOL -0.2 ACT 10.1 DEV 0.1 OUT 0",
+    "TP",
+    "MMC",
+    "NOM:",
+    "0",
+    "+TOL:",
+    "0.3",
+    "BONUS",
+    "0.05",
+    "MEAS",
+    "0.12",
+    "DEV",
+    "0.12",
+    "OUTTOL",
+    "0"
+  ],
+  "expected_blocks": [
+    [
+      [
+        [
+          "TOKEN LABELS"
+        ]
+      ],
+      [
+        [
+          "X",
+          10.0,
+          0.2,
+          -0.2,
+          "",
+          10.1,
+          0.1,
+          0.0
+        ],
+        [
+          "TP",
+          0.0,
+          0.3,
+          0,
+          0.05,
+          0.12,
+          0.12,
+          0.0
+        ]
+      ]
+    ]
+  ]
+}

@@ -94,6 +94,17 @@ def test_interrupted_multiline_fixture_keeps_single_block_intent_explicit():
     assert [line[0] for line in parsed[0][1]] == ["X", "Y"]
 
 
+def test_unusual_token_layout_fixture_preserves_semantic_tp_and_numeric_x_mapping():
+    fixture = _fixture_by_name("unusual token/layout variants preserve parser semantics")
+
+    parsed = parse_raw_lines_to_blocks(fixture["raw_lines"])
+
+    assert len(parsed) == 1
+    assert parsed[0][0] == [["TOKEN LABELS"]]
+    assert parsed[0][1][0] == ["X", 10.0, 0.2, -0.2, "", 10.1, 0.1, 0.0]
+    assert parsed[0][1][1] == ["TP", 0.0, 0.3, 0, 0.05, 0.12, 0.12, 0.0]
+
+
 @pytest.fixture
 def first_line_comment_regression_inputs():
     base_lines = [
