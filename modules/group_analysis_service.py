@@ -267,8 +267,9 @@ def _resolve_canonical_metric_aliases(frame, canonical_metric_series, *, alias_d
         return resolved_metric_series
 
     if 'REFERENCE' in frame.columns:
-        reference_series = frame['REFERENCE'].fillna('').astype(str).str.strip()
-        reference_series = reference_series.where(reference_series != '', None)
+        reference_series = frame['REFERENCE'].map(
+            lambda value: None if pd.isna(value) or str(value).strip() == '' else str(value).strip()
+        )
     else:
         reference_series = pd.Series([None] * len(resolved_metric_series), index=resolved_metric_series.index, dtype=object)
 
