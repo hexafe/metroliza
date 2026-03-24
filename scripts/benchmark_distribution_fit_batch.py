@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from modules.distribution_fit_service import (
+from modules.distribution_fit_service import (  # noqa: E402
     fit_measurement_distribution,
     fit_measurement_distribution_batch,
     measurement_fingerprint,

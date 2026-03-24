@@ -12,9 +12,12 @@ from scipy.stats import anderson_ksamp, ks_2samp, wasserstein_distance
 
 from modules.comparison_stats import _adjust_pvalues
 from modules.distribution_fit_service import (
-    fit_measurement_distribution_batch,
+    fit_measurement_distribution as _fit_measurement_distribution,
     measurement_fingerprint,
 )
+
+# Backward-compatible module attribute for patch-based tests/callers.
+fit_measurement_distribution = _fit_measurement_distribution
 
 
 DEFAULT_DISTRIBUTION_FIT_POLICY = {
@@ -168,11 +171,14 @@ def build_distribution_profile_rows_compact(metric, grouped_values, *, fit_cache
     }
     ordered_groups = sorted(numeric_by_group)
     fingerprints = {group_name: _sample_fingerprint(numeric_by_group[group_name]) for group_name in ordered_groups}
-    fits_by_group = fit_measurement_distribution_batch(
-        {group_name: numeric_by_group[group_name] for group_name in ordered_groups},
-        memoization_cache=fit_cache,
-        fingerprints_by_group=fingerprints,
-    )
+    fits_by_group = {
+        group_name: fit_measurement_distribution(
+            numeric_by_group[group_name],
+            memoization_cache=fit_cache,
+            measurement_signature=fingerprints[group_name],
+        )
+        for group_name in ordered_groups
+    }
     return [
         _build_profile_compact_entry(metric, group_name, numeric_by_group[group_name], fits_by_group[group_name])
         for group_name in ordered_groups
