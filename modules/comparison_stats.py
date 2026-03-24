@@ -22,7 +22,7 @@ from typing import Any, Callable
 import numpy as np
 from scipy.stats import mannwhitneyu, rankdata, ttest_ind
 
-from modules.comparison_stats_native import bootstrap_percentile_ci_native
+from modules.comparison_stats_native import bootstrap_percentile_ci_native, pairwise_stats_native
 from modules.group_stats_tests import select_group_stat_test
 
 
@@ -259,6 +259,39 @@ def _pairwise_effect_size(sample_a: np.ndarray, sample_b: np.ndarray, *, non_par
     return _cliffs_delta(sample_a, sample_b) if non_parametric else _cohen_d(sample_a, sample_b)
 
 
+def _compute_pairwise_core_native(
+    *,
+    labels: list[str],
+    numeric_groups: dict[str, np.ndarray],
+    config: ComparisonStatsConfig,
+    is_non_parametric: bool,
+    equal_var: bool,
+) -> list[dict[str, Any]] | None:
+    native_rows = pairwise_stats_native(
+        labels=labels,
+        groups=[numeric_groups[label].astype(float).tolist() for label in labels],
+        alpha=config.alpha,
+        correction_method=config.correction_method,
+        non_parametric=is_non_parametric,
+        equal_var=equal_var,
+    )
+    if native_rows is None:
+        return None
+    return [
+        {
+            'group_a': str(row['group_a']),
+            'group_b': str(row['group_b']),
+            'test_used': str(row['test_used']),
+            'pairwise_test_name': str(row['test_used']),
+            'p_value': row.get('p_value'),
+            'effect_size': row.get('effect_size'),
+            'adjusted_p_value': row.get('adjusted_p_value'),
+            'significant': bool(row.get('significant', False)),
+        }
+        for row in native_rows
+    ]
+
+
 def compute_metric_pairwise_stats(
     metric_key: str,
     grouped_values: dict[str, list[float] | np.ndarray],
@@ -320,15 +353,43 @@ def compute_metric_pairwise_stats(
                 iterations=config.ci_bootstrap_iterations,
             )
 
+    pairwise_rows = _compute_pairwise_core_native(
+        labels=labels,
+        numeric_groups=numeric_groups,
+        config=config,
+        is_non_parametric=is_non_parametric,
+        equal_var=equal_var,
+    )
+    if pairwise_rows is None:
+        pairwise_rows = []
+        raw_p_values: list[float | None] = []
+        for group_a, group_b in combinations(labels, 2):
+            sample_a = numeric_groups[group_a]
+            sample_b = numeric_groups[group_b]
+            test_used, p_value = _pairwise_p_value(sample_a, sample_b, non_parametric=is_non_parametric, equal_var=equal_var)
+            raw_p_values.append(p_value)
+            pairwise_rows.append(
+                {
+                    'group_a': group_a,
+                    'group_b': group_b,
+                    'test_used': test_used,
+                    'pairwise_test_name': test_used,
+                    'p_value': p_value,
+                    'effect_size': _pairwise_effect_size(sample_a, sample_b, non_parametric=is_non_parametric),
+                }
+            )
+        adjusted = _adjust_pvalues(raw_p_values, config.correction_method)
+        for row, adjusted_p in zip(pairwise_rows, adjusted):
+            row['adjusted_p_value'] = adjusted_p
+            row['significant'] = bool(adjusted_p is not None and adjusted_p < config.alpha)
+
     rows: list[dict[str, Any]] = []
-    raw_p_values: list[float | None] = []
-    for group_a, group_b in combinations(labels, 2):
+    for pairwise in pairwise_rows:
+        group_a = str(pairwise['group_a'])
+        group_b = str(pairwise['group_b'])
         sample_a = numeric_groups[group_a]
         sample_b = numeric_groups[group_b]
-        test_used, p_value = _pairwise_p_value(sample_a, sample_b, non_parametric=is_non_parametric, equal_var=equal_var)
-        raw_p_values.append(p_value)
-
-        effect_size = _pairwise_effect_size(sample_a, sample_b, non_parametric=is_non_parametric)
+        effect_size = pairwise.get('effect_size')
         effect_ci = None
         if config.include_effect_size_ci and effect_size is not None:
             effect_ci = _bootstrap_effect_percentile_ci(
@@ -342,9 +403,9 @@ def compute_metric_pairwise_stats(
             'metric': metric_key,
             'group_a': group_a,
             'group_b': group_b,
-            'test_used': test_used,
-            'pairwise_test_name': test_used,
-            'p_value': p_value,
+            'test_used': pairwise['test_used'],
+            'pairwise_test_name': pairwise['pairwise_test_name'],
+            'p_value': pairwise.get('p_value'),
             'effect_size': effect_size,
             'effect_type': pairwise_effect_type,
             'pairwise_effect_type': pairwise_effect_type,
@@ -370,11 +431,9 @@ def compute_metric_pairwise_stats(
             if overall_ci is not None:
                 row['omnibus_effect_size_ci'] = overall_ci
         rows.append(row)
-
-    adjusted = _adjust_pvalues(raw_p_values, config.correction_method)
-    for row, adjusted_p in zip(rows, adjusted):
-        row['adjusted_p_value'] = adjusted_p
-        row['significant'] = bool(adjusted_p is not None and adjusted_p < config.alpha)
+    for row, pairwise in zip(rows, pairwise_rows):
+        row['adjusted_p_value'] = pairwise.get('adjusted_p_value')
+        row['significant'] = bool(pairwise.get('significant', False))
         row.setdefault('effect_types', {'pairwise': pairwise_effect_type, 'omnibus': row.get('omnibus_effect_type')})
 
     return rows

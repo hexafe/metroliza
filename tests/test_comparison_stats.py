@@ -326,6 +326,79 @@ def test_native_and_python_bootstrap_ci_are_nearly_equal(monkeypatch):
     assert math.isclose(multi_python[1], multi_native[1], rel_tol=3e-2, abs_tol=3e-2)
 
 
+def test_pairwise_native_backend_selector_python_fallback(monkeypatch):
+    grouped_values = {
+        'A': [1.0, 2.0, 3.0, np.nan],
+        'B': [2.0, 3.0, 4.0],
+    }
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'python')
+    rows = compute_metric_pairwise_stats('metric_selector', grouped_values)
+    assert len(rows) == 1
+    assert rows[0]['pairwise_test_name'] in {'Student t-test', 'Welch t-test', 'Mann-Whitney U'}
+
+
+def test_pairwise_native_and_python_parity_on_deterministic_edge_cases(monkeypatch):
+    if not comparison_stats_native.native_backend_available():
+        monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'python')
+        importlib.reload(comparison_stats_native)
+        return
+
+    datasets = {
+        'small_n': {
+            'A': [1.0, 1.1],
+            'B': [1.2, 1.3],
+            'C': [0.9, 1.0],
+        },
+        'ties': {
+            'A': [1.0, 1.0, 2.0, 2.0, 3.0],
+            'B': [1.0, 2.0, 2.0, 3.0, 3.0],
+            'C': [1.0, 1.0, 1.0, 2.0, 2.0],
+        },
+        'nan_heavy': {
+            'A': [np.nan, np.nan, 2.0, 2.1, 2.2],
+            'B': [np.nan, 2.4, 2.5, np.nan, 2.6],
+            'C': [2.8, np.nan, np.nan, 2.9, 3.0],
+        },
+        'all_constant_groups': {
+            'A': [5.0, 5.0, 5.0, 5.0],
+            'B': [5.0, 5.0, 5.0, 5.0],
+            'C': [5.0, 5.0, 5.0, 5.0],
+        },
+    }
+
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'python')
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
+    importlib.reload(comparison_stats_native)
+
+    python_rows = {
+        name: compute_metric_pairwise_stats(f'metric_{name}', grouped_values)
+        for name, grouped_values in datasets.items()
+    }
+
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'native')
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
+    importlib.reload(comparison_stats_native)
+    native_rows = {
+        name: compute_metric_pairwise_stats(f'metric_{name}', grouped_values)
+        for name, grouped_values in datasets.items()
+    }
+
+    for dataset_name in datasets:
+        assert len(native_rows[dataset_name]) == len(python_rows[dataset_name])
+        for py_row, native_row in zip(python_rows[dataset_name], native_rows[dataset_name]):
+            assert set(py_row.keys()) == set(native_row.keys())
+            for stable_key in ('group_a', 'group_b', 'test_used', 'pairwise_test_name', 'effect_type', 'pairwise_effect_type'):
+                assert native_row[stable_key] == py_row[stable_key]
+            for numeric_key in ('p_value', 'adjusted_p_value', 'effect_size'):
+                py_value = py_row[numeric_key]
+                native_value = native_row[numeric_key]
+                if py_value is None or native_value is None:
+                    assert py_value == native_value
+                else:
+                    assert math.isclose(native_value, py_value, rel_tol=2e-2, abs_tol=2e-2)
+            assert native_row['significant'] == py_row['significant']
+
+
 def test_bootstrap_ci_benchmark_by_group_count_and_iterations(monkeypatch):
     benchmark_cases = [
         (2, 200),
