@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from modules.cmm_native_parser import native_backend_available, parse_blocks_with_backend
+from modules.cmm_native_parser import (
+    native_backend_available,
+    native_persistence_backend_available,
+    normalize_measurement_rows,
+    parse_blocks_with_backend,
+    persist_measurement_rows_python,
+    persist_measurement_rows_with_backend_and_telemetry,
+)
 from modules.cmm_parsing import add_tolerances_to_blocks, parse_raw_lines_to_blocks
 
 FIXTURE_DIR = Path("tests/fixtures/cmm_parser")
@@ -528,3 +535,109 @@ def test_tp_qualifier_pipeline_roundtrip_native_backend_when_available(tmp_path)
 
     parsed = parse_blocks_with_backend(raw_lines, use_native=True)
     _assert_tp_pipeline_roundtrip(parsed, tmp_path)
+
+
+def test_measurement_row_normalization_parity_python_vs_native_when_available():
+    if not native_persistence_backend_available():
+        pytest.skip("Native CMM persistence module is not built in this environment")
+
+    blocks = parse_blocks_with_backend(
+        [
+            "#ROW PARITY",
+            "DIM",
+            "D1 10 0.2 -0.2 10.03",
+            "TP RFS 0.200 0.000 0.344 0.344 0.144",
+            "#END",
+        ],
+        use_native=False,
+    )
+    meta = dict(
+        reference="REF01",
+        fileloc="/tmp/reports",
+        filename="REF01_2024-01-02_123.pdf",
+        date="2024-01-02",
+        sample_number="123",
+    )
+
+    rows_python = normalize_measurement_rows(blocks, **meta, use_native=False)
+    rows_native = normalize_measurement_rows(blocks, **meta, use_native=True)
+
+    assert rows_python == rows_native
+    assert len(rows_python) == len(rows_native)
+
+
+def test_measurement_row_persistence_parity_python_vs_native_when_available(tmp_path):
+    if not native_persistence_backend_available():
+        pytest.skip("Native CMM persistence module is not built in this environment")
+
+    blocks = parse_blocks_with_backend(
+        [
+            "#PERSIST PARITY",
+            "DIM",
+            "D1 10 0.2 -0.2 10.03",
+            "D2 20 0.2 -0.2 20.01",
+            "#END",
+        ],
+        use_native=False,
+    )
+    rows = normalize_measurement_rows(
+        blocks,
+        reference="REF01",
+        fileloc="/tmp/reports",
+        filename="REF01_2024-01-02_123.pdf",
+        date="2024-01-02",
+        sample_number="123",
+        use_native=False,
+    )
+
+    py_db = str(tmp_path / "py_insert.db")
+    native_db = str(tmp_path / "native_insert.db")
+    assert persist_measurement_rows_python(py_db, rows) is True
+    native_result = persist_measurement_rows_with_backend_and_telemetry(native_db, rows, use_native=True)
+    assert native_result.backend == "native"
+    assert native_result.inserted is True
+
+    with sqlite3.connect(py_db) as py_conn, sqlite3.connect(native_db) as native_conn:
+        py_rows = py_conn.execute(
+            """
+            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
+                MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
+                MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
+                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
+            FROM MEASUREMENTS
+            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            ORDER BY MEASUREMENTS.ID
+            """
+        ).fetchall()
+        native_rows = native_conn.execute(
+            """
+            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
+                MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
+                MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
+                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
+            FROM MEASUREMENTS
+            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            ORDER BY MEASUREMENTS.ID
+            """
+        ).fetchall()
+
+    assert py_rows == native_rows
+
+
+def test_cmm_report_parser_records_parse_and_db_stage_timings(tmp_path):
+    CMMReportParser = _load_cmm_report_parser_with_test_stubs()
+
+    db_path = str(tmp_path / "timing.db")
+    parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
+    parser.pdf_raw_text = [
+        "#TIMING",
+        "DIM",
+        "X 10 0.2 -0.2 10.03 0.03 0",
+        "#END",
+    ]
+    parser.split_text_to_blocks()
+    parser.add_tolerances()
+    parser.to_sqlite()
+
+    assert parser.stage_timings_s["parse_batch_runtime"] >= 0.0
+    assert parser.stage_timings_s["db_write_runtime"] >= 0.0

@@ -5,7 +5,9 @@ rows used by downstream grouping and export workflows.
 """
 
 import logging
+import os
 from pathlib import Path
+from time import perf_counter
 from time import strftime
 
 from modules.custom_logger import CustomLogger
@@ -13,7 +15,11 @@ from modules.characteristic_alias_service import (
     ensure_characteristic_alias_schema,
     ensure_characteristic_alias_table,
 )
-from modules.cmm_native_parser import parse_blocks_with_backend_and_telemetry
+from modules.cmm_native_parser import (
+    normalize_measurement_rows,
+    parse_blocks_with_backend_and_telemetry,
+    persist_measurement_rows_with_backend_and_telemetry,
+)
 from modules.pdf_backend import require_pdf_backend, resolve_pdf_backend_module_name
 from modules.cmm_parsing import add_tolerances_to_blocks
 from modules.base_report_parser import BaseReportParser
@@ -105,6 +111,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         """Initialize parser for one CMM report file."""
         super().__init__(file_path=file_path, database=database, connection=connection)
         self.parse_backend_used = "unknown"
+        self.persistence_backend_used = "unknown"
+        self.stage_timings_s: dict[str, float] = {}
 
     def open_database_and_check_filename(self):
         """Handle `open_database_and_check_filename` for `CMMReportParser`.
@@ -289,9 +297,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
         try:
             """Method to split raw text from pdf to blocks - split by measurements"""
+            parse_start = perf_counter()
             parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)
             self.blocks_text = parse_result.blocks
             self.parse_backend_used = parse_result.backend
+            self.stage_timings_s["parse_batch_runtime"] = perf_counter() - parse_start
         except Exception as e:
             self.log_and_exit(e)
 
@@ -425,6 +435,20 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 )
                 return
 
+            use_native_persistence = os.getenv("METROLIZA_CMM_NATIVE_PERSISTENCE", "0").strip() in {"1", "true", "yes", "on"}
+
+            normalized_rows = normalize_measurement_rows(
+                self.blocks_text,
+                reference=self.reference,
+                fileloc=self.file_path,
+                filename=self.file_name,
+                date=self.date,
+                sample_number=self.sample_number,
+                use_native=use_native_persistence,
+            )
+
+            db_write_start = perf_counter()
+
             def create_tables_and_insert_report(transaction_cursor):
                 transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS MEASUREMENTS (
                                     ID INTEGER PRIMARY KEY,
@@ -470,39 +494,79 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 )
                 report_id = transaction_cursor.lastrowid
 
-                for lst in self.blocks_text:
-                    table_name = ""
-                    for sublist in lst[0]:
-                        if isinstance(sublist, str):
-                            table_name += sublist
-                            table_name += ", "
-                        else:
-                            for item in sublist:
-                                if isinstance(item, str):
-                                    table_name += item
-                                    table_name += ", "
-
-                    table_name = table_name.replace('"', '')
-                    table_name = table_name[:-2]
-
-                    rows = [
-                        (None, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], table_name, report_id)
-                        for row in lst[1]
-                    ]
-                    transaction_cursor.executemany(
-                        'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        rows,
-                    )
+                transaction_cursor.executemany(
+                    'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [
+                        (
+                            None,
+                            row[0],
+                            row[1],
+                            row[2],
+                            row[3],
+                            row[4],
+                            row[5],
+                            row[6],
+                            row[7],
+                            row[8],
+                            report_id,
+                        )
+                        for row in normalized_rows
+                    ],
+                )
 
                 return True
 
-            was_inserted = run_transaction_with_retry(
-                self.database,
-                create_tables_and_insert_report,
-                connection=self.connection,
-                retries=4,
-                retry_delay_s=1,
-            )
+            def ensure_tables_only(transaction_cursor):
+                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS MEASUREMENTS (
+                                    ID INTEGER PRIMARY KEY,
+                                    AX TEXT,
+                                    NOM REAL,
+                                    "+TOL" REAL,
+                                    "-TOL" REAL,
+                                    BONUS REAL,
+                                    MEAS REAL,
+                                    DEV REAL,
+                                    OUTTOL REAL,
+                                    HEADER TEXT,
+                                    REPORT_ID INTEGER,
+                                    FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
+                                )''')
+                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS REPORTS (
+                                    ID INTEGER PRIMARY KEY,
+                                    REFERENCE TEXT,
+                                    FILELOC TEXT,
+                                    FILENAME TEXT,
+                                    DATE TEXT,
+                                    SAMPLE_NUMBER TEXT
+                                )''')
+                ensure_characteristic_alias_table(transaction_cursor)
+                ensure_schema_indexes(transaction_cursor)
+
+            if self.connection is None:
+                run_transaction_with_retry(
+                    self.database,
+                    ensure_tables_only,
+                    connection=self.connection,
+                    retries=4,
+                    retry_delay_s=1,
+                )
+                persist_result = persist_measurement_rows_with_backend_and_telemetry(
+                    self.database,
+                    normalized_rows,
+                    use_native=use_native_persistence,
+                )
+                self.persistence_backend_used = persist_result.backend
+                was_inserted = persist_result.inserted
+            else:
+                was_inserted = run_transaction_with_retry(
+                    self.database,
+                    create_tables_and_insert_report,
+                    connection=self.connection,
+                    retries=4,
+                    retry_delay_s=1,
+                )
+                self.persistence_backend_used = "python"
+            self.stage_timings_s["db_write_runtime"] = perf_counter() - db_write_start
             if was_inserted:
                 logger.info("Report '%s' measurements inserted into the database.", self.file_name)
                 return
