@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Literal
 
+import numpy as np
+
 try:
     from _metroliza_comparison_stats_native import bootstrap_percentile_ci as _native_bootstrap_percentile_ci  # type: ignore
     from _metroliza_comparison_stats_native import pairwise_stats as _native_pairwise_stats  # type: ignore
@@ -50,9 +52,14 @@ def bootstrap_percentile_ci_native(
     if _native_bootstrap_percentile_ci is None:
         return None
 
+    normalized_groups = [
+        np.ascontiguousarray(np.asarray(group, dtype=np.float64))
+        for group in groups
+    ]
+
     return _native_bootstrap_percentile_ci(
         str(effect_kernel),
-        [[float(value) for value in group] for group in groups],
+        normalized_groups,
         float(level),
         int(iterations),
         int(seed),
@@ -77,9 +84,14 @@ def pairwise_stats_native(
     if _native_pairwise_stats is None:
         return None
 
+    normalized_groups = [
+        np.ascontiguousarray(np.asarray(group, dtype=np.float64))
+        for group in groups
+    ]
+
     rows = _native_pairwise_stats(
         [str(label) for label in labels],
-        [[float(value) for value in group] for group in groups],
+        normalized_groups,
         float(alpha),
         str(correction_method),
         bool(non_parametric),

@@ -1,7 +1,9 @@
+use numpy::PyReadonlyArray1;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rand::SeedableRng;
 use rand_distr::{Distribution, Gamma, Normal, Weibull};
+use rayon::prelude::*;
 use statrs::distribution::{ContinuousCDF, Normal as StatNormal};
 
 const EPS: f64 = 1e-12;
@@ -190,7 +192,6 @@ fn ad_statistic(sample: &mut [f64], dist: &SupportedDistribution) -> Option<f64>
     Some(-n - (sum / n))
 }
 
-
 fn ks_statistic(sample: &[f64], dist: &SupportedDistribution) -> Option<f64> {
     if sample.is_empty() {
         return None;
@@ -216,13 +217,72 @@ fn ks_statistic(sample: &[f64], dist: &SupportedDistribution) -> Option<f64> {
     Some(d_plus.max(d_minus))
 }
 
+fn splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn iteration_seed(base_seed: u64, iteration_index: usize) -> u64 {
+    splitmix64(base_seed ^ (iteration_index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+}
+
+fn run_ad_monte_carlo(
+    dist: &SupportedDistribution,
+    sample_size: usize,
+    observed_stat: f64,
+    iterations: usize,
+    resolved_seed: u64,
+) -> (Option<f64>, usize) {
+    let (exceed_count, valid_trials) = (0..iterations)
+        .into_par_iter()
+        .map(|iteration_index| {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(iteration_seed(resolved_seed, iteration_index));
+            let mut simulated = Vec::with_capacity(sample_size);
+
+            for _ in 0..sample_size {
+                match dist.sample_one(&mut rng) {
+                    Some(value) if value.is_finite() => simulated.push(value),
+                    _ => return (0usize, 0usize),
+                }
+            }
+
+            let stat = match ad_statistic(&mut simulated, dist) {
+                Some(value) if value.is_finite() => value,
+                _ => return (0usize, 0usize),
+            };
+
+            if stat >= observed_stat {
+                (1usize, 1usize)
+            } else {
+                (0usize, 1usize)
+            }
+        })
+        .reduce(|| (0usize, 0usize), |left, right| (left.0 + right.0, left.1 + right.1));
+
+    if valid_trials == 0 {
+        return (None, 0);
+    }
+    let p_value = (exceed_count as f64 + 1.0) / (valid_trials as f64 + 1.0);
+    (Some(p_value), valid_trials)
+}
+
 #[pyfunction]
 #[pyo3(signature = (distribution, fitted_params, sample_values))]
 fn compute_ad_ks_statistics(
+    py: Python<'_>,
     distribution: &str,
-    fitted_params: Vec<f64>,
-    sample_values: Vec<f64>,
+    fitted_params: PyReadonlyArray1<'_, f64>,
+    sample_values: PyReadonlyArray1<'_, f64>,
 ) -> PyResult<(f64, f64)> {
+    let fitted_params = fitted_params
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("fitted_params must be a contiguous float64 array"))?;
+    let sample_values = sample_values
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("sample_values must be a contiguous float64 array"))?;
+
     let dist = SupportedDistribution::from_name_and_params(distribution, &fitted_params)
         .ok_or_else(|| PyValueError::new_err("Unsupported distribution identifier or invalid parameter count"))?;
 
@@ -238,18 +298,20 @@ fn compute_ad_ks_statistics(
         return Err(PyValueError::new_err("sample_values must be finite"));
     }
 
-    let mut ad_sample = sample_values.clone();
+    let mut ad_sample = sample_values.to_vec();
     let ad = ad_statistic(&mut ad_sample, &dist)
         .ok_or_else(|| PyValueError::new_err("Unable to compute Anderson-Darling statistic"))?;
     let ks = ks_statistic(&sample_values, &dist)
         .ok_or_else(|| PyValueError::new_err("Unable to compute Kolmogorov-Smirnov statistic"))?;
     Ok((ad, ks))
 }
+
 #[pyfunction]
 #[pyo3(signature = (distribution, fitted_params, sample_size, observed_stat, iterations, seed=None))]
 fn estimate_ad_pvalue_monte_carlo(
+    py: Python<'_>,
     distribution: &str,
-    fitted_params: Vec<f64>,
+    fitted_params: PyReadonlyArray1<'_, f64>,
     sample_size: usize,
     observed_stat: f64,
     iterations: usize,
@@ -262,6 +324,10 @@ fn estimate_ad_pvalue_monte_carlo(
         return Ok((None, 0));
     }
 
+    let fitted_params = fitted_params
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("fitted_params must be a contiguous float64 array"))?;
+
     let dist = SupportedDistribution::from_name_and_params(distribution, &fitted_params)
         .ok_or_else(|| PyValueError::new_err("Unsupported distribution identifier or invalid parameter count"))?;
 
@@ -270,42 +336,16 @@ fn estimate_ad_pvalue_monte_carlo(
     }
 
     let resolved_seed = seed.unwrap_or_else(rand::random::<u64>);
-    let mut rng = rand::rngs::StdRng::seed_from_u64(resolved_seed);
-    let mut exceed_count = 0usize;
-    let mut valid_trials = 0usize;
-
-    for _ in 0..iterations {
-        let mut simulated = Vec::with_capacity(sample_size);
-        let mut valid = true;
-        for _ in 0..sample_size {
-            match dist.sample_one(&mut rng) {
-                Some(value) if value.is_finite() => simulated.push(value),
-                _ => {
-                    valid = false;
-                    break;
-                }
-            }
-        }
-        if !valid || simulated.len() != sample_size {
-            continue;
-        }
-
-        let stat = match ad_statistic(&mut simulated, &dist) {
-            Some(value) if value.is_finite() => value,
-            _ => continue,
-        };
-
-        valid_trials += 1;
-        if stat >= observed_stat {
-            exceed_count += 1;
-        }
-    }
-
-    if valid_trials == 0 {
-        return Ok((None, 0));
-    }
-    let p_value = (exceed_count as f64 + 1.0) / (valid_trials as f64 + 1.0);
-    Ok((Some(p_value), valid_trials))
+    let result = py.allow_threads(|| {
+        run_ad_monte_carlo(
+            &dist,
+            sample_size,
+            observed_stat,
+            iterations,
+            resolved_seed,
+        )
+    });
+    Ok(result)
 }
 
 #[pymodule]

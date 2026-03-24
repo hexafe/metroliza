@@ -80,7 +80,7 @@ fn cliffs_delta(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
     Some((2.0 * u_statistic) / (n_a * n_b) - 1.0)
 }
 
-fn eta_or_omega_squared(groups: &[Vec<f64>], use_omega: bool) -> Option<f64> {
+fn eta_or_omega_squared(groups: &[&[f64]], use_omega: bool) -> Option<f64> {
     if groups.len() < 2 {
         return None;
     }
@@ -135,7 +135,7 @@ fn percentile_linear(sorted: &[f64], q: f64) -> f64 {
     sorted[low] * (1.0 - weight) + sorted[high] * weight
 }
 
-fn evaluate_kernel(effect_kernel: &str, groups: &[Vec<f64>]) -> Option<f64> {
+fn evaluate_kernel(effect_kernel: &str, groups: &[&[f64]]) -> Option<f64> {
     match effect_kernel {
         "cohen_d" => {
             if groups.len() != 2 {
@@ -324,8 +324,9 @@ fn bootstrap_percentile_ci(
                     .collect::<Vec<f64>>()
             })
             .collect();
+        let sampled_group_refs: Vec<&[f64]> = sampled_groups.iter().map(Vec::as_slice).collect();
 
-        if let Some(estimate) = evaluate_kernel(effect_kernel, &sampled_groups) {
+        if let Some(estimate) = evaluate_kernel(effect_kernel, &sampled_group_refs) {
             if estimate.is_finite() {
                 estimates.push(estimate);
             }

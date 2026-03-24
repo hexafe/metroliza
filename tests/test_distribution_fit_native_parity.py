@@ -1,5 +1,7 @@
 import unittest
+import json
 from unittest import mock
+from pathlib import Path
 
 import numpy as np
 from scipy.stats import gamma, norm
@@ -7,8 +9,62 @@ from scipy.stats import gamma, norm
 import modules.distribution_fit_native as native_bridge
 import modules.distribution_fit_service as service
 
+FIXTURE_PATH = Path('tests/fixtures/distribution_fit/native_kernel_edge_cases.json')
+
+
+def _load_native_kernel_edge_fixtures():
+    return json.loads(FIXTURE_PATH.read_text())
+
 
 class TestDistributionFitNativeParity(unittest.TestCase):
+    def test_native_wrapper_normalizes_list_and_ndarray_inputs_equivalently(self):
+        with mock.patch.object(
+            native_bridge,
+            '_native_estimate_ad_pvalue_monte_carlo',
+            return_value=(0.42, 100),
+        ) as monte_carlo_stub, mock.patch.object(
+            native_bridge,
+            '_native_compute_ad_ks_statistics',
+            return_value=(0.1, 0.2),
+        ) as stats_stub:
+            list_result = native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                distribution='norm',
+                fitted_params=[0, 1],
+                sample_size=40,
+                observed_stat=0.65,
+                iterations=100,
+                seed=123,
+            )
+            array_result = native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                distribution='norm',
+                fitted_params=np.array([0, 1], dtype=np.float32),
+                sample_size=40,
+                observed_stat=0.65,
+                iterations=100,
+                seed=123,
+            )
+            self.assertEqual(list_result, array_result)
+
+            list_stats = native_bridge.compute_ad_ks_statistics_native(
+                distribution='norm',
+                fitted_params=[0, 1],
+                sample_values=[-1, 0, 1],
+            )
+            array_stats = native_bridge.compute_ad_ks_statistics_native(
+                distribution='norm',
+                fitted_params=np.array([0, 1], dtype=np.float32),
+                sample_values=np.array([-1, 0, 1], dtype=np.float32),
+            )
+            self.assertEqual(list_stats, array_stats)
+
+            monte_call_params = monte_carlo_stub.call_args_list[0].args[1]
+            stats_call_params = stats_stub.call_args_list[0].args[1]
+            stats_call_values = stats_stub.call_args_list[0].args[2]
+            for arr in (monte_call_params, stats_call_params, stats_call_values):
+                self.assertIsInstance(arr, np.ndarray)
+                self.assertEqual(arr.dtype, np.float64)
+                self.assertTrue(arr.flags['C_CONTIGUOUS'])
+
     @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
     def test_native_seeded_runs_are_exactly_reproducible(self):
         p1, valid1 = native_bridge.estimate_ad_pvalue_monte_carlo_native(
@@ -103,6 +159,41 @@ class TestDistributionFitNativeParity(unittest.TestCase):
 
         self.assertAlmostEqual(native_ad, ad_py, places=10)
         self.assertAlmostEqual(native_ks, ks_py, places=10)
+
+    @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
+    def test_native_ad_ks_statistics_kernel_near_boundary_parameters(self):
+        for fixture in _load_native_kernel_edge_fixtures():
+            distribution = fixture['distribution']
+            params = tuple(float(value) for value in fixture['fitted_params'])
+            sample = [float(value) for value in fixture['sample_values']]
+
+            native_ad, native_ks = native_bridge.compute_ad_ks_statistics_native(
+                distribution=distribution,
+                fitted_params=params,
+                sample_values=sample,
+            )
+
+            if distribution == 'norm':
+                ad_py = service._ad_statistic(np.asarray(sample, dtype=float), lambda x: norm.cdf(x, *params))
+                ks_py = service.kstest(sample, norm.cdf, args=params).statistic
+            elif distribution == 'gamma':
+                ad_py = service._ad_statistic(np.asarray(sample, dtype=float), lambda x: gamma.cdf(x, *params))
+                ks_py = service.kstest(sample, gamma.cdf, args=params).statistic
+            else:
+                self.fail(f"Unsupported distribution fixture: {distribution}")
+
+            self.assertAlmostEqual(
+                native_ad,
+                ad_py,
+                delta=float(fixture['ad_abs_tol']),
+                msg=fixture['rationale'],
+            )
+            self.assertAlmostEqual(
+                native_ks,
+                ks_py,
+                delta=float(fixture['ks_abs_tol']),
+                msg=fixture['rationale'],
+            )
 
 if __name__ == '__main__':
     unittest.main()
