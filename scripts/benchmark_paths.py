@@ -354,6 +354,43 @@ def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: 
     )
 
 
+
+
+def benchmark_distribution_fit_monte_carlo_path(temp_dir: Path, *, group_count: int, sample_size: int, monte_carlo_samples: int) -> ScenarioResult:
+    from modules.distribution_fit_service import fit_measurement_distribution
+
+    del temp_dir
+    rng = np.random.default_rng(314159)
+    groups = [
+        np.asarray(rng.normal(loc=10.0 + (idx * 0.05), scale=0.25 + ((idx % 4) * 0.03), size=sample_size), dtype=float)
+        for idx in range(group_count)
+    ]
+
+    ks_proxy_start = time.perf_counter()
+    for values in groups:
+        fit_measurement_distribution(values, monte_carlo_gof_samples=0)
+    ks_proxy_s = time.perf_counter() - ks_proxy_start
+
+    monte_carlo_start = time.perf_counter()
+    for values in groups:
+        fit_measurement_distribution(values, monte_carlo_gof_samples=monte_carlo_samples, monte_carlo_seed=2026)
+    monte_carlo_s = time.perf_counter() - monte_carlo_start
+
+    return ScenarioResult(
+        scenario='distribution_fit_monte_carlo_path',
+        wall_time_s=ks_proxy_s + monte_carlo_s,
+        stage_timings_s={
+            'ks_proxy_path': ks_proxy_s,
+            'monte_carlo_bootstrap_path': monte_carlo_s,
+            'slowdown_ratio': (monte_carlo_s / ks_proxy_s) if ks_proxy_s > 0 else 0.0,
+        },
+        input_metrics={
+            'rows': group_count * sample_size,
+            'headers': group_count,
+            'chart_count': group_count,
+        },
+    )
+
 def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int) -> ScenarioResult:
     from modules.csv_summary_dialog import DataProcessingThread, load_csv_with_fallbacks
 
@@ -496,6 +533,9 @@ def main() -> int:
     parser.add_argument('--headers-per-report', type=int, default=10)
     parser.add_argument('--csv-rows', type=int, default=1500)
     parser.add_argument('--csv-columns', type=int, default=8)
+    parser.add_argument('--fit-group-count', type=int, default=40)
+    parser.add_argument('--fit-sample-size', type=int, default=120)
+    parser.add_argument('--fit-monte-carlo-samples', type=int, default=250)
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory(prefix='metroliza-bench-') as temp_dir:
@@ -509,6 +549,12 @@ def main() -> int:
                 headers_per_report=max(args.headers_per_report, 64),
             ),
             benchmark_csv_summary_path(temp_path, row_count=args.csv_rows, data_columns=args.csv_columns),
+            benchmark_distribution_fit_monte_carlo_path(
+                temp_path,
+                group_count=args.fit_group_count,
+                sample_size=args.fit_sample_size,
+                monte_carlo_samples=max(1, args.fit_monte_carlo_samples),
+            ),
         ]
 
     payload = {

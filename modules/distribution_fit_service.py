@@ -10,6 +10,7 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
+from modules.distribution_fit_native import estimate_ad_pvalue_monte_carlo_native
 from scipy.stats import (
     foldnorm,
     gamma,
@@ -250,6 +251,7 @@ def _ad_statistic(sample: np.ndarray, cdf: Callable[[np.ndarray], np.ndarray]) -
 def _estimate_ad_pvalue_monte_carlo(
     *,
     dist,
+    distribution_name: str,
     params: tuple,
     sample_size: int,
     observed_stat: float,
@@ -258,6 +260,19 @@ def _estimate_ad_pvalue_monte_carlo(
 ):
     if iterations <= 0:
         return None
+
+    native_result = estimate_ad_pvalue_monte_carlo_native(
+        distribution=distribution_name,
+        fitted_params=params,
+        sample_size=sample_size,
+        observed_stat=observed_stat,
+        iterations=iterations,
+        seed=random_seed,
+    )
+    if native_result is not None:
+        p_value, _valid_trials = native_result
+        return p_value
+
     rng = np.random.default_rng(random_seed)
     exceed_count = 0
     valid_trials = 0
@@ -561,6 +576,7 @@ def fit_measurement_distribution(
             if monte_carlo_gof_samples > 0:
                 fitted['gof']['ad_pvalue'] = _estimate_ad_pvalue_monte_carlo(
                     dist=candidate.scipy_dist,
+                    distribution_name=candidate.name,
                     params=fitted['params'],
                     sample_size=sample_size,
                     observed_stat=fitted['gof']['ad_statistic'],
