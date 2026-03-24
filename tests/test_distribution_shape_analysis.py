@@ -4,7 +4,11 @@ from unittest.mock import patch
 
 import numpy as np
 
-from modules.distribution_shape_analysis import build_distribution_profile_rows, compute_distribution_difference
+from modules.distribution_shape_analysis import (
+    build_distribution_profile_rows,
+    build_distribution_profile_rows_compact,
+    compute_distribution_difference,
+)
 
 
 class TestDistributionShapeAnalysis(unittest.TestCase):
@@ -118,6 +122,36 @@ class TestDistributionShapeAnalysis(unittest.TestCase):
         self.assertEqual(result['omnibus_row']['significant?'], 'YES')
         self.assertFalse(any('p-value floored' in str(item.message) for item in caught))
 
+
+
+    def test_build_distribution_profile_rows_compact_preserves_worksheet_projection(self):
+        grouped_values = {
+            'A': np.array([1.0, 2.0, 3.0], dtype=float),
+            'B': np.array([4.0, 5.0, 6.0], dtype=float),
+        }
+
+        compact = build_distribution_profile_rows_compact('M-compact', grouped_values, values_are_clean=True)
+        expanded = build_distribution_profile_rows('M-compact', grouped_values, values_are_clean=True)
+
+        self.assertEqual(len(compact), len(expanded))
+        self.assertEqual([entry[0] for entry in compact], [row['Metric'] for row in expanded])
+        self.assertEqual([entry[1] for entry in compact], [row['Group'] for row in expanded])
+
+    def test_profile_rows_batch_fit_calls_single_batch_api(self):
+        grouped_values = {
+            'A': np.array([1.0, 1.1, 1.2, 1.3], dtype=float),
+            'B': np.array([2.0, 2.1, 2.2, 2.3], dtype=float),
+        }
+
+        with patch('modules.distribution_shape_analysis.fit_measurement_distribution_batch') as mock_batch:
+            mock_batch.return_value = {
+                'A': {'fit_quality': {'label': 'strong'}, 'gof_metrics': {}, 'selected_model': {'display_name': 'Normal'}, 'inferred_support_mode': 'bilateral_signed', 'status': 'ok', 'warning': None, 'notes': []},
+                'B': {'fit_quality': {'label': 'strong'}, 'gof_metrics': {}, 'selected_model': {'display_name': 'Normal'}, 'inferred_support_mode': 'bilateral_signed', 'status': 'ok', 'warning': None, 'notes': []},
+            }
+            rows = build_distribution_profile_rows('M-batch', grouped_values, values_are_clean=True)
+
+        self.assertEqual(mock_batch.call_count, 1)
+        self.assertEqual(len(rows), 2)
 
 if __name__ == '__main__':
     unittest.main()
