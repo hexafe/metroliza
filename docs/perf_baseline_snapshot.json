@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-03-24T00:00:00Z",
+  "version": 1,
+  "notes": "Initial checked-in benchmark baseline snapshot for non-blocking CI trend monitoring.",
+  "scenarios": {
+    "pdf_parse_path": {
+      "median_wall_time_s": 0.01672
+    },
+    "cmm_parser_backend_compare": {
+      "median_wall_time_s": 0.07211
+    },
+    "distribution_fit_batch_compare": {
+      "median_wall_time_s": 11.70270
+    },
+    "comparison_stats_ci_flow": {
+      "median_wall_time_s": 0.41722
+    },
+    "comparison_stats_pairwise_flow": {
+      "median_wall_time_s": 0.03014
+    }
+  }
+}

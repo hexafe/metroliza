@@ -180,6 +180,7 @@ def _create_csv_fixture(csv_path: Path, *, row_count: int, data_columns: int) ->
 
 def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
     from modules.cmm_report_parser import CMMReportParser
+    from modules.cmm_native_parser import get_backend_telemetry_snapshot, reset_backend_telemetry
     from modules.parse_reports_thread import ParseReportsThread, parse_new_reports
     from modules.contracts import ParseRequest
 
@@ -197,6 +198,7 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
     load_existing_s = time.perf_counter() - load_existing_start
 
     parse_start = time.perf_counter()
+    reset_backend_telemetry()
     parse_result = parse_new_reports(
         report_paths=reports,
         report_fingerprints=fingerprints,
@@ -204,6 +206,7 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
         persist_report=lambda _parser: None,
     )
     parse_loop_s = time.perf_counter() - parse_start
+    parse_telemetry = get_backend_telemetry_snapshot()
     wall_time_s = time.perf_counter() - t0
 
     return ScenarioResult(
@@ -218,6 +221,10 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
             'rows': parse_result.total_files,
             'headers': 0,
             'chart_count': 0,
+            'parse_python_backend_rate': float(parse_telemetry.get('parse', {}).get('python_rate', 0.0)),
+            'parse_native_backend_rate': float(parse_telemetry.get('parse', {}).get('native_rate', 0.0)),
+            'persistence_python_backend_rate': float(parse_telemetry.get('persistence', {}).get('python_rate', 0.0)),
+            'persistence_native_backend_rate': float(parse_telemetry.get('persistence', {}).get('native_rate', 0.0)),
         },
     )
 
