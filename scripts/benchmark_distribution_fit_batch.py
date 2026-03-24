@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -16,6 +18,10 @@ from modules.distribution_fit_service import (  # noqa: E402
     fit_measurement_distribution,
     fit_measurement_distribution_batch,
     measurement_fingerprint,
+)
+from modules.distribution_fit_native import (  # noqa: E402
+    native_backend_available,
+    estimate_ad_pvalue_monte_carlo_native,
 )
 
 
@@ -81,13 +87,89 @@ def _validate_parity(baseline, candidate):
     return mismatches
 
 
+def _run_native_monte_carlo_once(*, iterations: int, sample_size: int, seed: int, reps: int) -> float:
+    start = time.perf_counter()
+    for _ in range(reps):
+        result = estimate_ad_pvalue_monte_carlo_native(
+            distribution='norm',
+            fitted_params=(0.0, 1.0),
+            sample_size=sample_size,
+            observed_stat=0.65,
+            iterations=iterations,
+            seed=seed,
+        )
+        if result is None:
+            raise RuntimeError('Native backend unavailable in worker process.')
+    return time.perf_counter() - start
+
+
+def _run_native_mode_subprocess(*, mode: str, args) -> float:
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        '--native-monte-carlo-mode',
+        mode,
+        '--native-iterations',
+        str(args.native_iterations),
+        '--native-sample-size',
+        str(args.native_sample_size),
+        '--native-seed',
+        str(args.native_seed),
+        '--native-repetitions',
+        str(args.native_repetitions),
+    ]
+    env = dict(os.environ)
+    if mode == 'single':
+        env['RAYON_NUM_THREADS'] = '1'
+
+    completed = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env)
+    return float(completed.stdout.strip())
+
+
+def _run_native_monte_carlo_scaling_benchmark(args) -> int:
+    if not native_backend_available():
+        print('native backend unavailable; skipping native single-thread vs parallel benchmark')
+        return 0
+
+    single_seconds = _run_native_mode_subprocess(mode='single', args=args)
+    parallel_seconds = _run_native_mode_subprocess(mode='parallel', args=args)
+    speedup = single_seconds / parallel_seconds if parallel_seconds > 0 else float('inf')
+
+    print('native_monte_carlo_scaling_benchmark')
+    print(f'native_iterations={args.native_iterations}, sample_size={args.native_sample_size}, repetitions={args.native_repetitions}')
+    print(f'single_thread_seconds={single_seconds:.4f}')
+    print(f'parallel_seconds={parallel_seconds:.4f}')
+    print(f'parallel_speedup_x={speedup:.2f}')
+    print('expected_speedup_band_x=1.3-4.0 (compute-bound; lower on small iteration counts, higher on multi-core hosts)')
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description='Benchmark distribution-fit legacy per-group path vs batch ndarray path.')
     parser.add_argument('--metrics', type=int, default=40)
     parser.add_argument('--groups', type=int, default=6)
     parser.add_argument('--samples', type=int, default=120)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--native-scaling', action='store_true', help='Benchmark native Monte Carlo single-thread vs parallel runtime.')
+    parser.add_argument('--native-iterations', type=int, default=20000)
+    parser.add_argument('--native-sample-size', type=int, default=64)
+    parser.add_argument('--native-seed', type=int, default=123)
+    parser.add_argument('--native-repetitions', type=int, default=3)
+    parser.add_argument('--native-monte-carlo-mode', choices=['single', 'parallel'], help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    if args.native_monte_carlo_mode:
+        seconds = _run_native_monte_carlo_once(
+            iterations=args.native_iterations,
+            sample_size=args.native_sample_size,
+            seed=args.native_seed,
+            reps=args.native_repetitions,
+        )
+        print(f'{seconds:.10f}')
+        return
+
+    if args.native_scaling:
+        raise SystemExit(_run_native_monte_carlo_scaling_benchmark(args))
 
     fixture = _build_fixture(args.metrics, args.groups, args.samples, args.seed)
 
