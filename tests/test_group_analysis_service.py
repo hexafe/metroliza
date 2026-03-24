@@ -374,6 +374,50 @@ class TestGroupAnalysisService(unittest.TestCase):
         )
         self.assertEqual(status, 'LIMIT_MISMATCH')
 
+    def test_classify_metric_spec_status_matches_legacy_outputs_for_mixed_validity_rows(self):
+        def legacy_classify(metric_rows_df, spec_columns):
+            normalized_specs = []
+            for _, row in metric_rows_df.iterrows():
+                normalized_specs.append(
+                    normalize_spec_limits(
+                        row[spec_columns['lsl']] if spec_columns['lsl'] else None,
+                        row[spec_columns['nominal']] if spec_columns['nominal'] else None,
+                        row[spec_columns['usl']] if spec_columns['usl'] else None,
+                    )
+                )
+
+            if not normalized_specs:
+                return 'INVALID_SPEC', {'lsl': None, 'nominal': None, 'usl': None}
+            if any(classify_spec_status(spec) == 'INVALID_SPEC' for spec in normalized_specs):
+                return 'INVALID_SPEC', normalized_specs[0]
+
+            unique_nominals = {spec['nominal'] for spec in normalized_specs}
+            unique_limits = {(spec['lsl'], spec['usl']) for spec in normalized_specs}
+            canonical_spec = normalized_specs[0]
+            if len(unique_nominals) > 1:
+                return 'NOM_MISMATCH', canonical_spec
+            if len(unique_limits) > 1:
+                return 'LIMIT_MISMATCH', canonical_spec
+            return 'EXACT_MATCH', canonical_spec
+
+        fixture_frames = [
+            pd.DataFrame({'LSL': [1, 1], 'NOMINAL': [2, 2], 'USL': [3, 3]}),
+            pd.DataFrame({'LSL': [1, 1], 'NOMINAL': [2, 2.1], 'USL': [3, 3]}),
+            pd.DataFrame({'LSL': [1, 1.1], 'NOMINAL': [2, 2], 'USL': [3, 3.1]}),
+            pd.DataFrame({'LSL': [1, 'bad'], 'NOMINAL': [2, 2], 'USL': [3, 3]}),
+            pd.DataFrame({'LSL': [4, 4], 'NOMINAL': [2, 2], 'USL': [3, 3]}),
+            pd.DataFrame({'LSL': [1.00049, 1.0004], 'NOMINAL': [2.00049, 2.0004], 'USL': [3.00049, 3.0004]}),
+            pd.DataFrame({'LSL': ['1.5', '1.5'], 'NOMINAL': ['1.4', '1.5'], 'USL': ['1.7', '1.7']}),
+        ]
+        spec_columns = {'lsl': 'LSL', 'nominal': 'NOMINAL', 'usl': 'USL'}
+
+        for fixture in fixture_frames:
+            with self.subTest(frame=fixture.to_dict(orient='list')):
+                legacy_status, legacy_canonical = legacy_classify(fixture, spec_columns)
+                status, canonical = classify_metric_spec_status(fixture, spec_columns)
+                self.assertEqual(status, legacy_status)
+                self.assertEqual(canonical, legacy_canonical)
+
     def test_capability_payload_marks_not_applicable_without_valid_spec(self):
         payload = compute_capability_payload([1.0, 1.1, 1.2], {'lsl': None, 'nominal': None, 'usl': None})
         self.assertEqual(payload['status'], 'not_applicable')

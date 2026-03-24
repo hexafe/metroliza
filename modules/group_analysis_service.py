@@ -165,14 +165,22 @@ def _build_metric_plot_eligibility(*, grouped_values, analysis_level, include_me
     }
 
 
-def _round_display_value(value, *, precision=3):
-    """Round numeric values for display payloads while preserving nulls."""
+def _coerce_numeric_scalar(value):
+    """Convert a scalar-like value to float, returning None when coercion fails."""
     if value is None:
         return None
-    parsed = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
+    parsed = pd.to_numeric(value, errors='coerce')
     if pd.isna(parsed):
         return None
-    return round(float(parsed), precision)
+    return float(parsed)
+
+
+def _round_display_value(value, *, precision=3):
+    """Round numeric values for display payloads while preserving nulls."""
+    parsed = _coerce_numeric_scalar(value)
+    if parsed is None:
+        return None
+    return round(parsed, precision)
 
 
 def _round_display_value_adj_p(value):
@@ -285,12 +293,10 @@ def normalize_spec_limits(lsl, nominal, usl, *, precision=3):
     """Normalize spec values to rounded numeric payload fields with explicit nulls."""
 
     def _to_rounded(value):
-        if value is None:
+        parsed = _coerce_numeric_scalar(value)
+        if parsed is None:
             return None
-        parsed = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
-        if pd.isna(parsed):
-            return None
-        return round(float(parsed), precision)
+        return round(parsed, precision)
 
     return {
         'lsl': _to_rounded(lsl),
@@ -316,29 +322,38 @@ def classify_spec_status(spec_payload):
 
 def classify_metric_spec_status(metric_rows_df, spec_columns):
     """Classify a metric's cross-row spec comparability status."""
-    normalized_specs = []
-    for _, row in metric_rows_df.iterrows():
-        normalized_specs.append(
-            normalize_spec_limits(
-                row[spec_columns['lsl']] if spec_columns['lsl'] else None,
-                row[spec_columns['nominal']] if spec_columns['nominal'] else None,
-                row[spec_columns['usl']] if spec_columns['usl'] else None,
-            )
-        )
-
-    if not normalized_specs:
+    if metric_rows_df.empty:
         return 'INVALID_SPEC', {'lsl': None, 'nominal': None, 'usl': None}
 
-    if any(classify_spec_status(spec) == 'INVALID_SPEC' for spec in normalized_specs):
-        return 'INVALID_SPEC', normalized_specs[0]
+    def _coerced_spec_series(column_name):
+        if not column_name:
+            return pd.Series(np.nan, index=metric_rows_df.index, dtype=float)
+        return pd.to_numeric(metric_rows_df[column_name], errors='coerce').round(3)
 
-    unique_nominals = {spec['nominal'] for spec in normalized_specs}
-    unique_limits = {(spec['lsl'], spec['usl']) for spec in normalized_specs}
-    canonical_spec = normalized_specs[0]
+    lsl_series = _coerced_spec_series(spec_columns.get('lsl'))
+    nominal_series = _coerced_spec_series(spec_columns.get('nominal'))
+    usl_series = _coerced_spec_series(spec_columns.get('usl'))
 
-    if len(unique_nominals) > 1:
+    canonical_spec = {
+        'lsl': None if pd.isna(lsl_series.iloc[0]) else float(lsl_series.iloc[0]),
+        'nominal': None if pd.isna(nominal_series.iloc[0]) else float(nominal_series.iloc[0]),
+        'usl': None if pd.isna(usl_series.iloc[0]) else float(usl_series.iloc[0]),
+    }
+
+    invalid_spec_mask = (
+        lsl_series.isna()
+        | nominal_series.isna()
+        | usl_series.isna()
+        | (lsl_series > usl_series)
+        | (nominal_series < lsl_series)
+        | (nominal_series > usl_series)
+    )
+    if invalid_spec_mask.any():
+        return 'INVALID_SPEC', canonical_spec
+
+    if nominal_series.nunique(dropna=False) > 1:
         return 'NOM_MISMATCH', canonical_spec
-    if len(unique_limits) > 1:
+    if pd.DataFrame({'lsl': lsl_series, 'usl': usl_series}).drop_duplicates().shape[0] > 1:
         return 'LIMIT_MISMATCH', canonical_spec
     return 'EXACT_MATCH', canonical_spec
 
@@ -453,8 +468,7 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
 
 
 def _safe_numeric(value):
-    parsed = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
-    return None if pd.isna(parsed) else float(parsed)
+    return _coerce_numeric_scalar(value)
 
 
 def _pairwise_practical_magnitude(effect_value):
