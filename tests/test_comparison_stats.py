@@ -430,6 +430,72 @@ def test_pairwise_native_and_python_parity_on_deterministic_edge_cases(monkeypat
             assert native_row['significant'] == py_row['significant']
 
 
+def test_comparison_native_wrapper_normalizes_list_and_ndarray_inputs_equivalently(monkeypatch):
+    captured_bootstrap_groups = []
+    captured_pairwise_groups = []
+
+    def _stub_bootstrap(effect_kernel, groups, level, iterations, seed):
+        del effect_kernel, level, iterations, seed
+        captured_bootstrap_groups.append(groups)
+        return (0.1, 0.9)
+
+    def _stub_pairwise(labels, groups, alpha, correction_method, non_parametric, equal_var):
+        del labels, alpha, correction_method, non_parametric, equal_var
+        captured_pairwise_groups.append(groups)
+        return [{'group_a': 'A', 'group_b': 'B', 'p_value': 0.5, 'effect_size': 0.0, 'adjusted_p_value': 0.5, 'significant': False, 'test_used': 'Student t-test'}]
+
+    monkeypatch.setattr(comparison_stats_native, '_native_bootstrap_percentile_ci', _stub_bootstrap)
+    monkeypatch.setattr(comparison_stats_native, '_native_pairwise_stats', _stub_pairwise)
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'native')
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'native')
+
+    list_groups = [[1, 2, 3], [4, 5, 6]]
+    ndarray_groups = [
+        np.array([1, 2, 3], dtype=np.float64),
+        np.array([4, 5, 6], dtype=np.float64),
+    ]
+
+    bootstrap_from_lists = comparison_stats_native.bootstrap_percentile_ci_native(
+        effect_kernel='cohen_d',
+        groups=list_groups,
+        level=0.95,
+        iterations=50,
+        seed=7,
+    )
+    bootstrap_from_arrays = comparison_stats_native.bootstrap_percentile_ci_native(
+        effect_kernel='cohen_d',
+        groups=ndarray_groups,
+        level=0.95,
+        iterations=50,
+        seed=7,
+    )
+    assert bootstrap_from_lists == bootstrap_from_arrays
+
+    rows_from_lists = comparison_stats_native.pairwise_stats_native(
+        labels=['A', 'B'],
+        groups=list_groups,
+        alpha=0.05,
+        correction_method='holm',
+        non_parametric=False,
+        equal_var=True,
+    )
+    rows_from_arrays = comparison_stats_native.pairwise_stats_native(
+        labels=['A', 'B'],
+        groups=ndarray_groups,
+        alpha=0.05,
+        correction_method='holm',
+        non_parametric=False,
+        equal_var=True,
+    )
+    assert rows_from_lists == rows_from_arrays
+
+    for call_groups in captured_bootstrap_groups + captured_pairwise_groups:
+        for group in call_groups:
+            assert isinstance(group, np.ndarray)
+            assert group.dtype == np.float64
+            assert group.flags['C_CONTIGUOUS']
+
+
 def test_bootstrap_ci_benchmark_by_group_count_and_iterations(monkeypatch):
     benchmark_cases = [
         (2, 200),

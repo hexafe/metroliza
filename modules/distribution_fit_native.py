@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Sequence
 
+import numpy as np
+
 try:
     from _metroliza_distribution_fit_native import (  # type: ignore
         compute_ad_ks_statistics as _native_compute_ad_ks_statistics,
@@ -16,6 +18,13 @@ except Exception:  # pragma: no cover - optional native module
 
 def native_backend_available() -> bool:
     return _native_estimate_ad_pvalue_monte_carlo is not None
+
+
+def _as_float64_1d_contiguous(values: Sequence[float]) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1:
+        raise ValueError('Expected 1D numeric input')
+    return np.ascontiguousarray(array)
 
 
 def estimate_ad_pvalue_monte_carlo_native(
@@ -31,9 +40,11 @@ def estimate_ad_pvalue_monte_carlo_native(
     if _native_estimate_ad_pvalue_monte_carlo is None:
         return None
 
+    normalized_params = _as_float64_1d_contiguous(fitted_params)
+
     return _native_estimate_ad_pvalue_monte_carlo(
         distribution,
-        [float(v) for v in fitted_params],
+        normalized_params,
         int(sample_size),
         float(observed_stat),
         int(iterations),
@@ -51,8 +62,11 @@ def compute_ad_ks_statistics_native(
     if _native_compute_ad_ks_statistics is None:
         return None
 
+    normalized_params = _as_float64_1d_contiguous(fitted_params)
+    normalized_samples = _as_float64_1d_contiguous(sample_values)
+
     return _native_compute_ad_ks_statistics(
         distribution,
-        [float(v) for v in fitted_params],
-        [float(v) for v in sample_values],
+        normalized_params,
+        normalized_samples,
     )

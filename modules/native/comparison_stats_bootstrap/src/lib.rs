@@ -1,3 +1,4 @@
+use numpy::PyReadonlyArray1;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -58,7 +59,7 @@ fn cliffs_delta(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
     Some((2.0 * u_statistic) / (n_a * n_b) - 1.0)
 }
 
-fn eta_or_omega_squared(groups: &[Vec<f64>], use_omega: bool) -> Option<f64> {
+fn eta_or_omega_squared(groups: &[&[f64]], use_omega: bool) -> Option<f64> {
     if groups.len() < 2 {
         return None;
     }
@@ -113,7 +114,7 @@ fn percentile_linear(sorted: &[f64], q: f64) -> f64 {
     sorted[low] * (1.0 - weight) + sorted[high] * weight
 }
 
-fn evaluate_kernel(effect_kernel: &str, groups: &[Vec<f64>]) -> Option<f64> {
+fn evaluate_kernel(effect_kernel: &str, groups: &[&[f64]]) -> Option<f64> {
     match effect_kernel {
         "cohen_d" => {
             if groups.len() != 2 {
@@ -273,7 +274,7 @@ fn mann_whitney_pvalue(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
 #[pyo3(signature = (effect_kernel, groups, level, iterations, seed))]
 fn bootstrap_percentile_ci(
     effect_kernel: &str,
-    groups: Vec<Vec<f64>>,
+    groups: Vec<PyReadonlyArray1<'_, f64>>,
     level: f64,
     iterations: usize,
     seed: u64,
@@ -281,6 +282,15 @@ fn bootstrap_percentile_ci(
     if !(0.0 < level && level < 1.0) {
         return Err(PyValueError::new_err("level must be between 0 and 1"));
     }
+    let groups: Vec<&[f64]> = groups
+        .into_iter()
+        .map(|group| {
+            group
+                .as_slice()
+                .map_err(|_| PyValueError::new_err("groups must be contiguous float64 arrays"))
+        })
+        .collect::<PyResult<Vec<&[f64]>>>()?;
+
     if iterations == 0 || groups.is_empty() || groups.iter().any(|g| g.is_empty()) {
         return Ok(None);
     }
@@ -299,8 +309,9 @@ fn bootstrap_percentile_ci(
                     .collect::<Vec<f64>>()
             })
             .collect();
+        let sampled_group_refs: Vec<&[f64]> = sampled_groups.iter().map(Vec::as_slice).collect();
 
-        if let Some(estimate) = evaluate_kernel(effect_kernel, &sampled_groups) {
+        if let Some(estimate) = evaluate_kernel(effect_kernel, &sampled_group_refs) {
             if estimate.is_finite() {
                 estimates.push(estimate);
             }
@@ -325,12 +336,21 @@ fn bootstrap_percentile_ci(
 fn pairwise_stats(
     py: Python<'_>,
     labels: Vec<String>,
-    groups: Vec<Vec<f64>>,
+    groups: Vec<PyReadonlyArray1<'_, f64>>,
     alpha: f64,
     correction_method: &str,
     non_parametric: bool,
     equal_var: bool,
 ) -> PyResult<Vec<PyObject>> {
+    let groups: Vec<&[f64]> = groups
+        .into_iter()
+        .map(|group| {
+            group
+                .as_slice()
+                .map_err(|_| PyValueError::new_err("groups must be contiguous float64 arrays"))
+        })
+        .collect::<PyResult<Vec<&[f64]>>>()?;
+
     if labels.len() != groups.len() {
         return Err(PyValueError::new_err("labels and groups must have equal length"));
     }

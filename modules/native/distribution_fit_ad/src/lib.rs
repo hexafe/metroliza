@@ -1,3 +1,4 @@
+use numpy::PyReadonlyArray1;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rand::SeedableRng;
@@ -272,9 +273,16 @@ fn run_ad_monte_carlo(
 fn compute_ad_ks_statistics(
     py: Python<'_>,
     distribution: &str,
-    fitted_params: Vec<f64>,
-    sample_values: Vec<f64>,
+    fitted_params: PyReadonlyArray1<'_, f64>,
+    sample_values: PyReadonlyArray1<'_, f64>,
 ) -> PyResult<(f64, f64)> {
+    let fitted_params = fitted_params
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("fitted_params must be a contiguous float64 array"))?;
+    let sample_values = sample_values
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("sample_values must be a contiguous float64 array"))?;
+
     let dist = SupportedDistribution::from_name_and_params(distribution, &fitted_params)
         .ok_or_else(|| PyValueError::new_err("Unsupported distribution identifier or invalid parameter count"))?;
 
@@ -290,14 +298,12 @@ fn compute_ad_ks_statistics(
         return Err(PyValueError::new_err("sample_values must be finite"));
     }
 
-    py.allow_threads(|| {
-        let mut ad_sample = sample_values.clone();
-        let ad = ad_statistic(&mut ad_sample, &dist)
-            .ok_or_else(|| PyValueError::new_err("Unable to compute Anderson-Darling statistic"))?;
-        let ks = ks_statistic(&sample_values, &dist)
-            .ok_or_else(|| PyValueError::new_err("Unable to compute Kolmogorov-Smirnov statistic"))?;
-        Ok((ad, ks))
-    })
+    let mut ad_sample = sample_values.to_vec();
+    let ad = ad_statistic(&mut ad_sample, &dist)
+        .ok_or_else(|| PyValueError::new_err("Unable to compute Anderson-Darling statistic"))?;
+    let ks = ks_statistic(&sample_values, &dist)
+        .ok_or_else(|| PyValueError::new_err("Unable to compute Kolmogorov-Smirnov statistic"))?;
+    Ok((ad, ks))
 }
 
 #[pyfunction]
@@ -305,7 +311,7 @@ fn compute_ad_ks_statistics(
 fn estimate_ad_pvalue_monte_carlo(
     py: Python<'_>,
     distribution: &str,
-    fitted_params: Vec<f64>,
+    fitted_params: PyReadonlyArray1<'_, f64>,
     sample_size: usize,
     observed_stat: f64,
     iterations: usize,
@@ -317,6 +323,10 @@ fn estimate_ad_pvalue_monte_carlo(
     if sample_size == 0 {
         return Ok((None, 0));
     }
+
+    let fitted_params = fitted_params
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("fitted_params must be a contiguous float64 array"))?;
 
     let dist = SupportedDistribution::from_name_and_params(distribution, &fitted_params)
         .ok_or_else(|| PyValueError::new_err("Unsupported distribution identifier or invalid parameter count"))?;

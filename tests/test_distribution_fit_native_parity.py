@@ -17,6 +17,54 @@ def _load_native_kernel_edge_fixtures():
 
 
 class TestDistributionFitNativeParity(unittest.TestCase):
+    def test_native_wrapper_normalizes_list_and_ndarray_inputs_equivalently(self):
+        with mock.patch.object(
+            native_bridge,
+            '_native_estimate_ad_pvalue_monte_carlo',
+            return_value=(0.42, 100),
+        ) as monte_carlo_stub, mock.patch.object(
+            native_bridge,
+            '_native_compute_ad_ks_statistics',
+            return_value=(0.1, 0.2),
+        ) as stats_stub:
+            list_result = native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                distribution='norm',
+                fitted_params=[0, 1],
+                sample_size=40,
+                observed_stat=0.65,
+                iterations=100,
+                seed=123,
+            )
+            array_result = native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                distribution='norm',
+                fitted_params=np.array([0, 1], dtype=np.float32),
+                sample_size=40,
+                observed_stat=0.65,
+                iterations=100,
+                seed=123,
+            )
+            self.assertEqual(list_result, array_result)
+
+            list_stats = native_bridge.compute_ad_ks_statistics_native(
+                distribution='norm',
+                fitted_params=[0, 1],
+                sample_values=[-1, 0, 1],
+            )
+            array_stats = native_bridge.compute_ad_ks_statistics_native(
+                distribution='norm',
+                fitted_params=np.array([0, 1], dtype=np.float32),
+                sample_values=np.array([-1, 0, 1], dtype=np.float32),
+            )
+            self.assertEqual(list_stats, array_stats)
+
+            monte_call_params = monte_carlo_stub.call_args_list[0].args[1]
+            stats_call_params = stats_stub.call_args_list[0].args[1]
+            stats_call_values = stats_stub.call_args_list[0].args[2]
+            for arr in (monte_call_params, stats_call_params, stats_call_values):
+                self.assertIsInstance(arr, np.ndarray)
+                self.assertEqual(arr.dtype, np.float64)
+                self.assertTrue(arr.flags['C_CONTIGUOUS'])
+
     @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
     def test_native_seeded_runs_are_exactly_reproducible(self):
         p1, valid1 = native_bridge.estimate_ad_pvalue_monte_carlo_native(
