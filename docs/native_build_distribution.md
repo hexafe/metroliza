@@ -1,7 +1,13 @@
 # Native module build and distribution requirements
 
-This project ships an optional native extension module: `_metroliza_cmm_native`.
-The application defaults to native parsing when the extension is present and continues to run in pure-Python mode when it is not.
+This project ships optional native extension modules:
+
+- `_metroliza_cmm_native` (`modules/native/cmm_parser`)
+- `_metroliza_group_stats_native` (`modules/native/group_stats_coercion`)
+- `_metroliza_comparison_stats_native` (`modules/native/comparison_stats_bootstrap`)
+- `_metroliza_distribution_fit_native` (`modules/native/distribution_fit_ad`)
+
+Each extension is optional at runtime. The app must keep deterministic Python-path behavior when native binaries are unavailable.
 
 ## Supported platforms and architectures
 
@@ -16,27 +22,44 @@ On unsupported platforms, the app defaults to pure-Python parsing.
 
 ## Wheel build pipeline
 
-The extension source lives in `modules/native/cmm_parser`.
 Build tooling requirements are tracked in `requirements-build.txt` (`maturin`, `cibuildwheel`, `build`).
+
+Native crate manifests:
+
+- `modules/native/cmm_parser/Cargo.toml`
+- `modules/native/group_stats_coercion/Cargo.toml`
+- `modules/native/comparison_stats_bootstrap/Cargo.toml`
+- `modules/native/distribution_fit_ad/Cargo.toml`
 
 Local developer commands:
 
 ```bash
 # build binary wheel(s) for local interpreter
 python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/group_stats_coercion/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/distribution_fit_ad/Cargo.toml --release
 
 # install extension in editable/dev mode
 python -m maturin develop --manifest-path modules/native/cmm_parser/Cargo.toml
+python -m maturin develop --manifest-path modules/native/group_stats_coercion/Cargo.toml
+python -m maturin develop --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml
+python -m maturin develop --manifest-path modules/native/distribution_fit_ad/Cargo.toml
 ```
 
 CI uses `cibuildwheel` and `maturin` to:
 
-1. build wheels from `modules/native/cmm_parser/Cargo.toml`,
+1. build wheels for all native crate manifests,
 2. install a wheel artifact,
-3. run a native smoke check,
-4. run parser parity tests.
+3. run import + minimal smoke checks for each native module,
+4. validate explicit fallback behavior when extensions are intentionally absent,
+5. run parser parity tests.
 
 ## Runtime backend + fallback behavior
+
+Backend behavior varies per module and must remain explicit:
+
+### CMM parser/persistence (`modules/cmm_native_parser.py`)
 
 Parser backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
 
@@ -44,7 +67,26 @@ Parser backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
 - `native`: require native backend and raise if unavailable.
 - `python`: force pure-Python backend (controlled operational rollback).
 
-Runtime fallback from native execution errors is intentionally disabled so backend behavior is explicit and observable. This ensures packaged apps keep working when the native binary is not bundled, while preserving deterministic rollback controls.
+Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the same value semantics (`auto`/`native`/`python`).
+
+### Comparison stats (`modules/comparison_stats_native.py`)
+
+- `METROLIZA_COMPARISON_STATS_CI_BACKEND` controls bootstrap CI native usage (`auto`/`native`/`python`).
+- `METROLIZA_COMPARISON_STATS_BACKEND` controls pairwise native usage (`auto`/`native`/`python`).
+- In `auto`, unavailable native symbols produce `None` so Python callers execute fallback logic.
+- In `native`, unavailable symbols raise `RuntimeError`.
+
+### Distribution fit (`modules/distribution_fit_native.py`)
+
+- No dedicated env toggle yet.
+- Native wrappers are opportunistic: they execute when importable and return `None` when unavailable.
+
+### Group stats coercion (`modules/group_stats_native.py`)
+
+- No dedicated env toggle yet.
+- Native coercion is used when importable; otherwise wrapper falls back to Python coercion.
+
+Runtime fallback from native execution errors in forced-`native` modes is intentionally disabled so backend behavior remains explicit and observable.
 
 ## PyInstaller inclusion rules and smoke checks
 
@@ -128,7 +170,15 @@ Nuitka release mode is also configured as onefile (`--onefile` by default, `--st
 
 The native-artifacts CI job must validate all of the following:
 
-1. wheel build succeeds,
-2. wheel install succeeds,
-3. backend smoke checks for `python` and `native` selection behavior,
-4. parser parity test passes when native backend is available.
+1. wheel build succeeds for all native crate manifests,
+2. wheel install succeeds for all built wheel artifacts,
+3. each module imports and runs at least one minimal smoke function:
+   - `modules.cmm_native_parser` (`parse_blocks_with_backend`)
+   - `modules.group_stats_native` (`coerce_sequence_to_float64`)
+   - `modules.comparison_stats_native` (`bootstrap_percentile_ci_native`, `pairwise_stats_native`)
+   - `modules.distribution_fit_native` (`compute_ad_ks_statistics_native`, `estimate_ad_pvalue_monte_carlo_native`)
+4. fallback behavior is explicitly smoke-validated for intentionally absent extensions (mocked-unavailable symbols):
+   - CMM parser path continues in Python when not forced to native,
+   - comparison/distribution wrappers return `None` in availability-driven fallback mode,
+   - group-stats coercion returns Python-coerced `float64`/`NaN` output.
+5. parser parity tests pass when native backend is available.

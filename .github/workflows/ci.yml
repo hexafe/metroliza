@@ -224,18 +224,119 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-build.txt
 
-      - name: Build native wheel
+      - name: Build native wheels
         run: |
           python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release --out dist/native
+          python -m maturin build --manifest-path modules/native/group_stats_coercion/Cargo.toml --release --out dist/native
+          python -m maturin build --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml --release --out dist/native
+          python -m maturin build --manifest-path modules/native/distribution_fit_ad/Cargo.toml --release --out dist/native
 
       - name: Install built native wheel
         run: |
           pip install dist/native/*.whl
 
-      - name: Native backend smoke checks
+      - name: Native module import + smoke checks
         run: |
           METROLIZA_CMM_PARSER_BACKEND=python PYTHONPATH=. python -c "from modules.cmm_native_parser import parse_blocks_with_backend; assert parse_blocks_with_backend([]) == []"
           METROLIZA_CMM_PARSER_BACKEND=native PYTHONPATH=. python -c "from modules.cmm_native_parser import native_backend_available; assert native_backend_available()"
+          PYTHONPATH=. python - <<'PYCODE'
+          import importlib
+          from unittest import mock
+
+          import modules.cmm_native_parser as cmm
+          import modules.comparison_stats_native as comparison
+          import modules.distribution_fit_native as distribution
+          import modules.group_stats_native as group_stats
+
+          assert cmm.native_backend_available()
+          assert cmm.parse_blocks_with_backend([]) == []
+
+          assert group_stats.native_backend_available()
+          group_values = group_stats.coerce_sequence_to_float64([1, "2.5", "bad"])
+          assert group_values.shape == (3,)
+
+          assert comparison.native_backend_available()
+          ci_result = comparison.bootstrap_percentile_ci_native(
+              effect_kernel="cohen_d",
+              groups=[[1.0, 2.0, 3.0], [1.1, 2.1, 3.1]],
+              level=0.95,
+              iterations=20,
+              seed=123,
+          )
+          assert ci_result is not None and len(ci_result) == 2
+          pairwise_rows = comparison.pairwise_stats_native(
+              labels=["A", "B"],
+              groups=[[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]],
+              alpha=0.05,
+              correction_method="holm",
+              non_parametric=False,
+              equal_var=True,
+          )
+          assert pairwise_rows is not None and len(pairwise_rows) == 1
+
+          assert distribution.native_backend_available()
+          ad_ks = distribution.compute_ad_ks_statistics_native(
+              distribution="norm",
+              fitted_params=[0.0, 1.0],
+              sample_values=[-1.0, 0.0, 1.0],
+          )
+          assert ad_ks is not None and len(ad_ks) == 2
+          ad_mc = distribution.estimate_ad_pvalue_monte_carlo_native(
+              distribution="norm",
+              fitted_params=[0.0, 1.0],
+              sample_size=20,
+              observed_stat=0.7,
+              iterations=20,
+              seed=123,
+          )
+          assert ad_mc is not None and len(ad_mc) == 2
+
+          # Fallback semantics when extensions are intentionally absent.
+          with mock.patch.object(cmm, "_native_parse_blocks", None):
+              assert cmm.parse_blocks_with_backend([], use_native=False) == []
+
+          with mock.patch.object(comparison, "_native_bootstrap_percentile_ci", None), \
+               mock.patch.object(comparison, "_native_pairwise_stats", None), \
+               mock.patch.dict("os.environ", {"METROLIZA_COMPARISON_STATS_CI_BACKEND": "auto", "METROLIZA_COMPARISON_STATS_BACKEND": "auto"}, clear=False):
+              assert comparison.bootstrap_percentile_ci_native(
+                  effect_kernel="cohen_d",
+                  groups=[[1.0, 2.0], [1.5, 2.5]],
+                  level=0.95,
+                  iterations=10,
+                  seed=1,
+              ) is None
+              assert comparison.pairwise_stats_native(
+                  labels=["A", "B"],
+                  groups=[[1.0, 2.0], [1.5, 2.5]],
+                  alpha=0.05,
+                  correction_method="holm",
+                  non_parametric=False,
+                  equal_var=True,
+              ) is None
+
+          with mock.patch.object(distribution, "_native_compute_ad_ks_statistics", None), \
+               mock.patch.object(distribution, "_native_estimate_ad_pvalue_monte_carlo", None):
+              assert distribution.compute_ad_ks_statistics_native(
+                  distribution="norm",
+                  fitted_params=[0.0, 1.0],
+                  sample_values=[-1.0, 0.0, 1.0],
+              ) is None
+              assert distribution.estimate_ad_pvalue_monte_carlo_native(
+                  distribution="norm",
+                  fitted_params=[0.0, 1.0],
+                  sample_size=20,
+                  observed_stat=0.7,
+                  iterations=10,
+                  seed=1,
+              ) is None
+
+          with mock.patch.object(group_stats, "_native_coerce_sequence_to_float64", None):
+              fallback_values = group_stats.coerce_sequence_to_float64([1, "2.5", "bad"])
+              assert fallback_values.shape == (3,)
+              assert str(fallback_values[2]) == "nan"
+
+          print("Native smoke checks passed for all modules (available + intentionally absent fallback).")
+          PYCODE
 
       - name: Parser parity tests (native enabled)
         run: PYTHONPATH=. python -m pytest tests/test_cmm_parser_parity.py -q
