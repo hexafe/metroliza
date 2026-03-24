@@ -1,7 +1,13 @@
 # Native module build and distribution requirements
 
-This project ships an optional native extension module: `_metroliza_cmm_native`.
-The application defaults to native parsing when the extension is present and continues to run in pure-Python mode when it is not.
+This project ships optional native extension modules:
+
+- `_metroliza_cmm_native` (`modules/native/cmm_parser`)
+- `_metroliza_group_stats_native` (`modules/native/group_stats_coercion`)
+- `_metroliza_comparison_stats_native` (`modules/native/comparison_stats_bootstrap`)
+- `_metroliza_distribution_fit_native` (`modules/native/distribution_fit_ad`)
+
+All extensions are optional at runtime. When a module is unavailable, the corresponding Python bridge follows its documented fallback policy (auto fallback to Python or `None` return), and strict/native-only modes must raise explicit errors.
 
 ## Supported platforms and architectures
 
@@ -16,7 +22,7 @@ On unsupported platforms, the app defaults to pure-Python parsing.
 
 ## Wheel build pipeline
 
-The extension source lives in `modules/native/cmm_parser`.
+Native extension sources live under `modules/native/*`.
 Build tooling requirements are tracked in `requirements-build.txt` (`maturin`, `cibuildwheel`, `build`).
 
 Local developer commands:
@@ -24,21 +30,36 @@ Local developer commands:
 ```bash
 # build binary wheel(s) for local interpreter
 python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/group_stats_coercion/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/distribution_fit_ad/Cargo.toml --release
 
-# install extension in editable/dev mode
+# install extension(s) in editable/dev mode
 python -m maturin develop --manifest-path modules/native/cmm_parser/Cargo.toml
+python -m maturin develop --manifest-path modules/native/group_stats_coercion/Cargo.toml
+python -m maturin develop --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml
+python -m maturin develop --manifest-path modules/native/distribution_fit_ad/Cargo.toml
 ```
 
-CI uses `cibuildwheel` and `maturin` to:
+CI uses `maturin` to build/install all native crate wheels and then runs per-module smoke/parity checks.
 
-1. build wheels from `modules/native/cmm_parser/Cargo.toml`,
-2. install a wheel artifact,
-3. run a native smoke check,
-4. run parser parity tests.
+
+## Native crate wheel/smoke/parity expectations
+
+Every native crate must satisfy these CI expectations:
+
+| Crate | Extension module | Required wheel build | Required smoke check | Required parity expectation |
+| --- | --- | --- | --- | --- |
+| `modules/native/cmm_parser` | `_metroliza_cmm_native` | build + install wheel | import bridge + parse smoke in `python` and `native` modes | fixture parity test vs Python parser (`tests/test_cmm_parser_parity.py`) |
+| `modules/native/group_stats_coercion` | `_metroliza_group_stats_native` | build + install wheel | import bridge + `coerce_sequence_to_float64` smoke | fallback-to-Python coercion semantics verified when extension is intentionally absent |
+| `modules/native/comparison_stats_bootstrap` | `_metroliza_comparison_stats_native` | build + install wheel | import bridge + minimal CI/pairwise smoke calls | native and Python comparison-stat outputs remain within parity tolerance (`tests/test_comparison_stats.py`) |
+| `modules/native/distribution_fit_ad` | `_metroliza_distribution_fit_native` | build + install wheel | import bridge + minimal AD/KS + Monte Carlo smoke calls | native and Python distribution-fit outputs remain within parity tolerance (`tests/test_distribution_fit_native_parity.py`) |
+
+In addition to "extensions present" smoke checks, CI must also execute a fallback smoke phase with the native wheels intentionally absent and verify the bridge-level fallback behavior for every module.
 
 ## Runtime backend + fallback behavior
 
-Parser backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
+CMM parser backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
 
 - `auto` (default): use native backend when available; if extension import is unavailable, use pure Python.
 - `native`: require native backend and raise if unavailable.
@@ -128,7 +149,8 @@ Nuitka release mode is also configured as onefile (`--onefile` by default, `--st
 
 The native-artifacts CI job must validate all of the following:
 
-1. wheel build succeeds,
-2. wheel install succeeds,
-3. backend smoke checks for `python` and `native` selection behavior,
-4. parser parity test passes when native backend is available.
+1. wheel builds succeed for **all** native crates,
+2. wheel installs succeed for all built native wheels,
+3. extension-present smoke checks import each native bridge and run a minimal function call,
+4. extension-absent smoke checks verify documented fallback semantics for each bridge,
+5. parity tests pass for crates that define parity obligations (`cmm_parser`, `comparison_stats_bootstrap`, `distribution_fit_ad`).

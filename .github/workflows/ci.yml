@@ -224,21 +224,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-build.txt
 
-      - name: Build native wheel
+      - name: Build native wheels
         run: |
           python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release --out dist/native
+          python -m maturin build --manifest-path modules/native/group_stats_coercion/Cargo.toml --release --out dist/native
+          python -m maturin build --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml --release --out dist/native
+          python -m maturin build --manifest-path modules/native/distribution_fit_ad/Cargo.toml --release --out dist/native
 
-      - name: Install built native wheel
+      - name: Install built native wheels
         run: |
           pip install dist/native/*.whl
 
-      - name: Native backend smoke checks
-        run: |
-          METROLIZA_CMM_PARSER_BACKEND=python PYTHONPATH=. python -c "from modules.cmm_native_parser import parse_blocks_with_backend; assert parse_blocks_with_backend([]) == []"
-          METROLIZA_CMM_PARSER_BACKEND=native PYTHONPATH=. python -c "from modules.cmm_native_parser import native_backend_available; assert native_backend_available()"
+      - name: Native bridges smoke checks (extensions present)
+        run: PYTHONPATH=. python scripts/smoke_native_modules.py --mode present
 
-      - name: Parser parity tests (native enabled)
-        run: PYTHONPATH=. python -m pytest tests/test_cmm_parser_parity.py -q
+      - name: Native parity tests
+        run: |
+          PYTHONPATH=. python -m pytest tests/test_cmm_parser_parity.py -q
+          PYTHONPATH=. python -m pytest tests/test_distribution_fit_native_parity.py -q
+          PYTHONPATH=. python -m pytest tests/test_comparison_stats.py -q -k native
 
       - name: Parser performance guardrails (native vs fallback)
         run: |
@@ -259,6 +263,11 @@ jobs:
             --enforce-cmm-parser-guardrail \
             --cmm-native-min-speedup-ratio 0.90 \
             --cmm-native-min-usage-rate 0.95
+
+      - name: Native bridges smoke checks (extensions intentionally absent)
+        run: |
+          pip uninstall -y metroliza-cmm-native metroliza-group-stats-native metroliza-comparison-stats-native metroliza-distribution-fit-native || true
+          PYTHONPATH=. python scripts/smoke_native_modules.py --mode absent
 
   packaging-smoke:
     name: Packaging smoke (manual/opt-in)
