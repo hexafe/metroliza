@@ -281,6 +281,8 @@ fn bootstrap_percentile_ci(
     if !(0.0 < level && level < 1.0) {
         return Err(PyValueError::new_err("level must be between 0 and 1"));
     }
+    let groups: Vec<Vec<f64>> = groups.into_iter().map(|group| group.into_iter().collect()).collect();
+
     if iterations == 0 || groups.is_empty() || groups.iter().any(|g| g.is_empty()) {
         return Ok(None);
     }
@@ -331,6 +333,8 @@ fn pairwise_stats(
     non_parametric: bool,
     equal_var: bool,
 ) -> PyResult<Vec<PyObject>> {
+    let groups: Vec<Vec<f64>> = groups.into_iter().map(|group| group.into_iter().collect()).collect();
+
     if labels.len() != groups.len() {
         return Err(PyValueError::new_err("labels and groups must have equal length"));
     }
