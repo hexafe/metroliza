@@ -1,0 +1,13 @@
+{
+  "generated_at": "2026-03-24T00:00:00Z",
+  "notes": "Initial baseline snapshot for CI trend comparisons. Values are median wall time seconds from canonical fixtures.",
+  "scenarios": {
+    "pdf_parse_path": 1.200,
+    "cmm_parser_backend_compare": 0.550,
+    "distribution_fit_batch_path": 1.800,
+    "comparison_stats_ci_python": 4.500,
+    "comparison_stats_ci_native": 2.500,
+    "comparison_stats_pairwise_python": 0.650,
+    "comparison_stats_pairwise_native": 0.350
+  }
+}

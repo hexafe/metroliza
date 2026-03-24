@@ -260,10 +260,87 @@ jobs:
             --cmm-native-min-speedup-ratio 0.90 \
             --cmm-native-min-usage-rate 0.95
 
+  perf-benchmarks:
+    name: Perf benchmarks (non-blocking)
+    runs-on: ubuntu-latest
+    needs: [static-checks, unit-tests, native-artifacts]
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run benchmark paths
+        run: |
+          PYTHONPATH=. python scripts/benchmark_paths.py \
+            --output-dir benchmark_results \
+            --pdf-count 80 \
+            --report-count 120 \
+            --headers-per-report 10 \
+            --csv-rows 1500 \
+            --csv-columns 8 \
+            --fit-group-count 40 \
+            --fit-sample-size 120 \
+            --fit-monte-carlo-samples 250 \
+            --group-preprocess-groups 48 \
+            --group-preprocess-values 20000 \
+            --cmm-bench-report-count 180 \
+            --cmm-bench-measurements-per-report 140
+
+      - name: Run benchmark distribution-fit batch
+        run: |
+          PYTHONPATH=. python scripts/benchmark_distribution_fit_batch.py \
+            --output-dir benchmark_results \
+            --metrics 40 \
+            --groups 6 \
+            --samples 120 \
+            --seed 42 \
+            --warmup-runs 1 \
+            --runs 5
+
+      - name: Run benchmark comparison-stats
+        run: |
+          PYTHONPATH=. python scripts/benchmark_comparison_stats.py \
+            --output-dir benchmark_results \
+            --metrics 24 \
+            --groups 4 \
+            --samples 120 \
+            --ci-bootstrap-iterations 500 \
+            --seed 123 \
+            --warmup-runs 1 \
+            --runs 5
+
+      - name: Compare benchmark trend against baseline snapshot
+        run: |
+          PYTHONPATH=. python scripts/benchmark_compare_to_baseline.py \
+            --baseline benchmarks/perf_baseline_snapshot.json \
+            --benchmark-dir benchmark_results \
+            --max-regression-pct 10.0 \
+            --output-report benchmark_results/perf-trend-report.json
+
+      - name: Upload perf benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-benchmark-artifacts
+          path: benchmark_results
+          if-no-files-found: warn
+
   packaging-smoke:
     name: Packaging smoke (manual/opt-in)
     runs-on: ubuntu-latest
-    needs: [static-checks, unit-tests, native-artifacts]
+    needs: [static-checks, unit-tests, native-artifacts, perf-benchmarks]
     # Intentionally opt-in/release-only: packaging smoke build signal is manual and non-blocking for regular PR CI.
     if: github.event_name == 'workflow_dispatch' && inputs.run_packaging_smoke == '1'
     env:

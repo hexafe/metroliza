@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import json
+import statistics
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -81,26 +84,97 @@ def _validate_parity(baseline, candidate):
     return mismatches
 
 
+def _build_summary(*, fixture: dict[str, dict[str, np.ndarray]], legacy_runs: list[float], batch_runs: list[float], mismatches: list[tuple[Any, ...]], args: argparse.Namespace) -> dict[str, Any]:
+    legacy_median = statistics.median(legacy_runs)
+    batch_median = statistics.median(batch_runs)
+    speedup = legacy_median / batch_median if batch_median > 0 else float('inf')
+    return {
+        'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'benchmark': 'distribution_fit_batch',
+        'config': {
+            'metrics': args.metrics,
+            'groups': args.groups,
+            'samples': args.samples,
+            'seed': args.seed,
+            'warmup_runs': args.warmup_runs,
+            'measured_runs': args.runs,
+        },
+        'scenario': {
+            'scenario': 'distribution_fit_batch_path',
+            'input_metrics': {
+                'metrics': args.metrics,
+                'groups': args.groups,
+                'samples_per_group': args.samples,
+                'cells': args.metrics * args.groups * args.samples,
+            },
+            'run_metrics': {
+                'legacy_seconds': legacy_runs,
+                'batch_seconds': batch_runs,
+                'legacy_median_seconds': legacy_median,
+                'batch_median_seconds': batch_median,
+                'speedup_x_median': speedup,
+            },
+            'parity_mismatches': len(mismatches),
+            'parity_ok': len(mismatches) == 0,
+        },
+        'fixture_metrics': {
+            'metric_count': len(fixture),
+            'group_count': len(next(iter(fixture.values()))) if fixture else 0,
+        },
+    }
+
+
+def _write_output(output_dir: Path, payload: dict[str, Any]) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    path = output_dir / f'distribution-fit-benchmark-{stamp}.json'
+    path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description='Benchmark distribution-fit legacy per-group path vs batch ndarray path.')
     parser.add_argument('--metrics', type=int, default=40)
     parser.add_argument('--groups', type=int, default=6)
     parser.add_argument('--samples', type=int, default=120)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--warmup-runs', type=int, default=1)
+    parser.add_argument('--runs', type=int, default=5)
+    parser.add_argument('--output-dir', default='benchmark_results', help='Directory for machine-readable benchmark outputs.')
     args = parser.parse_args()
 
     fixture = _build_fixture(args.metrics, args.groups, args.samples, args.seed)
 
-    legacy_seconds, legacy_results = _run_legacy_per_group(fixture)
-    batch_seconds, batch_results = _run_batch(fixture)
+    for _ in range(max(0, args.warmup_runs)):
+        _run_legacy_per_group(fixture)
+        _run_batch(fixture)
+
+    legacy_runs: list[float] = []
+    batch_runs: list[float] = []
+    legacy_results = {}
+    batch_results = {}
+    for _ in range(max(1, args.runs)):
+        legacy_seconds, legacy_results = _run_legacy_per_group(fixture)
+        batch_seconds, batch_results = _run_batch(fixture)
+        legacy_runs.append(legacy_seconds)
+        batch_runs.append(batch_seconds)
+
     mismatches = _validate_parity(legacy_results, batch_results)
+    payload = _build_summary(
+        fixture=fixture,
+        legacy_runs=legacy_runs,
+        batch_runs=batch_runs,
+        mismatches=mismatches,
+        args=args,
+    )
+    output_path = _write_output(Path(args.output_dir), payload)
 
     print(f"metrics={args.metrics}, groups={args.groups}, samples={args.samples}")
-    print(f"legacy_seconds={legacy_seconds:.4f}")
-    print(f"batch_seconds={batch_seconds:.4f}")
-    speedup = legacy_seconds / batch_seconds if batch_seconds > 0 else float('inf')
-    print(f"speedup_x={speedup:.2f}")
+    print(f"legacy_median_seconds={payload['scenario']['run_metrics']['legacy_median_seconds']:.4f}")
+    print(f"batch_median_seconds={payload['scenario']['run_metrics']['batch_median_seconds']:.4f}")
+    print(f"speedup_x_median={payload['scenario']['run_metrics']['speedup_x_median']:.2f}")
     print(f"parity_mismatches={len(mismatches)}")
+    print(f"Benchmark JSON: {output_path}")
     if mismatches:
         first = mismatches[0]
         print(f"first_mismatch={first}")

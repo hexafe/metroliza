@@ -182,6 +182,7 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
     from modules.cmm_report_parser import CMMReportParser
     from modules.parse_reports_thread import ParseReportsThread, parse_new_reports
     from modules.contracts import ParseRequest
+    from modules.cmm_native_parser import get_backend_telemetry_snapshot, reset_backend_telemetry
 
     db_path = temp_dir / 'parse_benchmark.sqlite'
     pdf_dir = _create_pdf_fixture_dir(temp_dir, pdf_count)
@@ -196,6 +197,7 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
     fingerprints = thread.get_report_fingerprints_in_database()
     load_existing_s = time.perf_counter() - load_existing_start
 
+    reset_backend_telemetry()
     parse_start = time.perf_counter()
     parse_result = parse_new_reports(
         report_paths=reports,
@@ -204,6 +206,7 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
         persist_report=lambda _parser: None,
     )
     parse_loop_s = time.perf_counter() - parse_start
+    backend_snapshot = get_backend_telemetry_snapshot()
     wall_time_s = time.perf_counter() - t0
 
     return ScenarioResult(
@@ -218,6 +221,12 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
             'rows': parse_result.total_files,
             'headers': 0,
             'chart_count': 0,
+            'parse_backend_native_rate': float(backend_snapshot.get('parse', {}).get('native_rate', 0.0)),
+            'parse_backend_python_rate': float(backend_snapshot.get('parse', {}).get('python_rate', 0.0)),
+            'parse_backend_total': int(backend_snapshot.get('parse', {}).get('total', 0)),
+            'persistence_backend_native_rate': float(backend_snapshot.get('persistence', {}).get('native_rate', 0.0)),
+            'persistence_backend_python_rate': float(backend_snapshot.get('persistence', {}).get('python_rate', 0.0)),
+            'persistence_backend_total': int(backend_snapshot.get('persistence', {}).get('total', 0)),
         },
     )
 
@@ -297,7 +306,13 @@ def benchmark_cmm_parser_backend_compare(temp_dir: Path, *, report_count: int, m
             'native_available': int(native_backend_available()),
             'native_rows': native_measurements,
             'python_parse_backend_rate': float(python_snapshot.get('parse', {}).get('python_rate', 0.0)),
+            'python_parse_backend_total': int(python_snapshot.get('parse', {}).get('total', 0)),
+            'python_persistence_backend_rate': float(python_snapshot.get('persistence', {}).get('python_rate', 0.0)),
+            'python_persistence_backend_total': int(python_snapshot.get('persistence', {}).get('total', 0)),
             'native_parse_backend_rate': float(native_snapshot.get('parse', {}).get('native_rate', 0.0)),
+            'native_parse_backend_total': int(native_snapshot.get('parse', {}).get('total', 0)),
+            'native_persistence_backend_rate': float(native_snapshot.get('persistence', {}).get('native_rate', 0.0)),
+            'native_persistence_backend_total': int(native_snapshot.get('persistence', {}).get('total', 0)),
         },
     )
 
