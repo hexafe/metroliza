@@ -260,6 +260,106 @@ jobs:
             --cmm-native-min-speedup-ratio 0.90 \
             --cmm-native-min-usage-rate 0.95
 
+  perf-benchmarks:
+    name: Performance benchmark trend check (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: [static-checks, unit-tests]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Warmup benchmark scripts
+        run: |
+          mkdir -p benchmark_results/perf_ci
+          PYTHONPATH=. python scripts/benchmark_paths.py \
+            --output-dir benchmark_results/perf_ci/warmup \
+            --pdf-count 20 \
+            --report-count 40 \
+            --headers-per-report 6 \
+            --csv-rows 300 \
+            --csv-columns 4 \
+            --fit-group-count 12 \
+            --fit-sample-size 90 \
+            --fit-monte-carlo-samples 40 \
+            --group-preprocess-groups 10 \
+            --group-preprocess-values 1500 \
+            --cmm-bench-report-count 120 \
+            --cmm-bench-measurements-per-report 120
+          PYTHONPATH=. python scripts/benchmark_distribution_fit_batch.py \
+            --metrics 40 \
+            --groups 6 \
+            --samples 120 \
+            --output-json benchmark_results/perf_ci/warmup/distribution-fit.json
+          PYTHONPATH=. python scripts/benchmark_comparison_stats.py \
+            --groups 8 \
+            --samples 160 \
+            --ci-iterations 600 \
+            --output-json benchmark_results/perf_ci/warmup/comparison-stats.json
+
+      - name: Measured benchmark runs
+        run: |
+          mkdir -p benchmark_results/perf_ci/runs
+          for run_idx in 1 2 3; do
+            run_dir="benchmark_results/perf_ci/runs/run-${run_idx}"
+            mkdir -p "${run_dir}"
+            PYTHONPATH=. python scripts/benchmark_paths.py \
+              --output-dir "${run_dir}" \
+              --pdf-count 20 \
+              --report-count 40 \
+              --headers-per-report 6 \
+              --csv-rows 300 \
+              --csv-columns 4 \
+              --fit-group-count 12 \
+              --fit-sample-size 90 \
+              --fit-monte-carlo-samples 40 \
+              --group-preprocess-groups 10 \
+              --group-preprocess-values 1500 \
+              --cmm-bench-report-count 120 \
+              --cmm-bench-measurements-per-report 120
+            cp "$(ls -1t ${run_dir}/benchmark-*.json | head -n 1)" "${run_dir}/benchmark-paths.json"
+            PYTHONPATH=. python scripts/benchmark_distribution_fit_batch.py \
+              --metrics 40 \
+              --groups 6 \
+              --samples 120 \
+              --output-json "${run_dir}/distribution-fit.json"
+            PYTHONPATH=. python scripts/benchmark_comparison_stats.py \
+              --groups 8 \
+              --samples 160 \
+              --ci-iterations 600 \
+              --output-json "${run_dir}/comparison-stats.json"
+          done
+
+      - name: Trend comparison against checked-in baseline
+        run: |
+          PYTHONPATH=. python scripts/benchmark_trend_compare.py \
+            --baseline docs/perf_baseline_snapshot.json \
+            --runs benchmark_results/perf_ci/runs/run-1/benchmark-paths.json benchmark_results/perf_ci/runs/run-1/distribution-fit.json benchmark_results/perf_ci/runs/run-1/comparison-stats.json \
+                   benchmark_results/perf_ci/runs/run-2/benchmark-paths.json benchmark_results/perf_ci/runs/run-2/distribution-fit.json benchmark_results/perf_ci/runs/run-2/comparison-stats.json \
+                   benchmark_results/perf_ci/runs/run-3/benchmark-paths.json benchmark_results/perf_ci/runs/run-3/distribution-fit.json benchmark_results/perf_ci/runs/run-3/comparison-stats.json \
+            --max-median-regression-pct 10 \
+            --output-json benchmark_results/perf_ci/trend-report.json
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-benchmark-artifacts
+          path: benchmark_results/perf_ci
+          if-no-files-found: warn
+
   packaging-smoke:
     name: Packaging smoke (manual/opt-in)
     runs-on: ubuntu-latest
