@@ -10,13 +10,17 @@ from typing import Callable
 
 import numpy as np
 import pandas as pd
-from modules.distribution_fit_native import estimate_ad_pvalue_monte_carlo_native
+from modules.distribution_fit_native import (
+    compute_ad_ks_statistics_native,
+    estimate_ad_pvalue_monte_carlo_native,
+)
 from scipy.stats import (
     foldnorm,
     gamma,
     gaussian_kde,
     halfnorm,
     johnsonsu,
+    kstwo,
     kstest,
     lognorm,
     norm,
@@ -110,6 +114,24 @@ def _safe_float(value):
     except (TypeError, ValueError):
         return None
     return parsed if np.isfinite(parsed) else None
+
+
+def _coerce_measurements_array(measurements) -> np.ndarray:
+    if isinstance(measurements, np.ndarray):
+        values = np.asarray(measurements, dtype=float)
+        if values.ndim != 1:
+            values = values.reshape(-1)
+        if np.all(np.isfinite(values)):
+            return np.ascontiguousarray(values)
+        return np.ascontiguousarray(values[np.isfinite(values)])
+
+    values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
+    return np.ascontiguousarray(values)
+
+
+def measurement_fingerprint(values: np.ndarray):
+    """Public fingerprint helper for callers that precompute cache keys per group."""
+    return _measurement_fingerprint(values)
 
 
 def _infer_support_mode(values: np.ndarray, tolerance: float = 1e-9) -> str:
@@ -319,8 +341,26 @@ def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray):
     aic = float(2 * k + 2 * nll)
     bic = float(k * math.log(n) + 2 * nll)
 
-    ad_stat = _ad_statistic(values, lambda x: candidate.scipy_dist.cdf(x, *params))
-    ks_stat, ks_pvalue = kstest(values, candidate.scipy_dist.cdf, args=params)
+    ad_stat = None
+    ks_stat = None
+    native_stats = compute_ad_ks_statistics_native(
+        distribution=candidate.name,
+        fitted_params=params,
+        sample_values=values,
+    )
+    if native_stats is not None:
+        ad_stat, ks_stat = native_stats
+
+    if ad_stat is None:
+        ad_stat = _ad_statistic(values, lambda x: candidate.scipy_dist.cdf(x, *params))
+
+    if ks_stat is None:
+        ks_stat, ks_pvalue = kstest(values, candidate.scipy_dist.cdf, args=params)
+        ks_stat = float(ks_stat)
+        ks_pvalue = float(ks_pvalue)
+    else:
+        ks_stat = float(ks_stat)
+        ks_pvalue = float(kstwo.sf(ks_stat, n)) if n > 0 else None
 
     return {
         'model': candidate.name,
@@ -345,7 +385,7 @@ def build_fit_curve_payload(
     distribution_fit_result: dict | None = None,
 ):
     """Return canonical histogram overlay curve payloads for export/render callers."""
-    values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
+    values = _coerce_measurements_array(measurements)
     if values.size == 0:
         return None
 
@@ -516,6 +556,7 @@ def fit_measurement_distribution(
     monte_carlo_gof_samples: int = 0,
     monte_carlo_seed: int | None = None,
     memoization_cache: MutableMapping | None = None,
+    measurement_signature: tuple[int, str] | None = None,
 ):
     """Fit distributions, score GOF, classify quality, and estimate tail risk.
 
@@ -524,20 +565,21 @@ def fit_measurement_distribution(
 
     del nom  # kept for backwards compatibility in call-sites.
 
-    values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
+    values = _coerce_measurements_array(measurements)
     sample_size = int(values.size)
 
     cache_key = None
     if memoization_cache is not None and sample_size > 0:
-        cache_key = _fit_cache_key(
-            values=values,
-            lsl=lsl,
-            usl=usl,
-            point_count=point_count,
-            include_kde_reference=include_kde_reference,
-            gof_acceptance_alpha=gof_acceptance_alpha,
-            monte_carlo_gof_samples=monte_carlo_gof_samples,
-            monte_carlo_seed=monte_carlo_seed,
+        fit_signature = measurement_signature if measurement_signature is not None else _measurement_fingerprint(values)
+        cache_key = (
+            fit_signature,
+            _safe_float(lsl),
+            _safe_float(usl),
+            int(point_count),
+            bool(include_kde_reference),
+            float(gof_acceptance_alpha),
+            int(monte_carlo_gof_samples),
+            None if monte_carlo_seed is None else int(monte_carlo_seed),
         )
         cached = memoization_cache.get(cache_key)
         if cached is not None:
@@ -672,3 +714,39 @@ def fit_measurement_distribution(
     if memoization_cache is not None and cache_key is not None:
         memoization_cache[cache_key] = clone_fit_payload(payload)
     return payload
+
+
+def fit_measurement_distribution_batch(
+    grouped_measurements: dict[str, np.ndarray],
+    *,
+    lsl_by_group: dict[str, float | None] | None = None,
+    usl_by_group: dict[str, float | None] | None = None,
+    point_count: int = 100,
+    include_kde_reference: bool = True,
+    gof_acceptance_alpha: float = 0.05,
+    monte_carlo_gof_samples: int = 0,
+    monte_carlo_seed: int | None = None,
+    memoization_cache: MutableMapping | None = None,
+    fingerprints_by_group: dict[str, tuple[int, str]] | None = None,
+) -> dict[str, dict]:
+    """Batch distribution-fit API for pre-cleaned, contiguous ndarray inputs."""
+
+    lsl_by_group = lsl_by_group or {}
+    usl_by_group = usl_by_group or {}
+    result: dict[str, dict] = {}
+
+    for group_name, values in grouped_measurements.items():
+        group_values = np.ascontiguousarray(np.asarray(values, dtype=float))
+        result[group_name] = fit_measurement_distribution(
+            group_values,
+            lsl=lsl_by_group.get(group_name),
+            usl=usl_by_group.get(group_name),
+            point_count=point_count,
+            include_kde_reference=include_kde_reference,
+            gof_acceptance_alpha=gof_acceptance_alpha,
+            monte_carlo_gof_samples=monte_carlo_gof_samples,
+            monte_carlo_seed=monte_carlo_seed,
+            memoization_cache=memoization_cache,
+            measurement_signature=None if fingerprints_by_group is None else fingerprints_by_group.get(group_name),
+        )
+    return result

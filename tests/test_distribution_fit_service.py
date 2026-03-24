@@ -13,6 +13,8 @@ from modules.distribution_fit_service import (
     build_fit_curve_payload,
     compute_estimated_tail_metrics,
     fit_measurement_distribution,
+    fit_measurement_distribution_batch,
+    measurement_fingerprint,
 )
 
 
@@ -245,6 +247,35 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertEqual(result['fit_quality']['label'], 'unreliable')
         self.assertIn('No model met GOF threshold', ' '.join(result['notes']))
 
+
+
+    def test_fit_measurement_distribution_batch_accepts_numpy_arrays_and_matches_single_fit(self):
+        grouped = {
+            'A': np.ascontiguousarray(np.array([1.0, 1.1, 1.2, 1.3, 1.4], dtype=float)),
+            'B': np.ascontiguousarray(np.array([-0.4, -0.2, 0.0, 0.2, 0.5, 0.8], dtype=float)),
+        }
+
+        batch = fit_measurement_distribution_batch(grouped, usl_by_group={'A': 1.5, 'B': 1.0})
+        single_a = fit_measurement_distribution(grouped['A'], usl=1.5)
+        single_b = fit_measurement_distribution(grouped['B'], usl=1.0)
+
+        self.assertEqual(batch['A']['selected_model']['name'], single_a['selected_model']['name'])
+        self.assertEqual(batch['B']['selected_model']['name'], single_b['selected_model']['name'])
+        self.assertAlmostEqual(batch['A']['risk_estimates']['outside_probability'], single_a['risk_estimates']['outside_probability'])
+        self.assertAlmostEqual(batch['B']['risk_estimates']['outside_probability'], single_b['risk_estimates']['outside_probability'])
+
+    def test_fit_measurement_distribution_uses_provided_measurement_signature_for_cache_key(self):
+        measurements = np.ascontiguousarray(np.array([1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15], dtype=float))
+        memo = {}
+        signature = measurement_fingerprint(measurements)
+
+        with mock.patch.object(distribution_fit_service, '_measurement_fingerprint', side_effect=AssertionError('fingerprint should not be recomputed')):
+            first = fit_measurement_distribution(measurements, usl=1.4, memoization_cache=memo, measurement_signature=signature)
+            second = fit_measurement_distribution(measurements, usl=1.4, memoization_cache=memo, measurement_signature=signature)
+
+        self.assertEqual(first['status'], 'ok')
+        self.assertEqual(second['status'], 'ok')
+        self.assertEqual(len(memo), 1)
 
 if __name__ == '__main__':
     unittest.main()

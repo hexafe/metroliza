@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 from itertools import combinations
-import hashlib
 import inspect
 import warnings
 
@@ -12,7 +11,13 @@ import numpy as np
 from scipy.stats import anderson_ksamp, ks_2samp, wasserstein_distance
 
 from modules.comparison_stats import _adjust_pvalues
-from modules.distribution_fit_service import fit_measurement_distribution
+from modules.distribution_fit_service import (
+    fit_measurement_distribution as _fit_measurement_distribution,
+    measurement_fingerprint,
+)
+
+# Backward-compatible module attribute for patch-based tests/callers.
+fit_measurement_distribution = _fit_measurement_distribution
 
 
 DEFAULT_DISTRIBUTION_FIT_POLICY = {
@@ -54,18 +59,66 @@ def _clean_numeric(values):
 
 def _sample_fingerprint(values):
     numeric = np.ascontiguousarray(np.asarray(values, dtype=np.float64))
-    digest = hashlib.sha1(numeric.tobytes()).hexdigest()
-    return (int(numeric.size), digest)
+    return measurement_fingerprint(numeric)
 
 
-def _get_cached_fit_result(*, metric, group_name, numeric_values, fit_cache=None):
-    if fit_cache is None:
-        return fit_measurement_distribution(numeric_values.tolist())
+def _build_profile_compact_entry(metric, group_name, numeric_values, fit):
+    fit_quality = (fit.get('fit_quality') or {}).get('label')
+    gof = fit.get('gof_metrics') or {}
+    selected_model = fit.get('selected_model') or {}
+    support_mode = str(fit.get('inferred_support_mode') or 'unknown').replace('_', ' ')
 
-    cache_key = (metric, group_name, _sample_fingerprint(numeric_values))
-    if cache_key not in fit_cache:
-        fit_cache[cache_key] = fit_measurement_distribution(numeric_values.tolist())
-    return fit_cache[cache_key]
+    warning = fit.get('warning')
+    if warning:
+        warning_text = 'Distribution fit unavailable for this group.'
+    else:
+        warning_text = _summarize_fit_notes(fit.get('notes') or [])
+
+    return (
+        metric,
+        group_name,
+        int(numeric_values.size),
+        selected_model.get('display_name') or 'Not available',
+        fit_quality or 'unreliable',
+        gof.get('ad_pvalue'),
+        gof.get('ks_pvalue'),
+        _yes_no(gof.get('is_acceptable')),
+        support_mode,
+        warning_text,
+        fit.get('status'),
+        str(fit_quality or '').lower(),
+    )
+
+
+def _expand_profile_compact_entry(compact_entry):
+    (
+        metric,
+        group_name,
+        sample_size,
+        best_model,
+        fit_quality,
+        ad_pvalue,
+        ks_pvalue,
+        gof_acceptable,
+        support_mode,
+        warning_text,
+        fit_status,
+        fit_quality_internal,
+    ) = compact_entry
+    return {
+        'Metric': metric,
+        'Group': group_name,
+        'n': sample_size,
+        'best fit model': best_model,
+        'fit quality': fit_quality,
+        'AD p-value': ad_pvalue,
+        'KS p-value': ks_pvalue,
+        'GOF acceptable?': gof_acceptable,
+        'Support mode': support_mode,
+        'Warning / notes summary': warning_text,
+        '_fit_status': fit_status,
+        '_fit_quality': fit_quality_internal,
+    }
 
 
 def _yes_no(flag):
@@ -111,56 +164,37 @@ def _run_anderson_ksamp(samples):
         return anderson_ksamp(samples, **kwargs)
 
 
-def _build_fit_profile_row(metric, group_name, numeric_values, *, fit_cache=None):
-    fit = _get_cached_fit_result(
-        metric=metric,
-        group_name=group_name,
-        numeric_values=numeric_values,
-        fit_cache=fit_cache,
-    )
-    fit_quality = (fit.get('fit_quality') or {}).get('label')
-    gof = fit.get('gof_metrics') or {}
-    selected_model = fit.get('selected_model') or {}
-    support_mode = str(fit.get('inferred_support_mode') or 'unknown').replace('_', ' ')
-
-    warning = fit.get('warning')
-    if warning:
-        warning_text = 'Distribution fit unavailable for this group.'
-    else:
-        warning_text = _summarize_fit_notes(fit.get('notes') or [])
-
-    return {
-        'Metric': metric,
-        'Group': group_name,
-        'n': int(numeric_values.size),
-        'best fit model': selected_model.get('display_name') or 'Not available',
-        'fit quality': fit_quality or 'unreliable',
-        'AD p-value': gof.get('ad_pvalue'),
-        'KS p-value': gof.get('ks_pvalue'),
-        'GOF acceptable?': _yes_no(gof.get('is_acceptable')),
-        'Support mode': support_mode,
-        'Warning / notes summary': warning_text,
-        '_fit_status': fit.get('status'),
-        '_fit_quality': str(fit_quality or '').lower(),
+def build_distribution_profile_rows_compact(metric, grouped_values, *, fit_cache=None, values_are_clean=False):
+    numeric_by_group = {
+        group_name: np.ascontiguousarray(np.asarray(values, dtype=float) if values_are_clean else _clean_numeric(values))
+        for group_name, values in grouped_values.items()
     }
+    ordered_groups = sorted(numeric_by_group)
+    fingerprints = {group_name: _sample_fingerprint(numeric_by_group[group_name]) for group_name in ordered_groups}
+    fits_by_group = {
+        group_name: fit_measurement_distribution(
+            numeric_by_group[group_name],
+            memoization_cache=fit_cache,
+            measurement_signature=fingerprints[group_name],
+        )
+        for group_name in ordered_groups
+    }
+    return [
+        _build_profile_compact_entry(metric, group_name, numeric_by_group[group_name], fits_by_group[group_name])
+        for group_name in ordered_groups
+    ]
 
 
 def build_distribution_profile_rows(metric, grouped_values, *, fit_cache=None, values_are_clean=False):
-    numeric_by_group = {
-        group_name: (np.asarray(values, dtype=float) if values_are_clean else _clean_numeric(values))
-        for group_name, values in grouped_values.items()
-    }
-    rows = []
-    for group_name in sorted(numeric_by_group):
-        rows.append(
-            _build_fit_profile_row(
-                metric,
-                group_name,
-                numeric_by_group[group_name],
-                fit_cache=fit_cache,
-            )
+    return [
+        _expand_profile_compact_entry(entry)
+        for entry in build_distribution_profile_rows_compact(
+            metric,
+            grouped_values,
+            fit_cache=fit_cache,
+            values_are_clean=values_are_clean,
         )
-    return rows
+    ]
 
 
 def _build_profile_rows(metric, numeric_by_group, *, fit_cache=None, fit_policy=None):

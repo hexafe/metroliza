@@ -1,6 +1,7 @@
 import unittest
 from unittest import mock
 
+import numpy as np
 from scipy.stats import gamma, norm
 
 import modules.distribution_fit_native as native_bridge
@@ -84,6 +85,22 @@ class TestDistributionFitNativeParity(unittest.TestCase):
         self.assertIsNotNone(python_result)
         self.assertLess(abs(native_result - python_result), 0.12)
 
+
+
+    @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
+    def test_native_ad_ks_statistics_kernel_matches_python_reference(self):
+        sample = [-1.2, -0.3, 0.0, 0.4, 0.8, 1.1, 1.4]
+        native_ad, native_ks = native_bridge.compute_ad_ks_statistics_native(
+            distribution='norm',
+            fitted_params=(0.0, 1.0),
+            sample_values=sample,
+        )
+
+        ad_py = service._ad_statistic(np.asarray(sample, dtype=float), lambda x: norm.cdf(x, 0.0, 1.0))
+        ks_py = service.kstest(sample, norm.cdf, args=(0.0, 1.0)).statistic
+
+        self.assertAlmostEqual(native_ad, ad_py, places=10)
+        self.assertAlmostEqual(native_ks, ks_py, places=10)
 
 if __name__ == '__main__':
     unittest.main()
