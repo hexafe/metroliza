@@ -323,6 +323,43 @@ def test_tp_parser_keeps_explicit_nom_for_qualified_rows_with_nom_label():
 
     assert parsed[0][1][0] == ["TP", 0.6, 0.2, 0, 0.0, 0.237, 0.237, 0.0]
 
+
+def test_native_parser_matches_python_for_non_tp_token_normalization_edge_when_available():
+    if not native_backend_available():
+        pytest.skip("Native CMM parser prototype module is not built in this environment")
+
+    raw_lines = [
+        "#TOKEN NORMALIZATION",
+        "DIM",
+        "M NOM 5 +TOL 0.1 -TOL -0.1 BONUS 0.0 MEAS 5.02 DEV 0.02 OUTTOL 0",
+        "#END",
+    ]
+
+    native = parse_blocks_with_backend(raw_lines, use_native=True)
+    python = parse_blocks_with_backend(raw_lines, use_native=False)
+
+    assert native == python
+
+
+def test_native_parser_matches_python_for_tolerance_propagation_edge_when_available():
+    if not native_backend_available():
+        pytest.skip("Native CMM parser prototype module is not built in this environment")
+
+    raw_lines = [
+        "#TOL PROPAGATION",
+        "DIM",
+        "X 10 0.2 -0.2 10.03 0.03 0",
+        "Y 5",
+        "5.0",
+        "0",
+        "#END",
+    ]
+
+    native = parse_blocks_with_backend(raw_lines, use_native=True)
+    python = parse_blocks_with_backend(raw_lines, use_native=False)
+
+    assert native == python
+
 def test_non_tp_x_parser_ignores_semantic_labels_without_shifting_values():
     raw_lines = [
         "#X LABELED",
