@@ -1,9 +1,17 @@
 import math
 import time
+import importlib
 
 import numpy as np
 
-from modules.comparison_stats import ComparisonStatsConfig, _adjust_pvalues, _cliffs_delta, compute_metric_pairwise_stats
+from modules import comparison_stats_native
+from modules.comparison_stats import (
+    ComparisonStatsConfig,
+    _adjust_pvalues,
+    _bootstrap_effect_percentile_ci,
+    _cliffs_delta,
+    compute_metric_pairwise_stats,
+)
 
 
 def _is_monotone_non_decreasing(values):
@@ -243,3 +251,105 @@ def test_cliffs_delta_rank_based_path_scales_better_on_large_arrays():
     assert legacy is not None
     assert math.isclose(optimized, legacy, rel_tol=1e-12, abs_tol=1e-12)
     assert optimized_time < legacy_time
+
+
+def test_effect_size_ci_is_deterministic_with_seeded_sampling(monkeypatch):
+    grouped_values = {
+        'A': [0.0, 0.1, -0.1, 0.0, 0.05],
+        'B': [0.2, 0.3, 0.25, 0.35, 0.3],
+        'C': [1.4, 1.5, 1.45, 1.55, 1.6],
+    }
+    config = ComparisonStatsConfig(include_effect_size_ci=True, ci_bootstrap_iterations=150)
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
+    module = importlib.reload(comparison_stats_native)
+
+    rows_first = compute_metric_pairwise_stats('metric_seeded_ci', grouped_values, config=config)
+    rows_second = compute_metric_pairwise_stats('metric_seeded_ci', grouped_values, config=config)
+
+    assert module.native_backend_available() in {True, False}
+    ci_first = {(row['group_a'], row['group_b']): row['effect_size_ci'] for row in rows_first}
+    ci_second = {(row['group_a'], row['group_b']): row['effect_size_ci'] for row in rows_second}
+    assert ci_first == ci_second
+
+
+def test_native_and_python_bootstrap_ci_are_nearly_equal(monkeypatch):
+    if not comparison_stats_native.native_backend_available():
+        monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
+        importlib.reload(comparison_stats_native)
+        return
+
+    rng = np.random.default_rng(2026)
+    groups_pairwise = [rng.normal(0.0, 1.0, size=64), rng.normal(0.3, 1.1, size=59)]
+    groups_multi = [
+        rng.normal(0.0, 1.0, size=55),
+        rng.normal(0.4, 1.0, size=61),
+        rng.normal(0.8, 0.9, size=57),
+    ]
+
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
+    importlib.reload(comparison_stats_native)
+    pairwise_python = _bootstrap_effect_percentile_ci(
+        effect_kernel='cohen_d',
+        groups=groups_pairwise,
+        level=0.95,
+        iterations=400,
+    )
+    multi_python = _bootstrap_effect_percentile_ci(
+        effect_kernel='eta_squared',
+        groups=groups_multi,
+        level=0.95,
+        iterations=400,
+    )
+
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'native')
+    importlib.reload(comparison_stats_native)
+    pairwise_native = _bootstrap_effect_percentile_ci(
+        effect_kernel='cohen_d',
+        groups=groups_pairwise,
+        level=0.95,
+        iterations=400,
+    )
+    multi_native = _bootstrap_effect_percentile_ci(
+        effect_kernel='eta_squared',
+        groups=groups_multi,
+        level=0.95,
+        iterations=400,
+    )
+
+    assert pairwise_python is not None
+    assert multi_python is not None
+    assert pairwise_native is not None
+    assert multi_native is not None
+    assert math.isclose(pairwise_python[0], pairwise_native[0], rel_tol=3e-2, abs_tol=3e-2)
+    assert math.isclose(pairwise_python[1], pairwise_native[1], rel_tol=3e-2, abs_tol=3e-2)
+    assert math.isclose(multi_python[0], multi_native[0], rel_tol=3e-2, abs_tol=3e-2)
+    assert math.isclose(multi_python[1], multi_native[1], rel_tol=3e-2, abs_tol=3e-2)
+
+
+def test_bootstrap_ci_benchmark_by_group_count_and_iterations(monkeypatch):
+    benchmark_cases = [
+        (2, 200),
+        (3, 200),
+        (4, 400),
+    ]
+    rng = np.random.default_rng(777)
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
+    importlib.reload(comparison_stats_native)
+
+    wall_times = []
+    for group_count, iterations in benchmark_cases:
+        groups = [rng.normal(loc=i * 0.25, scale=1.0, size=120).astype(float) for i in range(group_count)]
+        kernel = 'cohen_d' if group_count == 2 else 'eta_squared'
+        start = time.perf_counter()
+        ci = _bootstrap_effect_percentile_ci(
+            effect_kernel=kernel,
+            groups=groups[:2] if kernel == 'cohen_d' else groups,
+            level=0.95,
+            iterations=iterations,
+        )
+        elapsed = time.perf_counter() - start
+        wall_times.append((group_count, iterations, elapsed))
+        assert ci is not None
+
+    assert len(wall_times) == len(benchmark_cases)
+    assert all(elapsed > 0.0 for _, _, elapsed in wall_times)
