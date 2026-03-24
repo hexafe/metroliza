@@ -1,6 +1,8 @@
 import math
 import time
 import importlib
+import json
+from pathlib import Path
 
 import numpy as np
 
@@ -12,6 +14,12 @@ from modules.comparison_stats import (
     _cliffs_delta,
     compute_metric_pairwise_stats,
 )
+
+PAIRWISE_FIXTURE_PATH = Path('tests/fixtures/comparison_stats/pairwise_edge_cases.json')
+
+
+def _load_pairwise_edge_fixtures():
+    return json.loads(PAIRWISE_FIXTURE_PATH.read_text())
 
 
 def _is_monotone_non_decreasing(values):
@@ -226,6 +234,29 @@ def test_cliffs_delta_rank_based_path_matches_legacy_loop_with_ties():
 
     assert effect_size is not None
     assert math.isclose(effect_size, legacy_effect_size, rel_tol=1e-12, abs_tol=1e-12)
+
+
+def test_pairwise_edge_fixtures_documented_expectations_hold():
+    for fixture in _load_pairwise_edge_fixtures():
+        if fixture['kind'] == 'cliffs_delta':
+            effect_size = _cliffs_delta(
+                np.asarray(fixture['sample_a'], dtype=float),
+                np.asarray(fixture['sample_b'], dtype=float),
+            )
+            assert effect_size is not None, fixture['rationale']
+            assert math.isclose(effect_size, fixture['expected'], abs_tol=fixture['abs_tol']), fixture['rationale']
+            continue
+
+        rows = compute_metric_pairwise_stats(fixture['metric'], fixture['grouped_values'])
+        assert len(rows) == 1, fixture['rationale']
+        row = rows[0]
+        assert row['test_used'] == fixture['expected_test_used'], fixture['rationale']
+        assert row['effect_size'] is not None, fixture['rationale']
+        assert math.isclose(
+            row['effect_size'],
+            fixture['expected_effect_size'],
+            abs_tol=fixture['effect_abs_tol'],
+        ), fixture['rationale']
 
 
 def test_cliffs_delta_rank_based_path_scales_better_on_large_arrays():
