@@ -14,6 +14,7 @@ from modules.characteristic_alias_service import (
     import_characteristic_aliases_csv,
     normalize_alias_scope,
     resolve_characteristic_alias,
+    resolve_characteristic_aliases_bulk,
     upsert_characteristic_alias,
     upsert_characteristic_aliases_bulk,
 )
@@ -149,6 +150,36 @@ class TestCharacteristicAliasService(unittest.TestCase):
 
     def test_resolver_falls_back_to_original_metric_when_no_mapping_exists(self):
         self.assertEqual(resolve_characteristic_alias('NO-MAPPING', 'REF-100', self.db_path), 'NO-MAPPING')
+
+    def test_bulk_resolver_applies_reference_then_global_then_fallback(self):
+        upsert_characteristic_alias(
+            self.db_path,
+            alias_name='M1 - X',
+            canonical_name='GLOBAL-CANON',
+            scope_type='global',
+        )
+        upsert_characteristic_alias(
+            self.db_path,
+            alias_name='M1 - X',
+            canonical_name='REF-CANON',
+            scope_type='reference',
+            scope_value='REF-001',
+        )
+
+        resolved = resolve_characteristic_aliases_bulk(
+            [
+                ('M1 - X', 'REF-001'),
+                ('M1 - X', 'REF-002'),
+                ('UNKNOWN-METRIC', 'REF-001'),
+                ('   ', 'REF-001'),
+            ],
+            self.db_path,
+        )
+
+        self.assertEqual(resolved[('M1 - X', 'REF-001')], 'REF-CANON')
+        self.assertEqual(resolved[('M1 - X', 'REF-002')], 'GLOBAL-CANON')
+        self.assertEqual(resolved[('UNKNOWN-METRIC', 'REF-001')], 'UNKNOWN-METRIC')
+        self.assertNotIn(('   ', 'REF-001'), resolved)
 
     def test_resolve_returns_original_when_alias_table_is_missing(self):
         db_path = f"{self.temp_dir.name}/no_alias_schema.sqlite"

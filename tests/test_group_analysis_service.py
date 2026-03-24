@@ -4,8 +4,13 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
+from modules.characteristic_alias_service import (
+    ensure_characteristic_alias_schema,
+    resolve_characteristic_alias,
+    upsert_characteristic_alias,
+)
 from modules.group_analysis_service import (
+    _resolve_canonical_metric_aliases,
     build_group_analysis_payload,
     build_metric_insights,
     build_pairwise_rows,
@@ -21,6 +26,69 @@ from modules.group_analysis_service import (
 
 
 class TestGroupAnalysisService(unittest.TestCase):
+    def test_resolve_canonical_metric_aliases_matches_row_wise_behavior(self):
+        frame = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-2', None, 'REF-1'],
+            }
+        )
+        canonical_metric_series = pd.Series(['DIA - X', 'DIA - X', 'DIA - X', ''], index=frame.index)
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='GLOBAL DIA',
+                scope_type='global',
+            )
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='REF1 DIA',
+                scope_type='reference',
+                scope_value='REF-1',
+            )
+
+            expected = canonical_metric_series.fillna('').astype(str).str.strip().copy()
+            reference_series = frame['REFERENCE'].fillna('').astype(str).str.strip()
+            for row_index, metric_name in expected.items():
+                if not metric_name:
+                    continue
+                reference_value = reference_series.get(row_index) or None
+                expected.at[row_index] = resolve_characteristic_alias(metric_name, reference_value, db_path)
+
+            actual = _resolve_canonical_metric_aliases(
+                frame,
+                canonical_metric_series,
+                alias_db_path=db_path,
+            )
+
+        self.assertEqual(actual.tolist(), expected.tolist())
+
+    def test_resolve_canonical_metric_aliases_without_reference_column_preserves_blank_metrics(self):
+        frame = pd.DataFrame({'GROUP': ['A', 'A', 'B']})
+        canonical_metric_series = pd.Series(['', 'DIA - X', '   '], index=frame.index)
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='GLOBAL DIA',
+                scope_type='global',
+            )
+
+            resolved = _resolve_canonical_metric_aliases(
+                frame,
+                canonical_metric_series,
+                alias_db_path=db_path,
+            )
+
+        self.assertEqual(resolved.tolist(), ['', 'GLOBAL DIA', ''])
+
     def test_build_payload_resolves_reference_scoped_metric_aliases(self):
         grouped_df = pd.DataFrame(
             {
@@ -92,6 +160,46 @@ class TestGroupAnalysisService(unittest.TestCase):
             )
 
         self.assertEqual(payload['metric_rows'][0]['metric'], 'REF DIA')
+
+    def test_build_payload_multi_reference_applies_reference_specific_aliases_per_reference(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-1', 'REF-2', 'REF-2'],
+                'HEADER - AX': ['DIA - X'] * 4,
+                'GROUP': ['A', 'B', 'A', 'B'],
+                'MEAS': [10.0, 10.1, 9.9, 10.2],
+                'LSL': [9.0] * 4,
+                'NOMINAL': [10.0] * 4,
+                'USL': [11.0] * 4,
+            }
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='GLOBAL DIA',
+                scope_type='global',
+            )
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='REF1 DIA',
+                scope_type='reference',
+                scope_value='REF-1',
+            )
+
+            payload = build_group_analysis_payload(
+                grouped_df,
+                requested_scope='multi_reference',
+                analysis_level='light',
+                alias_db_path=db_path,
+            )
+
+        metric_names = sorted(row['metric'] for row in payload['metric_rows'])
+        self.assertEqual(metric_names, ['REF-1 :: REF1 DIA', 'REF-2 :: GLOBAL DIA'])
 
 
     def test_build_payload_keeps_metric_identity_when_no_alias_mapping_exists(self):

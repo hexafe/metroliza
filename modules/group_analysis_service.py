@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from modules.characteristic_alias_service import resolve_characteristic_alias
+from modules.characteristic_alias_service import resolve_characteristic_aliases_bulk
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.export_grouping_utils import normalize_group_labels
 from modules.distribution_shape_analysis import compute_distribution_difference, resolve_distribution_fit_policy
@@ -262,21 +262,28 @@ def _resolve_canonical_metric_aliases(frame, canonical_metric_series, *, alias_d
         return canonical_metric_series
 
     resolved_metric_series = canonical_metric_series.fillna('').astype(str).str.strip().copy()
-    reference_series = None
+    non_empty_metric_mask = resolved_metric_series != ''
+    if not non_empty_metric_mask.any():
+        return resolved_metric_series
+
     if 'REFERENCE' in frame.columns:
         reference_series = frame['REFERENCE'].fillna('').astype(str).str.strip()
+        reference_series = reference_series.where(reference_series != '', None)
+    else:
+        reference_series = pd.Series([None] * len(resolved_metric_series), index=resolved_metric_series.index, dtype=object)
 
-    for row_index, metric_name in resolved_metric_series.items():
-        if not metric_name:
-            continue
-        reference_value = None
-        if reference_series is not None:
-            reference_value = reference_series.get(row_index) or None
-        resolved_metric_series.at[row_index] = resolve_characteristic_alias(
-            metric_name,
-            reference_value,
-            alias_db_path,
-        )
+    lookup_key_series = pd.Series(
+        list(zip(resolved_metric_series, reference_series)),
+        index=resolved_metric_series.index,
+        dtype=object,
+    )
+    unique_lookup_keys = list(dict.fromkeys(lookup_key_series.loc[non_empty_metric_mask].tolist()))
+    resolved_lookup = resolve_characteristic_aliases_bulk(unique_lookup_keys, alias_db_path)
+
+    mapped = lookup_key_series.loc[non_empty_metric_mask].map(resolved_lookup)
+    resolved_metric_series.loc[non_empty_metric_mask] = mapped.fillna(
+        resolved_metric_series.loc[non_empty_metric_mask]
+    )
 
     return resolved_metric_series
 
