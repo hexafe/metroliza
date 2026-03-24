@@ -184,6 +184,7 @@ from modules.chart_render_service import (
     resolve_chart_sampling_policy,
     deterministic_downsample_frame,
 )
+from modules.chart_renderer import build_chart_renderer, build_histogram_native_payload
 from modules.distribution_fit_service import fit_measurement_distribution
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
@@ -2947,6 +2948,7 @@ class ExportDataThread(QThread):
         }
         self._chart_executor = None
         self._summary_prep_executor = None
+        self._chart_renderer = build_chart_renderer()
         self._active_chart_images = []
         self._summary_sheet_failed = False
         self._summary_sheet_skip_warning_emitted = False
@@ -3123,21 +3125,18 @@ class ExportDataThread(QThread):
             connection=self._db_connection,
         )
 
-    @staticmethod
-    def _save_summary_chart(fig, mode='workbook'):
+    def _save_summary_chart(self, fig, mode='workbook', *, chart_type=None, native_payload=None):
         """Persist summary-sheet charts with a workbook-friendly rendering policy."""
-        export_dpi = 150
-        save_kwargs = {
-            'format': 'png',
-            'dpi': export_dpi,
-        }
-        if mode == 'clipped':
-            # Keep a fallback for charts that may require clipping fixes.
-            save_kwargs['bbox_inches'] = 'tight'
+        if chart_type == 'histogram' and native_payload is not None:
+            render_result = self._chart_renderer.render_histogram_png(
+                native_payload,
+                fallback_fig=fig,
+                mode=mode,
+            )
+            return render_result.png_bytes
 
-        image_buffer = BytesIO()
-        fig.savefig(image_buffer, **save_kwargs)
-        return image_buffer.getvalue()
+        render_result = self._chart_renderer.render_figure_png(fig, mode=mode, chart_type=chart_type)
+        return render_result.png_bytes
 
     @staticmethod
     def _resolve_chart_cell_span(
@@ -4489,7 +4488,7 @@ class ExportDataThread(QThread):
                     ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
                     figure_legend = move_legend_to_figure(ax)
                     finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
-                    image_data = self._register_chart_image(self._save_summary_chart(fig))
+                    image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='distribution'))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
 
                     distribution_slot = _reserve_summary_image_slot('distribution', fig)
@@ -4545,7 +4544,7 @@ class ExportDataThread(QThread):
                     ax.set_ylim(y_min, y_max)
                     finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
 
-                    image_data = self._register_chart_image(self._save_summary_chart(fig))
+                    image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='iqr'))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     iqr_slot = _reserve_summary_image_slot('iqr', fig)
                     write_start = time.perf_counter()
@@ -4829,7 +4828,13 @@ class ExportDataThread(QThread):
                         annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
                         annotation_box=annotation_box,
                     )
-                    image_data = self._register_chart_image(self._save_summary_chart(fig))
+                    native_histogram_payload = build_histogram_native_payload(
+                        values=sampling_context['histogram_payload']['measurements'],
+                        lsl=LSL,
+                        usl=USL,
+                        title=build_wrapped_chart_title(header),
+                    )
+                    image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='histogram', native_payload=native_histogram_payload))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     histogram_slot = _reserve_summary_image_slot('histogram', fig)
                     write_start = time.perf_counter()
@@ -4880,7 +4885,7 @@ class ExportDataThread(QThread):
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
 
-                    image_data = self._register_chart_image(self._save_summary_chart(fig))
+                    image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='trend'))
                     self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
                     trend_slot = _reserve_summary_image_slot('trend', fig)
                     write_start = time.perf_counter()
