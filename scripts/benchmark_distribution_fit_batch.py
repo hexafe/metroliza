@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -156,6 +157,7 @@ def main():
     parser.add_argument('--native-seed', type=int, default=123)
     parser.add_argument('--native-repetitions', type=int, default=3)
     parser.add_argument('--native-monte-carlo-mode', choices=['single', 'parallel'], help=argparse.SUPPRESS)
+    parser.add_argument('--output-json', help='Optional path to write machine-readable benchmark output JSON.')
     args = parser.parse_args()
 
     if args.native_monte_carlo_mode:
@@ -183,6 +185,39 @@ def main():
     speedup = legacy_seconds / batch_seconds if batch_seconds > 0 else float('inf')
     print(f"speedup_x={speedup:.2f}")
     print(f"parity_mismatches={len(mismatches)}")
+
+    payload = {
+        'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'config': {
+            'metrics': args.metrics,
+            'groups': args.groups,
+            'samples': args.samples,
+            'seed': args.seed,
+        },
+        'results': [
+            {
+                'scenario': 'distribution_fit_batch_compare',
+                'wall_time_s': float(legacy_seconds + batch_seconds),
+                'stage_timings_s': {
+                    'legacy_per_group': float(legacy_seconds),
+                    'batch_path': float(batch_seconds),
+                    'speedup_ratio': float(speedup),
+                },
+                'input_metrics': {
+                    'metrics': int(args.metrics),
+                    'groups': int(args.groups),
+                    'samples': int(args.samples),
+                    'parity_mismatches': int(len(mismatches)),
+                },
+            }
+        ],
+    }
+    if args.output_json:
+        output_path = Path(args.output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+        print(f'json_output={output_path}')
+
     if mismatches:
         first = mismatches[0]
         print(f"first_mismatch={first}")
