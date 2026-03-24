@@ -391,6 +391,67 @@ def benchmark_distribution_fit_monte_carlo_path(temp_dir: Path, *, group_count: 
         },
     )
 
+def _coerce_legacy(values: list[Any]) -> np.ndarray:
+    numeric_values = np.asarray(values, dtype=object)
+    coerced: list[float] = []
+    for value in numeric_values:
+        try:
+            coerced.append(float(value))
+        except (TypeError, ValueError):
+            coerced.append(np.nan)
+    return np.asarray(coerced, dtype=float)
+
+
+def benchmark_group_preprocess_mixed_types_path(temp_dir: Path, *, group_count: int, values_per_group: int) -> ScenarioResult:
+    from modules.group_stats_native import coerce_sequence_to_float64
+
+    del temp_dir
+    rng = np.random.default_rng(2026)
+    groups: list[list[Any]] = []
+    for _ in range(group_count):
+        base = rng.normal(10.0, 0.8, size=values_per_group)
+        mixed: list[Any] = base.tolist()
+        for idx in range(0, values_per_group, 10):
+            mixed[idx] = f"{mixed[idx]:.6f}"
+        for idx in range(1, values_per_group, 25):
+            mixed[idx] = None
+        for idx in range(2, values_per_group, 33):
+            mixed[idx] = 'bad'
+        groups.append(mixed)
+
+    legacy_start = time.perf_counter()
+    legacy_total_values = 0
+    for group in groups:
+        values = _coerce_legacy(group)
+        legacy_total_values += int(np.count_nonzero(~np.isnan(values)))
+    legacy_s = time.perf_counter() - legacy_start
+
+    optimized_start = time.perf_counter()
+    optimized_total_values = 0
+    for group in groups:
+        values = coerce_sequence_to_float64(group)
+        optimized_total_values += int(np.count_nonzero(~np.isnan(values)))
+    optimized_s = time.perf_counter() - optimized_start
+
+    if optimized_total_values != legacy_total_values:
+        raise RuntimeError('optimized group coercion produced different non-NaN counts')
+
+    return ScenarioResult(
+        scenario='group_preprocess_mixed_types_compare',
+        wall_time_s=legacy_s + optimized_s,
+        stage_timings_s={
+            'legacy_coercion': legacy_s,
+            'optimized_coercion': optimized_s,
+            'speedup_ratio': (legacy_s / optimized_s) if optimized_s > 0 else 0.0,
+        },
+        input_metrics={
+            'rows': group_count * values_per_group,
+            'headers': group_count,
+            'chart_count': 0,
+        },
+    )
+
+
 def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int) -> ScenarioResult:
     from modules.csv_summary_dialog import DataProcessingThread, load_csv_with_fallbacks
 
@@ -536,6 +597,8 @@ def main() -> int:
     parser.add_argument('--fit-group-count', type=int, default=40)
     parser.add_argument('--fit-sample-size', type=int, default=120)
     parser.add_argument('--fit-monte-carlo-samples', type=int, default=250)
+    parser.add_argument('--group-preprocess-groups', type=int, default=48)
+    parser.add_argument('--group-preprocess-values', type=int, default=20000)
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory(prefix='metroliza-bench-') as temp_dir:
@@ -554,6 +617,11 @@ def main() -> int:
                 group_count=args.fit_group_count,
                 sample_size=args.fit_sample_size,
                 monte_carlo_samples=max(1, args.fit_monte_carlo_samples),
+            ),
+            benchmark_group_preprocess_mixed_types_path(
+                temp_path,
+                group_count=max(1, args.group_preprocess_groups),
+                values_per_group=max(10, args.group_preprocess_values),
             ),
         ]
 

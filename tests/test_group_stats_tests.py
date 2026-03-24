@@ -1,6 +1,24 @@
 import unittest
+from unittest import mock
 
+import numpy as np
+
+import modules.group_stats_native as native_helper
 from modules.group_stats_tests import preprocess_group, select_group_stat_test
+
+
+
+
+class TestGroupStatsNativeCoercion(unittest.TestCase):
+    def test_coerce_sequence_to_float64_marks_non_coercible_as_nan(self):
+        arr = native_helper.coerce_sequence_to_float64([1, '2.5', 'bad', None, float('nan')])
+
+        self.assertEqual(arr.dtype, np.float64)
+        self.assertTrue(arr.flags.c_contiguous)
+        np.testing.assert_allclose(arr[:2], np.array([1.0, 2.5]))
+        self.assertTrue(np.isnan(arr[2]))
+        self.assertTrue(np.isnan(arr[3]))
+        self.assertTrue(np.isnan(arr[4]))
 
 
 class TestGroupStatsTests(unittest.TestCase):
@@ -11,6 +29,16 @@ class TestGroupStatsTests(unittest.TestCase):
         self.assertEqual(result.sample_size, 2)
         self.assertFalse(result.is_empty)
         self.assertFalse(result.is_constant)
+
+    def test_preprocess_group_uses_python_fallback_when_helper_raises(self):
+        with mock.patch('modules.group_stats_tests.coerce_sequence_to_float64', side_effect=RuntimeError('boom')):
+            result = preprocess_group('A', [1, '2.5', 'bad', None, float('nan')])
+
+        self.assertEqual(result.label, 'A')
+        self.assertEqual(result.sample_size, 2)
+        self.assertFalse(result.is_empty)
+        self.assertFalse(result.is_constant)
+
 
     def test_two_group_student_t_selected_when_normal_and_homoscedastic(self):
         labels = ['A', 'B']
