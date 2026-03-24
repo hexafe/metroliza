@@ -1,11 +1,19 @@
 import unittest
+import json
 from unittest import mock
+from pathlib import Path
 
 import numpy as np
 from scipy.stats import gamma, norm
 
 import modules.distribution_fit_native as native_bridge
 import modules.distribution_fit_service as service
+
+FIXTURE_PATH = Path('tests/fixtures/distribution_fit/native_kernel_edge_cases.json')
+
+
+def _load_native_kernel_edge_fixtures():
+    return json.loads(FIXTURE_PATH.read_text())
 
 
 class TestDistributionFitNativeParity(unittest.TestCase):
@@ -101,6 +109,41 @@ class TestDistributionFitNativeParity(unittest.TestCase):
 
         self.assertAlmostEqual(native_ad, ad_py, places=10)
         self.assertAlmostEqual(native_ks, ks_py, places=10)
+
+    @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
+    def test_native_ad_ks_statistics_kernel_near_boundary_parameters(self):
+        for fixture in _load_native_kernel_edge_fixtures():
+            distribution = fixture['distribution']
+            params = tuple(float(value) for value in fixture['fitted_params'])
+            sample = [float(value) for value in fixture['sample_values']]
+
+            native_ad, native_ks = native_bridge.compute_ad_ks_statistics_native(
+                distribution=distribution,
+                fitted_params=params,
+                sample_values=sample,
+            )
+
+            if distribution == 'norm':
+                ad_py = service._ad_statistic(np.asarray(sample, dtype=float), lambda x: norm.cdf(x, *params))
+                ks_py = service.kstest(sample, norm.cdf, args=params).statistic
+            elif distribution == 'gamma':
+                ad_py = service._ad_statistic(np.asarray(sample, dtype=float), lambda x: gamma.cdf(x, *params))
+                ks_py = service.kstest(sample, gamma.cdf, args=params).statistic
+            else:
+                self.fail(f"Unsupported distribution fixture: {distribution}")
+
+            self.assertAlmostEqual(
+                native_ad,
+                ad_py,
+                delta=float(fixture['ad_abs_tol']),
+                msg=fixture['rationale'],
+            )
+            self.assertAlmostEqual(
+                native_ks,
+                ks_py,
+                delta=float(fixture['ks_abs_tol']),
+                msg=fixture['rationale'],
+            )
 
 if __name__ == '__main__':
     unittest.main()
