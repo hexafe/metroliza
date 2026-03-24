@@ -424,14 +424,24 @@ class ParseReportsThread(QThread):
                 telemetry_batch_first_index = 1
                 telemetry_batch_elapsed_s = 0.0
                 telemetry_batch_backend_counts = {}
+                telemetry_batch_persistence_backend_counts = {}
+
+                def _rate_snapshot(counts):
+                    total = sum(counts.values())
+                    if total <= 0:
+                        return {}
+                    return {backend: round(count / total, 4) for backend, count in sorted(counts.items())}
 
                 def _record_file_telemetry(parser, parsed_files, total_files, parse_duration_s):
                     nonlocal telemetry_batch_start, telemetry_batch_first_index
                     nonlocal telemetry_batch_elapsed_s, telemetry_batch_backend_counts
+                    nonlocal telemetry_batch_persistence_backend_counts
 
                     backend = getattr(parser, "parse_backend_used", "unknown")
+                    persistence_backend = getattr(parser, "persistence_backend_used", "unknown")
                     telemetry_batch_elapsed_s += parse_duration_s
                     telemetry_batch_backend_counts[backend] = telemetry_batch_backend_counts.get(backend, 0) + 1
+                    telemetry_batch_persistence_backend_counts[persistence_backend] = telemetry_batch_persistence_backend_counts.get(persistence_backend, 0) + 1
 
                     completed_batch_size = parsed_files - telemetry_batch_first_index + 1
                     is_batch_boundary = (completed_batch_size >= PARSE_TELEMETRY_BATCH_SIZE) or (parsed_files == total_files)
@@ -455,6 +465,9 @@ class ParseReportsThread(QThread):
                             "batch_wall_elapsed_s": round(wall_clock_elapsed_s, 4),
                             "batch_avg_parse_s": round(telemetry_batch_elapsed_s / completed_batch_size, 4),
                             "batch_backend_counts": dict(telemetry_batch_backend_counts),
+                            "batch_backend_rates": _rate_snapshot(telemetry_batch_backend_counts),
+                            "batch_persistence_backend_counts": dict(telemetry_batch_persistence_backend_counts),
+                            "batch_persistence_backend_rates": _rate_snapshot(telemetry_batch_persistence_backend_counts),
                         },
                     )
 
@@ -462,6 +475,7 @@ class ParseReportsThread(QThread):
                     telemetry_batch_first_index = parsed_files + 1
                     telemetry_batch_elapsed_s = 0.0
                     telemetry_batch_backend_counts = {}
+                    telemetry_batch_persistence_backend_counts = {}
 
                 result = parse_new_reports(
                     list_of_reports,

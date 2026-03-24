@@ -103,3 +103,36 @@ def test_parse_blocks_with_backend_and_telemetry_reports_native_backend(monkeypa
             "0",
         ]
     )
+
+
+def test_backend_telemetry_snapshot_counts_and_rates_for_python_parse(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CMM_PARSER_BACKEND", "python")
+    parser = importlib.reload(cmm_native_parser)
+
+    parser.reset_backend_telemetry()
+    parser.parse_blocks_with_backend_and_telemetry(_sample_lines(), use_native=False)
+    parser.parse_blocks_with_backend_and_telemetry(_sample_lines(), use_native=False)
+    snapshot = parser.get_backend_telemetry_snapshot()
+
+    assert snapshot["parse"]["python"] == 2
+    assert snapshot["parse"]["native"] == 0
+    assert snapshot["parse"]["total"] == 2
+    assert snapshot["parse"]["python_rate"] == 1.0
+    assert snapshot["parse"]["native_rate"] == 0.0
+
+
+def test_backend_telemetry_snapshot_includes_persistence_counts(monkeypatch, tmp_path):
+    monkeypatch.setenv("METROLIZA_CMM_PERSIST_BACKEND", "python")
+    parser = importlib.reload(cmm_native_parser)
+    parser.reset_backend_telemetry()
+
+    rows = [
+        ("X", 10.0, 0.2, -0.2, 0.0, 10.1, 0.1, 0.0, "HEADER", "REF", "/tmp", "f.pdf", "2024-01-01", "001"),
+    ]
+    result = parser.persist_measurement_rows_with_backend_and_telemetry(str(tmp_path / "telemetry.db"), rows)
+    snapshot = parser.get_backend_telemetry_snapshot()
+
+    assert result.backend == "python"
+    assert snapshot["persistence"]["python"] == 1
+    assert snapshot["persistence"]["native"] == 0
+    assert snapshot["persistence"]["python_rate"] == 1.0

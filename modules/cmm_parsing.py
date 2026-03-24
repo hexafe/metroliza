@@ -10,7 +10,6 @@ Output contract:
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 MEASUREMENT_LINE_MAP = {
@@ -31,6 +30,17 @@ MEASUREMENT_LINE_MAP = {
     "A": 7,
 }
 
+
+
+def _strip_comment_prefix(text: str) -> str:
+    """Strip leading CMM comment markers without regex overhead."""
+    if not text or text[0] not in "#*/":
+        return text.strip()
+
+    idx = 0
+    while idx < len(text) and text[idx] in "#*/":
+        idx += 1
+    return text[idx:].strip()
 
 def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
     """Parse raw report lines into legacy block structure."""
@@ -309,7 +319,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
         if text_block:
             if is_comment_or_header(line) or is_dim_line(line):
                 if is_comment_or_header(line) and prev_line is not None and is_comment_or_header(prev_line):
-                    formatted_line = re.sub(r"^[#*/]+", "", line).strip()
+                    formatted_line = _strip_comment_prefix(line)
                     header_comment.append([formatted_line])
 
                 if is_dim_line(line) and prev_line is not None and not is_comment_or_header(prev_line):
@@ -322,7 +332,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                     text_block = [header_comment] + [dim_block]
                     pdf_blocks_text.append(text_block)
                     text_block, header_comment, dim_block = [], [], []
-                    formatted_line = re.sub(r"^[#*/]+", "", line).strip()
+                    formatted_line = _strip_comment_prefix(line)
                     header_comment.append([formatted_line])
                     text_block.append(header_comment)
 
@@ -343,7 +353,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
         else:
             if not pdf_blocks_text:
                 if is_comment_or_header(line):
-                    formatted_line = re.sub(r"^[#*/]+", "", line).strip()
+                    formatted_line = _strip_comment_prefix(line)
                     header_comment.append([formatted_line])
                     text_block.append(header_comment)
                 elif is_dim_line(line):
@@ -356,7 +366,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                     text_block, dim_block = [], []
                 if is_comment_or_header(line):
                     text_block, header_comment, dim_block = [], [], []
-                    formatted_line = re.sub(r"^[#*/]+", "", line).strip()
+                    formatted_line = _strip_comment_prefix(line)
                     header_comment.append([formatted_line])
 
     if text_block:

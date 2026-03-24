@@ -240,6 +240,26 @@ jobs:
       - name: Parser parity tests (native enabled)
         run: PYTHONPATH=. python -m pytest tests/test_cmm_parser_parity.py -q
 
+      - name: Parser performance guardrails (native vs fallback)
+        run: |
+          PYTHONPATH=. python scripts/benchmark_paths.py \
+            --output-dir benchmark_results \
+            --pdf-count 20 \
+            --report-count 40 \
+            --headers-per-report 6 \
+            --csv-rows 300 \
+            --csv-columns 4 \
+            --fit-group-count 12 \
+            --fit-sample-size 90 \
+            --fit-monte-carlo-samples 40 \
+            --group-preprocess-groups 10 \
+            --group-preprocess-values 1500 \
+            --cmm-bench-report-count 120 \
+            --cmm-bench-measurements-per-report 120 \
+            --enforce-cmm-parser-guardrail \
+            --cmm-native-min-speedup-ratio 0.90 \
+            --cmm-native-min-usage-rate 0.95
+
   packaging-smoke:
     name: Packaging smoke (manual/opt-in)
     runs-on: ubuntu-latest

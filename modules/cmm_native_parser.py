@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from threading import Lock
 from typing import Any, Literal, NamedTuple
 
 from modules.cmm_parsing import parse_raw_lines_to_blocks
@@ -18,6 +19,50 @@ except Exception:  # pragma: no cover - optional native module
     _native_parse_blocks = None
     _native_normalize_measurement_rows = None
     _native_persist_measurement_rows = None
+
+_BACKEND_TELEMETRY_LOCK = Lock()
+_BACKEND_TELEMETRY = {
+    "parse": {"native": 0, "python": 0},
+    "persistence": {"native": 0, "python": 0},
+}
+
+
+def _record_backend_selection(path: Literal["parse", "persistence"], backend: ResolvedBackend) -> None:
+    with _BACKEND_TELEMETRY_LOCK:
+        _BACKEND_TELEMETRY[path][backend] += 1
+
+
+def reset_backend_telemetry() -> None:
+    """Reset in-process backend usage telemetry counters."""
+    with _BACKEND_TELEMETRY_LOCK:
+        for path in _BACKEND_TELEMETRY.values():
+            for key in path:
+                path[key] = 0
+
+
+def get_backend_telemetry_snapshot() -> dict[str, dict[str, float | int]]:
+    """Return backend counts + usage rates for parse and persistence paths."""
+    with _BACKEND_TELEMETRY_LOCK:
+        parse_counts = dict(_BACKEND_TELEMETRY["parse"])
+        persistence_counts = dict(_BACKEND_TELEMETRY["persistence"])
+
+    def _with_rates(counts: dict[str, int]) -> dict[str, float | int]:
+        total = counts["native"] + counts["python"]
+        native_rate = (counts["native"] / total) if total else 0.0
+        python_rate = (counts["python"] / total) if total else 0.0
+        return {
+            "native": counts["native"],
+            "python": counts["python"],
+            "total": total,
+            "native_rate": native_rate,
+            "python_rate": python_rate,
+        }
+
+    return {
+        "parse": _with_rates(parse_counts),
+        "persistence": _with_rates(persistence_counts),
+    }
+
 
 BackendChoice = Literal["auto", "native", "python"]
 ResolvedBackend = Literal["native", "python"]
@@ -108,8 +153,10 @@ def parse_blocks_with_backend_and_telemetry(
     if resolved_backend == "native":
         if _native_parse_blocks is None:
             raise RuntimeError("Native CMM parser backend requested but unavailable")
+        _record_backend_selection("parse", "native")
         return ParseBackendResult(blocks=_native_parse_blocks(raw_lines), backend="native")
 
+    _record_backend_selection("parse", "python")
     return ParseBackendResult(blocks=parse_raw_lines_to_blocks(raw_lines), backend="python")
 
 
@@ -266,8 +313,10 @@ def persist_measurement_rows_with_backend_and_telemetry(
     if backend == "native":
         if _native_persist_measurement_rows is None:
             raise RuntimeError("Native measurement row persistence requested but unavailable")
+        _record_backend_selection("persistence", "native")
         return PersistBackendResult(inserted=bool(_native_persist_measurement_rows(database, rows)), backend="native")
 
+    _record_backend_selection("persistence", "python")
     return PersistBackendResult(inserted=persist_measurement_rows_python(database, rows), backend="python")
 
 

@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import importlib.machinery
+import os
 import sys
 import tempfile
 import time
@@ -217,6 +218,86 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
             'rows': parse_result.total_files,
             'headers': 0,
             'chart_count': 0,
+        },
+    )
+
+
+def benchmark_cmm_parser_backend_compare(temp_dir: Path, *, report_count: int, measurements_per_report: int) -> ScenarioResult:
+    from modules.cmm_native_parser import (
+        get_backend_telemetry_snapshot,
+        native_backend_available,
+        parse_blocks_with_backend,
+        reset_backend_telemetry,
+    )
+
+    del temp_dir
+
+    def _build_report_lines(report_index: int) -> list[str]:
+        lines: list[str] = [f"#BENCHMARK HEADER {report_index}", "DIM"]
+        for row_index in range(1, measurements_per_report + 1):
+            nominal = 10.0 + row_index
+            tol = 0.15 + ((row_index % 3) * 0.01)
+            measured = nominal + (((row_index % 5) - 2) * 0.01)
+            deviation = measured - nominal
+            outtol = 1 if abs(deviation) > tol else 0
+            lines.append(
+                f"X NOM {nominal:.4f} +TOL {tol:.4f} -TOL {-tol:.4f} "
+                f"MEAS {measured:.4f} DEV {deviation:.4f} OUTTOL {outtol}"
+            )
+            if row_index % 12 == 0:
+                lines.extend(
+                    [
+                        "TP MMC +TOL 0.400 BONUS 0.000 MEAS 0.250 DEV 0.250 OUTTOL 0.000",
+                    ]
+                )
+        lines.append("#END")
+        return lines
+
+    raw_batches = [_build_report_lines(index) for index in range(1, report_count + 1)]
+
+    # Always benchmark fallback.
+    os.environ["METROLIZA_CMM_PARSER_BACKEND"] = "python"
+    reset_backend_telemetry()
+    py_start = time.perf_counter()
+    py_measurements = 0
+    for lines in raw_batches:
+        parsed = parse_blocks_with_backend(lines, use_native=False)
+        py_measurements += sum(len(block[1]) for block in parsed)
+    python_s = time.perf_counter() - py_start
+    python_snapshot = get_backend_telemetry_snapshot()
+
+    # Native benchmark only when extension is available.
+    native_s: float | None = None
+    native_measurements = 0
+    native_snapshot = {}
+    speedup_ratio = 0.0
+    if native_backend_available():
+        os.environ["METROLIZA_CMM_PARSER_BACKEND"] = "native"
+        reset_backend_telemetry()
+        native_start = time.perf_counter()
+        for lines in raw_batches:
+            parsed = parse_blocks_with_backend(lines, use_native=True)
+            native_measurements += sum(len(block[1]) for block in parsed)
+        native_s = time.perf_counter() - native_start
+        native_snapshot = get_backend_telemetry_snapshot()
+        speedup_ratio = (python_s / native_s) if native_s > 0 else 0.0
+
+    return ScenarioResult(
+        scenario='cmm_parser_backend_compare',
+        wall_time_s=python_s + (native_s or 0.0),
+        stage_timings_s={
+            'python_backend_parse': python_s,
+            'native_backend_parse': native_s or 0.0,
+            'native_speedup_ratio': speedup_ratio,
+        },
+        input_metrics={
+            'rows': py_measurements,
+            'headers': report_count,
+            'chart_count': 0,
+            'native_available': int(native_backend_available()),
+            'native_rows': native_measurements,
+            'python_parse_backend_rate': float(python_snapshot.get('parse', {}).get('python_rate', 0.0)),
+            'native_parse_backend_rate': float(native_snapshot.get('parse', {}).get('native_rate', 0.0)),
         },
     )
 
@@ -499,13 +580,15 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
     import modules.csv_summary_dialog as csv_module
     stats_seconds = 0.0
     workbook_write_seconds = 0.0
-    original_stats = csv_module.compute_column_summary_stats
+    original_stats = getattr(csv_module, "compute_column_summary_stats", None)
     original_to_excel = pd.DataFrame.to_excel
 
     def timed_stats(*args, **kwargs):
         nonlocal stats_seconds
         start = time.perf_counter()
         try:
+            if original_stats is None:
+                return None
             return original_stats(*args, **kwargs)
         finally:
             stats_seconds += time.perf_counter() - start
@@ -518,7 +601,8 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         finally:
             workbook_write_seconds += time.perf_counter() - start
 
-    csv_module.compute_column_summary_stats = timed_stats
+    if original_stats is not None:
+        csv_module.compute_column_summary_stats = timed_stats
     pd.DataFrame.to_excel = timed_to_excel
 
     worker = BenchmarkCSVThread(
@@ -536,7 +620,8 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
     try:
         worker.run()
     finally:
-        csv_module.compute_column_summary_stats = original_stats
+        if original_stats is not None:
+            csv_module.compute_column_summary_stats = original_stats
         pd.DataFrame.to_excel = original_to_excel
 
     run_s = time.perf_counter() - run_start
@@ -599,6 +684,11 @@ def main() -> int:
     parser.add_argument('--fit-monte-carlo-samples', type=int, default=250)
     parser.add_argument('--group-preprocess-groups', type=int, default=48)
     parser.add_argument('--group-preprocess-values', type=int, default=20000)
+    parser.add_argument('--cmm-bench-report-count', type=int, default=180)
+    parser.add_argument('--cmm-bench-measurements-per-report', type=int, default=140)
+    parser.add_argument('--enforce-cmm-parser-guardrail', action='store_true')
+    parser.add_argument('--cmm-native-min-speedup-ratio', type=float, default=0.9)
+    parser.add_argument('--cmm-native-min-usage-rate', type=float, default=0.95)
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory(prefix='metroliza-bench-') as temp_dir:
@@ -623,6 +713,11 @@ def main() -> int:
                 group_count=max(1, args.group_preprocess_groups),
                 values_per_group=max(10, args.group_preprocess_values),
             ),
+            benchmark_cmm_parser_backend_compare(
+                temp_path,
+                report_count=max(1, args.cmm_bench_report_count),
+                measurements_per_report=max(1, args.cmm_bench_measurements_per_report),
+            ),
         ]
 
     payload = {
@@ -634,6 +729,31 @@ def main() -> int:
 
     print(f'Benchmark JSON: {json_path}')
     print(f'Benchmark CSV: {csv_path}')
+
+    if args.enforce_cmm_parser_guardrail:
+        cmm = next((item for item in payload['results'] if item['scenario'] == 'cmm_parser_backend_compare'), None)
+        if cmm is None:
+            raise RuntimeError('cmm_parser_backend_compare scenario missing from benchmark payload')
+
+        native_available = int(cmm['input_metrics'].get('native_available', 0)) == 1
+        if native_available:
+            speedup_ratio = float(cmm['stage_timings_s'].get('native_speedup_ratio', 0.0))
+            native_usage_rate = float(cmm['input_metrics'].get('native_parse_backend_rate', 0.0))
+            if speedup_ratio < args.cmm_native_min_speedup_ratio:
+                raise RuntimeError(
+                    f'Native parser speedup ratio {speedup_ratio:.3f} below threshold {args.cmm_native_min_speedup_ratio:.3f}'
+                )
+            if native_usage_rate < args.cmm_native_min_usage_rate:
+                raise RuntimeError(
+                    f'Native parser usage rate {native_usage_rate:.3f} below threshold {args.cmm_native_min_usage_rate:.3f}'
+                )
+            print(
+                f"CMM parser guardrail passed: native_speedup_ratio={speedup_ratio:.3f}, "
+                f"native_usage_rate={native_usage_rate:.3f}"
+            )
+        else:
+            print('CMM parser guardrail skipped: native parser extension unavailable in this environment.')
+
     return 0
 
 
