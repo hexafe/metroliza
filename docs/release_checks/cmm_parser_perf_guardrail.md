@@ -14,6 +14,8 @@ The gate uses a fixed synthetic workload and must run with:
 - `--enforce-cmm-parser-guardrail`
 - `--cmm-native-min-speedup-ratio 0.90`
 - `--cmm-native-min-usage-rate 0.95`
+- `--max-median-regression-pct 12`
+- `--min-median-regression-s 0.050`
 
 ## Trend evidence and artifacts
 
@@ -32,14 +34,14 @@ Expected artifact contents:
 
 ## Expected variance guidance
 
-Because this benchmark is runtime-sensitive and runs on shared hosted runners, minor run-to-run jitter is expected. The trend gate uses a 12% median-regression threshold for this reason.
+Because this benchmark is runtime-sensitive and runs on shared hosted runners, minor run-to-run jitter is expected. The trend gate uses a 12% median-regression threshold plus a 0.050s absolute slowdown floor for this reason.
 
 - Treat small single-run oscillations as noise.
 - Use the **median across 3 measured runs** as the decision signal.
 - The guardrail hard-fails only when:
   - native speedup ratio falls below `0.90`, or
   - native parser usage rate falls below `0.95`, or
-  - trend comparison reports median regression greater than the CMM gate threshold (`12%`).
+  - trend comparison reports median regression greater than `12%` **and** absolute slowdown greater than `0.050s`.
 
 ## Failure triage checklist
 

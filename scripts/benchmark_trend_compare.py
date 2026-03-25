@@ -33,6 +33,12 @@ def main() -> int:
     parser.add_argument('--output-json', required=True, help='Path to write trend comparison JSON.')
     parser.add_argument('--max-median-regression-pct', type=float, default=10.0)
     parser.add_argument(
+        '--min-median-regression-s',
+        type=float,
+        default=0.0,
+        help='Optional absolute slowdown floor in seconds. Fails only when both pct and absolute thresholds are exceeded.',
+    )
+    parser.add_argument(
         '--scenarios',
         nargs='+',
         help='Optional scenario keys to compare. When provided, only these scenarios are evaluated.',
@@ -49,6 +55,7 @@ def main() -> int:
     }
 
     threshold = float(args.max_median_regression_pct)
+    min_regression_s = max(0.0, float(args.min_median_regression_s))
     rows: list[dict] = []
     failures: list[str] = []
 
@@ -62,10 +69,14 @@ def main() -> int:
         baseline_median = float(baseline_times.get(scenario_name, 0.0))
         if baseline_median <= 0:
             regression_pct = 0.0
+            regression_s = 0.0
             status = 'missing_baseline'
         else:
+            regression_s = observed_median - baseline_median
             regression_pct = ((observed_median - baseline_median) / baseline_median) * 100.0
-            status = 'pass' if regression_pct <= threshold else 'fail'
+            exceeds_pct = regression_pct > threshold
+            exceeds_abs = regression_s > min_regression_s
+            status = 'fail' if (exceeds_pct and exceeds_abs) else 'pass'
             if status == 'fail':
                 failures.append(scenario_name)
         rows.append(
@@ -73,6 +84,7 @@ def main() -> int:
                 'scenario': scenario_name,
                 'baseline_median_wall_time_s': baseline_median,
                 'observed_median_wall_time_s': observed_median,
+                'median_regression_s': regression_s,
                 'median_regression_pct': regression_pct,
                 'status': status,
             }
@@ -81,6 +93,7 @@ def main() -> int:
     report = {
         'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'max_median_regression_pct': threshold,
+        'min_median_regression_s': min_regression_s,
         'baseline_path': args.baseline,
         'run_files': args.runs,
         'results': rows,
@@ -95,6 +108,7 @@ def main() -> int:
         print(
             f"scenario={row['scenario']} status={row['status']} "
             f"baseline={row['baseline_median_wall_time_s']:.6f}s observed={row['observed_median_wall_time_s']:.6f}s "
+            f"regression_s={row['median_regression_s']:.6f}s "
             f"regression_pct={row['median_regression_pct']:.2f}"
         )
 

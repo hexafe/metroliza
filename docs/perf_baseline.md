@@ -41,6 +41,7 @@ For CI quality-gate enforcement on `cmm_parser_backend_compare`:
 - `--cmm-native-min-speedup-ratio 0.90`
 - `--cmm-native-min-usage-rate 0.95`
 - trend median regression threshold: `12%` for the dedicated `cmm-parser-perf-gate` CI job
+- trend absolute regression floor: `0.050s` for the dedicated `cmm-parser-perf-gate` CI job
 
 These values are pinned in CI and should only change with a dedicated baseline-governance PR that includes fresh trend evidence.
 

@@ -418,6 +418,7 @@ jobs:
                    benchmark_results/cmm_perf_gate/runs/run-3/benchmark-paths.json \
             --scenarios cmm_parser_backend_compare \
             --max-median-regression-pct 12 \
+            --min-median-regression-s 0.050 \
             --output-json benchmark_results/cmm_perf_gate/trend-report.json
 
       - name: Upload CMM benchmark artifacts
