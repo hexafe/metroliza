@@ -48,6 +48,28 @@ class TestDistributionFitNativeParity(unittest.TestCase):
                 self.assertEqual(arr.dtype, np.float64)
                 self.assertTrue(arr.flags['C_CONTIGUOUS'])
 
+    def test_candidate_kernel_batch_bridge_normalizes_to_contiguous_float64(self):
+        with mock.patch.object(
+            candidate_native_bridge,
+            '_native_compute_candidate_metrics_batch',
+            return_value=([1.0], [2.0], [3.0], [4.0], [5.0], [0]),
+        ) as kernel_stub:
+            kernel_input = candidate_native_bridge.build_batch_kernel_input(
+                distributions=['norm'],
+                fitted_params_batch=[np.array([0, 1], dtype=np.float32)],
+                sample_values_batch=[np.array([-1, 0, 1], dtype=np.float32)],
+            )
+            output = candidate_native_bridge.compute_candidate_metrics_batch_native(kernel_input)
+            self.assertEqual(output.error_flags, (0,))
+            for arr in kernel_stub.call_args.args[1]:
+                self.assertIsInstance(arr, np.ndarray)
+                self.assertEqual(arr.dtype, np.float64)
+                self.assertTrue(arr.flags['C_CONTIGUOUS'])
+            for arr in kernel_stub.call_args.args[2]:
+                self.assertIsInstance(arr, np.ndarray)
+                self.assertEqual(arr.dtype, np.float64)
+                self.assertTrue(arr.flags['C_CONTIGUOUS'])
+
     def test_native_wrapper_normalizes_list_and_ndarray_inputs_equivalently(self):
         with mock.patch.object(
             native_bridge,

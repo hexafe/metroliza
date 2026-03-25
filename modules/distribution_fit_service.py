@@ -16,7 +16,10 @@ from modules.distribution_fit_native import (
 )
 from modules.distribution_fit_candidate_native import (
     build_kernel_input,
+    build_batch_kernel_input,
     compute_candidate_metrics,
+    compute_candidate_metrics_batch_native,
+    resolve_kernel_mode,
 )
 from scipy.stats import (
     foldnorm,
@@ -397,6 +400,95 @@ def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray, *, ker
     }
 
 
+def _fit_candidates_batch_native(
+    grouped_values: dict[str, np.ndarray],
+    *,
+    support_mode_by_group: dict[str, str],
+    kernel_mode: str | None = None,
+) -> dict[str, dict[str, dict]] | None:
+    if resolve_kernel_mode(kernel_mode) == 'python':
+        return None
+
+    distributions: list[str] = []
+    fitted_params_batch: list[tuple[float, ...]] = []
+    sample_values_batch: list[np.ndarray] = []
+    metadata: list[tuple[str, _CandidateDistribution, tuple[float, ...], np.ndarray]] = []
+
+    for group_name, values in grouped_values.items():
+        if values.size < 3:
+            continue
+        if np.isclose(float(np.min(values)), float(np.max(values))):
+            continue
+        for candidate in _candidate_pool_for_mode(support_mode_by_group[group_name]):
+            fit_kwargs = {'floc': 0.0} if candidate.force_loc_zero else {}
+            params = tuple(candidate.fit_method(values, **fit_kwargs))
+            if candidate.positive_support and params:
+                mutable = list(params)
+                mutable[-2] = 0.0
+                params = tuple(mutable)
+            distributions.append(candidate.name)
+            fitted_params_batch.append(params)
+            sample_values_batch.append(values)
+            metadata.append((group_name, candidate, params, values))
+
+    if not metadata:
+        return None
+
+    batch_output = compute_candidate_metrics_batch_native(
+        build_batch_kernel_input(
+            sample_values_batch=sample_values_batch,
+            distributions=distributions,
+            fitted_params_batch=fitted_params_batch,
+        )
+    )
+    if batch_output is None:
+        return None
+
+    result: dict[str, dict[str, dict]] = {}
+    for idx, (group_name, candidate, params, values) in enumerate(metadata):
+        n = values.size
+        nll = batch_output.nll[idx]
+        aic = batch_output.aic[idx]
+        bic = batch_output.bic[idx]
+        ad_stat = batch_output.ad_statistic[idx]
+        ks_stat = batch_output.ks_statistic[idx]
+
+        if nll is None or aic is None or bic is None:
+            logpdf = candidate.scipy_dist.logpdf(values, *params)
+            if not np.all(np.isfinite(logpdf)):
+                raise ValueError('logpdf returned invalid values')
+            nll = float(-np.sum(logpdf))
+            k = len(params)
+            aic = float(2 * k + 2 * nll)
+            bic = float(k * math.log(n) + 2 * nll)
+
+        if ad_stat is None:
+            ad_stat = _ad_statistic(values, lambda x: candidate.scipy_dist.cdf(x, *params))
+
+        if ks_stat is None:
+            ks_stat, ks_pvalue = kstest(values, candidate.scipy_dist.cdf, args=params)
+            ks_stat = float(ks_stat)
+            ks_pvalue = float(ks_pvalue)
+        else:
+            ks_stat = float(ks_stat)
+            ks_pvalue = float(kstwo.sf(ks_stat, n)) if n > 0 else None
+
+        result.setdefault(group_name, {})[candidate.name] = {
+            'model': candidate.name,
+            'display_name': candidate.display_name,
+            'params': tuple(float(v) for v in params),
+            'metrics': {'nll': nll, 'aic': aic, 'bic': bic},
+            'gof': {
+                'ad_statistic': float(ad_stat),
+                'ad_pvalue': None,
+                'ad_pvalue_method': 'not_estimated',
+                'ks_statistic': float(ks_stat),
+                'ks_pvalue': float(ks_pvalue),
+            },
+        }
+    return result
+
+
 def build_fit_curve_payload(
     measurements,
     *,
@@ -578,6 +670,7 @@ def fit_measurement_distribution(
     candidate_kernel_mode: str | None = None,
     memoization_cache: MutableMapping | None = None,
     measurement_signature: tuple[int, str] | None = None,
+    precomputed_candidates_by_model: dict[str, dict] | None = None,
 ):
     """Fit distributions, score GOF, classify quality, and estimate tail risk.
 
@@ -635,7 +728,13 @@ def fit_measurement_distribution(
     candidates = []
     for candidate in _candidate_pool_for_mode(inferred_mode):
         try:
-            fitted = _fit_candidate(candidate, values, kernel_mode=candidate_kernel_mode)
+            fitted = None if precomputed_candidates_by_model is None else precomputed_candidates_by_model.get(candidate.name)
+            if fitted is None:
+                fitted = _fit_candidate(candidate, values, kernel_mode=candidate_kernel_mode)
+            else:
+                fitted = dict(fitted)
+                fitted['metrics'] = dict(fitted.get('metrics') or {})
+                fitted['gof'] = dict(fitted.get('gof') or {})
             if monte_carlo_gof_samples > 0:
                 fitted['gof']['ad_pvalue'] = _estimate_ad_pvalue_monte_carlo(
                     dist=candidate.scipy_dist,
@@ -757,8 +856,21 @@ def fit_measurement_distribution_batch(
     usl_by_group = usl_by_group or {}
     result: dict[str, dict] = {}
 
-    for group_name, values in grouped_measurements.items():
-        group_values = np.ascontiguousarray(np.asarray(values, dtype=float))
+    normalized_values = {
+        group_name: np.ascontiguousarray(np.asarray(values, dtype=float))
+        for group_name, values in grouped_measurements.items()
+    }
+    support_mode_by_group = {
+        group_name: ('unknown' if values.size < 1 else _infer_support_mode(values))
+        for group_name, values in normalized_values.items()
+    }
+    precomputed_by_group = _fit_candidates_batch_native(
+        normalized_values,
+        support_mode_by_group=support_mode_by_group,
+        kernel_mode=candidate_kernel_mode,
+    ) or {}
+
+    for group_name, group_values in normalized_values.items():
         result[group_name] = fit_measurement_distribution(
             group_values,
             lsl=lsl_by_group.get(group_name),
@@ -771,5 +883,6 @@ def fit_measurement_distribution_batch(
             candidate_kernel_mode=candidate_kernel_mode,
             memoization_cache=memoization_cache,
             measurement_signature=None if fingerprints_by_group is None else fingerprints_by_group.get(group_name),
+            precomputed_candidates_by_model=precomputed_by_group.get(group_name),
         )
     return result

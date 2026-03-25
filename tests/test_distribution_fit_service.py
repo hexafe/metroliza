@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -282,6 +283,75 @@ class TestDistributionFitService(unittest.TestCase):
             for lhs, rhs in zip(left, right, strict=False):
                 for metric_key in ('nll', 'aic', 'bic', 'ad_statistic', 'ks_statistic'):
                     self.assertAlmostEqual(lhs[metric_key], rhs[metric_key], places=9)
+
+    def test_batch_native_dispatch_parity_matches_python_baseline_for_ranking_selection_and_risk(self):
+        rng = np.random.default_rng(20260326)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.8, scale=0.6, size=120).astype(float)),
+            'G_BI': np.ascontiguousarray(rng.normal(loc=-0.1, scale=0.9, size=120).astype(float)),
+        }
+
+        baseline = fit_measurement_distribution_batch(
+            grouped,
+            usl_by_group={'G_POS': 2.2, 'G_BI': 1.8},
+            lsl_by_group={'G_BI': -1.8},
+            candidate_kernel_mode='python',
+        )
+
+        def _fake_native_batch(kernel_input):
+            nll = []
+            aic = []
+            bic = []
+            ad = []
+            ks = []
+            flags = []
+            for distribution, params, sample in zip(
+                kernel_input.distributions,
+                kernel_input.fitted_params_batch,
+                kernel_input.sample_values_batch,
+                strict=False,
+            ):
+                dist = distribution_fit_service._DISTRIBUTION_BY_NAME[distribution]
+                params_tuple = tuple(float(v) for v in params)
+                values = np.asarray(sample, dtype=float)
+                logpdf = dist.logpdf(values, *params_tuple)
+                nll_value = float(-np.sum(logpdf))
+                k = len(params_tuple)
+                n = values.size
+                nll.append(nll_value)
+                aic.append(float(2 * k + 2 * nll_value))
+                bic.append(float(k * np.log(n) + 2 * nll_value))
+                ad.append(float(distribution_fit_service._ad_statistic(values, lambda x: dist.cdf(x, *params_tuple))))
+                ks.append(float(distribution_fit_service.kstest(values, dist.cdf, args=params_tuple).statistic))
+                flags.append(0)
+            return SimpleNamespace(
+                nll=tuple(nll),
+                aic=tuple(aic),
+                bic=tuple(bic),
+                ad_statistic=tuple(ad),
+                ks_statistic=tuple(ks),
+                error_flags=tuple(flags),
+            )
+
+        with mock.patch.object(distribution_fit_service, 'compute_candidate_metrics_batch_native', side_effect=_fake_native_batch) as batch_stub:
+            candidate = fit_measurement_distribution_batch(
+                grouped,
+                usl_by_group={'G_POS': 2.2, 'G_BI': 1.8},
+                lsl_by_group={'G_BI': -1.8},
+                candidate_kernel_mode='auto',
+            )
+
+        self.assertGreater(batch_stub.call_count, 0)
+        for group_name in grouped:
+            baseline_rank = baseline[group_name]['ranking_metrics']
+            candidate_rank = candidate[group_name]['ranking_metrics']
+            self.assertEqual([row['model'] for row in baseline_rank], [row['model'] for row in candidate_rank])
+            self.assertEqual(baseline[group_name]['selected_model']['name'], candidate[group_name]['selected_model']['name'])
+            self.assertAlmostEqual(
+                baseline[group_name]['risk_estimates']['outside_probability'],
+                candidate[group_name]['risk_estimates']['outside_probability'],
+                places=12,
+            )
 
     def test_fit_measurement_distribution_uses_provided_measurement_signature_for_cache_key(self):
         measurements = np.ascontiguousarray(np.array([1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15], dtype=float))

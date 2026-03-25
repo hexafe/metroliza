@@ -10,8 +10,10 @@ import numpy as np
 
 try:
     from _metroliza_distribution_fit_native import compute_candidate_metrics as _native_compute_candidate_metrics  # type: ignore
+    from _metroliza_distribution_fit_native import compute_candidate_metrics_batch as _native_compute_candidate_metrics_batch  # type: ignore
 except Exception:  # pragma: no cover - optional native module
     _native_compute_candidate_metrics = None
+    _native_compute_candidate_metrics_batch = None
 
 
 KERNEL_MODE_PYTHON = 'python'
@@ -34,6 +36,23 @@ class CandidateKernelOutput:
     ad_statistic: float | None
     ks_statistic: float | None
     error_flags: int
+
+
+@dataclass(frozen=True)
+class CandidateBatchKernelInput:
+    distributions: tuple[str, ...]
+    fitted_params_batch: tuple[np.ndarray, ...]
+    sample_values_batch: tuple[np.ndarray, ...]
+
+
+@dataclass(frozen=True)
+class CandidateBatchKernelOutput:
+    nll: tuple[float | None, ...]
+    aic: tuple[float | None, ...]
+    bic: tuple[float | None, ...]
+    ad_statistic: tuple[float | None, ...]
+    ks_statistic: tuple[float | None, ...]
+    error_flags: tuple[int, ...]
 
 
 ERROR_NONE = 0
@@ -72,6 +91,21 @@ def build_kernel_input(*, sample_values: Sequence[float] | np.ndarray, distribut
     )
 
 
+def build_batch_kernel_input(
+    *,
+    sample_values_batch: Sequence[Sequence[float] | np.ndarray],
+    distributions: Sequence[str],
+    fitted_params_batch: Sequence[Sequence[float] | np.ndarray],
+) -> CandidateBatchKernelInput:
+    if len(sample_values_batch) != len(distributions) or len(sample_values_batch) != len(fitted_params_batch):
+        raise ValueError('Batch kernel inputs must have matching lengths')
+    return CandidateBatchKernelInput(
+        sample_values_batch=tuple(_as_float64_1d_contiguous(values) for values in sample_values_batch),
+        distributions=tuple(str(distribution) for distribution in distributions),
+        fitted_params_batch=tuple(_as_float64_1d_contiguous(values) for values in fitted_params_batch),
+    )
+
+
 def compute_candidate_metrics_native(kernel_input: CandidateKernelInput) -> CandidateKernelOutput | None:
     if _native_compute_candidate_metrics is None:
         return None
@@ -107,3 +141,21 @@ def compute_candidate_metrics(kernel_input: CandidateKernelInput, *, mode: str |
             error_flags=ERROR_UNSUPPORTED_DISTRIBUTION,
         )
     return native_result
+
+
+def compute_candidate_metrics_batch_native(kernel_input: CandidateBatchKernelInput) -> CandidateBatchKernelOutput | None:
+    if _native_compute_candidate_metrics_batch is None:
+        return None
+    nll, aic, bic, ad_stat, ks_stat, flags = _native_compute_candidate_metrics_batch(
+        list(kernel_input.distributions),
+        list(kernel_input.fitted_params_batch),
+        list(kernel_input.sample_values_batch),
+    )
+    return CandidateBatchKernelOutput(
+        nll=tuple(None if v is None else float(v) for v in nll),
+        aic=tuple(None if v is None else float(v) for v in aic),
+        bic=tuple(None if v is None else float(v) for v in bic),
+        ad_statistic=tuple(None if v is None else float(v) for v in ad_stat),
+        ks_statistic=tuple(None if v is None else float(v) for v in ks_stat),
+        error_flags=tuple(int(v) for v in flags),
+    )
