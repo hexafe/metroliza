@@ -27,16 +27,22 @@ def test_resolve_backend_defaults_to_matplotlib_when_native_unavailable(monkeypa
         assert resolve_chart_renderer_backend() == "matplotlib"
 
 
-def test_resolve_backend_native_requires_extension(monkeypatch):
+def test_resolve_backend_native_warns_and_falls_back_when_extension_missing(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
     with mock.patch("modules.chart_renderer._native_render_histogram_png", None):
-        try:
-            resolve_chart_renderer_backend()
-        except RuntimeError as exc:
-            assert "unavailable" in str(exc).lower()
-        else:  # pragma: no cover - defensive assertion
-            raise AssertionError("Expected RuntimeError when native backend is forced but unavailable")
+        with mock.patch("warnings.warn") as warn:
+            assert resolve_chart_renderer_backend() == "matplotlib"
+    assert warn.called
+    assert "METROLIZA_CHART_RENDERER_BACKEND=native" in str(warn.call_args[0][0])
 
+
+
+
+def test_build_chart_renderer_native_env_falls_back_to_matplotlib_when_extension_missing(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", None):
+        renderer = build_chart_renderer()
+    assert isinstance(renderer, MatplotlibChartRenderer)
 
 def test_build_chart_renderer_matplotlib(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib")
@@ -102,3 +108,22 @@ def test_build_histogram_native_payload_includes_bin_count_when_provided():
         bin_count=7,
     )
     assert payload["bin_count"] == 7
+
+
+def test_native_chart_renderer_falls_back_to_matplotlib_when_extension_missing():
+    payload = build_histogram_native_payload(
+        values=[1.0, 2.0, 3.0],
+        lsl=0.0,
+        usl=4.0,
+        title="Fallback Histogram",
+    )
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.hist(payload["values"], bins=4)
+
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", None):
+        result = NativeChartRenderer().render_histogram_png(payload, fallback_fig=fig)
+
+    plt.close(fig)
+    assert result.backend == "matplotlib"
+    assert isinstance(result.png_bytes, bytes)
+    assert len(result.png_bytes) > 0
