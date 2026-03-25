@@ -265,6 +265,40 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertAlmostEqual(batch['A']['risk_estimates']['outside_probability'], single_a['risk_estimates']['outside_probability'])
         self.assertAlmostEqual(batch['B']['risk_estimates']['outside_probability'], single_b['risk_estimates']['outside_probability'])
 
+    def test_fit_measurement_distribution_batch_converts_lists_and_zero_copies_contiguous_ndarrays(self):
+        contiguous_array = np.ascontiguousarray(np.array([1.0, 1.1, 1.2], dtype=np.float64))
+        grouped = {
+            'FROM_LIST': [0.1, 0.2, 0.3],
+            'FROM_ARRAY': contiguous_array,
+        }
+        captured_values = {}
+
+        def _stub_fit_measurement_distribution(values, **kwargs):
+            del kwargs
+            captured_values[len(captured_values)] = values
+            return {
+                'status': 'ok',
+                'selected_model': {'name': 'norm'},
+                'risk_estimates': {'outside_probability': 0.0},
+                'ranking_metrics': [],
+            }
+
+        with mock.patch.object(distribution_fit_service, '_fit_candidates_batch_native', return_value={}), mock.patch.object(
+            distribution_fit_service,
+            'fit_measurement_distribution',
+            side_effect=_stub_fit_measurement_distribution,
+        ):
+            fit_measurement_distribution_batch(grouped)
+
+        list_values = captured_values[0]
+        ndarray_values = captured_values[1]
+        self.assertIsInstance(list_values, np.ndarray)
+        self.assertEqual(list_values.dtype, np.float64)
+        self.assertTrue(list_values.flags['C_CONTIGUOUS'])
+        self.assertIsNot(list_values, grouped['FROM_LIST'])
+
+        self.assertIs(ndarray_values, contiguous_array)
+
     def test_batch_candidate_kernel_mode_parity_preserves_full_ranking_for_deterministic_fixture(self):
         rng = np.random.default_rng(20260325)
         grouped = {

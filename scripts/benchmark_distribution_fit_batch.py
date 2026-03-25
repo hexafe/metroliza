@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from modules.distribution_fit_service import (  # noqa: E402
+    _coerce_measurements_array,
     fit_measurement_distribution,
     fit_measurement_distribution_batch,
     measurement_fingerprint,
@@ -69,6 +70,30 @@ def _run_batch(fixture, *, include_kde_reference=False, candidate_kernel_mode=No
             candidate_kernel_mode=candidate_kernel_mode,
         )
     return time.perf_counter() - start, results
+
+
+def _run_marshaling_benchmark(*, groups: int, samples: int, repeats: int, seed: int) -> dict[str, float]:
+    rng = np.random.default_rng(seed)
+    list_groups = [rng.normal(loc=i * 0.05, scale=1.0, size=samples).astype(float).tolist() for i in range(groups)]
+    ndarray_groups = [np.ascontiguousarray(np.asarray(group, dtype=np.float64)) for group in list_groups]
+
+    start = time.perf_counter()
+    for _ in range(max(1, repeats)):
+        for values in list_groups:
+            _coerce_measurements_array(values)
+    list_seconds = time.perf_counter() - start
+
+    start = time.perf_counter()
+    for _ in range(max(1, repeats)):
+        for values in ndarray_groups:
+            _coerce_measurements_array(values)
+    ndarray_seconds = time.perf_counter() - start
+
+    return {
+        'list_input_seconds': float(list_seconds),
+        'ndarray_input_seconds': float(ndarray_seconds),
+        'ndarray_vs_list_speedup_ratio': float((list_seconds / ndarray_seconds) if ndarray_seconds > 0 else 0.0),
+    }
 
 
 def _validate_parity(baseline, candidate, *, full_ranking=False):
@@ -177,6 +202,7 @@ def main():
     parser.add_argument('--native-monte-carlo-mode', choices=['single', 'parallel'], help=argparse.SUPPRESS)
     parser.add_argument('--candidate-kernel-benchmark', action='store_true', help='Benchmark candidate metric kernel mode (python vs auto/native if available).')
     parser.add_argument('--batch-native-benchmark', action='store_true', help='Benchmark explicit batch-native dispatch path (python vs native).')
+    parser.add_argument('--marshal-repeats', type=int, default=400, help='Repetitions for marshaling micro-benchmark.')
     parser.add_argument('--output-json', help='Optional path to write machine-readable benchmark output JSON.')
     args = parser.parse_args()
 
@@ -194,6 +220,12 @@ def main():
         raise SystemExit(_run_native_monte_carlo_scaling_benchmark(args))
 
     fixture = _build_fixture(args.metrics, args.groups, args.samples, args.seed)
+    marshaling = _run_marshaling_benchmark(
+        groups=max(1, args.groups),
+        samples=max(2, args.samples),
+        repeats=max(1, args.marshal_repeats),
+        seed=args.seed + 19,
+    )
 
     legacy_seconds, legacy_results = _run_legacy_per_group(fixture)
     batch_seconds, batch_results = _run_batch(fixture)
@@ -248,8 +280,17 @@ def main():
     print(f"legacy_seconds={legacy_seconds:.4f}")
     print(f"batch_seconds={batch_seconds:.4f}")
     speedup = legacy_seconds / batch_seconds if batch_seconds > 0 else float('inf')
+    marshaling_seconds = float(marshaling['ndarray_input_seconds'])
+    baseline_total_seconds = marshaling_seconds + float(batch_seconds)
+    marshaling_share = (marshaling_seconds / baseline_total_seconds) if baseline_total_seconds > 0 else 0.0
+    compute_share = (float(batch_seconds) / baseline_total_seconds) if baseline_total_seconds > 0 else 0.0
     print(f"speedup_x={speedup:.2f}")
     print(f"parity_mismatches={len(mismatches)}")
+    print(f"marshaling_list_seconds={marshaling['list_input_seconds']:.4f}")
+    print(f"marshaling_ndarray_seconds={marshaling['ndarray_input_seconds']:.4f}")
+    print(f"marshaling_speedup_ratio={marshaling['ndarray_vs_list_speedup_ratio']:.2f}")
+    print(f"marshaling_only_share={marshaling_share:.6f}")
+    print(f"compute_share={compute_share:.6f}")
 
     payload = {
         'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
@@ -267,11 +308,17 @@ def main():
                     'legacy_per_group': float(legacy_seconds),
                     'batch_path': float(batch_seconds),
                     'speedup_ratio': float(speedup),
+                    'marshaling_list_seconds': float(marshaling['list_input_seconds']),
+                    'marshaling_ndarray_seconds': float(marshaling['ndarray_input_seconds']),
+                    'marshaling_speedup_ratio': float(marshaling['ndarray_vs_list_speedup_ratio']),
+                    'marshaling_only_share': float(marshaling_share),
+                    'compute_share': float(compute_share),
                 },
                 'input_metrics': {
                     'metrics': int(args.metrics),
                     'groups': int(args.groups),
                     'samples': int(args.samples),
+                    'marshal_repeats': int(args.marshal_repeats),
                     'parity_mismatches': int(len(mismatches)),
                 },
                 'candidate_kernel': kernel_payload,
