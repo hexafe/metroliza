@@ -230,6 +230,7 @@ jobs:
           python -m maturin build --manifest-path modules/native/group_stats_coercion/Cargo.toml --release --out dist/native
           python -m maturin build --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml --release --out dist/native
           python -m maturin build --manifest-path modules/native/distribution_fit_ad/Cargo.toml --release --out dist/native
+          python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml --release --out dist/native
 
       - name: Install built native wheel
         run: |
@@ -245,6 +246,7 @@ jobs:
 
           import modules.cmm_native_parser as cmm
           import modules.comparison_stats_native as comparison
+          import modules.chart_renderer as chart_renderer
           import modules.distribution_fit_native as distribution
           import modules.group_stats_native as group_stats
 
@@ -290,6 +292,18 @@ jobs:
               seed=123,
           )
           assert ad_mc is not None and len(ad_mc) == 2
+
+          assert chart_renderer.native_chart_backend_available()
+          chart_payload = chart_renderer.build_histogram_native_payload(
+              values=[1.0, 1.2, 1.4, 1.8, 2.0],
+              lsl=1.0,
+              usl=2.2,
+              title="Native Smoke",
+              bin_count=5,
+          )
+          chart_result = chart_renderer.NativeChartRenderer().render_histogram_png(chart_payload)
+          assert chart_result.backend == "native"
+          assert isinstance(chart_result.png_bytes, bytes) and len(chart_result.png_bytes) > 0
 
           # Fallback semantics when extensions are intentionally absent.
           with mock.patch.object(cmm, "_native_parse_blocks", None):
