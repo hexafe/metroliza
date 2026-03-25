@@ -641,9 +641,15 @@ def test_measurement_row_persistence_parity_python_vs_native_when_available(tmp_
     py_db = str(tmp_path / "py_insert.db")
     native_db = str(tmp_path / "native_insert.db")
     assert persist_measurement_rows_python(py_db, rows) is True
+    assert persist_measurement_rows_python(py_db, rows) is False
     native_result = persist_measurement_rows_with_backend_and_telemetry(native_db, rows, use_native=True)
     assert native_result.backend == "native"
     assert native_result.inserted is True
+    native_duplicate_result = persist_measurement_rows_with_backend_and_telemetry(
+        native_db, rows, use_native=True
+    )
+    assert native_duplicate_result.backend == "native"
+    assert native_duplicate_result.inserted is False
 
     with sqlite3.connect(py_db) as py_conn, sqlite3.connect(native_db) as native_conn:
         py_rows = py_conn.execute(
@@ -670,6 +676,133 @@ def test_measurement_row_persistence_parity_python_vs_native_when_available(tmp_
         ).fetchall()
 
     assert py_rows == native_rows
+
+
+@pytest.fixture
+def large_measurement_rows():
+    row_count = 20_000
+    header = "LARGE ROW PARITY"
+    return [
+        (
+            f"D{idx}",
+            10.0 + idx,
+            0.2,
+            -0.2,
+            0.0,
+            10.01 + idx,
+            0.01,
+            0.0,
+            header,
+            "REF_LARGE",
+            "/tmp/reports",
+            "REF_LARGE_2024-01-02_999.pdf",
+            "2024-01-02",
+            "999",
+        )
+        for idx in range(row_count)
+    ]
+
+
+def test_measurement_row_persistence_duplicate_detection_python_backend(tmp_path):
+    rows = [
+        (
+            "D1",
+            10.0,
+            0.2,
+            -0.2,
+            0.0,
+            10.03,
+            0.03,
+            0.0,
+            "PERSIST PARITY",
+            "REF01",
+            "/tmp/reports",
+            "REF01_2024-01-02_123.pdf",
+            "2024-01-02",
+            "123",
+        )
+    ]
+    py_db = str(tmp_path / "py_duplicate.db")
+
+    assert persist_measurement_rows_python(py_db, rows) is True
+    assert persist_measurement_rows_python(py_db, rows) is False
+
+    with sqlite3.connect(py_db) as conn:
+        report_count = conn.execute("SELECT COUNT(*) FROM REPORTS").fetchone()
+        measurement_count = conn.execute("SELECT COUNT(*) FROM MEASUREMENTS").fetchone()
+
+    assert report_count == (1,)
+    assert measurement_count == (1,)
+
+
+def test_large_row_persistence_python_backend(tmp_path, large_measurement_rows):
+    py_db = str(tmp_path / "py_large_insert.db")
+
+    assert persist_measurement_rows_python(py_db, large_measurement_rows) is True
+    assert persist_measurement_rows_python(py_db, large_measurement_rows) is False
+
+    with sqlite3.connect(py_db) as conn:
+        report_count = conn.execute("SELECT COUNT(*) FROM REPORTS").fetchone()
+        measurement_count = conn.execute("SELECT COUNT(*) FROM MEASUREMENTS").fetchone()
+
+    assert report_count == (1,)
+    assert measurement_count == (len(large_measurement_rows),)
+
+
+def test_large_row_persistence_parity_python_vs_native_when_available(tmp_path, large_measurement_rows):
+    if not native_persistence_backend_available():
+        pytest.skip("Native CMM persistence module is not built in this environment")
+
+    py_db = str(tmp_path / "py_large_insert.db")
+    native_db = str(tmp_path / "native_large_insert.db")
+
+    assert persist_measurement_rows_python(py_db, large_measurement_rows) is True
+    native_result = persist_measurement_rows_with_backend_and_telemetry(
+        native_db, large_measurement_rows, use_native=True
+    )
+    assert native_result.backend == "native"
+    assert native_result.inserted is True
+
+    with sqlite3.connect(py_db) as py_conn, sqlite3.connect(native_db) as native_conn:
+        py_counts = py_conn.execute(
+            "SELECT COUNT(*) FROM REPORTS, MEASUREMENTS WHERE REPORTS.ID = MEASUREMENTS.REPORT_ID"
+        ).fetchone()
+        native_counts = native_conn.execute(
+            "SELECT COUNT(*) FROM REPORTS, MEASUREMENTS WHERE REPORTS.ID = MEASUREMENTS.REPORT_ID"
+        ).fetchone()
+        py_edges = py_conn.execute(
+            """
+            SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER
+            FROM MEASUREMENTS
+            ORDER BY ID
+            LIMIT 1
+            """
+        ).fetchone(), py_conn.execute(
+            """
+            SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER
+            FROM MEASUREMENTS
+            ORDER BY ID DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        native_edges = native_conn.execute(
+            """
+            SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER
+            FROM MEASUREMENTS
+            ORDER BY ID
+            LIMIT 1
+            """
+        ).fetchone(), native_conn.execute(
+            """
+            SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER
+            FROM MEASUREMENTS
+            ORDER BY ID DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert py_counts == native_counts == (len(large_measurement_rows),)
+    assert py_edges == native_edges
 
 
 def test_cmm_report_parser_records_parse_and_db_stage_timings(tmp_path):
