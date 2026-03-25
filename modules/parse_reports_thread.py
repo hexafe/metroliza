@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 import shutil
 from modules.report_fingerprint import build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
-from modules.characteristic_alias_service import ensure_characteristic_alias_schema
+from modules.cmm_schema import ensure_cmm_report_schema
 from modules.db import execute_with_retry, sqlite_connection_scope
 from modules.log_context import build_parse_log_extra, get_operation_logger
 from modules.progress_status import build_three_line_status
@@ -279,13 +279,6 @@ class ParseReportsThread(QThread):
             )
             self._emit_stage_progress('load_existing_reports', 0.0)
 
-            ensure_characteristic_alias_schema(
-                self.db_file,
-                connection=connection,
-                retries=5,
-                retry_delay_s=1,
-            )
-
             table_exists = execute_with_retry(
                 self.db_file,
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='REPORTS'",
@@ -407,6 +400,12 @@ class ParseReportsThread(QThread):
                 return
 
             with sqlite_connection_scope(self.db_file) as connection:
+                ensure_cmm_report_schema(
+                    self.db_file,
+                    connection=connection,
+                    retries=5,
+                    retry_delay_s=1,
+                )
                 report_fingerprints = self.get_report_fingerprints_in_database(connection)
 
                 logger.info(

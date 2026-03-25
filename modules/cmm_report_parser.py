@@ -11,10 +11,7 @@ from time import perf_counter
 from time import strftime
 
 from modules.custom_logger import CustomLogger
-from modules.characteristic_alias_service import (
-    ensure_characteristic_alias_schema,
-    ensure_characteristic_alias_table,
-)
+from modules.cmm_schema import ensure_cmm_report_schema
 from modules.cmm_native_parser import (
     normalize_measurement_rows,
     parse_blocks_with_backend_and_telemetry,
@@ -38,28 +35,6 @@ from modules.parser_plugin_contracts import (
 
 
 logger = logging.getLogger(__name__)
-
-
-SCHEMA_INDEX_STATEMENTS = (
-    'CREATE INDEX IF NOT EXISTS idx_reports_reference ON REPORTS(REFERENCE)',
-    'CREATE INDEX IF NOT EXISTS idx_reports_filename ON REPORTS(FILENAME)',
-    'CREATE INDEX IF NOT EXISTS idx_reports_date ON REPORTS(DATE)',
-    'CREATE INDEX IF NOT EXISTS idx_reports_sample_number ON REPORTS(SAMPLE_NUMBER)',
-    'CREATE INDEX IF NOT EXISTS idx_reports_identity ON REPORTS(REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER)',
-    'CREATE INDEX IF NOT EXISTS idx_measurements_report_id ON MEASUREMENTS(REPORT_ID)',
-    'CREATE INDEX IF NOT EXISTS idx_measurements_report_header_ax ON MEASUREMENTS(REPORT_ID, HEADER, AX)',
-    'CREATE INDEX IF NOT EXISTS idx_measurements_header ON MEASUREMENTS(HEADER)',
-    'CREATE INDEX IF NOT EXISTS idx_measurements_ax ON MEASUREMENTS(AX)',
-)
-
-
-def ensure_schema_indexes(cursor):
-    """Create app indexes in a migration-safe way."""
-    for statement in SCHEMA_INDEX_STATEMENTS:
-        cursor.execute(statement)
-
-
-
 
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
@@ -127,7 +102,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         """
 
         try:
-            ensure_characteristic_alias_schema(
+            ensure_cmm_report_schema(
                 self.database,
                 connection=self.connection,
                 retries=4,
@@ -449,35 +424,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
             db_write_start = perf_counter()
 
-            def create_tables_and_insert_report(transaction_cursor):
-                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS MEASUREMENTS (
-                                    ID INTEGER PRIMARY KEY,
-                                    AX TEXT,
-                                    NOM REAL,
-                                    "+TOL" REAL,
-                                    "-TOL" REAL,
-                                    BONUS REAL,
-                                    MEAS REAL,
-                                    DEV REAL,
-                                    OUTTOL REAL,
-                                    HEADER TEXT,
-                                    REPORT_ID INTEGER,
-                                    FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
-                                )''')
-
-                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS REPORTS (
-                                    ID INTEGER PRIMARY KEY,
-                                    REFERENCE TEXT,
-                                    FILELOC TEXT,
-                                    FILENAME TEXT,
-                                    DATE TEXT,
-                                    SAMPLE_NUMBER TEXT
-                                )''')
-
-                ensure_characteristic_alias_table(transaction_cursor)
-
-                ensure_schema_indexes(transaction_cursor)
-
+            def insert_report(transaction_cursor):
                 transaction_cursor.execute(
                     'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
                     (self.reference, self.file_path, self.file_name, self.date, self.sample_number),
@@ -516,40 +463,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
                 return True
 
-            def ensure_tables_only(transaction_cursor):
-                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS MEASUREMENTS (
-                                    ID INTEGER PRIMARY KEY,
-                                    AX TEXT,
-                                    NOM REAL,
-                                    "+TOL" REAL,
-                                    "-TOL" REAL,
-                                    BONUS REAL,
-                                    MEAS REAL,
-                                    DEV REAL,
-                                    OUTTOL REAL,
-                                    HEADER TEXT,
-                                    REPORT_ID INTEGER,
-                                    FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
-                                )''')
-                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS REPORTS (
-                                    ID INTEGER PRIMARY KEY,
-                                    REFERENCE TEXT,
-                                    FILELOC TEXT,
-                                    FILENAME TEXT,
-                                    DATE TEXT,
-                                    SAMPLE_NUMBER TEXT
-                                )''')
-                ensure_characteristic_alias_table(transaction_cursor)
-                ensure_schema_indexes(transaction_cursor)
-
             if self.connection is None:
-                run_transaction_with_retry(
-                    self.database,
-                    ensure_tables_only,
-                    connection=self.connection,
-                    retries=4,
-                    retry_delay_s=1,
-                )
                 persist_result = persist_measurement_rows_with_backend_and_telemetry(
                     self.database,
                     normalized_rows,
@@ -560,7 +474,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             else:
                 was_inserted = run_transaction_with_retry(
                     self.database,
-                    create_tables_and_insert_report,
+                    insert_report,
                     connection=self.connection,
                     retries=4,
                     retry_delay_s=1,

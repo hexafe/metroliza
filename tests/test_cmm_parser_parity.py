@@ -12,6 +12,7 @@ from modules.cmm_native_parser import (
     persist_measurement_rows_python,
     persist_measurement_rows_with_backend_and_telemetry,
 )
+from modules.cmm_schema import ensure_cmm_report_schema
 from modules.cmm_parsing import add_tolerances_to_blocks, parse_raw_lines_to_blocks
 
 FIXTURE_DIR = Path("tests/fixtures/cmm_parser")
@@ -445,6 +446,7 @@ def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
     from modules.db import execute_with_retry
 
     db_path = str(tmp_path / "cmm.db")
+    ensure_cmm_report_schema(db_path)
     parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
     parser.pdf_reference = "REF01"
     parser.pdf_file_path = "/tmp/reports"
@@ -510,6 +512,7 @@ def _assert_tp_pipeline_roundtrip(parsed_blocks, tmp_path):
     assert parsed_blocks[0][1][0] == ["TP", 0.0, 0.2, 0, 0.0, 0.344, 0.344, 0.144]
 
     db_path = str(tmp_path / "tp_pipeline.db")
+    ensure_cmm_report_schema(db_path)
     parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
     parser.pdf_reference = "REF01"
     parser.pdf_file_path = "/tmp/reports"
@@ -640,6 +643,8 @@ def test_measurement_row_persistence_parity_python_vs_native_when_available(tmp_
 
     py_db = str(tmp_path / "py_insert.db")
     native_db = str(tmp_path / "native_insert.db")
+    ensure_cmm_report_schema(py_db)
+    ensure_cmm_report_schema(native_db)
     assert persist_measurement_rows_python(py_db, rows) is True
     assert persist_measurement_rows_python(py_db, rows) is False
     native_result = persist_measurement_rows_with_backend_and_telemetry(native_db, rows, use_native=True)
@@ -723,6 +728,7 @@ def test_measurement_row_persistence_duplicate_detection_python_backend(tmp_path
         )
     ]
     py_db = str(tmp_path / "py_duplicate.db")
+    ensure_cmm_report_schema(py_db)
 
     assert persist_measurement_rows_python(py_db, rows) is True
     assert persist_measurement_rows_python(py_db, rows) is False
@@ -737,6 +743,7 @@ def test_measurement_row_persistence_duplicate_detection_python_backend(tmp_path
 
 def test_large_row_persistence_python_backend(tmp_path, large_measurement_rows):
     py_db = str(tmp_path / "py_large_insert.db")
+    ensure_cmm_report_schema(py_db)
 
     assert persist_measurement_rows_python(py_db, large_measurement_rows) is True
     assert persist_measurement_rows_python(py_db, large_measurement_rows) is False
@@ -755,6 +762,8 @@ def test_large_row_persistence_parity_python_vs_native_when_available(tmp_path, 
 
     py_db = str(tmp_path / "py_large_insert.db")
     native_db = str(tmp_path / "native_large_insert.db")
+    ensure_cmm_report_schema(py_db)
+    ensure_cmm_report_schema(native_db)
 
     assert persist_measurement_rows_python(py_db, large_measurement_rows) is True
     native_result = persist_measurement_rows_with_backend_and_telemetry(
@@ -809,6 +818,7 @@ def test_cmm_report_parser_records_parse_and_db_stage_timings(tmp_path):
     CMMReportParser = _load_cmm_report_parser_with_test_stubs()
 
     db_path = str(tmp_path / "timing.db")
+    ensure_cmm_report_schema(db_path)
     parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
     parser.pdf_raw_text = [
         "#TIMING",

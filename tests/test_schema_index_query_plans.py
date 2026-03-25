@@ -35,12 +35,14 @@ pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec('pymupdf', loader=None)
 sys.modules.setdefault('pymupdf', pymupdf_stub)
 
 import modules.cmm_report_parser as cmm_report_parser_module  # noqa: E402
+from modules.cmm_schema import ensure_cmm_report_schema  # noqa: E402
 
 CMMReportParser = cmm_report_parser_module.CMMReportParser
 
 
 class TestSchemaIndexQueryPlans(unittest.TestCase):
     def _insert_report(self, db_path: str, reference: str, sample_number: str, day: int) -> None:
+        ensure_cmm_report_schema(db_path)
         parser = CMMReportParser(f'{reference}_2024-02-{day:02d}_{sample_number}.pdf', db_path)
         parser.pdf_reference = reference
         parser.pdf_file_path = '/tmp/reports'
