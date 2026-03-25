@@ -128,7 +128,7 @@ def _bootstrap_effect_percentile_ci(
 ) -> tuple[float, float] | None:
     native_ci = bootstrap_percentile_ci_native(
         effect_kernel=effect_kernel,
-        groups=[np.ascontiguousarray(group, dtype=np.float64) for group in groups],
+        groups=groups,
         level=level,
         iterations=iterations,
         seed=seed,
@@ -307,6 +307,19 @@ def _pairwise_effect_size(sample_a: np.ndarray, sample_b: np.ndarray, *, non_par
     return _cliffs_delta(sample_a, sample_b) if non_parametric else _cohen_d(sample_a, sample_b)
 
 
+def _coerce_float64_contiguous_non_nan(values: list[float] | np.ndarray) -> np.ndarray:
+    if isinstance(values, np.ndarray):
+        array = values if values.dtype == np.float64 else np.asarray(values, dtype=np.float64)
+    else:
+        array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1:
+        array = array.reshape(-1)
+    finite = array[~np.isnan(array)]
+    if finite.flags['C_CONTIGUOUS'] and finite.dtype == np.float64:
+        return finite
+    return np.ascontiguousarray(finite, dtype=np.float64)
+
+
 def _compute_pairwise_core_native(
     *,
     labels: list[str],
@@ -317,7 +330,7 @@ def _compute_pairwise_core_native(
 ) -> list[dict[str, Any]] | None:
     native_rows = pairwise_stats_native(
         labels=labels,
-        groups=[np.ascontiguousarray(numeric_groups[label], dtype=np.float64) for label in labels],
+        groups=[numeric_groups[label] for label in labels],
         alpha=config.alpha,
         correction_method=config.correction_method,
         non_parametric=is_non_parametric,
@@ -360,10 +373,7 @@ def compute_metric_pairwise_stats(
     config = config or ComparisonStatsConfig()
 
     labels = list(grouped_values.keys())
-    numeric_groups = {
-        label: np.asarray(values, dtype=float)[~np.isnan(np.asarray(values, dtype=float))]
-        for label, values in grouped_values.items()
-    }
+    numeric_groups = {label: _coerce_float64_contiguous_non_nan(values) for label, values in grouped_values.items()}
     selector_result = select_group_stat_test(labels=labels, grouped_values=[numeric_groups[label] for label in labels])
     selected_test = selector_result.get('test_name') or 'Unknown'
     is_non_parametric = selected_test in {'Mann-Whitney U', 'Kruskal-Wallis'}

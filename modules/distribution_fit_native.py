@@ -20,10 +20,15 @@ def native_backend_available() -> bool:
     return _native_estimate_ad_pvalue_monte_carlo is not None
 
 
-def _as_float64_1d_contiguous(values: Sequence[float]) -> np.ndarray:
-    array = np.asarray(values, dtype=np.float64)
+def _as_float64_1d_contiguous(values: Sequence[float] | np.ndarray) -> np.ndarray:
+    if isinstance(values, np.ndarray) and values.dtype == np.float64 and values.flags['C_CONTIGUOUS']:
+        array = values
+    else:
+        array = np.asarray(values, dtype=np.float64)
     if array.ndim != 1:
         raise ValueError('Expected 1D numeric input')
+    if array.flags['C_CONTIGUOUS']:
+        return array
     return np.ascontiguousarray(array)
 
 
