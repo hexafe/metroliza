@@ -1,0 +1,109 @@
+"""Native bridge for distribution candidate metric kernels with fallback modes."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import Sequence
+
+import numpy as np
+
+try:
+    from _metroliza_distribution_fit_native import compute_candidate_metrics as _native_compute_candidate_metrics  # type: ignore
+except Exception:  # pragma: no cover - optional native module
+    _native_compute_candidate_metrics = None
+
+
+KERNEL_MODE_PYTHON = 'python'
+KERNEL_MODE_NATIVE = 'native'
+KERNEL_MODE_AUTO = 'auto'
+
+
+@dataclass(frozen=True)
+class CandidateKernelInput:
+    sample_values: np.ndarray
+    distribution: str
+    fitted_params: np.ndarray
+
+
+@dataclass(frozen=True)
+class CandidateKernelOutput:
+    nll: float | None
+    aic: float | None
+    bic: float | None
+    ad_statistic: float | None
+    ks_statistic: float | None
+    error_flags: int
+
+
+ERROR_NONE = 0
+ERROR_EMPTY_SAMPLE = 1 << 0
+ERROR_NONFINITE_SAMPLE = 1 << 1
+ERROR_UNSUPPORTED_DISTRIBUTION = 1 << 2
+ERROR_INVALID_PARAMS = 1 << 3
+ERROR_LOGPDF_FAILURE = 1 << 4
+ERROR_AD_FAILURE = 1 << 5
+ERROR_KS_FAILURE = 1 << 6
+
+
+def native_backend_available() -> bool:
+    return _native_compute_candidate_metrics is not None
+
+
+def resolve_kernel_mode(explicit_mode: str | None = None) -> str:
+    mode = (explicit_mode or os.getenv('METROLIZA_DISTRIBUTION_FIT_KERNEL') or KERNEL_MODE_PYTHON).strip().lower()
+    if mode not in {KERNEL_MODE_PYTHON, KERNEL_MODE_NATIVE, KERNEL_MODE_AUTO}:
+        return KERNEL_MODE_PYTHON
+    return mode
+
+
+def _as_float64_1d_contiguous(values: Sequence[float] | np.ndarray) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1:
+        raise ValueError('Expected 1D numeric input')
+    return np.ascontiguousarray(array)
+
+
+def build_kernel_input(*, sample_values: Sequence[float] | np.ndarray, distribution: str, fitted_params: Sequence[float] | np.ndarray) -> CandidateKernelInput:
+    return CandidateKernelInput(
+        sample_values=_as_float64_1d_contiguous(sample_values),
+        distribution=str(distribution),
+        fitted_params=_as_float64_1d_contiguous(fitted_params),
+    )
+
+
+def compute_candidate_metrics_native(kernel_input: CandidateKernelInput) -> CandidateKernelOutput | None:
+    if _native_compute_candidate_metrics is None:
+        return None
+
+    nll, aic, bic, ad_stat, ks_stat, flags = _native_compute_candidate_metrics(
+        kernel_input.distribution,
+        kernel_input.fitted_params,
+        kernel_input.sample_values,
+    )
+    return CandidateKernelOutput(
+        nll=None if nll is None else float(nll),
+        aic=None if aic is None else float(aic),
+        bic=None if bic is None else float(bic),
+        ad_statistic=None if ad_stat is None else float(ad_stat),
+        ks_statistic=None if ks_stat is None else float(ks_stat),
+        error_flags=int(flags),
+    )
+
+
+def compute_candidate_metrics(kernel_input: CandidateKernelInput, *, mode: str | None = None) -> CandidateKernelOutput | None:
+    resolved_mode = resolve_kernel_mode(mode)
+    if resolved_mode == KERNEL_MODE_PYTHON:
+        return None
+
+    native_result = compute_candidate_metrics_native(kernel_input)
+    if native_result is None and resolved_mode == KERNEL_MODE_NATIVE:
+        return CandidateKernelOutput(
+            nll=None,
+            aic=None,
+            bic=None,
+            ad_statistic=None,
+            ks_statistic=None,
+            error_flags=ERROR_UNSUPPORTED_DISTRIBUTION,
+        )
+    return native_result

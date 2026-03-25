@@ -14,6 +14,10 @@ from modules.distribution_fit_native import (
     compute_ad_ks_statistics_native,
     estimate_ad_pvalue_monte_carlo_native,
 )
+from modules.distribution_fit_candidate_native import (
+    build_kernel_input,
+    compute_candidate_metrics,
+)
 from scipy.stats import (
     foldnorm,
     gamma,
@@ -92,6 +96,10 @@ _DISTRIBUTION_BY_NAME = {
     'weibull_min': weibull_min,
     'lognorm': lognorm,
 }
+
+# Stable candidate-kernel contract (frozen for Rust/Python parity):
+# Input: contiguous float64 1D sample array + candidate model metadata (distribution + fitted params).
+# Output: nll, aic, bic, ad_statistic, ks_statistic, and kernel error flags (consumed internally for fallback).
 
 
 def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
@@ -323,7 +331,7 @@ def _classify_fit_quality(gof_pvalue: float | None, selected_is_acceptable: bool
     return {'label': 'unreliable', 'score': 0.1}
 
 
-def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray):
+def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray, *, kernel_mode: str | None = None):
     fit_kwargs = {'floc': 0.0} if candidate.force_loc_zero else {}
     params = tuple(candidate.fit_method(values, **fit_kwargs))
     if candidate.positive_support and params:
@@ -331,25 +339,37 @@ def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray):
         params[-2] = 0.0
         params = tuple(params)
 
-    logpdf = candidate.scipy_dist.logpdf(values, *params)
-    if not np.all(np.isfinite(logpdf)):
-        raise ValueError('logpdf returned invalid values')
-
-    n = values.size
-    nll = float(-np.sum(logpdf))
-    k = len(params)
-    aic = float(2 * k + 2 * nll)
-    bic = float(k * math.log(n) + 2 * nll)
-
-    ad_stat = None
-    ks_stat = None
-    native_stats = compute_ad_ks_statistics_native(
+    kernel_input = build_kernel_input(
+        sample_values=values,
         distribution=candidate.name,
         fitted_params=params,
-        sample_values=values,
     )
-    if native_stats is not None:
-        ad_stat, ks_stat = native_stats
+    kernel_output = compute_candidate_metrics(kernel_input, mode=kernel_mode)
+
+    n = values.size
+    nll = None if kernel_output is None else kernel_output.nll
+    aic = None if kernel_output is None else kernel_output.aic
+    bic = None if kernel_output is None else kernel_output.bic
+    ad_stat = None if kernel_output is None else kernel_output.ad_statistic
+    ks_stat = None if kernel_output is None else kernel_output.ks_statistic
+
+    if nll is None or aic is None or bic is None:
+        logpdf = candidate.scipy_dist.logpdf(values, *params)
+        if not np.all(np.isfinite(logpdf)):
+            raise ValueError('logpdf returned invalid values')
+        nll = float(-np.sum(logpdf))
+        k = len(params)
+        aic = float(2 * k + 2 * nll)
+        bic = float(k * math.log(n) + 2 * nll)
+
+    if ad_stat is None:
+        native_stats = compute_ad_ks_statistics_native(
+            distribution=candidate.name,
+            fitted_params=params,
+            sample_values=values,
+        )
+        if native_stats is not None:
+            ad_stat, ks_stat = native_stats
 
     if ad_stat is None:
         ad_stat = _ad_statistic(values, lambda x: candidate.scipy_dist.cdf(x, *params))
@@ -555,6 +575,7 @@ def fit_measurement_distribution(
     gof_acceptance_alpha: float = 0.05,
     monte_carlo_gof_samples: int = 0,
     monte_carlo_seed: int | None = None,
+    candidate_kernel_mode: str | None = None,
     memoization_cache: MutableMapping | None = None,
     measurement_signature: tuple[int, str] | None = None,
 ):
@@ -614,7 +635,7 @@ def fit_measurement_distribution(
     candidates = []
     for candidate in _candidate_pool_for_mode(inferred_mode):
         try:
-            fitted = _fit_candidate(candidate, values)
+            fitted = _fit_candidate(candidate, values, kernel_mode=candidate_kernel_mode)
             if monte_carlo_gof_samples > 0:
                 fitted['gof']['ad_pvalue'] = _estimate_ad_pvalue_monte_carlo(
                     dist=candidate.scipy_dist,
@@ -726,6 +747,7 @@ def fit_measurement_distribution_batch(
     gof_acceptance_alpha: float = 0.05,
     monte_carlo_gof_samples: int = 0,
     monte_carlo_seed: int | None = None,
+    candidate_kernel_mode: str | None = None,
     memoization_cache: MutableMapping | None = None,
     fingerprints_by_group: dict[str, tuple[int, str]] | None = None,
 ) -> dict[str, dict]:
@@ -746,6 +768,7 @@ def fit_measurement_distribution_batch(
             gof_acceptance_alpha=gof_acceptance_alpha,
             monte_carlo_gof_samples=monte_carlo_gof_samples,
             monte_carlo_seed=monte_carlo_seed,
+            candidate_kernel_mode=candidate_kernel_mode,
             memoization_cache=memoization_cache,
             measurement_signature=None if fingerprints_by_group is None else fingerprints_by_group.get(group_name),
         )

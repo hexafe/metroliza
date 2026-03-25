@@ -225,7 +225,7 @@ class TestDistributionFitService(unittest.TestCase):
     def test_poor_fit_path_downgrades_quality_when_no_acceptable_gof(self):
         values = np.linspace(-1.0, 1.0, 60)
 
-        def _poor_candidate(_candidate, _values):
+        def _poor_candidate(_candidate, _values, **_kwargs):
             return {
                 'model': 'norm',
                 'display_name': 'Normal',
@@ -263,6 +263,25 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertEqual(batch['B']['selected_model']['name'], single_b['selected_model']['name'])
         self.assertAlmostEqual(batch['A']['risk_estimates']['outside_probability'], single_a['risk_estimates']['outside_probability'])
         self.assertAlmostEqual(batch['B']['risk_estimates']['outside_probability'], single_b['risk_estimates']['outside_probability'])
+
+    def test_batch_candidate_kernel_mode_parity_preserves_full_ranking_for_deterministic_fixture(self):
+        rng = np.random.default_rng(20260325)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.3, scale=0.9, size=90).astype(float)),
+            'G_BI': np.ascontiguousarray(rng.normal(loc=0.0, scale=1.0, size=90).astype(float)),
+        }
+
+        baseline = fit_measurement_distribution_batch(grouped, candidate_kernel_mode='python')
+        candidate = fit_measurement_distribution_batch(grouped, candidate_kernel_mode='auto')
+
+        for group_name in grouped:
+            left = baseline[group_name]['ranking_metrics']
+            right = candidate[group_name]['ranking_metrics']
+            self.assertEqual([row['model'] for row in left], [row['model'] for row in right])
+            self.assertEqual([row['rank'] for row in left], [row['rank'] for row in right])
+            for lhs, rhs in zip(left, right, strict=False):
+                for metric_key in ('nll', 'aic', 'bic', 'ad_statistic', 'ks_statistic'):
+                    self.assertAlmostEqual(lhs[metric_key], rhs[metric_key], places=9)
 
     def test_fit_measurement_distribution_uses_provided_measurement_signature_for_cache_key(self):
         measurements = np.ascontiguousarray(np.array([1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15], dtype=float))
