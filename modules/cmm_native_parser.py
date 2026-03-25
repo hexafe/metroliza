@@ -292,10 +292,10 @@ def persist_measurement_rows_python(database: str, rows: list[tuple[Any, ...]]) 
         report_id = cursor.lastrowid
         cursor.executemany(
             'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [
+            (
                 (None, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], report_id)
                 for r in rows
-            ],
+            ),
         )
         return True
 
