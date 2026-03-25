@@ -124,7 +124,7 @@ def _bootstrap_effect_percentile_ci(
 ) -> tuple[float, float] | None:
     native_ci = bootstrap_percentile_ci_native(
         effect_kernel=effect_kernel,
-        groups=[group.astype(float).tolist() for group in groups],
+        groups=[np.ascontiguousarray(group, dtype=np.float64) for group in groups],
         level=level,
         iterations=iterations,
         seed=seed,
@@ -269,7 +269,7 @@ def _compute_pairwise_core_native(
 ) -> list[dict[str, Any]] | None:
     native_rows = pairwise_stats_native(
         labels=labels,
-        groups=[numeric_groups[label].astype(float).tolist() for label in labels],
+        groups=[np.ascontiguousarray(numeric_groups[label], dtype=np.float64) for label in labels],
         alpha=config.alpha,
         correction_method=config.correction_method,
         non_parametric=is_non_parametric,
