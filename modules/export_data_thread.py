@@ -184,7 +184,12 @@ from modules.chart_render_service import (
     resolve_chart_sampling_policy,
     deterministic_downsample_frame,
 )
-from modules.chart_renderer import build_chart_renderer, build_histogram_native_payload
+from modules.chart_renderer import (
+    build_chart_renderer,
+    build_histogram_native_payload,
+    native_chart_backend_available,
+    resolve_chart_renderer_backend,
+)
 from modules.distribution_fit_service import fit_measurement_distribution
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
@@ -4573,289 +4578,347 @@ class ExportDataThread(QThread):
                 try:
                     base_histogram_figsize = (8.8, 4.0)
                     chart_start = time.perf_counter()
+                    histogram_values = sampling_context['histogram_payload']['measurements']
+                    histogram_title = build_wrapped_chart_title(header)
+                    histogram_bin_count = resolve_histogram_bin_count(histogram_values).get('bin_count')
 
-                    distribution_fit_result = precomputed_distribution_fit
-                    if distribution_fit_result is None:
-                        distribution_fit_result = fit_measurement_distribution(
-                            sampling_context['histogram_payload']['measurements'],
+                    native_histogram_capable = False
+                    if native_chart_backend_available():
+                        try:
+                            native_histogram_capable = resolve_chart_renderer_backend() == 'native'
+                        except RuntimeError:
+                            native_histogram_capable = False
+
+                    if native_histogram_capable:
+                        native_histogram_payload = build_histogram_native_payload(
+                            values=histogram_values,
                             lsl=LSL,
                             usl=USL,
-                            nom=nom,
-                            point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
-                            include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
-                            memoization_cache=self._distribution_fit_memo,
+                            title=histogram_title,
+                            bin_count=histogram_bin_count,
+                        )
+                        native_histogram_payload.update(
+                            {
+                                'limits': {
+                                    'lsl': None if LSL is None else float(LSL),
+                                    'usl': None if USL is None else float(USL),
+                                    'nominal': None if nom is None else float(nom),
+                                },
+                                'summary': {
+                                    'count': float(summary_stats.get('n', 0) or 0),
+                                    'mean': summary_stats.get('avg'),
+                                    'std': summary_stats.get('std_dev'),
+                                    'min': summary_stats.get('min'),
+                                    'max': summary_stats.get('max'),
+                                },
+                                'style': {
+                                    'axis_label_x': 'Measurement',
+                                    'axis_label_y': 'Count',
+                                    'grid_axis': 'y',
+                                },
+                                # Keep annotation and modeled-overlay parity in fallback branch
+                                # until native payload support lands.
+                                'advanced_annotations_enabled': False,
+                                'overlays_enabled': False,
+                            }
                         )
 
-                    histogram_summary_payload = _finalize_histogram_summary_payload_compute(
-                        summary_stats,
-                        distribution_fit_result,
-                        lsl=LSL,
-                        usl=USL,
-                    )
-                    summary_stats = histogram_summary_payload['summary_stats']
-                    histogram_table_payload = histogram_summary_payload['histogram_table_payload']
-                    summary_table_composition = histogram_summary_payload['summary_table_composition']
-                    histogram_row_badges = summary_table_composition['histogram_row_badges']
-                    capability_badge = summary_table_composition['capability_badge']
-                    histogram_table_payload = _apply_non_normal_cpk_reference_label(
-                        histogram_table_payload,
-                        distribution_fit_result,
-                        summary_stats=summary_stats,
-                    )
-                    non_normal_reference_mode = _is_non_normal_capability_reference_model(distribution_fit_result)
-                    statistics_rows = histogram_table_payload['rows']
-                    distribution_fit_rows = _build_distribution_fit_table_rows(
-                        distribution_fit_result,
-                        lsl=LSL,
-                        usl=USL,
-                        summary_stats=summary_stats,
-                    )
-                    unified_rows = _build_unified_histogram_dashboard_rows(
-                        statistics_rows=statistics_rows,
-                        distribution_fit_rows=distribution_fit_rows,
-                    )
+                        image_data = self._register_chart_image(
+                            self._save_summary_chart(None, chart_type='histogram', native_payload=native_histogram_payload)
+                        )
+                        self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                        slot_fig = plt.figure(figsize=base_histogram_figsize)
+                        histogram_slot = _reserve_summary_image_slot('histogram', slot_fig)
+                        plt.close(slot_fig)
+                        write_start = time.perf_counter()
+                        self._insert_summary_image(summary_worksheet, histogram_slot, image_data)
+                        self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                        if self._check_canceled():
+                            return
+                    else:
+                        distribution_fit_result = precomputed_distribution_fit
+                        if distribution_fit_result is None:
+                            distribution_fit_result = fit_measurement_distribution(
+                                histogram_values,
+                                lsl=LSL,
+                                usl=USL,
+                                nom=nom,
+                                point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                                include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
+                                memoization_cache=self._distribution_fit_memo,
+                            )
 
-                    histogram_figsize = base_histogram_figsize
-                    fig = plt.figure(figsize=histogram_figsize)
-                    histogram_font_sizes = compute_histogram_font_sizes(
-                        histogram_figsize,
-                        has_table=True,
-                        readability_scale=self.summary_plot_scale,
-                    )
+                        histogram_summary_payload = _finalize_histogram_summary_payload_compute(
+                            summary_stats,
+                            distribution_fit_result,
+                            lsl=LSL,
+                            usl=USL,
+                        )
+                        summary_stats = histogram_summary_payload['summary_stats']
+                        histogram_table_payload = histogram_summary_payload['histogram_table_payload']
+                        summary_table_composition = histogram_summary_payload['summary_table_composition']
+                        histogram_row_badges = summary_table_composition['histogram_row_badges']
+                        capability_badge = summary_table_composition['capability_badge']
+                        histogram_table_payload = _apply_non_normal_cpk_reference_label(
+                            histogram_table_payload,
+                            distribution_fit_result,
+                            summary_stats=summary_stats,
+                        )
+                        non_normal_reference_mode = _is_non_normal_capability_reference_model(distribution_fit_result)
+                        statistics_rows = histogram_table_payload['rows']
+                        distribution_fit_rows = _build_distribution_fit_table_rows(
+                            distribution_fit_result,
+                            lsl=LSL,
+                            usl=USL,
+                            summary_stats=summary_stats,
+                        )
+                        unified_rows = _build_unified_histogram_dashboard_rows(
+                            statistics_rows=statistics_rows,
+                            distribution_fit_rows=distribution_fit_rows,
+                        )
 
-                    panel_rects = compute_histogram_plot_with_right_info_layout(
-                        histogram_figsize,
-                        table_fontsize=histogram_font_sizes['table_fontsize'],
-                        fit_row_count=0,
-                        stats_row_count=len(unified_rows),
-                        fit_rows=[],
-                        stats_rows=unified_rows,
-                        note_line_count=0,
-                        right_container_width_hint=0.34,
-                        dpi=fig.dpi,
-                    )
-                    assert_non_overlapping_rectangles(
-                        {
-                            'plot_rect': panel_rects['plot_rect'],
-                            'right_table_rect': panel_rects['right_container_rect'],
-                            'footer_rect': panel_rects['footer_rect'],
-                        }
-                    )
+                        histogram_figsize = base_histogram_figsize
+                        fig = plt.figure(figsize=histogram_figsize)
+                        histogram_font_sizes = compute_histogram_font_sizes(
+                            histogram_figsize,
+                            has_table=True,
+                            readability_scale=self.summary_plot_scale,
+                        )
 
-                    plot_rect = panel_rects['plot_rect']
-                    right_table_rect = panel_rects['right_container_rect']
+                        panel_rects = compute_histogram_plot_with_right_info_layout(
+                            histogram_figsize,
+                            table_fontsize=histogram_font_sizes['table_fontsize'],
+                            fit_row_count=0,
+                            stats_row_count=len(unified_rows),
+                            fit_rows=[],
+                            stats_rows=unified_rows,
+                            note_line_count=0,
+                            right_container_width_hint=0.34,
+                            dpi=fig.dpi,
+                        )
+                        assert_non_overlapping_rectangles(
+                            {
+                                'plot_rect': panel_rects['plot_rect'],
+                                'right_table_rect': panel_rects['right_container_rect'],
+                                'footer_rect': panel_rects['footer_rect'],
+                            }
+                        )
 
-                    plot_ax = fig.add_axes([
-                        plot_rect['x'],
-                        plot_rect['y'],
-                        plot_rect['width'],
-                        plot_rect['height'],
-                    ])
-                    right_table_ax = fig.add_axes([
-                        right_table_rect['x'],
-                        right_table_rect['y'],
-                        right_table_rect['width'],
-                        right_table_rect['height'],
-                    ])
-                    right_table_ax.set_axis_off()
+                        plot_rect = panel_rects['plot_rect']
+                        right_table_rect = panel_rects['right_container_rect']
 
-                    histogram_render_meta = render_histogram(
-                        plot_ax,
-                        sampled_histogram_group,
-                        lsl=LSL,
-                        usl=USL,
-                        group_column=distribution_key if grouping_applied else None,
-                    )
+                        plot_ax = fig.add_axes([
+                            plot_rect['x'],
+                            plot_rect['y'],
+                            plot_rect['width'],
+                            plot_rect['height'],
+                        ])
+                        right_table_ax = fig.add_axes([
+                            right_table_rect['x'],
+                            right_table_rect['y'],
+                            right_table_rect['width'],
+                            right_table_rect['height'],
+                        ])
+                        right_table_ax.set_axis_off()
 
-                    table_style_options = {
-                        'fontsize': histogram_font_sizes['table_fontsize'],
-                        'min_fontsize': 7.4,
-                        'max_fontsize': 10.4,
-                        'cell_padding_points': 2.2,
-                        'compact_label_mapping': {
-                            **_DISTRIBUTION_FIT_COMPACT_LABELS,
-                            'Normality': 'Norm.',
-                        },
-                    }
-
-                    unified_table_meta = render_panel_table_in_panel_axes(
-                        ax=right_table_ax,
-                        title='Parameter',
-                        rows=unified_rows,
-                        style_options={
-                            **table_style_options,
-                            'explicit_label_fraction': _UNIFIED_HISTOGRAM_LABEL_FRACTION,
-                            'explicit_value_fraction': _UNIFIED_HISTOGRAM_VALUE_FRACTION,
-                            'value_wrap_width': 26,
-                            'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
-                        },
-                        row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
-                        pad_y=0.0,
-                        valign='top',
-                    )
-                    unified_table = unified_table_meta['table']
-
-                    non_normal_row_badges = dict(histogram_row_badges or {})
-                    if non_normal_reference_mode:
-                        for label in ('Cp (ref)', 'Cpk (ref)'):
-                            non_normal_row_badges[label] = {'palette_key': 'quality_unknown'}
-
-                    fit_quality_value = None
-                    for label, value in unified_table_meta.get('rendered_rows', []):
-                        if label == 'Fit quality':
-                            fit_quality_value = str(value).strip().lower()
-                            break
-
-                    fit_quality_palette = None
-                    if fit_quality_value in {'weak', 'unreliable'}:
-                        fit_quality_palette = 'fit_quality_low'
-                    elif fit_quality_value in {'medium', 'marginal'}:
-                        fit_quality_palette = 'fit_quality_medium'
-                    elif fit_quality_value in {'good', 'strong', 'capable'}:
-                        fit_quality_palette = 'fit_quality_high'
-                    if fit_quality_palette:
-                        non_normal_row_badges['Fit quality'] = {'palette_key': fit_quality_palette}
-
-                    style_histogram_stats_table(
-                        unified_table,
-                        unified_table_meta['rendered_rows'],
-                        capability_badge=capability_badge,
-                        capability_row_badges=non_normal_row_badges,
-                    )
-                    _apply_table_section_separator(
-                        unified_table,
-                        unified_table_meta['rendered_rows'],
-                        transition_label='Model',
-                    )
-                    adjust_histogram_stats_table_geometry(
-                        unified_table,
-                        statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
-                        row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
-                        explicit_row_heights=unified_table_meta.get('explicit_row_heights'),
-                    )
-
-                    selected_model_curve = distribution_fit_result.get('selected_model_pdf')
-                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
-                    x_left, x_right = plot_ax.get_xlim()
-                    x_span = abs(float(x_right) - float(x_left))
-                    annotation_specs, _ = compute_histogram_annotation_rows(
-                        annotation_specs,
-                        distance_threshold=0.04,
-                        threshold_mode='axis_fraction',
-                        x_span=x_span,
-                        base_text_y_axes=1.01,
-                        row_step=0.025,
-                    )
-
-                    if selected_model_curve is not None:
-                        model_curve_style = resolve_selected_model_curve_style(distribution_fit_result)
-                        model_curve_y = np.asarray(selected_model_curve['y'], dtype=float)
-                        count_scale_factor = histogram_render_meta.get('count_scale_factor')
-                        if count_scale_factor is not None:
-                            model_curve_y = model_curve_y * float(count_scale_factor)
-                        render_density_line(
+                        histogram_render_meta = render_histogram(
                             plot_ax,
-                            selected_model_curve['x'],
-                            model_curve_y,
-                            alpha=model_curve_style['alpha'],
-                            linewidth=model_curve_style['linewidth'],
+                            sampled_histogram_group,
+                            lsl=LSL,
+                            usl=USL,
+                            group_column=distribution_key if grouping_applied else None,
                         )
-                        distribution_fit_result['selected_model_pdf'] = {
-                            **selected_model_curve,
-                            'y': model_curve_y,
-                        }
-                        render_modeled_tail_shading(plot_ax, distribution_fit_result, lsl=LSL, usl=USL)
-                    kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
-                    if kde_reference_curve is not None:
-                        kde_curve_y = np.asarray(kde_reference_curve['y'], dtype=float)
-                        count_scale_factor = histogram_render_meta.get('count_scale_factor')
-                        if count_scale_factor is not None:
-                            kde_curve_y = kde_curve_y * float(count_scale_factor)
-                        render_density_line(
-                            plot_ax,
-                            kde_reference_curve['x'],
-                            kde_curve_y,
-                            color=SUMMARY_PLOT_PALETTE['density_line'],
-                            alpha=0.22,
-                            linewidth=0.9,
-                            linestyle='--',
-                        )
-                        plot_ax.text(
-                            0.02,
-                            0.02,
-                            'Dashed KDE: descriptive only',
-                            transform=plot_ax.transAxes,
-                            ha='left',
-                            va='bottom',
-                            fontsize=max(6.5, histogram_font_sizes['table_fontsize'] - 1.0),
-                            color='#4d5968',
-                            bbox={
-                                'boxstyle': 'round,pad=0.16',
-                                'facecolor': (1.0, 1.0, 1.0, 0.74),
-                                'edgecolor': '#c7ced7',
-                                'linewidth': 0.45,
+
+                        table_style_options = {
+                            'fontsize': histogram_font_sizes['table_fontsize'],
+                            'min_fontsize': 7.4,
+                            'max_fontsize': 10.4,
+                            'cell_padding_points': 2.2,
+                            'compact_label_mapping': {
+                                **_DISTRIBUTION_FIT_COMPACT_LABELS,
+                                'Normality': 'Norm.',
                             },
-                            zorder=8,
+                        }
+
+                        unified_table_meta = render_panel_table_in_panel_axes(
+                            ax=right_table_ax,
+                            title='Parameter',
+                            rows=unified_rows,
+                            style_options={
+                                **table_style_options,
+                                'explicit_label_fraction': _UNIFIED_HISTOGRAM_LABEL_FRACTION,
+                                'explicit_value_fraction': _UNIFIED_HISTOGRAM_VALUE_FRACTION,
+                                'value_wrap_width': 26,
+                                'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
+                            },
+                            row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
+                            pad_y=0.0,
+                            valign='top',
+                        )
+                        unified_table = unified_table_meta['table']
+
+                        non_normal_row_badges = dict(histogram_row_badges or {})
+                        if non_normal_reference_mode:
+                            for label in ('Cp (ref)', 'Cpk (ref)'):
+                                non_normal_row_badges[label] = {'palette_key': 'quality_unknown'}
+
+                        fit_quality_value = None
+                        for label, value in unified_table_meta.get('rendered_rows', []):
+                            if label == 'Fit quality':
+                                fit_quality_value = str(value).strip().lower()
+                                break
+
+                        fit_quality_palette = None
+                        if fit_quality_value in {'weak', 'unreliable'}:
+                            fit_quality_palette = 'fit_quality_low'
+                        elif fit_quality_value in {'medium', 'marginal'}:
+                            fit_quality_palette = 'fit_quality_medium'
+                        elif fit_quality_value in {'good', 'strong', 'capable'}:
+                            fit_quality_palette = 'fit_quality_high'
+                        if fit_quality_palette:
+                            non_normal_row_badges['Fit quality'] = {'palette_key': fit_quality_palette}
+
+                        style_histogram_stats_table(
+                            unified_table,
+                            unified_table_meta['rendered_rows'],
+                            capability_badge=capability_badge,
+                            capability_row_badges=non_normal_row_badges,
+                        )
+                        _apply_table_section_separator(
+                            unified_table,
+                            unified_table_meta['rendered_rows'],
+                            transition_label='Model',
+                        )
+                        adjust_histogram_stats_table_geometry(
+                            unified_table,
+                            statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
+                            row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
+                            explicit_row_heights=unified_table_meta.get('explicit_row_heights'),
                         )
 
-                    lock_histogram_y_axis_to_bar_heights(plot_ax)
+                        selected_model_curve = distribution_fit_result.get('selected_model_pdf')
+                        annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
+                        x_left, x_right = plot_ax.get_xlim()
+                        x_span = abs(float(x_right) - float(x_left))
+                        annotation_specs, _ = compute_histogram_annotation_rows(
+                            annotation_specs,
+                            distance_threshold=0.04,
+                            threshold_mode='axis_fraction',
+                            x_span=x_span,
+                            base_text_y_axes=1.01,
+                            row_step=0.025,
+                        )
 
-                    fit_warning = distribution_fit_result.get('warning')
-                    if fit_warning:
-                        logger.warning("%s Header=%s", fit_warning, header)
+                        if selected_model_curve is not None:
+                            model_curve_style = resolve_selected_model_curve_style(distribution_fit_result)
+                            model_curve_y = np.asarray(selected_model_curve['y'], dtype=float)
+                            count_scale_factor = histogram_render_meta.get('count_scale_factor')
+                            if count_scale_factor is not None:
+                                model_curve_y = model_curve_y * float(count_scale_factor)
+                            render_density_line(
+                                plot_ax,
+                                selected_model_curve['x'],
+                                model_curve_y,
+                                alpha=model_curve_style['alpha'],
+                                linewidth=model_curve_style['linewidth'],
+                            )
+                            distribution_fit_result['selected_model_pdf'] = {
+                                **selected_model_curve,
+                                'y': model_curve_y,
+                            }
+                            render_modeled_tail_shading(plot_ax, distribution_fit_result, lsl=LSL, usl=USL)
+                        kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
+                        if kde_reference_curve is not None:
+                            kde_curve_y = np.asarray(kde_reference_curve['y'], dtype=float)
+                            count_scale_factor = histogram_render_meta.get('count_scale_factor')
+                            if count_scale_factor is not None:
+                                kde_curve_y = kde_curve_y * float(count_scale_factor)
+                            render_density_line(
+                                plot_ax,
+                                kde_reference_curve['x'],
+                                kde_curve_y,
+                                color=SUMMARY_PLOT_PALETTE['density_line'],
+                                alpha=0.22,
+                                linewidth=0.9,
+                                linestyle='--',
+                            )
+                            plot_ax.text(
+                                0.02,
+                                0.02,
+                                'Dashed KDE: descriptive only',
+                                transform=plot_ax.transAxes,
+                                ha='left',
+                                va='bottom',
+                                fontsize=max(6.5, histogram_font_sizes['table_fontsize'] - 1.0),
+                                color='#4d5968',
+                                bbox={
+                                    'boxstyle': 'round,pad=0.16',
+                                    'facecolor': (1.0, 1.0, 1.0, 0.74),
+                                    'edgecolor': '#c7ced7',
+                                    'linewidth': 0.45,
+                                },
+                                zorder=8,
+                            )
 
-                    mean_line_style = build_histogram_mean_line_style()
-                    plot_ax.axvline(average, **mean_line_style)
-                    render_tolerance_band(
-                        plot_ax,
-                        nom,
-                        LSL,
-                        USL,
-                        one_sided=is_one_sided_geometric_tolerance(nom, LSL),
-                        orientation='vertical',
-                    )
-                    render_spec_reference_lines(plot_ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
-                    plot_ax.set_xlabel('Measurement')
-                    if not histogram_render_meta.get('is_grouped'):
-                        plot_ax.set_ylabel('Count')
-                    title_artist = render_histogram_title(
-                        plot_ax,
-                        build_wrapped_chart_title(header),
-                        fontsize=max(histogram_font_sizes['annotation_fontsize'] + 1.1, 8.8),
-                    )
-                    apply_minimal_axis_style(plot_ax, grid_axis='y')
+                        lock_histogram_y_axis_to_bar_heights(plot_ax)
 
-                    annotation_box = {
-                        'boxstyle': 'round,pad=0.15',
-                        'fc': 'white',
-                        'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
-                        'alpha': 0.94,
-                        'plot_rect': plot_rect,
-                        'title_artist': title_artist,
-                    }
-                    render_histogram_annotations(
-                        plot_ax,
-                        annotation_specs,
-                        annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
-                        annotation_box=annotation_box,
-                    )
-                    native_histogram_payload = build_histogram_native_payload(
-                        values=sampling_context['histogram_payload']['measurements'],
-                        lsl=LSL,
-                        usl=USL,
-                        title=build_wrapped_chart_title(header),
-                    )
-                    image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='histogram', native_payload=native_histogram_payload))
-                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    histogram_slot = _reserve_summary_image_slot('histogram', fig)
-                    write_start = time.perf_counter()
-                    self._insert_summary_image(summary_worksheet, histogram_slot, image_data)
-                    self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                        fit_warning = distribution_fit_result.get('warning')
+                        if fit_warning:
+                            logger.warning("%s Header=%s", fit_warning, header)
 
-                    if self._check_canceled():
+                        mean_line_style = build_histogram_mean_line_style()
+                        plot_ax.axvline(average, **mean_line_style)
+                        render_tolerance_band(
+                            plot_ax,
+                            nom,
+                            LSL,
+                            USL,
+                            one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                            orientation='vertical',
+                        )
+                        render_spec_reference_lines(plot_ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
+                        plot_ax.set_xlabel('Measurement')
+                        if not histogram_render_meta.get('is_grouped'):
+                            plot_ax.set_ylabel('Count')
+                        title_artist = render_histogram_title(
+                            plot_ax,
+                            build_wrapped_chart_title(header),
+                            fontsize=max(histogram_font_sizes['annotation_fontsize'] + 1.1, 8.8),
+                        )
+                        apply_minimal_axis_style(plot_ax, grid_axis='y')
+
+                        annotation_box = {
+                            'boxstyle': 'round,pad=0.15',
+                            'fc': 'white',
+                            'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                            'alpha': 0.94,
+                            'plot_rect': plot_rect,
+                            'title_artist': title_artist,
+                        }
+                        render_histogram_annotations(
+                            plot_ax,
+                            annotation_specs,
+                            annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
+                            annotation_box=annotation_box,
+                        )
+                        native_histogram_payload = build_histogram_native_payload(
+                            values=histogram_values,
+                            lsl=LSL,
+                            usl=USL,
+                            title=histogram_title,
+                            bin_count=histogram_bin_count,
+                        )
+                        image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='histogram', native_payload=native_histogram_payload))
+                        self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                        histogram_slot = _reserve_summary_image_slot('histogram', fig)
+                        write_start = time.perf_counter()
+                        self._insert_summary_image(summary_worksheet, histogram_slot, image_data)
+                        self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+
+                        if self._check_canceled():
+                            plt.close(fig)
+                            return
                         plt.close(fig)
-                        return
-                    plt.close(fig)
                 finally:
                     pass
 
