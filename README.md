@@ -56,6 +56,13 @@ Dependency files:
 
 Parity between native and Python backends is enforced through fixture-based tests in `tests/test_cmm_parser_parity.py`.
 
+## Chart renderer backend policy
+
+- `METROLIZA_CHART_RENDERER_BACKEND` accepts `auto` (default), `native`, or `matplotlib`.
+- Native chart rendering via `_metroliza_chart_native` is currently **experimental / not shipped** in release artifacts.
+- If `native` is forced while the native module is unavailable, Metroliza warns and falls back to matplotlib rendering.
+- For deterministic rollback behavior, set `METROLIZA_CHART_RENDERER_BACKEND=matplotlib`.
+
 ## Parser plugin resolver controls
 
 - Default selection accepts parser probes with confidence `>=1` and resolves ties by confidence, plugin priority, then plugin id.

@@ -6,6 +6,7 @@ This project ships optional native extension modules:
 - `_metroliza_group_stats_native` (`modules/native/group_stats_coercion`)
 - `_metroliza_comparison_stats_native` (`modules/native/comparison_stats_bootstrap`)
 - `_metroliza_distribution_fit_native` (`modules/native/distribution_fit_ad`)
+- `_metroliza_chart_native` (`modules/native/chart_renderer`) **not shipped yet** (experimental placeholder only)
 
 Each extension is optional at runtime. The app must keep deterministic Python-path behavior when native binaries are unavailable.
 
@@ -75,6 +76,13 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 - `METROLIZA_COMPARISON_STATS_BACKEND` controls pairwise native usage (`auto`/`native`/`python`).
 - In `auto`, unavailable native symbols produce `None` so Python callers execute fallback logic.
 - In `native`, unavailable symbols raise `RuntimeError`.
+
+### Chart renderer (`modules/chart_renderer.py`)
+
+- Backend selection is controlled by `METROLIZA_CHART_RENDERER_BACKEND` (`auto`/`native`/`matplotlib`).
+- Native chart rendering is currently **experimental and not shipped** in release artifacts.
+- If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
+- `auto` uses native only when the extension is present; otherwise it defaults to matplotlib.
 
 ### Distribution fit (`modules/distribution_fit_native.py`)
 

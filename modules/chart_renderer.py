@@ -8,6 +8,7 @@ for immediate rollback.
 from __future__ import annotations
 
 import os
+import warnings
 from abc import ABC, abstractmethod
 from io import BytesIO
 from typing import Any, Literal, NamedTuple
@@ -102,7 +103,12 @@ def resolve_chart_renderer_backend() -> ResolvedBackend:
         return "matplotlib"
     if backend == "native":
         if _native_render_histogram_png is None:
-            raise RuntimeError("Native chart renderer backend requested but unavailable")
+            warnings.warn(
+                "METROLIZA_CHART_RENDERER_BACKEND=native requested but _metroliza_chart_native is unavailable; falling back to matplotlib backend.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return "matplotlib"
         return "native"
     if _native_render_histogram_png is not None:
         return "native"
