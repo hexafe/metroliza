@@ -1218,6 +1218,74 @@ def _build_unified_histogram_dashboard_rows(*, statistics_rows, distribution_fit
     return list(statistics_rows or []) + list(distribution_fit_rows or [])
 
 
+def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal):
+    """Build stable visual-metadata payload contract for native histogram rendering."""
+    histogram_table_payload = _build_histogram_table_data(summary_stats)
+    rendered_rows = histogram_table_payload.get('rows') or []
+
+    annotation_specs = _build_histogram_annotation_specs(summary_stats.get('average'), usl, lsl, 1.0)
+    finite_points = [
+        float(item)
+        for item in (summary_stats.get('average'), lsl, usl)
+        if isinstance(item, (int, float)) and np.isfinite(float(item))
+    ]
+    x_span = abs(max(finite_points) - min(finite_points)) if len(finite_points) >= 2 else 1.0
+    annotation_specs, _ = _compute_histogram_annotation_rows(
+        annotation_specs,
+        distance_threshold=0.04,
+        threshold_mode='axis_fraction',
+        x_span=max(x_span, 1e-12),
+        base_text_y_axes=1.01,
+        row_step=0.025,
+    )
+
+    def _line(label, value, *, role):
+        return {
+            'id': role,
+            'label': label,
+            'value': None if value is None else float(value),
+            'enabled': value is not None,
+            'style_hint': {'orientation': 'vertical', 'line_role': role},
+        }
+
+    return {
+        'schema_version': 1,
+        'specification_lines': [
+            _line('LSL', lsl, role='lsl'),
+            _line('USL', usl, role='usl'),
+            _line('Nominal', nominal, role='nominal'),
+        ],
+        'summary_stats_table': {
+            'title': 'Parameter',
+            'columns': ['Parameter', 'Value'],
+            'rows': [
+                {'label': str(label), 'value': str(value), 'row_kind': 'summary_metric'}
+                for label, value in rendered_rows
+            ],
+        },
+        'annotation_rows': [
+            {
+                'label': spec.get('label'),
+                'x': spec.get('x'),
+                'y': spec.get('y'),
+                'xytext': spec.get('xytext'),
+                'placement_hint': {
+                    'textcoords': spec.get('textcoords', 'data'),
+                    'va': spec.get('va', 'bottom'),
+                    'ha': spec.get('ha', 'center'),
+                },
+            }
+            for spec in annotation_specs
+        ],
+        'modeled_overlays': {
+            'advanced_annotations_enabled': False,
+            'overlays_enabled': False,
+            'rows': [],
+            'status': 'disabled',
+        },
+    }
+
+
 def _apply_table_section_separator(ax_table, table_data, *, transition_label='Model'):
     """Add subtle visual grouping by drawing a mild separator above transition row."""
 
@@ -4597,6 +4665,12 @@ class ExportDataThread(QThread):
                             title=histogram_title,
                             bin_count=histogram_bin_count,
                         )
+                        visual_metadata = _build_histogram_native_visual_metadata(
+                            summary_stats=summary_stats,
+                            lsl=LSL,
+                            usl=USL,
+                            nominal=nom,
+                        )
                         native_histogram_payload.update(
                             {
                                 'limits': {
@@ -4616,8 +4690,7 @@ class ExportDataThread(QThread):
                                     'axis_label_y': 'Count',
                                     'grid_axis': 'y',
                                 },
-                                # Keep annotation and modeled-overlay parity in fallback branch
-                                # until native payload support lands.
+                                'visual_metadata': visual_metadata,
                                 'advanced_annotations_enabled': False,
                                 'overlays_enabled': False,
                             }
@@ -4907,6 +4980,18 @@ class ExportDataThread(QThread):
                             usl=USL,
                             title=histogram_title,
                             bin_count=histogram_bin_count,
+                        )
+                        native_histogram_payload.update(
+                            {
+                                'visual_metadata': _build_histogram_native_visual_metadata(
+                                    summary_stats=summary_stats,
+                                    lsl=LSL,
+                                    usl=USL,
+                                    nominal=nom,
+                                ),
+                                'advanced_annotations_enabled': False,
+                                'overlays_enabled': False,
+                            }
                         )
                         image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='histogram', native_payload=native_histogram_payload))
                         self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)

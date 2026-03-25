@@ -2733,6 +2733,11 @@ class TestExportBackendSmoke(unittest.TestCase):
         assert worksheet.insert_calls
         assert thread._chart_renderer.payload is not None
         assert thread._chart_renderer.payload['title'] == 'H1'
+        assert thread._chart_renderer.payload['visual_metadata']['schema_version'] == 1
+        assert len(thread._chart_renderer.payload['visual_metadata']['specification_lines']) == 3
+        assert thread._chart_renderer.payload['visual_metadata']['summary_stats_table']['columns'] == ['Parameter', 'Value']
+        assert thread._chart_renderer.payload['visual_metadata']['annotation_rows']
+        assert thread._chart_renderer.payload['visual_metadata']['modeled_overlays']['status'] == 'disabled'
         assert thread._chart_renderer.payload['advanced_annotations_enabled'] is False
         assert thread._chart_renderer.fallback_fig is None
 
@@ -2787,6 +2792,76 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         assert worksheet.insert_calls
         assert render_calls['count'] == 1
+
+    def test_summary_sheet_fill_histogram_native_and_matplotlib_paths_keep_same_worksheet_slot(self):
+        import pandas as pd
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.insert_calls = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, _path, options):
+                self.insert_calls.append((row, col, options))
+
+        class _FakeNativeRenderer:
+            def __init__(self):
+                self.payload = None
+
+            def render_figure_png(self, *_args, **_kwargs):
+                raise AssertionError("Native histogram branch should not call figure renderer.")
+
+            def render_histogram_png(self, payload, *, fallback_fig=None, mode='workbook'):
+                self.payload = payload
+                return type("Result", (), {"png_bytes": b"native-bytes"})()
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.1, 10.2, 10.3],
+                'NOM': [10.0] * 5,
+                '+TOL': [0.2] * 5,
+                '-TOL': [-0.2] * 5,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
+                'DATE': ['2024-01-01'] * 5,
+            }
+        )
+
+        native_thread = ExportDataThread(request)
+        native_thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
+        native_thread._chart_renderer = _FakeNativeRenderer()
+        native_thread._register_chart_image = lambda payload: payload
+        native_worksheet = _FakeSummaryWorksheet()
+
+        matplotlib_thread = ExportDataThread(request)
+        matplotlib_thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
+        matplotlib_thread._register_chart_image = lambda payload: payload
+        matplotlib_worksheet = _FakeSummaryWorksheet()
+
+        with (
+            mock.patch('modules.export_data_thread.native_chart_backend_available', return_value=True),
+            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='native'),
+            mock.patch('modules.export_data_thread.render_histogram', side_effect=AssertionError("matplotlib histogram should be skipped")),
+        ):
+            native_thread.summary_sheet_fill(native_worksheet, 'H1', header_group.copy(), col=5)
+
+        with (
+            mock.patch('modules.export_data_thread.native_chart_backend_available', return_value=False),
+            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'),
+        ):
+            matplotlib_thread.summary_sheet_fill(matplotlib_worksheet, 'H1', header_group.copy(), col=5)
+
+        assert native_worksheet.insert_calls
+        assert matplotlib_worksheet.insert_calls
+        native_row, native_col, _native_options = native_worksheet.insert_calls[-1]
+        mpl_row, mpl_col, _mpl_options = matplotlib_worksheet.insert_calls[-1]
+        assert (native_row, native_col) == (mpl_row, mpl_col)
 
     def test_google_retry_parse_error_logs_warning(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest

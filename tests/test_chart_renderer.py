@@ -124,6 +124,15 @@ def test_build_histogram_native_payload_includes_bin_count_when_provided():
         bin_count=7,
     )
     assert payload["bin_count"] == 7
+    assert "visual_metadata" in payload
+    assert payload["visual_metadata"]["summary_stats_table"]["columns"] == ["Parameter", "Value"]
+
+
+def test_native_histogram_renderer_validates_payload_contract():
+    payload = {"type": "histogram", "values": "not-a-list", "title": "Bad Payload"}
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda _payload: b"png"):
+        with pytest.raises(RuntimeError, match="values"):
+            NativeChartRenderer().render_histogram_png(payload)
 
 
 def test_native_chart_renderer_falls_back_to_matplotlib_when_extension_missing():
