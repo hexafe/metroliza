@@ -4,6 +4,7 @@ from io import BytesIO
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 from unittest import mock
 
 from modules.chart_renderer import (
@@ -12,6 +13,7 @@ from modules.chart_renderer import (
     benchmark_histogram_render_runtime,
     build_chart_renderer,
     build_histogram_native_payload,
+    native_chart_backend_available,
     resolve_chart_renderer_backend,
 )
 
@@ -34,6 +36,20 @@ def test_resolve_backend_native_warns_and_falls_back_when_extension_missing(monk
             assert resolve_chart_renderer_backend() == "matplotlib"
     assert warn.called
     assert "METROLIZA_CHART_RENDERER_BACKEND=native" in str(warn.call_args[0][0])
+
+
+def test_resolve_backend_auto_prefers_native_when_extension_available(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
+        assert resolve_chart_renderer_backend() == "native"
+
+
+def test_resolve_backend_native_forces_native_without_warning_when_extension_available(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
+        with mock.patch("warnings.warn") as warn:
+            assert resolve_chart_renderer_backend() == "native"
+    warn.assert_not_called()
 
 
 
@@ -125,5 +141,20 @@ def test_native_chart_renderer_falls_back_to_matplotlib_when_extension_missing()
 
     plt.close(fig)
     assert result.backend == "matplotlib"
+    assert isinstance(result.png_bytes, bytes)
+    assert len(result.png_bytes) > 0
+
+
+@pytest.mark.skipif(not native_chart_backend_available(), reason="Native chart module not available in current environment")
+def test_native_histogram_renderer_uses_real_extension_when_available():
+    payload = build_histogram_native_payload(
+        values=[1.0, 1.2, 1.4, 1.8, 2.0, 2.1, 2.2],
+        lsl=1.0,
+        usl=2.3,
+        title="Real Native Histogram",
+        bin_count=6,
+    )
+    result = NativeChartRenderer().render_histogram_png(payload)
+    assert result.backend == "native"
     assert isinstance(result.png_bytes, bytes)
     assert len(result.png_bytes) > 0

@@ -107,6 +107,8 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert "$modeLabel = if ($FastDev) { 'standalone (faster dev build)' } else { 'onefile (release-like build)' }" in script
     assert "'--include-package=modules'" in script
     assert "'--include-module=modules.cmm_report_parser'" in script
+    assert "'--include-module=_metroliza_cmm_native'" in script
+    assert "'--include-module=_metroliza_chart_native'" in script
     assert "'--include-module=modules.report_parser_factory'" in script
     assert "'--include-module=modules.pdf_backend'" in script
     assert "'--include-package-data=pymupdf'" in script
@@ -132,7 +134,7 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert "fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets('fitz')" in spec
     assert "binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries" in spec
     assert "datas=pymupdf_datas + fitz_datas" in spec
-    assert "hiddenimports=['_metroliza_cmm_native', 'pymupdf', 'fitz', 'modules.cmm_report_parser'" in spec
+    assert "hiddenimports=['_metroliza_cmm_native', '_metroliza_chart_native', 'pymupdf', 'fitz', 'modules.cmm_report_parser'" in spec
     assert "runtime_tmpdir=None" in spec
     assert 'exe = EXE(' in spec
     assert 'COLLECT(' not in spec

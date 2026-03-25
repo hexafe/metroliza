@@ -59,9 +59,17 @@ Parity between native and Python backends is enforced through fixture-based test
 ## Chart renderer backend policy
 
 - `METROLIZA_CHART_RENDERER_BACKEND` accepts `auto` (default), `native`, or `matplotlib`.
-- Native chart rendering via `_metroliza_chart_native` is currently **experimental / not shipped** in release artifacts.
+- Native chart rendering via `_metroliza_chart_native` is included when the native extension is built/installed in the packaging environment.
 - If `native` is forced while the native module is unavailable, Metroliza warns and falls back to matplotlib rendering.
 - For deterministic rollback behavior, set `METROLIZA_CHART_RENDERER_BACKEND=matplotlib`.
+
+### Local native chart extension build (optional)
+
+```bash
+python -m maturin develop --manifest-path modules/native/chart_renderer/Cargo.toml
+# or build wheel artifacts
+python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml --release
+```
 
 ## Parser plugin resolver controls
 
