@@ -44,6 +44,7 @@ def _strip_comment_prefix(text: str) -> str:
 
 def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
     """Parse raw report lines into legacy block structure."""
+    split_lines = [line.split() for line in raw_lines]
 
     def is_comment_or_header(line: str) -> bool:
         return line.startswith(("#", "*"))
@@ -230,12 +231,12 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
         return processed_line
 
     def extract_measurement_tokens_and_raw_lines_consumed(
-        lines: list[str], preserve_non_numeric_tokens: bool = False
+        lines: list[str], line_tokens: list[list[str]], preserve_non_numeric_tokens: bool = False
     ) -> tuple[list[str], int]:
         if not lines:
             return [], 0
 
-        code_tokens = lines[0].split()
+        code_tokens = line_tokens[0]
         if not code_tokens:
             return [], 0
 
@@ -261,11 +262,10 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
 
         append_tokens(first_line_tokens)
 
-        for raw_line in lines[1:]:
+        for raw_line, raw_line_tokens in zip(lines[1:], line_tokens[1:]):
             if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
                 break
 
-            raw_line_tokens = raw_line.split()
             if not raw_line_tokens:
                 raw_lines_consumed += 1
                 continue
@@ -313,7 +313,8 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                 pdf_blocks_text.append(text_block)
                 text_block, header_comment, dim_block = [], [], []
 
-        if not is_comment_or_header(line) and len(line.split()) == 3:
+        line_tokens = split_lines[index]
+        if not is_comment_or_header(line) and len(line_tokens) == 3:
             continue
 
         if text_block:
@@ -337,12 +338,14 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                     text_block.append(header_comment)
 
             else:
-                tokens = line.split()
+                tokens = line_tokens
                 if tokens and tokens[0] in MEASUREMENT_LINE_MAP:
                     candidate_lines = raw_lines[index:]
+                    candidate_tokens = split_lines[index:]
                     preserve_non_numeric_tokens = tokens[0].startswith("TP")
                     parsed_tokens, raw_lines_consumed = extract_measurement_tokens_and_raw_lines_consumed(
                         candidate_lines,
+                        candidate_tokens,
                         preserve_non_numeric_tokens=preserve_non_numeric_tokens,
                     )
 

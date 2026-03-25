@@ -229,15 +229,21 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
     )
 
 
-def benchmark_cmm_parser_backend_compare(temp_dir: Path, *, report_count: int, measurements_per_report: int) -> ScenarioResult:
+def benchmark_cmm_parser_backend_compare(
+    temp_dir: Path,
+    *,
+    report_count: int,
+    measurements_per_report: int,
+    benchmark_mode: str = "parse",
+) -> ScenarioResult:
     from modules.cmm_native_parser import (
         get_backend_telemetry_snapshot,
         native_backend_available,
+        normalize_measurement_rows,
         parse_blocks_with_backend,
+        persist_measurement_rows_with_backend_and_telemetry,
         reset_backend_telemetry,
     )
-
-    del temp_dir
 
     def _build_report_lines(report_index: int) -> list[str]:
         lines: list[str] = [f"#BENCHMARK HEADER {report_index}", "DIM"]
@@ -262,39 +268,103 @@ def benchmark_cmm_parser_backend_compare(temp_dir: Path, *, report_count: int, m
 
     raw_batches = [_build_report_lines(index) for index in range(1, report_count + 1)]
 
+    report_meta = [
+        (
+            f"REF-{index:05d}",
+            "/bench",
+            f"REF-{index:05d}_2024-01-02_{index:04d}.pdf",
+            "2024-01-02",
+            f"{index:04d}",
+        )
+        for index in range(1, report_count + 1)
+    ]
+
     # Always benchmark fallback.
     os.environ["METROLIZA_CMM_PARSER_BACKEND"] = "python"
+    os.environ["METROLIZA_CMM_PERSIST_BACKEND"] = "python"
     reset_backend_telemetry()
-    py_start = time.perf_counter()
-    py_measurements = 0
-    for lines in raw_batches:
-        parsed = parse_blocks_with_backend(lines, use_native=False)
-        py_measurements += sum(len(block[1]) for block in parsed)
-    python_s = time.perf_counter() - py_start
+    py_parse_start = time.perf_counter()
+    py_parsed_batches = [parse_blocks_with_backend(lines, use_native=False) for lines in raw_batches]
+    py_parse_s = time.perf_counter() - py_parse_start
+    py_measurements = sum(sum(len(block[1]) for block in parsed) for parsed in py_parsed_batches)
+    py_normalize_s = 0.0
+    py_persist_s = 0.0
+    if benchmark_mode == "stages":
+        py_normalize_start = time.perf_counter()
+        py_rows = [
+            normalize_measurement_rows(
+                blocks,
+                reference=meta[0],
+                fileloc=meta[1],
+                filename=meta[2],
+                date=meta[3],
+                sample_number=meta[4],
+                use_native=False,
+            )
+            for blocks, meta in zip(py_parsed_batches, report_meta)
+        ]
+        py_normalize_s = time.perf_counter() - py_normalize_start
+
+        py_db = temp_dir / "cmm_backend_benchmark_python.sqlite"
+        if py_db.exists():
+            py_db.unlink()
+        py_persist_start = time.perf_counter()
+        for rows in py_rows:
+            persist_measurement_rows_with_backend_and_telemetry(str(py_db), rows, use_native=False)
+        py_persist_s = time.perf_counter() - py_persist_start
     python_snapshot = get_backend_telemetry_snapshot()
 
     # Native benchmark only when extension is available.
-    native_s: float | None = None
+    native_parse_s: float | None = None
+    native_normalize_s = 0.0
+    native_persist_s = 0.0
     native_measurements = 0
     native_snapshot = {}
     speedup_ratio = 0.0
     if native_backend_available():
         os.environ["METROLIZA_CMM_PARSER_BACKEND"] = "native"
+        os.environ["METROLIZA_CMM_PERSIST_BACKEND"] = "native"
         reset_backend_telemetry()
-        native_start = time.perf_counter()
-        for lines in raw_batches:
-            parsed = parse_blocks_with_backend(lines, use_native=True)
-            native_measurements += sum(len(block[1]) for block in parsed)
-        native_s = time.perf_counter() - native_start
+        native_parse_start = time.perf_counter()
+        native_parsed_batches = [parse_blocks_with_backend(lines, use_native=True) for lines in raw_batches]
+        native_parse_s = time.perf_counter() - native_parse_start
+        native_measurements = sum(sum(len(block[1]) for block in parsed) for parsed in native_parsed_batches)
+        if benchmark_mode == "stages":
+            native_normalize_start = time.perf_counter()
+            native_rows = [
+                normalize_measurement_rows(
+                    blocks,
+                    reference=meta[0],
+                    fileloc=meta[1],
+                    filename=meta[2],
+                    date=meta[3],
+                    sample_number=meta[4],
+                    use_native=True,
+                )
+                for blocks, meta in zip(native_parsed_batches, report_meta)
+            ]
+            native_normalize_s = time.perf_counter() - native_normalize_start
+
+            native_db = temp_dir / "cmm_backend_benchmark_native.sqlite"
+            if native_db.exists():
+                native_db.unlink()
+            native_persist_start = time.perf_counter()
+            for rows in native_rows:
+                persist_measurement_rows_with_backend_and_telemetry(str(native_db), rows, use_native=True)
+            native_persist_s = time.perf_counter() - native_persist_start
         native_snapshot = get_backend_telemetry_snapshot()
-        speedup_ratio = (python_s / native_s) if native_s > 0 else 0.0
+        speedup_ratio = (py_parse_s / native_parse_s) if native_parse_s > 0 else 0.0
 
     return ScenarioResult(
         scenario='cmm_parser_backend_compare',
-        wall_time_s=python_s + (native_s or 0.0),
+        wall_time_s=(py_parse_s + py_normalize_s + py_persist_s) + (native_parse_s or 0.0) + native_normalize_s + native_persist_s,
         stage_timings_s={
-            'python_backend_parse': python_s,
-            'native_backend_parse': native_s or 0.0,
+            'python_backend_parse': py_parse_s,
+            'python_backend_normalize': py_normalize_s,
+            'python_backend_persist': py_persist_s,
+            'native_backend_parse': native_parse_s or 0.0,
+            'native_backend_normalize': native_normalize_s,
+            'native_backend_persist': native_persist_s,
             'native_speedup_ratio': speedup_ratio,
         },
         input_metrics={
@@ -305,6 +375,17 @@ def benchmark_cmm_parser_backend_compare(temp_dir: Path, *, report_count: int, m
             'native_rows': native_measurements,
             'python_parse_backend_rate': float(python_snapshot.get('parse', {}).get('python_rate', 0.0)),
             'native_parse_backend_rate': float(native_snapshot.get('parse', {}).get('native_rate', 0.0)),
+            'python_normalize_backend_rate': float(python_snapshot.get('normalize', {}).get('python_rate', 0.0)),
+            'native_normalize_backend_rate': float(native_snapshot.get('normalize', {}).get('native_rate', 0.0)),
+            'python_normalize_rows': int(python_snapshot.get('normalize', {}).get('rows_python', 0)),
+            'native_normalize_rows': int(native_snapshot.get('normalize', {}).get('rows_native', 0)),
+            'python_normalize_latency_s': float(python_snapshot.get('normalize', {}).get('latency_python_s', 0.0)),
+            'native_normalize_latency_s': float(native_snapshot.get('normalize', {}).get('latency_native_s', 0.0)),
+            'python_persistence_rows': int(python_snapshot.get('persistence_rows', {}).get('python', 0)),
+            'native_persistence_rows': int(native_snapshot.get('persistence_rows', {}).get('native', 0)),
+            'python_persistence_latency_s': float(python_snapshot.get('persistence_rows', {}).get('latency_python_s', 0.0)),
+            'native_persistence_latency_s': float(native_snapshot.get('persistence_rows', {}).get('latency_native_s', 0.0)),
+            'cmm_benchmark_mode': benchmark_mode,
         },
     )
 
@@ -693,6 +774,12 @@ def main() -> int:
     parser.add_argument('--group-preprocess-values', type=int, default=20000)
     parser.add_argument('--cmm-bench-report-count', type=int, default=180)
     parser.add_argument('--cmm-bench-measurements-per-report', type=int, default=140)
+    parser.add_argument(
+        '--cmm-benchmark-mode',
+        choices=('parse', 'stages'),
+        default='parse',
+        help='CMM backend benchmark mode: parse-only comparison or isolated parse/normalize/persist stages.',
+    )
     parser.add_argument('--enforce-cmm-parser-guardrail', action='store_true')
     parser.add_argument('--cmm-native-min-speedup-ratio', type=float, default=0.9)
     parser.add_argument('--cmm-native-min-usage-rate', type=float, default=0.95)
@@ -724,6 +811,7 @@ def main() -> int:
                 temp_path,
                 report_count=max(1, args.cmm_bench_report_count),
                 measurements_per_report=max(1, args.cmm_bench_measurements_per_report),
+                benchmark_mode=args.cmm_benchmark_mode,
             ),
         ]
 
