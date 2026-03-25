@@ -500,6 +500,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         )
 
     def prepare_for_two_stage_pipeline(self):
+        """Prepare parser state and normalized rows for deferred single-writer persistence.
+
+        This stage performs file open/parsing/token normalization work only and stores
+        normalized rows on the parser instance so stage 2 can commit without re-parsing.
+        """
         prepare_start = perf_counter()
         if not self.raw_text:
             self.open_report()
@@ -522,6 +527,10 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self.stage_timings_s["prepare_pipeline_runtime"] = perf_counter() - prepare_start
 
     def persist_prepared_report(self):
+        """Persist report data prepared during stage 1 of the two-stage pipeline.
+
+        Falls back to legacy open+check behavior when preparation did not complete.
+        """
         if not self.blocks_text:
             return self.open_database_and_check_filename()
 
