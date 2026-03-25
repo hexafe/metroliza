@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import statistics
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -105,6 +106,12 @@ class ScenarioResult:
     wall_time_s: float
     stage_timings_s: dict[str, float]
     input_metrics: dict[str, float | int]
+
+
+def _collect_median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return float(statistics.median(float(v) for v in values))
 
 
 def _create_pdf_fixture_dir(base_dir: Path, count: int) -> Path:
@@ -424,30 +431,18 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
         compute_measurement_summary(group, usl=usl, lsl=lsl, nom=nom)
     groupby_stats_s = time.perf_counter() - groupby_start
 
-    import modules.export_data_thread as export_module
-    original_insert_chart = export_module.insert_measurement_chart
-    chart_seconds = 0.0
-
-    def timed_insert_chart(*args, **kwargs):
-        nonlocal chart_seconds
-        chart_start = time.perf_counter()
-        try:
-            return original_insert_chart(*args, **kwargs)
-        finally:
-            chart_seconds += time.perf_counter() - chart_start
-
-    export_module.insert_measurement_chart = timed_insert_chart
     total_run_start = time.perf_counter()
-    try:
-        completed = thread.get_export_backend().run(thread)
-    finally:
-        export_module.insert_measurement_chart = original_insert_chart
+    completed = thread.get_export_backend().run(thread)
     total_run_s = time.perf_counter() - total_run_start
 
     if not completed:
         raise RuntimeError('Excel export benchmark did not complete successfully.')
 
-    workbook_write_s = max(0.0, total_run_s - chart_seconds)
+    observability_summary = thread.build_export_observability_summary(high_header_threshold=64)
+    stage_timings = observability_summary['stage_timings_s']
+    backend_counts = observability_summary['chart_backend_distribution']['counts']
+    per_chart_medians = observability_summary['per_chart_type_timing_medians_s']
+    high_header = observability_summary['high_header_cardinality_scenario']
 
     return ScenarioResult(
         scenario='excel_export_path',
@@ -455,13 +450,22 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
         stage_timings_s={
             'data_load': data_load_s,
             'groupby_stats': groupby_stats_s,
-            'chart_generation': chart_seconds,
-            'workbook_write': workbook_write_s,
+            'chart_payload_preparation': float(stage_timings.get('chart_payload_preparation', 0.0)),
+            'chart_rendering': float(stage_timings.get('chart_rendering', 0.0)),
+            'worksheet_writes': float(stage_timings.get('worksheet_writes', 0.0)),
         },
         input_metrics={
             'rows': fixture_metrics['measurement_rows'],
             'headers': fixture_metrics['headers'],
             'chart_count': fixture_metrics['headers'] * 2,
+            'chart_backend_native_count': int(backend_counts.get('native', 0)),
+            'chart_backend_matplotlib_count': int(backend_counts.get('matplotlib', 0)),
+            'chart_type_median_distribution_s': float(per_chart_medians.get('distribution', 0.0)),
+            'chart_type_median_iqr_s': float(per_chart_medians.get('iqr', 0.0)),
+            'chart_type_median_histogram_s': float(per_chart_medians.get('histogram', 0.0)),
+            'chart_type_median_trend_s': float(per_chart_medians.get('trend', 0.0)),
+            'high_header_cardinality_detected': int(bool(high_header.get('detected'))),
+            'high_header_cardinality_max_headers': int(high_header.get('max_headers_per_partition', 0)),
         },
     )
 
@@ -810,6 +814,99 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
     )
 
 
+def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histogram_points: int) -> ScenarioResult:
+    import matplotlib.pyplot as plt
+    from modules.chart_renderer import (
+        MatplotlibChartRenderer,
+        NativeChartRenderer,
+        benchmark_histogram_render_runtime,
+        native_chart_backend_available,
+        build_histogram_native_payload,
+    )
+
+    del temp_dir
+    rng = np.random.default_rng(20260325)
+    values = rng.normal(loc=10.0, scale=0.2, size=max(32, histogram_points))
+    payload = build_histogram_native_payload(
+        values=values.tolist(),
+        lsl=9.5,
+        usl=10.5,
+        title='Histogram budget benchmark',
+        bin_count=24,
+    )
+
+    matplotlib_samples: list[float] = []
+    native_samples: list[float] = []
+
+    for _ in range(max(1, iterations)):
+        mpl_runtime = benchmark_histogram_render_runtime(MatplotlibChartRenderer(), payload, iterations=1)
+        matplotlib_samples.append(float(mpl_runtime.get('median_s', 0.0)))
+        if native_chart_backend_available():
+            native_runtime = benchmark_histogram_render_runtime(NativeChartRenderer(), payload, iterations=1)
+            native_samples.append(float(native_runtime.get('median_s', 0.0)))
+
+    matplotlib_median = _collect_median(matplotlib_samples)
+    native_median = _collect_median(native_samples)
+    regression_ratio = (matplotlib_median / native_median) if native_median > 0 else 0.0
+
+    plt.close('all')
+    return ScenarioResult(
+        scenario='chart_render_budget_path',
+        wall_time_s=float(sum(matplotlib_samples) + sum(native_samples)),
+        stage_timings_s={
+            'histogram_matplotlib_median_s': matplotlib_median,
+            'histogram_native_median_s': native_median,
+            'histogram_branch_regression_ratio': regression_ratio,
+        },
+        input_metrics={
+            'rows': int(len(values)),
+            'headers': 1,
+            'chart_count': int(max(1, iterations) * (2 if native_chart_backend_available() else 1)),
+            'histogram_native_available': int(native_chart_backend_available()),
+        },
+    )
+
+
+def build_benchmark_run_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    native_count = 0
+    matplotlib_count = 0
+    chart_type_samples: dict[str, list[float]] = {
+        'distribution': [],
+        'iqr': [],
+        'histogram': [],
+        'trend': [],
+    }
+    high_header_timing = {}
+    for result in results:
+        metrics = result.get('input_metrics') or {}
+        native_count += int(metrics.get('chart_backend_native_count', 0))
+        matplotlib_count += int(metrics.get('chart_backend_matplotlib_count', 0))
+
+        for chart_type in chart_type_samples:
+            key = f'chart_type_median_{chart_type}_s'
+            if key in metrics:
+                chart_type_samples[chart_type].append(float(metrics[key]))
+
+        if result.get('scenario') == 'excel_export_high_header_cardinality_compare':
+            high_header_timing = dict(result.get('stage_timings_s') or {})
+
+    total = native_count + matplotlib_count
+    return {
+        'chart_backend_distribution': {
+            'counts': {'native': native_count, 'matplotlib': matplotlib_count},
+            'rates': {
+                'native': (native_count / total) if total else 0.0,
+                'matplotlib': (matplotlib_count / total) if total else 0.0,
+            },
+        },
+        'per_chart_type_timing_medians_s': {
+            chart_type: _collect_median(samples)
+            for chart_type, samples in chart_type_samples.items()
+        },
+        'high_header_cardinality_scenario_timing_s': high_header_timing,
+    }
+
+
 def _write_outputs(output_dir: Path, payload: dict[str, Any]) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -848,6 +945,10 @@ def main() -> int:
     parser.add_argument('--group-preprocess-values', type=int, default=20000)
     parser.add_argument('--cmm-bench-report-count', type=int, default=180)
     parser.add_argument('--cmm-bench-measurements-per-report', type=int, default=140)
+    parser.add_argument('--chart-render-iterations', type=int, default=5)
+    parser.add_argument('--chart-render-histogram-points', type=int, default=4000)
+    parser.add_argument('--enforce-chart-render-guardrail', action='store_true')
+    parser.add_argument('--chart-render-max-median-regression-ratio', type=float, default=2.5)
     parser.add_argument(
         '--cmm-benchmark-mode',
         choices=('parse', 'stages'),
@@ -869,6 +970,7 @@ def main() -> int:
             'distribution_fit_monte_carlo_path',
             'group_preprocess_mixed_types_compare',
             'cmm_parser_backend_compare',
+            'chart_render_budget_path',
         ),
         help='Optional list of scenario keys to run. Defaults to running all scenarios.',
     )
@@ -907,6 +1009,11 @@ def main() -> int:
             measurements_per_report=max(1, args.cmm_bench_measurements_per_report),
             benchmark_mode=args.cmm_benchmark_mode,
         ),
+        'chart_render_budget_path': lambda temp_path: benchmark_chart_render_budget_path(
+            temp_path,
+            iterations=max(1, args.chart_render_iterations),
+            histogram_points=max(32, args.chart_render_histogram_points),
+        ),
     }
     selected_scenarios = args.scenarios or list(scenario_runners.keys())
 
@@ -919,6 +1026,7 @@ def main() -> int:
         'config': vars(args),
         'results': [asdict(result) for result in results],
     }
+    payload['summary'] = build_benchmark_run_summary(payload['results'])
     json_path, csv_path = _write_outputs(Path(args.output_dir), payload)
 
     print(f'Benchmark JSON: {json_path}')
@@ -947,6 +1055,23 @@ def main() -> int:
             )
         else:
             print('CMM parser guardrail skipped: native parser extension unavailable in this environment.')
+
+    if args.enforce_chart_render_guardrail:
+        chart_budget = next((item for item in payload['results'] if item['scenario'] == 'chart_render_budget_path'), None)
+        if chart_budget is None:
+            raise RuntimeError('chart_render_budget_path scenario missing from benchmark payload')
+        native_available = int(chart_budget['input_metrics'].get('histogram_native_available', 0)) == 1
+        if native_available:
+            regression_ratio = float(chart_budget['stage_timings_s'].get('histogram_branch_regression_ratio', 0.0))
+            if regression_ratio > args.chart_render_max_median_regression_ratio:
+                raise RuntimeError(
+                    f'Chart render median regression ratio {regression_ratio:.3f} exceeded threshold {args.chart_render_max_median_regression_ratio:.3f}'
+                )
+            print(
+                f"Chart render guardrail passed: histogram_branch_regression_ratio={regression_ratio:.3f}"
+            )
+        else:
+            print('Chart render guardrail skipped: native chart extension unavailable in this environment.')
 
     return 0
 
