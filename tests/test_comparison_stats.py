@@ -475,6 +475,8 @@ def test_pairwise_native_full_path_accepts_list_and_ndarray_grouped_values(monke
 
 def test_comparison_native_wrapper_normalizes_list_and_ndarray_inputs_equivalently(monkeypatch):
     captured_bootstrap_groups = []
+    captured_bootstrap_batch_groups = []
+    captured_bootstrap_batch_pairs = []
     captured_pairwise_groups = []
 
     def _stub_bootstrap(effect_kernel, groups, level, iterations, seed):
@@ -487,7 +489,14 @@ def test_comparison_native_wrapper_normalizes_list_and_ndarray_inputs_equivalent
         captured_pairwise_groups.append(groups)
         return [{'group_a': 'A', 'group_b': 'B', 'p_value': 0.5, 'effect_size': 0.0, 'adjusted_p_value': 0.5, 'significant': False, 'test_used': 'Student t-test'}]
 
+    def _stub_bootstrap_batch(effect_kernel, groups, pairs, level, iterations, seed):
+        del effect_kernel, level, iterations, seed
+        captured_bootstrap_batch_groups.append(groups)
+        captured_bootstrap_batch_pairs.append(pairs)
+        return [(0.2, 0.8) for _ in pairs]
+
     monkeypatch.setattr(comparison_stats_native, '_native_bootstrap_percentile_ci', _stub_bootstrap)
+    monkeypatch.setattr(comparison_stats_native, '_native_bootstrap_percentile_ci_batch', _stub_bootstrap_batch)
     monkeypatch.setattr(comparison_stats_native, '_native_pairwise_stats', _stub_pairwise)
     monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'native')
     monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'native')
@@ -532,16 +541,75 @@ def test_comparison_native_wrapper_normalizes_list_and_ndarray_inputs_equivalent
     )
     assert rows_from_lists == rows_from_arrays
 
+    batch_from_lists = comparison_stats_native.bootstrap_percentile_ci_batch_native(
+        effect_kernel='cohen_d',
+        groups=list_groups,
+        pairs=[(0, 1)],
+        level=0.95,
+        iterations=50,
+        seed=7,
+    )
+    batch_from_arrays = comparison_stats_native.bootstrap_percentile_ci_batch_native(
+        effect_kernel='cohen_d',
+        groups=ndarray_groups,
+        pairs=[(0, 1)],
+        level=0.95,
+        iterations=50,
+        seed=7,
+    )
+    assert batch_from_lists == batch_from_arrays
+
     assert captured_bootstrap_groups[1][0] is ndarray_groups[0]
     assert captured_bootstrap_groups[1][1] is ndarray_groups[1]
     assert captured_pairwise_groups[1][0] is ndarray_groups[0]
     assert captured_pairwise_groups[1][1] is ndarray_groups[1]
+    assert captured_bootstrap_batch_groups[1][0] is ndarray_groups[0]
+    assert captured_bootstrap_batch_groups[1][1] is ndarray_groups[1]
+    assert captured_bootstrap_batch_pairs[0] == [(0, 1)]
+    assert captured_bootstrap_batch_pairs[1] == [(0, 1)]
 
-    for call_groups in captured_bootstrap_groups + captured_pairwise_groups:
+    for call_groups in captured_bootstrap_groups + captured_bootstrap_batch_groups + captured_pairwise_groups:
         for group in call_groups:
             assert isinstance(group, np.ndarray)
             assert group.dtype == np.float64
             assert group.flags['C_CONTIGUOUS']
+
+
+def test_pairwise_effect_ci_batch_native_and_python_parity(monkeypatch):
+    if not comparison_stats_native.native_backend_available():
+        monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'python')
+        monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
+        importlib.reload(comparison_stats_native)
+        return
+
+    grouped_values = {
+        'A': [0.1, 0.2, 0.3, 0.0, -0.1, 0.25],
+        'B': [0.4, 0.35, 0.5, 0.55, 0.6, 0.45],
+        'C': [1.0, 1.1, 0.9, 1.2, 1.15, 1.05],
+    }
+    config = ComparisonStatsConfig(include_effect_size_ci=True, ci_bootstrap_iterations=300, correction_method='holm')
+
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'python')
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
+    importlib.reload(comparison_stats_native)
+    python_rows = compute_metric_pairwise_stats('metric_ci_parity', grouped_values, config=config)
+
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'native')
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'native')
+    importlib.reload(comparison_stats_native)
+    native_rows = compute_metric_pairwise_stats('metric_ci_parity', grouped_values, config=config)
+
+    assert len(native_rows) == len(python_rows)
+    for py_row, native_row in zip(python_rows, native_rows):
+        assert native_row['group_a'] == py_row['group_a']
+        assert native_row['group_b'] == py_row['group_b']
+        assert native_row['significant'] == py_row['significant']
+        py_ci = py_row.get('effect_size_ci')
+        native_ci = native_row.get('effect_size_ci')
+        assert (py_ci is None) == (native_ci is None)
+        if py_ci is not None and native_ci is not None:
+            assert math.isclose(native_ci[0], py_ci[0], rel_tol=3e-2, abs_tol=3e-2)
+            assert math.isclose(native_ci[1], py_ci[1], rel_tol=3e-2, abs_tol=3e-2)
 
 
 def test_bootstrap_ci_benchmark_by_group_count_and_iterations(monkeypatch):

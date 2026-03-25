@@ -333,6 +333,89 @@ fn bootstrap_percentile_ci(
 }
 
 #[pyfunction]
+#[pyo3(signature = (effect_kernel, groups, pairs, level, iterations, seed))]
+fn bootstrap_percentile_ci_batch(
+    effect_kernel: &str,
+    groups: Vec<PyReadonlyArray1<'_, f64>>,
+    pairs: Vec<(usize, usize)>,
+    level: f64,
+    iterations: usize,
+    seed: u64,
+) -> PyResult<Vec<Option<(f64, f64)>>> {
+    if !(0.0 < level && level < 1.0) {
+        return Err(PyValueError::new_err("level must be between 0 and 1"));
+    }
+    let groups: Vec<Vec<f64>> = groups
+        .into_iter()
+        .map(|group| {
+            group
+                .as_slice()
+                .map_err(|_| PyValueError::new_err("groups must be contiguous float64 arrays"))
+                .map(|values| values.to_vec())
+        })
+        .collect::<PyResult<Vec<Vec<f64>>>>()?;
+
+    if groups.is_empty() {
+        return Ok(vec![None; pairs.len()]);
+    }
+
+    for &(left, right) in &pairs {
+        if left >= groups.len() || right >= groups.len() {
+            return Err(PyValueError::new_err("pair index out of range"));
+        }
+        if left == right {
+            return Err(PyValueError::new_err("pair indices must be different"));
+        }
+    }
+
+    if iterations == 0 || groups.iter().any(|g| g.is_empty()) {
+        return Ok(vec![None; pairs.len()]);
+    }
+
+    let mut out: Vec<Option<(f64, f64)>> = Vec::with_capacity(pairs.len());
+    for &(left, right) in &pairs {
+        let pair_groups: [&[f64]; 2] = [groups[left].as_slice(), groups[right].as_slice()];
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut estimates: Vec<f64> = Vec::with_capacity(iterations);
+
+        for _ in 0..iterations.max(1) {
+            let sampled_groups: Vec<Vec<f64>> = pair_groups
+                .iter()
+                .map(|group| {
+                    (0..group.len())
+                        .map(|_| {
+                            let idx = rng.gen_range(0..group.len());
+                            group[idx]
+                        })
+                        .collect::<Vec<f64>>()
+                })
+                .collect();
+            let sampled_group_refs: Vec<&[f64]> = sampled_groups.iter().map(Vec::as_slice).collect();
+
+            if let Some(estimate) = evaluate_kernel(effect_kernel, &sampled_group_refs) {
+                if estimate.is_finite() {
+                    estimates.push(estimate);
+                }
+            }
+        }
+
+        if estimates.is_empty() {
+            out.push(None);
+            continue;
+        }
+        estimates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let lower_q = ((1.0 - level) / 2.0) * 100.0;
+        let upper_q = (1.0 - (1.0 - level) / 2.0) * 100.0;
+        out.push(Some((
+            percentile_linear(&estimates, lower_q),
+            percentile_linear(&estimates, upper_q),
+        )));
+    }
+
+    Ok(out)
+}
+
+#[pyfunction]
 #[pyo3(signature = (labels, groups, alpha, correction_method, non_parametric, equal_var))]
 fn pairwise_stats(
     py: Python<'_>,
@@ -406,6 +489,7 @@ fn pairwise_stats(
 #[pymodule]
 fn _metroliza_comparison_stats_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bootstrap_percentile_ci, m)?)?;
+    m.add_function(wrap_pyfunction!(bootstrap_percentile_ci_batch, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_stats, m)?)?;
     Ok(())
 }
