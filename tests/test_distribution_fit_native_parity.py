@@ -4,7 +4,7 @@ from unittest import mock
 from pathlib import Path
 
 import numpy as np
-from scipy.stats import gamma, norm
+from scipy.stats import gamma, lognorm, norm, weibull_min
 
 import modules.distribution_fit_native as native_bridge
 import modules.distribution_fit_service as service
@@ -177,6 +177,12 @@ class TestDistributionFitNativeParity(unittest.TestCase):
             elif distribution == 'gamma':
                 ad_py = service._ad_statistic(np.asarray(sample, dtype=float), lambda x: gamma.cdf(x, *params))
                 ks_py = service.kstest(sample, gamma.cdf, args=params).statistic
+            elif distribution == 'weibull_min':
+                ad_py = service._ad_statistic(np.asarray(sample, dtype=float), lambda x: weibull_min.cdf(x, *params))
+                ks_py = service.kstest(sample, weibull_min.cdf, args=params).statistic
+            elif distribution == 'lognorm':
+                ad_py = service._ad_statistic(np.asarray(sample, dtype=float), lambda x: lognorm.cdf(x, *params))
+                ks_py = service.kstest(sample, lognorm.cdf, args=params).statistic
             else:
                 self.fail(f"Unsupported distribution fixture: {distribution}")
 

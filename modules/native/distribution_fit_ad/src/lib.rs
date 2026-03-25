@@ -4,19 +4,49 @@ use pyo3::prelude::*;
 use rand::SeedableRng;
 use rand_distr::{Distribution, Gamma, Normal, Weibull};
 use rayon::prelude::*;
-use statrs::distribution::{ContinuousCDF, Normal as StatNormal};
+use statrs::distribution::{
+    ContinuousCDF, Gamma as StatGamma, LogNormal as StatLogNormal, Normal as StatNormal,
+    Weibull as StatWeibull,
+};
 
 const EPS: f64 = 1e-12;
 
 #[derive(Clone, Debug)]
 enum SupportedDistribution {
-    Norm { loc: f64, scale: f64 },
-    HalfNorm { loc: f64, scale: f64 },
-    FoldNorm { c: f64, loc: f64, scale: f64 },
-    Gamma { shape: f64, loc: f64, scale: f64 },
-    WeibullMin { shape: f64, loc: f64, scale: f64 },
-    LogNorm { sigma: f64, loc: f64, scale: f64 },
-    JohnsonSu { gamma: f64, delta: f64, loc: f64, scale: f64 },
+    Norm {
+        loc: f64,
+        scale: f64,
+    },
+    HalfNorm {
+        loc: f64,
+        scale: f64,
+    },
+    FoldNorm {
+        c: f64,
+        loc: f64,
+        scale: f64,
+    },
+    Gamma {
+        shape: f64,
+        loc: f64,
+        scale: f64,
+    },
+    WeibullMin {
+        shape: f64,
+        loc: f64,
+        scale: f64,
+    },
+    LogNorm {
+        sigma: f64,
+        loc: f64,
+        scale: f64,
+    },
+    JohnsonSu {
+        gamma: f64,
+        delta: f64,
+        loc: f64,
+        scale: f64,
+    },
 }
 
 impl SupportedDistribution {
@@ -70,87 +100,190 @@ impl SupportedDistribution {
             Self::JohnsonSu { delta, scale, .. } => *delta > 0.0 && *scale > 0.0,
         }
     }
+}
 
-    fn sample_one(&self, rng: &mut rand::rngs::StdRng) -> Option<f64> {
+#[derive(Clone)]
+enum RuntimeDistribution {
+    Norm {
+        cdf: StatNormal,
+        sampler: Normal<f64>,
+    },
+    HalfNorm {
+        loc: f64,
+        scale: f64,
+        standard_cdf: StatNormal,
+        sampler: Normal<f64>,
+    },
+    FoldNorm {
+        c: f64,
+        loc: f64,
+        scale: f64,
+        standard_cdf: StatNormal,
+        sampler: Normal<f64>,
+    },
+    Gamma {
+        loc: f64,
+        scale: f64,
+        unit_cdf: StatGamma,
+        sampler: Gamma<f64>,
+    },
+    WeibullMin {
+        loc: f64,
+        scale: f64,
+        unit_cdf: StatWeibull,
+        sampler: Weibull<f64>,
+    },
+    LogNorm {
+        loc: f64,
+        scale: f64,
+        standard_cdf: StatLogNormal,
+        sampler: Normal<f64>,
+    },
+    JohnsonSu {
+        gamma: f64,
+        delta: f64,
+        loc: f64,
+        scale: f64,
+        standard_cdf: StatNormal,
+        sampler: Normal<f64>,
+    },
+}
+
+impl RuntimeDistribution {
+    fn compile(dist: &SupportedDistribution) -> Option<Self> {
+        match dist {
+            SupportedDistribution::Norm { loc, scale } => Some(Self::Norm {
+                cdf: StatNormal::new(*loc, *scale).ok()?,
+                sampler: Normal::new(*loc, *scale).ok()?,
+            }),
+            SupportedDistribution::HalfNorm { loc, scale } => Some(Self::HalfNorm {
+                loc: *loc,
+                scale: *scale,
+                standard_cdf: StatNormal::new(0.0, 1.0).ok()?,
+                sampler: Normal::new(0.0, *scale).ok()?,
+            }),
+            SupportedDistribution::FoldNorm { c, loc, scale } => Some(Self::FoldNorm {
+                c: *c,
+                loc: *loc,
+                scale: *scale,
+                standard_cdf: StatNormal::new(0.0, 1.0).ok()?,
+                sampler: Normal::new(c * scale, *scale).ok()?,
+            }),
+            SupportedDistribution::Gamma { shape, loc, scale } => Some(Self::Gamma {
+                loc: *loc,
+                scale: *scale,
+                unit_cdf: StatGamma::new(*shape, 1.0).ok()?,
+                sampler: Gamma::new(*shape, *scale).ok()?,
+            }),
+            SupportedDistribution::WeibullMin { shape, loc, scale } => Some(Self::WeibullMin {
+                loc: *loc,
+                scale: *scale,
+                unit_cdf: StatWeibull::new(*shape, 1.0).ok()?,
+                sampler: Weibull::new(*scale, *shape).ok()?,
+            }),
+            SupportedDistribution::LogNorm { sigma, loc, scale } => Some(Self::LogNorm {
+                loc: *loc,
+                scale: *scale,
+                standard_cdf: StatLogNormal::new(0.0, *sigma).ok()?,
+                sampler: Normal::new(scale.ln(), *sigma).ok()?,
+            }),
+            SupportedDistribution::JohnsonSu {
+                gamma,
+                delta,
+                loc,
+                scale,
+            } => Some(Self::JohnsonSu {
+                gamma: *gamma,
+                delta: *delta,
+                loc: *loc,
+                scale: *scale,
+                standard_cdf: StatNormal::new(0.0, 1.0).ok()?,
+                sampler: Normal::new(0.0, 1.0).ok()?,
+            }),
+        }
+    }
+
+    fn sample_one(&self, rng: &mut rand::rngs::StdRng) -> f64 {
         match self {
-            Self::Norm { loc, scale } => {
-                let d = Normal::new(*loc, *scale).ok()?;
-                Some(d.sample(rng))
-            }
-            Self::HalfNorm { loc, scale } => {
-                let d = Normal::new(0.0, *scale).ok()?;
-                Some(loc + d.sample(rng).abs())
-            }
-            Self::FoldNorm { c, loc, scale } => {
-                let d = Normal::new(c * scale, *scale).ok()?;
-                Some(loc + d.sample(rng).abs())
-            }
-            Self::Gamma { shape, loc, scale } => {
-                let d = Gamma::new(*shape, *scale).ok()?;
-                Some(loc + d.sample(rng))
-            }
-            Self::WeibullMin { shape, loc, scale } => {
-                let d = Weibull::new(*scale, *shape).ok()?;
-                Some(loc + d.sample(rng))
-            }
-            Self::LogNorm { sigma, loc, scale } => {
-                let mu = scale.ln();
-                let d = Normal::new(mu, *sigma).ok()?;
-                Some(loc + d.sample(rng).exp())
-            }
+            Self::Norm { sampler, .. } => sampler.sample(rng),
+            Self::HalfNorm { loc, sampler, .. } => loc + sampler.sample(rng).abs(),
+            Self::FoldNorm { loc, sampler, .. } => loc + sampler.sample(rng).abs(),
+            Self::Gamma { loc, sampler, .. } => loc + sampler.sample(rng),
+            Self::WeibullMin { loc, sampler, .. } => loc + sampler.sample(rng),
+            Self::LogNorm { loc, sampler, .. } => loc + sampler.sample(rng).exp(),
             Self::JohnsonSu {
                 gamma,
                 delta,
                 loc,
                 scale,
+                sampler,
+                ..
             } => {
-                let d = Normal::new(0.0, 1.0).ok()?;
-                let z = d.sample(rng);
+                let z = sampler.sample(rng);
                 let x = ((z - gamma) / delta).sinh();
-                Some(loc + scale * x)
+                loc + scale * x
             }
         }
     }
 
     fn cdf(&self, x: f64) -> f64 {
         match self {
-            Self::Norm { loc, scale } => {
-                let d = StatNormal::new(*loc, *scale).unwrap();
-                d.cdf(x)
-            }
-            Self::HalfNorm { loc, scale } => {
+            Self::Norm { cdf, .. } => cdf.cdf(x),
+            Self::HalfNorm {
+                loc,
+                scale,
+                standard_cdf,
+                ..
+            } => {
                 if x <= *loc {
                     return 0.0;
                 }
                 let z = (x - loc) / scale;
-                let standard = StatNormal::new(0.0, 1.0).unwrap();
-                (2.0 * standard.cdf(z) - 1.0).clamp(0.0, 1.0)
+                (2.0 * standard_cdf.cdf(z) - 1.0).clamp(0.0, 1.0)
             }
-            Self::FoldNorm { c, loc, scale } => {
+            Self::FoldNorm {
+                c,
+                loc,
+                scale,
+                standard_cdf,
+                ..
+            } => {
                 if x <= *loc {
                     return 0.0;
                 }
                 let z = (x - loc) / scale;
-                let standard = StatNormal::new(0.0, 1.0).unwrap();
-                (standard.cdf(z - c) - standard.cdf(-z - c)).clamp(0.0, 1.0)
+                (standard_cdf.cdf(z - c) - standard_cdf.cdf(-z - c)).clamp(0.0, 1.0)
             }
-            Self::Gamma { shape, loc, scale } => {
+            Self::Gamma {
+                loc,
+                scale,
+                unit_cdf,
+                ..
+            } => {
                 if x <= *loc {
                     return 0.0;
                 }
                 let shifted = (x - loc) / scale;
-                let d = statrs::distribution::Gamma::new(*shape, 1.0).unwrap();
-                d.cdf(shifted)
+                unit_cdf.cdf(shifted)
             }
-            Self::WeibullMin { shape, loc, scale } => {
+            Self::WeibullMin {
+                loc,
+                scale,
+                unit_cdf,
+                ..
+            } => {
                 if x <= *loc {
                     return 0.0;
                 }
                 let shifted = (x - loc) / scale;
-                let d = statrs::distribution::Weibull::new(*shape, 1.0).unwrap();
-                d.cdf(shifted)
+                unit_cdf.cdf(shifted)
             }
-            Self::LogNorm { sigma, loc, scale } => {
+            Self::LogNorm {
+                loc,
+                scale,
+                standard_cdf,
+                ..
+            } => {
                 if x <= *loc {
                     return 0.0;
                 }
@@ -158,41 +291,45 @@ impl SupportedDistribution {
                 if shifted <= 0.0 {
                     return 0.0;
                 }
-                let d = statrs::distribution::LogNormal::new(0.0, *sigma).unwrap();
-                d.cdf(shifted)
+                standard_cdf.cdf(shifted)
             }
             Self::JohnsonSu {
                 gamma,
                 delta,
                 loc,
                 scale,
+                standard_cdf,
+                ..
             } => {
                 let y = (x - loc) / scale;
                 let transformed = gamma + delta * y.asinh();
-                let standard = StatNormal::new(0.0, 1.0).unwrap();
-                standard.cdf(transformed)
+                standard_cdf.cdf(transformed)
             }
         }
     }
 }
 
-fn ad_statistic(sample: &mut [f64], dist: &SupportedDistribution) -> Option<f64> {
+fn ad_statistic(sample: &mut [f64], dist: &RuntimeDistribution) -> Option<f64> {
     if sample.is_empty() {
         return None;
     }
     sample.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = sample.len() as f64;
+    let probabilities: Vec<f64> = sample
+        .iter()
+        .map(|value| dist.cdf(*value).clamp(EPS, 1.0 - EPS))
+        .collect();
+
     let mut sum = 0.0;
-    for (i, value) in sample.iter().enumerate() {
+    for (i, p) in probabilities.iter().enumerate() {
         let idx = (i + 1) as f64;
-        let p = dist.cdf(*value).clamp(EPS, 1.0 - EPS);
-        let rp = (1.0 - dist.cdf(sample[sample.len() - 1 - i])).clamp(EPS, 1.0);
+        let rp = (1.0 - probabilities[sample.len() - 1 - i]).clamp(EPS, 1.0);
         sum += (2.0 * idx - 1.0) * (p.ln() + rp.ln());
     }
     Some(-n - (sum / n))
 }
 
-fn ks_statistic(sample: &[f64], dist: &SupportedDistribution) -> Option<f64> {
+fn ks_statistic(sample: &[f64], dist: &RuntimeDistribution) -> Option<f64> {
     if sample.is_empty() {
         return None;
     }
@@ -229,7 +366,7 @@ fn iteration_seed(base_seed: u64, iteration_index: usize) -> u64 {
 }
 
 fn run_ad_monte_carlo(
-    dist: &SupportedDistribution,
+    dist: &RuntimeDistribution,
     sample_size: usize,
     observed_stat: f64,
     iterations: usize,
@@ -238,12 +375,13 @@ fn run_ad_monte_carlo(
     let (exceed_count, valid_trials) = (0..iterations)
         .into_par_iter()
         .map(|iteration_index| {
-            let mut rng = rand::rngs::StdRng::seed_from_u64(iteration_seed(resolved_seed, iteration_index));
+            let mut rng =
+                rand::rngs::StdRng::seed_from_u64(iteration_seed(resolved_seed, iteration_index));
             let mut simulated = Vec::with_capacity(sample_size);
 
             for _ in 0..sample_size {
                 match dist.sample_one(&mut rng) {
-                    Some(value) if value.is_finite() => simulated.push(value),
+                    value if value.is_finite() => simulated.push(value),
                     _ => return (0usize, 0usize),
                 }
             }
@@ -259,7 +397,10 @@ fn run_ad_monte_carlo(
                 (0usize, 1usize)
             }
         })
-        .reduce(|| (0usize, 0usize), |left, right| (left.0 + right.0, left.1 + right.1));
+        .reduce(
+            || (0usize, 0usize),
+            |left, right| (left.0 + right.0, left.1 + right.1),
+        );
 
     if valid_trials == 0 {
         return (None, 0);
@@ -284,7 +425,9 @@ fn compute_ad_ks_statistics(
         .map_err(|_| PyValueError::new_err("sample_values must be a contiguous float64 array"))?;
 
     let dist = SupportedDistribution::from_name_and_params(distribution, &fitted_params)
-        .ok_or_else(|| PyValueError::new_err("Unsupported distribution identifier or invalid parameter count"))?;
+        .ok_or_else(|| {
+            PyValueError::new_err("Unsupported distribution identifier or invalid parameter count")
+        })?;
 
     if !dist.params_valid() {
         return Err(PyValueError::new_err("Invalid distribution parameters"));
@@ -297,11 +440,13 @@ fn compute_ad_ks_statistics(
     if sample_values.iter().any(|v| !v.is_finite()) {
         return Err(PyValueError::new_err("sample_values must be finite"));
     }
+    let runtime_dist = RuntimeDistribution::compile(&dist)
+        .ok_or_else(|| PyValueError::new_err("Invalid distribution parameters"))?;
 
     let mut ad_sample = sample_values.to_vec();
-    let ad = ad_statistic(&mut ad_sample, &dist)
+    let ad = ad_statistic(&mut ad_sample, &runtime_dist)
         .ok_or_else(|| PyValueError::new_err("Unable to compute Anderson-Darling statistic"))?;
-    let ks = ks_statistic(&sample_values, &dist)
+    let ks = ks_statistic(&sample_values, &runtime_dist)
         .ok_or_else(|| PyValueError::new_err("Unable to compute Kolmogorov-Smirnov statistic"))?;
     Ok((ad, ks))
 }
@@ -329,16 +474,20 @@ fn estimate_ad_pvalue_monte_carlo(
         .map_err(|_| PyValueError::new_err("fitted_params must be a contiguous float64 array"))?;
 
     let dist = SupportedDistribution::from_name_and_params(distribution, &fitted_params)
-        .ok_or_else(|| PyValueError::new_err("Unsupported distribution identifier or invalid parameter count"))?;
+        .ok_or_else(|| {
+            PyValueError::new_err("Unsupported distribution identifier or invalid parameter count")
+        })?;
 
     if !dist.params_valid() {
         return Ok((None, 0));
     }
+    let runtime_dist = RuntimeDistribution::compile(&dist)
+        .ok_or_else(|| PyValueError::new_err("Invalid distribution parameters"))?;
 
     let resolved_seed = seed.unwrap_or_else(rand::random::<u64>);
     let result = py.allow_threads(|| {
         run_ad_monte_carlo(
-            &dist,
+            &runtime_dist,
             sample_size,
             observed_stat,
             iterations,
