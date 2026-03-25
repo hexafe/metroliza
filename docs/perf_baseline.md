@@ -71,6 +71,9 @@ Notes:
 Checked-in baseline medians are stored in:
 - `docs/perf_baseline_snapshot.json`
 
+Baseline provenance:
+- The snapshot should be captured from canonical runs on the same CI runner class (`ubuntu-latest`) used by the trend job to avoid host-to-host skew.
+
 Update process:
 1. Run canonical warmup + measured benchmark sequence on CI runner class.
 2. Validate parity and stability.

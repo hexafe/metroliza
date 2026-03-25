@@ -1,22 +1,37 @@
 {
-  "generated_at": "2026-03-24T00:00:00Z",
+  "generated_at": "2026-03-25T00:00:00Z",
   "version": 1,
-  "notes": "Initial checked-in benchmark baseline snapshot for non-blocking CI trend monitoring.",
+  "notes": "Baseline refreshed from GitHub Actions ubuntu-latest canonical perf run medians (2026-03-25).",
   "scenarios": {
     "pdf_parse_path": {
-      "median_wall_time_s": 0.01672
+      "median_wall_time_s": 0.00703
     },
     "cmm_parser_backend_compare": {
-      "median_wall_time_s": 0.07211
+      "median_wall_time_s": 0.370339
+    },
+    "excel_export_path": {
+      "median_wall_time_s": 0.174592
+    },
+    "excel_export_high_header_cardinality_compare": {
+      "median_wall_time_s": 1.601084
+    },
+    "csv_summary_export_path": {
+      "median_wall_time_s": 0.096793
+    },
+    "distribution_fit_monte_carlo_path": {
+      "median_wall_time_s": 1.859312
     },
     "distribution_fit_batch_compare": {
-      "median_wall_time_s": 11.70270
+      "median_wall_time_s": 25.878629
+    },
+    "group_preprocess_mixed_types_compare": {
+      "median_wall_time_s": 0.006922
     },
     "comparison_stats_ci_flow": {
-      "median_wall_time_s": 0.41722
+      "median_wall_time_s": 1.028067
     },
     "comparison_stats_pairwise_flow": {
-      "median_wall_time_s": 0.03014
+      "median_wall_time_s": 0.024544
     }
   }
 }
