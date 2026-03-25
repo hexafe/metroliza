@@ -2578,7 +2578,6 @@ class TestExportBackendSmoke(unittest.TestCase):
 
     def test_summary_sheet_fill_histogram_prefers_native_path_when_backend_is_native(self):
         import pandas as pd
-        import modules.export_data_thread as export_thread_module
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
         class _FakeSummaryWorksheet:
