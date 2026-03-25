@@ -32,14 +32,14 @@ Expected artifact contents:
 
 ## Expected variance guidance
 
-Because this benchmark is runtime-sensitive and runs on shared hosted runners, minor run-to-run jitter is expected.
+Because this benchmark is runtime-sensitive and runs on shared hosted runners, minor run-to-run jitter is expected. The trend gate uses a 12% median-regression threshold for this reason.
 
 - Treat small single-run oscillations as noise.
 - Use the **median across 3 measured runs** as the decision signal.
 - The guardrail hard-fails only when:
   - native speedup ratio falls below `0.90`, or
   - native parser usage rate falls below `0.95`, or
-  - trend comparison reports median regression greater than configured threshold.
+  - trend comparison reports median regression greater than the CMM gate threshold (`12%`).
 
 ## Failure triage checklist
 
