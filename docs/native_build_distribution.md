@@ -6,7 +6,7 @@ This project ships optional native extension modules:
 - `_metroliza_group_stats_native` (`modules/native/group_stats_coercion`)
 - `_metroliza_comparison_stats_native` (`modules/native/comparison_stats_bootstrap`)
 - `_metroliza_distribution_fit_native` (`modules/native/distribution_fit_ad`)
-- `_metroliza_chart_native` (`modules/native/chart_renderer`) **not shipped yet** (experimental placeholder only)
+- `_metroliza_chart_native` (`modules/native/chart_renderer`)
 
 Each extension is optional at runtime. The app must keep deterministic Python-path behavior when native binaries are unavailable.
 
@@ -31,6 +31,7 @@ Native crate manifests:
 - `modules/native/group_stats_coercion/Cargo.toml`
 - `modules/native/comparison_stats_bootstrap/Cargo.toml`
 - `modules/native/distribution_fit_ad/Cargo.toml`
+- `modules/native/chart_renderer/Cargo.toml`
 
 Local developer commands:
 
@@ -40,12 +41,14 @@ python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --r
 python -m maturin build --manifest-path modules/native/group_stats_coercion/Cargo.toml --release
 python -m maturin build --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml --release
 python -m maturin build --manifest-path modules/native/distribution_fit_ad/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml --release
 
 # install extension in editable/dev mode
 python -m maturin develop --manifest-path modules/native/cmm_parser/Cargo.toml
 python -m maturin develop --manifest-path modules/native/group_stats_coercion/Cargo.toml
 python -m maturin develop --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml
 python -m maturin develop --manifest-path modules/native/distribution_fit_ad/Cargo.toml
+python -m maturin develop --manifest-path modules/native/chart_renderer/Cargo.toml
 ```
 
 CI uses `cibuildwheel` and `maturin` to:
@@ -80,7 +83,7 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 ### Chart renderer (`modules/chart_renderer.py`)
 
 - Backend selection is controlled by `METROLIZA_CHART_RENDERER_BACKEND` (`auto`/`native`/`matplotlib`).
-- Native chart rendering is currently **experimental and not shipped** in release artifacts.
+- Native chart rendering is shipped when `_metroliza_chart_native` is available in the packaged build environment.
 - If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
 - `auto` uses native only when the extension is present; otherwise it defaults to matplotlib.
 
@@ -100,7 +103,7 @@ Runtime fallback from native execution errors in forced-`native` modes is intent
 
 `packaging/metroliza_onefile.spec` includes:
 
-- `hiddenimports=['_metroliza_cmm_native']`
+- `hiddenimports=['_metroliza_cmm_native', '_metroliza_chart_native']`
 - Windows Python runtime DLL collection (`libffi`, `python3*.dll`, `vcruntime`, `msvcp`) so onefile startup does not depend on a fragile ambient interpreter layout
 - PyMuPDF/`fitz` data files, native libraries, and discovered submodules so packaged PDF parsing survives frozen builds
 
@@ -141,6 +144,7 @@ PyInstaller is the closest current path to a turnkey single-file distribution fo
 - prints candidate diagnostics, selected compiler, selection reason, and whether an auto-install attempt ran before the build starts
 - can try an opt-in compiler install flow (`winget` on Windows, conventional package-manager flows on Linux/macOS when available), otherwise prints exact install guidance
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
+- auto-adds `--include-module=_metroliza_chart_native` only when `_metroliza_chart_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
 - explicitly includes `modules.cmm_report_parser`, `modules.report_parser_factory`, and `modules.pdf_backend` because the rc1 parser/plugin refactor introduced dynamic paths that packagers may otherwise under-detect
 - requires PyMuPDF to be importable in the build environment and fails closed by default when it is not available
@@ -185,6 +189,7 @@ The native-artifacts CI job must validate all of the following:
    - `modules.group_stats_native` (`coerce_sequence_to_float64`)
    - `modules.comparison_stats_native` (`bootstrap_percentile_ci_native`, `pairwise_stats_native`)
    - `modules.distribution_fit_native` (`compute_ad_ks_statistics_native`, `estimate_ad_pvalue_monte_carlo_native`)
+   - `modules.chart_renderer` (native histogram renderer path via `build_chart_renderer`)
 4. fallback behavior is explicitly smoke-validated for intentionally absent extensions (mocked-unavailable symbols):
    - CMM parser path continues in Python when not forced to native,
    - comparison/distribution wrappers return `None` in availability-driven fallback mode,
