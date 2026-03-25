@@ -103,6 +103,7 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 
 - [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
+- [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage visibility output from `unit-tests` is reviewed (job log summary and `unit-test-coverage` artifact `coverage.xml`) as RC confidence evidence; this is informational and not a blocking PR check. *(Owner: Release owner/QA)*
 - [ ] Any optional manual smoke evidence (if executed) is linked from release notes or tracker (`packaging-smoke`, `google-conversion-smoke`). *(Owner: Release owner)*
 
