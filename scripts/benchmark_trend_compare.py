@@ -32,6 +32,11 @@ def main() -> int:
     parser.add_argument('--runs', nargs='+', required=True, help='Benchmark JSON files from measured runs.')
     parser.add_argument('--output-json', required=True, help='Path to write trend comparison JSON.')
     parser.add_argument('--max-median-regression-pct', type=float, default=10.0)
+    parser.add_argument(
+        '--scenarios',
+        nargs='+',
+        help='Optional scenario keys to compare. When provided, only these scenarios are evaluated.',
+    )
     args = parser.parse_args()
 
     baseline = json.loads(Path(args.baseline).read_text(encoding='utf-8'))
@@ -47,7 +52,12 @@ def main() -> int:
     rows: list[dict] = []
     failures: list[str] = []
 
-    for scenario_name in sorted(set(run_times.keys()) | set(baseline_times.keys())):
+    scenario_names = sorted(set(run_times.keys()) | set(baseline_times.keys()))
+    if args.scenarios:
+        requested = {name.strip() for name in args.scenarios if str(name).strip()}
+        scenario_names = [name for name in scenario_names if name in requested]
+
+    for scenario_name in scenario_names:
         observed_median = _median(run_times.get(scenario_name, []))
         baseline_median = float(baseline_times.get(scenario_name, 0.0))
         if baseline_median <= 0:

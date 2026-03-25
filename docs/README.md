@@ -56,6 +56,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/open_testing_runbook.md` — open-testing execution runbook and evidence expectations.
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.
 - `release_checks/google_conversion_smoke.md` — required release smoke evidence log for Google conversion checks.
+- `release_checks/cmm_parser_perf_guardrail.md` — CMM parser performance guardrail policy, variance expectations, and CI-failure triage steps.
 
 Supplemental tutorial/playbook docs (how-to guidance that supports, but does not override, canonical docs):
 

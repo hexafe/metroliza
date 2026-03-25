@@ -857,38 +857,62 @@ def main() -> int:
     parser.add_argument('--enforce-cmm-parser-guardrail', action='store_true')
     parser.add_argument('--cmm-native-min-speedup-ratio', type=float, default=0.9)
     parser.add_argument('--cmm-native-min-usage-rate', type=float, default=0.95)
+    parser.add_argument(
+        '--scenarios',
+        nargs='+',
+        choices=(
+            'pdf_parse_path',
+            'excel_export_path',
+            'excel_export_write_vs_shape_path',
+            'excel_export_high_header_cardinality_compare',
+            'csv_summary_export_path',
+            'distribution_fit_monte_carlo_path',
+            'group_preprocess_mixed_types_compare',
+            'cmm_parser_backend_compare',
+        ),
+        help='Optional list of scenario keys to run. Defaults to running all scenarios.',
+    )
     args = parser.parse_args()
+
+    scenario_runners = {
+        'pdf_parse_path': lambda temp_path: benchmark_parse_path(temp_path, pdf_count=args.pdf_count),
+        'excel_export_path': lambda temp_path: benchmark_excel_export_path(
+            temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report
+        ),
+        'excel_export_write_vs_shape_path': lambda temp_path: benchmark_export_write_vs_shape_path(
+            temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report
+        ),
+        'excel_export_high_header_cardinality_compare': lambda temp_path: benchmark_export_high_header_cardinality_path(
+            temp_path,
+            report_count=max(args.report_count, 100),
+            headers_per_report=max(args.headers_per_report, 64),
+        ),
+        'csv_summary_export_path': lambda temp_path: benchmark_csv_summary_path(
+            temp_path, row_count=args.csv_rows, data_columns=args.csv_columns
+        ),
+        'distribution_fit_monte_carlo_path': lambda temp_path: benchmark_distribution_fit_monte_carlo_path(
+            temp_path,
+            group_count=args.fit_group_count,
+            sample_size=args.fit_sample_size,
+            monte_carlo_samples=max(1, args.fit_monte_carlo_samples),
+        ),
+        'group_preprocess_mixed_types_compare': lambda temp_path: benchmark_group_preprocess_mixed_types_path(
+            temp_path,
+            group_count=max(1, args.group_preprocess_groups),
+            values_per_group=max(10, args.group_preprocess_values),
+        ),
+        'cmm_parser_backend_compare': lambda temp_path: benchmark_cmm_parser_backend_compare(
+            temp_path,
+            report_count=max(1, args.cmm_bench_report_count),
+            measurements_per_report=max(1, args.cmm_bench_measurements_per_report),
+            benchmark_mode=args.cmm_benchmark_mode,
+        ),
+    }
+    selected_scenarios = args.scenarios or list(scenario_runners.keys())
 
     with tempfile.TemporaryDirectory(prefix='metroliza-bench-') as temp_dir:
         temp_path = Path(temp_dir)
-        results = [
-            benchmark_parse_path(temp_path, pdf_count=args.pdf_count),
-            benchmark_excel_export_path(temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report),
-            benchmark_export_write_vs_shape_path(temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report),
-            benchmark_export_high_header_cardinality_path(
-                temp_path,
-                report_count=max(args.report_count, 100),
-                headers_per_report=max(args.headers_per_report, 64),
-            ),
-            benchmark_csv_summary_path(temp_path, row_count=args.csv_rows, data_columns=args.csv_columns),
-            benchmark_distribution_fit_monte_carlo_path(
-                temp_path,
-                group_count=args.fit_group_count,
-                sample_size=args.fit_sample_size,
-                monte_carlo_samples=max(1, args.fit_monte_carlo_samples),
-            ),
-            benchmark_group_preprocess_mixed_types_path(
-                temp_path,
-                group_count=max(1, args.group_preprocess_groups),
-                values_per_group=max(10, args.group_preprocess_values),
-            ),
-            benchmark_cmm_parser_backend_compare(
-                temp_path,
-                report_count=max(1, args.cmm_bench_report_count),
-                measurements_per_report=max(1, args.cmm_bench_measurements_per_report),
-                benchmark_mode=args.cmm_benchmark_mode,
-            ),
-        ]
+        results = [scenario_runners[scenario](temp_path) for scenario in selected_scenarios]
 
     payload = {
         'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
