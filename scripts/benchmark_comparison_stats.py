@@ -110,6 +110,11 @@ def main() -> int:
         repeats=max(1, args.marshal_repeats),
         seed=args.seed + 17,
     )
+    marshaling_seconds = float(marshaling['ndarray_input_seconds'])
+    native_compute_seconds = float(ci_native + pairwise_native) if (ci_native > 0 or pairwise_native > 0) else float(ci_python + pairwise_python)
+    baseline_total_seconds = marshaling_seconds + native_compute_seconds
+    marshaling_share = (marshaling_seconds / baseline_total_seconds) if baseline_total_seconds > 0 else 0.0
+    compute_share = (native_compute_seconds / baseline_total_seconds) if baseline_total_seconds > 0 else 0.0
 
     payload = {
         'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
@@ -156,7 +161,13 @@ def main() -> int:
             {
                 'scenario': 'comparison_stats_native_marshaling',
                 'wall_time_s': float(marshaling['list_input_seconds'] + marshaling['ndarray_input_seconds']),
-                'stage_timings_s': marshaling,
+                'stage_timings_s': {
+                    **marshaling,
+                    'marshaling_only_seconds': marshaling_seconds,
+                    'compute_seconds': native_compute_seconds,
+                    'marshaling_only_share': float(marshaling_share),
+                    'compute_share': float(compute_share),
+                },
                 'input_metrics': {
                     'rows': int(row_count),
                     'headers': int(args.groups),
@@ -176,6 +187,8 @@ def main() -> int:
     print(f"comparison_stats_marshal_list_seconds={marshaling['list_input_seconds']:.6f}")
     print(f"comparison_stats_marshal_ndarray_seconds={marshaling['ndarray_input_seconds']:.6f}")
     print(f"comparison_stats_marshal_speedup_ratio={marshaling['ndarray_vs_list_speedup_ratio']:.6f}")
+    print(f'comparison_stats_marshaling_only_share={marshaling_share:.6f}')
+    print(f'comparison_stats_compute_share={compute_share:.6f}')
 
     if args.output_json:
         output_path = Path(args.output_json)
