@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Literal, Sequence
 
 import numpy as np
 
@@ -35,10 +35,20 @@ def _runtime_pairwise_backend_choice() -> BackendChoice:
     return 'auto'
 
 
+def _normalize_native_groups(groups: Sequence[np.ndarray | list[float]]) -> list[np.ndarray]:
+    normalized: list[np.ndarray] = []
+    for group in groups:
+        if isinstance(group, np.ndarray) and group.dtype == np.float64 and group.flags['C_CONTIGUOUS']:
+            normalized.append(group)
+            continue
+        normalized.append(np.ascontiguousarray(np.asarray(group, dtype=np.float64)))
+    return normalized
+
+
 def bootstrap_percentile_ci_native(
     *,
     effect_kernel: str,
-    groups: list[list[float]],
+    groups: Sequence[np.ndarray | list[float]],
     level: float,
     iterations: int,
     seed: int,
@@ -52,10 +62,7 @@ def bootstrap_percentile_ci_native(
     if _native_bootstrap_percentile_ci is None:
         return None
 
-    normalized_groups = [
-        np.ascontiguousarray(np.asarray(group, dtype=np.float64))
-        for group in groups
-    ]
+    normalized_groups = _normalize_native_groups(groups)
 
     return _native_bootstrap_percentile_ci(
         str(effect_kernel),
@@ -69,7 +76,7 @@ def bootstrap_percentile_ci_native(
 def pairwise_stats_native(
     *,
     labels: list[str],
-    groups: list[list[float]],
+    groups: Sequence[np.ndarray | list[float]],
     alpha: float,
     correction_method: str,
     non_parametric: bool,
@@ -84,10 +91,7 @@ def pairwise_stats_native(
     if _native_pairwise_stats is None:
         return None
 
-    normalized_groups = [
-        np.ascontiguousarray(np.asarray(group, dtype=np.float64))
-        for group in groups
-    ]
+    normalized_groups = _normalize_native_groups(groups)
 
     rows = _native_pairwise_stats(
         [str(label) for label in labels],

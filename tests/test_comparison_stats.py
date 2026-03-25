@@ -430,6 +430,49 @@ def test_pairwise_native_and_python_parity_on_deterministic_edge_cases(monkeypat
             assert native_row['significant'] == py_row['significant']
 
 
+def test_pairwise_native_full_path_accepts_list_and_ndarray_grouped_values(monkeypatch):
+    if not comparison_stats_native.native_backend_available():
+        monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'python')
+        monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
+        importlib.reload(comparison_stats_native)
+        return
+
+    grouped_values_list = {
+        'A': [0.1, 0.2, 0.3, 0.4, 0.5],
+        'B': [0.4, 0.5, 0.6, 0.7, 0.8],
+        'C': [0.9, 1.0, 1.1, 1.2, 1.3],
+    }
+    grouped_values_ndarray = {
+        label: np.asarray(values, dtype=np.float64)
+        for label, values in grouped_values_list.items()
+    }
+
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'native')
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'native')
+    importlib.reload(comparison_stats_native)
+
+    config = ComparisonStatsConfig(include_effect_size_ci=True, ci_bootstrap_iterations=120, correction_method='holm')
+    rows_from_lists = compute_metric_pairwise_stats('metric_native_list', grouped_values_list, config=config)
+    rows_from_ndarrays = compute_metric_pairwise_stats('metric_native_ndarray', grouped_values_ndarray, config=config)
+
+    assert len(rows_from_lists) == len(rows_from_ndarrays)
+    for list_row, ndarray_row in zip(rows_from_lists, rows_from_ndarrays):
+        assert list_row['group_a'] == ndarray_row['group_a']
+        assert list_row['group_b'] == ndarray_row['group_b']
+        for key in ('test_used', 'pairwise_test_name', 'effect_type', 'pairwise_effect_type', 'omnibus_effect_type'):
+            assert list_row.get(key) == ndarray_row.get(key)
+        for key in ('p_value', 'adjusted_p_value', 'effect_size'):
+            list_value = list_row.get(key)
+            ndarray_value = ndarray_row.get(key)
+            if list_value is None or ndarray_value is None:
+                assert list_value == ndarray_value
+            else:
+                assert math.isclose(list_value, ndarray_value, rel_tol=1e-12, abs_tol=1e-12)
+        assert list_row.get('effect_size_ci') == ndarray_row.get('effect_size_ci')
+        assert list_row.get('omnibus_effect_size_ci') == ndarray_row.get('omnibus_effect_size_ci')
+        assert list_row['significant'] == ndarray_row['significant']
+
+
 def test_comparison_native_wrapper_normalizes_list_and_ndarray_inputs_equivalently(monkeypatch):
     captured_bootstrap_groups = []
     captured_pairwise_groups = []
@@ -488,6 +531,11 @@ def test_comparison_native_wrapper_normalizes_list_and_ndarray_inputs_equivalent
         equal_var=True,
     )
     assert rows_from_lists == rows_from_arrays
+
+    assert captured_bootstrap_groups[1][0] is ndarray_groups[0]
+    assert captured_bootstrap_groups[1][1] is ndarray_groups[1]
+    assert captured_pairwise_groups[1][0] is ndarray_groups[0]
+    assert captured_pairwise_groups[1][1] is ndarray_groups[1]
 
     for call_groups in captured_bootstrap_groups + captured_pairwise_groups:
         for group in call_groups:

@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
-from modules.comparison_stats_native import native_backend_available
+from modules.comparison_stats_native import _normalize_native_groups, native_backend_available
 
 
 def _build_fixture(*, group_count: int, samples_per_group: int, seed: int) -> dict[str, list[float]]:
@@ -49,6 +49,27 @@ def _run_pairwise_path(grouped_values: dict[str, list[float]]) -> float:
     return time.perf_counter() - start
 
 
+def _run_marshaling_benchmark(*, groups: int, samples: int, repeats: int, seed: int) -> dict[str, float]:
+    rng = np.random.default_rng(seed)
+    list_groups = [rng.normal(loc=i * 0.05, scale=1.0, size=samples).astype(float).tolist() for i in range(groups)]
+    ndarray_groups = [np.asarray(group, dtype=np.float64) for group in list_groups]
+
+    start = time.perf_counter()
+    for _ in range(max(1, repeats)):
+        _normalize_native_groups(list_groups)
+    list_seconds = time.perf_counter() - start
+
+    start = time.perf_counter()
+    for _ in range(max(1, repeats)):
+        _normalize_native_groups(ndarray_groups)
+    ndarray_seconds = time.perf_counter() - start
+
+    return {
+        'list_input_seconds': float(list_seconds),
+        'ndarray_input_seconds': float(ndarray_seconds),
+        'ndarray_vs_list_speedup_ratio': float((list_seconds / ndarray_seconds) if ndarray_seconds > 0 else 0.0),
+    }
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Benchmark comparison-stats CI and pairwise execution paths.')
     parser.add_argument('--groups', type=int, default=8)
@@ -57,6 +78,7 @@ def main() -> int:
     parser.add_argument('--ci-iterations', type=int, default=600)
     parser.add_argument('--ci-level', type=float, default=0.95)
     parser.add_argument('--output-json', help='Optional path to write machine-readable benchmark output JSON.')
+    parser.add_argument('--marshal-repeats', type=int, default=2000, help='Repetitions for native marshaling micro-benchmark.')
     args = parser.parse_args()
 
     grouped_values = _build_fixture(group_count=max(2, args.groups), samples_per_group=max(2, args.samples), seed=args.seed)
@@ -81,6 +103,13 @@ def main() -> int:
         os.environ['METROLIZA_COMPARISON_STATS_BACKEND'] = 'native'
         pairwise_native = _run_pairwise_path(grouped_values)
         pairwise_backend = 'native'
+
+    marshaling = _run_marshaling_benchmark(
+        groups=max(2, args.groups),
+        samples=max(2, args.samples),
+        repeats=max(1, args.marshal_repeats),
+        seed=args.seed + 17,
+    )
 
     payload = {
         'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
@@ -124,6 +153,17 @@ def main() -> int:
                     'pairwise_backend_used': pairwise_backend,
                 },
             },
+            {
+                'scenario': 'comparison_stats_native_marshaling',
+                'wall_time_s': float(marshaling['list_input_seconds'] + marshaling['ndarray_input_seconds']),
+                'stage_timings_s': marshaling,
+                'input_metrics': {
+                    'rows': int(row_count),
+                    'headers': int(args.groups),
+                    'chart_count': 0,
+                    'marshal_repeats': int(args.marshal_repeats),
+                },
+            },
         ],
     }
 
@@ -133,6 +173,9 @@ def main() -> int:
     print(f'comparison_stats_pairwise_python_seconds={pairwise_python:.6f}')
     if pairwise_native > 0:
         print(f'comparison_stats_pairwise_native_seconds={pairwise_native:.6f}')
+    print(f"comparison_stats_marshal_list_seconds={marshaling['list_input_seconds']:.6f}")
+    print(f"comparison_stats_marshal_ndarray_seconds={marshaling['ndarray_input_seconds']:.6f}")
+    print(f"comparison_stats_marshal_speedup_ratio={marshaling['ndarray_vs_list_speedup_ratio']:.6f}")
 
     if args.output_json:
         output_path = Path(args.output_json)
