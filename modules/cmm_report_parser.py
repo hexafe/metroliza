@@ -88,6 +88,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self.parse_backend_used = "unknown"
         self.persistence_backend_used = "unknown"
         self.stage_timings_s: dict[str, float] = {}
+        self._prepared_measurement_rows = None
 
     def open_database_and_check_filename(self):
         """Handle `open_database_and_check_filename` for `CMMReportParser`.
@@ -412,15 +413,9 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
             use_native_persistence = os.getenv("METROLIZA_CMM_NATIVE_PERSISTENCE", "0").strip() in {"1", "true", "yes", "on"}
 
-            normalized_rows = normalize_measurement_rows(
-                self.blocks_text,
-                reference=self.reference,
-                fileloc=self.file_path,
-                filename=self.file_name,
-                date=self.date,
-                sample_number=self.sample_number,
-                use_native=use_native_persistence,
-            )
+            normalize_start = perf_counter()
+            normalized_rows = self._normalized_rows_for_persistence(use_native=use_native_persistence)
+            self.stage_timings_s["normalize_runtime"] = perf_counter() - normalize_start
 
             db_write_start = perf_counter()
 
@@ -489,6 +484,48 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             return
         except Exception as e:
             self.log_and_exit(e)
+
+    def _normalized_rows_for_persistence(self, use_native=False):
+        if self._prepared_measurement_rows is not None:
+            return self._prepared_measurement_rows
+
+        return normalize_measurement_rows(
+            self.blocks_text,
+            reference=self.reference,
+            fileloc=self.file_path,
+            filename=self.file_name,
+            date=self.date,
+            sample_number=self.sample_number,
+            use_native=use_native,
+        )
+
+    def prepare_for_two_stage_pipeline(self):
+        prepare_start = perf_counter()
+        if not self.raw_text:
+            self.open_report()
+        if not self.blocks_text:
+            self.split_text_to_blocks()
+            self.add_tolerances()
+
+        use_native_persistence = os.getenv("METROLIZA_CMM_NATIVE_PERSISTENCE", "0").strip() in {"1", "true", "yes", "on"}
+        normalize_start = perf_counter()
+        self._prepared_measurement_rows = normalize_measurement_rows(
+            self.blocks_text,
+            reference=self.reference,
+            fileloc=self.file_path,
+            filename=self.file_name,
+            date=self.date,
+            sample_number=self.sample_number,
+            use_native=use_native_persistence,
+        )
+        self.stage_timings_s["normalize_runtime"] = perf_counter() - normalize_start
+        self.stage_timings_s["prepare_pipeline_runtime"] = perf_counter() - prepare_start
+
+    def persist_prepared_report(self):
+        if not self.blocks_text:
+            return self.open_database_and_check_filename()
+
+        return self.to_sqlite()
 
     def show_df(self):
         """Handle `show_df` for `CMMReportParser`.

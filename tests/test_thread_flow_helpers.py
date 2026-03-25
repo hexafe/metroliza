@@ -275,6 +275,105 @@ class TestParseHelpers(unittest.TestCase):
         self.assertEqual(persisted, ['a.pdf', 'b.pdf'])
         self.assertEqual(progress_updates, [(1, 3), (2, 3)])
 
+    def test_parse_new_reports_two_stage_duplicate_detection(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+                self.pdf_reference = 'R'
+                self.pdf_file_path = '/tmp'
+                self.pdf_file_name = str(report)
+                self.pdf_date = '2024-01-01'
+                self.pdf_sample_number = '1'
+                self.stage_timings_s = {}
+
+            def prepare_for_two_stage_pipeline(self):
+                return None
+
+        persisted = []
+        result = parse_new_reports(
+            ['a.pdf', 'b.pdf'],
+            {'R|/tmp|b.pdf|2024-01-01|1'},
+            parser_factory=DummyParser,
+            persist_report=lambda parser: persisted.append(parser.FILE_PATH),
+            enable_two_stage_pipeline=True,
+            worker_count=2,
+        )
+
+        self.assertEqual(result.parsed_files, 2)
+        self.assertEqual(persisted, ['a.pdf'])
+
+    def test_parse_new_reports_two_stage_honors_cancel(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+                self.pdf_reference = 'R'
+                self.pdf_file_path = '/tmp'
+                self.pdf_file_name = str(report)
+                self.pdf_date = '2024-01-01'
+                self.pdf_sample_number = report.replace('.pdf', '')
+                self.stage_timings_s = {}
+
+            def prepare_for_two_stage_pipeline(self):
+                return None
+
+        checks = {'count': 0}
+
+        def should_cancel():
+            checks['count'] += 1
+            return checks['count'] > 2
+
+        persisted = []
+        result = parse_new_reports(
+            ['a.pdf', 'b.pdf', 'c.pdf'],
+            set(),
+            parser_factory=DummyParser,
+            persist_report=lambda parser: persisted.append(parser.FILE_PATH),
+            should_cancel=should_cancel,
+            enable_two_stage_pipeline=True,
+            worker_count=2,
+        )
+
+        self.assertLessEqual(result.parsed_files, 2)
+        self.assertEqual(len(persisted), result.parsed_files)
+
+    def test_parse_new_reports_two_stage_deterministic_end_state_matches_sequential(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+                self.pdf_reference = 'R'
+                self.pdf_file_path = '/tmp'
+                self.pdf_file_name = str(report)
+                self.pdf_date = '2024-01-01'
+                self.pdf_sample_number = report.replace('.pdf', '')
+                self.stage_timings_s = {}
+
+            def prepare_for_two_stage_pipeline(self):
+                return None
+
+        reports = ['a.pdf', 'b.pdf', 'c.pdf']
+        persisted_sequential = []
+        fingerprints_sequential = set()
+        parse_new_reports(
+            reports,
+            fingerprints_sequential,
+            parser_factory=DummyParser,
+            persist_report=lambda parser: persisted_sequential.append(parser.FILE_PATH),
+        )
+
+        persisted_two_stage = []
+        fingerprints_two_stage = set()
+        parse_new_reports(
+            reports,
+            fingerprints_two_stage,
+            parser_factory=DummyParser,
+            persist_report=lambda parser: persisted_two_stage.append(parser.FILE_PATH),
+            enable_two_stage_pipeline=True,
+            worker_count=2,
+        )
+
+        self.assertEqual(set(persisted_two_stage), set(persisted_sequential))
+        self.assertEqual(fingerprints_two_stage, fingerprints_sequential)
+
     def test_parse_label_includes_multiline_progress_details(self):
         from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
