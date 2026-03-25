@@ -136,3 +136,36 @@ def test_backend_telemetry_snapshot_includes_persistence_counts(monkeypatch, tmp
     assert snapshot["persistence"]["python"] == 1
     assert snapshot["persistence"]["native"] == 0
     assert snapshot["persistence"]["python_rate"] == 1.0
+    assert snapshot["persistence_rows"]["python"] == 1
+    assert snapshot["persistence_rows"]["inserted_python"] == 1
+
+
+def test_backend_telemetry_snapshot_includes_normalization_counts(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CMM_PERSIST_BACKEND", "python")
+    parser = importlib.reload(cmm_native_parser)
+    parser.reset_backend_telemetry()
+
+    blocks = parser.parse_raw_lines_to_blocks(
+        [
+            "#ROW PARITY",
+            "DIM",
+            "D1 10 0.2 -0.2 10.03",
+            "#END",
+        ]
+    )
+    rows = parser.normalize_measurement_rows(
+        blocks,
+        reference="REF01",
+        fileloc="/tmp/reports",
+        filename="REF01_2024-01-02_123.pdf",
+        date="2024-01-02",
+        sample_number="123",
+        use_native=False,
+    )
+    snapshot = parser.get_backend_telemetry_snapshot()
+
+    assert len(rows) == 1
+    assert snapshot["normalize"]["python"] == 1
+    assert snapshot["normalize"]["native"] == 0
+    assert snapshot["normalize"]["rows_python"] == 1
+    assert snapshot["normalize"]["latency_python_s"] >= 0.0

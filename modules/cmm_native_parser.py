@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from threading import Lock
 from typing import Any, Literal, NamedTuple
 
@@ -23,13 +24,37 @@ except Exception:  # pragma: no cover - optional native module
 _BACKEND_TELEMETRY_LOCK = Lock()
 _BACKEND_TELEMETRY = {
     "parse": {"native": 0, "python": 0},
+    "normalize": {"native": 0, "python": 0},
     "persistence": {"native": 0, "python": 0},
+    "normalize_rows": {"native": 0, "python": 0},
+    "persistence_rows": {"native": 0, "python": 0},
+    "persistence_inserted_rows": {"native": 0, "python": 0},
+    "normalize_latency_s": {"native": 0.0, "python": 0.0},
+    "persistence_latency_s": {"native": 0.0, "python": 0.0},
 }
 
 
-def _record_backend_selection(path: Literal["parse", "persistence"], backend: ResolvedBackend) -> None:
+def _record_backend_selection(path: Literal["parse", "normalize", "persistence"], backend: ResolvedBackend) -> None:
     with _BACKEND_TELEMETRY_LOCK:
         _BACKEND_TELEMETRY[path][backend] += 1
+
+
+def _record_backend_volume(
+    path: Literal["normalize_rows", "persistence_rows", "persistence_inserted_rows"],
+    backend: ResolvedBackend,
+    rows: int,
+) -> None:
+    with _BACKEND_TELEMETRY_LOCK:
+        _BACKEND_TELEMETRY[path][backend] += rows
+
+
+def _record_backend_latency(
+    path: Literal["normalize_latency_s", "persistence_latency_s"],
+    backend: ResolvedBackend,
+    elapsed_s: float,
+) -> None:
+    with _BACKEND_TELEMETRY_LOCK:
+        _BACKEND_TELEMETRY[path][backend] += elapsed_s
 
 
 def reset_backend_telemetry() -> None:
@@ -41,10 +66,16 @@ def reset_backend_telemetry() -> None:
 
 
 def get_backend_telemetry_snapshot() -> dict[str, dict[str, float | int]]:
-    """Return backend counts + usage rates for parse and persistence paths."""
+    """Return backend counts/rows/latency rates for parse, normalize, and persistence paths."""
     with _BACKEND_TELEMETRY_LOCK:
         parse_counts = dict(_BACKEND_TELEMETRY["parse"])
+        normalize_counts = dict(_BACKEND_TELEMETRY["normalize"])
         persistence_counts = dict(_BACKEND_TELEMETRY["persistence"])
+        normalize_rows = dict(_BACKEND_TELEMETRY["normalize_rows"])
+        persistence_rows = dict(_BACKEND_TELEMETRY["persistence_rows"])
+        persistence_inserted_rows = dict(_BACKEND_TELEMETRY["persistence_inserted_rows"])
+        normalize_latency_s = dict(_BACKEND_TELEMETRY["normalize_latency_s"])
+        persistence_latency_s = dict(_BACKEND_TELEMETRY["persistence_latency_s"])
 
     def _with_rates(counts: dict[str, int]) -> dict[str, float | int]:
         total = counts["native"] + counts["python"]
@@ -60,7 +91,27 @@ def get_backend_telemetry_snapshot() -> dict[str, dict[str, float | int]]:
 
     return {
         "parse": _with_rates(parse_counts),
+        "normalize": {
+            **_with_rates(normalize_counts),
+            "rows_total": normalize_rows["native"] + normalize_rows["python"],
+            "rows_native": normalize_rows["native"],
+            "rows_python": normalize_rows["python"],
+            "latency_total_s": normalize_latency_s["native"] + normalize_latency_s["python"],
+            "latency_native_s": normalize_latency_s["native"],
+            "latency_python_s": normalize_latency_s["python"],
+        },
         "persistence": _with_rates(persistence_counts),
+        "persistence_rows": {
+            "total": persistence_rows["native"] + persistence_rows["python"],
+            "native": persistence_rows["native"],
+            "python": persistence_rows["python"],
+            "inserted_total": persistence_inserted_rows["native"] + persistence_inserted_rows["python"],
+            "inserted_native": persistence_inserted_rows["native"],
+            "inserted_python": persistence_inserted_rows["python"],
+            "latency_total_s": persistence_latency_s["native"] + persistence_latency_s["python"],
+            "latency_native_s": persistence_latency_s["native"],
+            "latency_python_s": persistence_latency_s["python"],
+        },
     }
 
 
@@ -183,25 +234,35 @@ def normalize_measurement_rows_python(
 ) -> list[tuple[Any, ...]]:
     """Normalize parsed blocks into stable flat measurement records."""
     rows: list[tuple[Any, ...]] = []
+    meta = (reference, fileloc, filename, date, sample_number)
     for block in blocks:
         header = _normalize_header(block[0]) if len(block) > 0 else ""
         for row in block[1] if len(block) > 1 else ():
+            if not row:
+                normalized = ("", "", "", "", "", "", "", "")
+            else:
+                row_len = len(row)
+                if row_len >= 8:
+                    normalized = (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7])
+                elif row_len == 7:
+                    normalized = (row[0], row[1], row[2], row[3], row[4], row[5], row[6], "")
+                elif row_len == 6:
+                    normalized = (row[0], row[1], row[2], row[3], row[4], row[5], "", "")
+                elif row_len == 5:
+                    normalized = (row[0], row[1], row[2], row[3], row[4], "", "", "")
+                elif row_len == 4:
+                    normalized = (row[0], row[1], row[2], row[3], "", "", "", "")
+                elif row_len == 3:
+                    normalized = (row[0], row[1], row[2], "", "", "", "", "")
+                elif row_len == 2:
+                    normalized = (row[0], row[1], "", "", "", "", "", "")
+                else:
+                    normalized = (row[0], "", "", "", "", "", "", "")
             rows.append(
                 (
-                    row[0] if len(row) > 0 else "",
-                    row[1] if len(row) > 1 else "",
-                    row[2] if len(row) > 2 else "",
-                    row[3] if len(row) > 3 else "",
-                    row[4] if len(row) > 4 else "",
-                    row[5] if len(row) > 5 else "",
-                    row[6] if len(row) > 6 else "",
-                    row[7] if len(row) > 7 else "",
+                    *normalized,
                     header,
-                    reference,
-                    fileloc,
-                    filename,
-                    date,
-                    sample_number,
+                    *meta,
                 )
             )
     return rows
@@ -219,10 +280,12 @@ def normalize_measurement_rows(
 ) -> list[tuple[Any, ...]]:
     """Normalize parsed blocks into flat rows using selected backend."""
     backend = resolve_cmm_persistence_backend(use_native=use_native)
+    _record_backend_selection("normalize", backend)
+    started = time.perf_counter()
     if backend == "native":
         if _native_normalize_measurement_rows is None:
             raise RuntimeError("Native measurement row normalization requested but unavailable")
-        return _native_normalize_measurement_rows(
+        rows = _native_normalize_measurement_rows(
             blocks,
             reference,
             fileloc,
@@ -230,15 +293,19 @@ def normalize_measurement_rows(
             date,
             sample_number,
         )
+    else:
+        rows = normalize_measurement_rows_python(
+            blocks,
+            reference=reference,
+            fileloc=fileloc,
+            filename=filename,
+            date=date,
+            sample_number=sample_number,
+        )
 
-    return normalize_measurement_rows_python(
-        blocks,
-        reference=reference,
-        fileloc=fileloc,
-        filename=filename,
-        date=date,
-        sample_number=sample_number,
-    )
+    _record_backend_latency("normalize_latency_s", backend, time.perf_counter() - started)
+    _record_backend_volume("normalize_rows", backend, len(rows))
+    return rows
 
 
 def persist_measurement_rows_python(database: str, rows: list[tuple[Any, ...]]) -> bool:
@@ -310,14 +377,25 @@ def persist_measurement_rows_with_backend_and_telemetry(
 ) -> PersistBackendResult:
     """Persist normalized rows with optional native DB path."""
     backend = resolve_cmm_persistence_backend(use_native=use_native)
+    started = time.perf_counter()
     if backend == "native":
         if _native_persist_measurement_rows is None:
             raise RuntimeError("Native measurement row persistence requested but unavailable")
         _record_backend_selection("persistence", "native")
-        return PersistBackendResult(inserted=bool(_native_persist_measurement_rows(database, rows)), backend="native")
+        inserted = bool(_native_persist_measurement_rows(database, rows))
+        _record_backend_latency("persistence_latency_s", "native", time.perf_counter() - started)
+        _record_backend_volume("persistence_rows", "native", len(rows))
+        if inserted:
+            _record_backend_volume("persistence_inserted_rows", "native", len(rows))
+        return PersistBackendResult(inserted=inserted, backend="native")
 
     _record_backend_selection("persistence", "python")
-    return PersistBackendResult(inserted=persist_measurement_rows_python(database, rows), backend="python")
+    inserted = persist_measurement_rows_python(database, rows)
+    _record_backend_latency("persistence_latency_s", "python", time.perf_counter() - started)
+    _record_backend_volume("persistence_rows", "python", len(rows))
+    if inserted:
+        _record_backend_volume("persistence_inserted_rows", "python", len(rows))
+    return PersistBackendResult(inserted=inserted, backend="python")
 
 
 def parse_blocks_with_backend(raw_lines: list[str], use_native: bool = False) -> list[list[Any]]:
