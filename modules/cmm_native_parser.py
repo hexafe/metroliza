@@ -318,32 +318,6 @@ def persist_measurement_rows_python(database: str, rows: list[tuple[Any, ...]]) 
 
     def _insert(cursor):
         cursor.execute(
-            '''CREATE TABLE IF NOT EXISTS MEASUREMENTS (
-                        ID INTEGER PRIMARY KEY,
-                        AX TEXT,
-                        NOM REAL,
-                        "+TOL" REAL,
-                        "-TOL" REAL,
-                        BONUS REAL,
-                        MEAS REAL,
-                        DEV REAL,
-                        OUTTOL REAL,
-                        HEADER TEXT,
-                        REPORT_ID INTEGER,
-                        FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
-                    )'''
-        )
-        cursor.execute(
-            '''CREATE TABLE IF NOT EXISTS REPORTS (
-                        ID INTEGER PRIMARY KEY,
-                        REFERENCE TEXT,
-                        FILELOC TEXT,
-                        FILENAME TEXT,
-                        DATE TEXT,
-                        SAMPLE_NUMBER TEXT
-                    )'''
-        )
-        cursor.execute(
             'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
             report_identity,
         )
