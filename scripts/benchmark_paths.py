@@ -466,6 +466,80 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
     )
 
 
+def benchmark_export_write_vs_shape_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
+    """Benchmark data-shaping preprocessing separately from worksheet write-only ops."""
+    import xlsxwriter
+    from modules.db import read_sql_dataframe
+    from modules.export_query_service import build_measurement_export_dataframe
+    from modules.export_sheet_writer import (
+        build_measurement_write_bundle_cached,
+        create_measurement_formats,
+        write_measurement_block,
+    )
+
+    db_path = temp_dir / 'export_write_vs_shape.sqlite'
+    fixture_metrics = _create_export_db_fixture(db_path, report_count=report_count, headers_per_report=headers_per_report)
+
+    loaded_df = build_measurement_export_dataframe(
+        read_sql_dataframe(
+            str(db_path),
+            """
+            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
+                   MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
+                   MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
+                   REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
+            FROM MEASUREMENTS
+            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            WHERE 1=1
+            """,
+        )
+    )
+    grouped = list(loaded_df.groupby(['REFERENCE', 'HEADER - AX'], sort=False))
+
+    cache: dict[str, Any] = {}
+    shape_start = time.perf_counter()
+    shaped = []
+    for idx, ((reference, header), group) in enumerate(grouped):
+        base_col = idx * 5
+        sorted_group = group.sort_values(
+            by=['HEADER', 'AX', 'DATE', 'SAMPLE_NUMBER'],
+            key=lambda col: col.astype(str).str.lower(),
+        )
+        write_bundle = build_measurement_write_bundle_cached(header, sorted_group, base_col, cache=cache)
+        shaped.append((reference, header, write_bundle))
+    shape_s = time.perf_counter() - shape_start
+
+    write_start = time.perf_counter()
+    write_only_sheet_count = 0
+    with xlsxwriter.Workbook(str(temp_dir / 'export_write_vs_shape.xlsx')) as workbook:
+        formats = create_measurement_formats(workbook)
+        current_reference = None
+        worksheet = None
+        for reference, _header, write_bundle in shaped:
+            if reference != current_reference:
+                worksheet = workbook.add_worksheet(f'REF_{write_only_sheet_count + 1}')
+                current_reference = reference
+                write_only_sheet_count += 1
+            write_measurement_block(worksheet, write_bundle, formats, base_col=write_bundle['measurement_plan']['summary_column'] - 1)
+    write_only_s = time.perf_counter() - write_start
+
+    return ScenarioResult(
+        scenario='excel_export_write_vs_shape_path',
+        wall_time_s=shape_s + write_only_s,
+        stage_timings_s={
+            'data_shaping': shape_s,
+            'write_only_worksheet_ops': write_only_s,
+            'write_to_shape_ratio': (write_only_s / shape_s) if shape_s > 0 else 0.0,
+        },
+        input_metrics={
+            'rows': fixture_metrics['measurement_rows'],
+            'headers': fixture_metrics['headers'],
+            'chart_count': 0,
+            'worksheets': write_only_sheet_count,
+        },
+    )
+
+
 def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
     from modules.export_data_thread import ExportDataThread
     from modules.chart_render_service import build_violin_payload_vectorized, resolve_chart_sampling_policy, sample_frame_for_chart
@@ -790,6 +864,7 @@ def main() -> int:
         results = [
             benchmark_parse_path(temp_path, pdf_count=args.pdf_count),
             benchmark_excel_export_path(temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report),
+            benchmark_export_write_vs_shape_path(temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report),
             benchmark_export_high_header_cardinality_path(
                 temp_path,
                 report_count=max(args.report_count, 100),

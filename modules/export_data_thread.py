@@ -3796,19 +3796,30 @@ class ExportDataThread(QThread):
                 timing_enabled = os.getenv('METROLIZA_EXPORT_TIMING', '').lower() in {'1', 'true', 'yes', 'on'}
                 build_bundle_elapsed = 0.0
                 chart_insert_elapsed = 0.0
+                precompute_start = time.perf_counter()
+                precomputed_header_entries = []
                 for (header, header_group) in header_groups:
                     if self._check_canceled():
                         return
 
-                    transform_start = time.perf_counter()
                     header_group = self._sort_header_group(header_group)
+                    base_col = len(precomputed_header_entries) * 5
+                    build_bundle_start = time.perf_counter()
+                    write_bundle = _build_measurement_write_bundle_cached(
+                        header,
+                        header_group,
+                        base_col,
+                        cache=optimization_cache,
+                    )
+                    build_bundle_elapsed += time.perf_counter() - build_bundle_start
+                    precomputed_header_entries.append((header, header_group, write_bundle))
+                self._record_stage_timing('transform_grouping', time.perf_counter() - precompute_start)
+
+                for (header, header_group, write_bundle) in precomputed_header_entries:
+                    if self._check_canceled():
+                        return
+
                     base_col = col
-                    if timing_enabled:
-                        build_bundle_start = time.perf_counter()
-                    write_bundle = _build_measurement_write_bundle_cached(header, header_group, base_col, cache=optimization_cache)
-                    self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
-                    if timing_enabled:
-                        build_bundle_elapsed += time.perf_counter() - build_bundle_start
                     header_plan = write_bundle['header_plan']
                     write_start = time.perf_counter()
                     measurement_plan = write_measurement_block(worksheet, write_bundle, formats, base_col=base_col)
