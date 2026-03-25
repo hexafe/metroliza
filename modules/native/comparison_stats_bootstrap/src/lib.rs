@@ -282,14 +282,15 @@ fn bootstrap_percentile_ci(
     if !(0.0 < level && level < 1.0) {
         return Err(PyValueError::new_err("level must be between 0 and 1"));
     }
-    let groups: Vec<&[f64]> = groups
+    let groups: Vec<Vec<f64>> = groups
         .into_iter()
         .map(|group| {
             group
                 .as_slice()
                 .map_err(|_| PyValueError::new_err("groups must be contiguous float64 arrays"))
+                .map(|values| values.to_vec())
         })
-        .collect::<PyResult<Vec<&[f64]>>>()?;
+        .collect::<PyResult<Vec<Vec<f64>>>>()?;
 
     if iterations == 0 || groups.is_empty() || groups.iter().any(|g| g.is_empty()) {
         return Ok(None);
@@ -342,14 +343,15 @@ fn pairwise_stats(
     non_parametric: bool,
     equal_var: bool,
 ) -> PyResult<Vec<PyObject>> {
-    let groups: Vec<&[f64]> = groups
+    let groups: Vec<Vec<f64>> = groups
         .into_iter()
         .map(|group| {
             group
                 .as_slice()
                 .map_err(|_| PyValueError::new_err("groups must be contiguous float64 arrays"))
+                .map(|values| values.to_vec())
         })
-        .collect::<PyResult<Vec<&[f64]>>>()?;
+        .collect::<PyResult<Vec<Vec<f64>>>>()?;
 
     if labels.len() != groups.len() {
         return Err(PyValueError::new_err("labels and groups must have equal length"));
@@ -359,8 +361,8 @@ fn pairwise_stats(
     let mut raw_p_values: Vec<Option<f64>> = Vec::new();
     for left in 0..labels.len() {
         for right in (left + 1)..labels.len() {
-            let sample_a = &groups[left];
-            let sample_b = &groups[right];
+            let sample_a = groups[left].as_slice();
+            let sample_b = groups[right].as_slice();
             let (test_used, p_value) = if non_parametric {
                 ("Mann-Whitney U".to_string(), mann_whitney_pvalue(sample_a, sample_b))
             } else if equal_var {
