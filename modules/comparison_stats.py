@@ -22,7 +22,11 @@ from typing import Any, Callable
 import numpy as np
 from scipy.stats import mannwhitneyu, rankdata, ttest_ind
 
-from modules.comparison_stats_native import bootstrap_percentile_ci_native, pairwise_stats_native
+from modules.comparison_stats_native import (
+    bootstrap_percentile_ci_batch_native,
+    bootstrap_percentile_ci_native,
+    pairwise_stats_native,
+)
 from modules.group_stats_tests import select_group_stat_test
 
 
@@ -166,6 +170,50 @@ def _bootstrap_effect_percentile_ci(
             iterations=iterations,
         )
     raise ValueError(f'Unsupported effect kernel: {effect_kernel}')
+
+
+def _bootstrap_pairwise_effect_percentile_ci_batch(
+    *,
+    effect_kernel: str,
+    labels: list[str],
+    numeric_groups: dict[str, np.ndarray],
+    pairwise_rows: list[dict[str, Any]],
+    level: float,
+    iterations: int,
+    seed: int = 42,
+) -> dict[tuple[str, str], tuple[float, float] | None]:
+    eligible_pairs = [
+        (str(row['group_a']), str(row['group_b']))
+        for row in pairwise_rows
+        if row.get('effect_size') is not None
+    ]
+    if not eligible_pairs:
+        return {}
+
+    label_to_index = {label: idx for idx, label in enumerate(labels)}
+    pair_indices = [(label_to_index[group_a], label_to_index[group_b]) for group_a, group_b in eligible_pairs]
+
+    native_batch = bootstrap_percentile_ci_batch_native(
+        effect_kernel=effect_kernel,
+        groups=[numeric_groups[label] for label in labels],
+        pairs=pair_indices,
+        level=level,
+        iterations=iterations,
+        seed=seed,
+    )
+    if native_batch is not None:
+        return {pair: ci for pair, ci in zip(eligible_pairs, native_batch)}
+
+    return {
+        (group_a, group_b): _bootstrap_effect_percentile_ci(
+            effect_kernel=effect_kernel,
+            groups=[numeric_groups[group_a], numeric_groups[group_b]],
+            level=level,
+            iterations=iterations,
+            seed=seed,
+        )
+        for group_a, group_b in eligible_pairs
+    }
 
 
 def _adjust_pvalues(p_values: list[float | None], method: str) -> list[float | None]:
@@ -384,20 +432,22 @@ def compute_metric_pairwise_stats(
             row['significant'] = bool(adjusted_p is not None and adjusted_p < config.alpha)
 
     rows: list[dict[str, Any]] = []
+    pairwise_effect_cis: dict[tuple[str, str], tuple[float, float] | None] = {}
+    if config.include_effect_size_ci:
+        pairwise_effect_cis = _bootstrap_pairwise_effect_percentile_ci_batch(
+            effect_kernel='cliffs_delta' if is_non_parametric else 'cohen_d',
+            labels=labels,
+            numeric_groups=numeric_groups,
+            pairwise_rows=pairwise_rows,
+            level=config.ci_level,
+            iterations=config.ci_bootstrap_iterations,
+        )
+
     for pairwise in pairwise_rows:
         group_a = str(pairwise['group_a'])
         group_b = str(pairwise['group_b'])
-        sample_a = numeric_groups[group_a]
-        sample_b = numeric_groups[group_b]
         effect_size = pairwise.get('effect_size')
-        effect_ci = None
-        if config.include_effect_size_ci and effect_size is not None:
-            effect_ci = _bootstrap_effect_percentile_ci(
-                effect_kernel='cliffs_delta' if is_non_parametric else 'cohen_d',
-                groups=[sample_a, sample_b],
-                level=config.ci_level,
-                iterations=config.ci_bootstrap_iterations,
-            )
+        effect_ci = pairwise_effect_cis.get((group_a, group_b))
 
         row = {
             'metric': metric_key,
