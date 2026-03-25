@@ -91,3 +91,14 @@ def test_benchmark_runtime_metadata_large_cardinality_payload():
     assert metrics["runtime_min_ms"] > 0.0
     assert metrics["runtime_avg_ms"] > 0.0
     assert metrics["runtime_max_ms"] >= metrics["runtime_min_ms"]
+
+
+def test_build_histogram_native_payload_includes_bin_count_when_provided():
+    payload = build_histogram_native_payload(
+        values=[1.0, 2.0, 3.0],
+        lsl=0.0,
+        usl=4.0,
+        title="Histogram",
+        bin_count=7,
+    )
+    assert payload["bin_count"] == 7

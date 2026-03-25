@@ -2576,6 +2576,120 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(captured['violin_labels'], ['A (n=2)', 'B (n=3)'])
         self.assertEqual(captured['iqr_labels'], ['A (n=2)', 'B (n=3)'])
 
+    def test_summary_sheet_fill_histogram_prefers_native_path_when_backend_is_native(self):
+        import pandas as pd
+        import modules.export_data_thread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.insert_calls = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, _path, options):
+                self.insert_calls.append((row, col, options))
+
+        class _FakeRenderer:
+            def __init__(self):
+                self.payload = None
+                self.fallback_fig = "unset"
+
+            def render_figure_png(self, *_args, **_kwargs):
+                raise AssertionError("Native histogram path should not call figure renderer")
+
+            def render_histogram_png(self, payload, *, fallback_fig=None, mode='workbook'):
+                self.payload = payload
+                self.fallback_fig = fallback_fig
+                return type("Result", (), {"png_bytes": b"native-bytes"})()
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
+        thread._chart_renderer = _FakeRenderer()
+        thread._register_chart_image = lambda payload: payload
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.1, 10.2, 10.3],
+                'NOM': [10.0] * 5,
+                '+TOL': [0.2] * 5,
+                '-TOL': [-0.2] * 5,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
+                'DATE': ['2024-01-01'] * 5,
+            }
+        )
+        worksheet = _FakeSummaryWorksheet()
+
+        with (
+            mock.patch('modules.export_data_thread.native_chart_backend_available', return_value=True),
+            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='native'),
+            mock.patch('modules.export_data_thread.render_histogram', side_effect=AssertionError("matplotlib histogram should be skipped")),
+        ):
+            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        assert worksheet.insert_calls
+        assert thread._chart_renderer.payload is not None
+        assert thread._chart_renderer.payload['title'] == 'H1'
+        assert thread._chart_renderer.payload['advanced_annotations_enabled'] is False
+        assert thread._chart_renderer.fallback_fig is None
+
+    def test_summary_sheet_fill_histogram_uses_matplotlib_fallback_when_native_unavailable(self):
+        import pandas as pd
+        import modules.export_data_thread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.insert_calls = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, _path, options):
+                self.insert_calls.append((row, col, options))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
+        thread._register_chart_image = lambda payload: payload
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.1, 10.2, 10.3],
+                'NOM': [10.0] * 5,
+                '+TOL': [0.2] * 5,
+                '-TOL': [-0.2] * 5,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
+                'DATE': ['2024-01-01'] * 5,
+            }
+        )
+        worksheet = _FakeSummaryWorksheet()
+        render_calls = {'count': 0}
+
+        original_render_histogram = export_thread_module.render_histogram
+
+        def _count_render(*args, **kwargs):
+            render_calls['count'] += 1
+            return original_render_histogram(*args, **kwargs)
+
+        with (
+            mock.patch('modules.export_data_thread.native_chart_backend_available', return_value=False),
+            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'),
+            mock.patch('modules.export_data_thread.render_histogram', side_effect=_count_render),
+        ):
+            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        assert worksheet.insert_calls
+        assert render_calls['count'] == 1
+
     def test_google_retry_parse_error_logs_warning(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
         import modules.export_data_thread as export_thread_module
