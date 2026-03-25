@@ -118,6 +118,36 @@ class TestDistributionFitNativeParity(unittest.TestCase):
                 self.assertEqual(arr.dtype, np.float64)
                 self.assertTrue(arr.flags['C_CONTIGUOUS'])
 
+    def test_native_wrapper_uses_zero_copy_for_contiguous_float64_ndarrays(self):
+        contiguous_params = np.ascontiguousarray(np.array([0.0, 1.0], dtype=np.float64))
+        contiguous_sample = np.ascontiguousarray(np.array([-1.0, 0.0, 1.0], dtype=np.float64))
+        with mock.patch.object(
+            native_bridge,
+            '_native_estimate_ad_pvalue_monte_carlo',
+            return_value=(0.42, 100),
+        ) as monte_carlo_stub, mock.patch.object(
+            native_bridge,
+            '_native_compute_ad_ks_statistics',
+            return_value=(0.1, 0.2),
+        ) as stats_stub:
+            native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                distribution='norm',
+                fitted_params=contiguous_params,
+                sample_size=40,
+                observed_stat=0.65,
+                iterations=100,
+                seed=123,
+            )
+            native_bridge.compute_ad_ks_statistics_native(
+                distribution='norm',
+                fitted_params=contiguous_params,
+                sample_values=contiguous_sample,
+            )
+
+            self.assertIs(monte_carlo_stub.call_args.args[1], contiguous_params)
+            self.assertIs(stats_stub.call_args.args[1], contiguous_params)
+            self.assertIs(stats_stub.call_args.args[2], contiguous_sample)
+
     @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
     def test_native_seeded_runs_are_exactly_reproducible(self):
         p1, valid1 = native_bridge.estimate_ad_pvalue_monte_carlo_native(

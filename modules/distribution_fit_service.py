@@ -127,17 +127,30 @@ def _safe_float(value):
     return parsed if np.isfinite(parsed) else None
 
 
+def _as_float64_1d_contiguous(values) -> np.ndarray:
+    if isinstance(values, np.ndarray) and values.dtype == np.float64 and values.flags['C_CONTIGUOUS']:
+        array = values
+    else:
+        array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1:
+        array = array.reshape(-1)
+    if array.flags['C_CONTIGUOUS'] and array.dtype == np.float64:
+        return array
+    return np.ascontiguousarray(array, dtype=np.float64)
+
+
 def _coerce_measurements_array(measurements) -> np.ndarray:
     if isinstance(measurements, np.ndarray):
-        values = np.asarray(measurements, dtype=float)
-        if values.ndim != 1:
-            values = values.reshape(-1)
+        values = _as_float64_1d_contiguous(measurements)
         if np.all(np.isfinite(values)):
-            return np.ascontiguousarray(values)
-        return np.ascontiguousarray(values[np.isfinite(values)])
+            return values
+        finite_values = values[np.isfinite(values)]
+        if finite_values.flags['C_CONTIGUOUS']:
+            return finite_values
+        return np.ascontiguousarray(finite_values, dtype=np.float64)
 
     values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
-    return np.ascontiguousarray(values)
+    return _as_float64_1d_contiguous(values)
 
 
 def measurement_fingerprint(values: np.ndarray):
@@ -172,7 +185,7 @@ def _resolve_curve_x_values(values: np.ndarray, *, point_count: int, coverage_pa
 
 
 def _measurement_fingerprint(values: np.ndarray):
-    normalized = np.ascontiguousarray(np.asarray(values, dtype=float))
+    normalized = _as_float64_1d_contiguous(values)
     digest = blake2b(normalized.tobytes(), digest_size=16).hexdigest()
     return (int(normalized.size), digest)
 
@@ -856,10 +869,7 @@ def fit_measurement_distribution_batch(
     usl_by_group = usl_by_group or {}
     result: dict[str, dict] = {}
 
-    normalized_values = {
-        group_name: np.ascontiguousarray(np.asarray(values, dtype=float))
-        for group_name, values in grouped_measurements.items()
-    }
+    normalized_values = {group_name: _as_float64_1d_contiguous(values) for group_name, values in grouped_measurements.items()}
     support_mode_by_group = {
         group_name: ('unknown' if values.size < 1 else _infer_support_mode(values))
         for group_name, values in normalized_values.items()
