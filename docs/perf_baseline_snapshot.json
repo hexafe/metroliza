@@ -1,7 +1,7 @@
 {
   "generated_at": "2026-03-25T00:00:00Z",
   "version": 1,
-  "notes": "Baseline refreshed from GitHub Actions ubuntu-latest canonical perf run medians (2026-03-25).",
+  "notes": "Baseline refreshed from canonical distribution-fit batch rerun medians (2026-03-25).",
   "scenarios": {
     "pdf_parse_path": {
       "median_wall_time_s": 0.00703
@@ -22,7 +22,7 @@
       "median_wall_time_s": 1.859312
     },
     "distribution_fit_batch_compare": {
-      "median_wall_time_s": 25.878629
+      "median_wall_time_s": 33.858084
     },
     "group_preprocess_mixed_types_compare": {
       "median_wall_time_s": 0.006922
