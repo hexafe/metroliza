@@ -770,20 +770,32 @@ fn compute_candidate_metrics(
         .as_slice()
         .map_err(|_| PyValueError::new_err("sample_values must be a contiguous float64 array"))?;
 
+    Ok(compute_candidate_metrics_impl(
+        distribution,
+        fitted_params,
+        sample_values,
+    ))
+}
+
+fn compute_candidate_metrics_impl(
+    distribution: &str,
+    fitted_params: &[f64],
+    sample_values: &[f64],
+) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, u32) {
     let mut flags: u32 = 0;
     if sample_values.is_empty() {
-        return Ok((None, None, None, None, None, 0b0001));
+        return (None, None, None, None, None, 0b0001);
     }
     if sample_values.iter().any(|v| !v.is_finite()) {
-        return Ok((None, None, None, None, None, 0b0010));
+        return (None, None, None, None, None, 0b0010);
     }
 
     let dist = match SupportedDistribution::from_name_and_params(distribution, &fitted_params) {
         Some(value) => value,
-        None => return Ok((None, None, None, None, None, 0b0100)),
+        None => return (None, None, None, None, None, 0b0100),
     };
     if !dist.params_valid() {
-        return Ok((None, None, None, None, None, 0b1000));
+        return (None, None, None, None, None, 0b1000);
     }
 
     let mut nll = 0.0;
@@ -793,7 +805,7 @@ fn compute_candidate_metrics(
             Some(v) if v.is_finite() => nll -= v,
             _ => {
                 flags |= 0b1_0000;
-                return Ok((None, None, None, None, None, flags));
+                return (None, None, None, None, None, flags);
             }
         }
     }
@@ -809,7 +821,64 @@ fn compute_candidate_metrics(
     if ks.is_none() {
         flags |= 0b100_0000;
     }
-    Ok((Some(nll), Some(aic), Some(bic), ad, ks, flags))
+    (Some(nll), Some(aic), Some(bic), ad, ks, flags)
+}
+
+#[pyfunction]
+#[pyo3(signature = (distributions, fitted_params_batch, sample_values_batch))]
+fn compute_candidate_metrics_batch(
+    distributions: Vec<String>,
+    fitted_params_batch: Vec<PyReadonlyArray1<'_, f64>>,
+    sample_values_batch: Vec<PyReadonlyArray1<'_, f64>>,
+) -> PyResult<(
+    Vec<Option<f64>>,
+    Vec<Option<f64>>,
+    Vec<Option<f64>>,
+    Vec<Option<f64>>,
+    Vec<Option<f64>>,
+    Vec<u32>,
+)> {
+    if distributions.len() != fitted_params_batch.len()
+        || distributions.len() != sample_values_batch.len()
+    {
+        return Err(PyValueError::new_err(
+            "distributions, fitted_params_batch, and sample_values_batch must have equal lengths",
+        ));
+    }
+
+    let mut nll_values: Vec<Option<f64>> = Vec::with_capacity(distributions.len());
+    let mut aic_values: Vec<Option<f64>> = Vec::with_capacity(distributions.len());
+    let mut bic_values: Vec<Option<f64>> = Vec::with_capacity(distributions.len());
+    let mut ad_values: Vec<Option<f64>> = Vec::with_capacity(distributions.len());
+    let mut ks_values: Vec<Option<f64>> = Vec::with_capacity(distributions.len());
+    let mut flags_values: Vec<u32> = Vec::with_capacity(distributions.len());
+
+    for idx in 0..distributions.len() {
+        let fitted_params = fitted_params_batch[idx].as_slice().map_err(|_| {
+            PyValueError::new_err("fitted_params_batch entries must be contiguous float64 arrays")
+        })?;
+        let sample_values = sample_values_batch[idx].as_slice().map_err(|_| {
+            PyValueError::new_err("sample_values_batch entries must be contiguous float64 arrays")
+        })?;
+
+        let (nll, aic, bic, ad, ks, flags) =
+            compute_candidate_metrics_impl(&distributions[idx], fitted_params, sample_values);
+        nll_values.push(nll);
+        aic_values.push(aic);
+        bic_values.push(bic);
+        ad_values.push(ad);
+        ks_values.push(ks);
+        flags_values.push(flags);
+    }
+
+    Ok((
+        nll_values,
+        aic_values,
+        bic_values,
+        ad_values,
+        ks_values,
+        flags_values,
+    ))
 }
 
 #[pymodule]
@@ -817,5 +886,6 @@ fn _metroliza_distribution_fit_native(_py: Python<'_>, m: &PyModule) -> PyResult
     m.add_function(wrap_pyfunction!(compute_ad_ks_statistics, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_ad_pvalue_monte_carlo, m)?)?;
     m.add_function(wrap_pyfunction!(compute_candidate_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_candidate_metrics_batch, m)?)?;
     Ok(())
 }
