@@ -55,7 +55,7 @@ def _run_legacy_per_group(fixture, *, include_kde_reference=False):
     return time.perf_counter() - start, results
 
 
-def _run_batch(fixture, *, include_kde_reference=False):
+def _run_batch(fixture, *, include_kde_reference=False, candidate_kernel_mode=None):
     start = time.perf_counter()
     results = {}
     memo = {}
@@ -66,11 +66,12 @@ def _run_batch(fixture, *, include_kde_reference=False):
             include_kde_reference=include_kde_reference,
             memoization_cache=memo,
             fingerprints_by_group=fingerprints,
+            candidate_kernel_mode=candidate_kernel_mode,
         )
     return time.perf_counter() - start, results
 
 
-def _validate_parity(baseline, candidate):
+def _validate_parity(baseline, candidate, *, full_ranking=False):
     mismatches = []
     for metric, grouped in baseline.items():
         for group, row in grouped.items():
@@ -85,6 +86,23 @@ def _validate_parity(baseline, candidate):
                 continue
             if left_risk is None or right_risk is None or abs(float(left_risk) - float(right_risk)) > 1e-9:
                 mismatches.append((metric, group, 'outside_probability', left_risk, right_risk))
+            if full_ranking:
+                left_rank = row.get('ranking_metrics') or []
+                right_rank = compare.get('ranking_metrics') or []
+                if len(left_rank) != len(right_rank):
+                    mismatches.append((metric, group, 'ranking_length', len(left_rank), len(right_rank)))
+                    continue
+                for idx, (left_item, right_item) in enumerate(zip(left_rank, right_rank, strict=False)):
+                    for key in ('model', 'rank'):
+                        if left_item.get(key) != right_item.get(key):
+                            mismatches.append((metric, group, f'ranking_{idx}_{key}', left_item.get(key), right_item.get(key)))
+                    for key in ('nll', 'aic', 'bic', 'ad_statistic', 'ks_statistic'):
+                        lv = left_item.get(key)
+                        rv = right_item.get(key)
+                        if lv is None and rv is None:
+                            continue
+                        if lv is None or rv is None or abs(float(lv) - float(rv)) > 1e-9:
+                            mismatches.append((metric, group, f'ranking_{idx}_{key}', lv, rv))
     return mismatches
 
 
@@ -157,6 +175,7 @@ def main():
     parser.add_argument('--native-seed', type=int, default=123)
     parser.add_argument('--native-repetitions', type=int, default=3)
     parser.add_argument('--native-monte-carlo-mode', choices=['single', 'parallel'], help=argparse.SUPPRESS)
+    parser.add_argument('--candidate-kernel-benchmark', action='store_true', help='Benchmark candidate metric kernel mode (python vs auto/native if available).')
     parser.add_argument('--output-json', help='Optional path to write machine-readable benchmark output JSON.')
     args = parser.parse_args()
 
@@ -178,6 +197,28 @@ def main():
     legacy_seconds, legacy_results = _run_legacy_per_group(fixture)
     batch_seconds, batch_results = _run_batch(fixture)
     mismatches = _validate_parity(legacy_results, batch_results)
+    kernel_payload = None
+    if args.candidate_kernel_benchmark:
+        python_seconds, python_results = _run_batch(fixture, candidate_kernel_mode='python')
+        mode = 'native' if native_backend_available() else 'auto'
+        kernel_seconds, kernel_results = _run_batch(fixture, candidate_kernel_mode=mode)
+        kernel_mismatches = _validate_parity(python_results, kernel_results, full_ranking=True)
+        kernel_speedup = python_seconds / kernel_seconds if kernel_seconds > 0 else float('inf')
+        kernel_payload = {
+            'python_seconds': float(python_seconds),
+            'kernel_seconds': float(kernel_seconds),
+            'kernel_mode': mode,
+            'kernel_speedup': float(kernel_speedup),
+            'ranking_parity_mismatches': int(len(kernel_mismatches)),
+        }
+        print(f"candidate_kernel_mode={mode}")
+        print(f"candidate_kernel_python_seconds={python_seconds:.4f}")
+        print(f"candidate_kernel_seconds={kernel_seconds:.4f}")
+        print(f"candidate_kernel_speedup_x={kernel_speedup:.2f}")
+        print(f"candidate_kernel_ranking_parity_mismatches={len(kernel_mismatches)}")
+        if kernel_mismatches:
+            print(f"candidate_kernel_first_mismatch={kernel_mismatches[0]}")
+            raise SystemExit(1)
 
     print(f"metrics={args.metrics}, groups={args.groups}, samples={args.samples}")
     print(f"legacy_seconds={legacy_seconds:.4f}")
@@ -209,6 +250,7 @@ def main():
                     'samples': int(args.samples),
                     'parity_mismatches': int(len(mismatches)),
                 },
+                'candidate_kernel': kernel_payload,
             }
         ],
     }

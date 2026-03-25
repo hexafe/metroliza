@@ -7,6 +7,7 @@ import numpy as np
 from scipy.stats import gamma, lognorm, norm, weibull_min
 
 import modules.distribution_fit_native as native_bridge
+import modules.distribution_fit_candidate_native as candidate_native_bridge
 import modules.distribution_fit_service as service
 
 FIXTURE_PATH = Path('tests/fixtures/distribution_fit/native_kernel_edge_cases.json')
@@ -17,6 +18,36 @@ def _load_native_kernel_edge_fixtures():
 
 
 class TestDistributionFitNativeParity(unittest.TestCase):
+    def test_candidate_kernel_bridge_auto_fallback_returns_none_without_backend(self):
+        kernel_input = candidate_native_bridge.build_kernel_input(
+            distribution='norm',
+            fitted_params=[0.0, 1.0],
+            sample_values=[-1.0, 0.0, 1.0],
+        )
+        with mock.patch.object(candidate_native_bridge, '_native_compute_candidate_metrics', None):
+            self.assertIsNone(candidate_native_bridge.compute_candidate_metrics(kernel_input, mode='auto'))
+            native_forced = candidate_native_bridge.compute_candidate_metrics(kernel_input, mode='native')
+            self.assertIsNotNone(native_forced)
+            self.assertGreater(native_forced.error_flags, 0)
+
+    def test_candidate_kernel_bridge_normalizes_to_contiguous_float64(self):
+        with mock.patch.object(
+            candidate_native_bridge,
+            '_native_compute_candidate_metrics',
+            return_value=(1.0, 2.0, 3.0, 4.0, 5.0, 0),
+        ) as kernel_stub:
+            kernel_input = candidate_native_bridge.build_kernel_input(
+                distribution='norm',
+                fitted_params=np.array([0, 1], dtype=np.float32),
+                sample_values=np.array([-1, 0, 1], dtype=np.float32),
+            )
+            output = candidate_native_bridge.compute_candidate_metrics(kernel_input, mode='native')
+            self.assertEqual(output.error_flags, 0)
+            for arr in kernel_stub.call_args.args[1:]:
+                self.assertIsInstance(arr, np.ndarray)
+                self.assertEqual(arr.dtype, np.float64)
+                self.assertTrue(arr.flags['C_CONTIGUOUS'])
+
     def test_native_wrapper_normalizes_list_and_ndarray_inputs_equivalently(self):
         with mock.patch.object(
             native_bridge,
