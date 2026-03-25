@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 from threading import Lock
 from typing import Any, Literal, NamedTuple
 
+from modules.cmm_schema import ensure_cmm_report_schema
 from modules.cmm_parsing import parse_raw_lines_to_blocks
 from modules.db import run_transaction_with_retry
 
@@ -340,7 +342,13 @@ def persist_measurement_rows_python(database: str, rows: list[tuple[Any, ...]]) 
         )
         return True
 
-    return run_transaction_with_retry(database, _insert, retries=4, retry_delay_s=1)
+    try:
+        return run_transaction_with_retry(database, _insert, retries=4, retry_delay_s=1)
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc).lower():
+            raise
+        ensure_cmm_report_schema(database, retries=4, retry_delay_s=1)
+        return run_transaction_with_retry(database, _insert, retries=4, retry_delay_s=1)
 
 
 def persist_measurement_rows_with_backend_and_telemetry(
