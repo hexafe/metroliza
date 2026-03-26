@@ -65,20 +65,20 @@ fn is_dim_line(line: &str) -> bool {
     line.starts_with("DIM")
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum ParsedToken<'a> {
+#[derive(Clone, Debug, PartialEq)]
+enum ParsedToken {
     Number(f64),
-    Text(&'a str),
+    Text(String),
 }
 
-fn parse_token(token: &str) -> ParsedToken<'_> {
+fn parse_token(token: &str) -> ParsedToken {
     match token.trim().parse::<f64>() {
         Ok(value) => ParsedToken::Number(value),
-        Err(_) => ParsedToken::Text(token),
+        Err(_) => ParsedToken::Text(token.to_string()),
     }
 }
 
-fn parse_line_tokens(line: &str) -> Vec<ParsedToken<'_>> {
+fn parse_line_tokens(line: &str) -> Vec<ParsedToken> {
     line.split_whitespace().map(parse_token).collect()
 }
 
@@ -113,7 +113,7 @@ fn extract_header_comment(lines: &[String]) -> (String, usize) {
 fn extract_measurement_tokens_and_raw_lines_consumed(
     lines: &[String],
     preserve_non_numeric_tokens: bool,
-) -> (Vec<ParsedToken<'_>>, usize) {
+) -> (Vec<ParsedToken>, usize) {
     if lines.is_empty() {
         return (Vec::new(), 0);
     }
@@ -124,10 +124,10 @@ fn extract_measurement_tokens_and_raw_lines_consumed(
     }
 
     let code = match code_tokens[0] {
-        ParsedToken::Text(value) => value,
+        ParsedToken::Text(ref value) => value.as_str(),
         ParsedToken::Number(_) => return (Vec::new(), 0),
     };
-    let mut parsed_tokens = vec![ParsedToken::Text(code)];
+    let mut parsed_tokens = vec![ParsedToken::Text(code.to_string())];
     let mut raw_lines_consumed = 1usize;
     let max_token_count = measurement_line_map(code);
     let max_numeric_count = if max_token_count > 0 {
@@ -137,8 +137,8 @@ fn extract_measurement_tokens_and_raw_lines_consumed(
     };
     let mut numeric_count = 0usize;
 
-    let append_tokens = |parsed_tokens: &mut Vec<ParsedToken<'_>>,
-                         tokens: &[ParsedToken<'_>],
+    let append_tokens = |parsed_tokens: &mut Vec<ParsedToken>,
+                         tokens: &[ParsedToken],
                          numeric_count: &mut usize| {
         for token in tokens {
             match token {
@@ -147,7 +147,7 @@ fn extract_measurement_tokens_and_raw_lines_consumed(
                     *numeric_count += 1;
                 }
                 ParsedToken::Text(value) if preserve_non_numeric_tokens => {
-                    parsed_tokens.push(ParsedToken::Text(value));
+                    parsed_tokens.push(ParsedToken::Text(value.clone()));
                 }
                 ParsedToken::Text(_) => {}
             }
@@ -171,7 +171,7 @@ fn extract_measurement_tokens_and_raw_lines_consumed(
         }
 
         let first_token = match raw_line_tokens[0] {
-            ParsedToken::Text(value) => value,
+            ParsedToken::Text(ref value) => value.as_str(),
             ParsedToken::Number(_) => "",
         };
         if is_comment_or_header(raw_line)
@@ -188,7 +188,7 @@ fn extract_measurement_tokens_and_raw_lines_consumed(
     (parsed_tokens, raw_lines_consumed)
 }
 
-fn process_tp_line(tokens: &[ParsedToken<'_>]) -> Vec<Field> {
+fn process_tp_line(tokens: &[ParsedToken]) -> Vec<Field> {
     let mut has_tp_qualifier = false;
     let mut has_explicit_nom_label = false;
     let mut numeric_values: Vec<f64> = Vec::new();
@@ -245,13 +245,13 @@ fn process_tp_line(tokens: &[ParsedToken<'_>]) -> Vec<Field> {
     ]
 }
 
-fn process_line(line: &[ParsedToken<'_>]) -> Vec<Field> {
+fn process_line(line: &[ParsedToken]) -> Vec<Field> {
     if line.is_empty() {
         return Vec::new();
     }
 
     let code = match line[0] {
-        ParsedToken::Text(value) => value,
+        ParsedToken::Text(ref value) => value.as_str(),
         ParsedToken::Number(_) => return Vec::new(),
     };
     if code.starts_with("TP") {

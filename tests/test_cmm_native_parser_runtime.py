@@ -1,4 +1,5 @@
 import importlib
+import time
 
 from modules import cmm_native_parser
 
@@ -196,3 +197,43 @@ def test_parse_blocks_with_backend_keeps_tp_non_tp_mixed_semantic_token_parity(m
 
     native = parser.parse_blocks_with_backend(raw_lines, use_native=True)
     assert native == python
+
+
+def test_native_persistence_preinitialized_db_benchmark(monkeypatch, tmp_path):
+    monkeypatch.setenv("METROLIZA_CMM_PERSIST_BACKEND", "native")
+    parser = importlib.reload(cmm_native_parser)
+    parser.reset_backend_telemetry()
+
+    db_path = str(tmp_path / "native_benchmark.db")
+    rows = [
+        ("X", 10.0, 0.2, -0.2, 0.0, 10.1, 0.1, 0.0, "HEADER", "REF", "/tmp", "f.pdf", "2024-01-01", "001"),
+    ]
+
+    ensure_calls = {"count": 0}
+
+    def _slow_ensure_schema(database, **kwargs):
+        assert database == db_path
+        ensure_calls["count"] += 1
+        time.sleep(0.01)
+
+    def _fake_native_persist(database, normalized_rows):
+        assert database == db_path
+        assert normalized_rows == rows
+        return True
+
+    monkeypatch.setattr(parser, "ensure_cmm_report_schema", _slow_ensure_schema)
+    monkeypatch.setattr(parser, "_native_persist_measurement_rows", _fake_native_persist)
+    monkeypatch.setattr(parser, "_native_normalize_measurement_rows", lambda *args, **kwargs: rows)
+
+    durations = []
+    for _ in range(5):
+        started = time.perf_counter()
+        result = parser.persist_measurement_rows_with_backend_and_telemetry(
+            db_path, rows, use_native=True
+        )
+        durations.append(time.perf_counter() - started)
+        assert result.backend == "native"
+        assert result.inserted is True
+
+    assert ensure_calls["count"] == 0
+    assert all(duration >= 0 for duration in durations)
