@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from modules import chart_renderer, cmm_native_parser, comparison_stats_native, distribution_fit_candidate_native, distribution_fit_native
+from modules import chart_renderer, cmm_native_parser, comparison_stats_native, distribution_fit_candidate_native, distribution_fit_native, group_stats_native
 
 
 def _build_backend_entry(*, available: bool, selected_mode: str, effective_backend: str, error: str = "") -> dict[str, Any]:
@@ -77,6 +77,18 @@ def _resolve_distribution_fit_candidate_entry() -> dict[str, Any]:
     return _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend=effective)
 
 
+def _resolve_group_stats_entry() -> dict[str, Any]:
+    selected_mode = group_stats_native._runtime_backend_choice()
+    available = group_stats_native.native_backend_available()
+    if selected_mode == "python":
+        effective = "python"
+    elif selected_mode == "native":
+        effective = "native" if available else "python"
+    else:
+        effective = "native" if available else "python"
+    return _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend=effective)
+
+
 def _resolve_chart_renderer_entry() -> dict[str, Any]:
     selected_mode = chart_renderer._runtime_backend_choice()
     available = chart_renderer.native_chart_backend_available()
@@ -96,6 +108,7 @@ def build_backend_diagnostic_summary() -> dict[str, dict[str, Any]]:
         "comparison_stats_pairwise": _resolve_comparison_pairwise_entry(),
         "distribution_fit": _resolve_distribution_fit_entry(),
         "distribution_fit_candidate": _resolve_distribution_fit_candidate_entry(),
+        "group_stats": _resolve_group_stats_entry(),
         "chart_renderer": _resolve_chart_renderer_entry(),
     }
 

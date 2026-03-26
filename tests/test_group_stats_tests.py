@@ -51,6 +51,21 @@ class TestGroupStatsNativeCoercion(unittest.TestCase):
         self.assertTrue(captured['values'].flags.c_contiguous)
         self.assertTrue(arr.flags.c_contiguous)
 
+    def test_coerce_sequence_to_float64_forced_python_mode_skips_native(self):
+        values = [1, "2.5", "bad"]
+        with mock.patch.dict("os.environ", {"METROLIZA_GROUP_STATS_BACKEND": "python"}):
+            with mock.patch.object(native_helper, "_native_coerce_sequence_to_float64", side_effect=AssertionError("native should not be called")):
+                arr = native_helper.coerce_sequence_to_float64(values)
+
+        np.testing.assert_allclose(arr[:2], np.array([1.0, 2.5]))
+        self.assertTrue(np.isnan(arr[2]))
+
+    def test_coerce_sequence_to_float64_forced_native_raises_when_native_unavailable(self):
+        with mock.patch.dict("os.environ", {"METROLIZA_GROUP_STATS_BACKEND": "native"}):
+            with mock.patch.object(native_helper, "_native_coerce_sequence_to_float64", None):
+                with self.assertRaisesRegex(RuntimeError, "requested but unavailable"):
+                    native_helper.coerce_sequence_to_float64([1, "2.5", "bad"])
+
 
 class TestGroupStatsTests(unittest.TestCase):
     def test_preprocess_group_coerces_numeric_and_drops_nan(self):

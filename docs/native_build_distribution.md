@@ -96,8 +96,10 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 
 ### Group stats coercion (`modules/group_stats_native.py`)
 
-- No dedicated env toggle yet.
-- Native coercion is used when importable; otherwise wrapper falls back to Python coercion.
+- Backend selection is controlled by `METROLIZA_GROUP_STATS_BACKEND` (`auto`/`native`/`python`).
+- `auto` (default): uses native coercion when available, otherwise wrapper falls back to Python coercion.
+- `native`: requires native coercion and raises if unavailable.
+- `python`: forces Python coercion and bypasses native dispatch.
 
 Runtime fallback from native execution errors in forced-`native` modes is intentionally disabled so backend behavior remains explicit and observable.
 
