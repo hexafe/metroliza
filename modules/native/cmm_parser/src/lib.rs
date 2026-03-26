@@ -809,43 +809,6 @@ fn persist_measurement_rows(database: String, rows: &PyAny) -> PyResult<bool> {
         .transaction()
         .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
 
-    tx.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS MEASUREMENTS (
-            ID INTEGER PRIMARY KEY,
-            AX TEXT,
-            NOM REAL,
-            "+TOL" REAL,
-            "-TOL" REAL,
-            BONUS REAL,
-            MEAS REAL,
-            DEV REAL,
-            OUTTOL REAL,
-            HEADER TEXT,
-            REPORT_ID INTEGER,
-            FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
-        );
-        CREATE TABLE IF NOT EXISTS REPORTS (
-            ID INTEGER PRIMARY KEY,
-            REFERENCE TEXT,
-            FILELOC TEXT,
-            FILENAME TEXT,
-            DATE TEXT,
-            SAMPLE_NUMBER TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_reports_reference ON REPORTS(REFERENCE);
-        CREATE INDEX IF NOT EXISTS idx_reports_filename ON REPORTS(FILENAME);
-        CREATE INDEX IF NOT EXISTS idx_reports_date ON REPORTS(DATE);
-        CREATE INDEX IF NOT EXISTS idx_reports_sample_number ON REPORTS(SAMPLE_NUMBER);
-        CREATE INDEX IF NOT EXISTS idx_reports_identity ON REPORTS(REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER);
-        CREATE INDEX IF NOT EXISTS idx_measurements_report_id ON MEASUREMENTS(REPORT_ID);
-        CREATE INDEX IF NOT EXISTS idx_measurements_report_header_ax ON MEASUREMENTS(REPORT_ID, HEADER, AX);
-        CREATE INDEX IF NOT EXISTS idx_measurements_header ON MEASUREMENTS(HEADER);
-        CREATE INDEX IF NOT EXISTS idx_measurements_ax ON MEASUREMENTS(AX);
-        "#,
-    )
-    .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
-
     let duplicate_count: i64 = tx
         .query_row(
             "SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ?1 AND FILELOC = ?2 AND FILENAME = ?3 AND DATE = ?4 AND SAMPLE_NUMBER = ?5",
