@@ -12,6 +12,7 @@ from modules.chart_renderer import (
     NativeChartRenderer,
     benchmark_histogram_render_runtime,
     build_chart_renderer,
+    build_distribution_native_payload,
     build_histogram_native_payload,
     native_chart_backend_available,
     resolve_chart_renderer_backend,
@@ -152,6 +153,31 @@ def test_native_chart_renderer_falls_back_to_matplotlib_when_extension_missing()
     assert result.backend == "matplotlib"
     assert isinstance(result.png_bytes, bytes)
     assert len(result.png_bytes) > 0
+
+
+def test_native_distribution_renderer_falls_back_to_matplotlib_when_extension_missing():
+    payload = build_distribution_native_payload(
+        values=[[1.0, 1.2, 1.3], [1.4, 1.45, 1.5]],
+        labels=["A", "B"],
+        title="Fallback Distribution",
+    )
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.scatter([0, 1, 2], [1.0, 1.1, 1.2], s=10)
+
+    with mock.patch("modules.chart_renderer._native_render_distribution_png", None):
+        result = NativeChartRenderer().render_distribution_png(payload, fallback_fig=fig)
+
+    plt.close(fig)
+    assert result.backend == "matplotlib"
+    assert isinstance(result.png_bytes, bytes)
+    assert len(result.png_bytes) > 0
+
+
+def test_native_distribution_renderer_validates_payload_contract():
+    payload = {"type": "distribution", "labels": ["A"], "series": "invalid", "title": "Bad Payload"}
+    with mock.patch("modules.chart_renderer._native_render_distribution_png", lambda _payload: b"png"):
+        with pytest.raises(RuntimeError, match="series"):
+            NativeChartRenderer().render_distribution_png(payload)
 
 
 @pytest.mark.skipif(not native_chart_backend_available(), reason="Native chart module not available in current environment")

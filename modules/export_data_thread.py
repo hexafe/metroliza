@@ -187,6 +187,7 @@ from modules.chart_render_service import (
 )
 from modules.chart_renderer import (
     build_chart_renderer,
+    build_distribution_native_payload,
     build_histogram_native_payload,
     native_chart_backend_available,
     resolve_chart_renderer_backend,
@@ -3015,6 +3016,12 @@ class ExportDataThread(QThread):
             'chart_rendering': 0.0,
         }
         self._chart_render_backend_counts = {'native': 0, 'matplotlib': 0}
+        self._chart_render_backend_counts_by_type = {
+            'distribution': {'native': 0, 'matplotlib': 0},
+            'iqr': {'native': 0, 'matplotlib': 0},
+            'histogram': {'native': 0, 'matplotlib': 0},
+            'trend': {'native': 0, 'matplotlib': 0},
+        }
         self._chart_render_timings_by_type = {
             'distribution': [],
             'iqr': [],
@@ -3163,6 +3170,8 @@ class ExportDataThread(QThread):
             self._chart_render_timings_by_type[chart_type].append(elapsed_s)
         if backend in self._chart_render_backend_counts:
             self._chart_render_backend_counts[backend] += 1
+        if chart_type in self._chart_render_backend_counts_by_type and backend in self._chart_render_backend_counts_by_type[chart_type]:
+            self._chart_render_backend_counts_by_type[chart_type][backend] += 1
 
     def build_export_observability_summary(self, *, high_header_threshold=64):
         """Build structured telemetry for one export run.
@@ -3196,6 +3205,20 @@ class ExportDataThread(QThread):
             )
             for chart_type, samples in self._chart_render_timings_by_type.items()
         }
+        per_chart_type_runtime_totals_s = {
+            chart_type: float(sum(samples))
+            for chart_type, samples in self._chart_render_timings_by_type.items()
+        }
+        per_chart_type_backend_distribution = {}
+        for chart_type, backend_counts in self._chart_render_backend_counts_by_type.items():
+            total = sum(int(v) for v in backend_counts.values())
+            per_chart_type_backend_distribution[chart_type] = {
+                'counts': {k: int(v) for k, v in backend_counts.items()},
+                'rates': {
+                    backend: (int(count) / total) if total else 0.0
+                    for backend, count in backend_counts.items()
+                },
+            }
         high_header_cardinality = {
             'threshold': int(high_header_threshold),
             'max_headers_per_partition': 0,
@@ -3230,7 +3253,22 @@ class ExportDataThread(QThread):
             },
             'chart_backend_distribution': chart_backend_distribution,
             'per_chart_type_timing_medians_s': per_chart_type_timing_medians_s,
+            'per_chart_type_runtime_totals_s': per_chart_type_runtime_totals_s,
+            'per_chart_type_backend_distribution': per_chart_type_backend_distribution,
             'high_header_cardinality_scenario': high_header_cardinality,
+        }
+
+    def _update_completion_chart_telemetry(self):
+        """Persist per-chart timing/backend counters into completion metadata."""
+        summary = self.build_export_observability_summary()
+        self.completion_metadata['chart_observability_summary'] = summary
+        self.completion_metadata['chart_native_usage_by_type'] = {
+            chart_type: int(data.get('counts', {}).get('native', 0))
+            for chart_type, data in summary.get('per_chart_type_backend_distribution', {}).items()
+        }
+        self.completion_metadata['chart_runtime_seconds_by_type'] = {
+            chart_type: float(value)
+            for chart_type, value in summary.get('per_chart_type_runtime_totals_s', {}).items()
         }
 
     def _apply_bottleneck_optimizations(self):
@@ -3291,10 +3329,18 @@ class ExportDataThread(QThread):
                 fallback_fig=fig,
                 mode=mode,
             )
-            return render_result.png_bytes
+            return render_result
+
+        if chart_type == 'distribution' and native_payload is not None:
+            render_result = self._chart_renderer.render_distribution_png(
+                native_payload,
+                fallback_fig=fig,
+                mode=mode,
+            )
+            return render_result
 
         render_result = self._chart_renderer.render_figure_png(fig, mode=mode, chart_type=chart_type)
-        return render_result.png_bytes
+        return render_result
 
     @staticmethod
     def _resolve_chart_cell_span(
@@ -3832,6 +3878,7 @@ class ExportDataThread(QThread):
                     )
 
             self._emit_stage_progress('finalize', 1.0)
+            self._update_completion_chart_telemetry()
             self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
             self._log_export_stage("Export completed successfully", stage="completed")
             self.finished.emit()
@@ -3845,6 +3892,7 @@ class ExportDataThread(QThread):
                 self.completion_metadata.update(build_google_fallback_metadata(excel_file=self.excel_file, error=e))
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
                 self.update_label.emit(build_three_line_status(f"Warning: {e}", "Exporting data...", "ETA --"))
+                self._update_completion_chart_telemetry()
                 self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
                 self._log_export_stage("Export completed with local fallback after Google conversion failure", stage="fallback", level="warning", fallback_reason=self.completion_metadata["fallback_message"])
                 self.finished.emit()
@@ -4657,8 +4705,24 @@ class ExportDataThread(QThread):
                     ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
                     figure_legend = move_legend_to_figure(ax)
                     finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
-                    image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='distribution'))
-                    self._record_chart_render_timing('distribution', time.perf_counter() - chart_start, backend='matplotlib')
+                    distribution_native_payload = build_distribution_native_payload(
+                        values=distribution_values,
+                        labels=distribution_labels,
+                        title=build_wrapped_chart_title(distribution_title),
+                        lsl=LSL,
+                        usl=USL,
+                    )
+                    distribution_render_result = self._save_summary_chart(
+                        fig,
+                        chart_type='distribution',
+                        native_payload=distribution_native_payload,
+                    )
+                    image_data = self._register_chart_image(distribution_render_result.png_bytes)
+                    self._record_chart_render_timing(
+                        'distribution',
+                        time.perf_counter() - chart_start,
+                        backend=distribution_render_result.backend,
+                    )
 
                     distribution_slot = _reserve_summary_image_slot('distribution', fig)
                     write_start = time.perf_counter()
@@ -4713,8 +4777,9 @@ class ExportDataThread(QThread):
                     ax.set_ylim(y_min, y_max)
                     finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
 
-                    image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='iqr'))
-                    self._record_chart_render_timing('iqr', time.perf_counter() - chart_start, backend='matplotlib')
+                    iqr_render_result = self._save_summary_chart(fig, chart_type='iqr')
+                    image_data = self._register_chart_image(iqr_render_result.png_bytes)
+                    self._record_chart_render_timing('iqr', time.perf_counter() - chart_start, backend=iqr_render_result.backend)
                     iqr_slot = _reserve_summary_image_slot('iqr', fig)
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, iqr_slot, image_data)
@@ -4781,10 +4846,17 @@ class ExportDataThread(QThread):
                             }
                         )
 
-                        image_data = self._register_chart_image(
-                            self._save_summary_chart(None, chart_type='histogram', native_payload=native_histogram_payload)
+                        histogram_render_result = self._save_summary_chart(
+                            None,
+                            chart_type='histogram',
+                            native_payload=native_histogram_payload,
                         )
-                        self._record_chart_render_timing('histogram', time.perf_counter() - chart_start, backend='native')
+                        image_data = self._register_chart_image(histogram_render_result.png_bytes)
+                        self._record_chart_render_timing(
+                            'histogram',
+                            time.perf_counter() - chart_start,
+                            backend=histogram_render_result.backend,
+                        )
                         slot_fig = plt.figure(figsize=base_histogram_figsize)
                         histogram_slot = _reserve_summary_image_slot('histogram', slot_fig)
                         plt.close(slot_fig)
@@ -5078,8 +5150,17 @@ class ExportDataThread(QThread):
                                 'overlays_enabled': False,
                             }
                         )
-                        image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='histogram', native_payload=native_histogram_payload))
-                        self._record_chart_render_timing('histogram', time.perf_counter() - chart_start, backend='matplotlib')
+                        histogram_render_result = self._save_summary_chart(
+                            fig,
+                            chart_type='histogram',
+                            native_payload=native_histogram_payload,
+                        )
+                        image_data = self._register_chart_image(histogram_render_result.png_bytes)
+                        self._record_chart_render_timing(
+                            'histogram',
+                            time.perf_counter() - chart_start,
+                            backend=histogram_render_result.backend,
+                        )
                         histogram_slot = _reserve_summary_image_slot('histogram', fig)
                         write_start = time.perf_counter()
                         self._insert_summary_image(summary_worksheet, histogram_slot, image_data)
@@ -5129,8 +5210,9 @@ class ExportDataThread(QThread):
                     y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                     ax.set_ylim(y_min, y_max)
 
-                    image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='trend'))
-                    self._record_chart_render_timing('trend', time.perf_counter() - chart_start, backend='matplotlib')
+                    trend_render_result = self._save_summary_chart(fig, chart_type='trend')
+                    image_data = self._register_chart_image(trend_render_result.png_bytes)
+                    self._record_chart_render_timing('trend', time.perf_counter() - chart_start, backend=trend_render_result.backend)
                     trend_slot = _reserve_summary_image_slot('trend', fig)
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, trend_slot, image_data)
