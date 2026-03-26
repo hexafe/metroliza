@@ -207,6 +207,10 @@ logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
+# Backward-compatible module-level alias used by tests/patch points in this module.
+# Export histogram selection now uses histogram-specific capability semantics.
+native_chart_backend_available = native_histogram_backend_available
+
 
 _INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
 
@@ -4824,7 +4828,7 @@ class ExportDataThread(QThread):
                     histogram_bin_count = resolve_histogram_bin_count(histogram_values).get('bin_count')
 
                     native_histogram_capable = False
-                    if native_histogram_backend_available():
+                    if native_chart_backend_available():
                         try:
                             native_histogram_capable = resolve_chart_renderer_backend() == 'native'
                         except RuntimeError:
