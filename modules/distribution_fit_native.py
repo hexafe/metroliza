@@ -16,8 +16,16 @@ except Exception:  # pragma: no cover - optional native module
     _native_compute_ad_ks_statistics = None
 
 
-def native_backend_available() -> bool:
+def native_monte_carlo_backend_available() -> bool:
     return _native_estimate_ad_pvalue_monte_carlo is not None
+
+
+def native_ad_ks_backend_available() -> bool:
+    return _native_compute_ad_ks_statistics is not None
+
+
+def native_backend_available() -> bool:
+    return native_monte_carlo_backend_available() and native_ad_ks_backend_available()
 
 
 def _as_float64_1d_contiguous(values: Sequence[float] | np.ndarray) -> np.ndarray:
