@@ -24,6 +24,11 @@ try:
 except Exception:  # pragma: no cover - optional native extension
     _native_render_histogram_png = None
 
+try:
+    from _metroliza_chart_native import render_distribution_png as _native_render_distribution_png  # type: ignore
+except Exception:  # pragma: no cover - optional native extension
+    _native_render_distribution_png = None
+
 
 class ChartRenderResult(NamedTuple):
     png_bytes: bytes
@@ -40,6 +45,10 @@ class ChartRenderer(ABC):
     @abstractmethod
     def render_histogram_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
         """Render histogram payload into PNG bytes."""
+
+    @abstractmethod
+    def render_distribution_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        """Render distribution payload into PNG bytes."""
 
 
 def _savefig_bytes(fig: Any, *, mode: str = "workbook", dpi: int = 150) -> bytes:
@@ -62,6 +71,11 @@ class MatplotlibChartRenderer(ChartRenderer):
             raise RuntimeError("Matplotlib histogram fallback requires a matplotlib figure.")
         return self.render_figure_png(fallback_fig, mode=mode, chart_type="histogram")
 
+    def render_distribution_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        if fallback_fig is None:
+            raise RuntimeError("Matplotlib distribution fallback requires a matplotlib figure.")
+        return self.render_figure_png(fallback_fig, mode=mode, chart_type="distribution")
+
 
 class NativeChartRenderer(ChartRenderer):
     """Native histogram renderer with matplotlib fallback for compatibility."""
@@ -83,6 +97,19 @@ class NativeChartRenderer(ChartRenderer):
         png_bytes = _native_render_histogram_png(payload)
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native chart renderer returned non-bytes payload.")
+        return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
+
+    def render_distribution_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        if _native_render_distribution_png is None:
+            if fallback_fig is None:
+                raise RuntimeError("Native distribution renderer unavailable and no matplotlib fallback figure provided.")
+            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="distribution")
+            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
+
+        _validate_distribution_native_payload(payload)
+        png_bytes = _native_render_distribution_png(payload)
+        if not isinstance(png_bytes, (bytes, bytearray)):
+            raise RuntimeError("Native distribution renderer returned non-bytes payload.")
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
 
 
@@ -165,6 +192,29 @@ def build_histogram_native_payload(
     return payload
 
 
+def build_distribution_native_payload(
+    *,
+    values: list[list[float]] | np.ndarray,
+    labels: list[str],
+    title: str,
+    lsl: float | None = None,
+    usl: float | None = None,
+) -> dict[str, Any]:
+    """Build base native payload contract for distribution charts."""
+    normalized_values: list[list[float]] = []
+    for series in values:
+        numeric = np.asarray(series, dtype=float)
+        normalized_values.append(numeric[np.isfinite(numeric)].tolist())
+    return {
+        "type": "distribution",
+        "series": normalized_values,
+        "labels": [str(label) for label in labels],
+        "title": str(title),
+        "lsl": None if lsl is None else float(lsl),
+        "usl": None if usl is None else float(usl),
+    }
+
+
 def _validate_histogram_native_payload(payload: dict[str, Any]) -> None:
     """Validate native histogram payload contract before crossing backend boundary."""
     if not isinstance(payload, dict):
@@ -200,6 +250,27 @@ def _validate_histogram_native_payload(payload: dict[str, Any]) -> None:
     modeled_overlays = visual_metadata.get("modeled_overlays")
     if modeled_overlays is not None and not isinstance(modeled_overlays, dict):
         raise RuntimeError("Native histogram payload `visual_metadata.modeled_overlays` must be a mapping.")
+
+
+def _validate_distribution_native_payload(payload: dict[str, Any]) -> None:
+    """Validate native distribution payload contract before backend dispatch."""
+    if not isinstance(payload, dict):
+        raise RuntimeError("Native distribution payload must be a mapping.")
+    if payload.get("type") != "distribution":
+        raise RuntimeError("Native distribution payload `type` must equal `distribution`.")
+    labels = payload.get("labels")
+    if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+        raise RuntimeError("Native distribution payload `labels` must be a list[str].")
+    series = payload.get("series")
+    if not isinstance(series, list):
+        raise RuntimeError("Native distribution payload `series` must be a list of numeric series.")
+    for values in series:
+        if not isinstance(values, list) or any(not isinstance(item, (int, float)) for item in values):
+            raise RuntimeError("Native distribution payload `series` entries must be list[float].")
+    if len(series) != len(labels):
+        raise RuntimeError("Native distribution payload requires equal series/labels length.")
+    if not isinstance(payload.get("title"), str):
+        raise RuntimeError("Native distribution payload `title` must be a string.")
 
 
 def benchmark_histogram_render_runtime(renderer: ChartRenderer, payload: dict[str, Any], *, iterations: int = 3) -> dict[str, float]:

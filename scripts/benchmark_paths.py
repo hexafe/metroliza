@@ -867,6 +867,84 @@ def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histo
     )
 
 
+def benchmark_chart_type_native_compare_path(temp_dir: Path, *, chart_type: str, iterations: int) -> ScenarioResult:
+    """Benchmark one summary chart type using ExportDataThread timing hooks."""
+    from modules.contracts import AppPaths, ExportOptions, ExportRequest
+    from modules.export_data_thread import ExportDataThread
+
+    class _BenchWorksheet:
+        def write(self, *_args, **_kwargs):
+            return None
+
+        def insert_image(self, *_args, **_kwargs):
+            return None
+
+    chart_key = str(chart_type).strip().lower()
+    if chart_key not in {"distribution", "iqr", "trend", "histogram"}:
+        raise ValueError(f"Unsupported chart_type benchmark: {chart_type}")
+
+    header_group = pd.DataFrame(
+        {
+            "MEAS": np.linspace(9.8, 10.2, 120),
+            "NOM": [10.0] * 120,
+            "+TOL": [0.2] * 120,
+            "-TOL": [-0.2] * 120,
+            "SAMPLE_NUMBER": [str(i + 1) for i in range(120)],
+            "DATE": ["2024-01-01"] * 120,
+        }
+    )
+
+    backend_stage_medians: dict[str, float] = {}
+    backend_native_counts: dict[str, int] = {}
+    backend_chart_medians: dict[str, float] = {}
+    original_backend_env = os.environ.get("METROLIZA_CHART_RENDERER_BACKEND")
+    try:
+        for backend in ("matplotlib", "native"):
+            os.environ["METROLIZA_CHART_RENDERER_BACKEND"] = backend
+            request = ExportRequest(
+                paths=AppPaths(db_file=str(temp_dir / "bench.sqlite"), excel_file=str(temp_dir / "bench.xlsx")),
+                options=ExportOptions(generate_summary_sheet=True, preset="fast_diagnostics"),
+            )
+            thread = ExportDataThread(request)
+            thread._optimization_toggles["summary_sheet_minimum_charts"] = {chart_key}
+            worksheet = _BenchWorksheet()
+
+            for _ in range(max(1, int(iterations))):
+                thread.summary_sheet_fill(worksheet, "BENCH_HEADER", header_group.copy(), col=0)
+
+            summary = thread.build_export_observability_summary()
+            backend_stage_medians[backend] = float(summary.get("stage_timings_s", {}).get("chart_rendering", 0.0))
+            backend_native_counts[backend] = int(
+                summary.get("per_chart_type_backend_distribution", {}).get(chart_key, {}).get("counts", {}).get("native", 0)
+            )
+            backend_chart_medians[backend] = float(summary.get("per_chart_type_timing_medians_s", {}).get(chart_key, 0.0))
+    finally:
+        if original_backend_env is None:
+            os.environ.pop("METROLIZA_CHART_RENDERER_BACKEND", None)
+        else:
+            os.environ["METROLIZA_CHART_RENDERER_BACKEND"] = original_backend_env
+
+    native_median = backend_chart_medians.get("native", 0.0)
+    matplotlib_median = backend_chart_medians.get("matplotlib", 0.0)
+    speedup = (matplotlib_median / native_median) if native_median > 0 else 0.0
+    return ScenarioResult(
+        scenario=f"chart_type_native_compare_{chart_key}",
+        wall_time_s=float(backend_stage_medians.get("matplotlib", 0.0) + backend_stage_medians.get("native", 0.0)),
+        stage_timings_s={
+            f"{chart_key}_matplotlib_median_s": matplotlib_median,
+            f"{chart_key}_native_median_s": native_median,
+            f"{chart_key}_native_speedup_ratio": speedup,
+        },
+        input_metrics={
+            "rows": int(len(header_group)),
+            "headers": 1,
+            "chart_count": int(max(1, int(iterations)) * 2),
+            f"{chart_key}_native_usage_count_matplotlib_backend": int(backend_native_counts.get("matplotlib", 0)),
+            f"{chart_key}_native_usage_count_native_backend": int(backend_native_counts.get("native", 0)),
+        },
+    )
+
+
 def build_benchmark_run_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     native_count = 0
     matplotlib_count = 0
@@ -947,6 +1025,13 @@ def main() -> int:
     parser.add_argument('--cmm-bench-measurements-per-report', type=int, default=140)
     parser.add_argument('--chart-render-iterations', type=int, default=5)
     parser.add_argument('--chart-render-histogram-points', type=int, default=4000)
+    parser.add_argument('--chart-type-benchmark-iterations', type=int, default=3)
+    parser.add_argument(
+        '--chart-type-benchmark-chart',
+        choices=('distribution', 'iqr', 'trend', 'histogram'),
+        default='distribution',
+        help='Chart type used by chart_type_native_compare scenario.',
+    )
     parser.add_argument('--enforce-chart-render-guardrail', action='store_true')
     parser.add_argument('--chart-render-max-median-regression-ratio', type=float, default=2.5)
     parser.add_argument(
@@ -971,6 +1056,7 @@ def main() -> int:
             'group_preprocess_mixed_types_compare',
             'cmm_parser_backend_compare',
             'chart_render_budget_path',
+            'chart_type_native_compare',
         ),
         help='Optional list of scenario keys to run. Defaults to running all scenarios.',
     )
@@ -1013,6 +1099,11 @@ def main() -> int:
             temp_path,
             iterations=max(1, args.chart_render_iterations),
             histogram_points=max(32, args.chart_render_histogram_points),
+        ),
+        'chart_type_native_compare': lambda temp_path: benchmark_chart_type_native_compare_path(
+            temp_path,
+            chart_type=args.chart_type_benchmark_chart,
+            iterations=max(1, args.chart_type_benchmark_iterations),
         ),
     }
     selected_scenarios = args.scenarios or list(scenario_runners.keys())
