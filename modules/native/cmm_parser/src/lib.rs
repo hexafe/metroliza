@@ -65,8 +65,25 @@ fn is_dim_line(line: &str) -> bool {
     line.starts_with("DIM")
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ParsedToken<'a> {
+    Number(f64),
+    Text(&'a str),
+}
+
+fn parse_token(token: &str) -> ParsedToken<'_> {
+    match token.trim().parse::<f64>() {
+        Ok(value) => ParsedToken::Number(value),
+        Err(_) => ParsedToken::Text(token),
+    }
+}
+
+fn parse_line_tokens(line: &str) -> Vec<ParsedToken<'_>> {
+    line.split_whitespace().map(parse_token).collect()
+}
+
 fn is_number(value: &str) -> bool {
-    value.trim().parse::<f64>().is_ok()
+    matches!(parse_token(value), ParsedToken::Number(_))
 }
 
 fn strip_comment_prefix(line: &str) -> String {
@@ -96,101 +113,98 @@ fn extract_header_comment(lines: &[String]) -> (String, usize) {
 fn extract_measurement_tokens_and_raw_lines_consumed(
     lines: &[String],
     preserve_non_numeric_tokens: bool,
-) -> (Vec<String>, usize) {
+) -> (Vec<ParsedToken<'_>>, usize) {
     if lines.is_empty() {
         return (Vec::new(), 0);
     }
 
-    let code_tokens: Vec<String> = lines[0]
-        .split_whitespace()
-        .map(ToString::to_string)
-        .collect();
+    let code_tokens = parse_line_tokens(&lines[0]);
     if code_tokens.is_empty() {
         return (Vec::new(), 0);
     }
 
-    let code = code_tokens[0].clone();
-    let mut parsed_tokens = vec![code.clone()];
+    let code = match code_tokens[0] {
+        ParsedToken::Text(value) => value,
+        ParsedToken::Number(_) => return (Vec::new(), 0),
+    };
+    let mut parsed_tokens = vec![ParsedToken::Text(code)];
     let mut raw_lines_consumed = 1usize;
-    let max_token_count = measurement_line_map(&code);
+    let max_token_count = measurement_line_map(code);
     let max_numeric_count = if max_token_count > 0 {
         max_token_count - 1
     } else {
         0
     };
+    let mut numeric_count = 0usize;
 
-    let numeric_tokens_consumed = |tokens: &[String]| {
-        tokens
-            .iter()
-            .skip(1)
-            .filter(|token| is_number(token))
-            .count()
-    };
-
-    let append_tokens = |parsed_tokens: &mut Vec<String>, tokens: &[String]| {
+    let append_tokens = |parsed_tokens: &mut Vec<ParsedToken<'_>>,
+                         tokens: &[ParsedToken<'_>],
+                         numeric_count: &mut usize| {
         for token in tokens {
-            if is_number(token) {
-                parsed_tokens.push(token.clone());
-                if max_numeric_count > 0
-                    && numeric_tokens_consumed(parsed_tokens) >= max_numeric_count
-                {
-                    break;
+            match token {
+                ParsedToken::Number(value) => {
+                    parsed_tokens.push(ParsedToken::Number(*value));
+                    *numeric_count += 1;
                 }
-            } else if preserve_non_numeric_tokens {
-                parsed_tokens.push(token.clone());
-                if max_numeric_count > 0
-                    && numeric_tokens_consumed(parsed_tokens) >= max_numeric_count
-                {
-                    break;
+                ParsedToken::Text(value) if preserve_non_numeric_tokens => {
+                    parsed_tokens.push(ParsedToken::Text(value));
                 }
+                ParsedToken::Text(_) => {}
+            }
+            if max_numeric_count > 0 && *numeric_count >= max_numeric_count {
+                break;
             }
         }
     };
 
-    append_tokens(&mut parsed_tokens, &code_tokens[1..]);
+    append_tokens(&mut parsed_tokens, &code_tokens[1..], &mut numeric_count);
 
     for raw_line in lines.iter().skip(1) {
-        if max_numeric_count > 0 && numeric_tokens_consumed(&parsed_tokens) >= max_numeric_count {
+        if max_numeric_count > 0 && numeric_count >= max_numeric_count {
             break;
         }
 
-        let raw_line_tokens: Vec<String> = raw_line
-            .split_whitespace()
-            .map(ToString::to_string)
-            .collect();
+        let raw_line_tokens = parse_line_tokens(raw_line);
         if raw_line_tokens.is_empty() {
             raw_lines_consumed += 1;
             continue;
         }
 
+        let first_token = match raw_line_tokens[0] {
+            ParsedToken::Text(value) => value,
+            ParsedToken::Number(_) => "",
+        };
         if is_comment_or_header(raw_line)
             || is_dim_line(raw_line)
-            || measurement_line_map(&raw_line_tokens[0]) > 0
+            || measurement_line_map(first_token) > 0
         {
             break;
         }
 
         raw_lines_consumed += 1;
-        append_tokens(&mut parsed_tokens, &raw_line_tokens);
+        append_tokens(&mut parsed_tokens, &raw_line_tokens, &mut numeric_count);
     }
 
     (parsed_tokens, raw_lines_consumed)
 }
 
-fn process_tp_line(tokens: &[String]) -> Vec<Field> {
+fn process_tp_line(tokens: &[ParsedToken<'_>]) -> Vec<Field> {
     let mut has_tp_qualifier = false;
     let mut has_explicit_nom_label = false;
     let mut numeric_values: Vec<f64> = Vec::new();
 
     for token in tokens.iter().skip(1) {
-        let uppercase = token.to_uppercase();
-        let normalized = uppercase.trim_end_matches(':');
-        if let Ok(value) = token.parse::<f64>() {
-            numeric_values.push(value);
-        } else if TP_QUALIFIERS.contains(&normalized) {
-            has_tp_qualifier = true;
-        } else if TP_SEMANTIC_LABELS.contains(&normalized) && normalized == "NOM" {
-            has_explicit_nom_label = true;
+        match token {
+            ParsedToken::Number(value) => numeric_values.push(*value),
+            ParsedToken::Text(value) => {
+                let uppercase = value.to_uppercase();
+                let normalized = uppercase.trim_end_matches(':');
+                if TP_QUALIFIERS.contains(&normalized) {
+                    has_tp_qualifier = true;
+                } else if TP_SEMANTIC_LABELS.contains(&normalized) && normalized == "NOM" {
+                    has_explicit_nom_label = true;
+                }
+            }
         }
     }
 
@@ -231,98 +245,96 @@ fn process_tp_line(tokens: &[String]) -> Vec<Field> {
     ]
 }
 
-fn normalize_numeric_tokens(line: &[String]) -> Vec<String> {
-    let mut normalized = vec![line[0].clone()];
-    normalized.extend(
-        line.iter()
-            .skip(1)
-            .filter(|token| is_number(token))
-            .cloned(),
-    );
-    normalized
-}
-
-fn process_line(line: &[String]) -> Vec<Field> {
+fn process_line(line: &[ParsedToken<'_>]) -> Vec<Field> {
     if line.is_empty() {
         return Vec::new();
     }
 
-    let normalized_line = if !line[0].starts_with("TP") {
-        normalize_numeric_tokens(line)
-    } else {
-        line.to_vec()
+    let code = match line[0] {
+        ParsedToken::Text(value) => value,
+        ParsedToken::Number(_) => return Vec::new(),
     };
+    if code.starts_with("TP") {
+        return process_tp_line(line);
+    }
 
-    let code = normalized_line[0].as_str();
-    match (code, normalized_line.len()) {
+    let numeric_values: Vec<f64> = line
+        .iter()
+        .skip(1)
+        .filter_map(|token| match token {
+            ParsedToken::Number(value) => Some(*value),
+            ParsedToken::Text(_) => None,
+        })
+        .collect();
+
+    match (code, numeric_values.len()) {
         ("X" | "Y" | "Z", 4) => vec![
             Field::Text(code.to_string()),
-            Field::Float(normalized_line[1].parse().unwrap()),
+            Field::Float(numeric_values[0]),
             Field::Empty,
             Field::Empty,
             Field::Empty,
-            Field::Float(normalized_line[2].parse().unwrap()),
-            Field::Float(normalized_line[3].parse().unwrap()),
+            Field::Float(numeric_values[1]),
+            Field::Float(numeric_values[2]),
             Field::Empty,
         ],
         ("X" | "Y" | "Z", 7) => vec![
             Field::Text(code.to_string()),
-            Field::Float(normalized_line[1].parse().unwrap()),
-            Field::Float(normalized_line[2].parse().unwrap()),
-            Field::Float(normalized_line[3].parse().unwrap()),
+            Field::Float(numeric_values[0]),
+            Field::Float(numeric_values[1]),
+            Field::Float(numeric_values[2]),
             Field::Empty,
-            Field::Float(normalized_line[4].parse().unwrap()),
-            Field::Float(normalized_line[5].parse().unwrap()),
-            Field::Float(normalized_line[6].parse().unwrap()),
+            Field::Float(numeric_values[3]),
+            Field::Float(numeric_values[4]),
+            Field::Float(numeric_values[5]),
         ],
-        (c, _) if c.starts_with("TP") => process_tp_line(&normalized_line),
         ("M", 7) | ("D", 7) | ("RN", 7) | ("PR", 7) => vec![
             Field::Text(code.to_string()),
-            Field::Float(normalized_line[1].parse().unwrap()),
-            Field::Float(normalized_line[2].parse().unwrap()),
-            Field::Float(normalized_line[3].parse().unwrap()),
+            Field::Float(numeric_values[0]),
+            Field::Float(numeric_values[1]),
+            Field::Float(numeric_values[2]),
             Field::Empty,
-            Field::Float(normalized_line[4].parse().unwrap()),
-            Field::Float(normalized_line[5].parse().unwrap()),
-            Field::Float(normalized_line[6].parse().unwrap()),
+            Field::Float(numeric_values[3]),
+            Field::Float(numeric_values[4]),
+            Field::Float(numeric_values[5]),
         ],
         ("M", 8) | ("DF", 8) => vec![
             Field::Text(code.to_string()),
-            Field::Float(normalized_line[1].parse().unwrap()),
-            Field::Float(normalized_line[2].parse().unwrap()),
-            Field::Float(normalized_line[3].parse().unwrap()),
-            Field::Float(normalized_line[4].parse().unwrap()),
-            Field::Float(normalized_line[5].parse().unwrap()),
-            Field::Float(normalized_line[6].parse().unwrap()),
-            Field::Float(normalized_line[7].parse().unwrap()),
+            Field::Float(numeric_values[0]),
+            Field::Float(numeric_values[1]),
+            Field::Float(numeric_values[2]),
+            Field::Float(numeric_values[3]),
+            Field::Float(numeric_values[4]),
+            Field::Float(numeric_values[5]),
+            Field::Float(numeric_values[6]),
         ],
         ("DF", 7) | ("A", 7) => vec![
             Field::Text(code.to_string()),
-            Field::Float(normalized_line[1].parse().unwrap()),
-            Field::Float(normalized_line[2].parse().unwrap()),
-            Field::Float(normalized_line[3].parse().unwrap()),
+            Field::Float(numeric_values[0]),
+            Field::Float(numeric_values[1]),
+            Field::Float(numeric_values[2]),
             Field::Float(0.0),
-            Field::Float(normalized_line[4].parse().unwrap()),
-            Field::Float(normalized_line[5].parse().unwrap()),
-            Field::Float(normalized_line[6].parse().unwrap()),
+            Field::Float(numeric_values[3]),
+            Field::Float(numeric_values[4]),
+            Field::Float(numeric_values[5]),
         ],
         ("PR" | "PA", 4) => vec![
             Field::Text(code.to_string()),
-            Field::Float(normalized_line[1].parse().unwrap()),
+            Field::Float(numeric_values[0]),
             Field::Empty,
             Field::Empty,
             Field::Empty,
-            Field::Float(normalized_line[2].parse().unwrap()),
-            Field::Float(normalized_line[3].parse().unwrap()),
+            Field::Float(numeric_values[1]),
+            Field::Float(numeric_values[2]),
             Field::Empty,
         ],
-        ("D1" | "D2" | "D3" | "D4", 5) if is_number(&normalized_line[1]) => vec![
+        ("D1" | "D2" | "D3" | "D4", 5) => vec![
             Field::Text(code.to_string()),
-            Field::Float(normalized_line[1].parse().unwrap()),
-            Field::Float(normalized_line[2].parse().unwrap()),
-            Field::Float(normalized_line[3].parse().unwrap()),
+            Field::Float(numeric_values[0]),
+            Field::Float(numeric_values[1]),
+            Field::Float(numeric_values[2]),
             Field::Empty,
-            Field::Float(normalized_line[4].parse().unwrap()),
+            Field::Float(numeric_values[3]),
             Field::Empty,
             Field::Empty,
         ],
@@ -477,10 +489,12 @@ fn parse_raw_lines_to_blocks_native(raw_lines: &[String]) -> Vec<Block> {
                     header_comment.push(HeaderEntry::Text(strip_comment_prefix(&line)));
                 }
             } else {
-                let tokens: Vec<String> =
-                    line.split_whitespace().map(ToString::to_string).collect();
-                if !tokens.is_empty() && measurement_line_map(&tokens[0]) > 0 {
-                    let preserve_non_numeric_tokens = tokens[0].starts_with("TP");
+                let mut tokens = line.split_whitespace();
+                if let Some(code) = tokens.next() {
+                    if measurement_line_map(code) == 0 {
+                        continue;
+                    }
+                    let preserve_non_numeric_tokens = code.starts_with("TP");
                     let (parsed_tokens, consumed) =
                         extract_measurement_tokens_and_raw_lines_consumed(
                             &raw_lines[index..],

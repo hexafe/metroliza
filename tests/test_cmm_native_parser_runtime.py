@@ -169,3 +169,30 @@ def test_backend_telemetry_snapshot_includes_normalization_counts(monkeypatch):
     assert snapshot["normalize"]["native"] == 0
     assert snapshot["normalize"]["rows_python"] == 1
     assert snapshot["normalize"]["latency_python_s"] >= 0.0
+
+
+def test_parse_blocks_with_backend_keeps_tp_non_tp_mixed_semantic_token_parity(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CMM_PARSER_BACKEND", "auto")
+    parser = importlib.reload(cmm_native_parser)
+
+    raw_lines = [
+        "#MIXED TOKENS",
+        "DIM",
+        "X NOM 10 +TOL 0.2 -TOL -0.2 MEAS 10.1 DEV 0.1 OUTTOL 0",
+        "TP MMC +TOL 0.4 BONUS 0.1 MEAS 0.25 DEV 0.25 OUTTOL 0",
+        "#END",
+    ]
+
+    python = parser.parse_blocks_with_backend(raw_lines, use_native=False)
+
+    if parser._native_parse_blocks is None:
+        try:
+            parser.parse_blocks_with_backend(raw_lines, use_native=True)
+        except RuntimeError:
+            assert parser.parse_blocks_with_backend(raw_lines) == python
+            return
+        raise AssertionError("native backend mode must raise when native parser is unavailable")
+        return
+
+    native = parser.parse_blocks_with_backend(raw_lines, use_native=True)
+    assert native == python
