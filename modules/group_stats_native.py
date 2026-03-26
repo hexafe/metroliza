@@ -28,7 +28,14 @@ def coerce_sequence_to_float64(values: Sequence[Any]) -> np.ndarray:
     """Return contiguous float64 values with NaN placeholders for failed coercions."""
 
     if _native_coerce_sequence_to_float64 is not None:
-        coerced = _native_coerce_sequence_to_float64(values)
+        native_input: Sequence[Any] = values
+        if isinstance(values, np.ndarray):
+            if values.dtype == np.float64 and values.flags.c_contiguous:
+                native_input = values
+            elif values.dtype != object:
+                native_input = np.ascontiguousarray(values, dtype=np.float64)
+
+        coerced = _native_coerce_sequence_to_float64(native_input)
         return np.ascontiguousarray(coerced, dtype=np.float64)
 
     return _coerce_sequence_to_float64_python(values)
