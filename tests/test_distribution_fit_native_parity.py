@@ -9,6 +9,7 @@ from scipy.stats import gamma, lognorm, norm, weibull_min
 import modules.distribution_fit_native as native_bridge
 import modules.distribution_fit_candidate_native as candidate_native_bridge
 import modules.distribution_fit_service as service
+import scripts.benchmark_distribution_fit_batch as benchmark_distribution_fit_batch
 
 FIXTURE_PATH = Path('tests/fixtures/distribution_fit/native_kernel_edge_cases.json')
 
@@ -173,6 +174,17 @@ class TestDistributionFitNativeParity(unittest.TestCase):
             self.assertIs(monte_carlo_stub.call_args.args[1], contiguous_params)
             self.assertIs(stats_stub.call_args.args[1], contiguous_params)
             self.assertIs(stats_stub.call_args.args[2], contiguous_sample)
+
+    def test_native_monte_carlo_throughput_metric_scales_with_high_iteration_runs(self):
+        iterations = 200_000
+        reps = 3
+        throughput = benchmark_distribution_fit_batch._native_monte_carlo_throughput(
+            iterations=iterations,
+            reps=reps,
+            elapsed_seconds=1.5,
+        )
+        self.assertAlmostEqual(throughput, (iterations * reps) / 1.5)
+        self.assertGreater(throughput, 100_000.0)
 
     @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
     def test_native_seeded_runs_are_exactly_reproducible(self):
