@@ -372,6 +372,24 @@ def test_native_parser_matches_python_for_tolerance_propagation_edge_when_availa
 
     assert native == python
 
+
+def test_native_parser_matches_python_for_mixed_tp_and_non_tp_semantic_tokens_when_available():
+    if not native_backend_available():
+        pytest.skip("Native CMM parser prototype module is not built in this environment")
+
+    raw_lines = [
+        "#MIXED TOKENS",
+        "DIM",
+        "X NOM 10 +TOL 0.2 -TOL -0.2 MEAS 10.1 DEV 0.1 OUTTOL 0",
+        "TP MMC +TOL 0.4 BONUS 0.1 MEAS 0.25 DEV 0.25 OUTTOL 0",
+        "#END",
+    ]
+
+    native = parse_blocks_with_backend(raw_lines, use_native=True)
+    python = parse_blocks_with_backend(raw_lines, use_native=False)
+
+    assert native == python
+
 def test_non_tp_x_parser_ignores_semantic_labels_without_shifting_values():
     raw_lines = [
         "#X LABELED",
