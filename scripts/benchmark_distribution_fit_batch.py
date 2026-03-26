@@ -23,6 +23,7 @@ from modules.distribution_fit_service import (  # noqa: E402
 )
 from modules.distribution_fit_native import (  # noqa: E402
     native_backend_available,
+    native_monte_carlo_backend_available,
     estimate_ad_pvalue_monte_carlo_native,
 )
 
@@ -178,7 +179,7 @@ def _run_native_mode_subprocess(*, mode: str, args) -> float:
 
 
 def _run_native_monte_carlo_scaling_benchmark(args) -> int:
-    if not native_backend_available():
+    if not native_monte_carlo_backend_available():
         print('native backend unavailable; skipping native single-thread vs parallel benchmark')
         return 0
 
