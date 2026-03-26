@@ -12,7 +12,7 @@ The gate uses a fixed synthetic workload and must run with:
 - `--cmm-bench-report-count 120`
 - `--cmm-bench-measurements-per-report 120`
 - `--enforce-cmm-parser-guardrail`
-- `--cmm-native-min-speedup-ratio 0.90`
+- `--cmm-native-min-speedup-ratio 1.00`
 - `--cmm-native-min-usage-rate 0.95`
 - `--max-median-regression-pct 12`
 - `--min-median-regression-s 0.050`
@@ -39,7 +39,7 @@ Because this benchmark is runtime-sensitive and runs on shared hosted runners, m
 - Treat small single-run oscillations as noise.
 - Use the **median across 3 measured runs** as the decision signal.
 - The guardrail hard-fails only when:
-  - native speedup ratio falls below `0.90`, or
+  - native speedup ratio falls below `1.00`, or
   - native parser usage rate falls below `0.95`, or
   - trend comparison reports median regression greater than `12%` **and** absolute slowdown greater than `0.050s`.
 
@@ -66,8 +66,16 @@ When `cmm-parser-perf-gate` fails:
 
 ## Baseline/threshold governance
 
-- Keep `0.90` speedup and `0.95` native usage as pinned CI baselines unless a deliberate governance decision updates them.
+- Keep `1.00` speedup and `0.95` native usage as pinned CI baselines unless a deliberate governance decision updates them.
 - Any threshold or baseline snapshot change must include:
   - explicit rationale,
   - before/after median evidence,
   - link to the CI artifacts that motivated the change.
+
+Baseline refresh procedure (required when thresholds or canonical workload config change):
+
+1. Run a dedicated baseline-refresh workflow on `ubuntu-latest` with canonical warmup + 3 measured runs.
+2. Attach raw artifacts for all measured runs (`benchmark-paths.json`) and trend output (`trend-report.json`).
+3. Include a compact evidence table in the PR (old baseline median, new median, delta %, absolute delta s) for `cmm_parser_backend_compare`.
+4. Confirm guardrails still hold after refresh: native speedup ratio `>= 1.00`, native usage rate `>= 0.95`, and no trend-regression violation under existing thresholds.
+5. Land threshold updates and `docs/perf_baseline_snapshot.json` changes together in the same dedicated governance PR (no unrelated code changes).
