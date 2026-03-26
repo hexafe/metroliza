@@ -370,6 +370,25 @@ class TestExportCompletionMessaging(unittest.TestCase):
             f'Export file: {expected_file_uri}'
         )
 
+    def test_completion_message_includes_backend_diagnostics_panel_when_present(self):
+        from modules.export_dialog import build_export_completion_message
+
+        metadata = {
+            'backend_diagnostics_lines': [
+                'chart_renderer: status=native_available, available=True, selected=auto, effective=native',
+                'cmm_parser: status=native_unavailable_fallback, available=False, selected=auto, effective=python',
+            ],
+        }
+        _level, _title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='excel_xlsx',
+            completion_metadata=metadata,
+        )
+
+        self.assertIn('Backend diagnostics:', message)
+        self.assertIn('- chart_renderer: status=native_available', message)
+        self.assertIn('- cmm_parser: status=native_unavailable_fallback', message)
+
 
 class TestExportTargetSelection(unittest.TestCase):
     @classmethod

@@ -64,6 +64,7 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
     warnings = [str(w) for w in metadata.get('conversion_warnings', []) if str(w).strip()]
     fallback_message = str(metadata.get('fallback_message', '')).strip()
     converted_url = str(metadata.get('converted_url', '')).strip()
+    backend_diagnostic_lines = [str(line) for line in metadata.get('backend_diagnostics_lines', []) if str(line).strip()]
     export_directory_line = build_export_directory_link_line(excel_file)
 
     base_success_lines = [f"Data exported successfully to {excel_file}."]
@@ -86,6 +87,8 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
             if warnings:
                 message_lines.append("Warnings/Errors:")
                 message_lines.extend(f"- {warning}" for warning in warnings)
+            if backend_diagnostic_lines:
+                message_lines.extend(["", "Backend diagnostics:", *[f"- {line}" for line in backend_diagnostic_lines]])
             return 'warning', 'Export completed with Google fallback', "\n".join(message_lines)
 
         if converted_url:
@@ -94,8 +97,12 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
                 "",
                 f"Google Sheet: {converted_url}",
             ])
+            if backend_diagnostic_lines:
+                message_lines.extend(["", "Backend diagnostics:", *[f"- {line}" for line in backend_diagnostic_lines]])
             return 'info', 'Export successful', "\n".join(message_lines)
 
+    if backend_diagnostic_lines:
+        base_success_lines.extend(["", "Backend diagnostics:", *[f"- {line}" for line in backend_diagnostic_lines]])
     return 'info', 'Export successful', "\n".join(base_success_lines)
 
 
