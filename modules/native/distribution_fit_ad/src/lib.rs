@@ -427,7 +427,9 @@ fn owen_t(h: f64, a: f64) -> f64 {
 
 fn distribution_cdf(dist: &SupportedDistribution, x: f64) -> Option<f64> {
     match dist {
-        SupportedDistribution::Norm { loc, scale } => Some(StatNormal::new(*loc, *scale).ok()?.cdf(x)),
+        SupportedDistribution::Norm { loc, scale } => {
+            Some(StatNormal::new(*loc, *scale).ok()?.cdf(x))
+        }
         SupportedDistribution::SkewNorm { a, loc, scale } => {
             let z = (x - *loc) / *scale;
             Some((standard_normal_cdf(z) - 2.0 * owen_t(z, *a)).clamp(0.0, 1.0))
@@ -583,7 +585,11 @@ fn ad_statistic_with_cdf(sample: &[f64], dist: &SupportedDistribution) -> Option
     let n = sorted.len() as f64;
     let probabilities: Vec<f64> = sorted
         .iter()
-        .map(|value| distribution_cdf(dist, *value).unwrap_or(0.5).clamp(EPS, 1.0 - EPS))
+        .map(|value| {
+            distribution_cdf(dist, *value)
+                .unwrap_or(0.5)
+                .clamp(EPS, 1.0 - EPS)
+        })
         .collect();
 
     let mut sum = 0.0;
@@ -633,29 +639,34 @@ fn run_ad_monte_carlo(
 ) -> (Option<f64>, usize) {
     let (exceed_count, valid_trials) = (0..iterations)
         .into_par_iter()
-        .map(|iteration_index| {
-            let mut rng =
-                rand::rngs::StdRng::seed_from_u64(iteration_seed(resolved_seed, iteration_index));
-            let mut simulated = Vec::with_capacity(sample_size);
+        .map_init(
+            || Vec::with_capacity(sample_size),
+            |simulated, iteration_index| {
+                let mut rng = rand::rngs::StdRng::seed_from_u64(iteration_seed(
+                    resolved_seed,
+                    iteration_index,
+                ));
+                simulated.clear();
 
-            for _ in 0..sample_size {
-                match dist.sample_one(&mut rng) {
-                    value if value.is_finite() => simulated.push(value),
-                    _ => return (0usize, 0usize),
+                for _ in 0..sample_size {
+                    match dist.sample_one(&mut rng) {
+                        value if value.is_finite() => simulated.push(value),
+                        _ => return (0usize, 0usize),
+                    }
                 }
-            }
 
-            let stat = match ad_statistic(&mut simulated, dist) {
-                Some(value) if value.is_finite() => value,
-                _ => return (0usize, 0usize),
-            };
+                let stat = match ad_statistic(simulated, dist) {
+                    Some(value) if value.is_finite() => value,
+                    _ => return (0usize, 0usize),
+                };
 
-            if stat >= observed_stat {
-                (1usize, 1usize)
-            } else {
-                (0usize, 1usize)
-            }
-        })
+                if stat >= observed_stat {
+                    (1usize, 1usize)
+                } else {
+                    (0usize, 1usize)
+                }
+            },
+        )
         .reduce(
             || (0usize, 0usize),
             |left, right| (left.0 + right.0, left.1 + right.1),
@@ -762,7 +773,14 @@ fn compute_candidate_metrics(
     distribution: &str,
     fitted_params: PyReadonlyArray1<'_, f64>,
     sample_values: PyReadonlyArray1<'_, f64>,
-) -> PyResult<(Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, u32)> {
+) -> PyResult<(
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    u32,
+)> {
     let fitted_params = fitted_params
         .as_slice()
         .map_err(|_| PyValueError::new_err("fitted_params must be a contiguous float64 array"))?;
@@ -781,7 +799,14 @@ fn compute_candidate_metrics_impl(
     distribution: &str,
     fitted_params: &[f64],
     sample_values: &[f64],
-) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>, u32) {
+) -> (
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    u32,
+) {
     let mut flags: u32 = 0;
     if sample_values.is_empty() {
         return (None, None, None, None, None, 0b0001);
