@@ -3165,6 +3165,21 @@ class ExportDataThread(QThread):
             self._chart_render_backend_counts[backend] += 1
 
     def build_export_observability_summary(self, *, high_header_threshold=64):
+        """Build structured telemetry for one export run.
+
+        Args:
+            high_header_threshold (int): Distinct-header threshold used to flag
+                high-cardinality partitions.
+
+        Returns:
+            dict[str, object]: Observability payload containing:
+                - ``stage_timings_s``: chart prep/render/write stage totals.
+                - ``chart_backend_distribution``: native/matplotlib counts and rates.
+                - ``per_chart_type_timing_medians_s``: median render times per
+                  summary chart type.
+                - ``high_header_cardinality_scenario``: threshold, max headers,
+                  detection flag, and stage timing snapshot (when available).
+        """
         chart_backend_total = sum(self._chart_render_backend_counts.values())
         chart_backend_distribution = {
             'counts': dict(self._chart_render_backend_counts),
