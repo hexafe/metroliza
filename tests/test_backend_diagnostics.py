@@ -49,3 +49,17 @@ def test_backend_diagnostics_reports_forced_native_failure(monkeypatch):
     assert parser_status["status"] == "forced_native_failure"
     assert parser_status["forced_native_failure"] is True
     assert "unavailable" in parser_status["error"].lower()
+
+
+def test_backend_diagnostics_reports_group_stats_forced_native_failure(monkeypatch):
+    monkeypatch.setattr(backend_diagnostics.group_stats_native, "_runtime_backend_choice", lambda: "native")
+    monkeypatch.setattr(backend_diagnostics.group_stats_native, "native_backend_available", lambda: False)
+
+    summary = backend_diagnostics.build_backend_diagnostic_summary()
+    group_status = summary["group_stats"]
+
+    assert group_status["available"] is False
+    assert group_status["selected_mode"] == "native"
+    assert group_status["effective_backend"] == "python"
+    assert group_status["status"] == "forced_native_failure"
+    assert group_status["forced_native_failure"] is True

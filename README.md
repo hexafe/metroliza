@@ -63,6 +63,15 @@ Parity between native and Python backends is enforced through fixture-based test
 - If `native` is forced while the native module is unavailable, Metroliza warns and falls back to matplotlib rendering.
 - For deterministic rollback behavior, set `METROLIZA_CHART_RENDERER_BACKEND=matplotlib`.
 
+## Additional native backend controls
+
+- `METROLIZA_CMM_PERSIST_BACKEND`: controls CMM persistence backend (`auto`/`native`/`python`).
+- `METROLIZA_COMPARISON_STATS_CI_BACKEND`: controls comparison bootstrap CI backend (`auto`/`native`/`python`).
+- `METROLIZA_COMPARISON_STATS_BACKEND`: controls comparison pairwise backend (`auto`/`native`/`python`).
+- `METROLIZA_DISTRIBUTION_FIT_KERNEL`: controls distribution-fit candidate kernel backend (`auto`/`native`/`python`).
+- `METROLIZA_GROUP_STATS_BACKEND`: controls group-stats coercion backend (`auto`/`native`/`python`).
+- See [`docs/native_build_distribution.md`](docs/native_build_distribution.md) for full backend semantics and packaging requirements.
+
 ### Local native chart extension build (optional)
 
 ```bash
