@@ -191,6 +191,10 @@ from modules.chart_renderer import (
     native_chart_backend_available,
     resolve_chart_renderer_backend,
 )
+from modules.backend_diagnostics import (
+    build_backend_diagnostic_summary,
+    format_backend_diagnostic_lines,
+)
 from modules.distribution_fit_service import fit_measurement_distribution
 
 _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
@@ -3001,6 +3005,8 @@ class ExportDataThread(QThread):
             "conversion_warnings": [],
             "conversion_warning_details": [],
             "converted_tab_titles": [],
+            "backend_diagnostics": {},
+            "backend_diagnostics_lines": [],
         }
         self._exported_sheet_names = []
         self._exported_sheet_name_set = set()
@@ -3039,6 +3045,9 @@ class ExportDataThread(QThread):
         self._cached_export_filtered_df = None
         self._sql_measurement_summary_cache = {}
         self._distribution_fit_memo = {}
+        self._backend_diagnostic_summary = build_backend_diagnostic_summary()
+        self.completion_metadata["backend_diagnostics"] = dict(self._backend_diagnostic_summary)
+        self.completion_metadata["backend_diagnostics_lines"] = format_backend_diagnostic_lines(self._backend_diagnostic_summary)
 
     def _register_chart_image(self, payload: bytes):
         image_data = BytesIO(payload)
@@ -3231,6 +3240,7 @@ class ExportDataThread(QThread):
             'chart_backend_distribution': chart_backend_distribution,
             'per_chart_type_timing_medians_s': per_chart_type_timing_medians_s,
             'high_header_cardinality_scenario': high_header_cardinality,
+            'backend_diagnostics': dict(self._backend_diagnostic_summary),
         }
 
     def _apply_bottleneck_optimizations(self):
@@ -3739,6 +3749,10 @@ class ExportDataThread(QThread):
                 self._emit_stage_progress('preparing_query', 0.0)
                 self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
                 self._log_export_stage("Export started", stage="started")
+                logger.info(
+                    "Backend diagnostic summary: %s",
+                    "; ".join(self.completion_metadata.get("backend_diagnostics_lines", [])),
+                )
                 if self.export_target == "google_sheets_drive_convert":
                     self._emit_google_stage("generating")
 
