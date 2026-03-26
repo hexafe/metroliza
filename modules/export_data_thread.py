@@ -189,7 +189,7 @@ from modules.chart_renderer import (
     build_chart_renderer,
     build_distribution_native_payload,
     build_histogram_native_payload,
-    native_chart_backend_available,
+    native_histogram_backend_available,
     resolve_chart_renderer_backend,
 )
 from modules.backend_diagnostics import (
@@ -4824,7 +4824,7 @@ class ExportDataThread(QThread):
                     histogram_bin_count = resolve_histogram_bin_count(histogram_values).get('bin_count')
 
                     native_histogram_capable = False
-                    if native_chart_backend_available():
+                    if native_histogram_backend_available():
                         try:
                             native_histogram_capable = resolve_chart_renderer_backend() == 'native'
                         except RuntimeError:

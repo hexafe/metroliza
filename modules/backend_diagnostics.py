@@ -92,11 +92,19 @@ def _resolve_group_stats_entry() -> dict[str, Any]:
 def _resolve_chart_renderer_entry() -> dict[str, Any]:
     selected_mode = chart_renderer._runtime_backend_choice()
     available = chart_renderer.native_chart_backend_available()
+    histogram_available = chart_renderer.native_histogram_backend_available()
+    distribution_available = chart_renderer.native_distribution_backend_available()
     try:
         effective = chart_renderer.resolve_chart_renderer_backend()
-        return _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend=effective)
+        entry = _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend=effective)
+        entry["histogram_available"] = histogram_available
+        entry["distribution_available"] = distribution_available
+        return entry
     except Exception as exc:
-        return _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend="matplotlib", error=str(exc))
+        entry = _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend="matplotlib", error=str(exc))
+        entry["histogram_available"] = histogram_available
+        entry["distribution_available"] = distribution_available
+        return entry
 
 
 def build_backend_diagnostic_summary() -> dict[str, dict[str, Any]]:

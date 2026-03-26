@@ -121,7 +121,18 @@ def _runtime_backend_choice() -> BackendChoice:
 
 
 def native_chart_backend_available() -> bool:
+    """Backward-compatible aggregate availability check for native chart support."""
+    return native_histogram_backend_available() and native_distribution_backend_available()
+
+
+def native_histogram_backend_available() -> bool:
+    """Return whether native histogram rendering is available."""
     return _native_render_histogram_png is not None
+
+
+def native_distribution_backend_available() -> bool:
+    """Return whether native distribution rendering is available."""
+    return _native_render_distribution_png is not None
 
 
 def resolve_chart_renderer_backend() -> ResolvedBackend:
@@ -130,7 +141,7 @@ def resolve_chart_renderer_backend() -> ResolvedBackend:
     if backend == "matplotlib":
         return "matplotlib"
     if backend == "native":
-        if _native_render_histogram_png is None:
+        if not native_histogram_backend_available():
             warnings.warn(
                 "METROLIZA_CHART_RENDERER_BACKEND=native requested but _metroliza_chart_native is unavailable; falling back to matplotlib backend.",
                 RuntimeWarning,
@@ -138,7 +149,7 @@ def resolve_chart_renderer_backend() -> ResolvedBackend:
             )
             return "matplotlib"
         return "native"
-    if _native_render_histogram_png is not None:
+    if native_histogram_backend_available():
         return "native"
     return "matplotlib"
 

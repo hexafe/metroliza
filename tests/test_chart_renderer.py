@@ -14,7 +14,9 @@ from modules.chart_renderer import (
     build_chart_renderer,
     build_distribution_native_payload,
     build_histogram_native_payload,
+    native_distribution_backend_available,
     native_chart_backend_available,
+    native_histogram_backend_available,
     resolve_chart_renderer_backend,
 )
 
@@ -51,6 +53,16 @@ def test_resolve_backend_native_forces_native_without_warning_when_extension_ava
         with mock.patch("warnings.warn") as warn:
             assert resolve_chart_renderer_backend() == "native"
     warn.assert_not_called()
+
+
+def test_native_chart_backend_available_requires_histogram_and_distribution_symbols():
+    with (
+        mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
+        mock.patch("modules.chart_renderer._native_render_distribution_png", None),
+    ):
+        assert native_histogram_backend_available() is True
+        assert native_distribution_backend_available() is False
+        assert native_chart_backend_available() is False
 
 
 
@@ -180,7 +192,7 @@ def test_native_distribution_renderer_validates_payload_contract():
             NativeChartRenderer().render_distribution_png(payload)
 
 
-@pytest.mark.skipif(not native_chart_backend_available(), reason="Native chart module not available in current environment")
+@pytest.mark.skipif(not native_histogram_backend_available(), reason="Native histogram renderer is not available in current environment")
 def test_native_histogram_renderer_uses_real_extension_when_available():
     payload = build_histogram_native_payload(
         values=[1.0, 1.2, 1.4, 1.8, 2.0, 2.1, 2.2],
