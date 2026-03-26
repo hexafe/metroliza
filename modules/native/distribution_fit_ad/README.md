@@ -17,18 +17,17 @@ Application-level wrappers live in `modules/distribution_fit_native.py`:
 
 ## Backend env toggles
 
-There is currently **no dedicated backend env toggle** for distribution-fit native kernels.
+Distribution-fit candidate kernels are controlled by `METROLIZA_DISTRIBUTION_FIT_KERNEL`:
 
-Runtime policy is import-driven:
-
-- If `_metroliza_distribution_fit_native` imports successfully, wrappers call native kernels.
-- If the extension is unavailable, wrappers return `None` and callers continue with Python implementations.
+- `auto` (default): attempt native candidate-kernel dispatch; if native symbols are unavailable, callers continue with Python implementations.
+- `native`: require native candidate-kernel execution; unavailable native symbols return flagged kernel output and callers remain explicit about native-only intent.
+- `python`: force Python candidate-kernel execution and skip native dispatch.
 
 ## Fallback semantics
 
-- Native is opportunistic (auto-by-availability only).
+- Native is opportunistic by default (`METROLIZA_DISTRIBUTION_FIT_KERNEL=auto`).
 - Absence of the extension is non-fatal and expected to trigger Python fallback.
-- There is no `native`-forcing toggle for this module today.
+- Operators may force rollback (`python`) or require native (`native`) via `METROLIZA_DISTRIBUTION_FIT_KERNEL`.
 
 ## Build commands
 

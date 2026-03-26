@@ -18,6 +18,32 @@ def _load_native_kernel_edge_fixtures():
 
 
 class TestDistributionFitNativeParity(unittest.TestCase):
+    def test_resolve_kernel_mode_defaults_to_auto_when_unset(self):
+        with mock.patch.dict(candidate_native_bridge.os.environ, {}, clear=True):
+            self.assertEqual(candidate_native_bridge.resolve_kernel_mode(None), 'auto')
+
+    def test_resolve_kernel_mode_honors_env_values(self):
+        with mock.patch.dict(
+            candidate_native_bridge.os.environ,
+            {'METROLIZA_DISTRIBUTION_FIT_KERNEL': 'python'},
+            clear=True,
+        ):
+            self.assertEqual(candidate_native_bridge.resolve_kernel_mode(None), 'python')
+
+        with mock.patch.dict(
+            candidate_native_bridge.os.environ,
+            {'METROLIZA_DISTRIBUTION_FIT_KERNEL': 'native'},
+            clear=True,
+        ):
+            self.assertEqual(candidate_native_bridge.resolve_kernel_mode(None), 'native')
+
+        with mock.patch.dict(
+            candidate_native_bridge.os.environ,
+            {'METROLIZA_DISTRIBUTION_FIT_KERNEL': 'auto'},
+            clear=True,
+        ):
+            self.assertEqual(candidate_native_bridge.resolve_kernel_mode(None), 'auto')
+
     def test_candidate_kernel_bridge_auto_fallback_returns_none_without_backend(self):
         kernel_input = candidate_native_bridge.build_kernel_input(
             distribution='norm',

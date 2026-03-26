@@ -387,6 +387,53 @@ class TestDistributionFitService(unittest.TestCase):
                 places=12,
             )
 
+    def test_batch_candidate_kernel_default_mode_uses_auto_dispatch(self):
+        rng = np.random.default_rng(20260326)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.8, scale=0.6, size=120).astype(float)),
+            'G_BI': np.ascontiguousarray(rng.normal(loc=-0.1, scale=0.9, size=120).astype(float)),
+        }
+
+        def _fake_native_batch(kernel_input):
+            nll = []
+            aic = []
+            bic = []
+            ad = []
+            ks = []
+            flags = []
+            for distribution, params, sample in zip(
+                kernel_input.distributions,
+                kernel_input.fitted_params_batch,
+                kernel_input.sample_values_batch,
+                strict=False,
+            ):
+                dist = distribution_fit_service._DISTRIBUTION_BY_NAME[distribution]
+                params_tuple = tuple(float(v) for v in params)
+                values = np.asarray(sample, dtype=float)
+                logpdf = dist.logpdf(values, *params_tuple)
+                nll_value = float(-np.sum(logpdf))
+                k = len(params_tuple)
+                n = values.size
+                nll.append(nll_value)
+                aic.append(float(2 * k + 2 * nll_value))
+                bic.append(float(k * np.log(n) + 2 * nll_value))
+                ad.append(float(distribution_fit_service._ad_statistic(values, lambda x: dist.cdf(x, *params_tuple))))
+                ks.append(float(distribution_fit_service.kstest(values, dist.cdf, args=params_tuple).statistic))
+                flags.append(0)
+            return SimpleNamespace(
+                nll=tuple(nll),
+                aic=tuple(aic),
+                bic=tuple(bic),
+                ad_statistic=tuple(ad),
+                ks_statistic=tuple(ks),
+                error_flags=tuple(flags),
+            )
+
+        with mock.patch.object(distribution_fit_service, 'compute_candidate_metrics_batch_native', side_effect=_fake_native_batch) as batch_stub:
+            fit_measurement_distribution_batch(grouped)
+
+        self.assertGreater(batch_stub.call_count, 0)
+
     def test_fit_measurement_distribution_uses_provided_measurement_signature_for_cache_key(self):
         measurements = np.ascontiguousarray(np.array([1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15], dtype=float))
         memo = {}
