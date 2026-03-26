@@ -19,6 +19,52 @@ def _load_native_kernel_edge_fixtures():
 
 
 class TestDistributionFitNativeParity(unittest.TestCase):
+    def test_native_backend_status_true_when_monte_carlo_symbol_present_and_adks_missing(self):
+        with mock.patch.object(native_bridge, '_native_estimate_ad_pvalue_monte_carlo', return_value=(0.5, 10)), mock.patch.object(
+            native_bridge,
+            '_native_compute_ad_ks_statistics',
+            None,
+        ):
+            self.assertTrue(native_bridge.native_backend_available())
+            monte_carlo = native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                distribution='norm',
+                fitted_params=(0.0, 1.0),
+                sample_size=20,
+                observed_stat=0.2,
+                iterations=10,
+                seed=1,
+            )
+            ad_ks = native_bridge.compute_ad_ks_statistics_native(
+                distribution='norm',
+                fitted_params=(0.0, 1.0),
+                sample_values=[-1.0, 0.0, 1.0],
+            )
+            self.assertEqual(monte_carlo, (0.5, 10))
+            self.assertIsNone(ad_ks)
+
+    def test_native_backend_status_false_when_only_adks_symbol_present(self):
+        with mock.patch.object(native_bridge, '_native_estimate_ad_pvalue_monte_carlo', None), mock.patch.object(
+            native_bridge,
+            '_native_compute_ad_ks_statistics',
+            return_value=(0.1, 0.2),
+        ):
+            self.assertFalse(native_bridge.native_backend_available())
+            monte_carlo = native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                distribution='norm',
+                fitted_params=(0.0, 1.0),
+                sample_size=20,
+                observed_stat=0.2,
+                iterations=10,
+                seed=1,
+            )
+            ad_ks = native_bridge.compute_ad_ks_statistics_native(
+                distribution='norm',
+                fitted_params=(0.0, 1.0),
+                sample_values=[-1.0, 0.0, 1.0],
+            )
+            self.assertIsNone(monte_carlo)
+            self.assertEqual(ad_ks, (0.1, 0.2))
+
     def test_resolve_kernel_mode_defaults_to_auto_when_unset(self):
         with mock.patch.dict(candidate_native_bridge.os.environ, {}, clear=True):
             self.assertEqual(candidate_native_bridge.resolve_kernel_mode(None), 'auto')
