@@ -16,6 +16,13 @@ def test_force_python_backend_via_env(monkeypatch):
     assert parsed == parser.parse_raw_lines_to_blocks(_sample_lines())
 
 
+def test_force_python_backend_via_env_keeps_empty_input_contract(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CMM_PARSER_BACKEND", "python")
+    parser = importlib.reload(cmm_native_parser)
+
+    assert parser.parse_blocks_with_backend([]) == []
+
+
 def test_invalid_backend_value_falls_back_to_auto(monkeypatch):
     monkeypatch.setenv("METROLIZA_CMM_PARSER_BACKEND", "invalid")
     parser = importlib.reload(cmm_native_parser)
