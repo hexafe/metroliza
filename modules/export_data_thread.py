@@ -12,6 +12,7 @@ import inspect
 import re
 import sqlite3
 import textwrap
+import statistics
 from io import BytesIO
 import os
 import time
@@ -3013,6 +3014,13 @@ class ExportDataThread(QThread):
             'worksheet_writes': 0.0,
             'chart_rendering': 0.0,
         }
+        self._chart_render_backend_counts = {'native': 0, 'matplotlib': 0}
+        self._chart_render_timings_by_type = {
+            'distribution': [],
+            'iqr': [],
+            'histogram': [],
+            'trend': [],
+        }
         self._optimization_toggles = {
             'chart_density_mode': 'full',
             'defer_non_essential_charts': False,
@@ -3147,6 +3155,83 @@ class ExportDataThread(QThread):
     def _record_stage_timing(self, stage_name, elapsed):
         if stage_name in self._stage_timings:
             self._stage_timings[stage_name] += max(0.0, float(elapsed))
+
+    def _record_chart_render_timing(self, chart_type, elapsed, *, backend='matplotlib'):
+        elapsed_s = max(0.0, float(elapsed))
+        self._record_stage_timing('chart_rendering', elapsed_s)
+        if chart_type in self._chart_render_timings_by_type:
+            self._chart_render_timings_by_type[chart_type].append(elapsed_s)
+        if backend in self._chart_render_backend_counts:
+            self._chart_render_backend_counts[backend] += 1
+
+    def build_export_observability_summary(self, *, high_header_threshold=64):
+        """Build structured telemetry for one export run.
+
+        Args:
+            high_header_threshold (int): Distinct-header threshold used to flag
+                high-cardinality partitions.
+
+        Returns:
+            dict[str, object]: Observability payload containing:
+                - ``stage_timings_s``: chart prep/render/write stage totals.
+                - ``chart_backend_distribution``: native/matplotlib counts and rates.
+                - ``per_chart_type_timing_medians_s``: median render times per
+                  summary chart type.
+                - ``high_header_cardinality_scenario``: threshold, max headers,
+                  detection flag, and stage timing snapshot (when available).
+        """
+        chart_backend_total = sum(self._chart_render_backend_counts.values())
+        chart_backend_distribution = {
+            'counts': dict(self._chart_render_backend_counts),
+            'rates': {
+                backend: (count / chart_backend_total) if chart_backend_total else 0.0
+                for backend, count in self._chart_render_backend_counts.items()
+            },
+        }
+        per_chart_type_timing_medians_s = {
+            chart_type: (
+                float(statistics.median(samples))
+                if samples
+                else 0.0
+            )
+            for chart_type, samples in self._chart_render_timings_by_type.items()
+        }
+        high_header_cardinality = {
+            'threshold': int(high_header_threshold),
+            'max_headers_per_partition': 0,
+            'detected': False,
+            'timings_s': {},
+        }
+        try:
+            header_counts = fetch_partition_header_counts(
+                self.db_file,
+                self._active_export_query,
+                connection=self._db_connection,
+            )
+            max_headers = max((int(v) for v in header_counts.values()), default=0)
+            high_header_cardinality = {
+                'threshold': int(high_header_threshold),
+                'max_headers_per_partition': max_headers,
+                'detected': max_headers >= int(high_header_threshold),
+                'timings_s': {
+                    'chart_payload_preparation': float(self._stage_timings.get('chart_payload_preparation', 0.0)),
+                    'chart_rendering': float(self._stage_timings.get('chart_rendering', 0.0)),
+                    'worksheet_writes': float(self._stage_timings.get('worksheet_writes', 0.0)),
+                },
+            }
+        except Exception:
+            logger.debug("Unable to resolve high-header-cardinality summary metrics.", exc_info=True)
+
+        return {
+            'stage_timings_s': {
+                'chart_payload_preparation': float(self._stage_timings.get('chart_payload_preparation', 0.0)),
+                'chart_rendering': float(self._stage_timings.get('chart_rendering', 0.0)),
+                'worksheet_writes': float(self._stage_timings.get('worksheet_writes', 0.0)),
+            },
+            'chart_backend_distribution': chart_backend_distribution,
+            'per_chart_type_timing_medians_s': per_chart_type_timing_medians_s,
+            'high_header_cardinality_scenario': high_header_cardinality,
+        }
 
     def _apply_bottleneck_optimizations(self):
         total = sum(self._stage_timings.values())
@@ -4573,7 +4658,7 @@ class ExportDataThread(QThread):
                     figure_legend = move_legend_to_figure(ax)
                     finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
                     image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='distribution'))
-                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    self._record_chart_render_timing('distribution', time.perf_counter() - chart_start, backend='matplotlib')
 
                     distribution_slot = _reserve_summary_image_slot('distribution', fig)
                     write_start = time.perf_counter()
@@ -4629,7 +4714,7 @@ class ExportDataThread(QThread):
                     finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
 
                     image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='iqr'))
-                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    self._record_chart_render_timing('iqr', time.perf_counter() - chart_start, backend='matplotlib')
                     iqr_slot = _reserve_summary_image_slot('iqr', fig)
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, iqr_slot, image_data)
@@ -4699,7 +4784,7 @@ class ExportDataThread(QThread):
                         image_data = self._register_chart_image(
                             self._save_summary_chart(None, chart_type='histogram', native_payload=native_histogram_payload)
                         )
-                        self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                        self._record_chart_render_timing('histogram', time.perf_counter() - chart_start, backend='native')
                         slot_fig = plt.figure(figsize=base_histogram_figsize)
                         histogram_slot = _reserve_summary_image_slot('histogram', slot_fig)
                         plt.close(slot_fig)
@@ -4994,7 +5079,7 @@ class ExportDataThread(QThread):
                             }
                         )
                         image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='histogram', native_payload=native_histogram_payload))
-                        self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                        self._record_chart_render_timing('histogram', time.perf_counter() - chart_start, backend='matplotlib')
                         histogram_slot = _reserve_summary_image_slot('histogram', fig)
                         write_start = time.perf_counter()
                         self._insert_summary_image(summary_worksheet, histogram_slot, image_data)
@@ -5045,7 +5130,7 @@ class ExportDataThread(QThread):
                     ax.set_ylim(y_min, y_max)
 
                     image_data = self._register_chart_image(self._save_summary_chart(fig, chart_type='trend'))
-                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
+                    self._record_chart_render_timing('trend', time.perf_counter() - chart_start, backend='matplotlib')
                     trend_slot = _reserve_summary_image_slot('trend', fig)
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, trend_slot, image_data)

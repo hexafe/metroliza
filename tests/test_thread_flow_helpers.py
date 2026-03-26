@@ -1276,6 +1276,56 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(thread._optimization_toggles['summary_sheet_minimum_charts'], {'distribution', 'iqr', 'histogram'})
         self.assertFalse(thread._summary_chart_required('trend'))
 
+    def test_export_observability_summary_preserves_payload_shape_and_keys(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._stage_timings.update(
+            {
+                'chart_payload_preparation': 2.0,
+                'chart_rendering': 3.0,
+                'worksheet_writes': 4.0,
+            }
+        )
+        thread._record_chart_render_timing('distribution', 0.4, backend='matplotlib')
+        thread._record_chart_render_timing('histogram', 0.2, backend='native')
+
+        with mock.patch('modules.export_data_thread.fetch_partition_header_counts', return_value={'REF-A': 80}):
+            summary = thread.build_export_observability_summary(high_header_threshold=64)
+
+        self.assertIn('stage_timings_s', summary)
+        self.assertIn('chart_backend_distribution', summary)
+        self.assertIn('per_chart_type_timing_medians_s', summary)
+        self.assertIn('high_header_cardinality_scenario', summary)
+        self.assertEqual(summary['stage_timings_s']['chart_payload_preparation'], 2.0)
+        self.assertEqual(summary['chart_backend_distribution']['counts']['native'], 1)
+        self.assertEqual(summary['chart_backend_distribution']['counts']['matplotlib'], 1)
+        self.assertIn('distribution', summary['per_chart_type_timing_medians_s'])
+        self.assertIn('histogram', summary['per_chart_type_timing_medians_s'])
+        self.assertTrue(summary['high_header_cardinality_scenario']['detected'])
+        self.assertEqual(summary['high_header_cardinality_scenario']['max_headers_per_partition'], 80)
+
+    def test_export_observability_summary_handles_header_count_lookup_failures(self):
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+
+        with mock.patch('modules.export_data_thread.fetch_partition_header_counts', side_effect=RuntimeError('db unavailable')):
+            summary = thread.build_export_observability_summary(high_header_threshold=32)
+
+        high_header = summary['high_header_cardinality_scenario']
+        self.assertFalse(high_header['detected'])
+        self.assertEqual(high_header['max_headers_per_partition'], 0)
+        self.assertEqual(high_header['timings_s'], {})
+
     def test_summary_sheet_fill_deferred_mode_still_renders_trend_by_default(self):
         import pandas as pd
 
