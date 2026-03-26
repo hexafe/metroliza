@@ -89,8 +89,10 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 
 ### Distribution fit (`modules/distribution_fit_native.py`)
 
-- No dedicated env toggle yet.
-- Native wrappers are opportunistic: they execute when importable and return `None` when unavailable.
+- Candidate-kernel backend selection is controlled by `METROLIZA_DISTRIBUTION_FIT_KERNEL` (`auto`/`native`/`python`).
+- `auto` (default) is availability-driven: native candidate kernels are attempted when present and otherwise Python fallback remains active.
+- `native` requires native candidate-kernel execution semantics (no silent mode switch to Python).
+- `python` forces pure-Python candidate metrics and skips native dispatch.
 
 ### Group stats coercion (`modules/group_stats_native.py`)
 

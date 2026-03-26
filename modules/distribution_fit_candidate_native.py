@@ -70,7 +70,7 @@ def native_backend_available() -> bool:
 
 
 def resolve_kernel_mode(explicit_mode: str | None = None) -> str:
-    mode = (explicit_mode or os.getenv('METROLIZA_DISTRIBUTION_FIT_KERNEL') or KERNEL_MODE_PYTHON).strip().lower()
+    mode = (explicit_mode or os.getenv('METROLIZA_DISTRIBUTION_FIT_KERNEL') or KERNEL_MODE_AUTO).strip().lower()
     if mode not in {KERNEL_MODE_PYTHON, KERNEL_MODE_NATIVE, KERNEL_MODE_AUTO}:
         return KERNEL_MODE_PYTHON
     return mode
