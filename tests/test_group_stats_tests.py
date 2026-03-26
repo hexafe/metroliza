@@ -20,6 +20,37 @@ class TestGroupStatsNativeCoercion(unittest.TestCase):
         self.assertTrue(np.isnan(arr[3]))
         self.assertTrue(np.isnan(arr[4]))
 
+    def test_coerce_sequence_to_float64_parity_for_mixed_python_values(self):
+        values = [1, '2.5', '-7', 'bad-token', '', None, 'nan', '1e3']
+
+        native_values = native_helper.coerce_sequence_to_float64(values)
+        python_values = native_helper._coerce_sequence_to_float64_python(values)
+
+        np.testing.assert_allclose(native_values[:3], np.array([1.0, 2.5, -7.0]))
+        self.assertTrue(np.isnan(native_values[3]))
+        self.assertTrue(np.isnan(native_values[4]))
+        self.assertTrue(np.isnan(native_values[5]))
+        self.assertTrue(np.isnan(native_values[6]))
+        self.assertEqual(native_values[7], 1000.0)
+        np.testing.assert_equal(np.isnan(native_values), np.isnan(python_values))
+
+    def test_coerce_sequence_to_float64_prefers_contiguous_float64_native_input(self):
+        source = np.arange(6, dtype=np.float64).reshape(2, 3).T
+        self.assertFalse(source.flags.c_contiguous)
+        captured = {}
+
+        def _fake_native(values):
+            captured['values'] = values
+            return np.asarray(values, dtype=np.float64)
+
+        with mock.patch.object(native_helper, '_native_coerce_sequence_to_float64', side_effect=_fake_native):
+            arr = native_helper.coerce_sequence_to_float64(source)
+
+        self.assertIsInstance(captured['values'], np.ndarray)
+        self.assertEqual(captured['values'].dtype, np.float64)
+        self.assertTrue(captured['values'].flags.c_contiguous)
+        self.assertTrue(arr.flags.c_contiguous)
+
 
 class TestGroupStatsTests(unittest.TestCase):
     def test_preprocess_group_coerces_numeric_and_drops_nan(self):
