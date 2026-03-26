@@ -38,12 +38,12 @@ This document defines canonical benchmark scenarios and pass/fail policy for CI 
 
 For CI quality-gate enforcement on `cmm_parser_backend_compare`:
 
-- `--cmm-native-min-speedup-ratio 0.90`
+- `--cmm-native-min-speedup-ratio 1.00`
 - `--cmm-native-min-usage-rate 0.95`
 - trend median regression threshold: `12%` for the dedicated `cmm-parser-perf-gate` CI job
 - trend absolute regression floor: `0.050s` for the dedicated `cmm-parser-perf-gate` CI job
 
-These values are pinned in CI and should only change with a dedicated baseline-governance PR that includes fresh trend evidence.
+These values are pinned in CI and should only change with a dedicated baseline-governance PR that includes fresh trend evidence and explicit threshold-change justification.
 
 ## 2) Distribution fit batch path (`scripts/benchmark_distribution_fit_batch.py`)
 
@@ -86,6 +86,8 @@ Baseline provenance:
 - The snapshot should be captured from canonical runs on the same CI runner class (`ubuntu-latest`) used by the trend job to avoid host-to-host skew.
 
 Update process:
-1. Run canonical warmup + measured benchmark sequence on CI runner class.
-2. Validate parity and stability.
-3. Update baseline medians in `docs/perf_baseline_snapshot.json` in a dedicated PR.
+1. Run canonical warmup + measured benchmark sequence on CI runner class (`ubuntu-latest`) using the same scenario args enforced in CI.
+2. Validate parity and stability, and preserve CMM guardrail checks (`--cmm-native-min-usage-rate 0.95`, trend thresholds unchanged).
+3. Capture evidence from measured runs: per-run `benchmark-paths.json`, `trend-report.json`, and a PR summary table of old/new medians with percent + absolute deltas.
+4. If changing any threshold (for example, `--cmm-native-min-speedup-ratio`), include explicit rationale for why the previous threshold is no longer appropriate and why the new threshold is safe.
+5. Update baseline medians in `docs/perf_baseline_snapshot.json` in the same dedicated governance PR as any threshold changes.

@@ -404,7 +404,7 @@ jobs:
               --cmm-bench-report-count 120 \
               --cmm-bench-measurements-per-report 120 \
               --enforce-cmm-parser-guardrail \
-              --cmm-native-min-speedup-ratio 0.90 \
+              --cmm-native-min-speedup-ratio 1.00 \
               --cmm-native-min-usage-rate 0.95
             cp "$(ls -1t ${run_dir}/benchmark-*.json | head -n 1)" "${run_dir}/benchmark-paths.json"
           done

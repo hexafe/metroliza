@@ -956,7 +956,7 @@ def main() -> int:
         help='CMM backend benchmark mode: parse-only comparison or isolated parse/normalize/persist stages.',
     )
     parser.add_argument('--enforce-cmm-parser-guardrail', action='store_true')
-    parser.add_argument('--cmm-native-min-speedup-ratio', type=float, default=0.9)
+    parser.add_argument('--cmm-native-min-speedup-ratio', type=float, default=1.0)
     parser.add_argument('--cmm-native-min-usage-rate', type=float, default=0.95)
     parser.add_argument(
         '--scenarios',
