@@ -24,6 +24,8 @@ except Exception:  # pragma: no cover - optional native module
     _native_persist_measurement_rows = None
 
 _BACKEND_TELEMETRY_LOCK = Lock()
+_NATIVE_SCHEMA_INIT_LOCK = Lock()
+_NATIVE_SCHEMA_INIT_DATABASES: set[str] = set()
 _BACKEND_TELEMETRY = {
     "parse": {"native": 0, "python": 0},
     "normalize": {"native": 0, "python": 0},
@@ -34,6 +36,20 @@ _BACKEND_TELEMETRY = {
     "normalize_latency_s": {"native": 0.0, "python": 0.0},
     "persistence_latency_s": {"native": 0.0, "python": 0.0},
 }
+
+
+def _ensure_native_schema_initialized(database: str) -> None:
+    """Ensure schema/index bootstrap runs once per database path for native persistence."""
+    with _NATIVE_SCHEMA_INIT_LOCK:
+        already_initialized = database in _NATIVE_SCHEMA_INIT_DATABASES
+
+    if already_initialized:
+        return
+
+    ensure_cmm_report_schema(database, retries=4, retry_delay_s=1)
+
+    with _NATIVE_SCHEMA_INIT_LOCK:
+        _NATIVE_SCHEMA_INIT_DATABASES.add(database)
 
 
 def _record_backend_selection(path: Literal["parse", "normalize", "persistence"], backend: ResolvedBackend) -> None:
@@ -65,6 +81,8 @@ def reset_backend_telemetry() -> None:
         for path in _BACKEND_TELEMETRY.values():
             for key in path:
                 path[key] = 0
+    with _NATIVE_SCHEMA_INIT_LOCK:
+        _NATIVE_SCHEMA_INIT_DATABASES.clear()
 
 
 def get_backend_telemetry_snapshot() -> dict[str, dict[str, float | int]]:
@@ -363,6 +381,7 @@ def persist_measurement_rows_with_backend_and_telemetry(
     if backend == "native":
         if _native_persist_measurement_rows is None:
             raise RuntimeError("Native measurement row persistence requested but unavailable")
+        _ensure_native_schema_initialized(database)
         _record_backend_selection("persistence", "native")
         inserted = bool(_native_persist_measurement_rows(database, rows))
         _record_backend_latency("persistence_latency_s", "native", time.perf_counter() - started)

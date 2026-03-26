@@ -147,6 +147,13 @@ def _run_native_monte_carlo_once(*, iterations: int, sample_size: int, seed: int
     return time.perf_counter() - start
 
 
+def _native_monte_carlo_throughput(*, iterations: int, reps: int, elapsed_seconds: float) -> float:
+    if elapsed_seconds <= 0:
+        return 0.0
+    total_iterations = max(0, int(iterations)) * max(0, int(reps))
+    return total_iterations / elapsed_seconds
+
+
 def _run_native_mode_subprocess(*, mode: str, args) -> float:
     cmd = [
         sys.executable,
@@ -178,11 +185,23 @@ def _run_native_monte_carlo_scaling_benchmark(args) -> int:
     single_seconds = _run_native_mode_subprocess(mode='single', args=args)
     parallel_seconds = _run_native_mode_subprocess(mode='parallel', args=args)
     speedup = single_seconds / parallel_seconds if parallel_seconds > 0 else float('inf')
+    single_throughput = _native_monte_carlo_throughput(
+        iterations=args.native_iterations,
+        reps=args.native_repetitions,
+        elapsed_seconds=single_seconds,
+    )
+    parallel_throughput = _native_monte_carlo_throughput(
+        iterations=args.native_iterations,
+        reps=args.native_repetitions,
+        elapsed_seconds=parallel_seconds,
+    )
 
     print('native_monte_carlo_scaling_benchmark')
     print(f'native_iterations={args.native_iterations}, sample_size={args.native_sample_size}, repetitions={args.native_repetitions}')
     print(f'single_thread_seconds={single_seconds:.4f}')
+    print(f'single_thread_iterations_per_second={single_throughput:.2f}')
     print(f'parallel_seconds={parallel_seconds:.4f}')
+    print(f'parallel_iterations_per_second={parallel_throughput:.2f}')
     print(f'parallel_speedup_x={speedup:.2f}')
     print('expected_speedup_band_x=1.3-4.0 (compute-bound; lower on small iteration counts, higher on multi-core hosts)')
     return 0
