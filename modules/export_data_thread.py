@@ -3323,24 +3323,33 @@ class ExportDataThread(QThread):
 
     def _save_summary_chart(self, fig, mode='workbook', *, chart_type=None, native_payload=None):
         """Persist summary-sheet charts with a workbook-friendly rendering policy."""
+        def _normalize_render_result(raw_result, *, default_backend='matplotlib'):
+            if hasattr(raw_result, 'png_bytes'):
+                png_bytes = raw_result.png_bytes
+                backend = getattr(raw_result, 'backend', default_backend)
+            else:
+                png_bytes = raw_result
+                backend = default_backend
+            return type("RenderResult", (), {"png_bytes": png_bytes, "backend": backend})()
+
         if chart_type == 'histogram' and native_payload is not None:
             render_result = self._chart_renderer.render_histogram_png(
                 native_payload,
                 fallback_fig=fig,
                 mode=mode,
             )
-            return render_result
+            return _normalize_render_result(render_result, default_backend='native')
 
-        if chart_type == 'distribution' and native_payload is not None:
+        if chart_type == 'distribution' and native_payload is not None and hasattr(self._chart_renderer, 'render_distribution_png'):
             render_result = self._chart_renderer.render_distribution_png(
                 native_payload,
                 fallback_fig=fig,
                 mode=mode,
             )
-            return render_result
+            return _normalize_render_result(render_result, default_backend='native')
 
         render_result = self._chart_renderer.render_figure_png(fig, mode=mode, chart_type=chart_type)
-        return render_result
+        return _normalize_render_result(render_result, default_backend='matplotlib')
 
     @staticmethod
     def _resolve_chart_cell_span(
