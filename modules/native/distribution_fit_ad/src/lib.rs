@@ -682,7 +682,7 @@ fn run_ad_monte_carlo(
 #[pyfunction]
 #[pyo3(signature = (distribution, fitted_params, sample_values))]
 fn compute_ad_ks_statistics(
-    py: Python<'_>,
+    _py: Python<'_>,
     distribution: &str,
     fitted_params: PyReadonlyArray1<'_, f64>,
     sample_values: PyReadonlyArray1<'_, f64>,
@@ -907,7 +907,7 @@ fn compute_candidate_metrics_batch(
 }
 
 #[pymodule]
-fn _metroliza_distribution_fit_native(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn _metroliza_distribution_fit_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_ad_ks_statistics, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_ad_pvalue_monte_carlo, m)?)?;
     m.add_function(wrap_pyfunction!(compute_candidate_metrics, m)?)?;
