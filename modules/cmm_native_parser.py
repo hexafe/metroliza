@@ -401,6 +401,8 @@ def persist_measurement_rows_with_backend_and_telemetry(
 
 def parse_blocks_with_backend(raw_lines: list[str], use_native: bool = False) -> list[list[Any]]:
     """Parse blocks with explicit backend selection policy."""
+    if not raw_lines:
+        return []
     return parse_blocks_with_backend_and_telemetry(raw_lines, use_native=use_native).blocks
 
 
