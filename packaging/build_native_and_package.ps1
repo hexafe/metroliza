@@ -99,8 +99,22 @@ function Invoke-CheckedCommand {
         return
     }
 
-    & $Executable @Arguments
-    if ($LASTEXITCODE -ne 0) {
+    $commandExitCode = $null
+    $hadNativePreference = Test-Path -LiteralPath 'variable:PSNativeCommandUseErrorActionPreference'
+    if ($hadNativePreference) {
+        $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
+    try {
+        & $Executable @Arguments
+        $commandExitCode = $LASTEXITCODE
+    } finally {
+        if ($hadNativePreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+        }
+    }
+
+    if ($commandExitCode -ne 0) {
         throw $FailureMessage
     }
 }
@@ -120,8 +134,22 @@ function Get-CheckedCommandOutput {
         return $null
     }
 
-    $output = & $Executable @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $commandExitCode = $null
+    $hadNativePreference = Test-Path -LiteralPath 'variable:PSNativeCommandUseErrorActionPreference'
+    if ($hadNativePreference) {
+        $previousNativePreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
+    try {
+        $output = & $Executable @Arguments 2>&1
+        $commandExitCode = $LASTEXITCODE
+    } finally {
+        if ($hadNativePreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePreference
+        }
+    }
+
+    if ($commandExitCode -ne 0) {
         throw $FailureMessage
     }
 
