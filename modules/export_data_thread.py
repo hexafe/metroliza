@@ -4551,18 +4551,19 @@ class ExportDataThread(QThread):
             chart_mp_enabled = self._chart_executor is not None and len(normalized_group) >= 2500
             precomputed_distribution_fit = None
             precomputed_trend_payload = sampling_context['trend_payload']['payload']
-            native_histogram_capable = False
-            if native_chart_backend_available():
-                try:
-                    native_histogram_capable = resolve_chart_renderer_backend() == 'native'
-                except RuntimeError:
-                    native_histogram_capable = False
-            histogram_overlays_or_fit_tables_required = False
-            should_precompute_distribution_fit = (
-                not native_histogram_capable or histogram_overlays_or_fit_tables_required
-            )
+            native_histogram_capable = None
             if chart_mp_enabled:
                 try:
+                    should_precompute_distribution_fit = self._summary_chart_required('histogram')
+                    if should_precompute_distribution_fit:
+                        native_histogram_capable = False
+                        if native_chart_backend_available():
+                            try:
+                                native_histogram_capable = resolve_chart_renderer_backend() == 'native'
+                            except RuntimeError:
+                                native_histogram_capable = False
+                        should_precompute_distribution_fit = not native_histogram_capable
+
                     distribution_fit_future = None
                     if should_precompute_distribution_fit:
                         distribution_fit_future = self._chart_executor.submit(
@@ -4839,6 +4840,13 @@ class ExportDataThread(QThread):
                     histogram_values = sampling_context['histogram_payload']['measurements']
                     histogram_title = build_wrapped_chart_title(header)
                     histogram_bin_count = resolve_histogram_bin_count(histogram_values).get('bin_count')
+                    if native_histogram_capable is None:
+                        native_histogram_capable = False
+                        if native_chart_backend_available():
+                            try:
+                                native_histogram_capable = resolve_chart_renderer_backend() == 'native'
+                            except RuntimeError:
+                                native_histogram_capable = False
 
                     if native_histogram_capable:
                         native_histogram_payload = build_histogram_native_payload(
