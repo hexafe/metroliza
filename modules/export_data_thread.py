@@ -207,9 +207,9 @@ logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
 
-# Backward-compatible module-level alias used by tests/patch points in this module.
-# Export histogram selection now uses histogram-specific capability semantics.
-native_chart_backend_available = native_histogram_backend_available
+def native_chart_backend_available() -> bool:
+    """Backward-compatible patch point with histogram-specific semantics."""
+    return native_histogram_backend_available()
 
 
 _INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
