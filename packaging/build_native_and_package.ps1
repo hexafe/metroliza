@@ -243,17 +243,21 @@ try {
         throw "Rust toolchain (cargo) is required on PATH. Install rustup before building native modules."
     }
 
-    $pythonInfoRaw = Get-CheckedCommandOutput -Executable 'python' -Arguments @(
-        '-c',
-        'import json, platform, sys; print(json.dumps({"version": platform.python_version(), "platform": sys.platform, "executable": sys.executable, "major": sys.version_info[0], "minor": sys.version_info[1]}))'
-    ) -FailureMessage 'Failed to inspect the active Python runtime.'
-    if ($pythonInfoRaw) {
-        $pythonInfo = $pythonInfoRaw | ConvertFrom-Json
-        Write-Host "      Active Python: $($pythonInfo.version) [$($pythonInfo.platform)]"
-        Write-Host "      Python executable: $($pythonInfo.executable)"
-        if ($pythonInfo.platform -eq 'win32' -and "$($pythonInfo.major).$($pythonInfo.minor)" -ne '3.11') {
-            Write-Warning "Windows native packaging is validated primarily on CPython 3.11 x64. Current runtime is $($pythonInfo.version)."
+    try {
+        $pythonInfoRaw = Get-CheckedCommandOutput -Executable 'python' -Arguments @(
+            '-c',
+            'import json, platform, sys; print(json.dumps({"version": platform.python_version(), "platform": sys.platform, "executable": sys.executable, "major": sys.version_info[0], "minor": sys.version_info[1]}))'
+        ) -FailureMessage 'Failed to inspect the active Python runtime.'
+        if ($pythonInfoRaw) {
+            $pythonInfo = $pythonInfoRaw | ConvertFrom-Json
+            Write-Host "      Active Python: $($pythonInfo.version) [$($pythonInfo.platform)]"
+            Write-Host "      Python executable: $($pythonInfo.executable)"
+            if ($pythonInfo.platform -eq 'win32' -and "$($pythonInfo.major).$($pythonInfo.minor)" -ne '3.11') {
+                Write-Warning "Windows native packaging is validated primarily on CPython 3.11 x64. Current runtime is $($pythonInfo.version)."
+            }
         }
+    } catch {
+        Write-Warning "Unable to inspect the active Python runtime details; continuing. $($_.Exception.Message)"
     }
 
     $cargoVersion = Get-CheckedCommandOutput -Executable 'cargo' -Arguments @('--version') -FailureMessage 'Failed to query cargo version.'
