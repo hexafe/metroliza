@@ -128,8 +128,13 @@ def _runtime_backend_choice() -> BackendChoice:
 
 
 def native_chart_backend_available() -> bool:
-    """Backward-compatible aggregate availability check for native chart support."""
-    return native_histogram_backend_available() and native_distribution_backend_available()
+    """Backward-compatible availability check for native chart support.
+
+    Historically, chart-native enablement has been histogram-scoped. Keep this
+    aggregate helper aligned with packaging/runtime probes that only require the
+    histogram symbol to be present.
+    """
+    return native_histogram_backend_available()
 
 
 def native_histogram_backend_available() -> bool:
