@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use pyo3::types::PyList;
+use pyo3::types::PyModule;
 use pyo3::types::PyTuple;
 use rusqlite::params;
 use rusqlite::types::Value as SqlValue;
@@ -80,10 +82,6 @@ fn parse_token(token: &str) -> ParsedToken {
 
 fn parse_line_tokens(line: &str) -> Vec<ParsedToken> {
     line.split_whitespace().map(parse_token).collect()
-}
-
-fn is_number(value: &str) -> bool {
-    matches!(parse_token(value), ParsedToken::Number(_))
 }
 
 fn strip_comment_prefix(line: &str) -> String {
@@ -356,10 +354,6 @@ fn finalize_block(
 
 fn add_tolerances_to_blocks(pdf_blocks_text: &mut [Block]) {
     for block in pdf_blocks_text.iter_mut() {
-        let mut tol_plus: Option<f64> = Some(0.0);
-        let mut tol_minus: Option<f64> = None;
-        let mut bonus: Option<f64> = None;
-
         if let Some(last_line) = block.dimensions.last() {
             if matches!(last_line.first(), Some(Field::Text(code)) if code == "TP") {
                 let tp_tol = match last_line.get(2) {
@@ -370,9 +364,6 @@ fn add_tolerances_to_blocks(pdf_blocks_text: &mut [Block]) {
                     Some(Field::Float(value)) => Some(*value),
                     _ => None,
                 };
-                tol_plus = Some(tp_tol);
-                tol_minus = Some(-tp_tol);
-                bonus = tp_bonus;
 
                 for measurement_line in block.dimensions.iter_mut() {
                     if matches!(measurement_line.get(2), Some(Field::Empty)) {
@@ -388,6 +379,9 @@ fn add_tolerances_to_blocks(pdf_blocks_text: &mut [Block]) {
                     tp_line[3] = Field::Float(0.0);
                 }
             } else {
+                let mut tol_plus: Option<f64> = Some(0.0);
+                let mut tol_minus: Option<f64> = None;
+                let mut bonus: Option<f64> = None;
                 let mut saw_explicit_tol_source = false;
                 for measurement_line in &block.dimensions {
                     if let Some(Field::Float(value)) = measurement_line.get(2) {
@@ -711,7 +705,7 @@ fn flat_rows_to_pyobject(py: Python<'_>, rows: &[FlatMeasurementRow]) -> PyResul
     Ok(py_rows.into_py(py))
 }
 
-fn py_scalar_to_sql_value(value: &PyAny) -> PyResult<SqlValue> {
+fn py_scalar_to_sql_value(value: &Bound<'_, PyAny>) -> PyResult<SqlValue> {
     if let Ok(v) = value.extract::<f64>() {
         return Ok(SqlValue::Real(v));
     }
@@ -724,7 +718,7 @@ fn py_scalar_to_sql_value(value: &PyAny) -> PyResult<SqlValue> {
     Ok(SqlValue::Text(String::new()))
 }
 
-fn py_rows_to_flat_rows(rows: &PyAny) -> PyResult<Vec<FlatMeasurementRow>> {
+fn py_rows_to_flat_rows(rows: &Bound<'_, PyAny>) -> PyResult<Vec<FlatMeasurementRow>> {
     let py_rows = rows.downcast::<PyList>()?;
     let mut normalized: Vec<FlatMeasurementRow> = Vec::with_capacity(py_rows.len());
     for item in py_rows.iter() {
@@ -755,7 +749,7 @@ fn py_rows_to_flat_rows(rows: &PyAny) -> PyResult<Vec<FlatMeasurementRow>> {
 }
 
 #[pyfunction]
-fn parse_blocks(py: Python<'_>, raw_lines: &PyAny) -> PyResult<PyObject> {
+fn parse_blocks(py: Python<'_>, raw_lines: &Bound<'_, PyAny>) -> PyResult<PyObject> {
     let lines = raw_lines.downcast::<PyList>()?;
     let mut rust_lines = Vec::with_capacity(lines.len());
     for item in lines.iter() {
@@ -769,7 +763,7 @@ fn parse_blocks(py: Python<'_>, raw_lines: &PyAny) -> PyResult<PyObject> {
 #[pyfunction]
 fn normalize_measurement_rows(
     py: Python<'_>,
-    blocks: &PyAny,
+    blocks: &Bound<'_, PyAny>,
     reference: String,
     fileloc: String,
     filename: String,
@@ -840,7 +834,7 @@ fn normalize_measurement_rows(
 }
 
 #[pyfunction]
-fn persist_measurement_rows(database: String, rows: &PyAny) -> PyResult<bool> {
+fn persist_measurement_rows(database: String, rows: &Bound<'_, PyAny>) -> PyResult<bool> {
     let normalized_rows = py_rows_to_flat_rows(rows)?;
     if normalized_rows.is_empty() {
         return Ok(false);
@@ -887,9 +881,7 @@ fn persist_measurement_rows(database: String, rows: &PyAny) -> PyResult<bool> {
     let report_id = tx.last_insert_rowid();
 
     let mut stmt = tx
-        .prepare(
-            "INSERT INTO MEASUREMENTS VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        )
+        .prepare("INSERT INTO MEASUREMENTS VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)")
         .map_err(|err| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(err.to_string()))?;
     for row in &normalized_rows {
         stmt.execute(params![
@@ -915,7 +907,7 @@ fn persist_measurement_rows(database: String, rows: &PyAny) -> PyResult<bool> {
 }
 
 #[pymodule]
-fn _metroliza_cmm_native(py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn _metroliza_cmm_native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_blocks, m)?)?;
     m.add_function(wrap_pyfunction!(normalize_measurement_rows, m)?)?;
     m.add_function(wrap_pyfunction!(persist_measurement_rows, m)?)?;
