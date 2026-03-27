@@ -71,6 +71,7 @@ function Format-CommandForDisplay {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
+        [AllowEmptyCollection()]
         [string[]]$Arguments = @()
     )
 
@@ -88,6 +89,7 @@ function Invoke-CheckedCommand {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
+        [AllowEmptyCollection()]
         [string[]]$Arguments = @(),
         [Parameter(Mandatory = $true)]
         [string]$FailureMessage
@@ -126,6 +128,7 @@ function Get-CheckedCommandOutput {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
+        [AllowEmptyCollection()]
         [string[]]$Arguments = @(),
         [Parameter(Mandatory = $true)]
         [string]$FailureMessage
