@@ -51,6 +51,31 @@ python -m maturin develop --manifest-path modules/native/distribution_fit_ad/Car
 python -m maturin develop --manifest-path modules/native/chart_renderer/Cargo.toml
 ```
 
+Windows/PowerShell helper for the full native-first packaging flow:
+
+```powershell
+# build all native extensions, verify them, then package with Nuitka
+./packaging/build_native_and_package.ps1
+
+# build all native extensions, verify them, then package with PyInstaller
+./packaging/build_native_and_package.ps1 -Packager pyinstaller
+
+# only build+verify native extensions, skip packaging
+./packaging/build_native_and_package.ps1 -Packager none
+
+# narrow the build to the parser/chart hot paths
+./packaging/build_native_and_package.ps1 -NativeTargets cmm,chart -Packager nuitka
+```
+
+The helper script:
+
+- installs `requirements-build.txt` into the active Python environment,
+- builds the requested native modules with `python -m maturin develop --release`,
+- verifies backend availability in that same environment,
+- then optionally hands off to `packaging/build_nuitka.ps1` or `python -m PyInstaller`.
+
+On Windows, prefer CPython 3.11 x64 for release packaging. The helper warns on other interpreter versions because the project CI/wheel path is validated there first.
+
 CI uses `cibuildwheel` and `maturin` to:
 
 1. build wheels for all native crate manifests,

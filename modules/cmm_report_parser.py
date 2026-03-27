@@ -274,7 +274,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         try:
             """Method to split raw text from pdf to blocks - split by measurements"""
             parse_start = perf_counter()
-            parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)
+            parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text)
             self.blocks_text = parse_result.blocks
             self.parse_backend_used = parse_result.backend
             self.stage_timings_s["parse_batch_runtime"] = perf_counter() - parse_start

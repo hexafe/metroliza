@@ -36,7 +36,8 @@ def test_parser_interface_matches_fixture_snapshot(fixture):
 
 def test_cmm_report_parser_wired_to_interface_layer():
     parser_source = Path("modules/cmm_report_parser.py").read_text()
-    assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)" in parser_source
+    assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text)" in parser_source
+    assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)" not in parser_source
 
 
 @pytest.mark.parametrize("fixture", _load_fixtures(), ids=lambda f: f["name"])
@@ -133,6 +134,19 @@ def test_first_line_comment_parsing_is_independent_of_last_line(first_line_comme
 
     assert parsed_with_trailing_comment[0][0] == [["FIRST HEADER"]]
     assert parsed_with_trailing_numeric_triplet[0][0] == [["FIRST HEADER"]]
+
+
+def test_trailing_comment_does_not_leave_terminal_empty_block():
+    raw_lines = [
+        "#RUNTIME",
+        "DIM",
+        "X 10 0.2 -0.2 10.03 0.03 0",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed == [[[["RUNTIME"]], [["X", 10.0, 0.2, -0.2, 0, 10.03, 0.03, 0.0]]]]
 
 
 def test_measurement_rows_parse_for_single_token_start_format():
@@ -850,3 +864,38 @@ def test_cmm_report_parser_records_parse_and_db_stage_timings(tmp_path):
 
     assert parser.stage_timings_s["parse_batch_runtime"] >= 0.0
     assert parser.stage_timings_s["db_write_runtime"] >= 0.0
+
+
+def test_cmm_report_parser_split_text_to_blocks_uses_runtime_backend_result():
+    CMMReportParser = _load_cmm_report_parser_with_test_stubs()
+
+    parser = CMMReportParser("REF01_2024-01-02_123.pdf", database=":memory:")
+    parser.pdf_raw_text = [
+        "#RUNTIME BACKEND",
+        "DIM",
+        "X 10 0.2 -0.2 10.03 0.03 0",
+        "#END",
+    ]
+
+    fake_calls = {"count": 0}
+
+    def _fake_parse_blocks(raw_lines):
+        fake_calls["count"] += 1
+        assert raw_lines == parser.pdf_raw_text
+        return type(
+            "ParseResult",
+            (),
+            {"blocks": [[["RUNTIME BACKEND"], [["X", 10.0, 0.2, -0.2, "", 10.03, 0.03, 0.0]]]], "backend": "native"},
+        )()
+
+    split_globals = CMMReportParser.split_text_to_blocks.__globals__
+    original_parse_blocks = split_globals["parse_blocks_with_backend_and_telemetry"]
+    split_globals["parse_blocks_with_backend_and_telemetry"] = _fake_parse_blocks
+    try:
+        parser.split_text_to_blocks()
+    finally:
+        split_globals["parse_blocks_with_backend_and_telemetry"] = original_parse_blocks
+
+    assert fake_calls["count"] == 1
+    assert parser.parse_backend_used == "native"
+    assert parser.blocks_text == [[["RUNTIME BACKEND"], [["X", 10.0, 0.2, -0.2, "", 10.03, 0.03, 0.0]]]]

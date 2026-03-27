@@ -429,6 +429,35 @@ fn add_tolerances_to_blocks(pdf_blocks_text: &mut [Block]) {
     }
 }
 
+fn drop_trailing_empty_blocks(pdf_blocks_text: &mut Vec<Block>) {
+    fn is_disposable_terminal_block(block: &Block) -> bool {
+        if !block.dimensions.is_empty() {
+            return false;
+        }
+
+        let normalized_header = block
+            .header_comment
+            .iter()
+            .filter_map(|entry| match entry {
+                HeaderEntry::Text(value) => Some(value.trim()),
+                HeaderEntry::NoHeader => None,
+            })
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_uppercase();
+
+        normalized_header.is_empty() || normalized_header.starts_with("END")
+    }
+
+    while pdf_blocks_text
+        .last()
+        .is_some_and(is_disposable_terminal_block)
+    {
+        pdf_blocks_text.pop();
+    }
+}
+
 fn parse_raw_lines_to_blocks_native(raw_lines: &[String]) -> Vec<Block> {
     let mut pdf_blocks_text: Vec<Block> = Vec::new();
     let mut text_block_active = false;
@@ -548,6 +577,7 @@ fn parse_raw_lines_to_blocks_native(raw_lines: &[String]) -> Vec<Block> {
     }
 
     add_tolerances_to_blocks(&mut pdf_blocks_text);
+    drop_trailing_empty_blocks(&mut pdf_blocks_text);
     pdf_blocks_text
 }
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import importlib.util
 import textwrap
 import types
@@ -8,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from modules import pdf_backend
 from scripts.validate_packaged_pdf_parser import (
     PackagingValidationError,
     require_pdf_backend_available,
@@ -20,14 +20,8 @@ def test_require_pdf_backend_available_prefers_pymupdf(monkeypatch):
         pass
 
     monkeypatch.setattr(importlib.util, 'find_spec', lambda name: _FakeSpec() if name in {'pymupdf', 'fitz'} else None)
-    monkeypatch.setattr(
-        importlib,
-        'import_module',
-        lambda name: {
-            'pymupdf': types.SimpleNamespace(open=lambda *_args, **_kwargs: None),
-            'fitz': types.SimpleNamespace(open=lambda *_args, **_kwargs: None),
-        }[name],
-    )
+    monkeypatch.setattr(pdf_backend, '_PYMUPDF_BACKEND', types.SimpleNamespace(open=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(pdf_backend, '_FITZ_BACKEND', types.SimpleNamespace(open=lambda *_args, **_kwargs: None))
 
     assert require_pdf_backend_available() == 'pymupdf'
 
