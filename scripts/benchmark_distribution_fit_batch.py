@@ -57,7 +57,7 @@ def _run_legacy_per_group(fixture, *, include_kde_reference=False):
     return time.perf_counter() - start, results
 
 
-def _run_batch(fixture, *, include_kde_reference=False, candidate_kernel_mode=None):
+def _run_batch(fixture, *, include_kde_reference=False, candidate_kernel_mode=None, candidate_fit_batch_mode='native'):
     start = time.perf_counter()
     results = {}
     memo = {}
@@ -69,6 +69,7 @@ def _run_batch(fixture, *, include_kde_reference=False, candidate_kernel_mode=No
             memoization_cache=memo,
             fingerprints_by_group=fingerprints,
             candidate_kernel_mode=candidate_kernel_mode,
+            candidate_fit_batch_mode=candidate_fit_batch_mode,
         )
     return time.perf_counter() - start, results
 
@@ -221,7 +222,7 @@ def main():
     parser.add_argument('--native-repetitions', type=int, default=3)
     parser.add_argument('--native-monte-carlo-mode', choices=['single', 'parallel'], help=argparse.SUPPRESS)
     parser.add_argument('--candidate-kernel-benchmark', action='store_true', help='Benchmark candidate metric kernel mode (python vs auto/native if available).')
-    parser.add_argument('--batch-native-benchmark', action='store_true', help='Benchmark explicit batch-native dispatch path (python vs native).')
+    parser.add_argument('--batch-native-benchmark', action='store_true', help='Benchmark old-batch (legacy fit loop) vs new native-fit batch mode.')
     parser.add_argument('--marshal-repeats', type=int, default=400, help='Repetitions for marshaling micro-benchmark.')
     parser.add_argument('--output-json', help='Optional path to write machine-readable benchmark output JSON.')
     args = parser.parse_args()
@@ -275,20 +276,28 @@ def main():
 
     batch_native_payload = None
     if args.batch_native_benchmark:
-        python_seconds, python_results = _run_batch(fixture, candidate_kernel_mode='python')
         native_mode = 'native' if native_backend_available() else 'auto'
-        native_seconds, native_results = _run_batch(fixture, candidate_kernel_mode=native_mode)
-        native_mismatches = _validate_parity(python_results, native_results, full_ranking=True)
-        native_speedup = python_seconds / native_seconds if native_seconds > 0 else float('inf')
+        legacy_seconds, legacy_results = _run_batch(
+            fixture,
+            candidate_kernel_mode=native_mode,
+            candidate_fit_batch_mode='legacy',
+        )
+        native_seconds, native_results = _run_batch(
+            fixture,
+            candidate_kernel_mode=native_mode,
+            candidate_fit_batch_mode='native',
+        )
+        native_mismatches = _validate_parity(legacy_results, native_results, full_ranking=True)
+        native_speedup = legacy_seconds / native_seconds if native_seconds > 0 else float('inf')
         batch_native_payload = {
-            'python_seconds': float(python_seconds),
+            'legacy_seconds': float(legacy_seconds),
             'native_seconds': float(native_seconds),
             'native_mode': native_mode,
             'native_speedup': float(native_speedup),
             'ranking_parity_mismatches': int(len(native_mismatches)),
         }
         print(f"batch_native_mode={native_mode}")
-        print(f"batch_native_python_seconds={python_seconds:.4f}")
+        print(f"batch_native_legacy_seconds={legacy_seconds:.4f}")
         print(f"batch_native_seconds={native_seconds:.4f}")
         print(f"batch_native_speedup_x={native_speedup:.2f}")
         print(f"batch_native_ranking_parity_mismatches={len(native_mismatches)}")
