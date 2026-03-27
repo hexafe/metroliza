@@ -249,7 +249,12 @@ try {
             'import json, platform, sys; print(json.dumps({"version": platform.python_version(), "platform": sys.platform, "executable": sys.executable, "major": sys.version_info[0], "minor": sys.version_info[1]}))'
         ) -FailureMessage 'Failed to inspect the active Python runtime.'
         if ($pythonInfoRaw) {
-            $pythonInfo = $pythonInfoRaw | ConvertFrom-Json
+            $pythonInfoLine = @($pythonInfoRaw -split [Environment]::NewLine | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Where-Object { $_.StartsWith('{') -and $_.EndsWith('}') } | Select-Object -Last 1
+            if (-not $pythonInfoLine) {
+                throw 'Python runtime inspection did not return JSON output.'
+            }
+
+            $pythonInfo = $pythonInfoLine | ConvertFrom-Json
             Write-Host "      Active Python: $($pythonInfo.version) [$($pythonInfo.platform)]"
             Write-Host "      Python executable: $($pythonInfo.executable)"
             if ($pythonInfo.platform -eq 'win32' -and "$($pythonInfo.major).$($pythonInfo.minor)" -ne '3.11') {
