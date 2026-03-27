@@ -336,7 +336,11 @@ try {
         $enforceNativePackaging = $RequireNative.IsPresent -or ($selectedTargets.Name -contains 'cmm')
         Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $enforceNativePackaging -SwitchName '-RequireNative'
 
-        $display = Format-CommandForDisplay -Executable $nuitkaScriptPath -Arguments $nuitkaArgs.ToArray()
+        if ($nuitkaArgs.Count -gt 0) {
+            $display = Format-CommandForDisplay -Executable $nuitkaScriptPath -Arguments $nuitkaArgs.ToArray()
+        } else {
+            $display = Format-CommandForDisplay -Executable $nuitkaScriptPath
+        }
         Write-Host "      $display"
         if (-not $DryRun) {
             if ($nuitkaArgs.Count -gt 0) {
