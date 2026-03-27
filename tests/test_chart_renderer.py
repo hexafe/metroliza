@@ -55,14 +55,14 @@ def test_resolve_backend_native_forces_native_without_warning_when_extension_ava
     warn.assert_not_called()
 
 
-def test_native_chart_backend_available_requires_histogram_and_distribution_symbols():
+def test_native_chart_backend_available_requires_histogram_symbol_only():
     with (
         mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
         mock.patch("modules.chart_renderer._native_render_distribution_png", None),
     ):
         assert native_histogram_backend_available() is True
         assert native_distribution_backend_available() is False
-        assert native_chart_backend_available() is False
+        assert native_chart_backend_available() is True
 
 
 
