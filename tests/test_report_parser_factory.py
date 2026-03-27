@@ -47,6 +47,7 @@ detect_format = factory_module.detect_format
 get_parser = factory_module.get_parser
 register_parser = factory_module.register_parser
 reset_probe_cache = factory_module.reset_probe_cache
+reset_external_plugin_loader_state = factory_module.reset_external_plugin_loader_state
 resolve_parser_with_diagnostics = factory_module.resolve_parser_with_diagnostics
 
 
@@ -245,6 +246,49 @@ def test_resolver_uses_probe_cache_for_same_plugin_and_path(tmp_path):
 
         assert CachedProbeParser.probe_calls == 1
     finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
+def test_resolver_does_not_rescan_entry_points_after_initial_load(monkeypatch, tmp_path):
+    calls = {"count": 0}
+
+    def _fake_entry_points():
+        calls["count"] += 1
+        return ()
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    original_loaded = factory_module._EXTERNAL_PLUGINS_LOADED
+    original_signature = factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    original_entry_points = factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS
+    original_env = os.environ.get("PARSER_EXTERNAL_PLUGIN_PATHS")
+    try:
+        monkeypatch.setattr(factory_module, "_iter_external_plugin_entry_points", _fake_entry_points)
+        monkeypatch.delenv("PARSER_EXTERNAL_PLUGIN_PATHS", raising=False)
+        reset_external_plugin_loader_state()
+        _restore_real_cmm_registration()
+
+        resolve_parser_with_diagnostics(tmp_path / "first.pdf")
+        resolve_parser_with_diagnostics(tmp_path / "second.pdf")
+
+        assert calls["count"] == 1
+    finally:
+        if original_env is None:
+            os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+        else:
+            os.environ["PARSER_EXTERNAL_PLUGIN_PATHS"] = original_env
+        factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = original_entry_points
         PARSER_MAP.clear()
         PARSER_MAP.update(original_map)
         PARSER_MANIFESTS.clear()
@@ -531,11 +575,13 @@ class LateExternalParser(BaseReportParser, BaseReportParserPlugin):
     original_cache = dict(PROBE_RESULT_CACHE)
     original_loaded = factory_module._EXTERNAL_PLUGINS_LOADED
     original_signature = factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    original_entry_points = factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS
     original_env = os.environ.get("PARSER_EXTERNAL_PLUGIN_PATHS")
     try:
         os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
         factory_module._EXTERNAL_PLUGINS_LOADED = False
         factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = None
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = None
         reset_probe_cache()
         _restore_real_cmm_registration()
 
@@ -556,6 +602,7 @@ class LateExternalParser(BaseReportParser, BaseReportParserPlugin):
             os.environ["PARSER_EXTERNAL_PLUGIN_PATHS"] = original_env
         factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded
         factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = original_entry_points
         PARSER_MAP.clear()
         PARSER_MAP.update(original_map)
         PARSER_MANIFESTS.clear()
@@ -661,10 +708,14 @@ def test_resolve_parser_auto_loads_entry_point_plugins_without_path_env(monkeypa
     original_detectors = dict(PARSER_DETECTORS)
     original_cache = dict(PROBE_RESULT_CACHE)
     original_loaded_flag = factory_module._EXTERNAL_PLUGINS_LOADED
+    original_signature = factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    original_entry_points = factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS
     try:
         monkeypatch.delenv("PARSER_EXTERNAL_PLUGIN_PATHS", raising=False)
         monkeypatch.setattr(factory_module, "_iter_external_plugin_entry_points", lambda: (_DummyEntryPoint(),))
         factory_module._EXTERNAL_PLUGINS_LOADED = False
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = None
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = None
         PARSER_MAP.pop("cmm", None)
         PARSER_MANIFESTS.pop("cmm", None)
         PARSER_DETECTORS.pop("cmm", None)
@@ -677,6 +728,8 @@ def test_resolve_parser_auto_loads_entry_point_plugins_without_path_env(monkeypa
         assert factory_module._EXTERNAL_PLUGINS_LOADED is True
     finally:
         factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded_flag
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = original_entry_points
         PARSER_MAP.clear()
         PARSER_MAP.update(original_map)
         PARSER_MANIFESTS.clear()

@@ -231,41 +231,43 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
         return processed_line
 
     def extract_measurement_tokens_and_raw_lines_consumed(
-        lines: list[str], line_tokens: list[list[str]], preserve_non_numeric_tokens: bool = False
+        start_index: int, preserve_non_numeric_tokens: bool = False
     ) -> tuple[list[str], int]:
-        if not lines:
+        if start_index >= len(raw_lines):
             return [], 0
 
-        code_tokens = line_tokens[0]
+        code_tokens = split_lines[start_index]
         if not code_tokens:
             return [], 0
 
         code, *first_line_tokens = code_tokens
         parsed_tokens: list[str] = [code]
+        numeric_token_count = 0
         raw_lines_consumed = 1
         max_token_count = MEASUREMENT_LINE_MAP.get(code, 0)
         max_numeric_count = max(max_token_count - 1, 0) if max_token_count else 0
 
-        def numeric_tokens_consumed() -> int:
-            return sum(1 for token in parsed_tokens[1:] if is_number(token))
-
         def append_tokens(tokens: list[str]) -> None:
+            nonlocal numeric_token_count
             for token in tokens:
                 if is_number(token):
                     parsed_tokens.append(token)
-                    if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
+                    numeric_token_count += 1
+                    if max_numeric_count and numeric_token_count >= max_numeric_count:
                         break
                 elif preserve_non_numeric_tokens:
                     parsed_tokens.append(token)
-                    if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
+                    if max_numeric_count and numeric_token_count >= max_numeric_count:
                         break
 
         append_tokens(first_line_tokens)
 
-        for raw_line, raw_line_tokens in zip(lines[1:], line_tokens[1:]):
-            if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
+        for follow_index in range(start_index + 1, len(raw_lines)):
+            if max_numeric_count and numeric_token_count >= max_numeric_count:
                 break
 
+            raw_line = raw_lines[follow_index]
+            raw_line_tokens = split_lines[follow_index]
             if not raw_line_tokens:
                 raw_lines_consumed += 1
                 continue
@@ -340,12 +342,9 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             else:
                 tokens = line_tokens
                 if tokens and tokens[0] in MEASUREMENT_LINE_MAP:
-                    candidate_lines = raw_lines[index:]
-                    candidate_tokens = split_lines[index:]
                     preserve_non_numeric_tokens = tokens[0].startswith("TP")
                     parsed_tokens, raw_lines_consumed = extract_measurement_tokens_and_raw_lines_consumed(
-                        candidate_lines,
-                        candidate_tokens,
+                        index,
                         preserve_non_numeric_tokens=preserve_non_numeric_tokens,
                     )
 
