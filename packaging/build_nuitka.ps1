@@ -14,9 +14,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
 $isWindowsHost = $env:OS -eq "Windows_NT"
-$isMacOSHost = $PSVersionTable.PSVersion -and $IsMacOS
-$isLinuxHost = $PSVersionTable.PSVersion -and $IsLinux
+$isMacOSHost = $false
+$isLinuxHost = $false
+
+if ($PSVersionTable.PSEdition -eq 'Core') {
+    $macVar = Get-Variable -Name IsMacOS -ValueOnly -ErrorAction SilentlyContinue
+    $linuxVar = Get-Variable -Name IsLinux -ValueOnly -ErrorAction SilentlyContinue
+
+    $isMacOSHost = [bool]$macVar
+    $isLinuxHost = [bool]$linuxVar
+}
 
 $compilerInstallConfig = @{
     Windows = @{
