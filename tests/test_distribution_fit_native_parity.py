@@ -19,6 +19,66 @@ def _load_native_kernel_edge_fixtures():
 
 
 class TestDistributionFitNativeParity(unittest.TestCase):
+    def test_native_backend_status_true_when_monte_carlo_symbol_present_and_adks_missing(self):
+        with mock.patch.object(
+            native_bridge,
+            '_native_estimate_ad_pvalue_monte_carlo',
+            return_value=(0.5, 10),
+        ):
+            with mock.patch.object(
+                native_bridge,
+                '_native_compute_ad_ks_statistics',
+                None,
+            ):
+                monte_carlo = native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                    distribution='norm',
+                    fitted_params=(0.0, 1.0),
+                    sample_size=20,
+                    observed_stat=0.2,
+                    iterations=10,
+                    seed=1,
+                )
+                monte_carlo_again = native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                    distribution='norm',
+                    fitted_params=(0.0, 1.0),
+                    sample_size=20,
+                    observed_stat=0.2,
+                    iterations=10,
+                    seed=1,
+                )
+                ad_ks = native_bridge.compute_ad_ks_statistics_native(
+                    distribution='norm',
+                    fitted_params=(0.0, 1.0),
+                    sample_values=[-1.0, 0.0, 1.0],
+                )
+                self.assertEqual(monte_carlo, (0.5, 10))
+                self.assertEqual(monte_carlo_again, (0.5, 10))
+                self.assertIsNone(ad_ks)
+
+    def test_native_backend_status_false_when_only_adks_symbol_present(self):
+        with mock.patch.object(native_bridge, '_native_estimate_ad_pvalue_monte_carlo', None):
+            with mock.patch.object(
+                native_bridge,
+                '_native_compute_ad_ks_statistics',
+                return_value=(0.1, 0.2),
+            ):
+                self.assertFalse(native_bridge.native_backend_available())
+                monte_carlo = native_bridge.estimate_ad_pvalue_monte_carlo_native(
+                    distribution='norm',
+                    fitted_params=(0.0, 1.0),
+                    sample_size=20,
+                    observed_stat=0.2,
+                    iterations=10,
+                    seed=1,
+                )
+                ad_ks = native_bridge.compute_ad_ks_statistics_native(
+                    distribution='norm',
+                    fitted_params=(0.0, 1.0),
+                    sample_values=[-1.0, 0.0, 1.0],
+                )
+                self.assertIsNone(monte_carlo)
+                self.assertEqual(ad_ks, (0.1, 0.2))
+
     def test_resolve_kernel_mode_defaults_to_auto_when_unset(self):
         with mock.patch.dict(candidate_native_bridge.os.environ, {}, clear=True):
             self.assertEqual(candidate_native_bridge.resolve_kernel_mode(None), 'auto')
@@ -186,7 +246,10 @@ class TestDistributionFitNativeParity(unittest.TestCase):
         self.assertAlmostEqual(throughput, (iterations * reps) / 1.5)
         self.assertGreater(throughput, 100_000.0)
 
-    @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
+    @unittest.skipUnless(
+        native_bridge.native_monte_carlo_backend_available(),
+        'native distribution-fit Monte Carlo kernel is unavailable',
+    )
     def test_native_seeded_runs_are_exactly_reproducible(self):
         p1, valid1 = native_bridge.estimate_ad_pvalue_monte_carlo_native(
             distribution='norm',
@@ -208,7 +271,10 @@ class TestDistributionFitNativeParity(unittest.TestCase):
         self.assertEqual(valid1, valid2)
         self.assertEqual(p1, p2)
 
-    @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
+    @unittest.skipUnless(
+        native_bridge.native_monte_carlo_backend_available(),
+        'native distribution-fit Monte Carlo kernel is unavailable',
+    )
     def test_python_and_native_paths_match_for_seeded_runs(self):
         native_result = service._estimate_ad_pvalue_monte_carlo(
             dist=norm,
@@ -235,7 +301,10 @@ class TestDistributionFitNativeParity(unittest.TestCase):
         self.assertIsNotNone(python_result)
         self.assertAlmostEqual(native_result, python_result, places=2)
 
-    @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
+    @unittest.skipUnless(
+        native_bridge.native_monte_carlo_backend_available(),
+        'native distribution-fit Monte Carlo kernel is unavailable',
+    )
     def test_python_and_native_paths_are_close_for_unseeded_runs(self):
         native_result = service._estimate_ad_pvalue_monte_carlo(
             dist=gamma,
@@ -264,7 +333,10 @@ class TestDistributionFitNativeParity(unittest.TestCase):
 
 
 
-    @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
+    @unittest.skipUnless(
+        native_bridge.native_ad_ks_backend_available(),
+        'native distribution-fit AD+KS kernel is unavailable',
+    )
     def test_native_ad_ks_statistics_kernel_matches_python_reference(self):
         sample = [-1.2, -0.3, 0.0, 0.4, 0.8, 1.1, 1.4]
         native_ad, native_ks = native_bridge.compute_ad_ks_statistics_native(
@@ -279,7 +351,10 @@ class TestDistributionFitNativeParity(unittest.TestCase):
         self.assertAlmostEqual(native_ad, ad_py, places=10)
         self.assertAlmostEqual(native_ks, ks_py, places=10)
 
-    @unittest.skipUnless(native_bridge.native_backend_available(), 'native distribution-fit extension is unavailable')
+    @unittest.skipUnless(
+        native_bridge.native_ad_ks_backend_available(),
+        'native distribution-fit AD+KS kernel is unavailable',
+    )
     def test_native_ad_ks_statistics_kernel_near_boundary_parameters(self):
         for fixture in _load_native_kernel_edge_fixtures():
             distribution = fixture['distribution']

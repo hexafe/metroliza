@@ -13,6 +13,8 @@ Application-level wrappers live in `modules/distribution_fit_native.py`:
 
 - `compute_ad_ks_statistics_native(...)`
 - `estimate_ad_pvalue_monte_carlo_native(...)`
+- `native_monte_carlo_backend_available()`
+- `native_ad_ks_backend_available()`
 - `native_backend_available()`
 
 ## Backend env toggles
