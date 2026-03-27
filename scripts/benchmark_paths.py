@@ -22,6 +22,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from modules.matplotlib_runtime import configure_headless_matplotlib
+
+configure_headless_matplotlib()
+
 
 def _install_headless_stubs() -> None:
     custom_logger_stub = types.ModuleType('modules.custom_logger')
@@ -73,6 +77,11 @@ def _install_headless_stubs() -> None:
         def open(self):
             return True
 
+    class _DummyApplication:
+        @staticmethod
+        def instance():
+            return None
+
     qtcore_stub.QCoreApplication = _DummyCoreApp
     qtcore_stub.QThread = _DummyThread
     qtcore_stub.pyqtSignal = _dummy_signal
@@ -87,6 +96,7 @@ def _install_headless_stubs() -> None:
         'QHeaderView', 'QCheckBox'
     ):
         setattr(qtwidgets_stub, attr, type(attr, (), {}))
+    qtwidgets_stub.QApplication = _DummyApplication
 
     qtgui_stub.QMovie = type('QMovie', (), {})
 
@@ -924,7 +934,11 @@ def benchmark_chart_type_native_compare_path(temp_dir: Path, *, chart_type: str,
         else:
             os.environ["METROLIZA_CHART_RENDERER_BACKEND"] = original_backend_env
 
-    native_median = backend_chart_medians.get("native", 0.0)
+    native_median = (
+        backend_chart_medians.get("native", 0.0)
+        if backend_native_counts.get("native", 0) > 0
+        else 0.0
+    )
     matplotlib_median = backend_chart_medians.get("matplotlib", 0.0)
     speedup = (matplotlib_median / native_median) if native_median > 0 else 0.0
     return ScenarioResult(

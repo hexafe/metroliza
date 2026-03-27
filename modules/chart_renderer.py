@@ -8,11 +8,18 @@ for immediate rollback.
 from __future__ import annotations
 
 import os
+import statistics
 import warnings
 from abc import ABC, abstractmethod
 from io import BytesIO
 from typing import Any, Literal, NamedTuple
 
+from modules.matplotlib_runtime import configure_headless_matplotlib
+
+configure_headless_matplotlib()
+
+import matplotlib
+matplotlib.use(os.environ.get("MPLBACKEND", "Agg"), force=True)
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -294,9 +301,12 @@ def benchmark_histogram_render_runtime(renderer: ChartRenderer, payload: dict[st
         _ = renderer.render_histogram_png(payload, fallback_fig=plt.figure(figsize=(8, 4)))
         samples.append(time.perf_counter() - start)
         plt.close("all")
+    median_s = float(statistics.median(samples)) if samples else 0.0
     return {
         "iterations": float(len(samples)),
+        "median_s": median_s,
         "runtime_min_ms": float(min(samples) * 1000.0),
         "runtime_avg_ms": float(sum(samples) / len(samples) * 1000.0),
+        "runtime_median_ms": float(median_s * 1000.0),
         "runtime_max_ms": float(max(samples) * 1000.0),
     }

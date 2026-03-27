@@ -1609,6 +1609,31 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(iqr_labels, ['All'])
         self.assertEqual(iqr_values, [[1.0, 2.0, 3.0]])
 
+    def test_build_iqr_plot_payload_aggregates_ungrouped_samples_into_single_box(self):
+        import pandas as pd
+
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+
+        sampled_group = pd.DataFrame({'MEAS': [1.0, '2.0', None, 3.5]})
+        labels = ['1', '2', '3']
+        values = [[1.0], [2.0], [3.5]]
+
+        iqr_labels, iqr_values = thread._build_iqr_plot_payload(
+            labels,
+            values,
+            sampled_group,
+            grouping_active=False,
+        )
+
+        self.assertEqual(iqr_labels, ['All'])
+        self.assertEqual(iqr_values, [[1.0, 2.0, 3.5]])
+
     def test_grouped_summary_scatter_payload_appends_group_sample_sizes_to_labels(self):
         import pandas as pd
 
@@ -1903,6 +1928,55 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         self.assertEqual(captured['labels'], ['1', '1', '2', '2', '3', '3'])
         self.assertFalse(captured['allow_thinning'])
+
+    def test_summary_sheet_trend_allows_thinning_for_large_label_sets(self):
+        import pandas as pd
+
+        import modules.export_data_thread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, *_args, **_kwargs):
+                return None
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
+
+        label_count = 40
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [10.0 + (index * 0.01) for index in range(label_count)],
+                'NOM': [10.0] * label_count,
+                '+TOL': [0.2] * label_count,
+                '-TOL': [-0.2] * label_count,
+                'SAMPLE_NUMBER': [str(index + 1) for index in range(label_count)],
+                'DATE': ['2024-01-01'] * label_count,
+            }
+        )
+
+        captured = {}
+        original_apply_labels = export_thread_module.apply_shared_x_axis_label_strategy
+        try:
+            def _capture_labels(_ax, labels, **kwargs):
+                captured['labels'] = list(labels)
+                captured['allow_thinning'] = kwargs.get('allow_thinning')
+                return None
+
+            export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
+
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+        finally:
+            export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
+
+        self.assertEqual(len(captured['labels']), label_count)
+        self.assertTrue(captured['allow_thinning'])
 
 
     def test_summary_sheet_distribution_scatter_fallback_draws_only_lsl_usl_reference_lines(self):

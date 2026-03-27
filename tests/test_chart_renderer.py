@@ -123,8 +123,11 @@ def test_benchmark_runtime_metadata_large_cardinality_payload():
         )
     plt.close(fig)
     assert metrics["iterations"] == 2.0
+    assert metrics["median_s"] > 0.0
     assert metrics["runtime_min_ms"] > 0.0
     assert metrics["runtime_avg_ms"] > 0.0
+    assert metrics["runtime_median_ms"] > 0.0
+    assert metrics["runtime_median_ms"] >= metrics["runtime_min_ms"]
     assert metrics["runtime_max_ms"] >= metrics["runtime_min_ms"]
 
 

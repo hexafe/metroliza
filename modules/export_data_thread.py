@@ -17,11 +17,15 @@ from io import BytesIO
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
+from modules.matplotlib_runtime import configure_headless_matplotlib
+
+configure_headless_matplotlib()
+
 import matplotlib
 import pandas as pd
 import numpy as np
 
-matplotlib.use('Agg')
+matplotlib.use(os.environ.get('MPLBACKEND', 'Agg'), force=True)
 
 import importlib.util
 
@@ -3394,6 +3398,14 @@ class ExportDataThread(QThread):
         worksheet.insert_image(slot['row'], slot['col'], '', {'image_data': image_data})
 
     def _build_iqr_plot_payload(self, labels, values, sampled_group, *, grouping_active=False):
+        if not grouping_active and sampled_group is not None and 'MEAS' in sampled_group:
+            # A single ungrouped population should render as one boxplot. Building
+            # one box per sample creates thousands of degenerate single-point
+            # boxes, which is both slow and statistically misleading.
+            numeric_values = pd.to_numeric(sampled_group['MEAS'], errors='coerce').dropna().tolist()
+            if numeric_values:
+                return ['All'], [numeric_values]
+
         strategy_labels = build_summary_panel_labels(labels or ['All'], grouping_active=grouping_active)
         boxplot_labels = strategy_labels
         boxplot_values = values if values else [list(sampled_group['MEAS'])]
@@ -5244,7 +5256,7 @@ class ExportDataThread(QThread):
                         unique_labels,
                         positions=data_x,
                         force_sparse=force_sparse_x_labels,
-                        allow_thinning=False,
+                        allow_thinning=bool(force_sparse_x_labels or trend_label_count > 24),
                     )
 
                     current_y_limits = ax.get_ylim()
