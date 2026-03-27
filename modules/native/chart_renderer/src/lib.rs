@@ -1,7 +1,7 @@
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict};
+use pyo3::types::{PyAny, PyDict, PyModule};
 use std::io::Cursor;
 
 const WIDTH: u32 = 800;
@@ -46,20 +46,20 @@ fn draw_horizontal_line(image: &mut RgbaImage, x0: i32, x1: i32, y: i32, color: 
     }
 }
 
-fn get_payload_dict<'py>(payload: &'py PyAny) -> PyResult<&'py PyDict> {
+fn get_payload_dict<'py>(payload: &'py Bound<'py, PyAny>) -> PyResult<&'py Bound<'py, PyDict>> {
     payload
         .downcast::<PyDict>()
         .map_err(|_| PyValueError::new_err("payload must be a dict"))
 }
 
-fn get_values(payload: &PyDict) -> PyResult<Vec<f64>> {
+fn get_values(payload: &Bound<'_, PyDict>) -> PyResult<Vec<f64>> {
     let raw_values = payload
         .get_item("values")?
         .ok_or_else(|| PyValueError::new_err("payload.values is required"))?;
 
-    let values: Vec<f64> = raw_values.extract().map_err(|_| {
-        PyValueError::new_err("payload.values must be a list of numeric values")
-    })?;
+    let values: Vec<f64> = raw_values
+        .extract()
+        .map_err(|_| PyValueError::new_err("payload.values must be a list of numeric values"))?;
 
     let finite: Vec<f64> = values.into_iter().filter(|v| v.is_finite()).collect();
     if finite.is_empty() {
@@ -70,7 +70,7 @@ fn get_values(payload: &PyDict) -> PyResult<Vec<f64>> {
     Ok(finite)
 }
 
-fn get_optional_f64(payload: &PyDict, key: &str) -> PyResult<Option<f64>> {
+fn get_optional_f64(payload: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f64>> {
     match payload.get_item(key)? {
         None => Ok(None),
         Some(value) => {
@@ -90,7 +90,7 @@ fn get_optional_f64(payload: &PyDict, key: &str) -> PyResult<Option<f64>> {
     }
 }
 
-fn get_bin_count(payload: &PyDict, sample_len: usize) -> PyResult<usize> {
+fn get_bin_count(payload: &Bound<'_, PyDict>, sample_len: usize) -> PyResult<usize> {
     let default_bins = ((sample_len as f64).sqrt().round() as usize).clamp(5, 60);
     match payload.get_item("bin_count")? {
         None => Ok(default_bins),
@@ -112,7 +112,7 @@ fn get_bin_count(payload: &PyDict, sample_len: usize) -> PyResult<usize> {
 }
 
 #[pyfunction]
-fn render_histogram_png(py: Python<'_>, payload: &PyAny) -> PyResult<Py<PyAny>> {
+fn render_histogram_png(py: Python<'_>, payload: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let payload = get_payload_dict(payload)?;
     let values = get_values(payload)?;
     let lsl = get_optional_f64(payload, "lsl")?;
@@ -129,7 +129,9 @@ fn render_histogram_png(py: Python<'_>, payload: &PyAny) -> PyResult<Py<PyAny>> 
         .fold(f64::NEG_INFINITY, |acc, value| acc.max(value));
 
     if !min_value.is_finite() || !max_value.is_finite() {
-        return Err(PyValueError::new_err("payload.values produced invalid range"));
+        return Err(PyValueError::new_err(
+            "payload.values produced invalid range",
+        ));
     }
 
     if (max_value - min_value).abs() < f64::EPSILON {
@@ -208,7 +210,7 @@ fn render_histogram_png(py: Python<'_>, payload: &PyAny) -> PyResult<Py<PyAny>> 
 }
 
 #[pymodule]
-fn _metroliza_chart_native(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn _metroliza_chart_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(render_histogram_png, m)?)?;
     Ok(())
 }
