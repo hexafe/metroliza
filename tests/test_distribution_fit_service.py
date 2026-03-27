@@ -434,6 +434,48 @@ class TestDistributionFitService(unittest.TestCase):
 
         self.assertGreater(batch_stub.call_count, 0)
 
+    def test_batch_native_fit_mode_preserves_ranking_parity_with_legacy_fit_loop(self):
+        rng = np.random.default_rng(20260327)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.2, scale=0.7, size=100).astype(float)),
+            'G_BI': np.ascontiguousarray(rng.normal(loc=0.0, scale=1.0, size=100).astype(float)),
+        }
+
+        legacy = fit_measurement_distribution_batch(
+            grouped,
+            candidate_kernel_mode='auto',
+            candidate_fit_batch_mode='legacy',
+        )
+        native_fit = fit_measurement_distribution_batch(
+            grouped,
+            candidate_kernel_mode='auto',
+            candidate_fit_batch_mode='native',
+        )
+
+        for group_name in grouped:
+            legacy_rank = legacy[group_name]['ranking_metrics']
+            native_rank = native_fit[group_name]['ranking_metrics']
+            self.assertEqual([row['model'] for row in legacy_rank], [row['model'] for row in native_rank])
+            self.assertEqual([row['rank'] for row in legacy_rank], [row['rank'] for row in native_rank])
+            for left, right in zip(legacy_rank, native_rank, strict=False):
+                for metric_key in ('nll', 'aic', 'bic', 'ad_statistic', 'ks_statistic'):
+                    self.assertAlmostEqual(left[metric_key], right[metric_key], places=9)
+
+    def test_batch_native_fit_mode_uses_fit_batch_bridge_and_legacy_mode_skips_it(self):
+        rng = np.random.default_rng(20260327)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.0, scale=0.8, size=80).astype(float)),
+        }
+
+        with mock.patch.object(distribution_fit_service, 'compute_candidate_fit_batch', wraps=distribution_fit_service.compute_candidate_fit_batch) as fit_batch_stub:
+            fit_measurement_distribution_batch(grouped, candidate_kernel_mode='auto', candidate_fit_batch_mode='native')
+            native_calls = fit_batch_stub.call_count
+            fit_measurement_distribution_batch(grouped, candidate_kernel_mode='auto', candidate_fit_batch_mode='legacy')
+            legacy_calls = fit_batch_stub.call_count - native_calls
+
+        self.assertGreater(native_calls, 0)
+        self.assertEqual(legacy_calls, 0)
+
     def test_fit_measurement_distribution_uses_provided_measurement_signature_for_cache_key(self):
         measurements = np.ascontiguousarray(np.array([1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15], dtype=float))
         memo = {}

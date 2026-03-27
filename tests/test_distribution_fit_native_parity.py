@@ -157,6 +157,52 @@ class TestDistributionFitNativeParity(unittest.TestCase):
                 self.assertEqual(arr.dtype, np.float64)
                 self.assertTrue(arr.flags['C_CONTIGUOUS'])
 
+    def test_candidate_fit_batch_bridge_normalizes_to_contiguous_float64(self):
+        with mock.patch.object(
+            candidate_native_bridge,
+            '_native_compute_candidate_fit_params_batch',
+            return_value=([np.array([0.0, 1.0], dtype=np.float32)], [0]),
+        ) as fit_stub:
+            fit_input = candidate_native_bridge.build_batch_fit_input(
+                distributions=['norm'],
+                sample_values_batch=[np.array([-1, 0, 1], dtype=np.float32)],
+                force_loc_zero_batch=[False],
+            )
+            output = candidate_native_bridge.compute_candidate_fit_batch_native(fit_input)
+            self.assertIsNotNone(output)
+            self.assertEqual(output.error_flags, (0,))
+            self.assertEqual(output.fitted_params_batch[0].dtype, np.float64)
+            for arr in fit_stub.call_args.args[1]:
+                self.assertIsInstance(arr, np.ndarray)
+                self.assertEqual(arr.dtype, np.float64)
+                self.assertTrue(arr.flags['C_CONTIGUOUS'])
+
+    def test_candidate_fit_batch_fallback_handles_supported_and_unsupported_distributions(self):
+        fit_input = candidate_native_bridge.build_batch_fit_input(
+            distributions=['norm', 'missing'],
+            sample_values_batch=[
+                np.array([-1.0, 0.0, 1.0], dtype=float),
+                np.array([0.1, 0.2, 0.3], dtype=float),
+            ],
+            force_loc_zero_batch=[True, False],
+        )
+
+        def _norm_fitter(values, **kwargs):
+            self.assertIn('floc', kwargs)
+            self.assertEqual(kwargs['floc'], 0.0)
+            self.assertEqual(np.asarray(values).shape[0], 3)
+            return np.array([0.0, 1.0], dtype=np.float64)
+
+        output = candidate_native_bridge.compute_candidate_fit_batch_fallback(
+            fit_input,
+            fitters_by_distribution={'norm': _norm_fitter},
+        )
+
+        self.assertEqual(output.error_flags[0], candidate_native_bridge.ERROR_NONE)
+        self.assertEqual(output.error_flags[1], candidate_native_bridge.ERROR_UNSUPPORTED_DISTRIBUTION)
+        self.assertEqual(tuple(output.fitted_params_batch[0]), (0.0, 1.0))
+        self.assertIsNone(output.fitted_params_batch[1])
+
     def test_native_wrapper_normalizes_list_and_ndarray_inputs_equivalently(self):
         with mock.patch.object(
             native_bridge,

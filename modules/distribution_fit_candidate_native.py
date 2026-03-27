@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 
 try:
     from _metroliza_distribution_fit_native import compute_candidate_metrics as _native_compute_candidate_metrics  # type: ignore
     from _metroliza_distribution_fit_native import compute_candidate_metrics_batch as _native_compute_candidate_metrics_batch  # type: ignore
+    from _metroliza_distribution_fit_native import compute_candidate_fit_params_batch as _native_compute_candidate_fit_params_batch  # type: ignore
 except Exception:  # pragma: no cover - optional native module
     _native_compute_candidate_metrics = None
     _native_compute_candidate_metrics_batch = None
+    _native_compute_candidate_fit_params_batch = None
 
 
 KERNEL_MODE_PYTHON = 'python'
@@ -55,6 +57,19 @@ class CandidateBatchKernelOutput:
     error_flags: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class CandidateBatchFitInput:
+    distributions: tuple[str, ...]
+    sample_values_batch: tuple[np.ndarray, ...]
+    force_loc_zero_batch: tuple[bool, ...]
+
+
+@dataclass(frozen=True)
+class CandidateBatchFitOutput:
+    fitted_params_batch: tuple[np.ndarray | None, ...]
+    error_flags: tuple[int, ...]
+
+
 ERROR_NONE = 0
 ERROR_EMPTY_SAMPLE = 1 << 0
 ERROR_NONFINITE_SAMPLE = 1 << 1
@@ -63,6 +78,7 @@ ERROR_INVALID_PARAMS = 1 << 3
 ERROR_LOGPDF_FAILURE = 1 << 4
 ERROR_AD_FAILURE = 1 << 5
 ERROR_KS_FAILURE = 1 << 6
+ERROR_FIT_FAILURE = 1 << 7
 
 
 def native_backend_available() -> bool:
@@ -103,6 +119,21 @@ def build_batch_kernel_input(
         sample_values_batch=tuple(_as_float64_1d_contiguous(values) for values in sample_values_batch),
         distributions=tuple(str(distribution) for distribution in distributions),
         fitted_params_batch=tuple(_as_float64_1d_contiguous(values) for values in fitted_params_batch),
+    )
+
+
+def build_batch_fit_input(
+    *,
+    sample_values_batch: Sequence[Sequence[float] | np.ndarray],
+    distributions: Sequence[str],
+    force_loc_zero_batch: Sequence[bool],
+) -> CandidateBatchFitInput:
+    if len(sample_values_batch) != len(distributions) or len(sample_values_batch) != len(force_loc_zero_batch):
+        raise ValueError('Batch fit inputs must have matching lengths')
+    return CandidateBatchFitInput(
+        sample_values_batch=tuple(_as_float64_1d_contiguous(values) for values in sample_values_batch),
+        distributions=tuple(str(distribution) for distribution in distributions),
+        force_loc_zero_batch=tuple(bool(flag) for flag in force_loc_zero_batch),
     )
 
 
@@ -158,4 +189,75 @@ def compute_candidate_metrics_batch_native(kernel_input: CandidateBatchKernelInp
         ad_statistic=tuple(None if v is None else float(v) for v in ad_stat),
         ks_statistic=tuple(None if v is None else float(v) for v in ks_stat),
         error_flags=tuple(int(v) for v in flags),
+    )
+
+
+def compute_candidate_fit_batch_native(kernel_input: CandidateBatchFitInput) -> CandidateBatchFitOutput | None:
+    if _native_compute_candidate_fit_params_batch is None:
+        return None
+    fitted_params_batch, flags = _native_compute_candidate_fit_params_batch(
+        list(kernel_input.distributions),
+        list(kernel_input.sample_values_batch),
+        list(kernel_input.force_loc_zero_batch),
+    )
+    return CandidateBatchFitOutput(
+        fitted_params_batch=tuple(None if params is None else _as_float64_1d_contiguous(params) for params in fitted_params_batch),
+        error_flags=tuple(int(v) for v in flags),
+    )
+
+
+def compute_candidate_fit_batch_fallback(
+    kernel_input: CandidateBatchFitInput,
+    *,
+    fitters_by_distribution: dict[str, Callable],
+) -> CandidateBatchFitOutput:
+    fitted: list[np.ndarray | None] = []
+    flags: list[int] = []
+    for distribution, sample_values, force_loc_zero in zip(
+        kernel_input.distributions,
+        kernel_input.sample_values_batch,
+        kernel_input.force_loc_zero_batch,
+        strict=False,
+    ):
+        fitter = fitters_by_distribution.get(distribution)
+        if fitter is None:
+            fitted.append(None)
+            flags.append(ERROR_UNSUPPORTED_DISTRIBUTION)
+            continue
+        try:
+            fit_kwargs = {'floc': 0.0} if force_loc_zero else {}
+            params = fitter(sample_values, **fit_kwargs)
+            fitted.append(_as_float64_1d_contiguous(params))
+            flags.append(ERROR_NONE)
+        except Exception:
+            fitted.append(None)
+            flags.append(ERROR_FIT_FAILURE)
+    return CandidateBatchFitOutput(
+        fitted_params_batch=tuple(fitted),
+        error_flags=tuple(flags),
+    )
+
+
+def compute_candidate_fit_batch(
+    kernel_input: CandidateBatchFitInput,
+    *,
+    mode: str | None = None,
+    fitters_by_distribution: dict[str, Callable] | None = None,
+) -> CandidateBatchFitOutput | None:
+    resolved_mode = resolve_kernel_mode(mode)
+    if resolved_mode != KERNEL_MODE_PYTHON:
+        native_output = compute_candidate_fit_batch_native(kernel_input)
+        if native_output is not None:
+            return native_output
+        if resolved_mode == KERNEL_MODE_NATIVE:
+            return CandidateBatchFitOutput(
+                fitted_params_batch=tuple(None for _ in kernel_input.distributions),
+                error_flags=tuple(ERROR_UNSUPPORTED_DISTRIBUTION for _ in kernel_input.distributions),
+            )
+
+    if fitters_by_distribution is None:
+        return None
+    return compute_candidate_fit_batch_fallback(
+        kernel_input,
+        fitters_by_distribution=fitters_by_distribution,
     )

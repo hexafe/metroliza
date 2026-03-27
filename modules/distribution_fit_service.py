@@ -15,8 +15,11 @@ from modules.distribution_fit_native import (
     estimate_ad_pvalue_monte_carlo_native,
 )
 from modules.distribution_fit_candidate_native import (
+    ERROR_NONE,
     build_kernel_input,
+    build_batch_fit_input,
     build_batch_kernel_input,
+    compute_candidate_fit_batch,
     compute_candidate_metrics,
     compute_candidate_metrics_batch_native,
     resolve_kernel_mode,
@@ -418,14 +421,15 @@ def _fit_candidates_batch_native(
     *,
     support_mode_by_group: dict[str, str],
     kernel_mode: str | None = None,
+    fit_batch_mode: str = 'native',
 ) -> dict[str, dict[str, dict]] | None:
     if resolve_kernel_mode(kernel_mode) == 'python':
         return None
 
-    distributions: list[str] = []
-    fitted_params_batch: list[tuple[float, ...]] = []
-    sample_values_batch: list[np.ndarray] = []
-    metadata: list[tuple[str, _CandidateDistribution, tuple[float, ...], np.ndarray]] = []
+    fit_metadata: list[tuple[str, _CandidateDistribution, np.ndarray]] = []
+    fit_distributions: list[str] = []
+    fit_sample_values: list[np.ndarray] = []
+    fit_force_loc_zero: list[bool] = []
 
     for group_name, values in grouped_values.items():
         if values.size < 3:
@@ -433,6 +437,20 @@ def _fit_candidates_batch_native(
         if np.isclose(float(np.min(values)), float(np.max(values))):
             continue
         for candidate in _candidate_pool_for_mode(support_mode_by_group[group_name]):
+            fit_metadata.append((group_name, candidate, values))
+            fit_distributions.append(candidate.name)
+            fit_sample_values.append(values)
+            fit_force_loc_zero.append(bool(candidate.force_loc_zero))
+
+    if not fit_metadata:
+        return None
+
+    distributions: list[str] = []
+    fitted_params_batch: list[tuple[float, ...]] = []
+    sample_values_batch: list[np.ndarray] = []
+    metadata: list[tuple[str, _CandidateDistribution, tuple[float, ...], np.ndarray]] = []
+    if fit_batch_mode == 'legacy':
+        for group_name, candidate, values in fit_metadata:
             fit_kwargs = {'floc': 0.0} if candidate.force_loc_zero else {}
             params = tuple(candidate.fit_method(values, **fit_kwargs))
             if candidate.positive_support and params:
@@ -443,6 +461,38 @@ def _fit_candidates_batch_native(
             fitted_params_batch.append(params)
             sample_values_batch.append(values)
             metadata.append((group_name, candidate, params, values))
+    else:
+        fitters_by_distribution = {
+            candidate.name: candidate.fit_method
+            for candidate in (*_BILATERAL_CANDIDATES, *_POSITIVE_CANDIDATES)
+        }
+        fit_output = compute_candidate_fit_batch(
+            build_batch_fit_input(
+                sample_values_batch=fit_sample_values,
+                distributions=fit_distributions,
+                force_loc_zero_batch=fit_force_loc_zero,
+            ),
+            mode=kernel_mode,
+            fitters_by_distribution=fitters_by_distribution,
+        )
+        if fit_output is None:
+            return None
+
+        for idx, (group_name, candidate, values) in enumerate(fit_metadata):
+            if fit_output.error_flags[idx] != ERROR_NONE:
+                continue
+            params = fit_output.fitted_params_batch[idx]
+            if params is None:
+                continue
+            resolved_params = tuple(float(v) for v in params)
+            if candidate.positive_support and resolved_params:
+                mutable = list(resolved_params)
+                mutable[-2] = 0.0
+                resolved_params = tuple(mutable)
+            distributions.append(candidate.name)
+            fitted_params_batch.append(resolved_params)
+            sample_values_batch.append(values)
+            metadata.append((group_name, candidate, resolved_params, values))
 
     if not metadata:
         return None
@@ -860,6 +910,7 @@ def fit_measurement_distribution_batch(
     monte_carlo_gof_samples: int = 0,
     monte_carlo_seed: int | None = None,
     candidate_kernel_mode: str | None = None,
+    candidate_fit_batch_mode: str = 'native',
     memoization_cache: MutableMapping | None = None,
     fingerprints_by_group: dict[str, tuple[int, str]] | None = None,
 ) -> dict[str, dict]:
@@ -878,6 +929,7 @@ def fit_measurement_distribution_batch(
         normalized_values,
         support_mode_by_group=support_mode_by_group,
         kernel_mode=candidate_kernel_mode,
+        fit_batch_mode=candidate_fit_batch_mode,
     ) or {}
 
     for group_name, group_values in normalized_values.items():
