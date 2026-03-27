@@ -336,7 +336,11 @@ try {
         $display = Format-CommandForDisplay -Executable $nuitkaScriptPath -Arguments $nuitkaArgs.ToArray()
         Write-Host "      $display"
         if (-not $DryRun) {
-            & $nuitkaScriptPath @($nuitkaArgs.ToArray())
+            if ($nuitkaArgs.Count -gt 0) {
+                & $nuitkaScriptPath @($nuitkaArgs.ToArray())
+            } else {
+                & $nuitkaScriptPath
+            }
         }
     } else {
         if (-not (Test-Path -LiteralPath $PyInstallerSpecPath)) {
