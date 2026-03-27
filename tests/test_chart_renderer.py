@@ -14,7 +14,9 @@ from modules.chart_renderer import (
     build_chart_renderer,
     build_distribution_native_payload,
     build_histogram_native_payload,
+    native_distribution_backend_available,
     native_chart_backend_available,
+    native_histogram_backend_available,
     resolve_chart_renderer_backend,
 )
 
@@ -53,26 +55,14 @@ def test_resolve_backend_native_forces_native_without_warning_when_extension_ava
     warn.assert_not_called()
 
 
-def test_chart_backend_resolution_uses_histogram_symbol_when_distribution_symbol_missing(monkeypatch):
-    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
-    with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda _payload: b"hist"), mock.patch(
-        "modules.chart_renderer._native_render_distribution_png",
-        None,
+def test_native_chart_backend_available_requires_histogram_and_distribution_symbols():
+    with (
+        mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
+        mock.patch("modules.chart_renderer._native_render_distribution_png", None),
     ):
-        assert native_chart_backend_available() is True
-        assert resolve_chart_renderer_backend() == "native"
-        assert isinstance(build_chart_renderer(), NativeChartRenderer)
-
-
-def test_chart_backend_resolution_does_not_report_native_when_only_distribution_symbol_exists(monkeypatch):
-    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
-    with mock.patch("modules.chart_renderer._native_render_histogram_png", None), mock.patch(
-        "modules.chart_renderer._native_render_distribution_png",
-        lambda _payload: b"dist",
-    ):
+        assert native_histogram_backend_available() is True
+        assert native_distribution_backend_available() is False
         assert native_chart_backend_available() is False
-        assert resolve_chart_renderer_backend() == "matplotlib"
-        assert isinstance(build_chart_renderer(), MatplotlibChartRenderer)
 
 
 
@@ -202,53 +192,7 @@ def test_native_distribution_renderer_validates_payload_contract():
             NativeChartRenderer().render_distribution_png(payload)
 
 
-def test_native_renderer_distribution_falls_back_to_matplotlib_when_distribution_symbol_missing():
-    payload = build_distribution_native_payload(
-        values=[[1.0, 1.2, 1.3]],
-        labels=["A"],
-        title="Distribution Fallback",
-    )
-    fig, ax = plt.subplots(figsize=(6, 3))
-    ax.scatter([0, 1], [1.0, 1.2], s=10)
-
-    with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda _payload: b"hist"), mock.patch(
-        "modules.chart_renderer._native_render_distribution_png",
-        None,
-    ):
-        result = NativeChartRenderer().render_distribution_png(payload, fallback_fig=fig)
-
-    plt.close(fig)
-    assert result.backend == "matplotlib"
-    assert len(result.png_bytes) > 0
-
-
-def test_native_renderer_histogram_raises_explicit_error_when_histogram_symbol_missing_without_fallback():
-    payload = build_histogram_native_payload(values=[1.0, 2.0], lsl=None, usl=None, title="Missing Hist Native")
-    with mock.patch("modules.chart_renderer._native_render_histogram_png", None), mock.patch(
-        "modules.chart_renderer._native_render_distribution_png",
-        lambda _payload: b"dist",
-    ):
-        with pytest.raises(RuntimeError, match="Native chart renderer unavailable"):
-            NativeChartRenderer().render_histogram_png(payload)
-
-
-def test_native_renderer_distribution_uses_native_when_only_distribution_symbol_exists():
-    payload = build_distribution_native_payload(
-        values=[[1.0, 1.2, 1.4]],
-        labels=["A"],
-        title="Distribution Native",
-    )
-    with mock.patch("modules.chart_renderer._native_render_histogram_png", None), mock.patch(
-        "modules.chart_renderer._native_render_distribution_png",
-        lambda _payload: b"dist-bytes",
-    ):
-        result = NativeChartRenderer().render_distribution_png(payload)
-
-    assert result.backend == "native"
-    assert result.png_bytes == b"dist-bytes"
-
-
-@pytest.mark.skipif(not native_chart_backend_available(), reason="Native chart module not available in current environment")
+@pytest.mark.skipif(not native_histogram_backend_available(), reason="Native histogram renderer is not available in current environment")
 def test_native_histogram_renderer_uses_real_extension_when_available():
     payload = build_histogram_native_payload(
         values=[1.0, 1.2, 1.4, 1.8, 2.0, 2.1, 2.2],

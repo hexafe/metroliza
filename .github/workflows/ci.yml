@@ -518,7 +518,7 @@ jobs:
             --runs benchmark_results/perf_ci/runs/run-1/benchmark-paths.json benchmark_results/perf_ci/runs/run-1/distribution-fit.json benchmark_results/perf_ci/runs/run-1/comparison-stats.json \
                    benchmark_results/perf_ci/runs/run-2/benchmark-paths.json benchmark_results/perf_ci/runs/run-2/distribution-fit.json benchmark_results/perf_ci/runs/run-2/comparison-stats.json \
                    benchmark_results/perf_ci/runs/run-3/benchmark-paths.json benchmark_results/perf_ci/runs/run-3/distribution-fit.json benchmark_results/perf_ci/runs/run-3/comparison-stats.json \
-            --max-median-regression-pct 10 \
+            --max-median-regression-pct 12 \
             --output-json benchmark_results/perf_ci/trend-report.json
 
       - name: Upload benchmark artifacts

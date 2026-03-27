@@ -189,7 +189,7 @@ from modules.chart_renderer import (
     build_chart_renderer,
     build_distribution_native_payload,
     build_histogram_native_payload,
-    native_chart_backend_available,
+    native_histogram_backend_available,
     resolve_chart_renderer_backend,
 )
 from modules.backend_diagnostics import (
@@ -206,6 +206,10 @@ if _HAS_SEABORN:
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
+
+def native_chart_backend_available() -> bool:
+    """Backward-compatible patch point with histogram-specific semantics."""
+    return native_histogram_backend_available()
 
 
 _INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
