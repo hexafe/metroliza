@@ -16,6 +16,10 @@ try:  # pragma: no cover - optional SciPy path
 except Exception:  # pragma: no cover - optional SciPy path
     gaussian_kde = None
 
+from modules.export_summary_sheet_planner import (
+    build_histogram_annotation_specs as _build_histogram_annotation_specs,
+    compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
+)
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
 
@@ -407,6 +411,162 @@ def _draw_table(
         cursor_y += row_height
 
 
+def _format_histogram_stat_value(value: Any, *, decimals: int = 3) -> str:
+    numeric = _as_float(value)
+    if numeric is None:
+        return "N/A"
+    if math.isclose(numeric, round(numeric), abs_tol=1e-9):
+        return f"{numeric:.0f}"
+    return f"{numeric:.{decimals}f}"
+
+
+def _fallback_histogram_specification_lines(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
+    resolved = []
+    for role, label, value in (
+        ("lsl", "LSL", limits.get("lsl", payload.get("lsl"))),
+        ("usl", "USL", limits.get("usl", payload.get("usl"))),
+        ("nominal", "Nominal", limits.get("nominal")),
+    ):
+        numeric = _as_float(value)
+        resolved.append(
+            {
+                "id": role,
+                "label": label,
+                "value": numeric,
+                "enabled": numeric is not None,
+                "style_hint": {"orientation": "vertical", "line_role": role},
+            }
+        )
+    return resolved
+
+
+def _fallback_histogram_table_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    rows: list[dict[str, Any]] = []
+    for label, key, decimals in (
+        ("Min", "min", 3),
+        ("Max", "max", 3),
+        ("Mean", "mean", 3),
+        ("Std Dev", "std", 3),
+    ):
+        if _as_float(summary.get(key)) is not None:
+            rows.append({"label": label, "value": _format_histogram_stat_value(summary.get(key), decimals=decimals)})
+    count_value = _as_float(summary.get("count"))
+    if count_value is not None:
+        rows.append({"label": "Samples", "value": _format_histogram_stat_value(count_value, decimals=0)})
+    return rows
+
+
+def _fallback_histogram_annotation_rows(
+    payload: dict[str, Any],
+    *,
+    x_min: float,
+    x_max: float,
+) -> list[dict[str, Any]]:
+    mean_value = _as_float(((payload.get("mean_line") or {}) if isinstance(payload.get("mean_line"), dict) else {}).get("value"))
+    limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
+    lsl = _as_float(limits.get("lsl", payload.get("lsl")))
+    usl = _as_float(limits.get("usl", payload.get("usl")))
+
+    available = [item for item in (mean_value, lsl, usl) if item is not None]
+    if not available:
+        return []
+
+    if mean_value is not None and lsl is not None and usl is not None:
+        x_span = max(abs(float(x_max) - float(x_min)), 1e-12)
+        annotation_specs = _build_histogram_annotation_specs(mean_value, usl, lsl, 1.0)
+        resolved_specs, _ = _compute_histogram_annotation_rows(
+            annotation_specs,
+            distance_threshold=0.04,
+            threshold_mode="axis_fraction",
+            x_span=x_span,
+            base_text_y_axes=1.01,
+            row_step=0.025,
+        )
+        return [
+            {
+                "label": spec.get("label"),
+                "text": spec.get("text"),
+                "kind": spec.get("kind"),
+                "color": spec.get("color"),
+                "x": spec.get("x"),
+                "row_index": spec.get("row_index"),
+                "placement_hint": {
+                    "textcoords": spec.get("textcoords", "data"),
+                    "va": spec.get("va", "bottom"),
+                    "ha": spec.get("ha", "center"),
+                },
+            }
+            for spec in resolved_specs
+        ]
+
+    fallback_annotations: list[dict[str, Any]] = []
+    for row_index, (kind, label, value, color) in enumerate(
+        (
+            ("mean", "Mean", mean_value, SUMMARY_PLOT_PALETTE["annotation_text"]),
+            ("usl", "USL", usl, SUMMARY_PLOT_PALETTE["spec_limit"]),
+            ("lsl", "LSL", lsl, SUMMARY_PLOT_PALETTE["spec_limit"]),
+        )
+    ):
+        if value is None:
+            continue
+        text = f"{label}={value:.3f}" if kind != "mean" else f"Mean = {value:.3f}"
+        fallback_annotations.append(
+            {
+                "label": label,
+                "text": text,
+                "kind": kind,
+                "color": color,
+                "x": value,
+                "row_index": row_index,
+                "placement_hint": {"textcoords": "data", "va": "bottom", "ha": "center"},
+            }
+        )
+    return fallback_annotations
+
+
+def _resolve_histogram_visual_metadata(
+    payload: dict[str, Any],
+    *,
+    x_min: float,
+    x_max: float,
+) -> tuple[dict[str, Any], bool]:
+    visual_metadata = payload.get("visual_metadata") if isinstance(payload.get("visual_metadata"), dict) else {}
+    nested_table = visual_metadata.get("summary_stats_table") if isinstance(visual_metadata.get("summary_stats_table"), dict) else {}
+    nested_overlays = visual_metadata.get("modeled_overlays") if isinstance(visual_metadata.get("modeled_overlays"), dict) else {}
+
+    table_rows = _normalize_table_rows(
+        list(nested_table.get("rows") or [])
+        or list(payload.get("summary_table_rows") or [])
+        or _fallback_histogram_table_rows(payload)
+    )
+    annotation_rows = list(visual_metadata.get("annotation_rows") or []) or list(payload.get("annotation_rows") or [])
+    if not annotation_rows:
+        annotation_rows = _fallback_histogram_annotation_rows(payload, x_min=x_min, x_max=x_max)
+    specification_lines = list(visual_metadata.get("specification_lines") or []) or list(payload.get("specification_lines") or [])
+    if not specification_lines:
+        specification_lines = _fallback_histogram_specification_lines(payload)
+    overlay_rows = list(nested_overlays.get("rows") or []) or list(payload.get("modeled_overlay_rows") or [])
+
+    resolved_visual_metadata = {
+        "specification_lines": specification_lines,
+        "summary_stats_table": {
+            "title": str(nested_table.get("title") or payload.get("summary_table_title") or "Parameter"),
+            "columns": list(nested_table.get("columns") or ["Parameter", "Value"]),
+            "rows": table_rows,
+        },
+        "annotation_rows": annotation_rows,
+        "modeled_overlays": {
+            "advanced_annotations_enabled": bool(nested_overlays.get("advanced_annotations_enabled", bool(overlay_rows))),
+            "overlays_enabled": bool(nested_overlays.get("overlays_enabled", bool(overlay_rows))),
+            "rows": overlay_rows,
+        },
+    }
+    compact_mode = bool(payload.get("compact_render")) or str(payload.get("render_variant") or "").strip().lower() == "compact"
+    return resolved_visual_metadata, compact_mode
+
+
 def render_histogram_png(payload: dict[str, Any]) -> bytes:
     values = _finite_array(payload.get("values") or [])
     if values.size == 0:
@@ -431,10 +591,9 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
     counts, edges = np.histogram(values, bins=bin_count, range=(x_min, x_max))
     max_count = float(max(1, int(np.max(counts)) if counts.size else 1))
 
-    visual_metadata = payload.get("visual_metadata") if isinstance(payload.get("visual_metadata"), dict) else {}
+    visual_metadata, compact_mode = _resolve_histogram_visual_metadata(payload, x_min=x_min, x_max=x_max)
     overlays_meta = visual_metadata.get("modeled_overlays") if isinstance(visual_metadata.get("modeled_overlays"), dict) else {}
     overlay_rows = list(overlays_meta.get("rows") or [])
-    compact_mode = not bool(list((visual_metadata.get("summary_stats_table") or {}).get("rows") or [])) and not bool(list(visual_metadata.get("annotation_rows") or [])) and not bool(overlay_rows)
     plot_left = 86
     plot_top = 72 if compact_mode else 104
     plot_bottom = height - 92

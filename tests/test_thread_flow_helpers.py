@@ -2949,6 +2949,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         assert thread._chart_renderer.last_payload is not None
         assert thread._chart_renderer.last_payload['visual_metadata']['summary_stats_table']['rows']
         assert thread._chart_renderer.last_payload['visual_metadata']['annotation_rows']
+        assert thread._chart_renderer.last_payload['summary_table_rows']
+        assert thread._chart_renderer.last_payload['annotation_rows']
+        assert thread._chart_renderer.last_payload['specification_lines']
 
     def test_summary_sheet_fill_histogram_uses_matplotlib_fallback_when_native_unavailable(self):
         import pandas as pd

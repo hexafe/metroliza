@@ -164,6 +164,7 @@ def test_compact_histogram_renderer_uses_fast_png_encoding(monkeypatch):
         lsl=0.0,
         usl=3.0,
         title="Compact Histogram",
+        compact_render=True,
     )
     captured = {}
 
@@ -199,6 +200,61 @@ def test_rich_histogram_renderer_keeps_default_png_encoding(monkeypatch):
     assert native_chart_compositor.render_histogram_png(payload) == b"png"
     assert captured["optimize"] is True
     assert captured["compress_level"] is None
+
+
+def test_rich_histogram_renderer_recovers_layout_from_top_level_metadata():
+    payload = build_histogram_native_payload(
+        values=[1.0, 1.1, 1.3, 1.5, 1.7, 1.9, 2.0, 2.1],
+        lsl=0.8,
+        usl=2.2,
+        title="Recovered Rich Histogram",
+        bin_count=6,
+    )
+    payload["visual_metadata"] = {}
+    payload["summary_table_rows"] = [
+        {"label": "Mean", "value": "1.58"},
+        {"label": "Cp", "value": "1.25"},
+        {"label": "Cpk", "value": "1.11"},
+    ]
+    payload["annotation_rows"] = [
+        {"label": "LSL", "text": "LSL=0.800", "kind": "lsl", "x": 0.8, "row_index": 1},
+        {"label": "Mean", "text": "Mean = 1.580", "kind": "mean", "x": 1.58, "row_index": 0},
+        {"label": "USL", "text": "USL=2.200", "kind": "usl", "x": 2.2, "row_index": 1},
+    ]
+    payload["specification_lines"] = [
+        {"id": "lsl", "label": "LSL", "value": 0.8, "enabled": True},
+        {"id": "usl", "label": "USL", "value": 2.2, "enabled": True},
+    ]
+
+    png = native_chart_compositor.render_histogram_png(payload)
+    image = plt.imread(BytesIO(png), format="png")
+    height, width = image.shape[:2]
+    table_region = image[int(height * 0.12): int(height * 0.92), int(width * 0.72): int(width * 0.98), :3]
+    annotation_region = image[: int(height * 0.18), int(width * 0.10): int(width * 0.65), :3]
+
+    assert np.count_nonzero(np.any(table_region < 0.97, axis=2)) > 4000
+    assert np.count_nonzero(np.any(annotation_region < 0.97, axis=2)) > 900
+
+
+def test_rich_histogram_renderer_builds_fallback_metadata_when_not_explicitly_compact():
+    payload = build_histogram_native_payload(
+        values=[1.0, 1.1, 1.3, 1.5, 1.7, 1.9, 2.0, 2.1],
+        lsl=0.8,
+        usl=2.2,
+        title="Fallback Rich Histogram",
+        bin_count=6,
+    )
+    payload["visual_metadata"] = {}
+    payload["summary"] = {"count": 8, "mean": 1.58, "std": 0.39, "min": 1.0, "max": 2.1}
+    payload["limits"] = {"lsl": 0.8, "usl": 2.2, "nominal": 1.5}
+    payload["mean_line"] = {"value": 1.58}
+
+    png = native_chart_compositor.render_histogram_png(payload)
+    image = plt.imread(BytesIO(png), format="png")
+    height, width = image.shape[:2]
+    table_region = image[int(height * 0.12): int(height * 0.92), int(width * 0.72): int(width * 0.98), :3]
+
+    assert np.count_nonzero(np.any(table_region < 0.97, axis=2)) > 2500
 
 
 def test_native_histogram_renderer_validates_payload_contract():

@@ -269,6 +269,7 @@ def build_histogram_native_payload(
     usl: float | None,
     title: str,
     bin_count: int | None = None,
+    compact_render: bool = False,
 ) -> dict[str, Any]:
     """Build the base native histogram payload.
 
@@ -283,6 +284,8 @@ def build_histogram_native_payload(
       - `summary_stats_table`: dict with rendered row metadata.
       - `annotation_rows`: list[dict] with label placement hints.
       - `modeled_overlays`: dict describing disabled/enabled model overlays.
+    - `compact_render`: explicit stripped-render fast path. Rich workbook
+      exports should leave this disabled.
     """
     numeric = np.asarray(values, dtype=float)
     finite = numeric[np.isfinite(numeric)]
@@ -293,6 +296,12 @@ def build_histogram_native_payload(
         "lsl": None if lsl is None else float(lsl),
         "usl": None if usl is None else float(usl),
         "bin_count": None if bin_count is None else int(bin_count),
+        "compact_render": bool(compact_render),
+        "summary_table_title": "Parameter",
+        "summary_table_rows": [],
+        "annotation_rows": [],
+        "specification_lines": [],
+        "modeled_overlay_rows": [],
         "visual_metadata": {
             "specification_lines": [],
             "summary_stats_table": {"title": "Parameter", "columns": ["Parameter", "Value"], "rows": []},
@@ -361,6 +370,22 @@ def _validate_histogram_native_payload(payload: dict[str, Any]) -> None:
     modeled_overlays = visual_metadata.get("modeled_overlays")
     if modeled_overlays is not None and not isinstance(modeled_overlays, dict):
         raise RuntimeError("Native histogram payload `visual_metadata.modeled_overlays` must be a mapping.")
+
+    top_level_table_rows = payload.get("summary_table_rows")
+    if top_level_table_rows is not None and not isinstance(top_level_table_rows, list):
+        raise RuntimeError("Native histogram payload `summary_table_rows` must be a list when provided.")
+
+    top_level_annotation_rows = payload.get("annotation_rows")
+    if top_level_annotation_rows is not None and not isinstance(top_level_annotation_rows, list):
+        raise RuntimeError("Native histogram payload `annotation_rows` must be a list when provided.")
+
+    top_level_spec_lines = payload.get("specification_lines")
+    if top_level_spec_lines is not None and not isinstance(top_level_spec_lines, list):
+        raise RuntimeError("Native histogram payload `specification_lines` must be a list when provided.")
+
+    top_level_overlay_rows = payload.get("modeled_overlay_rows")
+    if top_level_overlay_rows is not None and not isinstance(top_level_overlay_rows, list):
+        raise RuntimeError("Native histogram payload `modeled_overlay_rows` must be a list when provided.")
 
 
 def _validate_distribution_native_payload(payload: dict[str, Any]) -> None:

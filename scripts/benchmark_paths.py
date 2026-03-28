@@ -843,6 +843,7 @@ def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histo
         usl=10.5,
         title='Histogram budget benchmark',
         bin_count=24,
+        compact_render=True,
     )
 
     matplotlib_samples: list[float] = []

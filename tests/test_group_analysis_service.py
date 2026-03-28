@@ -896,6 +896,8 @@ class TestGroupAnalysisService(unittest.TestCase):
 
     def test_build_metric_insights_prioritizes_shape_with_three_line_cap(self):
         metric_row = {
+            'spec_status': 'EXACT_MATCH',
+            'analysis_restriction_label': 'Full analysis',
             'comparability_summary': {'status': 'EXACT_MATCH', 'interpretation_limits': 'none'},
             'descriptive_stats': [
                 {'group': 'A', 'mean': 10.2},
@@ -911,9 +913,52 @@ class TestGroupAnalysisService(unittest.TestCase):
         insights = build_metric_insights(metric_row)
 
         self.assertEqual(len(insights), 3)
-        self.assertTrue(insights[0].startswith('Comparability='))
-        self.assertIn('Strongest pairwise location signal', insights[1])
-        self.assertEqual(insights[2], 'Distribution shape: Clear shape mismatch across groups.')
+        self.assertEqual(insights[0], 'Status: Exact match; mode=Full analysis.')
+        self.assertEqual(insights[1], 'Primary signal: A vs B is DIFFERENCE (adj p=0.0009).')
+        self.assertEqual(insights[2], 'Shape signal: Clear shape mismatch across groups.')
+
+    @patch('modules.group_analysis_service.compute_distribution_difference')
+    @patch('modules.group_analysis_service.compute_pairwise_rows')
+    def test_shape_only_metrics_surface_caution_status_takeaway_and_action(self, mock_compute_pairwise_rows, mock_distribution_difference):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['M1'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [10.0, 10.1, 10.2, 10.0, 9.9, 10.0, 10.1, 9.9],
+                'LSL': [9.0] * 8,
+                'NOMINAL': [10.0] * 8,
+                'USL': [11.0] * 8,
+            }
+        )
+        mock_compute_pairwise_rows.return_value = []
+        mock_distribution_difference.return_value = {
+            'profile_rows': [],
+            'pairwise_rows': [],
+            'omnibus_row': {
+                'Metric': 'M1',
+                'Test used': 'Kolmogorov-Smirnov (2-sample)',
+                'raw p-value': 0.004,
+                'adjusted p-value': 0.004,
+                'significant?': 'YES',
+                'warning / assumptions': 'None',
+                'comment / verdict': 'Clear shape mismatch across groups.',
+            },
+        }
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['index_status'], 'USE CAUTION')
+        self.assertEqual(
+            metric['recommended_action'],
+            'Recommended action: review spread and consistency by group; averages may look similar, but the distribution pattern differs.',
+        )
+        self.assertEqual(
+            metric['metric_takeaway'],
+            'Clear shape mismatch across groups. Review spread and consistency by group.',
+        )
+        self.assertEqual(metric['insights'][2], 'Shape signal: Clear shape mismatch across groups.')
 
     def test_build_group_analysis_payload_cache_hits_preserve_payload_parity(self):
         grouped_df = pd.DataFrame(

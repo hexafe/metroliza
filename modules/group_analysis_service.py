@@ -580,6 +580,103 @@ def _distribution_metric_note(distribution_difference):
     return f'Shape note: {verdict}'
 
 
+def _distribution_shape_signal_level(distribution_difference):
+    verdict = str((distribution_difference or {}).get('comment / verdict') or '').strip()
+    if not verdict:
+        return None
+    lowered = verdict.lower()
+    if 'no statistically significant distribution shape difference' in lowered or 'no distribution shape difference' in lowered:
+        return None
+    if lowered.startswith('caution:'):
+        return 'caution'
+    if 'difference' in lowered or 'mismatch' in lowered:
+        return 'difference'
+    return None
+
+
+def _distribution_shape_message(distribution_difference):
+    verdict = str((distribution_difference or {}).get('comment / verdict') or '').strip()
+    if not verdict:
+        return ''
+
+    lowered = verdict.lower()
+    if 'no statistically significant distribution shape difference' in lowered or 'no distribution shape difference' in lowered:
+        return ''
+    if lowered.startswith('caution: distribution fit quality is unreliable'):
+        return 'review spread and consistency cautiously; fit quality is unreliable for one or more groups.'
+    if lowered == 'difference detected in distribution shape.':
+        return 'spread or pattern differs across groups.'
+    return verdict.rstrip('.!?') + '.'
+
+
+def _pairwise_status_label(row):
+    label = str((row or {}).get('difference_label') or '').strip()
+    if label:
+        return label
+    return _difference_status_label(
+        adjusted_p_value=(row or {}).get('adjusted_p_value'),
+        effect_size=(row or {}).get('effect_size'),
+        flags=(row or {}).get('flags'),
+    )
+
+
+def _priority_pairwise_row(pairwise_rows):
+    if not pairwise_rows:
+        return None
+
+    status_rank = {
+        'DIFFERENCE': 0,
+        'USE CAUTION': 1,
+        'APPROXIMATE': 2,
+        'NO DIFFERENCE': 3,
+    }
+    return sorted(
+        pairwise_rows,
+        key=lambda row: (
+            status_rank.get(_pairwise_status_label(row), 4),
+            _safe_numeric(row.get('adjusted_p_value')) is None,
+            _safe_numeric(row.get('adjusted_p_value')) if _safe_numeric(row.get('adjusted_p_value')) is not None else float('inf'),
+            -abs(_safe_numeric(row.get('effect_size')) or 0.0),
+            str(row.get('group_a') or ''),
+            str(row.get('group_b') or ''),
+        ),
+    )[0]
+
+
+def _format_primary_pairwise_signal(pairwise_rows):
+    best = _priority_pairwise_row(pairwise_rows)
+    if best is None:
+        return ''
+
+    status_label = _pairwise_status_label(best)
+    detail_parts = []
+    adjusted_p = _safe_numeric(best.get('adjusted_p_value'))
+    effect_size = _safe_numeric(best.get('effect_size'))
+    if adjusted_p is not None:
+        detail_parts.append(f'adj p={adjusted_p:.4f}')
+    if effect_size is not None:
+        detail_parts.append(f'effect={effect_size:.3f}')
+
+    detail_suffix = f" ({', '.join(detail_parts)})" if detail_parts else ''
+    return f"Primary signal: {best.get('group_a')} vs {best.get('group_b')} is {status_label}{detail_suffix}."
+
+
+def _format_mean_range_signal(desc_rows):
+    sorted_by_mean = sorted(
+        [row for row in (desc_rows or []) if row.get('mean') is not None],
+        key=lambda row: row.get('mean'),
+    )
+    if not sorted_by_mean:
+        return ''
+
+    low = sorted_by_mean[0]
+    high = sorted_by_mean[-1]
+    return (
+        f"Mean range: lowest={low.get('group')} ({low.get('mean'):.4g}), "
+        f"highest={high.get('group')} ({high.get('mean'):.4g})."
+    )
+
+
 def _recommended_metric_action(*, pairwise_rows, distribution_difference, analysis_policy):
     if not analysis_policy.get('allow_pairwise'):
         return 'Recommended action: use descriptive results only; direct pairwise interpretation is not supported for this metric.'
@@ -600,14 +697,16 @@ def _recommended_metric_action(*, pairwise_rows, distribution_difference, analys
             f"{strongest.get('group_a')} vs {strongest.get('group_b')} and verify likely process drivers before changing settings."
         )
 
-    verdict = str((distribution_difference or {}).get('comment / verdict') or '').lower()
-    if 'statistically significant' in verdict and 'no statistically significant' not in verdict:
-        return 'Recommended action: averages may be similar, but review variation and consistency by group before changing the process.'
+    shape_signal = _distribution_shape_signal_level(distribution_difference)
+    if shape_signal == 'caution':
+        return 'Recommended action: review spread and consistency by group, but treat the shape signal cautiously because fit quality is unreliable.'
+    if shape_signal == 'difference':
+        return 'Recommended action: review spread and consistency by group; averages may look similar, but the distribution pattern differs.'
 
     return 'Recommended action: no immediate escalation; keep monitoring and collect more data if the gap still matters.'
 
 
-def _metric_index_status(*, pairwise_rows, diagnostics_comment):
+def _metric_index_status(*, pairwise_rows, diagnostics_comment, distribution_difference=None):
     labels = [
         _difference_status_label(
             adjusted_p_value=row.get('adjusted_p_value'),
@@ -618,6 +717,8 @@ def _metric_index_status(*, pairwise_rows, diagnostics_comment):
     ]
     if 'DIFFERENCE' in labels:
         return 'DIFFERENCE'
+    if _distribution_shape_signal_level(distribution_difference) is not None:
+        return 'USE CAUTION'
     if 'USE CAUTION' in labels or 'Descriptive-only' in str(diagnostics_comment or ''):
         return 'USE CAUTION'
     if 'APPROXIMATE' in labels:
@@ -627,22 +728,17 @@ def _metric_index_status(*, pairwise_rows, diagnostics_comment):
 
 def _metric_takeaway(*, pairwise_rows, diagnostics_comment, distribution_difference):
     if pairwise_rows:
-        ranked = sorted(
-            pairwise_rows,
-            key=lambda row: (
-                str(row.get('difference_label') or '') != 'DIFFERENCE',
-                _safe_numeric(row.get('adjusted_p_value')) is None,
-                _safe_numeric(row.get('adjusted_p_value')) if _safe_numeric(row.get('adjusted_p_value')) is not None else float('inf'),
-            ),
-        )
-        best = ranked[0]
-        summary = f"{best.get('group_a')} vs {best.get('group_b')}: {best.get('difference_label') or 'REVIEW'}."
+        best = _priority_pairwise_row(pairwise_rows)
+        summary = f"{best.get('group_a')} vs {best.get('group_b')}: {_pairwise_status_label(best) or 'REVIEW'}."
         action = str(best.get('suggested_action') or '').strip()
         return f'{summary} {action}'.strip()
 
-    shape_note = str((distribution_difference or {}).get('comment / verdict') or '').strip()
-    if shape_note:
-        return shape_note
+    shape_signal = _distribution_shape_signal_level(distribution_difference)
+    shape_message = _distribution_shape_message(distribution_difference)
+    if shape_signal == 'caution':
+        return 'Review spread and consistency cautiously because distribution-fit quality is unreliable for one or more groups.'
+    if shape_message:
+        return f'{shape_message} Review spread and consistency by group.'
     return str(diagnostics_comment or 'Review descriptive statistics only.').strip()
 
 def _build_pairwise_test_rationale(*, group_count, test_used):
@@ -798,53 +894,34 @@ def build_metric_insights(metric_row):
     desc_rows = metric_row.get('descriptive_stats', [])
     pairwise_rows = metric_row.get('pairwise_rows', [])
     comparability = metric_row.get('comparability_summary', {})
+    spec_status = metric_row.get('spec_status') or comparability.get('status')
+    restriction_label = str(metric_row.get('analysis_restriction_label') or '').strip()
+    if not restriction_label:
+        restriction_label = _build_analysis_restriction_fields(
+            spec_status,
+            metric_row.get('analysis_policy') or {},
+        ).get('analysis_restriction_label', 'Descriptive only')
+    status_label = get_spec_status_label(spec_status)
 
-    required_lines = [
-        (
-            f"Comparability={comparability.get('status')} "
-            f"(limits: {comparability.get('interpretation_limits', 'none')})."
-        )
-    ]
-    optional_lines = []
-
-    if desc_rows:
-        sorted_by_mean = sorted(
-            [row for row in desc_rows if row.get('mean') is not None],
-            key=lambda row: row['mean'],
-        )
-        if sorted_by_mean:
-            low = sorted_by_mean[0]
-            high = sorted_by_mean[-1]
-            optional_lines.append(
-                (
-                    f"Mean range spans {low.get('group')} ({low.get('mean'):.4g}) to "
-                    f"{high.get('group')} ({high.get('mean'):.4g})."
-                )
-            )
+    insight_lines = [f'Status: {status_label}; mode={restriction_label}.']
+    primary_signal = _format_primary_pairwise_signal(pairwise_rows)
+    if primary_signal:
+        insight_lines.append(primary_signal)
+    elif metric_row.get('analysis_policy', {}).get('allow_pairwise'):
+        insight_lines.append('Primary signal: no valid pairwise rows were produced.')
+    else:
+        insight_lines.append('Primary signal: pairwise comparison is disabled for this metric.')
 
     distribution_difference = metric_row.get('distribution_difference') or {}
-    shape_verdict = distribution_difference.get('comment / verdict')
-
-    if pairwise_rows:
-        best = sorted(
-            pairwise_rows,
-            key=lambda row: (row.get('adjusted_p_value') is None, row.get('adjusted_p_value') or float('inf')),
-        )[0]
-        required_lines.append(
-            (
-                f"Strongest pairwise location signal: {best.get('group_a')} vs {best.get('group_b')} "
-                f"(adj p={best.get('adjusted_p_value')}, comment={best.get('comment')})."
-            )
-        )
-    elif metric_row.get('analysis_policy', {}).get('allow_pairwise'):
-        required_lines.append('Pairwise location test enabled but no valid A/B rows were produced.')
+    shape_message = _distribution_shape_message(distribution_difference)
+    if shape_message:
+        insight_lines.append(f'Shape signal: {shape_message}')
     else:
-        required_lines.append('Pairwise location interpretation is disabled for this metric.')
+        mean_range_signal = _format_mean_range_signal(desc_rows)
+        if mean_range_signal:
+            insight_lines.append(mean_range_signal)
 
-    if shape_verdict:
-        required_lines.append(f"Distribution shape: {shape_verdict}")
-
-    return (required_lines + optional_lines)[:3]
+    return insight_lines[:3]
 
 
 def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correction_method='holm'):
@@ -1422,6 +1499,7 @@ def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_st
     metric_payload['index_status'] = _metric_index_status(
         pairwise_rows=pairwise_rows,
         diagnostics_comment=diagnostics_comment,
+        distribution_difference=distribution_omnibus,
     )
     if not policy.get('allow_pairwise') and metric_payload['index_status'] == 'NO DIFFERENCE':
         metric_payload['index_status'] = 'USE CAUTION'
