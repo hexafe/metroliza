@@ -32,6 +32,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$invocationBoundParameters = @{}
+foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+    $invocationBoundParameters[$entry.Key] = $entry.Value
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $nuitkaScriptPath = Join-Path $PSScriptRoot 'build_nuitka.ps1'
 
@@ -226,6 +231,39 @@ function Resolve-NativeTargets {
     return @($nativeTargetCatalog | Where-Object { $requestedLookup.ContainsKey($_.Name) })
 }
 
+function Add-SwitchArgumentIfNeeded {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.List[string]]$Arguments,
+        [Parameter(Mandatory = $true)]
+        [bool]$Enabled,
+        [Parameter(Mandatory = $true)]
+        [string]$SwitchName
+    )
+
+    if ($Enabled) {
+        [void]$Arguments.Add($SwitchName)
+    }
+}
+
+function Add-ValueArgumentIfBound {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.List[string]]$Arguments,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$BoundParameters,
+        [Parameter(Mandatory = $true)]
+        [string]$ParameterName,
+        [Parameter(Mandatory = $true)]
+        [string]$SwitchName
+    )
+
+    if ($BoundParameters.ContainsKey($ParameterName)) {
+        [void]$Arguments.Add($SwitchName)
+        [void]$Arguments.Add([string]$BoundParameters[$ParameterName])
+    }
+}
+
 Push-Location $repoRoot
 try {
     Write-Host '[1/6] Validating toolchain'
@@ -331,43 +369,34 @@ try {
                 throw "Nuitka helper script not found: $nuitkaScriptPath"
             }
 
-            $nuitkaParams = @{
-                EntryPoint = $EntryPoint
-                IconPath = $IconPath
-                CredentialsPath = $CredentialsPath
-                CompilerStrategy = $CompilerStrategy
-            }
-
-            if ($PSBoundParameters.ContainsKey('OutputName') -and $null -ne $OutputName -and $OutputName -ne '') {
-                $nuitkaParams.OutputName = $OutputName
-            }
-
-            if ($FastDev.IsPresent) { $nuitkaParams.FastDev = $true }
-            if ($EnableConsole.IsPresent) { $nuitkaParams.EnableConsole = $true }
-            if ($AllowBrokenPdfParserBuild.IsPresent) { $nuitkaParams.AllowBrokenPdfParserBuild = $true }
-            if ($AutoInstallCompiler.IsPresent) { $nuitkaParams.AutoInstallCompiler = $true }
-            if ($OpenInstallHelp.IsPresent) { $nuitkaParams.OpenInstallHelp = $true }
+            $nuitkaArgs = [System.Collections.Generic.List[string]]::new()
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'EntryPoint' -SwitchName '-EntryPoint'
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'OutputName' -SwitchName '-OutputName'
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'IconPath' -SwitchName '-IconPath'
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'CredentialsPath' -SwitchName '-CredentialsPath'
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'CompilerStrategy' -SwitchName '-CompilerStrategy'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $FastDev.IsPresent -SwitchName '-FastDev'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $EnableConsole.IsPresent -SwitchName '-EnableConsole'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AllowBrokenPdfParserBuild.IsPresent -SwitchName '-AllowBrokenPdfParserBuild'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AutoInstallCompiler.IsPresent -SwitchName '-AutoInstallCompiler'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $OpenInstallHelp.IsPresent -SwitchName '-OpenInstallHelp'
 
             $enforceNativePackaging = $RequireNative.IsPresent -or ($selectedTargets.Name -contains 'cmm')
-            if ($enforceNativePackaging) {
-                $nuitkaParams.RequireNative = $true
-            }
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $enforceNativePackaging -SwitchName '-RequireNative'
 
-            $paramSummary = ($nuitkaParams.GetEnumerator() | Sort-Object Name | ForEach-Object {
-                if ($_.Value -is [bool]) {
-                    if ($_.Value) { "-$($_.Name)" } else { $null }
+            if ($nuitkaArgs.Count -gt 0) {
+                $display = Format-CommandForDisplay -Executable $nuitkaScriptPath -Arguments $nuitkaArgs.ToArray()
+            }
+            else {
+                $display = Format-CommandForDisplay -Executable $nuitkaScriptPath
+            }
+            Write-Host "      $display"
+            if (-not $DryRun) {
+                if ($nuitkaArgs.Count -gt 0) {
+                    & $nuitkaScriptPath @($nuitkaArgs.ToArray())
                 }
                 else {
-                    "-$($_.Name) `"$($_.Value)`""
-                }
-            } | Where-Object { $_ }) -join ' '
-
-            Write-Host "      $nuitkaScriptPath $paramSummary"
-
-            if (-not $DryRun) {
-                & $nuitkaScriptPath @nuitkaParams
-                if ($LASTEXITCODE -ne 0) {
-                    throw 'Nuitka packaging failed.'
+                    & $nuitkaScriptPath
                 }
             }
         }
