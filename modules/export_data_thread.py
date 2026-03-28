@@ -4216,6 +4216,120 @@ class ExportDataThread(QThread):
         )
 
     @staticmethod
+    def _build_group_analysis_plot_description(metric_row, plot_key, grouped_entries, spec_limits):
+        """Return a concise workbook image description for Group Analysis plots."""
+        metric_name = str((metric_row or {}).get('metric') or 'metric')
+        plot_label = 'violin plot' if str(plot_key) == 'violin' else 'histogram'
+        capability_context = ExportDataThread._build_group_analysis_capability_context(metric_row)
+
+        group_parts = []
+        for label, values in grouped_entries:
+            if values.size == 0:
+                continue
+            mean_value = float(np.mean(values))
+            group_parts.append(f"{label} n={values.size}, mean={mean_value:.3f}")
+
+        spec_parts = []
+        for key, label in (('lsl', 'LSL'), ('nominal', 'Nominal'), ('usl', 'USL')):
+            value = (spec_limits or {}).get(key)
+            if value is not None:
+                spec_parts.append(f"{label}={float(value):.3f}")
+
+        description_parts = [f"Group Analysis {plot_label} for {metric_name}."]
+        if group_parts:
+            description_parts.append(f"Groups: {'; '.join(group_parts)}.")
+        if spec_parts:
+            description_parts.append(f"Spec references: {', '.join(spec_parts)}.")
+        capability_description = str((capability_context or {}).get('description') or '').strip()
+        if capability_description:
+            description_parts.append(capability_description)
+        if str(plot_key) == 'violin':
+            description_parts.append('Mean, min, and max annotations are shown for each group when space allows.')
+        else:
+            description_parts.append('Legend entries include per-group sample count and mean.')
+        return ' '.join(description_parts)
+
+    @staticmethod
+    def _build_group_analysis_capability_context(metric_row):
+        """Return capability callout metadata for Group Analysis workbook plots."""
+        metric_row = metric_row if isinstance(metric_row, dict) else {}
+
+        def _as_float(value):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if np.isfinite(number) else None
+
+        def _readiness_label(palette_key):
+            return {
+                'quality_capable': 'Capable',
+                'quality_good': 'Good',
+                'quality_marginal': 'Marginal',
+                'quality_risk': 'Risk',
+                'quality_unknown': 'Unknown',
+            }.get(str(palette_key or '').strip().lower(), 'Unknown')
+
+        if metric_row.get('capability_allowed') is False:
+            return {
+                'palette_key': 'quality_unknown',
+                'callout_lines': ['Capability disabled', 'Spec limits differ across groups'],
+                'description': 'Capability is disabled because spec limits are not directly comparable across groups.',
+            }
+
+        capability_payload = metric_row.get('capability')
+        if not isinstance(capability_payload, dict):
+            return {}
+
+        cp_value = _as_float(capability_payload.get('cp'))
+        cpk_value = _as_float(capability_payload.get('cpk'))
+        capability_value = _as_float(capability_payload.get('capability'))
+        capability_type = str(capability_payload.get('capability_type') or 'Capability').strip() or 'Capability'
+        capability_ci = capability_payload.get('capability_ci') if isinstance(capability_payload.get('capability_ci'), dict) else {}
+        cpk_ci = capability_ci.get('cpk') if isinstance(capability_ci, dict) else None
+        ci_lower = _as_float((cpk_ci or {}).get('lower')) if isinstance(cpk_ci, dict) else None
+        ci_upper = _as_float((cpk_ci or {}).get('upper')) if isinstance(cpk_ci, dict) else None
+
+        if cp_value is not None and cpk_value is not None:
+            palette_key = classify_capability_status(cp_value, cpk_value).get('palette_key')
+            callout_lines = [
+                f"Capability: {_readiness_label(palette_key)}",
+                f"Cp={cp_value:.3f}, Cpk={cpk_value:.3f}",
+            ]
+            description = f"Capability summary: {_readiness_label(palette_key).lower()}. Cp={cp_value:.3f}, Cpk={cpk_value:.3f}."
+        elif capability_value is not None:
+            palette_key = classify_capability_value(capability_value, label_prefix=capability_type).get('palette_key')
+            callout_lines = [
+                f"Capability: {capability_type} {_readiness_label(palette_key).lower()}",
+                f"{capability_type}={capability_value:.3f}",
+            ]
+            description = f"Capability summary: {capability_type} {_readiness_label(palette_key).lower()} at {capability_value:.3f}."
+        else:
+            status = str(capability_payload.get('status') or '').strip().lower()
+            if status == 'not_applicable':
+                return {
+                    'palette_key': 'quality_unknown',
+                    'callout_lines': ['Capability not applicable', 'Check data spread or spec definition'],
+                    'description': 'Capability is not applicable with the current data or spec definition.',
+                }
+            return {}
+
+        if ci_lower is not None and ci_upper is not None:
+            callout_lines.append(f"95% CI {ci_lower:.3f} to {ci_upper:.3f}")
+            if ci_lower < 1.0:
+                callout_lines.append('Lower CI < 1.000')
+                description = f'{description} 95% CI {ci_lower:.3f} to {ci_upper:.3f}; lower confidence bound is below 1.000.'
+            else:
+                callout_lines.append('Lower CI >= 1.000')
+                description = f'{description} 95% CI {ci_lower:.3f} to {ci_upper:.3f}; lower confidence bound stays at or above 1.000.'
+
+        return {
+            'palette_key': palette_key,
+            'callout_lines': callout_lines,
+            'description': description,
+        }
+
+    @staticmethod
     def _render_group_analysis_plot_asset(metric_row, plot_key):
         """Build an in-memory chart asset for Group Analysis worksheet insertion."""
         chart_payload = metric_row.get('chart_payload') if isinstance(metric_row, dict) else None
@@ -4239,20 +4353,32 @@ class ExportDataThread(QThread):
 
         group_labels = [label for (label, _) in filtered_entries]
         grouped_values = [values for (_, values) in filtered_entries]
+        display_group_labels = [
+            f"{label}\n(n={values.size})"
+            for (label, values) in filtered_entries
+        ]
 
         spec_limits = chart_payload.get('spec_limits') or {}
+        capability_context = ExportDataThread._build_group_analysis_capability_context(metric_row)
+        description = ExportDataThread._build_group_analysis_plot_description(
+            metric_row,
+            plot_key,
+            filtered_entries,
+            spec_limits,
+        )
         fig, ax = plt.subplots(figsize=(6.2, 3.2))
         try:
             if plot_key == 'violin':
                 if _HAS_SEABORN:
                     sns.violinplot(data=grouped_values, inner='quartile', cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
-                    ax.set_xticks(range(len(group_labels)))
-                    ax.set_xticklabels(group_labels)
+                    positions = list(range(len(group_labels)))
+                    ax.set_xticks(positions)
+                    ax.set_xticklabels(display_group_labels)
                 else:
-                    positions = range(1, len(group_labels) + 1)
+                    positions = list(range(1, len(group_labels) + 1))
                     ax.violinplot(grouped_values, showmeans=False, showmedians=True, showextrema=False, positions=positions)
-                    ax.set_xticks(list(positions))
-                    ax.set_xticklabels(group_labels)
+                    ax.set_xticks(positions)
+                    ax.set_xticklabels(display_group_labels)
 
                 nominal_value = spec_limits.get('nominal')
                 lsl_value = spec_limits.get('lsl')
@@ -4295,6 +4421,36 @@ class ExportDataThread(QThread):
                         bbox=annotation_box,
                         clip_on=False,
                     )
+                annotate_violin_group_stats(
+                    ax,
+                    group_labels,
+                    grouped_values,
+                    positions,
+                    nom=nominal_value,
+                    lsl=lsl_value,
+                    readability_scale=0.9,
+                    annotation_mode='auto',
+                    use_dynamic_offsets=True,
+                )
+                if capability_context.get('callout_lines'):
+                    palette_key = capability_context.get('palette_key') or 'quality_unknown'
+                    ax.text(
+                        0.01,
+                        0.98,
+                        '\n'.join(capability_context['callout_lines']),
+                        transform=ax.transAxes,
+                        ha='left',
+                        va='top',
+                        fontsize=6.6,
+                        color=SUMMARY_PLOT_PALETTE.get(f'{palette_key}_text', SUMMARY_PLOT_PALETTE['annotation_text']),
+                        bbox={
+                            'boxstyle': 'round,pad=0.2',
+                            'facecolor': SUMMARY_PLOT_PALETTE.get(f'{palette_key}_bg', 'white'),
+                            'edgecolor': SUMMARY_PLOT_PALETTE.get(f'{palette_key}_text', SUMMARY_PLOT_PALETTE['annotation_box_edge']),
+                            'linewidth': 0.55,
+                            'alpha': 0.9,
+                        },
+                    )
                 ax.set_title(f"{metric_row.get('metric')} - Violin")
             elif plot_key == 'histogram':
                 all_values = np.concatenate(grouped_values)
@@ -4307,15 +4463,44 @@ class ExportDataThread(QThread):
                     SUMMARY_PLOT_PALETTE['sigma_band'],
                 ]
                 for index, (label, values) in enumerate(zip(group_labels, grouped_values)):
+                    color = histogram_palette[index % len(histogram_palette)]
+                    mean_value = float(np.mean(values))
                     ax.hist(
                         values,
                         bins=bin_edges,
                         edgecolor='black',
                         alpha=0.42,
-                        color=histogram_palette[index % len(histogram_palette)],
-                        label=label,
+                        color=color,
+                        label=f"{label} (n={values.size}, μ={mean_value:.3f})",
                     )
-                ax.legend(loc='upper left', frameon=True, fontsize=7.0)
+                    ax.axvline(
+                        mean_value,
+                        color=color,
+                        linestyle='-.',
+                        linewidth=1.0,
+                        alpha=0.85,
+                    )
+                ax.legend(loc='upper left', frameon=True, fontsize=7.0, title='Group (n, mean)', title_fontsize=7.0)
+                histogram_note_lines = ['Dash-dot lines show group means']
+                if capability_context.get('callout_lines'):
+                    histogram_note_lines.extend(capability_context['callout_lines'])
+                palette_key = capability_context.get('palette_key') if capability_context else None
+                ax.text(
+                    0.99,
+                    0.98,
+                    '\n'.join(histogram_note_lines),
+                    transform=ax.transAxes,
+                    ha='right',
+                    va='top',
+                    fontsize=6.7,
+                    color=SUMMARY_PLOT_PALETTE.get(f'{palette_key}_text', '#4d5968') if palette_key else '#4d5968',
+                    bbox={
+                        'boxstyle': 'round,pad=0.18',
+                        'facecolor': SUMMARY_PLOT_PALETTE.get(f'{palette_key}_bg', (1.0, 1.0, 1.0, 0.78)) if palette_key else (1.0, 1.0, 1.0, 0.78),
+                        'edgecolor': SUMMARY_PLOT_PALETTE.get(f'{palette_key}_text', SUMMARY_PLOT_PALETTE['annotation_box_edge']) if palette_key else SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                        'linewidth': 0.45,
+                    },
+                )
 
                 for limit_key, style in (
                     ('lsl', {'linestyle': '--', 'color': '#B45309'}),
@@ -4335,7 +4520,7 @@ class ExportDataThread(QThread):
             image_data = BytesIO()
             fig.savefig(image_data, format='png', dpi=120)
             image_data.seek(0)
-            return {'image_data': image_data, 'row_span': 16}
+            return {'image_data': image_data, 'row_span': 16, 'description': description}
         except Exception:
             logger.debug('Failed to render group-analysis %s plot for %r', plot_key, metric_row.get('metric'), exc_info=True)
             return {}

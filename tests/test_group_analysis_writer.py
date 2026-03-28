@@ -3,6 +3,8 @@ import unittest
 from modules.group_analysis_writer import (
     GROUP_ANALYSIS_MANUAL_GITHUB_URL,
     GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL,
+    _build_metric_priority_reason,
+    _build_priority_metrics_summary,
     write_group_analysis_diagnostics_sheet,
     write_group_analysis_sheet,
 )
@@ -90,6 +92,13 @@ class TestGroupAnalysisWriter(unittest.TestCase):
             'status': 'ready',
             'analysis_level': 'standard',
             'effective_scope': 'single_reference',
+            'diagnostics': {
+                'reference_count': 1,
+                'group_count': 2,
+                'skipped_metric_count': 0,
+                'warning_summary': {'count': 2},
+                'unmatched_metrics_summary': {'count': 1},
+            },
             'metric_rows': [
                 {
                     'metric': 'M1',
@@ -101,7 +110,15 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                         'interpretation_limits': 'none',
                         'summary': 'Specs are aligned',
                     },
-                    'capability': {'cp': 1.1, 'cpk': 1.0},
+                    'capability': {
+                        'cp': 1.1,
+                        'cpk': 1.0,
+                        'capability': 1.0,
+                        'capability_type': 'Cpk',
+                        'capability_ci': {'cp': {'lower': 0.9, 'upper': 1.3}, 'cpk': {'lower': 0.75, 'upper': 1.2}},
+                        'status': 'ok',
+                    },
+                    'capability_allowed': True,
                     'descriptive_stats': [
                         {
                             'group': 'A',
@@ -115,6 +132,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'cp': 1.0,
                             'capability': 0.9,
                             'capability_type': 'Cpk',
+                            'capability_ci': {'cp': {'lower': 0.8, 'upper': 1.2}, 'cpk': {'lower': 0.6, 'upper': 1.1}},
                             'flags': 'none',
                         },
                         {
@@ -129,6 +147,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
                             'cp': 1.0,
                             'capability': 0.8,
                             'capability_type': 'Cpk',
+                            'capability_ci': {'cp': {'lower': 0.7, 'upper': 1.1}, 'cpk': {'lower': 0.5, 'upper': 1.0}},
                             'flags': 'none',
                         },
                     ],
@@ -165,12 +184,29 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('User manual', values)
         self.assertIn('Open Markdown manual', values)
         self.assertIn('Open PDF manual', values)
+        self.assertIn('Analysis level', values)
+        self.assertIn('Coverage', values)
+        self.assertIn('Attention summary', values)
+        self.assertIn('Start with', values)
+        self.assertIn('Coverage warnings', values)
+        self.assertIn('Standard', values)
+        self.assertIn('2 groups across 1 reference', values)
+        self.assertIn('1 DIFFERENCE', values)
+        self.assertIn('M1 (DIFFERENCE: Location gap: A vs B, adj p=0.0300, effect=0.700)', values)
+        self.assertIn('2 warning signals; 1 metric missing reference coverage; histograms omitted for 1 metric', values)
         self.assertIn('Metric index', values)
+        self.assertIn('Why review first', values)
+        self.assertIn('Restriction / mode', values)
         self.assertIn('Metric: M1', values)
         self.assertIn('Metric overview', values)
+        self.assertIn('Capability summary', values)
+        self.assertIn('Key insights', values)
         self.assertIn('Descriptive stats', values)
         self.assertIn('Spec status', values)
         self.assertIn('Exact match', values)
+        self.assertIn('Capability detail', values)
+        self.assertIn('Cp/Cpk marginal: Cp=1.100, Cpk=1.000. 95% CI 0.750 to 1.200; lower bound below 1.000.', values)
+        self.assertIn('Cpk\n95% CI 0.600 to 1.100', values)
         self.assertIn('Pairwise comparisons', values)
         self.assertIn('Why this test', values)
         self.assertIn('adj p-value', values)
@@ -192,11 +228,12 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertIn('Violin', values)
         self.assertIn('Histogram', values)
         self.assertIn('Not enough total samples to show this plot.', values)
+        self.assertIn('Line 1\nLine 2\nDistribution shape: Distinct tails across groups.', values)
 
         text_values = [str(value).upper() for value in values]
         self.assertNotIn('TRUE', text_values)
         self.assertNotIn('FALSE', text_values)
-        self.assertIsNone(worksheet.frozen)
+        self.assertEqual(worksheet.frozen, (9, 0))
         self.assertEqual(worksheet.gridlines_hidden, 2)
         self.assertEqual(worksheet.columns[0][:3], (0, 0, 18))
         self.assertEqual(worksheet.columns[2][:3], (2, 2, 16))
@@ -227,19 +264,30 @@ class TestGroupAnalysisWriter(unittest.TestCase):
             for row, col, value in worksheet.writes
             if col == 1 and isinstance(value, str) and value.startswith('A vs B: DIFFERENCE.')
         )
-        self.assertFalse(worksheet.write_formats[(take_row, 1)].get('props', {}).get('text_wrap'))
+        self.assertTrue(worksheet.write_formats[(take_row, 1)].get('props', {}).get('text_wrap'))
         self.assertTrue(any(row == metric_row and height >= 28 for row, height, *_ in worksheet.rows))
         metric_index_data_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'M1')
         self.assertEqual(worksheet.write_formats[(metric_index_data_row, 0)].get('props', {}).get('align'), 'center')
         self.assertEqual(worksheet.write_formats[(metric_index_data_row, 0)].get('props', {}).get('valign'), 'vcenter')
+        self.assertEqual(worksheet.write_formats[(metric_index_data_row, 4)].get('props', {}).get('align'), 'left')
+        self.assertEqual(worksheet.write_formats[(metric_index_data_row, 4)].get('props', {}).get('valign'), 'top')
+        self.assertTrue(worksheet.write_formats[(metric_index_data_row, 4)].get('props', {}).get('text_wrap'))
+        self.assertEqual(worksheet.write_formats[(metric_index_data_row, 5)].get('props', {}).get('align'), 'center')
+        self.assertEqual(worksheet.write_formats[(metric_index_data_row, 5)].get('props', {}).get('valign'), 'vcenter')
+        self.assertTrue(worksheet.write_formats[(metric_index_data_row, 5)].get('props', {}).get('text_wrap'))
         overview_value_row = next(
             row for row, col, value in worksheet.writes
             if col == 0 and value == 'Recommended action'
         )
         self.assertEqual(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('align'), 'left')
-        self.assertEqual(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('valign'), 'vcenter')
-        self.assertFalse(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('text_wrap'))
+        self.assertEqual(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('valign'), 'top')
+        self.assertTrue(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('text_wrap'))
         self.assertEqual(worksheet.write_formats[(overview_value_row, 1)].get('props', {}).get('bg_color'), '#FFF7D6')
+        capability_detail_row = next(
+            row for row, col, value in worksheet.writes
+            if col == 10 and value == 'Cpk\n95% CI 0.600 to 1.100'
+        )
+        self.assertTrue(worksheet.write_formats[(capability_detail_row, 10)].get('props', {}).get('text_wrap'))
         desc_caution_row = next(row for row, col, value in worksheet.writes if col == 13 and value == 'caution')
         desc_caution_height = next(height for row, height, *_ in worksheet.rows if row == desc_caution_row)
         self.assertGreater(desc_caution_height, DEFAULT_SIMPLE_ROW_HEIGHT := 22)
@@ -249,15 +297,15 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         pairwise_data_row = next(row for row, col, value in worksheet.writes if col == 8 and value == 'These groups show a reliable difference after correction. The practical gap looks moderate.')
         pairwise_data_height = next(height for row, height, *_ in worksheet.rows if row == pairwise_data_row)
         self.assertGreater(pairwise_data_height, DEFAULT_SIMPLE_ROW_HEIGHT)
-        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 8)].get('props', {}).get('align'), 'center')
-        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 8)].get('props', {}).get('valign'), 'vcenter')
+        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 8)].get('props', {}).get('align'), 'left')
+        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 8)].get('props', {}).get('valign'), 'top')
         takeaway_label_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Takeaway')
         self.assertEqual(worksheet.write_formats[(takeaway_label_row, 0)].get('props', {}).get('align'), 'center')
         self.assertEqual(worksheet.write_formats[(takeaway_label_row, 0)].get('props', {}).get('valign'), 'vcenter')
         self.assertFalse(worksheet.write_formats[(takeaway_label_row, 0)].get('props', {}).get('text_wrap'))
-        self.assertEqual(worksheet.write_formats[(takeaway_label_row, 1)].get('props', {}).get('align'), 'center')
-        self.assertEqual(worksheet.write_formats[(takeaway_label_row, 1)].get('props', {}).get('valign'), 'vcenter')
-        self.assertFalse(worksheet.write_formats[(takeaway_label_row, 1)].get('props', {}).get('text_wrap'))
+        self.assertEqual(worksheet.write_formats[(takeaway_label_row, 1)].get('props', {}).get('align'), 'left')
+        self.assertEqual(worksheet.write_formats[(takeaway_label_row, 1)].get('props', {}).get('valign'), 'top')
+        self.assertTrue(worksheet.write_formats[(takeaway_label_row, 1)].get('props', {}).get('text_wrap'))
         self.assertGreaterEqual(len(worksheet.autofilters), 2)
         index_link_row = next(row for row, col, value in worksheet.writes if col == 2 and value == 'Go to metric')
         self.assertTrue(any(formula[0] == index_link_row and f'A{metric_row + 1}' in formula[2] for formula in worksheet.formulas))
@@ -278,6 +326,52 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         ]
         self.assertTrue(delta_mean_rules)
         self.assertEqual(delta_mean_rules[0][4].get('format', {}).get('props', {}).get('num_format'), '0.000')
+
+    def test_priority_reason_labels_shape_gap_without_location_wording(self):
+        metric_row = {
+            'distribution_difference': {'comment / verdict': 'Clear shape mismatch across groups.'},
+            'diagnostics_comment': 'Analyzed with caution.',
+            'pairwise_rows': [],
+        }
+
+        reason = _build_metric_priority_reason(metric_row)
+
+        self.assertEqual(reason, 'Shape gap: Clear shape mismatch across groups.')
+
+    def test_priority_summary_can_surface_capability_risk_even_without_pairwise_difference(self):
+        metric_rows = [
+            {
+                'metric': 'M_CAP',
+                'index_status': 'NO DIFFERENCE',
+                'pairwise_rows': [],
+                'capability_allowed': True,
+                'capability': {
+                    'cp': 0.95,
+                    'cpk': 0.82,
+                    'capability': 0.82,
+                    'capability_type': 'Cpk',
+                    'capability_ci': {'cpk': {'lower': 0.55, 'upper': 1.02}},
+                },
+            },
+            {
+                'metric': 'M_OK',
+                'index_status': 'NO DIFFERENCE',
+                'pairwise_rows': [],
+                'capability_allowed': True,
+                'capability': {
+                    'cp': 1.80,
+                    'cpk': 1.72,
+                    'capability': 1.72,
+                    'capability_type': 'Cpk',
+                    'capability_ci': {'cpk': {'lower': 1.45, 'upper': 1.98}},
+                },
+            },
+        ]
+
+        summary = _build_priority_metrics_summary(metric_rows)
+
+        self.assertIn('M_CAP (NO DIFFERENCE: Capability risk: Cp=0.950, Cpk=0.820, 95% CI 0.550 to 1.020, lower CI < 1.000)', summary)
+        self.assertNotIn('M_OK', summary)
 
     def test_group_analysis_diagnostics_sheet_smoke(self):
         worksheet = FakeWorksheet()
@@ -414,8 +508,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         plot_assets = {
             'metrics': {
                 'M1': {
-                    'violin': {'path': 'violin.png', 'row_span': 4},
-                    'histogram': {'path': 'histogram.png', 'row_span': 3},
+                    'violin': {'path': 'violin.png', 'row_span': 4, 'description': 'Violin plot description'},
+                    'histogram': {'path': 'histogram.png', 'row_span': 3, 'description': 'Histogram plot description'},
                 }
             }
         }
@@ -424,6 +518,9 @@ class TestGroupAnalysisWriter(unittest.TestCase):
 
         inserted_paths = [entry[2] for entry in worksheet.images]
         self.assertEqual(inserted_paths, ['violin.png', 'histogram.png'])
+        inserted_options = [entry[3] for entry in worksheet.images]
+        self.assertEqual(inserted_options[0].get('description'), 'Violin plot description')
+        self.assertEqual(inserted_options[1].get('description'), 'Histogram plot description')
         self.assertEqual(len(worksheet.charts), 0)
 
         values = [value for _, _, value in worksheet.writes]

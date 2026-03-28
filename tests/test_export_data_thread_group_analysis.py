@@ -216,6 +216,52 @@ def _xlsx_sheet_formulas(xlsx_path, target_sheet_name):
     return formulas
 
 
+def _xlsx_sheet_drawing_cnvpr_attrs(xlsx_path, target_sheet_name):
+    ns_main = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    ns_rel = {'r': 'http://schemas.openxmlformats.org/package/2006/relationships'}
+    ns_draw = {'xdr': 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'}
+
+    with zipfile.ZipFile(xlsx_path, 'r') as workbook_zip:
+        workbook_xml = ET.fromstring(workbook_zip.read('xl/workbook.xml'))
+        workbook_rels = ET.fromstring(workbook_zip.read('xl/_rels/workbook.xml.rels'))
+        rel_map = {rel.attrib['Id']: rel.attrib['Target'] for rel in workbook_rels.findall('r:Relationship', ns_rel)}
+
+        sheet_path = None
+        for sheet in workbook_xml.findall('x:sheets/x:sheet', ns_main):
+            if sheet.attrib.get('name') != target_sheet_name:
+                continue
+            rel_id = sheet.attrib.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+            target = rel_map.get(rel_id, '')
+            sheet_path = f"xl/{target}" if not target.startswith('xl/') else target
+            break
+        if not sheet_path:
+            return []
+
+        sheet_rel_name = sheet_path.rsplit('/', 1)[-1] + '.rels'
+        sheet_rel_path = f"xl/worksheets/_rels/{sheet_rel_name}"
+        if sheet_rel_path not in workbook_zip.namelist():
+            return []
+
+        sheet_rels = ET.fromstring(workbook_zip.read(sheet_rel_path))
+        drawing_target = None
+        for rel in sheet_rels.findall('r:Relationship', ns_rel):
+            rel_type = rel.attrib.get('Type', '')
+            if rel_type.endswith('/drawing'):
+                drawing_target = rel.attrib.get('Target', '')
+                break
+        if not drawing_target:
+            return []
+
+        drawing_path = drawing_target
+        if drawing_path.startswith('../'):
+            drawing_path = f"xl/{drawing_path[3:]}"
+        elif not drawing_path.startswith('xl/'):
+            drawing_path = f"xl/worksheets/{drawing_path}"
+        drawing_path = drawing_path.replace('xl/worksheets/drawings/', 'xl/drawings/')
+        drawing_xml = ET.fromstring(workbook_zip.read(drawing_path))
+        return [dict(node.attrib) for node in drawing_xml.findall('.//xdr:cNvPr', ns_draw)]
+
+
 def _style_maps(styles_xml):
     ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
     style_to_alignment = {}
@@ -380,15 +426,26 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Group Analysis', analysis_values)
             self.assertIn('Status', analysis_values)
             self.assertIn('Effective scope', analysis_values)
+            self.assertIn('Analysis level', analysis_values)
+            self.assertIn('Coverage', analysis_values)
             self.assertIn('Metric count', analysis_values)
+            self.assertIn('Attention summary', analysis_values)
+            self.assertIn('Start with', analysis_values)
+            self.assertTrue(any(isinstance(value, str) and 'adj p=' in value for value in analysis_values))
             self.assertIn('User manual', analysis_values)
             self.assertNotIn('Markdown guide (GitHub)', analysis_values)
             self.assertNotIn('Printable companion (local PDF)', analysis_values)
             self.assertIn('Open Markdown manual', analysis_values)
             self.assertIn('Open PDF manual', analysis_values)
             self.assertIn('Metric index', analysis_values)
+            self.assertIn('Why review first', analysis_values)
+            self.assertIn('Restriction / mode', analysis_values)
             self.assertIn('Metric overview', analysis_values)
+            self.assertIn('Capability summary', analysis_values)
+            self.assertIn('Key insights', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
+            self.assertIn('Capability detail', analysis_values)
+            self.assertTrue(any(isinstance(value, str) and '95% CI' in value for value in analysis_values))
             self.assertIn('Pairwise comparisons', analysis_values)
             self.assertIn('Shape note', analysis_values)
             self.assertIn('Recommended action', analysis_values)
@@ -415,7 +472,8 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertAlmostEqual(_column_width_for(cols, 15), 18.7109375, places=3)
 
             pane = sheet_xml.find('x:sheetViews/x:sheetView/x:pane', ns)
-            self.assertIsNone(pane)
+            self.assertIsNotNone(pane)
+            self.assertEqual(pane.attrib.get('state'), 'frozen')
 
             auto_filter = sheet_xml.find('x:autoFilter', ns)
             self.assertIsNotNone(auto_filter)
@@ -455,6 +513,10 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             drawing = sheet_xml.find('x:drawing', ns)
             self.assertIsNotNone(drawing)
+            drawing_cnvpr_attrs = _xlsx_sheet_drawing_cnvpr_attrs(out_path, 'Group Analysis')
+            described_pictures = [attrs for attrs in drawing_cnvpr_attrs if attrs.get('name', '').startswith('Picture')]
+            self.assertGreaterEqual(len(described_pictures), 2)
+            self.assertTrue(all(attrs.get('descr') for attrs in described_pictures))
 
             formulas = _xlsx_sheet_formulas(out_path, 'Group Analysis')
             self.assertTrue(any(ref.startswith('C') and 'HYPERLINK(' in formula for ref, formula in formulas.items()))
@@ -520,6 +582,15 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
     def test_group_analysis_violin_uses_horizontal_spec_lines_with_annotations(self):
         metric_row = {
             'metric': 'M1',
+            'capability_allowed': True,
+            'capability': {
+                'cp': 1.10,
+                'cpk': 1.00,
+                'capability': 1.00,
+                'capability_type': 'Cpk',
+                'capability_ci': {'cp': {'lower': 0.9, 'upper': 1.3}, 'cpk': {'lower': 0.75, 'upper': 1.2}},
+                'status': 'ok',
+            },
             'chart_payload': {
                 'groups': [
                     {'group': 'A', 'values': [1.01, 1.02, 1.03]},
@@ -529,26 +600,52 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             },
         }
 
-        fig = MagicMock()
-        ax = MagicMock()
+        captured_axes = []
+        original_subplots = export_data_thread_module.plt.subplots
+
+        def _capture_subplots(*args, **kwargs):
+            fig, ax = original_subplots(*args, **kwargs)
+            captured_axes.append(ax)
+            return fig, ax
+
         with (
             patch.object(export_data_thread_module, '_HAS_SEABORN', False),
-            patch('modules.export_data_thread.plt.subplots', return_value=(fig, ax)),
-            patch('modules.export_data_thread.plt.close'),
+            patch('modules.export_data_thread.plt.subplots', side_effect=_capture_subplots),
         ):
             result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'violin')
 
         self.assertIn('image_data', result)
-        self.assertEqual(ax.axhline.call_count, 3)
-        ax.axvline.assert_not_called()
-        annotation_texts = [kwargs.get('text', args[0] if args else '') for args, kwargs in ax.annotate.call_args_list]
+        self.assertIn('description', result)
+        self.assertIn('A n=3, mean=1.020', result['description'])
+        self.assertIn('Capability summary: marginal. Cp=1.100, Cpk=1.000.', result['description'])
+        self.assertEqual(len(captured_axes), 1)
+        ax = captured_axes[0]
+        horizontal_levels = {
+            round(float(line.get_ydata()[0]), 3)
+            for line in ax.lines
+            if len(line.get_ydata()) >= 2 and abs(float(line.get_ydata()[0]) - float(line.get_ydata()[-1])) < 1e-9
+        }
+        self.assertTrue({0.95, 1.0, 1.05}.issubset(horizontal_levels))
+        annotation_texts = [text.get_text() for text in ax.texts]
         self.assertIn('USL=1.050', annotation_texts)
         self.assertIn('Nominal=1.000', annotation_texts)
         self.assertIn('LSL=0.950', annotation_texts)
+        self.assertTrue(any(str(text).startswith('μ=') for text in annotation_texts))
+        self.assertTrue(any('Capability: Marginal' in str(text) for text in annotation_texts))
+        self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in annotation_texts))
 
     def test_group_analysis_histogram_keeps_vertical_spec_lines(self):
         metric_row = {
             'metric': 'M1',
+            'capability_allowed': True,
+            'capability': {
+                'cp': 1.10,
+                'cpk': 1.00,
+                'capability': 1.00,
+                'capability_type': 'Cpk',
+                'capability_ci': {'cp': {'lower': 0.9, 'upper': 1.3}, 'cpk': {'lower': 0.75, 'upper': 1.2}},
+                'status': 'ok',
+            },
             'chart_payload': {
                 'groups': [
                     {'group': 'A', 'values': [1.01, 1.02, 1.03]},
@@ -567,8 +664,15 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram')
 
         self.assertIn('image_data', result)
-        self.assertEqual(ax.axvline.call_count, 3)
+        self.assertIn('description', result)
+        self.assertIn('Capability summary: marginal. Cp=1.100, Cpk=1.000.', result['description'])
+        self.assertEqual(ax.axvline.call_count, 5)
         ax.axhline.assert_not_called()
+        histogram_labels = [kwargs.get('label') for _args, kwargs in ax.hist.call_args_list]
+        self.assertEqual(histogram_labels, ['A (n=3, μ=1.020)', 'B (n=3, μ=1.010)'])
+        histogram_note_texts = [args[2] for args, _kwargs in ax.text.call_args_list if len(args) >= 3]
+        self.assertTrue(any('Capability: Marginal' in str(text) for text in histogram_note_texts))
+        self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in histogram_note_texts))
 
 
 if __name__ == '__main__':

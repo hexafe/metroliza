@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
+from modules.export_summary_composition_service import (
+    classify_capability_status as _classify_capability_status,
+    classify_capability_value as _classify_capability_value,
+)
 from modules.group_analysis_service import get_spec_status_label
 
 SECTION_GAP = 1
@@ -16,7 +21,7 @@ GROUP_ANALYSIS_COLUMN_WIDTHS = {
     2: 16,
     3: 12,
     4: 18,
-    5: 12,
+    5: 18,
     6: 15,
     7: 22,
     8: 22,
@@ -78,6 +83,10 @@ def _insert_plot_image(worksheet, row, asset):
             options['x_scale'] = asset.get('x_scale')
         if asset.get('y_scale') is not None:
             options['y_scale'] = asset.get('y_scale')
+        if asset.get('description'):
+            options['description'] = str(asset.get('description'))
+        if asset.get('decorative') is not None:
+            options['decorative'] = bool(asset.get('decorative'))
 
     if not image_ref and 'image_data' not in options:
         return False
@@ -199,10 +208,16 @@ def _build_formats(worksheet):
             'text_wrap': False,
             'bottom': 1,
         }),
+        'summary_value_wrap_fmt': workbook.add_format({
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'bottom': 1,
+        }),
         'overview_value_fmt': workbook.add_format({
             'align': 'left',
-            'valign': 'vcenter',
-            'text_wrap': False,
+            'valign': 'top',
+            'text_wrap': True,
             'bottom': 1,
             'bg_color': '#FFF7D6',
             'pattern': 1,
@@ -219,9 +234,9 @@ def _build_formats(worksheet):
         'takeaway_value_fmt': workbook.add_format({
             'bg_color': '#FFF7D6',
             'pattern': 1,
-            'align': 'center',
-            'valign': 'vcenter',
-            'text_wrap': False,
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
             'bottom': 1,
         }),
         'num_fmt': workbook.add_format({'num_format': '0.000', 'align': 'center', 'valign': 'vcenter'}),
@@ -368,6 +383,390 @@ def _coerce_status_label(value):
     return str(value or '').strip()
 
 
+def _format_analysis_level_label(value):
+    normalized = str(value or 'light').strip().lower()
+    if normalized == 'standard':
+        return 'Standard'
+    if normalized == 'light':
+        return 'Light'
+    return normalized.title() if normalized else 'Light'
+
+
+def _resolve_metric_index_status(metric_row):
+    return (
+        metric_row.get('index_status')
+        or metric_row.get('summary_status')
+        or _coerce_status_label(((metric_row.get('pairwise_rows') or [{}])[0]).get('difference'))
+        or 'REVIEW'
+    )
+
+
+def _format_metric_insights(metric_row):
+    insight_lines = [
+        str(value).strip()
+        for value in (metric_row.get('insights') or [])
+        if str(value or '').strip()
+    ]
+    return '\n'.join(insight_lines)
+
+
+def _coerce_finite_float(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _format_decimal(value, *, digits=3):
+    number = _coerce_finite_float(value)
+    if number is None:
+        return ''
+    return f'{number:.{int(digits)}f}'
+
+
+def _format_ci_interval(interval, *, digits=3):
+    if not isinstance(interval, dict):
+        return ''
+    lower = _format_decimal(interval.get('lower'), digits=digits)
+    upper = _format_decimal(interval.get('upper'), digits=digits)
+    if not lower or not upper:
+        return ''
+    return f'95% CI {lower} to {upper}'
+
+
+def _first_sentence(value):
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    for punct in ('. ', '! ', '? '):
+        if punct in text:
+            return text.split(punct, 1)[0].strip().rstrip('.!?') + punct[0]
+    return text
+
+
+def _pick_priority_pairwise_row(metric_row):
+    pairwise_rows = metric_row.get('pairwise_rows') or []
+    if not pairwise_rows:
+        return None
+    return sorted(
+        pairwise_rows,
+        key=lambda row: (
+            _coerce_status_label(row.get('difference_label') or row.get('difference')) != 'DIFFERENCE',
+            _coerce_finite_float(row.get('adjusted_p_value')) is None,
+            _coerce_finite_float(row.get('adjusted_p_value')) if _coerce_finite_float(row.get('adjusted_p_value')) is not None else float('inf'),
+            -abs(_coerce_finite_float(row.get('effect_size')) or 0.0),
+            str(row.get('group_a') or ''),
+            str(row.get('group_b') or ''),
+        ),
+    )[0]
+
+
+def _build_location_priority_signal(metric_row):
+    status = str(_resolve_metric_index_status(metric_row) or 'REVIEW').strip().upper() or 'REVIEW'
+    best_pair = _pick_priority_pairwise_row(metric_row)
+    if best_pair is None:
+        return None
+
+    detail_parts = [f"{best_pair.get('group_a')} vs {best_pair.get('group_b')}"]
+    adjusted_p = _format_decimal(best_pair.get('adjusted_p_value'), digits=4)
+    effect_size = _format_decimal(best_pair.get('effect_size'), digits=3)
+    if adjusted_p:
+        detail_parts.append(f"adj p={adjusted_p}")
+    if effect_size:
+        detail_parts.append(f"effect={effect_size}")
+    summary = ', '.join(detail_parts)
+    flags = str(best_pair.get('flags') or '').strip()
+
+    if status == 'DIFFERENCE':
+        return {'kind': 'location_gap', 'rank': 0, 'reason': f'Location gap: {summary}'}
+    if status == 'USE CAUTION':
+        caution_suffix = f'; {flags}' if flags else '; interpret with caution'
+        return {'kind': 'sample_caution', 'rank': 3, 'reason': f'Location signal with caution: {summary}{caution_suffix}'}
+    if status == 'APPROXIMATE':
+        return {'kind': 'approximate_gap', 'rank': 4, 'reason': f'Approximate location gap: {summary}; moderate effect without corrected significance'}
+    return None
+
+
+def _build_shape_priority_signal(metric_row):
+    distribution_verdict = _first_sentence((metric_row.get('distribution_difference') or {}).get('comment / verdict'))
+    if distribution_verdict and 'no statistically significant' not in distribution_verdict.lower():
+        cleaned = distribution_verdict
+        if cleaned.lower().startswith('shape note:'):
+            cleaned = cleaned.split(':', 1)[1].strip()
+        return {'kind': 'shape_gap', 'rank': 2, 'reason': f'Shape gap: {cleaned}'}
+    return None
+
+
+def _build_capability_priority_signal(metric_row):
+    if metric_row.get('capability_allowed') is False:
+        return None
+
+    capability_payload = metric_row.get('capability')
+    if not isinstance(capability_payload, dict):
+        return None
+
+    cp_value = _coerce_finite_float(capability_payload.get('cp'))
+    cpk_value = _coerce_finite_float(capability_payload.get('cpk'))
+    capability_value = _coerce_finite_float(capability_payload.get('capability'))
+    capability_type = str(capability_payload.get('capability_type') or 'Capability').strip() or 'Capability'
+    capability_ci = capability_payload.get('capability_ci') if isinstance(capability_payload.get('capability_ci'), dict) else {}
+    cpk_ci = capability_ci.get('cpk') if isinstance(capability_ci, dict) else None
+    lower_ci = _coerce_finite_float((cpk_ci or {}).get('lower')) if isinstance(cpk_ci, dict) else None
+    ci_text = _format_ci_interval(cpk_ci, digits=3)
+
+    if cp_value is not None and cpk_value is not None:
+        palette_key = _classify_capability_status(cp_value, cpk_value).get('palette_key')
+        label = _capability_readiness_label(palette_key)
+        severity = 'risk' if palette_key == 'quality_risk' else 'caution' if palette_key == 'quality_marginal' or (lower_ci is not None and lower_ci < 1.0) else None
+        if severity is None:
+            return None
+        detail = f'Cp={cp_value:.3f}, Cpk={cpk_value:.3f}'
+    elif capability_value is not None:
+        palette_key = _classify_capability_value(capability_value, label_prefix=capability_type).get('palette_key')
+        label = _capability_readiness_label(palette_key)
+        severity = 'risk' if palette_key == 'quality_risk' else 'caution' if palette_key == 'quality_marginal' or (lower_ci is not None and lower_ci < 1.0) else None
+        if severity is None:
+            return None
+        detail = f'{capability_type}={capability_value:.3f}'
+    else:
+        return None
+
+    if ci_text:
+        detail = f'{detail}, {ci_text}'
+    if lower_ci is not None and lower_ci < 1.0:
+        detail = f'{detail}, lower CI < 1.000'
+
+    return {
+        'kind': f'capability_{severity}',
+        'rank': 1 if severity == 'risk' else 2,
+        'reason': f'Capability {label}: {detail}',
+    }
+
+
+def _build_metric_priority_reason(metric_row):
+    location_signal = _build_location_priority_signal(metric_row)
+    capability_signal = _build_capability_priority_signal(metric_row)
+    shape_signal = _build_shape_priority_signal(metric_row)
+
+    if location_signal is not None and location_signal.get('kind') == 'location_gap':
+        return location_signal['reason']
+    if capability_signal is not None:
+        return capability_signal['reason']
+    if shape_signal is not None:
+        return shape_signal['reason']
+    if location_signal is not None:
+        return location_signal['reason']
+
+    diagnostics_comment = _first_sentence(metric_row.get('diagnostics_comment'))
+    if diagnostics_comment:
+        lowered = diagnostics_comment.lower()
+        if 'descriptive-only' in lowered:
+            return 'Restriction-driven caution: descriptive-only review'
+        if 'histogram omitted' in lowered or 'analyzed with caution' in lowered:
+            return f'Sample caution: {diagnostics_comment}'
+        return diagnostics_comment
+
+    takeaway = _first_sentence(metric_row.get('metric_takeaway'))
+    if takeaway:
+        return takeaway
+    return 'Review descriptive statistics only.'
+
+
+def _build_metric_index_restriction(metric_row):
+    return str(metric_row.get('analysis_restriction_label') or 'Review').strip() or 'Review'
+
+
+def _format_capability_detail(entry):
+    capability_type = str(entry.get('capability_type') or '').strip()
+    capability_ci = ((entry.get('capability_ci') or {}).get('cpk') if isinstance(entry.get('capability_ci'), dict) else None)
+    ci_text = _format_ci_interval(capability_ci, digits=3)
+    if capability_type and ci_text:
+        return f'{capability_type}\n{ci_text}'
+    if capability_type:
+        return capability_type
+    return ci_text
+
+
+def _capability_readiness_label(palette_key):
+    return {
+        'quality_capable': 'capable',
+        'quality_good': 'good',
+        'quality_marginal': 'marginal',
+        'quality_risk': 'risk',
+        'quality_unknown': 'unknown',
+    }.get(str(palette_key or '').strip().lower(), 'unknown')
+
+
+def _format_metric_capability_summary(metric_row):
+    if metric_row.get('capability_allowed') is False:
+        return 'Capability is disabled for this metric because limits are not directly comparable across groups.'
+
+    capability_payload = metric_row.get('capability')
+    if not isinstance(capability_payload, dict):
+        return ''
+
+    cp_value = _coerce_finite_float(capability_payload.get('cp'))
+    cpk_value = _coerce_finite_float(capability_payload.get('cpk'))
+    capability_value = _coerce_finite_float(capability_payload.get('capability'))
+    capability_type = str(capability_payload.get('capability_type') or 'Capability').strip() or 'Capability'
+    capability_ci = capability_payload.get('capability_ci') if isinstance(capability_payload.get('capability_ci'), dict) else {}
+    cpk_ci = capability_ci.get('cpk') if isinstance(capability_ci, dict) else None
+    lower_ci = _coerce_finite_float((cpk_ci or {}).get('lower')) if isinstance(cpk_ci, dict) else None
+
+    if cp_value is not None and cpk_value is not None:
+        readiness = _capability_readiness_label(_classify_capability_status(cp_value, cpk_value).get('palette_key'))
+        summary = f'Cp/Cpk {readiness}: Cp={cp_value:.3f}, Cpk={cpk_value:.3f}.'
+    elif capability_value is not None:
+        readiness = _capability_readiness_label(
+            _classify_capability_value(capability_value, label_prefix=capability_type).get('palette_key')
+        )
+        summary = f'{capability_type} {readiness}: {capability_value:.3f}.'
+    else:
+        status = str(capability_payload.get('status') or '').strip().lower()
+        if status == 'not_applicable':
+            return 'Capability is not applicable with the current data or spec definition.'
+        return ''
+
+    ci_text = _format_ci_interval(cpk_ci, digits=3)
+    if ci_text:
+        confidence_note = 'lower bound below 1.000' if lower_ci is not None and lower_ci < 1.0 else 'lower bound at or above 1.000'
+        summary = f'{summary} {ci_text}; {confidence_note}.'
+    return summary
+
+
+def _build_attention_summary(metric_rows, *, skipped_count=0):
+    ordered_statuses = ['DIFFERENCE', 'USE CAUTION', 'REVIEW', 'NO DIFFERENCE']
+    status_counts = {}
+    for metric_row in metric_rows:
+        status = str(_resolve_metric_index_status(metric_row) or 'REVIEW').strip().upper() or 'REVIEW'
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    parts = [
+        f"{status_counts[status]} {status}"
+        for status in ordered_statuses
+        if status_counts.get(status)
+    ]
+    for status in sorted(status_counts):
+        if status not in ordered_statuses:
+            parts.append(f"{status_counts[status]} {status}")
+    if skipped_count:
+        parts.append(f"{int(skipped_count)} SKIPPED")
+    return ', '.join(parts) if parts else 'No analyzed metrics.'
+
+
+def _build_priority_metrics_summary(metric_rows):
+    ranked_rows = []
+    for metric_row in metric_rows:
+        status = str(_resolve_metric_index_status(metric_row) or 'REVIEW').strip().upper() or 'REVIEW'
+        location_signal = _build_location_priority_signal(metric_row)
+        capability_signal = _build_capability_priority_signal(metric_row)
+        shape_signal = _build_shape_priority_signal(metric_row)
+        primary_signal = None
+        if location_signal is not None and location_signal.get('kind') == 'location_gap':
+            primary_signal = location_signal
+        elif capability_signal is not None:
+            primary_signal = capability_signal
+        elif shape_signal is not None:
+            primary_signal = shape_signal
+        elif location_signal is not None:
+            primary_signal = location_signal
+        if primary_signal is None and status == 'NO DIFFERENCE':
+            continue
+        p_values = [
+            float(row.get('adjusted_p_value'))
+            for row in (metric_row.get('pairwise_rows') or [])
+            if row.get('adjusted_p_value') is not None
+        ]
+        best_p = min(p_values) if p_values else float('inf')
+        capability_payload = metric_row.get('capability') if isinstance(metric_row.get('capability'), dict) else {}
+        lower_ci = _coerce_finite_float((((capability_payload.get('capability_ci') or {}).get('cpk') or {}).get('lower')))
+        capability_value = _coerce_finite_float(capability_payload.get('capability'))
+        effect_sizes = [
+            abs(float(row.get('effect_size')))
+            for row in (metric_row.get('pairwise_rows') or [])
+            if row.get('effect_size') is not None
+        ]
+        max_effect = max(effect_sizes) if effect_sizes else 0.0
+        ranked_rows.append(
+            (
+                primary_signal['rank'] if primary_signal is not None else 5,
+                best_p,
+                lower_ci if lower_ci is not None else float('inf'),
+                capability_value if capability_value is not None else float('inf'),
+                -max_effect,
+                str(metric_row.get('metric') or ''),
+                f"{metric_row.get('metric')} ({status}: {_build_metric_priority_reason(metric_row)})",
+            )
+        )
+
+    if not ranked_rows:
+        return 'No metrics currently stand out.'
+    top_rows = sorted(ranked_rows)[:3]
+    return ', '.join(row[-1] for row in top_rows)
+
+
+def _build_plot_coverage_summary(metric_rows, analysis_level):
+    if str(analysis_level or 'light').strip().lower() != 'standard':
+        return ''
+
+    omitted_counts = {'violin': 0, 'histogram': 0}
+    for metric_row in metric_rows:
+        eligibility = metric_row.get('plot_eligibility') or {}
+        for plot_key in omitted_counts:
+            plot_meta = eligibility.get(plot_key) or {}
+            if plot_meta and not bool(plot_meta.get('eligible')):
+                omitted_counts[plot_key] += 1
+
+    parts = []
+    for plot_key, label in (('violin', 'violins'), ('histogram', 'histograms')):
+        count = omitted_counts[plot_key]
+        if count:
+            parts.append(f"{label} omitted for {count} metric{'s' if count != 1 else ''}")
+    return '; '.join(parts)
+
+
+def _build_group_analysis_summary_rows(payload, metric_rows):
+    diagnostics = payload.get('diagnostics') or {}
+    metric_count = len(metric_rows)
+    reference_count = diagnostics.get('reference_count')
+    group_count = diagnostics.get('group_count')
+    skipped_metric_count = int(diagnostics.get('skipped_metric_count') or 0)
+    warning_count = int((diagnostics.get('warning_summary') or {}).get('count') or 0)
+    unmatched_count = int((diagnostics.get('unmatched_metrics_summary') or {}).get('count') or 0)
+
+    coverage_parts = []
+    if group_count is not None:
+        coverage_parts.append(f"{int(group_count)} group{'s' if int(group_count) != 1 else ''}")
+    if reference_count is not None:
+        coverage_parts.append(f"{int(reference_count)} reference{'s' if int(reference_count) != 1 else ''}")
+
+    summary_rows = [
+        {'Field': 'Status', 'Value': payload.get('status')},
+        {'Field': 'Effective scope', 'Value': payload.get('effective_scope')},
+        {'Field': 'Analysis level', 'Value': _format_analysis_level_label(payload.get('analysis_level'))},
+        {'Field': 'Coverage', 'Value': ' across '.join(coverage_parts) if coverage_parts else 'Coverage unavailable'},
+        {'Field': 'Metric count', 'Value': metric_count},
+        {'Field': 'Attention summary', 'Value': _build_attention_summary(metric_rows, skipped_count=skipped_metric_count)},
+        {'Field': 'Start with', 'Value': _build_priority_metrics_summary(metric_rows), 'wrap_value': True},
+    ]
+
+    signal_parts = []
+    if warning_count:
+        signal_parts.append(f"{warning_count} warning signal{'s' if warning_count != 1 else ''}")
+    if unmatched_count:
+        signal_parts.append(f"{unmatched_count} metric{'s' if unmatched_count != 1 else ''} missing reference coverage")
+    plot_summary = _build_plot_coverage_summary(metric_rows, payload.get('analysis_level'))
+    if plot_summary:
+        signal_parts.append(plot_summary)
+    if signal_parts:
+        summary_rows.append({'Field': 'Coverage warnings', 'Value': '; '.join(signal_parts), 'wrap_value': True})
+
+    if payload.get('skip_reason'):
+        summary_rows.append({'Field': 'Skip reason', 'Value': payload['skip_reason'].get('message'), 'wrap_value': True})
+    return summary_rows
+
+
 def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
     if worksheet is None:
         return
@@ -390,6 +789,7 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
         'summary_label': formats.get('summary_label_fmt'),
         'summary_label_wrap': formats.get('summary_label_wrap_fmt'),
         'summary_value': formats.get('summary_value_fmt'),
+        'summary_value_wrap': formats.get('summary_value_wrap_fmt'),
         'overview_value': formats.get('overview_value_fmt'),
         'takeaway_label': formats.get('takeaway_label_fmt'),
         'takeaway_value': formats.get('takeaway_value_fmt'),
@@ -402,6 +802,10 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
     if hasattr(worksheet, 'set_column'):
         for col, width in GROUP_ANALYSIS_COLUMN_WIDTHS.items():
             worksheet.set_column(col, col, width, header_formats['default'])
+
+    freeze_panes = sheet_state.get('freeze_panes')
+    if freeze_panes and hasattr(worksheet, 'freeze_panes'):
+        worksheet.freeze_panes(*freeze_panes)
 
     if hasattr(worksheet, 'set_row'):
         for row in sheet_state.get('title_rows', []):
@@ -495,9 +899,18 @@ def _write_named_value_rows(worksheet, row, rows, *, sheet_state=None):
         worksheet.write(row, 0, entry.get('Field'))
         worksheet.write(row, 1, entry.get('Value'))
         if sheet_state is not None:
-            sheet_state['styled_cells'].append((row, 0, entry.get('Field'), 'summary_label'))
-            sheet_state['styled_cells'].append((row, 1, entry.get('Value'), 'summary_value'))
+            label_fmt = 'summary_label_wrap' if entry.get('wrap_label') else 'summary_label'
+            value_fmt = 'summary_value_wrap' if entry.get('wrap_value') else 'summary_value'
+            sheet_state['styled_cells'].append((row, 0, entry.get('Field'), label_fmt))
+            sheet_state['styled_cells'].append((row, 1, entry.get('Value'), value_fmt))
             sheet_state['summary_rows'].append(row)
+            sheet_state['wrapped_data_rows'].append((
+                row,
+                [
+                    {'value': entry.get('Field'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(0, 18), 'wrap': bool(entry.get('wrap_label'))},
+                    {'value': entry.get('Value'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': bool(entry.get('wrap_value'))},
+                ],
+            ))
         row += 1
     return row, {'first_row': start_row, 'last_row': row - 1}
 
@@ -510,7 +923,7 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
         sheet_state['styled_cells'].append((section_row, 0, 'Metric index', 'section'))
 
     header_row = row
-    headers = ['Metric', 'Status', 'Jump to section', 'Spec status', 'Analysis mode / restrictions']
+    headers = ['Metric', 'Status', 'Jump to section', 'Spec status', 'Why review first', 'Restriction / mode']
     for col, header in enumerate(headers):
         worksheet.write(row, col, header)
         if sheet_state is not None:
@@ -523,35 +936,47 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
                 {'value': headers[2], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(2, 16), 'wrap': True},
                 {'value': headers[3], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 12), 'wrap': True},
                 {'value': headers[4], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(4, 18), 'wrap': True},
+                {'value': headers[5], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(5, 18), 'wrap': True},
             ],
         ))
     row += 1
 
     for metric_row in metric_rows:
         metric_name = str(metric_row.get('metric') or 'Unknown')
-        status_label = metric_row.get('index_status') or 'REVIEW'
+        status_label = _resolve_metric_index_status(metric_row)
         spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
-        restriction_label = metric_row.get('analysis_restriction_label') or 'Review'
+        review_reason = _build_metric_priority_reason(metric_row)
+        restriction_label = _build_metric_index_restriction(metric_row)
         worksheet.write(row, 0, metric_name)
         worksheet.write(row, 1, status_label)
         worksheet.write(row, 2, 'Go to metric')
         worksheet.write(row, 3, spec_status_label)
-        worksheet.write(row, 4, restriction_label)
+        worksheet.write(row, 4, review_reason)
+        worksheet.write(row, 5, restriction_label)
         if sheet_state is not None:
             sheet_state['index_rows'].append(row)
             sheet_state['styled_cells'].append((row, 0, metric_name, 'table_center'))
             sheet_state['styled_cells'].append((row, 1, status_label, 'table_center'))
             sheet_state['styled_cells'].append((row, 3, spec_status_label, 'table_center_wrap'))
-            sheet_state['styled_cells'].append((row, 4, restriction_label, 'table_center_wrap'))
+            sheet_state['styled_cells'].append((row, 4, review_reason, 'wrap'))
+            sheet_state['styled_cells'].append((row, 5, restriction_label, 'table_center_wrap'))
             sheet_state['metric_index_links'].append((row, 2, metric_name))
             sheet_state['wrapped_data_rows'].append((
                 row,
                 [
                     {'value': spec_status_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 12), 'wrap': True},
-                    {'value': restriction_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(4, 18), 'wrap': True},
+                    {'value': review_reason, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(4, 18), 'wrap': True},
+                    {'value': restriction_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(5, 18), 'wrap': True},
                 ],
             ))
         row += 1
+    if sheet_state is not None:
+        sheet_state['autofilter_blocks'].append({
+            'header_row': header_row,
+            'first_col': 0,
+            'last_row': row - 1,
+            'last_col': len(headers) - 1,
+        })
     return row + SECTION_GAP
 
 
@@ -641,18 +1066,23 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         sheet_state['metric_anchor_rows'][str(metric_row.get('metric') or 'Unknown')] = metric_title_row
 
     spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
+    capability_summary_text = _format_metric_capability_summary(metric_row)
     section_row = row
     row = _write_section_title(worksheet, row, 'Metric overview')
     if sheet_state is not None:
         sheet_state['section_rows'].append(section_row)
         sheet_state['styled_cells'].append((section_row, 0, 'Metric overview', 'section'))
+    insights_text = _format_metric_insights(metric_row)
     metric_meta_rows = [
         {'Field': 'Spec status', 'Value': spec_status_label},
         {'Field': 'Analysis mode / restrictions', 'Value': metric_row.get('analysis_restriction_label') or 'Review'},
+        {'Field': 'Capability summary', 'Value': capability_summary_text} if capability_summary_text else None,
+        {'Field': 'Key insights', 'Value': insights_text} if insights_text else None,
         {'Field': 'Shape note', 'Value': metric_row.get('metric_note') or (metric_row.get('distribution_difference') or {}).get('comment / verdict')},
         {'Field': 'Recommended action', 'Value': metric_row.get('recommended_action')},
         {'Field': 'Use caution', 'Value': metric_row.get('diagnostics_comment') or (metric_row.get('comparability_summary') or {}).get('summary')},
     ]
+    metric_meta_rows = [entry for entry in metric_meta_rows if entry is not None]
     row, meta_bounds = _write_table_with_bounds(worksheet, row, ['Field', 'Value'], metric_meta_rows)
     if sheet_state is not None:
         sheet_state['header_rows'].append((meta_bounds['header_row'], meta_bounds['headers']))
@@ -664,8 +1094,15 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             data_row = meta_bounds['first_data_row'] + data_row_idx
             sheet_state['styled_cells'].append((data_row, 0, entry.get('Field'), 'text_left_middle'))
             sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'overview_value'))
-            if entry.get('Field') in {'Shape note', 'Recommended action', 'Use caution'} and entry.get('Value'):
+            if entry.get('Field') in {'Capability summary', 'Key insights', 'Shape note', 'Recommended action', 'Use caution'} and entry.get('Value'):
                 sheet_state['note_rows'].append((data_row, entry.get('Value'), GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18)))
+            sheet_state['wrapped_data_rows'].append((
+                data_row,
+                [
+                    {'value': entry.get('Field'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(0, 18), 'wrap': False},
+                    {'value': entry.get('Value'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': True},
+                ],
+            ))
     row += SECTION_GAP
 
     section_row = row
@@ -685,7 +1122,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             'max': entry.get('max'),
             'Cp': entry.get('cp'),
             'Capability': entry.get('capability'),
-            'Capability type': entry.get('capability_type'),
+            'Capability detail': _format_capability_detail(entry),
             'best fit model': entry.get('best_fit_model'),
             'fit quality': entry.get('fit_quality'),
             'caution': entry.get('distribution_shape_caution'),
@@ -697,7 +1134,7 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         worksheet,
         row,
         [
-            'Group', 'n', 'mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability', 'Capability type',
+            'Group', 'n', 'mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability', 'Capability detail',
             'best fit model', 'fit quality', 'caution', 'Flags',
         ],
         desc_rows,
@@ -720,17 +1157,19 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             for header in ('mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability'):
                 if header in header_lookup:
                     sheet_state['numeric_cells'].append((data_row, header_lookup[header], entry.get(header), 'num'))
-            for header in ('Group', 'n', 'Capability type', 'Flags'):
+            for header in ('Group', 'n', 'Flags'):
                 if header in header_lookup:
                     sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center'))
-            for header in ('caution', 'best fit model', 'fit quality'):
+            for header in ('Capability detail', 'caution', 'best fit model', 'fit quality'):
                 if header in header_lookup and entry.get(header):
-                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center_wrap'))
-            if entry.get('caution'):
-                sheet_state['note_rows'].append((data_row, entry.get('caution'), GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup['caution'], 24)))
+                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'wrap'))
+            for header in ('Capability detail', 'caution'):
+                if header in header_lookup and entry.get(header):
+                    sheet_state['note_rows'].append((data_row, entry.get(header), GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup[header], 24)))
             sheet_state['wrapped_data_rows'].append((
                 data_row,
                 [
+                    {'value': entry.get('Capability detail'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('Capability detail', 10), 21), 'wrap': True},
                     {'value': entry.get('best fit model'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('best fit model', 11), 28), 'wrap': True},
                     {'value': entry.get('fit quality'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('fit quality', 12), 16), 'wrap': True},
                     {'value': entry.get('caution'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('caution', 13), 24), 'wrap': True},
@@ -790,9 +1229,12 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             for header in ('Group A', 'Group B', 'difference'):
                 if header in header_lookup:
                     sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center'))
-            for header in ('test', 'caution', 'Takeaway', 'Suggested action', 'Flags', 'Why this test'):
+            for header in ('test', 'Flags'):
                 if header in header_lookup and entry.get(header):
                     sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center_wrap'))
+            for header in ('caution', 'Takeaway', 'Suggested action', 'Why this test'):
+                if header in header_lookup and entry.get(header):
+                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'wrap'))
             if entry.get('caution'):
                 sheet_state['note_rows'].append((data_row, entry.get('caution'), GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup['caution'], 22)))
             sheet_state['wrapped_data_rows'].append(
@@ -826,6 +1268,13 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
         if sheet_state is not None:
             sheet_state['styled_cells'].append((row, 0, 'Takeaway', 'takeaway_label'))
             sheet_state['styled_cells'].append((row, 1, takeaway, 'takeaway_value'))
+            sheet_state['wrapped_data_rows'].append((
+                row,
+                [
+                    {'value': 'Takeaway', 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(0, 18), 'wrap': False},
+                    {'value': takeaway, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': True},
+                ],
+            ))
         row += 1
 
     plot_eligibility = metric_row.get('plot_eligibility') or {}
@@ -901,32 +1350,24 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
         'autofilter_blocks': [],
         'metric_anchor_rows': {},
         'metric_index_links': [],
+        'freeze_panes': None,
     }
     row = 0
     title_row = row
     row = _write_section_title(worksheet, row, 'Group Analysis', merge_to_col=TITLE_LAST_COL, cell_format=_build_formats(worksheet).get('title_fmt'))
     sheet_state['title_rows'].append(title_row)
-    summary_rows = [
-        {'Field': 'Status', 'Value': payload.get('status')},
-        {'Field': 'Effective scope', 'Value': payload.get('effective_scope')},
-        {'Field': 'Metric count', 'Value': len(payload.get('metric_rows', []))},
-    ]
-    if payload.get('skip_reason'):
-        summary_rows.append({'Field': 'Skip reason', 'Value': payload['skip_reason'].get('message')})
-    row, _summary_bounds = _write_named_value_rows(worksheet, row, summary_rows, sheet_state=sheet_state)
-    row += SECTION_GAP
-    row = _write_manual_links(worksheet, row, sheet_state=sheet_state)
 
     normalized_level = str(payload.get('analysis_level') or 'light').strip().lower()
     metric_rows = [dict(metric_row) for metric_row in payload.get('metric_rows', [])]
     for metric_row in metric_rows:
-        metric_row['index_status'] = (
-            metric_row.get('index_status')
-            or metric_row.get('summary_status')
-            or _coerce_status_label(((metric_row.get('pairwise_rows') or [{}])[0]).get('difference'))
-            or 'REVIEW'
-        )
+        metric_row['index_status'] = _resolve_metric_index_status(metric_row)
         metric_row['analysis_level'] = normalized_level
+
+    summary_rows = _build_group_analysis_summary_rows(payload, metric_rows)
+    row, _summary_bounds = _write_named_value_rows(worksheet, row, summary_rows, sheet_state=sheet_state)
+    sheet_state['freeze_panes'] = (row, 0)
+    row += SECTION_GAP
+    row = _write_manual_links(worksheet, row, sheet_state=sheet_state)
     if metric_rows:
         row = _write_metric_index(worksheet, row, metric_rows, sheet_state=sheet_state)
 

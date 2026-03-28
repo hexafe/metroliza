@@ -456,6 +456,7 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
             'cp': capability.get('cp'),
             'capability': capability.get('capability'),
             'capability_type': capability.get('capability_type'),
+            'capability_ci': capability.get('capability_ci'),
         }
         raw_output_row['flags'] = _build_group_flags(raw_output_row, metric_flags)
 
@@ -471,6 +472,7 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
             'cp': _round_display_value(raw_output_row.get('cp')),
             'capability': _round_display_value(raw_output_row.get('capability')),
             'capability_type': raw_output_row.get('capability_type'),
+            'capability_ci': raw_output_row.get('capability_ci'),
             'flags': raw_output_row.get('flags'),
         }
         output.append(output_row)

@@ -3652,7 +3652,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         ax = captured_axes[0]
         labels = [tick.get_text() for tick in ax.get_xticklabels()]
-        self.assertEqual(labels, ['A', 'C'])
+        self.assertEqual(labels, ['A\n(n=2)', 'C\n(n=1)'])
         self.assertEqual(len(labels), 2)
 
     def test_group_analysis_histogram_asset_includes_multi_group_legend(self):
@@ -3683,7 +3683,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         legend = captured_axes[0].get_legend()
         self.assertIsNotNone(legend)
         labels = [text.get_text() for text in legend.get_texts()]
-        self.assertEqual(labels, ['A', 'B', 'C'])
+        self.assertEqual(labels, ['A (n=3, μ=1.100)', 'B (n=3, μ=1.400)', 'C (n=3, μ=1.700)'])
 
 
     def test_render_tolerance_band_adds_horizontal_patch(self):

@@ -613,6 +613,7 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIn('median', metric['descriptive_stats'][0])
         self.assertIn('iqr', metric['descriptive_stats'][0])
         self.assertIn('flags', metric['descriptive_stats'][0])
+        self.assertIn('capability_ci', metric['descriptive_stats'][0])
         self.assertIn('delta_mean', metric['pairwise_rows'][0])
         self.assertIn('difference', metric['pairwise_rows'][0])
         self.assertIn('comment', metric['pairwise_rows'][0])
