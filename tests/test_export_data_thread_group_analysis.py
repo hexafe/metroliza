@@ -54,6 +54,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
 from modules.export_data_thread import ExportDataThread  # noqa: E402
 import modules.export_data_thread as export_data_thread_module  # noqa: E402
+from modules.export_html_dashboard import resolve_html_dashboard_path  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 
 
@@ -703,6 +704,34 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         histogram_note_texts = [args[2] for args, _kwargs in ax.text.call_args_list if len(args) >= 3]
         self.assertTrue(any('Capability: Marginal' in str(text) for text in histogram_note_texts))
         self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in histogram_note_texts))
+
+    def test_standard_mode_html_dashboard_includes_group_analysis_data(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'metroliza.sqlite')
+            out_path = str(Path(temp_dir) / 'export_standard.xlsx')
+            grouping_df = _seed_grouped_measurements(db_path)
+
+            request = ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file=out_path),
+                options=ExportOptions(
+                    generate_summary_sheet=False,
+                    generate_html_dashboard=True,
+                    group_analysis_level='standard',
+                ),
+                grouping_df=grouping_df,
+            )
+            thread = ExportDataThread(request)
+            thread.run()
+
+            html_path = resolve_html_dashboard_path(out_path)
+            self.assertTrue(Path(html_path).exists())
+            html_text = Path(html_path).read_text(encoding='utf-8')
+
+            self.assertIn('Group Analysis', html_text)
+            self.assertIn('FEATURE_1', html_text)
+            self.assertIn('Descriptive stats', html_text)
+            self.assertIn('Pairwise comparisons', html_text)
+            self.assertNotIn('No extended summary charts were generated.', html_text)
 
 
 if __name__ == '__main__':

@@ -3322,6 +3322,8 @@ class ExportDataThread(QThread):
         self._chart_renderer = build_chart_renderer()
         self._active_chart_images = []
         self._html_dashboard_sections = []
+        self._html_group_analysis_payload = None
+        self._html_group_analysis_plot_assets = None
         self._summary_sheet_failed = False
         self._summary_sheet_skip_warning_emitted = False
         self._db_connection = None
@@ -3396,6 +3398,8 @@ class ExportDataThread(QThread):
                 sections=self._html_dashboard_sections,
                 chart_observability_summary=self.completion_metadata.get('chart_observability_summary', {}),
                 backend_diagnostics_lines=self.completion_metadata.get('backend_diagnostics_lines', []),
+                group_analysis_payload=self._html_group_analysis_payload,
+                group_analysis_plot_assets=self._html_group_analysis_plot_assets,
             )
         except Exception as exc:
             warning_message = f"HTML dashboard export skipped: {exc}"
@@ -4927,6 +4931,9 @@ class ExportDataThread(QThread):
             analysis_level=mode,
             alias_db_path=self.db_file,
         )
+        if self.generate_html_dashboard:
+            self._html_group_analysis_payload = payload
+            self._html_group_analysis_plot_assets = {'metrics': {}}
 
         group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)
         group_worksheet = workbook.add_worksheet(group_sheet_name)
@@ -4943,6 +4950,8 @@ class ExportDataThread(QThread):
             self._write_group_analysis_message_sheet(group_worksheet, short_message)
         else:
             plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode)
+            if self.generate_html_dashboard:
+                self._html_group_analysis_plot_assets = plot_assets
             write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
             if mode == 'standard':
                 plots_sheet_name = unique_sheet_name('Group Analysis Plots', used_sheet_names)
