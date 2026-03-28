@@ -100,6 +100,14 @@ class NativeChartRenderer(ChartRenderer):
             fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="histogram")
             return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
 
+        if _histogram_visual_metadata_requires_matplotlib_fallback(payload):
+            if fallback_fig is None:
+                raise RuntimeError(
+                    "Native histogram payload requests visual metadata parity but no matplotlib fallback figure was provided."
+                )
+            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="histogram")
+            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
+
         _validate_histogram_native_payload(payload)
         png_bytes = _native_render_histogram_png(payload)
         if not isinstance(png_bytes, (bytes, bytearray)):
@@ -294,6 +302,41 @@ def _validate_distribution_native_payload(payload: dict[str, Any]) -> None:
         raise RuntimeError("Native distribution payload requires equal series/labels length.")
     if not isinstance(payload.get("title"), str):
         raise RuntimeError("Native distribution payload `title` must be a string.")
+
+
+def _histogram_visual_metadata_requires_matplotlib_fallback(payload: dict[str, Any]) -> bool:
+    """Return True when histogram payload requests fidelity not implemented by native renderer."""
+    visual_metadata = payload.get("visual_metadata")
+    if not isinstance(visual_metadata, dict):
+        return False
+
+    summary_table = visual_metadata.get("summary_stats_table")
+    if isinstance(summary_table, dict):
+        rows = summary_table.get("rows")
+        if isinstance(rows, list) and len(rows) > 0:
+            return True
+
+    annotation_rows = visual_metadata.get("annotation_rows")
+    if isinstance(annotation_rows, list) and len(annotation_rows) > 0:
+        return True
+
+    modeled_overlays = visual_metadata.get("modeled_overlays")
+    if isinstance(modeled_overlays, dict):
+        overlay_rows = modeled_overlays.get("rows")
+        if isinstance(overlay_rows, list) and len(overlay_rows) > 0:
+            return True
+        if bool(modeled_overlays.get("advanced_annotations_enabled")):
+            return True
+        if bool(modeled_overlays.get("overlays_enabled")):
+            return True
+
+    specification_lines = visual_metadata.get("specification_lines")
+    if isinstance(specification_lines, list):
+        for line in specification_lines:
+            if isinstance(line, dict) and bool(line.get("enabled")) and line.get("label"):
+                return True
+
+    return False
 
 
 def benchmark_histogram_render_runtime(renderer: ChartRenderer, payload: dict[str, Any], *, iterations: int = 3) -> dict[str, float]:
