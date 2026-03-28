@@ -2878,7 +2878,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(captured['violin_labels'], ['A (n=2)', 'B (n=3)'])
         self.assertEqual(captured['iqr_labels'], ['A (n=2)', 'B (n=3)'])
 
-    def test_summary_sheet_fill_histogram_uses_native_dashboard_payload_when_native_backend_is_selected(self):
+    def test_summary_sheet_fill_histogram_uses_matplotlib_path_for_extended_dashboard_even_when_native_backend_is_selected(self):
         import pandas as pd
         import modules.export_data_thread as export_thread_module
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -2943,15 +2943,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
         assert worksheet.insert_calls
-        assert render_calls['count'] == 0
-        assert thread._chart_renderer.figure_calls == 0
-        assert thread._chart_renderer.histogram_calls == 1
-        assert thread._chart_renderer.last_payload is not None
-        assert thread._chart_renderer.last_payload['visual_metadata']['summary_stats_table']['rows']
-        assert thread._chart_renderer.last_payload['visual_metadata']['annotation_rows']
-        assert thread._chart_renderer.last_payload['summary_table_rows']
-        assert thread._chart_renderer.last_payload['annotation_rows']
-        assert thread._chart_renderer.last_payload['specification_lines']
+        assert render_calls['count'] == 1
+        assert thread._chart_renderer.figure_calls >= 1
+        assert thread._chart_renderer.histogram_calls == 0
+        assert thread._chart_renderer.last_payload is None
 
     def test_summary_sheet_fill_histogram_uses_matplotlib_fallback_when_native_unavailable(self):
         import pandas as pd
@@ -3072,8 +3067,8 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         assert native_worksheet.insert_calls
         assert matplotlib_worksheet.insert_calls
-        assert native_thread._chart_renderer.figure_calls == 0
-        assert native_thread._chart_renderer.histogram_calls == 1
+        assert native_thread._chart_renderer.figure_calls >= 1
+        assert native_thread._chart_renderer.histogram_calls == 0
         native_row, native_col, _native_options = native_worksheet.insert_calls[-1]
         mpl_row, mpl_col, _mpl_options = matplotlib_worksheet.insert_calls[-1]
         assert (native_row, native_col) == (mpl_row, mpl_col)
