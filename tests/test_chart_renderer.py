@@ -190,7 +190,7 @@ def test_native_chart_renderer_falls_back_when_visual_metadata_requires_parity()
     assert result.png_bytes != b"native"
 
 
-def test_native_chart_renderer_raises_when_visual_metadata_requires_parity_without_fallback_figure():
+def test_native_chart_renderer_uses_native_and_warns_when_visual_metadata_requires_parity_without_fallback_figure():
     payload = build_histogram_native_payload(
         values=[1.0, 2.0, 3.0],
         lsl=0.0,
@@ -200,8 +200,11 @@ def test_native_chart_renderer_raises_when_visual_metadata_requires_parity_witho
     payload["visual_metadata"]["annotation_rows"] = [{"label": "LSL", "x": 0.0}]
 
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda _payload: b"native"):
-        with pytest.raises(RuntimeError, match="visual metadata parity"):
-            NativeChartRenderer().render_histogram_png(payload)
+        with pytest.warns(RuntimeWarning, match="visual metadata parity"):
+            result = NativeChartRenderer().render_histogram_png(payload)
+
+    assert result.backend == "native"
+    assert result.png_bytes == b"native"
 
 
 def test_native_distribution_renderer_falls_back_to_matplotlib_when_extension_missing():

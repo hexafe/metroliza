@@ -102,11 +102,14 @@ class NativeChartRenderer(ChartRenderer):
 
         if _histogram_visual_metadata_requires_matplotlib_fallback(payload):
             if fallback_fig is None:
-                raise RuntimeError(
-                    "Native histogram payload requests visual metadata parity but no matplotlib fallback figure was provided."
+                warnings.warn(
+                    "Native histogram payload requests visual metadata parity but no matplotlib fallback figure was provided; proceeding with native rendering without parity metadata.",
+                    RuntimeWarning,
+                    stacklevel=2,
                 )
-            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="histogram")
-            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
+            else:
+                fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="histogram")
+                return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
 
         _validate_histogram_native_payload(payload)
         png_bytes = _native_render_histogram_png(payload)
