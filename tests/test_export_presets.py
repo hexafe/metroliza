@@ -389,6 +389,22 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertIn('- chart_renderer: status=native_available', message)
         self.assertIn('- cmm_parser: status=native_unavailable_fallback', message)
 
+    def test_completion_message_includes_html_dashboard_links_when_present(self):
+        from modules.export_dialog import build_export_completion_message
+
+        metadata = {
+            'html_dashboard_path': 'out_dashboard.html',
+            'html_dashboard_assets_path': 'out_dashboard_assets',
+        }
+        _level, _title, message = build_export_completion_message(
+            excel_file='out.xlsx',
+            export_target='excel_xlsx',
+            completion_metadata=metadata,
+        )
+
+        self.assertIn(f'HTML dashboard: {Path("out_dashboard.html").resolve().as_uri()}', message)
+        self.assertIn(f'Dashboard assets: {Path("out_dashboard_assets").resolve().as_uri()}', message)
+
 
 class TestExportTargetSelection(unittest.TestCase):
     @classmethod
@@ -604,6 +620,7 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
             violin_input='1',
             summary_scale_input='-4',
             hide_ok_results=True,
+            generate_html_dashboard=True,
             filter_query='SELECT * FROM T',
             grouping_df=None,
             group_analysis_level='Standard',
@@ -619,6 +636,7 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
                 violin_input='1',
                 summary_scale_input='-4',
                 hide_ok_results=True,
+                generate_html_dashboard=True,
                 group_analysis_level='Standard',
                 group_analysis_scope='Multi-reference',
             )
@@ -631,6 +649,7 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
         self.assertEqual(request.options.summary_plot_scale, 0)
         self.assertEqual(request.filter_query, 'SELECT * FROM T')
         self.assertIsNone(request.grouping_df)
+        self.assertTrue(request.options.generate_html_dashboard)
         self.assertEqual(request.options.group_analysis_level, 'standard')
         self.assertEqual(request.options.group_analysis_scope, 'multi_reference')
 
@@ -719,6 +738,7 @@ class TestExportDialogThreadStartupContract(unittest.TestCase):
         dialog.export_type_combobox = _FakeCombo('Line')
         dialog.sort_measurements_combobox = _FakeCombo('Sample #')
         dialog.include_google_sheets_checkbox = _FakeCheckbox(False)
+        dialog.generate_html_dashboard_checkbox = _FakeCheckbox(True)
         dialog.hide_ok_results_checkbox = _FakeCheckbox(False)
         dialog.filter_query = 'SELECT 1'
         dialog.df_for_grouping = None
@@ -744,6 +764,7 @@ class TestExportDialogThreadStartupContract(unittest.TestCase):
         self.assertEqual(request.options.export_target, 'excel_xlsx')
         self.assertEqual(request.options.violin_plot_min_samplesize, 2)
         self.assertEqual(request.options.summary_plot_scale, 0)
+        self.assertTrue(request.options.generate_html_dashboard)
 
 
 class TestExportDialogDatabaseSwitchContext(unittest.TestCase):

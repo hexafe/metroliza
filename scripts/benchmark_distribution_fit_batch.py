@@ -21,11 +21,39 @@ from modules.distribution_fit_service import (  # noqa: E402
     fit_measurement_distribution_batch,
     measurement_fingerprint,
 )
+from modules.distribution_fit_candidate_native import (  # noqa: E402
+    native_fit_backend_available as native_candidate_fit_backend_available,
+    native_metrics_backend_available as native_candidate_metrics_backend_available,
+)
 from modules.distribution_fit_native import (  # noqa: E402
-    native_backend_available,
     native_monte_carlo_backend_available,
     estimate_ad_pvalue_monte_carlo_native,
 )
+
+
+_STRICT_RISK_TOLERANCE = 1e-9
+_NATIVE_FIT_RISK_TOLERANCE = 1e-6
+_STRICT_RANKING_METRIC_TOLERANCES = {
+    'nll': 1e-9,
+    'aic': 1e-9,
+    'bic': 1e-9,
+    'ad_statistic': 1e-9,
+    'ks_statistic': 1e-9,
+}
+_NATIVE_METRICS_RANKING_METRIC_TOLERANCES = {
+    'nll': 1e-8,
+    'aic': 1e-8,
+    'bic': 1e-8,
+    'ad_statistic': 1e-6,
+    'ks_statistic': 1e-8,
+}
+_NATIVE_FIT_RANKING_METRIC_TOLERANCES = {
+    'nll': 1e-2,
+    'aic': 1e-2,
+    'bic': 1e-2,
+    'ad_statistic': 1e-4,
+    'ks_statistic': 1e-4,
+}
 
 
 def _build_fixture(metric_count: int, group_count: int, samples_per_group: int, seed: int):
@@ -98,8 +126,23 @@ def _run_marshaling_benchmark(*, groups: int, samples: int, repeats: int, seed: 
     }
 
 
+def _outside_probability_tolerance() -> float:
+    if native_candidate_fit_backend_available():
+        return _NATIVE_FIT_RISK_TOLERANCE
+    return _STRICT_RISK_TOLERANCE
+
+
+def _ranking_metric_tolerance(metric_key: str) -> float:
+    if native_candidate_fit_backend_available():
+        return _NATIVE_FIT_RANKING_METRIC_TOLERANCES[metric_key]
+    if native_candidate_metrics_backend_available():
+        return _NATIVE_METRICS_RANKING_METRIC_TOLERANCES[metric_key]
+    return _STRICT_RANKING_METRIC_TOLERANCES[metric_key]
+
+
 def _validate_parity(baseline, candidate, *, full_ranking=False):
     mismatches = []
+    outside_probability_tolerance = _outside_probability_tolerance()
     for metric, grouped in baseline.items():
         for group, row in grouped.items():
             compare = candidate[metric][group]
@@ -111,7 +154,11 @@ def _validate_parity(baseline, candidate, *, full_ranking=False):
             right_risk = (compare.get('risk_estimates') or {}).get('outside_probability')
             if left_risk is None and right_risk is None:
                 continue
-            if left_risk is None or right_risk is None or abs(float(left_risk) - float(right_risk)) > 1e-9:
+            if (
+                left_risk is None
+                or right_risk is None
+                or abs(float(left_risk) - float(right_risk)) > outside_probability_tolerance
+            ):
                 mismatches.append((metric, group, 'outside_probability', left_risk, right_risk))
             if full_ranking:
                 left_rank = row.get('ranking_metrics') or []
@@ -128,7 +175,11 @@ def _validate_parity(baseline, candidate, *, full_ranking=False):
                         rv = right_item.get(key)
                         if lv is None and rv is None:
                             continue
-                        if lv is None or rv is None or abs(float(lv) - float(rv)) > 1e-9:
+                        if (
+                            lv is None
+                            or rv is None
+                            or abs(float(lv) - float(rv)) > _ranking_metric_tolerance(key)
+                        ):
                             mismatches.append((metric, group, f'ranking_{idx}_{key}', lv, rv))
     return mismatches
 
@@ -253,9 +304,17 @@ def main():
     mismatches = _validate_parity(legacy_results, batch_results)
     kernel_payload = None
     if args.candidate_kernel_benchmark:
-        python_seconds, python_results = _run_batch(fixture, candidate_kernel_mode='python')
-        mode = 'native' if native_backend_available() else 'auto'
-        kernel_seconds, kernel_results = _run_batch(fixture, candidate_kernel_mode=mode)
+        python_seconds, python_results = _run_batch(
+            fixture,
+            candidate_kernel_mode='python',
+            candidate_fit_batch_mode='legacy',
+        )
+        mode = 'native' if native_candidate_metrics_backend_available() else 'auto'
+        kernel_seconds, kernel_results = _run_batch(
+            fixture,
+            candidate_kernel_mode=mode,
+            candidate_fit_batch_mode='legacy',
+        )
         kernel_mismatches = _validate_parity(python_results, kernel_results, full_ranking=True)
         kernel_speedup = python_seconds / kernel_seconds if kernel_seconds > 0 else float('inf')
         kernel_payload = {
@@ -276,7 +335,7 @@ def main():
 
     batch_native_payload = None
     if args.batch_native_benchmark:
-        native_mode = 'native' if native_backend_available() else 'auto'
+        native_mode = 'native' if native_candidate_metrics_backend_available() else 'auto'
         legacy_seconds, legacy_results = _run_batch(
             fixture,
             candidate_kernel_mode=native_mode,

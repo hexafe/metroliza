@@ -331,6 +331,23 @@ class ExportDialog(QDialog):
                 "Google Sheets conversion can have minor fidelity differences."
             )
 
+            self.html_dashboard_label = QLabel("HTML dashboard:")
+            self.generate_html_dashboard_checkbox = QCheckBox(
+                "Also create HTML dashboard sidecar for extended summary charts"
+            )
+            self.generate_html_dashboard_checkbox.setChecked(False)
+            self.html_dashboard_note_label = QLabel(
+                "Creates a local `*_dashboard.html` file plus an asset folder that mirrors the extended summary charts."
+            )
+            self.html_dashboard_note_label.setStyleSheet("color: #666;")
+            self.html_dashboard_note_label.setWordWrap(True)
+            self.html_dashboard_label.setToolTip(
+                "Generate an additional HTML dashboard sidecar that reuses the export chart payloads.\n"
+                "Useful for browser-based review alongside the workbook."
+            )
+            self.generate_html_dashboard_checkbox.setToolTip(self.html_dashboard_label.toolTip())
+            self.html_dashboard_note_label.setToolTip(self.html_dashboard_label.toolTip())
+
             # Add dropdown list for chart type
             self.export_type_label = QLabel("Chart type:")
             self.export_type_combobox = QComboBox()
@@ -482,11 +499,15 @@ class ExportDialog(QDialog):
             report_profile_layout.addWidget(self.include_google_sheets_checkbox, 2, 1)
             report_profile_layout.addWidget(self.google_sheets_note_label, 3, 1)
 
-            report_profile_layout.addWidget(self.export_type_label, 4, 0)
-            report_profile_layout.addWidget(self.export_type_combobox, 4, 1)
+            report_profile_layout.addWidget(self.html_dashboard_label, 4, 0)
+            report_profile_layout.addWidget(self.generate_html_dashboard_checkbox, 4, 1)
+            report_profile_layout.addWidget(self.html_dashboard_note_label, 5, 1)
 
-            report_profile_layout.addWidget(self.sort_measurements_label, 5, 0)
-            report_profile_layout.addWidget(self.sort_measurements_combobox, 5, 1)
+            report_profile_layout.addWidget(self.export_type_label, 6, 0)
+            report_profile_layout.addWidget(self.export_type_combobox, 6, 1)
+
+            report_profile_layout.addWidget(self.sort_measurements_label, 7, 0)
+            report_profile_layout.addWidget(self.sort_measurements_combobox, 7, 1)
 
             group_analysis_layout = QGridLayout()
             group_analysis_layout.setContentsMargins(0, 0, 0, 0)
@@ -513,7 +534,8 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.filter_button, self.group_button)
             self.setTabOrder(self.group_button, self.preset_combobox)
             self.setTabOrder(self.preset_combobox, self.include_google_sheets_checkbox)
-            self.setTabOrder(self.include_google_sheets_checkbox, self.export_type_combobox)
+            self.setTabOrder(self.include_google_sheets_checkbox, self.generate_html_dashboard_checkbox)
+            self.setTabOrder(self.generate_html_dashboard_checkbox, self.export_type_combobox)
             self.setTabOrder(self.export_type_combobox, self.sort_measurements_combobox)
             self.setTabOrder(self.sort_measurements_combobox, self.group_analysis_level_combobox)
             self.setTabOrder(self.group_analysis_level_combobox, self.group_analysis_scope_combobox)
@@ -737,6 +759,7 @@ class ExportDialog(QDialog):
                 violin_input=violin_input,
                 summary_scale_input=summary_scale_input,
                 hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
+                generate_html_dashboard=self.generate_html_dashboard_checkbox.isChecked(),
                 filter_query=self.filter_query,
                 grouping_df=self.df_for_grouping,
                 group_analysis_level=self._selected_group_analysis_level(),

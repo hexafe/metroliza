@@ -22,6 +22,7 @@ from modules.distribution_fit_candidate_native import (
     compute_candidate_fit_batch,
     compute_candidate_metrics,
     compute_candidate_metrics_batch_native,
+    native_metrics_backend_available,
     resolve_kernel_mode,
 )
 from scipy.stats import (
@@ -174,6 +175,26 @@ def _candidate_pool_for_mode(mode: str) -> tuple[_CandidateDistribution, ...]:
     if mode == 'one_sided_zero_bound_positive':
         return _POSITIVE_CANDIDATES
     return _BILATERAL_CANDIDATES
+
+
+def _resolve_active_candidate_pool(values: np.ndarray, mode: str) -> tuple[_CandidateDistribution, ...]:
+    pool = _candidate_pool_for_mode(mode)
+    if mode != 'bilateral_signed' or values.size < 60:
+        return pool
+
+    centered = values - float(np.mean(values))
+    second_moment = float(np.mean(centered ** 2))
+    if second_moment <= 0.0 or not np.isfinite(second_moment):
+        return pool
+
+    third_moment = float(np.mean(centered ** 3))
+    fourth_moment = float(np.mean(centered ** 4))
+    skewness = third_moment / (second_moment ** 1.5)
+    excess_kurtosis = fourth_moment / (second_moment ** 2) - 3.0
+
+    if abs(skewness) < 0.6 and abs(excess_kurtosis) < 1.0:
+        return tuple(candidate for candidate in pool if candidate.name != 'johnsonsu')
+    return pool
 
 
 def _resolve_curve_x_values(values: np.ndarray, *, point_count: int, coverage_padding: float = 0.03):
@@ -425,6 +446,8 @@ def _fit_candidates_batch_native(
 ) -> dict[str, dict[str, dict]] | None:
     if resolve_kernel_mode(kernel_mode) == 'python':
         return None
+    if not native_metrics_backend_available():
+        return None
 
     fit_metadata: list[tuple[str, _CandidateDistribution, np.ndarray]] = []
     fit_distributions: list[str] = []
@@ -436,7 +459,7 @@ def _fit_candidates_batch_native(
             continue
         if np.isclose(float(np.min(values)), float(np.max(values))):
             continue
-        for candidate in _candidate_pool_for_mode(support_mode_by_group[group_name]):
+        for candidate in _resolve_active_candidate_pool(values, support_mode_by_group[group_name]):
             fit_metadata.append((group_name, candidate, values))
             fit_distributions.append(candidate.name)
             fit_sample_values.append(values)
@@ -789,7 +812,8 @@ def fit_measurement_distribution(
 
     notes: list[str] = []
     candidates = []
-    for candidate in _candidate_pool_for_mode(inferred_mode):
+    active_candidate_pool = _resolve_active_candidate_pool(values, inferred_mode)
+    for candidate in active_candidate_pool:
         try:
             fitted = None if precomputed_candidates_by_model is None else precomputed_candidates_by_model.get(candidate.name)
             if fitted is None:
@@ -843,7 +867,7 @@ def fit_measurement_distribution(
     ranked = sorted(candidates, key=lambda c: c['metrics']['bic'])
 
     selected_dist = next(
-        c.scipy_dist for c in _candidate_pool_for_mode(inferred_mode) if c.name == best['model']
+        c.scipy_dist for c in active_candidate_pool if c.name == best['model']
     )
     selected_pdf = _build_density_curve(selected_dist, best['params'], x_values)
     selected_cdf = _build_cdf_curve(selected_dist, best['params'], x_values)

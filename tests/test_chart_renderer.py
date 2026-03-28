@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from unittest import mock
 
+from modules import native_chart_compositor
 from modules.chart_renderer import (
     MatplotlibChartRenderer,
     NativeChartRenderer,
@@ -157,6 +158,49 @@ def test_build_histogram_native_payload_includes_bin_count_when_provided():
     assert payload["visual_metadata"]["summary_stats_table"]["columns"] == ["Parameter", "Value"]
 
 
+def test_compact_histogram_renderer_uses_fast_png_encoding(monkeypatch):
+    payload = build_histogram_native_payload(
+        values=[1.0, 1.5, 2.0, 2.5],
+        lsl=0.0,
+        usl=3.0,
+        title="Compact Histogram",
+    )
+    captured = {}
+
+    def _capture_encode(_image, *, optimize=True, compress_level=None):
+        captured["optimize"] = optimize
+        captured["compress_level"] = compress_level
+        return b"png"
+
+    monkeypatch.setattr(native_chart_compositor, "_encode_png", _capture_encode)
+
+    assert native_chart_compositor.render_histogram_png(payload) == b"png"
+    assert captured["optimize"] is False
+    assert captured["compress_level"] == 1
+
+
+def test_rich_histogram_renderer_keeps_default_png_encoding(monkeypatch):
+    payload = build_histogram_native_payload(
+        values=[1.0, 1.5, 2.0, 2.5],
+        lsl=0.0,
+        usl=3.0,
+        title="Rich Histogram",
+    )
+    payload["visual_metadata"]["summary_stats_table"]["rows"] = [{"label": "Mean", "value": "1.75"}]
+    captured = {}
+
+    def _capture_encode(_image, *, optimize=True, compress_level=None):
+        captured["optimize"] = optimize
+        captured["compress_level"] = compress_level
+        return b"png"
+
+    monkeypatch.setattr(native_chart_compositor, "_encode_png", _capture_encode)
+
+    assert native_chart_compositor.render_histogram_png(payload) == b"png"
+    assert captured["optimize"] is True
+    assert captured["compress_level"] is None
+
+
 def test_native_histogram_renderer_validates_payload_contract():
     payload = {"type": "histogram", "values": "not-a-list", "title": "Bad Payload"}
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda _payload: b"png"):
@@ -183,7 +227,7 @@ def test_native_chart_renderer_falls_back_to_matplotlib_when_extension_missing()
     assert len(result.png_bytes) > 0
 
 
-def test_native_chart_renderer_falls_back_when_visual_metadata_requires_parity():
+def test_native_chart_renderer_keeps_rich_histogram_visual_metadata_on_native_path():
     payload = build_histogram_native_payload(
         values=[1.0, 2.0, 3.0],
         lsl=0.0,
@@ -195,15 +239,22 @@ def test_native_chart_renderer_falls_back_when_visual_metadata_requires_parity()
     fig, ax = plt.subplots(figsize=(6, 3))
     ax.hist(payload["values"], bins=4)
 
-    with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda _payload: b"native"):
+    captured = {}
+
+    def _capture(native_payload):
+        captured["payload"] = native_payload
+        return b"native"
+
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", _capture):
         result = NativeChartRenderer().render_histogram_png(payload, fallback_fig=fig)
 
     plt.close(fig)
-    assert result.backend == "matplotlib"
-    assert result.png_bytes != b"native"
+    assert result.backend == "native"
+    assert result.png_bytes == b"native"
+    assert captured["payload"]["visual_metadata"]["summary_stats_table"]["rows"][0]["label"] == "Mean"
 
 
-def test_native_chart_renderer_uses_native_and_warns_when_visual_metadata_requires_parity_without_fallback_figure():
+def test_native_chart_renderer_uses_native_for_annotation_rows_without_warning():
     payload = build_histogram_native_payload(
         values=[1.0, 2.0, 3.0],
         lsl=0.0,
@@ -213,9 +264,10 @@ def test_native_chart_renderer_uses_native_and_warns_when_visual_metadata_requir
     payload["visual_metadata"]["annotation_rows"] = [{"label": "LSL", "x": 0.0}]
 
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda _payload: b"native"):
-        with pytest.warns(RuntimeWarning, match="visual metadata parity"):
+        with mock.patch("warnings.warn") as warn:
             result = NativeChartRenderer().render_histogram_png(payload)
 
+    warn.assert_not_called()
     assert result.backend == "native"
     assert result.png_bytes == b"native"
 
@@ -243,6 +295,20 @@ def test_native_distribution_renderer_validates_payload_contract():
     with mock.patch("modules.chart_renderer._native_render_distribution_png", lambda _payload: b"png"):
         with pytest.raises(RuntimeError, match="series"):
             NativeChartRenderer().render_distribution_png(payload)
+
+
+def test_native_iqr_renderer_validates_payload_contract():
+    payload = {"type": "iqr", "labels": ["A"], "series": "invalid"}
+    with mock.patch("modules.chart_renderer._native_render_iqr_png", lambda _payload: b"png"):
+        with pytest.raises(RuntimeError, match="series"):
+            NativeChartRenderer().render_iqr_png(payload)
+
+
+def test_native_trend_renderer_validates_payload_contract():
+    payload = {"type": "trend", "x_values": [0.0], "y_values": [1.0], "labels": []}
+    with mock.patch("modules.chart_renderer._native_render_trend_png", lambda _payload: b"png"):
+        with pytest.raises(RuntimeError, match="equal x/y/labels"):
+            NativeChartRenderer().render_trend_png(payload)
 
 
 @pytest.mark.skipif(not native_histogram_backend_available(), reason="Native histogram renderer is not available in current environment")

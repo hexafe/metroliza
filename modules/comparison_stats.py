@@ -113,9 +113,98 @@ def _bootstrap_ci(
     if not estimates:
         return None
 
+    return _percentile_interval(np.asarray(estimates, dtype=np.float64), level=level)
+
+
+def _percentile_interval(estimates: np.ndarray, *, level: float) -> tuple[float, float] | None:
+    finite = np.asarray(estimates, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return None
+
     lower_q = ((1.0 - level) / 2.0) * 100.0
     upper_q = (1.0 - (1.0 - level) / 2.0) * 100.0
-    return (float(np.percentile(estimates, lower_q)), float(np.percentile(estimates, upper_q)))
+    return (float(np.percentile(finite, lower_q)), float(np.percentile(finite, upper_q)))
+
+
+def _bootstrap_cohen_d_percentile_ci(
+    *,
+    sample_a: np.ndarray,
+    sample_b: np.ndarray,
+    level: float,
+    iterations: int,
+    seed: int,
+) -> tuple[float, float] | None:
+    if sample_a.size < 2 or sample_b.size < 2:
+        return None
+
+    resolved_iterations = max(1, int(iterations))
+    rng = np.random.default_rng(seed)
+    resampled_a = sample_a[rng.integers(0, sample_a.size, size=(resolved_iterations, sample_a.size))]
+    resampled_b = sample_b[rng.integers(0, sample_b.size, size=(resolved_iterations, sample_b.size))]
+
+    mean_a = np.mean(resampled_a, axis=1)
+    mean_b = np.mean(resampled_b, axis=1)
+    var_a = np.var(resampled_a, axis=1, ddof=1)
+    var_b = np.var(resampled_b, axis=1, ddof=1)
+    pooled = (((sample_a.size - 1) * var_a) + ((sample_b.size - 1) * var_b)) / (sample_a.size + sample_b.size - 2)
+    valid = np.isfinite(pooled) & (pooled > 0.0)
+    if not np.any(valid):
+        return None
+
+    estimates = (mean_a[valid] - mean_b[valid]) / np.sqrt(pooled[valid])
+    return _percentile_interval(estimates, level=level)
+
+
+def _bootstrap_multi_group_effect_percentile_ci(
+    *,
+    groups: list[np.ndarray],
+    level: float,
+    iterations: int,
+    seed: int,
+    use_omega: bool,
+) -> tuple[float, float] | None:
+    if len(groups) < 2:
+        return None
+
+    sample_sizes = np.array([group.size for group in groups], dtype=np.float64)
+    if np.any(sample_sizes < 2):
+        return None
+
+    resolved_iterations = max(1, int(iterations))
+    total_n = float(np.sum(sample_sizes))
+    group_count = float(len(groups))
+    rng = np.random.default_rng(seed)
+
+    means_by_group: list[np.ndarray] = []
+    ss_within = np.zeros(resolved_iterations, dtype=np.float64)
+    for group in groups:
+        sampled = group[rng.integers(0, group.size, size=(resolved_iterations, group.size))]
+        mean = np.mean(sampled, axis=1)
+        means_by_group.append(mean)
+        centered = sampled - mean[:, None]
+        ss_within += np.sum(centered * centered, axis=1, dtype=np.float64)
+
+    means_matrix = np.vstack(means_by_group)
+    grand_mean = np.sum(means_matrix * sample_sizes[:, None], axis=0, dtype=np.float64) / total_n
+    ss_between = np.sum(sample_sizes[:, None] * (means_matrix - grand_mean) ** 2, axis=0, dtype=np.float64)
+    ss_total = ss_between + ss_within
+    valid = np.isfinite(ss_total) & (ss_total > 0.0)
+
+    if use_omega:
+        df_between = group_count - 1.0
+        df_within = total_n - group_count
+        if df_within <= 0.0:
+            return None
+        ms_within = ss_within / df_within
+        denom = ss_total + ms_within
+        valid &= np.isfinite(denom) & (denom > 0.0)
+        estimates = (ss_between[valid] - (df_between * ms_within[valid])) / denom[valid]
+        estimates = np.maximum(estimates, 0.0)
+    else:
+        estimates = ss_between[valid] / ss_total[valid]
+
+    return _percentile_interval(estimates, level=level)
 
 
 def _bootstrap_effect_percentile_ci(
@@ -136,8 +225,28 @@ def _bootstrap_effect_percentile_ci(
     if native_ci is not None:
         return native_ci
 
+    if effect_kernel == 'cohen_d':
+        if len(groups) != 2:
+            return None
+        return _bootstrap_cohen_d_percentile_ci(
+            sample_a=groups[0],
+            sample_b=groups[1],
+            level=level,
+            iterations=iterations,
+            seed=seed,
+        )
+
+    if effect_kernel in {'eta_squared', 'omega_squared'}:
+        return _bootstrap_multi_group_effect_percentile_ci(
+            groups=groups,
+            level=level,
+            iterations=iterations,
+            seed=seed,
+            use_omega=effect_kernel == 'omega_squared',
+        )
+
     rng = np.random.default_rng(seed)
-    if effect_kernel in {'cohen_d', 'cliffs_delta'}:
+    if effect_kernel == 'cliffs_delta':
         if len(groups) != 2:
             return None
         sample_a = groups[0]
@@ -155,17 +264,6 @@ def _bootstrap_effect_percentile_ci(
                 sampled[1],
                 non_parametric=effect_kernel == 'cliffs_delta',
             ),
-            level=level,
-            iterations=iterations,
-        )
-
-    if effect_kernel in {'eta_squared', 'omega_squared'}:
-        if len(groups) < 2 or any(group.size == 0 for group in groups):
-            return None
-        return _bootstrap_ci(
-            rng=rng,
-            sample_builder=lambda: [group[rng.integers(0, group.size, group.size)] for group in groups],
-            effect_fn=lambda sampled: _eta_or_omega_squared(sampled, use_omega=effect_kernel == 'omega_squared'),
             level=level,
             iterations=iterations,
         )

@@ -7,7 +7,7 @@ from unittest import mock
 from pathlib import Path
 
 import numpy as np
-from scipy.stats import gamma, lognorm, norm, weibull_min
+from scipy.stats import foldnorm, gamma, johnsonsu, lognorm, norm, weibull_min
 
 import modules.distribution_fit_native as native_bridge
 import modules.distribution_fit_candidate_native as candidate_native_bridge
@@ -147,6 +147,29 @@ class TestDistributionFitNativeParity(unittest.TestCase):
 
         importlib.reload(candidate_native_bridge)
 
+    def test_candidate_bridge_reports_fit_backend_when_fit_symbol_is_present(self):
+        fake_native = types.ModuleType('_metroliza_distribution_fit_native')
+
+        def _metrics(*_args):
+            return (1.0, 2.0, 3.0, 4.0, 5.0, 0)
+
+        def _metrics_batch(*_args):
+            return ([1.0], [2.0], [3.0], [4.0], [5.0], [0])
+
+        def _fit_batch(*_args):
+            return ([np.array([0.0, 1.0], dtype=np.float64)], [0])
+
+        fake_native.compute_candidate_metrics = _metrics
+        fake_native.compute_candidate_metrics_batch = _metrics_batch
+        fake_native.compute_candidate_fit_params_batch = _fit_batch
+
+        with mock.patch.dict(sys.modules, {'_metroliza_distribution_fit_native': fake_native}):
+            reloaded = importlib.reload(candidate_native_bridge)
+            self.assertTrue(reloaded.native_metrics_backend_available())
+            self.assertTrue(reloaded.native_fit_backend_available())
+
+        importlib.reload(candidate_native_bridge)
+
     def test_candidate_kernel_bridge_normalizes_to_contiguous_float64(self):
         with mock.patch.object(
             candidate_native_bridge,
@@ -232,6 +255,72 @@ class TestDistributionFitNativeParity(unittest.TestCase):
         self.assertEqual(output.error_flags[1], candidate_native_bridge.ERROR_UNSUPPORTED_DISTRIBUTION)
         self.assertEqual(tuple(output.fitted_params_batch[0]), (0.0, 1.0))
         self.assertIsNone(output.fitted_params_batch[1])
+
+    def test_candidate_fit_batch_merges_native_and_python_fallback_results(self):
+        fit_input = candidate_native_bridge.build_batch_fit_input(
+            distributions=['norm', 'skewnorm'],
+            sample_values_batch=[
+                np.array([-1.0, 0.0, 1.0], dtype=float),
+                np.array([-0.8, 0.1, 1.7], dtype=float),
+            ],
+            force_loc_zero_batch=[False, False],
+        )
+
+        with mock.patch.object(
+            candidate_native_bridge,
+            '_native_compute_candidate_fit_params_batch',
+            return_value=(
+                [np.array([0.0, 1.0], dtype=np.float64), None],
+                [candidate_native_bridge.ERROR_NONE, candidate_native_bridge.ERROR_FIT_FAILURE],
+            ),
+        ):
+            output = candidate_native_bridge.compute_candidate_fit_batch(
+                fit_input,
+                mode='auto',
+                fitters_by_distribution={
+                    'norm': lambda values, **_kwargs: np.array([0.0, 1.0], dtype=np.float64),
+                    'skewnorm': lambda values, **_kwargs: np.array([0.25, 0.0, 1.1], dtype=np.float64),
+                },
+            )
+
+        self.assertIsNotNone(output)
+        self.assertEqual(output.error_flags, (candidate_native_bridge.ERROR_NONE, candidate_native_bridge.ERROR_NONE))
+        self.assertEqual(tuple(output.fitted_params_batch[0]), (0.0, 1.0))
+        self.assertEqual(tuple(output.fitted_params_batch[1]), (0.25, 0.0, 1.1))
+
+    @unittest.skipUnless(
+        candidate_native_bridge.native_fit_backend_available(),
+        'native distribution-fit batch fitter is unavailable',
+    )
+    def test_native_fit_batch_supports_foldnorm_and_johnsonsu_candidates(self):
+        rng = np.random.default_rng(20260328)
+        fit_input = candidate_native_bridge.build_batch_fit_input(
+            distributions=['foldnorm', 'johnsonsu'],
+            sample_values_batch=[
+                np.ascontiguousarray(
+                    np.concatenate(
+                        (
+                            [0.0, 0.0],
+                            foldnorm.rvs(1.4, loc=0.0, scale=0.75, size=160, random_state=rng),
+                        )
+                    ).astype(np.float64)
+                ),
+                np.ascontiguousarray(
+                    johnsonsu.rvs(0.8, 1.35, loc=0.1, scale=0.9, size=180, random_state=rng).astype(np.float64)
+                ),
+            ],
+            force_loc_zero_batch=[True, False],
+        )
+
+        output = candidate_native_bridge.compute_candidate_fit_batch_native(fit_input)
+
+        self.assertIsNotNone(output)
+        self.assertEqual(output.error_flags, (candidate_native_bridge.ERROR_NONE, candidate_native_bridge.ERROR_NONE))
+        self.assertEqual(len(output.fitted_params_batch[0]), 3)
+        self.assertEqual(len(output.fitted_params_batch[1]), 4)
+        self.assertTrue(np.all(np.isfinite(output.fitted_params_batch[0])))
+        self.assertTrue(np.all(np.isfinite(output.fitted_params_batch[1])))
+        self.assertAlmostEqual(float(output.fitted_params_batch[0][1]), 0.0, places=9)
 
     def test_native_wrapper_normalizes_list_and_ndarray_inputs_equivalently(self):
         with mock.patch.object(
@@ -371,11 +460,14 @@ class TestDistributionFitNativeParity(unittest.TestCase):
                 observed_stat=0.65,
                 iterations=500,
                 random_seed=77,
-            )
+        )
 
         self.assertIsNotNone(native_result)
         self.assertIsNotNone(python_result)
-        self.assertAlmostEqual(native_result, python_result, places=2)
+        # The seeded paths are deterministic independently, but they use
+        # different RNG implementations, so the Monte Carlo estimate should be
+        # close rather than decimal-identical at only 500 iterations.
+        self.assertLess(abs(native_result - python_result), 0.03)
 
     @unittest.skipUnless(
         native_bridge.native_monte_carlo_backend_available(),

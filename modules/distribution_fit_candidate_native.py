@@ -265,6 +265,34 @@ def compute_candidate_fit_batch(
     if resolved_mode != KERNEL_MODE_PYTHON:
         native_output = compute_candidate_fit_batch_native(kernel_input)
         if native_output is not None:
+            if fitters_by_distribution:
+                unresolved = [
+                    idx
+                    for idx, flag in enumerate(native_output.error_flags)
+                    if int(flag) != ERROR_NONE or native_output.fitted_params_batch[idx] is None
+                ]
+                if unresolved:
+                    fallback_input = CandidateBatchFitInput(
+                        distributions=tuple(kernel_input.distributions[idx] for idx in unresolved),
+                        sample_values_batch=tuple(kernel_input.sample_values_batch[idx] for idx in unresolved),
+                        force_loc_zero_batch=tuple(kernel_input.force_loc_zero_batch[idx] for idx in unresolved),
+                    )
+                    fallback_output = compute_candidate_fit_batch_fallback(
+                        fallback_input,
+                        fitters_by_distribution=fitters_by_distribution,
+                    )
+                    merged_params = list(native_output.fitted_params_batch)
+                    merged_flags = list(native_output.error_flags)
+                    for offset, idx in enumerate(unresolved):
+                        fallback_flag = int(fallback_output.error_flags[offset])
+                        fallback_params = fallback_output.fitted_params_batch[offset]
+                        if fallback_flag == ERROR_NONE and fallback_params is not None:
+                            merged_params[idx] = fallback_params
+                            merged_flags[idx] = ERROR_NONE
+                    return CandidateBatchFitOutput(
+                        fitted_params_batch=tuple(merged_params),
+                        error_flags=tuple(merged_flags),
+                    )
             return native_output
         if resolved_mode == KERNEL_MODE_NATIVE:
             return CandidateBatchFitOutput(

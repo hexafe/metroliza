@@ -183,6 +183,11 @@ from modules.export_sheet_writer import (
     create_measurement_formats,
     write_measurement_block,
 )
+from modules.export_html_dashboard import (
+    resolve_html_dashboard_assets_dir as _resolve_html_dashboard_assets_dir,
+    resolve_html_dashboard_path as _resolve_html_dashboard_path,
+    write_export_html_dashboard as _write_export_html_dashboard,
+)
 from modules.stats_utils import is_one_sided_geometric_tolerance
 # Canonical violin payload builder lives in `modules/chart_render_service.py`.
 from modules.chart_render_service import (
@@ -3249,6 +3254,7 @@ class ExportDataThread(QThread):
         self.summary_plot_scale = validated_request.options.summary_plot_scale
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
+        self.generate_html_dashboard = validated_request.options.generate_html_dashboard
         self.allow_non_essential_chart_skipping = validated_request.options.allow_non_essential_chart_skipping
         self.chart_worker_count = validated_request.options.chart_worker_count
         self.chart_worker_queue_size = validated_request.options.chart_worker_queue_size
@@ -3266,7 +3272,20 @@ class ExportDataThread(QThread):
             "converted_tab_titles": [],
             "backend_diagnostics": {},
             "backend_diagnostics_lines": [],
+            "html_dashboard_path": None,
+            "html_dashboard_assets_path": None,
+            "html_dashboard_warnings": [],
         }
+        self.html_dashboard_file = (
+            str(_resolve_html_dashboard_path(self.excel_file))
+            if self.generate_html_dashboard and self.excel_file
+            else None
+        )
+        self.html_dashboard_assets_dir = (
+            str(_resolve_html_dashboard_assets_dir(self.html_dashboard_file))
+            if self.html_dashboard_file
+            else None
+        )
         self._exported_sheet_names = []
         self._exported_sheet_name_set = set()
         self._last_emitted_progress = -1
@@ -3302,6 +3321,7 @@ class ExportDataThread(QThread):
         self._summary_prep_executor = None
         self._chart_renderer = build_chart_renderer()
         self._active_chart_images = []
+        self._html_dashboard_sections = []
         self._summary_sheet_failed = False
         self._summary_sheet_skip_warning_emitted = False
         self._db_connection = None
@@ -3322,6 +3342,80 @@ class ExportDataThread(QThread):
 
     def _cleanup_chart_images(self):
         self._active_chart_images.clear()
+
+    def _begin_html_dashboard_section(
+        self,
+        *,
+        header,
+        subtitle,
+        reference,
+        axis,
+        grouping_applied,
+        sample_size,
+        limits,
+    ):
+        if not self.generate_html_dashboard:
+            return None
+        section = {
+            'header': str(header or ''),
+            'subtitle': str(subtitle or ''),
+            'reference': '' if reference is None else str(reference),
+            'axis': '' if axis is None else str(axis),
+            'grouping_applied': bool(grouping_applied),
+            'sample_size': int(sample_size or 0),
+            'limits': dict(limits or {}),
+            'summary_rows': [],
+            'charts': [],
+        }
+        self._html_dashboard_sections.append(section)
+        return section
+
+    @staticmethod
+    def _attach_html_dashboard_chart(section, *, chart_type, title, backend, image_buffer, payload, note=''):
+        if section is None:
+            return
+        section.setdefault('charts', []).append(
+            {
+                'chart_type': str(chart_type or ''),
+                'title': str(title or chart_type or ''),
+                'backend': str(backend or ''),
+                'image_buffer': image_buffer,
+                'payload': payload if isinstance(payload, dict) else {},
+                'note': str(note or ''),
+            }
+        )
+
+    def _write_html_dashboard_if_requested(self):
+        if not self.generate_html_dashboard or not self.html_dashboard_file or not self.html_dashboard_assets_dir:
+            return
+        try:
+            dashboard_result = _write_export_html_dashboard(
+                excel_file=self.excel_file,
+                output_path=self.html_dashboard_file,
+                assets_dir=self.html_dashboard_assets_dir,
+                sections=self._html_dashboard_sections,
+                chart_observability_summary=self.completion_metadata.get('chart_observability_summary', {}),
+                backend_diagnostics_lines=self.completion_metadata.get('backend_diagnostics_lines', []),
+            )
+        except Exception as exc:
+            warning_message = f"HTML dashboard export skipped: {exc}"
+            logger.warning(warning_message, exc_info=True)
+            self.completion_metadata.setdefault('html_dashboard_warnings', []).append(warning_message)
+            self._log_export_stage(
+                "HTML dashboard generation skipped after workbook export",
+                stage="dashboard_warning",
+                level="warning",
+                dashboard_warning=warning_message,
+            )
+            return
+
+        self.completion_metadata.update(dashboard_result)
+        self._log_export_stage(
+            "HTML dashboard generated",
+            stage="dashboard_completed",
+            html_dashboard_path=dashboard_result.get('html_dashboard_path'),
+            html_dashboard_chart_count=dashboard_result.get('html_dashboard_chart_count', 0),
+        )
 
     def _ensure_chart_executor(self):
         if not self._optimization_toggles.get('enable_chart_multiprocessing'):
@@ -4184,6 +4278,7 @@ class ExportDataThread(QThread):
 
             self._emit_stage_progress('finalize', 1.0)
             self._update_completion_chart_telemetry()
+            self._write_html_dashboard_if_requested()
             self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
             self._log_export_stage("Export completed successfully", stage="completed")
             self.finished.emit()
@@ -4198,6 +4293,7 @@ class ExportDataThread(QThread):
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
                 self.update_label.emit(build_three_line_status(f"Warning: {e}", "Exporting data...", "ETA --"))
                 self._update_completion_chart_telemetry()
+                self._write_html_dashboard_if_requested()
                 self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
                 self._log_export_stage("Export completed with local fallback after Google conversion failure", stage="fallback", level="warning", fallback_reason=self.completion_metadata["fallback_message"])
                 self.finished.emit()
@@ -5097,6 +5193,19 @@ class ExportDataThread(QThread):
             capability_badge = summary_table_composition['capability_badge']
             histogram_row_badges = summary_table_composition['histogram_row_badges']
             panel_subtitle = summary_table_composition['panel_subtitle']
+            dashboard_section = self._begin_html_dashboard_section(
+                header=header,
+                subtitle=panel_subtitle,
+                reference=reference_value,
+                axis=axis_value,
+                grouping_applied=grouping_applied,
+                sample_size=summary_stats.get('sample_size', 0),
+                limits={
+                    'nominal': nom,
+                    'lsl': LSL,
+                    'usl': USL,
+                },
+            )
             distribution_labels = chart_payloads['distribution']['labels']
             distribution_values = chart_payloads['distribution']['values']
             can_render_violin = chart_payloads['distribution']['can_render_violin']
@@ -5338,6 +5447,15 @@ class ExportDataThread(QThread):
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, distribution_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    self._attach_html_dashboard_chart(
+                        dashboard_section,
+                        chart_type='distribution',
+                        title=distribution_native_payload.get('title') if isinstance(distribution_native_payload, dict) else build_wrapped_chart_title(distribution_title),
+                        backend=distribution_render_result.backend,
+                        image_buffer=image_data,
+                        payload=distribution_native_payload if isinstance(distribution_native_payload, dict) else {},
+                        note='Violin distribution view' if can_render_violin else 'Grouped mean scatter view',
+                    )
                     if self._check_canceled():
                         return
                 finally:
@@ -5423,6 +5541,22 @@ class ExportDataThread(QThread):
                         y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                         ax.set_ylim(y_min, y_max)
                         finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
+                        iqr_native_payload = {
+                            'type': 'iqr',
+                            'labels': [str(label) for label in boxplot_labels],
+                            'series': [
+                                [float(item) for item in np.asarray(values, dtype=float)[np.isfinite(np.asarray(values, dtype=float))]]
+                                for values in boxplot_values
+                            ],
+                            'title': build_wrapped_chart_title(header),
+                            'lsl': None if LSL is None else float(LSL),
+                            'usl': None if USL is None else float(USL),
+                            'nominal': None if nom is None else float(nom),
+                            'one_sided': bool(is_one_sided_geometric_tolerance(nom, LSL)),
+                            'x_label': 'Group',
+                            'y_label': 'Measurement',
+                            'legend': {'items': _build_iqr_native_legend_items()},
+                        }
 
                         iqr_render_result = self._save_summary_chart(fig, chart_type='iqr')
                         image_data = self._register_chart_image(iqr_render_result.png_bytes)
@@ -5436,6 +5570,15 @@ class ExportDataThread(QThread):
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, iqr_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    self._attach_html_dashboard_chart(
+                        dashboard_section,
+                        chart_type='iqr',
+                        title=iqr_native_payload.get('title') if isinstance(iqr_native_payload, dict) else build_wrapped_chart_title(header),
+                        backend=iqr_render_result.backend,
+                        image_buffer=image_data,
+                        payload=iqr_native_payload if isinstance(iqr_native_payload, dict) else {},
+                        note='Interquartile range boxplot',
+                    )
 
                     if self._check_canceled():
                         return
@@ -5523,67 +5666,71 @@ class ExportDataThread(QThread):
                     span = max(float(histogram_x_view['x_max']) - float(histogram_x_view['x_min']), 1e-12)
                     representative_bin_width = span / max(int(histogram_bin_count or 1), 1)
                     native_count_scale_factor = float(len(histogram_values)) * float(representative_bin_width)
+                    visual_metadata = _build_histogram_native_visual_metadata(
+                        summary_stats=summary_stats,
+                        lsl=LSL,
+                        usl=USL,
+                        nominal=nom,
+                        rendered_rows=unified_rows,
+                        row_badges=non_normal_row_badges,
+                        capability_badge=capability_badge,
+                        distribution_fit_result=distribution_fit_result,
+                        count_scale_factor=native_count_scale_factor,
+                    )
+                    histogram_native_payload = build_histogram_native_payload(
+                        values=histogram_values,
+                        lsl=LSL,
+                        usl=USL,
+                        title=histogram_title,
+                        bin_count=histogram_bin_count,
+                    )
+                    histogram_native_payload.update(
+                        {
+                            'canvas': _build_native_canvas(
+                                figure_width=base_histogram_figsize[0],
+                                figure_height=base_histogram_figsize[1],
+                            ),
+                            'x_view': {
+                                'min': float(histogram_x_view['x_min']),
+                                'max': float(histogram_x_view['x_max']),
+                            },
+                            'limits': {
+                                'lsl': None if LSL is None else float(LSL),
+                                'usl': None if USL is None else float(USL),
+                                'nominal': None if nom is None else float(nom),
+                            },
+                            'summary': {
+                                'count': float(summary_stats.get('sample_size', 0) or 0),
+                                'mean': current_average,
+                                'std': summary_stats.get('sigma'),
+                                'min': summary_stats.get('minimum'),
+                                'max': summary_stats.get('maximum'),
+                            },
+                            'style': {
+                                'axis_label_x': 'Measurement',
+                                'axis_label_y': 'Count',
+                                'grid_axis': 'y',
+                            },
+                            'mean_line': {
+                                **build_histogram_mean_line_style(),
+                                'value': None if current_average is None else float(current_average),
+                            },
+                            'visual_metadata': visual_metadata,
+                            'advanced_annotations_enabled': True,
+                            'overlays_enabled': bool((visual_metadata.get('modeled_overlays') or {}).get('rows')),
+                        }
+                    )
+                    if dashboard_section is not None:
+                        dashboard_section['summary_rows'] = [
+                            {'label': str(label or ''), 'value': str(value or '')}
+                            for label, value in unified_rows
+                        ]
 
                     if native_histogram_capable:
-                        native_histogram_payload = build_histogram_native_payload(
-                            values=histogram_values,
-                            lsl=LSL,
-                            usl=USL,
-                            title=histogram_title,
-                            bin_count=histogram_bin_count,
-                        )
-                        visual_metadata = _build_histogram_native_visual_metadata(
-                            summary_stats=summary_stats,
-                            lsl=LSL,
-                            usl=USL,
-                            nominal=nom,
-                            rendered_rows=unified_rows,
-                            row_badges=non_normal_row_badges,
-                            capability_badge=capability_badge,
-                            distribution_fit_result=distribution_fit_result,
-                            count_scale_factor=native_count_scale_factor,
-                        )
-                        native_histogram_payload.update(
-                            {
-                                'canvas': _build_native_canvas(
-                                    figure_width=base_histogram_figsize[0],
-                                    figure_height=base_histogram_figsize[1],
-                                ),
-                                'x_view': {
-                                    'min': float(histogram_x_view['x_min']),
-                                    'max': float(histogram_x_view['x_max']),
-                                },
-                                'limits': {
-                                    'lsl': None if LSL is None else float(LSL),
-                                    'usl': None if USL is None else float(USL),
-                                    'nominal': None if nom is None else float(nom),
-                                },
-                                'summary': {
-                                    'count': float(summary_stats.get('sample_size', 0) or 0),
-                                    'mean': current_average,
-                                    'std': summary_stats.get('sigma'),
-                                    'min': summary_stats.get('minimum'),
-                                    'max': summary_stats.get('maximum'),
-                                },
-                                'style': {
-                                    'axis_label_x': 'Measurement',
-                                    'axis_label_y': 'Count',
-                                    'grid_axis': 'y',
-                                },
-                                'mean_line': {
-                                    **build_histogram_mean_line_style(),
-                                    'value': None if current_average is None else float(current_average),
-                                },
-                                'visual_metadata': visual_metadata,
-                                'advanced_annotations_enabled': True,
-                                'overlays_enabled': bool((visual_metadata.get('modeled_overlays') or {}).get('rows')),
-                            }
-                        )
-
                         histogram_render_result = self._save_summary_chart(
                             None,
                             chart_type='histogram',
-                            native_payload=native_histogram_payload,
+                            native_payload=histogram_native_payload,
                         )
                         image_data = self._register_chart_image(histogram_render_result.png_bytes)
                         slot_fig = plt.figure(figsize=base_histogram_figsize)
@@ -5812,6 +5959,15 @@ class ExportDataThread(QThread):
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, histogram_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    self._attach_html_dashboard_chart(
+                        dashboard_section,
+                        chart_type='histogram',
+                        title=histogram_native_payload.get('title') if isinstance(histogram_native_payload, dict) else histogram_title,
+                        backend=histogram_render_result.backend,
+                        image_buffer=image_data,
+                        payload=histogram_native_payload if isinstance(histogram_native_payload, dict) else {},
+                        note='Extended histogram with modeled overlays, annotations, and right-side statistics',
+                    )
                     if self._check_canceled():
                         return
                 finally:
@@ -5891,6 +6047,20 @@ class ExportDataThread(QThread):
                         current_y_limits = ax.get_ylim()
                         y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
                         ax.set_ylim(y_min, y_max)
+                        trend_native_payload = {
+                            'type': 'trend',
+                            'x_values': [float(value) for value in data_x],
+                            'y_values': [float(value) for value in data_y],
+                            'labels': [str(label) for label in unique_labels],
+                            'title': build_wrapped_chart_title(header),
+                            'x_label': distribution_x_axis_label,
+                            'y_label': 'Measurement',
+                            'horizontal_limits': [
+                                float(value)
+                                for value in (USL, LSL)
+                                if value is not None
+                            ],
+                        }
 
                         trend_render_result = self._save_summary_chart(fig, chart_type='trend')
                         image_data = self._register_chart_image(trend_render_result.png_bytes)
@@ -5904,6 +6074,15 @@ class ExportDataThread(QThread):
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, trend_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    self._attach_html_dashboard_chart(
+                        dashboard_section,
+                        chart_type='trend',
+                        title=trend_native_payload.get('title') if isinstance(trend_native_payload, dict) else build_wrapped_chart_title(header),
+                        backend=trend_render_result.backend,
+                        image_buffer=image_data,
+                        payload=trend_native_payload if isinstance(trend_native_payload, dict) else {},
+                        note='Measurement trend scatter',
+                    )
                     if self._check_canceled():
                         return
                 finally:

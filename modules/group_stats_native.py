@@ -21,14 +21,30 @@ def _runtime_backend_choice() -> str:
     return "python"
 
 
+def _coerce_scalar_to_float64_or_nan(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return np.nan
+
+
 def _coerce_sequence_to_float64_python(values: Sequence[Any]) -> np.ndarray:
-    object_values = np.asarray(values, dtype=object)
-    coerced = np.empty(object_values.size, dtype=np.float64)
-    for idx, value in enumerate(object_values):
-        try:
-            coerced[idx] = float(value)
-        except (TypeError, ValueError):
-            coerced[idx] = np.nan
+    if isinstance(values, np.ndarray):
+        if values.dtype == np.float64 and values.flags.c_contiguous and values.ndim == 1:
+            return values
+        if values.dtype != object:
+            array = np.asarray(values, dtype=np.float64)
+            if array.ndim != 1:
+                array = array.reshape(-1)
+            return np.ascontiguousarray(array, dtype=np.float64)
+        iterable = values.reshape(-1)
+    else:
+        iterable = values
+
+    coerced = np.array(
+        [_coerce_scalar_to_float64_or_nan(value) for value in iterable],
+        dtype=np.float64,
+    )
     return np.ascontiguousarray(coerced, dtype=np.float64)
 
 

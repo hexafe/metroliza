@@ -94,3 +94,20 @@ def test_backend_diagnostics_reports_mixed_chart_capabilities(monkeypatch):
     assert chart_status["histogram_effective_backend"] == "native"
     assert chart_status["distribution_effective_backend"] == "matplotlib"
     assert chart_status["status"] == "native_available"
+
+
+def test_backend_diagnostics_reports_distribution_fit_candidate_capabilities(monkeypatch):
+    monkeypatch.setattr(backend_diagnostics.distribution_fit_candidate_native, "resolve_kernel_mode", lambda: "auto")
+    monkeypatch.setattr(backend_diagnostics.distribution_fit_candidate_native, "native_backend_available", lambda: True)
+    monkeypatch.setattr(backend_diagnostics.distribution_fit_candidate_native, "native_metrics_backend_available", lambda: True)
+    monkeypatch.setattr(backend_diagnostics.distribution_fit_candidate_native, "native_fit_backend_available", lambda: True)
+
+    summary = backend_diagnostics.build_backend_diagnostic_summary()
+    fit_status = summary["distribution_fit_candidate"]
+
+    assert fit_status["available"] is True
+    assert fit_status["selected_mode"] == "auto"
+    assert fit_status["effective_backend"] == "native"
+    assert fit_status["metrics_available"] is True
+    assert fit_status["fit_available"] is True
+    assert fit_status["status"] == "native_available"

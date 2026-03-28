@@ -109,8 +109,12 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 
 - Backend selection is controlled by `METROLIZA_CHART_RENDERER_BACKEND` (`auto`/`native`/`matplotlib`).
 - Native chart rendering is shipped when `_metroliza_chart_native` is available in the packaged build environment.
+- The current native module covers histogram, distribution, IQR, and trend summary charts through the `_metroliza_chart_native` extension surface.
+- The native chart path is a payload-driven non-matplotlib compositor intended for workbook/export rendering, not an HTML/interactive chart stack.
+- The optional HTML dashboard sidecar reuses the same export chart payloads and rendered PNGs, but it remains a separate Python-side export artifact rather than part of the native chart extension.
 - If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
 - `auto` uses native only when the extension is present; otherwise it defaults to matplotlib.
+- On Python `3.14`, local chart-renderer builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
 
 ### Distribution fit (`modules/distribution_fit_native.py`)
 
@@ -118,6 +122,10 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 - `auto` (default) is availability-driven: native candidate kernels are attempted when present and otherwise Python fallback remains active.
 - `native` requires native candidate-kernel execution semantics (no silent mode switch to Python).
 - `python` forces pure-Python candidate metrics and skips native dispatch.
+- `_metroliza_distribution_fit_native` now exports native candidate metric kernels and native batch fit-parameter estimation.
+- The current native fit batch covers the full current candidate pool: `norm`, `skewnorm`, `halfnorm`, `foldnorm`, `gamma`, `weibull_min`, `lognorm`, and `johnsonsu`.
+- Backend diagnostics expose both `metrics_available` and `fit_available` for the distribution-fit candidate bridge.
+- On Python `3.14`, local distribution-fit builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
 
 ### Group stats coercion (`modules/group_stats_native.py`)
 

@@ -36,6 +36,16 @@ try:
 except Exception:  # pragma: no cover - optional native extension
     _native_render_distribution_png = None
 
+try:
+    from _metroliza_chart_native import render_iqr_png as _native_render_iqr_png  # type: ignore
+except Exception:  # pragma: no cover - optional native extension
+    _native_render_iqr_png = None
+
+try:
+    from _metroliza_chart_native import render_trend_png as _native_render_trend_png  # type: ignore
+except Exception:  # pragma: no cover - optional native extension
+    _native_render_trend_png = None
+
 
 class ChartRenderResult(NamedTuple):
     png_bytes: bytes
@@ -56,6 +66,14 @@ class ChartRenderer(ABC):
     @abstractmethod
     def render_distribution_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
         """Render distribution payload into PNG bytes."""
+
+    @abstractmethod
+    def render_iqr_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        """Render IQR boxplot payload into PNG bytes."""
+
+    @abstractmethod
+    def render_trend_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        """Render trend payload into PNG bytes."""
 
 
 def _savefig_bytes(fig: Any, *, mode: str = "workbook", dpi: int = 150) -> bytes:
@@ -83,13 +101,22 @@ class MatplotlibChartRenderer(ChartRenderer):
             raise RuntimeError("Matplotlib distribution fallback requires a matplotlib figure.")
         return self.render_figure_png(fallback_fig, mode=mode, chart_type="distribution")
 
+    def render_iqr_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        if fallback_fig is None:
+            raise RuntimeError("Matplotlib IQR fallback requires a matplotlib figure.")
+        return self.render_figure_png(fallback_fig, mode=mode, chart_type="iqr")
+
+    def render_trend_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        if fallback_fig is None:
+            raise RuntimeError("Matplotlib trend fallback requires a matplotlib figure.")
+        return self.render_figure_png(fallback_fig, mode=mode, chart_type="trend")
+
 
 class NativeChartRenderer(ChartRenderer):
     """Native histogram renderer with matplotlib fallback for compatibility."""
 
     def __init__(self, *, fallback_renderer: ChartRenderer | None = None):
         self._fallback = fallback_renderer or MatplotlibChartRenderer()
-        self._visual_parity_warning_emitted = False
 
     def render_figure_png(self, fig: Any, *, mode: str = "workbook", chart_type: str | None = None) -> ChartRenderResult:
         return self._fallback.render_figure_png(fig, mode=mode, chart_type=chart_type)
@@ -100,19 +127,6 @@ class NativeChartRenderer(ChartRenderer):
                 raise RuntimeError("Native chart renderer unavailable and no matplotlib fallback figure provided.")
             fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="histogram")
             return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
-
-        if _histogram_visual_metadata_requires_matplotlib_fallback(payload):
-            if fallback_fig is None:
-                if not self._visual_parity_warning_emitted:
-                    warnings.warn(
-                        "Native histogram payload requests visual metadata parity but no matplotlib fallback figure was provided; proceeding with native rendering without parity metadata.",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-                    self._visual_parity_warning_emitted = True
-            else:
-                fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="histogram")
-                return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
 
         _validate_histogram_native_payload(payload)
         png_bytes = _native_render_histogram_png(payload)
@@ -131,6 +145,32 @@ class NativeChartRenderer(ChartRenderer):
         png_bytes = _native_render_distribution_png(payload)
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native distribution renderer returned non-bytes payload.")
+        return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
+
+    def render_iqr_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        if _native_render_iqr_png is None:
+            if fallback_fig is None:
+                raise RuntimeError("Native IQR renderer unavailable and no matplotlib fallback figure provided.")
+            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="iqr")
+            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
+
+        _validate_iqr_native_payload(payload)
+        png_bytes = _native_render_iqr_png(payload)
+        if not isinstance(png_bytes, (bytes, bytearray)):
+            raise RuntimeError("Native IQR renderer returned non-bytes payload.")
+        return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
+
+    def render_trend_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
+        if _native_render_trend_png is None:
+            if fallback_fig is None:
+                raise RuntimeError("Native trend renderer unavailable and no matplotlib fallback figure provided.")
+            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="trend")
+            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
+
+        _validate_trend_native_payload(payload)
+        png_bytes = _native_render_trend_png(payload)
+        if not isinstance(png_bytes, (bytes, bytearray)):
+            raise RuntimeError("Native trend renderer returned non-bytes payload.")
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
 
 
@@ -154,7 +194,12 @@ def native_chart_backend_available() -> bool:
 def native_full_chart_backend_available() -> bool:
     """Return whether all currently modeled chart types have native support."""
 
-    return native_histogram_backend_available() and native_distribution_backend_available()
+    return (
+        native_histogram_backend_available()
+        and native_distribution_backend_available()
+        and native_iqr_backend_available()
+        and native_trend_backend_available()
+    )
 
 
 def native_histogram_backend_available() -> bool:
@@ -165,6 +210,16 @@ def native_histogram_backend_available() -> bool:
 def native_distribution_backend_available() -> bool:
     """Return whether native distribution rendering is available."""
     return _native_render_distribution_png is not None
+
+
+def native_iqr_backend_available() -> bool:
+    """Return whether native IQR rendering is available."""
+    return _native_render_iqr_png is not None
+
+
+def native_trend_backend_available() -> bool:
+    """Return whether native trend rendering is available."""
+    return _native_render_trend_png is not None
 
 
 def resolve_chart_renderer_backend() -> ResolvedBackend:
@@ -329,38 +384,42 @@ def _validate_distribution_native_payload(payload: dict[str, Any]) -> None:
         raise RuntimeError("Native distribution payload `title` must be a string.")
 
 
+def _validate_iqr_native_payload(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise RuntimeError("Native IQR payload must be a mapping.")
+    if payload.get("type") != "iqr":
+        raise RuntimeError("Native IQR payload `type` must equal `iqr`.")
+    labels = payload.get("labels")
+    series = payload.get("series")
+    if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+        raise RuntimeError("Native IQR payload `labels` must be a list[str].")
+    if not isinstance(series, list) or len(series) != len(labels):
+        raise RuntimeError("Native IQR payload requires equal series/labels length.")
+    for values in series:
+        if not isinstance(values, list) or any(not isinstance(item, (int, float)) for item in values):
+            raise RuntimeError("Native IQR payload `series` entries must be list[float].")
+
+
+def _validate_trend_native_payload(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        raise RuntimeError("Native trend payload must be a mapping.")
+    if payload.get("type") != "trend":
+        raise RuntimeError("Native trend payload `type` must equal `trend`.")
+    x_values = payload.get("x_values")
+    y_values = payload.get("y_values")
+    labels = payload.get("labels")
+    if not isinstance(x_values, list) or any(not isinstance(item, (int, float)) for item in x_values):
+        raise RuntimeError("Native trend payload `x_values` must be a list[float].")
+    if not isinstance(y_values, list) or any(not isinstance(item, (int, float)) for item in y_values):
+        raise RuntimeError("Native trend payload `y_values` must be a list[float].")
+    if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+        raise RuntimeError("Native trend payload `labels` must be a list[str].")
+    if len(x_values) != len(y_values) or len(x_values) != len(labels):
+        raise RuntimeError("Native trend payload requires equal x/y/labels length.")
+
+
 def _histogram_visual_metadata_requires_matplotlib_fallback(payload: dict[str, Any]) -> bool:
-    """Return True when histogram payload requests fidelity not implemented by native renderer."""
-    visual_metadata = payload.get("visual_metadata")
-    if not isinstance(visual_metadata, dict):
-        return False
-
-    summary_table = visual_metadata.get("summary_stats_table")
-    if isinstance(summary_table, dict):
-        rows = summary_table.get("rows")
-        if isinstance(rows, list) and len(rows) > 0:
-            return True
-
-    annotation_rows = visual_metadata.get("annotation_rows")
-    if isinstance(annotation_rows, list) and len(annotation_rows) > 0:
-        return True
-
-    modeled_overlays = visual_metadata.get("modeled_overlays")
-    if isinstance(modeled_overlays, dict):
-        overlay_rows = modeled_overlays.get("rows")
-        if isinstance(overlay_rows, list) and len(overlay_rows) > 0:
-            return True
-        if bool(modeled_overlays.get("advanced_annotations_enabled")):
-            return True
-        if bool(modeled_overlays.get("overlays_enabled")):
-            return True
-
-    specification_lines = visual_metadata.get("specification_lines")
-    if isinstance(specification_lines, list):
-        for line in specification_lines:
-            if isinstance(line, dict) and bool(line.get("enabled")) and line.get("label"):
-                return True
-
+    """Compatibility shim kept for tests and old callers."""
     return False
 
 
