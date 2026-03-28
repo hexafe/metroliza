@@ -2,23 +2,29 @@
 param(
     [ValidateSet('none', 'nuitka', 'pyinstaller')]
     [string]$Packager = 'nuitka',
+
     [ValidateSet('all', 'cmm', 'chart', 'group-stats', 'comparison-stats', 'distribution-fit')]
     [string[]]$NativeTargets = @('all'),
+
     [switch]$SkipBuildRequirementsInstall,
     [switch]$SkipPipUpgrade,
     [switch]$SkipBackendVerification,
     [switch]$DryRun,
+
     [string]$PyInstallerSpecPath = "$PSScriptRoot/metroliza_onefile.spec",
     [string]$EntryPoint = 'metroliza.py',
     [string]$OutputName,
     [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
     [string]$CredentialsPath = 'credentials.json',
+
     [switch]$FastDev,
     [switch]$RequireNative,
     [switch]$EnableConsole,
     [switch]$AllowBrokenPdfParserBuild,
+
     [ValidateSet('auto', 'gcc', 'clang')]
     [string]$CompilerStrategy = 'auto',
+
     [switch]$AutoInstallCompiler,
     [switch]$OpenInstallHelp
 )
@@ -71,32 +77,38 @@ function Format-CommandForDisplay {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
+
         [AllowEmptyCollection()]
         [string[]]$Arguments = @()
     )
 
-    $parts = @($Executable) + $Arguments
+    $parts = @($Executable) + @($Arguments | Where-Object { $null -ne $_ -and $_ -ne '' })
     return ($parts | ForEach-Object {
-            if ($_ -match '\s') {
-                '"' + $_.Replace('"', '\"') + '"'
-            } else {
-                $_
-            }
-        }) -join ' '
+        if ($_ -match '\s') {
+            '"' + $_.Replace('"', '\"') + '"'
+        }
+        else {
+            $_
+        }
+    }) -join ' '
 }
 
 function Invoke-CheckedCommand {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
+
         [AllowEmptyCollection()]
         [string[]]$Arguments = @(),
+
         [Parameter(Mandatory = $true)]
         [string]$FailureMessage
     )
 
-    $display = Format-CommandForDisplay -Executable $Executable -Arguments $Arguments
+    $safeArguments = @($Arguments | Where-Object { $null -ne $_ -and $_ -ne '' })
+    $display = Format-CommandForDisplay -Executable $Executable -Arguments $safeArguments
     Write-Host "      $display"
+
     if ($DryRun) {
         return
     }
@@ -104,15 +116,18 @@ function Invoke-CheckedCommand {
     $commandExitCode = $null
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+
     $hadNativePreference = Test-Path -LiteralPath 'variable:PSNativeCommandUseErrorActionPreference'
     if ($hadNativePreference) {
         $previousNativePreference = $PSNativeCommandUseErrorActionPreference
         $PSNativeCommandUseErrorActionPreference = $false
     }
+
     try {
-        & $Executable @Arguments
+        & $Executable @safeArguments
         $commandExitCode = $LASTEXITCODE
-    } finally {
+    }
+    finally {
         $ErrorActionPreference = $previousErrorActionPreference
         if ($hadNativePreference) {
             $PSNativeCommandUseErrorActionPreference = $previousNativePreference
@@ -128,14 +143,18 @@ function Get-CheckedCommandOutput {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
+
         [AllowEmptyCollection()]
         [string[]]$Arguments = @(),
+
         [Parameter(Mandatory = $true)]
         [string]$FailureMessage
     )
 
-    $display = Format-CommandForDisplay -Executable $Executable -Arguments $Arguments
+    $safeArguments = @($Arguments | Where-Object { $null -ne $_ -and $_ -ne '' })
+    $display = Format-CommandForDisplay -Executable $Executable -Arguments $safeArguments
     Write-Host "      $display"
+
     if ($DryRun) {
         return $null
     }
@@ -143,15 +162,18 @@ function Get-CheckedCommandOutput {
     $commandExitCode = $null
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+
     $hadNativePreference = Test-Path -LiteralPath 'variable:PSNativeCommandUseErrorActionPreference'
     if ($hadNativePreference) {
         $previousNativePreference = $PSNativeCommandUseErrorActionPreference
         $PSNativeCommandUseErrorActionPreference = $false
     }
+
     try {
-        $output = & $Executable @Arguments 2>&1
+        $output = & $Executable @safeArguments 2>&1
         $commandExitCode = $LASTEXITCODE
-    } finally {
+    }
+    finally {
         $ErrorActionPreference = $previousErrorActionPreference
         if ($hadNativePreference) {
             $PSNativeCommandUseErrorActionPreference = $previousNativePreference
@@ -167,13 +189,19 @@ function Get-CheckedCommandOutput {
 
 function Invoke-CheckedPythonCommand {
     param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$Arguments,
+        [AllowEmptyCollection()]
+        [string[]]$Arguments = @(),
+
         [Parameter(Mandatory = $true)]
         [string]$FailureMessage
     )
 
-    Invoke-CheckedCommand -Executable 'python' -Arguments $Arguments -FailureMessage $FailureMessage
+    $safeArguments = @($Arguments | Where-Object { $null -ne $_ -and $_ -ne '' })
+    if ($safeArguments.Count -eq 0) {
+        throw "Internal packaging error: Python command received no arguments. $FailureMessage"
+    }
+
+    Invoke-CheckedCommand -Executable 'python' -Arguments $safeArguments -FailureMessage $FailureMessage
 }
 
 function Test-CommandAvailable {
@@ -239,11 +267,13 @@ function Add-ValueArgumentIfBound {
 Push-Location $repoRoot
 try {
     Write-Host '[1/6] Validating toolchain'
+
     if (-not (Test-CommandAvailable -CommandName 'python')) {
-        throw "Python is required on PATH."
+        throw 'Python is required on PATH.'
     }
+
     if (-not (Test-CommandAvailable -CommandName 'cargo')) {
-        throw "Rust toolchain (cargo) is required on PATH. Install rustup before building native modules."
+        throw "Rust toolchain (cargo) is required on PATH.`nInstall rustup before building native modules."
     }
 
     try {
@@ -251,8 +281,16 @@ try {
             '-c',
             'import json, platform, sys; print(json.dumps({"version": platform.python_version(), "platform": sys.platform, "executable": sys.executable, "major": sys.version_info[0], "minor": sys.version_info[1]}))'
         ) -FailureMessage 'Failed to inspect the active Python runtime.'
+
         if ($pythonInfoRaw) {
-            $pythonInfoLine = @($pythonInfoRaw -split [Environment]::NewLine | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Where-Object { $_.StartsWith('{') -and $_.EndsWith('}') } | Select-Object -Last 1
+            $pythonInfoLine = @(
+                $pythonInfoRaw -split [Environment]::NewLine |
+                    ForEach-Object { $_.Trim() } |
+                    Where-Object { $_ }
+            ) |
+                Where-Object { $_.StartsWith('{') -and $_.EndsWith('}') } |
+                Select-Object -Last 1
+
             if (-not $pythonInfoLine) {
                 throw 'Python runtime inspection did not return JSON output.'
             }
@@ -260,11 +298,13 @@ try {
             $pythonInfo = $pythonInfoLine | ConvertFrom-Json
             Write-Host "      Active Python: $($pythonInfo.version) [$($pythonInfo.platform)]"
             Write-Host "      Python executable: $($pythonInfo.executable)"
+
             if ($pythonInfo.platform -eq 'win32' -and "$($pythonInfo.major).$($pythonInfo.minor)" -ne '3.11') {
                 Write-Warning "Windows native packaging is validated primarily on CPython 3.11 x64. Current runtime is $($pythonInfo.version)."
             }
         }
-    } catch {
+    }
+    catch {
         Write-Warning "Unable to inspect the active Python runtime details; continuing. $($_.Exception.Message)"
     }
 
@@ -277,18 +317,22 @@ try {
     if (-not $selectedTargets -or $selectedTargets.Count -eq 0) {
         throw 'No native targets were selected for build.'
     }
+
     Write-Host "      Native targets: $($selectedTargets.Name -join ', ')"
     Write-Host "      Packager: $Packager"
 
     Write-Host '[2/6] Installing build requirements into the active Python environment'
     if ($SkipBuildRequirementsInstall) {
         Write-Host '      Skipping requirements-build.txt installation by request.'
-    } else {
+    }
+    else {
         if (-not $SkipPipUpgrade) {
             Invoke-CheckedPythonCommand -Arguments @('-m', 'pip', 'install', '--upgrade', 'pip') -FailureMessage 'Failed to upgrade pip in the active build environment.'
-        } else {
+        }
+        else {
             Write-Host '      Skipping pip upgrade by request.'
         }
+
         Invoke-CheckedPythonCommand -Arguments @('-m', 'pip', 'install', '-r', 'requirements-build.txt') -FailureMessage 'Failed to install requirements-build.txt into the active build environment.'
     }
 
@@ -300,7 +344,8 @@ try {
 
     if ($SkipBackendVerification) {
         Write-Host '[4/6] Backend verification skipped by request'
-    } else {
+    }
+    else {
         Write-Host '[4/6] Verifying native backend availability in the same Python environment'
         foreach ($target in $selectedTargets) {
             Write-Host "      Verifying $($target.ModuleName)"
@@ -314,51 +359,60 @@ try {
     }
 
     Write-Host '[5/6] Packaging'
-    if ($Packager -eq 'none') {
-        Write-Host '      Packaging disabled; native modules are built and verified only.'
-    } elseif ($Packager -eq 'nuitka') {
-        if (-not (Test-Path -LiteralPath $nuitkaScriptPath)) {
-            throw "Nuitka helper script not found: $nuitkaScriptPath"
+    switch ($Packager) {
+        'none' {
+            Write-Host '      Packaging disabled; native modules are built and verified only.'
         }
 
-        $nuitkaArgs = [System.Collections.Generic.List[string]]::new()
-        Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'EntryPoint' -SwitchName '-EntryPoint'
-        Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'OutputName' -SwitchName '-OutputName'
-        Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'IconPath' -SwitchName '-IconPath'
-        Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'CredentialsPath' -SwitchName '-CredentialsPath'
-        Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'CompilerStrategy' -SwitchName '-CompilerStrategy'
-        Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $FastDev.IsPresent -SwitchName '-FastDev'
-        Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $EnableConsole.IsPresent -SwitchName '-EnableConsole'
-        Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AllowBrokenPdfParserBuild.IsPresent -SwitchName '-AllowBrokenPdfParserBuild'
-        Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AutoInstallCompiler.IsPresent -SwitchName '-AutoInstallCompiler'
-        Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $OpenInstallHelp.IsPresent -SwitchName '-OpenInstallHelp'
+        'nuitka' {
+            if (-not (Test-Path -LiteralPath $nuitkaScriptPath)) {
+                throw "Nuitka helper script not found: $nuitkaScriptPath"
+            }
 
-        $enforceNativePackaging = $RequireNative.IsPresent -or ($selectedTargets.Name -contains 'cmm')
-        Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $enforceNativePackaging -SwitchName '-RequireNative'
+            $nuitkaArgs = [System.Collections.Generic.List[string]]::new()
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'EntryPoint' -SwitchName '-EntryPoint'
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'OutputName' -SwitchName '-OutputName'
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'IconPath' -SwitchName '-IconPath'
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'CredentialsPath' -SwitchName '-CredentialsPath'
+            Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'CompilerStrategy' -SwitchName '-CompilerStrategy'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $FastDev.IsPresent -SwitchName '-FastDev'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $EnableConsole.IsPresent -SwitchName '-EnableConsole'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AllowBrokenPdfParserBuild.IsPresent -SwitchName '-AllowBrokenPdfParserBuild'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AutoInstallCompiler.IsPresent -SwitchName '-AutoInstallCompiler'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $OpenInstallHelp.IsPresent -SwitchName '-OpenInstallHelp'
 
-        if ($nuitkaArgs.Count -gt 0) {
-            $display = Format-CommandForDisplay -Executable $nuitkaScriptPath -Arguments $nuitkaArgs.ToArray()
-        } else {
-            $display = Format-CommandForDisplay -Executable $nuitkaScriptPath
-        }
-        Write-Host "      $display"
-        if (-not $DryRun) {
+            $enforceNativePackaging = $RequireNative.IsPresent -or ($selectedTargets.Name -contains 'cmm')
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $enforceNativePackaging -SwitchName '-RequireNative'
+
             if ($nuitkaArgs.Count -gt 0) {
-                & $nuitkaScriptPath @($nuitkaArgs.ToArray())
-            } else {
-                & $nuitkaScriptPath
+                $display = Format-CommandForDisplay -Executable $nuitkaScriptPath -Arguments $nuitkaArgs.ToArray()
+            }
+            else {
+                $display = Format-CommandForDisplay -Executable $nuitkaScriptPath
+            }
+            Write-Host "      $display"
+            if (-not $DryRun) {
+                if ($nuitkaArgs.Count -gt 0) {
+                    & $nuitkaScriptPath @($nuitkaArgs.ToArray())
+                }
+                else {
+                    & $nuitkaScriptPath
+                }
             }
         }
-    } else {
-        if (-not (Test-Path -LiteralPath $PyInstallerSpecPath)) {
-            throw "PyInstaller spec file not found: $PyInstallerSpecPath"
-        }
 
-        Invoke-CheckedPythonCommand -Arguments @('-m', 'PyInstaller', '--noconfirm', $PyInstallerSpecPath) -FailureMessage 'PyInstaller packaging failed.'
+        'pyinstaller' {
+            if (-not (Test-Path -LiteralPath $PyInstallerSpecPath)) {
+                throw "PyInstaller spec file not found: $PyInstallerSpecPath"
+            }
+
+            Invoke-CheckedPythonCommand -Arguments @('-m', 'PyInstaller', '--noconfirm', $PyInstallerSpecPath) -FailureMessage 'PyInstaller packaging failed.'
+        }
     }
 
     Write-Host '[6/6] Done'
     Write-Host '      Native build/package helper completed successfully.'
-} finally {
+}
+finally {
     Pop-Location
 }
