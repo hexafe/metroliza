@@ -216,6 +216,19 @@ def native_chart_backend_available() -> bool:
     return native_histogram_backend_available()
 
 
+def _native_extended_histogram_export_available() -> bool:
+    """Return whether native histogram rendering can preserve extended-export parity.
+
+    Extended summary histograms include the right-side statistics panel,
+    collision-aware annotations, title band, and workbook-tuned visual
+    geometry. The current native histogram renderer only draws the bare plot
+    area, so this remains disabled until the native backend can consume the
+    same composition contract.
+    """
+
+    return False
+
+
 _INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
 
 
@@ -4568,12 +4581,7 @@ class ExportDataThread(QThread):
                 try:
                     should_precompute_distribution_fit = self._summary_chart_required('histogram')
                     if should_precompute_distribution_fit:
-                        native_histogram_capable = False
-                        if native_chart_backend_available():
-                            try:
-                                native_histogram_capable = resolve_chart_renderer_backend() == 'native'
-                            except RuntimeError:
-                                native_histogram_capable = False
+                        native_histogram_capable = _native_extended_histogram_export_available()
                         should_precompute_distribution_fit = not native_histogram_capable
 
                     distribution_fit_future = None
@@ -4853,12 +4861,7 @@ class ExportDataThread(QThread):
                     histogram_title = build_wrapped_chart_title(header)
                     histogram_bin_count = resolve_histogram_bin_count(histogram_values).get('bin_count')
                     if native_histogram_capable is None:
-                        native_histogram_capable = False
-                        if native_chart_backend_available():
-                            try:
-                                native_histogram_capable = resolve_chart_renderer_backend() == 'native'
-                            except RuntimeError:
-                                native_histogram_capable = False
+                        native_histogram_capable = _native_extended_histogram_export_available()
 
                     if native_histogram_capable:
                         native_histogram_payload = build_histogram_native_payload(
@@ -5184,29 +5187,9 @@ class ExportDataThread(QThread):
                             annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
                             annotation_box=annotation_box,
                         )
-                        native_histogram_payload = build_histogram_native_payload(
-                            values=histogram_values,
-                            lsl=LSL,
-                            usl=USL,
-                            title=histogram_title,
-                            bin_count=histogram_bin_count,
-                        )
-                        native_histogram_payload.update(
-                            {
-                                'visual_metadata': _build_histogram_native_visual_metadata(
-                                    summary_stats=summary_stats,
-                                    lsl=LSL,
-                                    usl=USL,
-                                    nominal=nom,
-                                ),
-                                'advanced_annotations_enabled': False,
-                                'overlays_enabled': False,
-                            }
-                        )
                         histogram_render_result = self._save_summary_chart(
                             fig,
                             chart_type='histogram',
-                            native_payload=native_histogram_payload,
                         )
                         image_data = self._register_chart_image(histogram_render_result.png_bytes)
                         self._record_chart_render_timing(

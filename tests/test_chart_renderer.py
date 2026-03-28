@@ -16,7 +16,9 @@ from modules.chart_renderer import (
     build_histogram_native_payload,
     native_distribution_backend_available,
     native_chart_backend_available,
+    native_full_chart_backend_available,
     native_histogram_backend_available,
+    resolve_distribution_renderer_backend,
     resolve_chart_renderer_backend,
 )
 
@@ -63,6 +65,17 @@ def test_native_chart_backend_available_requires_histogram_symbol_only():
         assert native_histogram_backend_available() is True
         assert native_distribution_backend_available() is False
         assert native_chart_backend_available() is True
+        assert native_full_chart_backend_available() is False
+
+
+def test_resolve_distribution_backend_falls_back_when_distribution_symbol_is_missing(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
+    with (
+        mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
+        mock.patch("modules.chart_renderer._native_render_distribution_png", None),
+    ):
+        assert resolve_chart_renderer_backend() == "native"
+        assert resolve_distribution_renderer_backend() == "matplotlib"
 
 
 

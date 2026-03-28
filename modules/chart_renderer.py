@@ -142,13 +142,19 @@ def _runtime_backend_choice() -> BackendChoice:
 
 
 def native_chart_backend_available() -> bool:
-    """Backward-compatible availability check for native chart support.
+    """Return whether the native chart renderer can accelerate primary export charts.
 
-    Historically, chart-native enablement has been histogram-scoped. Keep this
-    aggregate helper aligned with packaging/runtime probes that only require the
-    histogram symbol to be present.
+    `NativeChartRenderer` is selected for native histogram acceleration and
+    keeps per-chart matplotlib fallbacks for unsupported chart types.
     """
+
     return native_histogram_backend_available()
+
+
+def native_full_chart_backend_available() -> bool:
+    """Return whether all currently modeled chart types have native support."""
+
+    return native_histogram_backend_available() and native_distribution_backend_available()
 
 
 def native_histogram_backend_available() -> bool:
@@ -162,20 +168,33 @@ def native_distribution_backend_available() -> bool:
 
 
 def resolve_chart_renderer_backend() -> ResolvedBackend:
-    """Resolve chart renderer backend policy based on runtime configuration."""
+    """Resolve the primary chart renderer backend policy for histogram exports."""
     backend = _runtime_backend_choice()
     if backend == "matplotlib":
         return "matplotlib"
     if backend == "native":
-        if not native_histogram_backend_available():
+        if not native_chart_backend_available():
             warnings.warn(
-                "METROLIZA_CHART_RENDERER_BACKEND=native requested but _metroliza_chart_native is unavailable; falling back to matplotlib backend.",
+                "METROLIZA_CHART_RENDERER_BACKEND=native requested but native histogram rendering is unavailable; falling back to matplotlib backend.",
                 RuntimeWarning,
                 stacklevel=2,
             )
             return "matplotlib"
         return "native"
-    if native_histogram_backend_available():
+    if native_chart_backend_available():
+        return "native"
+    return "matplotlib"
+
+
+def resolve_distribution_renderer_backend() -> ResolvedBackend:
+    """Resolve the effective backend for distribution chart rendering."""
+
+    backend = _runtime_backend_choice()
+    if backend == "matplotlib":
+        return "matplotlib"
+    if backend == "native":
+        return "native" if native_distribution_backend_available() else "matplotlib"
+    if native_distribution_backend_available():
         return "native"
     return "matplotlib"
 

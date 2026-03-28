@@ -1,5 +1,8 @@
 import unittest
+import importlib
 import json
+import sys
+import types
 from unittest import mock
 from pathlib import Path
 
@@ -116,6 +119,33 @@ class TestDistributionFitNativeParity(unittest.TestCase):
             native_forced = candidate_native_bridge.compute_candidate_metrics(kernel_input, mode='native')
             self.assertIsNotNone(native_forced)
             self.assertGreater(native_forced.error_flags, 0)
+
+    def test_candidate_bridge_keeps_metrics_backend_when_fit_symbol_is_missing(self):
+        fake_native = types.ModuleType('_metroliza_distribution_fit_native')
+
+        def _metrics(*_args):
+            return (1.0, 2.0, 3.0, 4.0, 5.0, 0)
+
+        def _metrics_batch(*_args):
+            return ([1.0], [2.0], [3.0], [4.0], [5.0], [0])
+
+        fake_native.compute_candidate_metrics = _metrics
+        fake_native.compute_candidate_metrics_batch = _metrics_batch
+
+        with mock.patch.dict(sys.modules, {'_metroliza_distribution_fit_native': fake_native}):
+            reloaded = importlib.reload(candidate_native_bridge)
+            kernel_input = reloaded.build_kernel_input(
+                distribution='norm',
+                fitted_params=[0.0, 1.0],
+                sample_values=[-1.0, 0.0, 1.0],
+            )
+            output = reloaded.compute_candidate_metrics(kernel_input, mode='native')
+            self.assertTrue(reloaded.native_backend_available())
+            self.assertTrue(reloaded.native_metrics_backend_available())
+            self.assertFalse(reloaded.native_fit_backend_available())
+            self.assertEqual(output.error_flags, 0)
+
+        importlib.reload(candidate_native_bridge)
 
     def test_candidate_kernel_bridge_normalizes_to_contiguous_float64(self):
         with mock.patch.object(

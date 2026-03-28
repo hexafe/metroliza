@@ -39,7 +39,11 @@ fn cliffs_delta(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
     let mut pooled: Vec<(f64, bool)> = Vec::with_capacity(sample_a.len() + sample_b.len());
     pooled.extend(sample_a.iter().copied().map(|v| (v, true)));
     pooled.extend(sample_b.iter().copied().map(|v| (v, false)));
-    pooled.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(std::cmp::Ordering::Equal));
+    pooled.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut idx = 0usize;
     let mut rank_sum_a = 0.0f64;
@@ -147,13 +151,25 @@ fn adjust_pvalues(p_values: &[Option<f64>], method: &str) -> PyResult<Vec<Option
     let mut indexed: Vec<(usize, f64)> = p_values
         .iter()
         .enumerate()
-        .filter_map(|(idx, p)| p.and_then(|value| if value.is_finite() { Some((idx, value)) } else { None }))
+        .filter_map(|(idx, p)| {
+            p.and_then(|value| {
+                if value.is_finite() {
+                    Some((idx, value))
+                } else {
+                    None
+                }
+            })
+        })
         .collect();
     let mut adjusted = vec![None; p_values.len()];
     if indexed.is_empty() {
         return Ok(adjusted);
     }
-    indexed.sort_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal));
+    indexed.sort_by(|left, right| {
+        left.1
+            .partial_cmp(&right.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let m = indexed.len() as f64;
     match normalize_correction_method(method).as_str() {
@@ -224,21 +240,22 @@ fn t_test_pvalue(sample_a: &[f64], sample_b: &[f64], equal_var: bool) -> Option<
     Some(2.0 * (1.0 - dist.cdf(t_stat.abs())))
 }
 
-fn mann_whitney_pvalue(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
-    if sample_a.len() < 2 || sample_b.len() < 2 {
-        return None;
-    }
+fn mann_whitney_summary(sample_a: &[f64], sample_b: &[f64]) -> Option<(f64, f64, bool)> {
     let n1 = sample_a.len() as f64;
-    let n2 = sample_b.len() as f64;
 
     let mut pooled: Vec<(f64, bool)> = Vec::with_capacity(sample_a.len() + sample_b.len());
     pooled.extend(sample_a.iter().copied().map(|v| (v, true)));
     pooled.extend(sample_b.iter().copied().map(|v| (v, false)));
-    pooled.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(std::cmp::Ordering::Equal));
+    pooled.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut idx = 0usize;
     let mut rank_sum_a = 0.0f64;
     let mut tie_correction_numer = 0.0f64;
+    let mut has_ties = false;
     while idx < pooled.len() {
         let start = idx;
         let value = pooled[idx].0;
@@ -247,6 +264,7 @@ fn mann_whitney_pvalue(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
         }
         let end = idx;
         let tie_count = (end - start) as f64;
+        has_ties |= tie_count > 1.0;
         tie_correction_numer += tie_count.powi(3) - tie_count;
         let avg_rank = (start as f64 + 1.0 + end as f64) / 2.0;
         let count_a = pooled[start..end].iter().filter(|(_, is_a)| *is_a).count() as f64;
@@ -254,6 +272,18 @@ fn mann_whitney_pvalue(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
     }
 
     let u1 = rank_sum_a - (n1 * (n1 + 1.0) / 2.0);
+    Some((u1, tie_correction_numer, has_ties))
+}
+
+fn mann_whitney_asymptotic_pvalue(
+    u1: f64,
+    n1: usize,
+    n2: usize,
+    tie_correction_numer: f64,
+) -> Option<f64> {
+    let n1 = n1 as f64;
+    let n2 = n2 as f64;
+    let u = u1.max((n1 * n2) - u1);
     let mu = n1 * n2 / 2.0;
     let n = n1 + n2;
     if n <= 1.0 {
@@ -265,9 +295,70 @@ fn mann_whitney_pvalue(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
         return None;
     }
     let sigma = sigma_sq.sqrt();
-    let z = ((u1 - mu).abs() - 0.5) / sigma;
+    let z = (u - mu - 0.5) / sigma;
     let normal = Normal::new(0.0, 1.0).ok()?;
-    Some(2.0 * (1.0 - normal.cdf(z.abs())))
+    Some((2.0 * (1.0 - normal.cdf(z.abs()))).min(1.0))
+}
+
+fn mann_whitney_exact_distribution(n_small: usize, n_large: usize) -> Vec<f64> {
+    let max_u = n_small * n_large;
+    let mut previous = vec![vec![0.0f64; max_u + 1]; n_small + 1];
+    for row in &mut previous {
+        row[0] = 1.0;
+    }
+
+    for j in 1..=n_large {
+        let mut current = vec![vec![0.0f64; max_u + 1]; n_small + 1];
+        current[0][0] = 1.0;
+        for i in 1..=n_small {
+            let max_u_ij = i * j;
+            for u in 0..=max_u_ij {
+                let mut count = previous[i][u];
+                if u >= j {
+                    count += current[i - 1][u - j];
+                }
+                current[i][u] = count;
+            }
+        }
+        previous = current;
+    }
+
+    previous.pop().unwrap_or_default()
+}
+
+fn mann_whitney_exact_pvalue(u1: f64, n1: usize, n2: usize) -> Option<f64> {
+    let rounded_u1 = u1.round();
+    if (u1 - rounded_u1).abs() > 1e-9 {
+        return None;
+    }
+
+    let observed_u1 = rounded_u1 as usize;
+    let max_u = n1.checked_mul(n2)?;
+    if observed_u1 > max_u {
+        return None;
+    }
+    let observed_u = observed_u1.max(max_u - observed_u1);
+    let (n_small, n_large) = if n1 <= n2 { (n1, n2) } else { (n2, n1) };
+    let distribution = mann_whitney_exact_distribution(n_small, n_large);
+    let total: f64 = distribution.iter().sum();
+    if !(total > 0.0) {
+        return None;
+    }
+    let tail: f64 = distribution.iter().skip(observed_u).sum();
+    Some((2.0 * tail / total).min(1.0))
+}
+
+fn mann_whitney_pvalue(sample_a: &[f64], sample_b: &[f64]) -> Option<f64> {
+    if sample_a.len() < 2 || sample_b.len() < 2 {
+        return None;
+    }
+
+    let (u1, tie_correction_numer, has_ties) = mann_whitney_summary(sample_a, sample_b)?;
+    if !has_ties && (sample_a.len() <= 8 || sample_b.len() <= 8) {
+        return mann_whitney_exact_pvalue(u1, sample_a.len(), sample_b.len());
+    }
+
+    mann_whitney_asymptotic_pvalue(u1, sample_a.len(), sample_b.len(), tie_correction_numer)
 }
 
 #[pyfunction]
@@ -390,7 +481,8 @@ fn bootstrap_percentile_ci_batch(
                         .collect::<Vec<f64>>()
                 })
                 .collect();
-            let sampled_group_refs: Vec<&[f64]> = sampled_groups.iter().map(Vec::as_slice).collect();
+            let sampled_group_refs: Vec<&[f64]> =
+                sampled_groups.iter().map(Vec::as_slice).collect();
 
             if let Some(estimate) = evaluate_kernel(effect_kernel, &sampled_group_refs) {
                 if estimate.is_finite() {
@@ -437,7 +529,9 @@ fn pairwise_stats(
         .collect::<PyResult<Vec<Vec<f64>>>>()?;
 
     if labels.len() != groups.len() {
-        return Err(PyValueError::new_err("labels and groups must have equal length"));
+        return Err(PyValueError::new_err(
+            "labels and groups must have equal length",
+        ));
     }
 
     let mut rows: Vec<(String, String, String, Option<f64>, Option<f64>)> = Vec::new();
@@ -447,11 +541,20 @@ fn pairwise_stats(
             let sample_a = groups[left].as_slice();
             let sample_b = groups[right].as_slice();
             let (test_used, p_value) = if non_parametric {
-                ("Mann-Whitney U".to_string(), mann_whitney_pvalue(sample_a, sample_b))
+                (
+                    "Mann-Whitney U".to_string(),
+                    mann_whitney_pvalue(sample_a, sample_b),
+                )
             } else if equal_var {
-                ("Student t-test".to_string(), t_test_pvalue(sample_a, sample_b, true))
+                (
+                    "Student t-test".to_string(),
+                    t_test_pvalue(sample_a, sample_b, true),
+                )
             } else {
-                ("Welch t-test".to_string(), t_test_pvalue(sample_a, sample_b, false))
+                (
+                    "Welch t-test".to_string(),
+                    t_test_pvalue(sample_a, sample_b, false),
+                )
             };
             let effect_size = if non_parametric {
                 cliffs_delta(sample_a, sample_b)
@@ -492,4 +595,24 @@ fn _metroliza_comparison_stats_native(_py: Python<'_>, m: &Bound<'_, PyModule>) 
     m.add_function(wrap_pyfunction!(bootstrap_percentile_ci_batch, m)?)?;
     m.add_function(wrap_pyfunction!(pairwise_stats, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mann_whitney_pvalue;
+
+    #[test]
+    fn mann_whitney_matches_scipy_exact_for_small_untied_samples() {
+        let p_value = mann_whitney_pvalue(&[1.0, 2.0], &[3.0, 4.0]).unwrap();
+        assert!((p_value - (1.0 / 3.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn mann_whitney_matches_scipy_asymptotic_when_ties_are_present() {
+        let p_value = mann_whitney_pvalue(&[1.0, 1.0, 2.0], &[2.0, 3.0, 3.0]).unwrap();
+        assert!(
+            (p_value - 0.11014892418594699).abs() < 1e-10,
+            "unexpected p-value: {p_value}"
+        );
+    }
 }

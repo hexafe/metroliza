@@ -74,7 +74,10 @@ def _resolve_distribution_fit_candidate_entry() -> dict[str, Any]:
         effective = "native" if available else "python"
     else:
         effective = "native" if available else "python"
-    return _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend=effective)
+    entry = _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend=effective)
+    entry["metrics_available"] = distribution_fit_candidate_native.native_metrics_backend_available()
+    entry["fit_available"] = distribution_fit_candidate_native.native_fit_backend_available()
+    return entry
 
 
 def _resolve_group_stats_entry() -> dict[str, Any]:
@@ -92,18 +95,26 @@ def _resolve_group_stats_entry() -> dict[str, Any]:
 def _resolve_chart_renderer_entry() -> dict[str, Any]:
     selected_mode = chart_renderer._runtime_backend_choice()
     available = chart_renderer.native_chart_backend_available()
+    full_available = chart_renderer.native_full_chart_backend_available()
     histogram_available = chart_renderer.native_histogram_backend_available()
     distribution_available = chart_renderer.native_distribution_backend_available()
     try:
         effective = chart_renderer.resolve_chart_renderer_backend()
+        distribution_effective = chart_renderer.resolve_distribution_renderer_backend()
         entry = _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend=effective)
+        entry["full_native_available"] = full_available
         entry["histogram_available"] = histogram_available
         entry["distribution_available"] = distribution_available
+        entry["histogram_effective_backend"] = effective
+        entry["distribution_effective_backend"] = distribution_effective
         return entry
     except Exception as exc:
         entry = _build_backend_entry(available=available, selected_mode=selected_mode, effective_backend="matplotlib", error=str(exc))
+        entry["full_native_available"] = full_available
         entry["histogram_available"] = histogram_available
         entry["distribution_available"] = distribution_available
+        entry["histogram_effective_backend"] = "matplotlib"
+        entry["distribution_effective_backend"] = "matplotlib"
         return entry
 
 

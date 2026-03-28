@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from scipy.stats import mannwhitneyu
 
 from modules import comparison_stats_native
 from modules.comparison_stats import (
@@ -573,6 +574,27 @@ def test_comparison_native_wrapper_normalizes_list_and_ndarray_inputs_equivalent
             assert isinstance(group, np.ndarray)
             assert group.dtype == np.float64
             assert group.flags['C_CONTIGUOUS']
+
+
+def test_pairwise_native_matches_python_for_small_untied_samples(monkeypatch):
+    if not comparison_stats_native.native_backend_available():
+        monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'python')
+        importlib.reload(comparison_stats_native)
+        return
+
+    groups = {
+        'A': [1.0, 2.0],
+        'B': [3.0, 4.0],
+    }
+    expected = float(mannwhitneyu(groups['A'], groups['B'], alternative='two-sided').pvalue)
+
+    monkeypatch.setenv('METROLIZA_COMPARISON_STATS_BACKEND', 'native')
+    importlib.reload(comparison_stats_native)
+    native_rows = compute_metric_pairwise_stats('metric_native_exact_small_sample', groups)
+
+    assert len(native_rows) == 1
+    assert native_rows[0]['test_used'] == 'Mann-Whitney U'
+    assert math.isclose(native_rows[0]['p_value'], expected, rel_tol=1e-12, abs_tol=1e-12)
 
 
 def test_pairwise_effect_ci_batch_native_and_python_parity(monkeypatch):

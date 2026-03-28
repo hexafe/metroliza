@@ -10,11 +10,17 @@ import numpy as np
 
 try:
     from _metroliza_distribution_fit_native import compute_candidate_metrics as _native_compute_candidate_metrics  # type: ignore
-    from _metroliza_distribution_fit_native import compute_candidate_metrics_batch as _native_compute_candidate_metrics_batch  # type: ignore
-    from _metroliza_distribution_fit_native import compute_candidate_fit_params_batch as _native_compute_candidate_fit_params_batch  # type: ignore
 except Exception:  # pragma: no cover - optional native module
     _native_compute_candidate_metrics = None
+
+try:
+    from _metroliza_distribution_fit_native import compute_candidate_metrics_batch as _native_compute_candidate_metrics_batch  # type: ignore
+except Exception:  # pragma: no cover - optional native module
     _native_compute_candidate_metrics_batch = None
+
+try:
+    from _metroliza_distribution_fit_native import compute_candidate_fit_params_batch as _native_compute_candidate_fit_params_batch  # type: ignore
+except Exception:  # pragma: no cover - optional native module
     _native_compute_candidate_fit_params_batch = None
 
 
@@ -82,7 +88,18 @@ ERROR_FIT_FAILURE = 1 << 7
 
 
 def native_backend_available() -> bool:
-    return _native_compute_candidate_metrics is not None
+    return native_metrics_backend_available()
+
+
+def native_metrics_backend_available() -> bool:
+    return (
+        _native_compute_candidate_metrics is not None
+        and _native_compute_candidate_metrics_batch is not None
+    )
+
+
+def native_fit_backend_available() -> bool:
+    return _native_compute_candidate_fit_params_batch is not None
 
 
 def resolve_kernel_mode(explicit_mode: str | None = None) -> str:

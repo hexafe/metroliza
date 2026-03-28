@@ -19,9 +19,11 @@ def test_backend_diagnostics_reports_native_available(monkeypatch):
 def test_backend_diagnostics_reports_native_unavailable_fallback(monkeypatch):
     monkeypatch.setattr(backend_diagnostics.chart_renderer, "_runtime_backend_choice", lambda: "auto")
     monkeypatch.setattr(backend_diagnostics.chart_renderer, "native_chart_backend_available", lambda: False)
+    monkeypatch.setattr(backend_diagnostics.chart_renderer, "native_full_chart_backend_available", lambda: False)
     monkeypatch.setattr(backend_diagnostics.chart_renderer, "native_histogram_backend_available", lambda: False)
     monkeypatch.setattr(backend_diagnostics.chart_renderer, "native_distribution_backend_available", lambda: False)
     monkeypatch.setattr(backend_diagnostics.chart_renderer, "resolve_chart_renderer_backend", lambda: "matplotlib")
+    monkeypatch.setattr(backend_diagnostics.chart_renderer, "resolve_distribution_renderer_backend", lambda: "matplotlib")
 
     summary = backend_diagnostics.build_backend_diagnostic_summary()
     chart_status = summary["chart_renderer"]
@@ -29,8 +31,11 @@ def test_backend_diagnostics_reports_native_unavailable_fallback(monkeypatch):
     assert chart_status["available"] is False
     assert chart_status["selected_mode"] == "auto"
     assert chart_status["effective_backend"] == "matplotlib"
+    assert chart_status["full_native_available"] is False
     assert chart_status["histogram_available"] is False
     assert chart_status["distribution_available"] is False
+    assert chart_status["histogram_effective_backend"] == "matplotlib"
+    assert chart_status["distribution_effective_backend"] == "matplotlib"
     assert chart_status["status"] == "native_unavailable_fallback"
     assert chart_status["forced_native_failure"] is False
 
@@ -67,3 +72,25 @@ def test_backend_diagnostics_reports_group_stats_forced_native_failure(monkeypat
     assert group_status["effective_backend"] == "python"
     assert group_status["status"] == "forced_native_failure"
     assert group_status["forced_native_failure"] is True
+
+
+def test_backend_diagnostics_reports_mixed_chart_capabilities(monkeypatch):
+    monkeypatch.setattr(backend_diagnostics.chart_renderer, "_runtime_backend_choice", lambda: "auto")
+    monkeypatch.setattr(backend_diagnostics.chart_renderer, "native_chart_backend_available", lambda: True)
+    monkeypatch.setattr(backend_diagnostics.chart_renderer, "native_full_chart_backend_available", lambda: False)
+    monkeypatch.setattr(backend_diagnostics.chart_renderer, "native_histogram_backend_available", lambda: True)
+    monkeypatch.setattr(backend_diagnostics.chart_renderer, "native_distribution_backend_available", lambda: False)
+    monkeypatch.setattr(backend_diagnostics.chart_renderer, "resolve_chart_renderer_backend", lambda: "native")
+    monkeypatch.setattr(backend_diagnostics.chart_renderer, "resolve_distribution_renderer_backend", lambda: "matplotlib")
+
+    summary = backend_diagnostics.build_backend_diagnostic_summary()
+    chart_status = summary["chart_renderer"]
+
+    assert chart_status["available"] is True
+    assert chart_status["effective_backend"] == "native"
+    assert chart_status["full_native_available"] is False
+    assert chart_status["histogram_available"] is True
+    assert chart_status["distribution_available"] is False
+    assert chart_status["histogram_effective_backend"] == "native"
+    assert chart_status["distribution_effective_backend"] == "matplotlib"
+    assert chart_status["status"] == "native_available"

@@ -1483,7 +1483,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertLessEqual(len(executor.calls[0][1][0]), sampled_limit)
         self.assertEqual(len(executor.calls[0][1][0]), len(executor.calls[1][1][0]))
 
-    def test_summary_sheet_fill_skips_distribution_fit_precompute_in_native_histogram_mode(self):
+    def test_summary_sheet_fill_precomputes_distribution_fit_when_native_backend_is_selected_for_histogram(self):
         import pandas as pd
 
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -1540,8 +1540,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         ):
             thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
-        self.assertEqual(len(executor.calls), 1)
-        self.assertEqual(executor.calls[0][0], 'build_trend_plot_payload')
+        call_names = [name for name, _args, _kwargs in executor.calls]
+        self.assertEqual(call_names.count('fit_measurement_distribution'), 1)
+        self.assertEqual(call_names.count('build_trend_plot_payload'), 1)
 
     def test_summary_sheet_fill_falls_back_to_in_process_when_executor_submit_fails(self):
         import pandas as pd
@@ -2867,8 +2868,9 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(captured['violin_labels'], ['A (n=2)', 'B (n=3)'])
         self.assertEqual(captured['iqr_labels'], ['A (n=2)', 'B (n=3)'])
 
-    def test_summary_sheet_fill_histogram_prefers_native_path_when_backend_is_native(self):
+    def test_summary_sheet_fill_histogram_preserves_rich_matplotlib_composition_when_native_backend_is_selected(self):
         import pandas as pd
+        import modules.export_data_thread as export_thread_module
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
 
         class _FakeSummaryWorksheet:
@@ -2883,16 +2885,18 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         class _FakeRenderer:
             def __init__(self):
-                self.payload = None
-                self.fallback_fig = "unset"
+                self.figure_calls = 0
+                self.chart_type = None
+                self.last_figure = None
 
-            def render_figure_png(self, *_args, **_kwargs):
-                raise AssertionError("Native histogram path should not call figure renderer")
+            def render_figure_png(self, fig, *, mode='workbook', chart_type=None):
+                self.figure_calls += 1
+                self.chart_type = chart_type
+                self.last_figure = fig
+                return type("Result", (), {"png_bytes": b"matplotlib-bytes", "backend": "matplotlib"})()
 
             def render_histogram_png(self, payload, *, fallback_fig=None, mode='workbook'):
-                self.payload = payload
-                self.fallback_fig = fallback_fig
-                return type("Result", (), {"png_bytes": b"native-bytes"})()
+                raise AssertionError("Extended histogram export should not use the stripped native histogram renderer.")
 
         request = ExportRequest(
             paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
@@ -2914,24 +2918,26 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
         worksheet = _FakeSummaryWorksheet()
+        render_calls = {'count': 0}
+        original_render_histogram = export_thread_module.render_histogram
+
+        def _count_render(*args, **kwargs):
+            render_calls['count'] += 1
+            return original_render_histogram(*args, **kwargs)
 
         with (
             mock.patch('modules.export_data_thread.native_chart_backend_available', return_value=True),
             mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='native'),
-            mock.patch('modules.export_data_thread.render_histogram', side_effect=AssertionError("matplotlib histogram should be skipped")),
+            mock.patch('modules.export_data_thread.render_histogram', side_effect=_count_render),
         ):
             thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
         assert worksheet.insert_calls
-        assert thread._chart_renderer.payload is not None
-        assert thread._chart_renderer.payload['title'] == 'H1'
-        assert thread._chart_renderer.payload['visual_metadata']['schema_version'] == 1
-        assert len(thread._chart_renderer.payload['visual_metadata']['specification_lines']) == 3
-        assert thread._chart_renderer.payload['visual_metadata']['summary_stats_table']['columns'] == ['Parameter', 'Value']
-        assert thread._chart_renderer.payload['visual_metadata']['annotation_rows']
-        assert thread._chart_renderer.payload['visual_metadata']['modeled_overlays']['status'] == 'disabled'
-        assert thread._chart_renderer.payload['advanced_annotations_enabled'] is False
-        assert thread._chart_renderer.fallback_fig is None
+        assert render_calls['count'] == 1
+        assert thread._chart_renderer.figure_calls == 1
+        assert thread._chart_renderer.chart_type == 'histogram'
+        assert thread._chart_renderer.last_figure is not None
+        assert len(thread._chart_renderer.last_figure.axes) >= 2
 
     def test_summary_sheet_fill_histogram_uses_matplotlib_fallback_when_native_unavailable(self):
         import pandas as pd
@@ -3001,14 +3007,14 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         class _FakeNativeRenderer:
             def __init__(self):
-                self.payload = None
+                self.figure_calls = 0
 
-            def render_figure_png(self, *_args, **_kwargs):
-                raise AssertionError("Native histogram branch should not call figure renderer.")
+            def render_figure_png(self, fig, *, mode='workbook', chart_type=None):
+                self.figure_calls += 1
+                return type("Result", (), {"png_bytes": b"matplotlib-bytes", "backend": "matplotlib"})()
 
             def render_histogram_png(self, payload, *, fallback_fig=None, mode='workbook'):
-                self.payload = payload
-                return type("Result", (), {"png_bytes": b"native-bytes"})()
+                raise AssertionError("Extended histogram export should render the composed matplotlib figure.")
 
         request = ExportRequest(
             paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
@@ -3039,7 +3045,6 @@ class TestExportBackendSmoke(unittest.TestCase):
         with (
             mock.patch('modules.export_data_thread.native_chart_backend_available', return_value=True),
             mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='native'),
-            mock.patch('modules.export_data_thread.render_histogram', side_effect=AssertionError("matplotlib histogram should be skipped")),
         ):
             native_thread.summary_sheet_fill(native_worksheet, 'H1', header_group.copy(), col=5)
 
@@ -3051,6 +3056,7 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         assert native_worksheet.insert_calls
         assert matplotlib_worksheet.insert_calls
+        assert native_thread._chart_renderer.figure_calls == 1
         native_row, native_col, _native_options = native_worksheet.insert_calls[-1]
         mpl_row, mpl_col, _mpl_options = matplotlib_worksheet.insert_calls[-1]
         assert (native_row, native_col) == (mpl_row, mpl_col)
