@@ -373,7 +373,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Metric index', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
             self.assertIn('Pairwise comparisons', analysis_values)
-            self.assertIn('Shape note: no clear distribution-shape difference after correction.', analysis_values)
+            self.assertTrue(any(isinstance(value, str) and 'Shape note: no clear distribution-shape difference after correction.' in value for value in analysis_values))
             self.assertNotIn('Plots', analysis_values)
             self.assertNotIn('Shown below.', analysis_values)
             self.assertNotIn('Shown', analysis_values)
@@ -384,15 +384,22 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             sheet_names = _xlsx_sheet_names(out_path)
             self.assertIn('Group Analysis', sheet_names)
+            self.assertIn('Group Analysis Plots', sheet_names)
             self.assertNotIn('Group Comparison', sheet_names)
             self.assertNotIn('Diagnostics', sheet_names)
 
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+            plot_values = _xlsx_sheet_text_values(out_path, 'Group Analysis Plots')
             self.assertIn('Metric index', analysis_values)
-            self.assertIn('Plots', analysis_values)
-            self.assertIn('Violin', analysis_values)
-            self.assertIn('Histogram', analysis_values)
-            self.assertIn('Why this test', analysis_values)
+            self.assertNotIn('Plots', analysis_values)
+            self.assertNotIn('Violin', analysis_values)
+            self.assertNotIn('Histogram', analysis_values)
+            self.assertIn('Group Analysis Plots', plot_values)
+            self.assertIn('Plots', plot_values)
+            self.assertIn('Violin', plot_values)
+            self.assertIn('Histogram', plot_values)
+            self.assertIn('Test / why', analysis_values)
+            self.assertTrue(any(isinstance(value, str) and 'Why:' in value for value in analysis_values))
             self.assertNotIn('Shown', analysis_values)
             self.assertNotIn('Shown below.', analysis_values)
             self.assertNotIn('Detail', analysis_values)
@@ -420,64 +427,60 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_path = self._run_export(temp_dir, level='standard')
             analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
+            plot_values = _xlsx_sheet_text_values(out_path, 'Group Analysis Plots')
             sheet_xml, styles_xml = _xlsx_sheet_xml_details(out_path, 'Group Analysis')
+            plots_sheet_xml, _plots_styles_xml = _xlsx_sheet_xml_details(out_path, 'Group Analysis Plots')
             ns = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 
             self.assertIn('Group Analysis', analysis_values)
             self.assertIn('Status', analysis_values)
-            self.assertIn('Effective scope', analysis_values)
-            self.assertIn('Analysis level', analysis_values)
-            self.assertIn('Coverage', analysis_values)
-            self.assertIn('Metric count', analysis_values)
-            self.assertIn('Attention summary', analysis_values)
-            self.assertIn('Start with', analysis_values)
+            self.assertTrue(any(isinstance(value, str) and 'Standard | Single Reference' in value for value in analysis_values))
+            self.assertTrue(any(isinstance(value, str) and '2 groups across 1 reference' in value for value in analysis_values))
+            self.assertTrue(any(isinstance(value, str) and value.startswith('DIFFERENCE\n1 metric') for value in analysis_values))
+            self.assertTrue(any(isinstance(value, str) and 'Top:' in value for value in analysis_values))
             self.assertTrue(any(isinstance(value, str) and 'adj p=' in value for value in analysis_values))
-            self.assertIn('User manual', analysis_values)
-            self.assertNotIn('Markdown guide (GitHub)', analysis_values)
-            self.assertNotIn('Printable companion (local PDF)', analysis_values)
             self.assertIn('Open Markdown manual', analysis_values)
             self.assertIn('Open PDF manual', analysis_values)
             self.assertIn('Metric index', analysis_values)
-            self.assertIn('Why review first', analysis_values)
-            self.assertIn('Restriction / mode', analysis_values)
-            self.assertIn('Metric overview', analysis_values)
+            self.assertIn('Priority signal', analysis_values)
+            self.assertIn('Stat signal', analysis_values)
+            self.assertIn('Next step', analysis_values)
             self.assertIn('Capability summary', analysis_values)
             self.assertIn('Key insights', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
-            self.assertIn('Capability detail', analysis_values)
+            self.assertIn('Distribution / capability note', analysis_values)
             self.assertTrue(any(isinstance(value, str) and '95% CI' in value for value in analysis_values))
             self.assertIn('Pairwise comparisons', analysis_values)
-            self.assertIn('Shape note', analysis_values)
+            self.assertTrue(any(isinstance(value, str) and 'Shape note:' in value for value in analysis_values))
             self.assertIn('Recommended action', analysis_values)
             self.assertIn('Takeaway', analysis_values)
-            self.assertIn('Suggested action', analysis_values)
-            self.assertIn('Shape note: no clear distribution-shape difference after correction.', analysis_values)
-            self.assertIn('Plots', analysis_values)
-            self.assertIn('Violin', analysis_values)
-            self.assertIn('Histogram', analysis_values)
+            self.assertIn('Action', analysis_values)
+            self.assertIn('Test / why', analysis_values)
+            self.assertTrue(any(isinstance(value, str) and 'Caution:' in value for value in analysis_values))
+            self.assertTrue(any(isinstance(value, str) and 'Why:' in value for value in analysis_values))
+            self.assertTrue(any(isinstance(value, str) and 'Shape note: no clear distribution-shape difference after correction.' in value for value in analysis_values))
+            self.assertNotIn('Plots', analysis_values)
+            self.assertNotIn('Violin', analysis_values)
+            self.assertNotIn('Histogram', analysis_values)
             self.assertIn('Go to metric', analysis_values)
             self.assertIn('DIFFERENCE', analysis_values)
+            self.assertIn('Group Analysis Plots', plot_values)
+            self.assertIn('Plots', plot_values)
+            self.assertIn('Violin', plot_values)
+            self.assertIn('Histogram', plot_values)
 
             cols = [
                 (int(col.attrib['min']), int(col.attrib['max']), float(col.attrib['width']))
                 for col in sheet_xml.findall('x:cols/x:col', ns)
             ]
-            self.assertAlmostEqual(_column_width_for(cols, 1), 18.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 2), 18.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 3), 16.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 8), 22.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 10), 24.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 12), 28.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 14), 24.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 1), 20.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 2), 12.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 11), 16.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 12), 18.7109375, places=3)
             self.assertAlmostEqual(_column_width_for(cols, 15), 18.7109375, places=3)
 
             pane = sheet_xml.find('x:sheetViews/x:sheetView/x:pane', ns)
-            self.assertIsNotNone(pane)
-            self.assertEqual(pane.attrib.get('state'), 'frozen')
-
-            auto_filter = sheet_xml.find('x:autoFilter', ns)
-            self.assertIsNotNone(auto_filter)
-            self.assertRegex(auto_filter.attrib.get('ref', ''), r'^A\d+:L\d+$|^A\d+:O\d+$')
+            self.assertIsNone(pane)
             self.assertGreaterEqual(len(sheet_xml.findall('x:conditionalFormatting', ns)), 1)
 
             row_heights = _row_heights(sheet_xml)
@@ -508,15 +511,36 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
             merge_refs = {merge.attrib.get('ref') for merge in sheet_xml.findall('x:mergeCells/x:mergeCell', ns)}
             self.assertIn('A1:O1', merge_refs)
-            self.assertTrue(any(ref.endswith(':O9') is False for ref in merge_refs))
-            self.assertTrue(any(ref.startswith('A') and ref.endswith(':O' + ref.split(':O')[-1]) for ref in merge_refs if ref != 'A1:O1'))
+            self.assertIn('A2:C2', merge_refs)
+            self.assertIn('D2:F2', merge_refs)
+            self.assertIn('G2:H2', merge_refs)
+            self.assertIn('I2:J2', merge_refs)
+            self.assertIn('K2:L2', merge_refs)
+            self.assertIn('M2:O2', merge_refs)
+            self.assertIn('A3:C3', merge_refs)
+            self.assertIn('D3:L3', merge_refs)
+            self.assertIn('A4:I4', merge_refs)
+            self.assertIn('E5:I5', merge_refs)
+            self.assertIn('J5:O5', merge_refs)
 
             drawing = sheet_xml.find('x:drawing', ns)
-            self.assertIsNotNone(drawing)
-            drawing_cnvpr_attrs = _xlsx_sheet_drawing_cnvpr_attrs(out_path, 'Group Analysis')
+            self.assertIsNone(drawing)
+            plots_drawing = plots_sheet_xml.find('x:drawing', ns)
+            self.assertIsNotNone(plots_drawing)
+            analysis_page_setup = sheet_xml.find('x:pageSetup', ns)
+            plots_page_setup = plots_sheet_xml.find('x:pageSetup', ns)
+            self.assertIsNotNone(analysis_page_setup)
+            self.assertIsNotNone(plots_page_setup)
+            self.assertEqual(analysis_page_setup.attrib.get('orientation'), 'landscape')
+            self.assertEqual(plots_page_setup.attrib.get('orientation'), 'landscape')
+            drawing_cnvpr_attrs = _xlsx_sheet_drawing_cnvpr_attrs(out_path, 'Group Analysis Plots')
             described_pictures = [attrs for attrs in drawing_cnvpr_attrs if attrs.get('name', '').startswith('Picture')]
             self.assertGreaterEqual(len(described_pictures), 2)
             self.assertTrue(all(attrs.get('descr') for attrs in described_pictures))
+            analysis_hyperlinks = _xlsx_sheet_hyperlinks(out_path, 'Group Analysis')
+            plots_hyperlinks = _xlsx_sheet_hyperlinks(out_path, 'Group Analysis Plots')
+            self.assertTrue(any(link.get('display') == 'Open plots sheet' for link in analysis_hyperlinks))
+            self.assertTrue(any(link.get('display') == 'Back to Group Analysis' for link in plots_hyperlinks))
 
             formulas = _xlsx_sheet_formulas(out_path, 'Group Analysis')
             self.assertTrue(any(ref.startswith('C') and 'HYPERLINK(' in formula for ref, formula in formulas.items()))
@@ -534,7 +558,13 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
                 if isinstance(value, str) and value.startswith('Metric: FEATURE_1')
             }
             self.assertTrue(metric_title_rows)
-            self.assertTrue(any(f'A{target_row}' in metric_title_rows for target_row in metric_title_targets))
+            self.assertTrue(any(f'D{target_row}' in metric_title_rows for target_row in metric_title_targets))
+            outline_rows = [
+                row.attrib
+                for row in sheet_xml.findall('x:sheetData/x:row', ns)
+                if row.attrib.get('outlineLevel') == '1'
+            ]
+            self.assertTrue(outline_rows)
 
             styled_cells = sheet_xml.findall('x:sheetData/x:row/x:c', ns)
             wrap_styles = {
@@ -547,7 +577,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertTrue(any(ref.startswith('J') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
             self.assertTrue(any(ref.startswith('L') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
 
-            jump_header_row = next(int(ref[1:]) for ref, value in cell_text_map.items() if value == 'Jump to section')
+            jump_header_row = next(int(ref[1:]) for ref, value in cell_text_map.items() if value == 'Jump')
             self.assertGreaterEqual(row_heights.get(jump_header_row, 0), 24)
 
             feature_metric_row = next(
@@ -566,7 +596,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             descriptive_wrapped_rows = [
                 int(ref[1:])
                 for ref, attrs in wrap_styles.items()
-                if ref.startswith(('L', 'M', 'N')) and attrs.get('wrapText') == '1'
+                if ref.startswith(('J', 'K', 'L', 'M', 'N', 'O')) and attrs.get('wrapText') == '1'
             ]
             self.assertTrue(descriptive_wrapped_rows)
             self.assertTrue(any(row_heights.get(row, 0) > 22 for row in descriptive_wrapped_rows))
@@ -574,7 +604,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             pairwise_wrapped_rows = [
                 int(ref[1:])
                 for ref, attrs in wrap_styles.items()
-                if ref.startswith(('E', 'H', 'I', 'J', 'L')) and attrs.get('wrapText') == '1'
+                if ref.startswith(('E', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O')) and attrs.get('wrapText') == '1'
             ]
             self.assertTrue(pairwise_wrapped_rows)
             self.assertTrue(any(row_heights.get(row, 0) > 22 for row in pairwise_wrapped_rows))

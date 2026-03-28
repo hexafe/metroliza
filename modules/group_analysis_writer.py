@@ -16,20 +16,20 @@ DEFAULT_PLOT_ROW_SPAN = 16
 DEFAULT_ROW_HEIGHT = 22
 DEFAULT_LINE_HEIGHT = 14
 GROUP_ANALYSIS_COLUMN_WIDTHS = {
-    0: 18,
-    1: 18,
-    2: 16,
+    0: 20,
+    1: 12,
+    2: 14,
     3: 12,
-    4: 18,
-    5: 18,
-    6: 15,
-    7: 22,
-    8: 22,
-    9: 24,
-    10: 21,
-    11: 28,
+    4: 14,
+    5: 14,
+    6: 14,
+    7: 14,
+    8: 14,
+    9: 14,
+    10: 16,
+    11: 18,
     12: 16,
-    13: 24,
+    13: 18,
     14: 18,
 }
 METRIC_TITLE_LAST_COL = 14
@@ -255,6 +255,178 @@ def _build_formats(worksheet):
             'underline': 1,
             'valign': 'top',
         }),
+        'card_default_fmt': workbook.add_format({
+            'bg_color': '#F8FAFC',
+            'pattern': 1,
+            'font_color': '#0F172A',
+            'bold': True,
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'card_emphasis_fmt': workbook.add_format({
+            'bg_color': '#E8F3FF',
+            'pattern': 1,
+            'font_color': '#0B4F8C',
+            'bold': True,
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'card_warning_fmt': workbook.add_format({
+            'bg_color': '#FFF4CC',
+            'pattern': 1,
+            'font_color': '#7A4E00',
+            'bold': True,
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'card_risk_fmt': workbook.add_format({
+            'bg_color': '#FDE2E1',
+            'pattern': 1,
+            'font_color': '#8B1C13',
+            'bold': True,
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'card_success_fmt': workbook.add_format({
+            'bg_color': '#E6F4EA',
+            'pattern': 1,
+            'font_color': '#1E4620',
+            'bold': True,
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'detail_label_fmt': workbook.add_format({
+            'bg_color': '#EEF2F7',
+            'pattern': 1,
+            'font_color': '#0F172A',
+            'bold': True,
+            'align': 'left',
+            'valign': 'vcenter',
+            'border': 1,
+        }),
+        'detail_value_fmt': workbook.add_format({
+            'bg_color': '#FFFFFF',
+            'pattern': 1,
+            'font_color': '#0F172A',
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'detail_note_fmt': workbook.add_format({
+            'bg_color': '#F8FAFC',
+            'pattern': 1,
+            'font_color': '#334155',
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'band_text_left_middle_fmt': workbook.add_format({
+            'bg_color': '#F8FAFC',
+            'pattern': 1,
+            'align': 'left',
+            'valign': 'vcenter',
+            'text_wrap': False,
+            'border': 1,
+        }),
+        'band_table_center_fmt': workbook.add_format({
+            'bg_color': '#F8FAFC',
+            'pattern': 1,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+        }),
+        'band_table_center_wrap_fmt': workbook.add_format({
+            'bg_color': '#F8FAFC',
+            'pattern': 1,
+            'align': 'center',
+            'valign': 'vcenter',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'band_num_fmt': workbook.add_format({
+            'bg_color': '#F8FAFC',
+            'pattern': 1,
+            'num_format': '0.000',
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+        }),
+        'band_pvalue_fmt': workbook.add_format({
+            'bg_color': '#F8FAFC',
+            'pattern': 1,
+            'num_format': '0.0000',
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+        }),
+        'band_detail_value_fmt': workbook.add_format({
+            'bg_color': '#F8FAFC',
+            'pattern': 1,
+            'font_color': '#0F172A',
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'band_detail_note_fmt': workbook.add_format({
+            'bg_color': '#F1F5F9',
+            'pattern': 1,
+            'font_color': '#334155',
+            'align': 'left',
+            'valign': 'top',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'status_difference_fmt': workbook.add_format({
+            'bg_color': '#E8F3FF',
+            'pattern': 1,
+            'font_color': '#0B4F8C',
+            'bold': True,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+        }),
+        'status_no_difference_fmt': workbook.add_format({
+            'bg_color': '#E6F4EA',
+            'pattern': 1,
+            'font_color': '#1E4620',
+            'bold': True,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': 1,
+        }),
+        'status_caution_fmt': workbook.add_format({
+            'bg_color': '#FFF4CC',
+            'pattern': 1,
+            'font_color': '#7A4E00',
+            'bold': True,
+            'align': 'center',
+            'valign': 'vcenter',
+            'text_wrap': True,
+            'border': 1,
+        }),
+        'status_review_fmt': workbook.add_format({
+            'bg_color': '#EEF2F7',
+            'pattern': 1,
+            'font_color': '#334155',
+            'bold': True,
+            'align': 'center',
+            'valign': 'vcenter',
+            'text_wrap': True,
+            'border': 1,
+        }),
     }
     setattr(worksheet, '_group_analysis_formats', formats)
     return formats
@@ -372,6 +544,63 @@ def _estimate_header_height(*headers):
             padding=2,
         ),
     )
+
+
+def _column_span_width(first_col, last_col):
+    total_width = 0.0
+    for col in range(int(first_col), int(last_col) + 1):
+        total_width += float(GROUP_ANALYSIS_COLUMN_WIDTHS.get(col, 14))
+    return max(total_width, 8.0)
+
+
+def _estimate_span_height(value, first_col, last_col, *, minimum=DEFAULT_ROW_HEIGHT, line_height=DEFAULT_LINE_HEIGHT, padding=4):
+    return _estimate_wrapped_row_height(
+        [{'value': value, 'width': _column_span_width(first_col, last_col), 'wrap': True}],
+        minimum=minimum,
+        line_height=line_height,
+        padding=padding,
+    )
+
+
+def _truncate_text(value, *, max_chars=180):
+    text = str(value or '').strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max(0, max_chars - 1)].rstrip(' ,;:.') + '...'
+
+
+def _merge_row(worksheet, row, first_col, last_col, value, cell_format=None):
+    native = _get_native_worksheet(worksheet)
+    if first_col != last_col and hasattr(native, 'merge_range'):
+        native.merge_range(row, first_col, row, last_col, value, cell_format)
+    else:
+        worksheet.write(row, first_col, value, cell_format)
+
+
+def _set_row_height(worksheet, row, height, cell_format=None, options=None):
+    if hasattr(worksheet, 'set_row'):
+        worksheet.set_row(row, height, cell_format, options or {})
+
+
+def _set_row_options(worksheet, row, *, level=None, hidden=None, collapsed=None):
+    options = {}
+    if level is not None:
+        options['level'] = int(level)
+    if hidden is not None:
+        options['hidden'] = bool(hidden)
+    if collapsed is not None:
+        options['collapsed'] = bool(collapsed)
+    if options and hasattr(worksheet, 'set_row'):
+        worksheet.set_row(row, None, None, options)
+
+
+def _combine_nonempty_lines(*values):
+    lines = []
+    for value in values:
+        text = str(value or '').strip()
+        if text:
+            lines.extend(part for part in text.splitlines() if part.strip())
+    return '\n'.join(lines)
 
 
 def _coerce_status_label(value):
@@ -577,6 +806,45 @@ def _build_metric_index_restriction(metric_row):
     return str(metric_row.get('analysis_restriction_label') or 'Review').strip() or 'Review'
 
 
+def _build_metric_next_step(metric_row):
+    recommended_action = _first_sentence(metric_row.get('recommended_action'))
+    if recommended_action:
+        return recommended_action
+    metric_takeaway = _first_sentence(metric_row.get('metric_takeaway'))
+    if metric_takeaway:
+        return metric_takeaway
+    best_pair = _pick_priority_pairwise_row(metric_row)
+    if best_pair is not None:
+        suggested_action = _first_sentence(best_pair.get('suggested_action'))
+        if suggested_action:
+            return suggested_action
+    return 'Review the metric detail block before acting.'
+
+
+def _status_format_key(status_label):
+    normalized = str(status_label or '').strip().upper()
+    if normalized == 'DIFFERENCE':
+        return 'status_difference_fmt'
+    if normalized == 'NO DIFFERENCE':
+        return 'status_no_difference_fmt'
+    if normalized in {'USE CAUTION', 'APPROXIMATE'}:
+        return 'status_caution_fmt'
+    return 'status_review_fmt'
+
+
+def _card_format_key(status_label):
+    normalized = str(status_label or '').strip().upper()
+    if normalized in {'READY', 'OK'}:
+        return 'card_success_fmt'
+    if normalized in {'DIFFERENCE'}:
+        return 'card_emphasis_fmt'
+    if normalized in {'USE CAUTION', 'APPROXIMATE'}:
+        return 'card_warning_fmt'
+    if normalized in {'REVIEW', 'SKIPPED', 'ERROR'}:
+        return 'card_risk_fmt' if normalized in {'ERROR'} else 'card_default_fmt'
+    return 'card_default_fmt'
+
+
 def _format_capability_detail(entry):
     capability_type = str(entry.get('capability_type') or '').strip()
     capability_ci = ((entry.get('capability_ci') or {}).get('cpk') if isinstance(entry.get('capability_ci'), dict) else None)
@@ -635,6 +903,140 @@ def _format_metric_capability_summary(metric_row):
     return summary
 
 
+def _format_metric_stat_signal(metric_row):
+    best_pair = _pick_priority_pairwise_row(metric_row)
+    if best_pair is None:
+        return ''
+
+    status_label = _coerce_status_label(best_pair.get('difference_label') or best_pair.get('difference'))
+    status_label = status_label or _resolve_metric_index_status(metric_row) or 'REVIEW'
+    verdict = {
+        'DIFFERENCE': 'Statistically different',
+        'NO DIFFERENCE': 'No statistically significant difference',
+        'USE CAUTION': 'Possible difference, interpret with caution',
+        'APPROXIMATE': 'Approximate difference only',
+    }.get(str(status_label).strip().upper(), 'Review statistical signal')
+    comparison = f"{best_pair.get('group_a')} vs {best_pair.get('group_b')}"
+    adjusted_p = _format_decimal(best_pair.get('adjusted_p_value'), digits=4)
+    effect_size = _format_decimal(best_pair.get('effect_size'), digits=3)
+
+    parts = [f'{comparison}: {verdict}']
+    if adjusted_p:
+        parts.append(f'adj p={adjusted_p}')
+    if effect_size:
+        parts.append(f'effect={effect_size}')
+    flags = _first_sentence(best_pair.get('flags'))
+    if str(status_label).strip().upper() in {'USE CAUTION', 'APPROXIMATE'} and flags:
+        parts.append(flags)
+    return '; '.join(parts)
+
+
+def _is_compact_metric(metric_row):
+    summary = _metric_priority_summary_parts(metric_row)
+    if summary['status'] != 'NO DIFFERENCE':
+        return False
+    if summary['primary_signal'] is not None:
+        return False
+    diagnostics_comment = _first_sentence(metric_row.get('diagnostics_comment'))
+    return not diagnostics_comment
+
+
+def _build_metric_anchor_text(metric_row):
+    metric_name = str(metric_row.get('metric') or 'Unknown')
+    if _is_compact_metric(metric_row):
+        return f'Metric: {metric_name} | All clear'
+    return f"Metric: {metric_name} | {_truncate_text(_build_metric_priority_reason(metric_row), max_chars=90)}"
+
+
+def _format_metric_highlights(metric_row, capability_summary_text):
+    insights_text = _format_metric_insights(metric_row)
+    shape_note = str(
+        metric_row.get('metric_note')
+        or (metric_row.get('distribution_difference') or {}).get('comment / verdict')
+        or ''
+    ).strip()
+    caution_text = str(
+        metric_row.get('diagnostics_comment')
+        or (metric_row.get('comparability_summary') or {}).get('summary')
+        or ''
+    ).strip()
+    if _is_compact_metric(metric_row):
+        highlights = [
+            ('Stat signal', _format_metric_stat_signal(metric_row)),
+            ('Capability summary', capability_summary_text),
+            ('Recommended action', str(metric_row.get('recommended_action') or '').strip()),
+        ]
+        return [(label, value) for label, value in highlights if str(value or '').strip()]
+    highlights = [
+        ('Priority signal', _build_metric_priority_reason(metric_row)),
+        ('Stat signal', _format_metric_stat_signal(metric_row)),
+        ('Capability summary', capability_summary_text),
+        ('Key insights', _combine_nonempty_lines(insights_text, shape_note)),
+        ('Recommended action', str(metric_row.get('recommended_action') or '').strip()),
+        ('Use caution', caution_text),
+    ]
+    return [(label, value) for label, value in highlights if str(value or '').strip()]
+
+
+def _format_range_text(lower, upper):
+    lower_text = _format_decimal(lower, digits=3)
+    upper_text = _format_decimal(upper, digits=3)
+    if lower_text and upper_text:
+        return f'{lower_text} to {upper_text}'
+    return lower_text or upper_text
+
+
+def _format_distribution_note(entry):
+    capability_detail = _format_capability_detail(entry)
+    fit_model = str(entry.get('best_fit_model') or '').strip()
+    fit_quality = str(entry.get('fit_quality') or '').strip()
+    fit_note = ''
+    if fit_model and fit_quality:
+        fit_note = f'Fit: {fit_model} ({fit_quality})'
+    elif fit_model:
+        fit_note = f'Fit: {fit_model}'
+    elif fit_quality:
+        fit_note = f'Fit quality: {fit_quality}'
+    caution = str(entry.get('distribution_shape_caution') or '').strip()
+    caution_note = f'Caution: {caution}' if caution else ''
+    return _combine_nonempty_lines(capability_detail, fit_note, caution_note)
+
+
+def _format_pairwise_takeaway(entry):
+    takeaway = str(entry.get('takeaway') or '').strip()
+    if takeaway:
+        return takeaway
+    status_label = _coerce_status_label(entry.get('difference_label') or entry.get('difference')) or 'REVIEW'
+    return f"{entry.get('group_a')} vs {entry.get('group_b')}: {status_label}."
+
+
+def _format_pairwise_action(entry):
+    caution = str(entry.get('comment') or '').strip()
+    suggested_action = str(entry.get('suggested_action') or '').strip()
+    return _combine_nonempty_lines(
+        f'Caution: {caution}' if caution else '',
+        suggested_action if suggested_action else '',
+    )
+
+
+def _format_pairwise_test_context(entry):
+    test_used = str(entry.get('test_used') or '').strip() or 'Comparison test'
+    rationale = _truncate_text(_first_sentence(entry.get('test_rationale')), max_chars=70)
+    if rationale:
+        return f'{test_used}\nWhy: {rationale}'
+    return test_used
+
+
+def _is_banded_row(row_index, *, anchor_row):
+    return (int(row_index) - int(anchor_row)) % 2 == 1
+
+
+def _row_format(formats, default_key, banded_key, *, banded):
+    if banded and banded_key in formats:
+        return formats.get(banded_key)
+    return formats.get(default_key)
+
+
 def _build_attention_summary(metric_rows, *, skipped_count=0):
     ordered_statuses = ['DIFFERENCE', 'USE CAUTION', 'REVIEW', 'NO DIFFERENCE']
     status_counts = {}
@@ -655,48 +1057,143 @@ def _build_attention_summary(metric_rows, *, skipped_count=0):
     return ', '.join(parts) if parts else 'No analyzed metrics.'
 
 
+def _build_metric_status_counts(metric_rows):
+    counts = {
+        'DIFFERENCE': 0,
+        'NO DIFFERENCE': 0,
+        'CAUTION': 0,
+    }
+    for metric_row in metric_rows:
+        status = str(_resolve_metric_index_status(metric_row) or 'REVIEW').strip().upper() or 'REVIEW'
+        if status == 'DIFFERENCE':
+            counts['DIFFERENCE'] += 1
+        elif status == 'NO DIFFERENCE':
+            counts['NO DIFFERENCE'] += 1
+        else:
+            counts['CAUTION'] += 1
+    return counts
+
+
+def _metric_priority_summary_parts(metric_row):
+    status = str(_resolve_metric_index_status(metric_row) or 'REVIEW').strip().upper() or 'REVIEW'
+    location_signal = _build_location_priority_signal(metric_row)
+    capability_signal = _build_capability_priority_signal(metric_row)
+    shape_signal = _build_shape_priority_signal(metric_row)
+
+    primary_signal = None
+    if location_signal is not None and location_signal.get('kind') == 'location_gap':
+        primary_signal = location_signal
+    elif capability_signal is not None:
+        primary_signal = capability_signal
+    elif shape_signal is not None:
+        primary_signal = shape_signal
+    elif location_signal is not None:
+        primary_signal = location_signal
+
+    p_values = [
+        float(row.get('adjusted_p_value'))
+        for row in (metric_row.get('pairwise_rows') or [])
+        if row.get('adjusted_p_value') is not None
+    ]
+    best_p = min(p_values) if p_values else float('inf')
+    capability_payload = metric_row.get('capability') if isinstance(metric_row.get('capability'), dict) else {}
+    lower_ci = _coerce_finite_float((((capability_payload.get('capability_ci') or {}).get('cpk') or {}).get('lower')))
+    capability_value = _coerce_finite_float(capability_payload.get('capability'))
+    effect_sizes = [
+        abs(float(row.get('effect_size')))
+        for row in (metric_row.get('pairwise_rows') or [])
+        if row.get('effect_size') is not None
+    ]
+    max_effect = max(effect_sizes) if effect_sizes else 0.0
+    return {
+        'status': status,
+        'primary_signal': primary_signal,
+        'best_p': best_p,
+        'lower_ci': lower_ci if lower_ci is not None else float('inf'),
+        'capability_value': capability_value if capability_value is not None else float('inf'),
+        'max_effect': max_effect,
+        'reason': _build_metric_priority_reason(metric_row),
+        'metric': str(metric_row.get('metric') or ''),
+    }
+
+
+def _metric_priority_sort_key(metric_row):
+    summary = _metric_priority_summary_parts(metric_row)
+    return (
+        summary['primary_signal']['rank'] if summary['primary_signal'] is not None else 5,
+        summary['best_p'],
+        summary['lower_ci'],
+        summary['capability_value'],
+        -summary['max_effect'],
+        summary['metric'],
+    )
+
+
+def _sorted_metric_rows(metric_rows):
+    return sorted(metric_rows, key=_metric_priority_sort_key)
+
+
+def _metric_priority_badge(metric_row):
+    summary = _metric_priority_summary_parts(metric_row)
+    signal = summary['primary_signal']
+    if signal is not None:
+        kind = str(signal.get('kind') or '').strip().lower()
+        return {
+            'location_gap': 'location gap',
+            'capability_risk': 'capability risk',
+            'capability_caution': 'capability caution',
+            'shape_gap': 'shape gap',
+            'sample_caution': 'sample caution',
+            'approximate_gap': 'approximate gap',
+        }.get(kind, summary['status'].lower())
+    return summary['status'].lower()
+
+
+def _build_compact_priority_metrics_summary(metric_rows, *, limit=2):
+    candidates = []
+    for metric_row in _sorted_metric_rows(metric_rows):
+        summary = _metric_priority_summary_parts(metric_row)
+        if summary['primary_signal'] is None and summary['status'] == 'NO DIFFERENCE':
+            continue
+        badge = _metric_priority_badge(metric_row)
+        if math.isfinite(summary['best_p']):
+            badge = f'{badge}, adj p={summary["best_p"]:.4f}'
+        candidates.append(f"{summary['metric']}: {badge}")
+        if len(candidates) >= int(limit):
+            break
+    return '; '.join(candidates) if candidates else 'No immediate priorities'
+
+
+def _build_watch_summary(payload, metric_rows):
+    diagnostics = payload.get('diagnostics') or {}
+    warning_parts = []
+    warning_count = int((diagnostics.get('warning_summary') or {}).get('count') or 0)
+    unmatched_count = int((diagnostics.get('unmatched_metrics_summary') or {}).get('count') or 0)
+    if warning_count:
+        warning_parts.append(f"{warning_count} warning{'s' if warning_count != 1 else ''}")
+    if unmatched_count:
+        warning_parts.append(f"{unmatched_count} uncovered")
+    plot_summary = _build_plot_coverage_summary(metric_rows, payload.get('analysis_level'))
+    if plot_summary:
+        warning_parts.append(plot_summary.replace(' omitted for ', ' omitted: '))
+    if str(payload.get('analysis_level') or 'light').strip().lower() == 'standard' and metric_rows:
+        warning_parts.append('plots on separate sheet')
+    skip_reason = payload.get('skip_reason')
+    if skip_reason:
+        warning_parts.append(str(skip_reason.get('message') or '').strip())
+    return '; '.join(warning_parts)
+
+
 def _build_priority_metrics_summary(metric_rows):
     ranked_rows = []
     for metric_row in metric_rows:
-        status = str(_resolve_metric_index_status(metric_row) or 'REVIEW').strip().upper() or 'REVIEW'
-        location_signal = _build_location_priority_signal(metric_row)
-        capability_signal = _build_capability_priority_signal(metric_row)
-        shape_signal = _build_shape_priority_signal(metric_row)
-        primary_signal = None
-        if location_signal is not None and location_signal.get('kind') == 'location_gap':
-            primary_signal = location_signal
-        elif capability_signal is not None:
-            primary_signal = capability_signal
-        elif shape_signal is not None:
-            primary_signal = shape_signal
-        elif location_signal is not None:
-            primary_signal = location_signal
-        if primary_signal is None and status == 'NO DIFFERENCE':
+        summary = _metric_priority_summary_parts(metric_row)
+        if summary['primary_signal'] is None and summary['status'] == 'NO DIFFERENCE':
             continue
-        p_values = [
-            float(row.get('adjusted_p_value'))
-            for row in (metric_row.get('pairwise_rows') or [])
-            if row.get('adjusted_p_value') is not None
-        ]
-        best_p = min(p_values) if p_values else float('inf')
-        capability_payload = metric_row.get('capability') if isinstance(metric_row.get('capability'), dict) else {}
-        lower_ci = _coerce_finite_float((((capability_payload.get('capability_ci') or {}).get('cpk') or {}).get('lower')))
-        capability_value = _coerce_finite_float(capability_payload.get('capability'))
-        effect_sizes = [
-            abs(float(row.get('effect_size')))
-            for row in (metric_row.get('pairwise_rows') or [])
-            if row.get('effect_size') is not None
-        ]
-        max_effect = max(effect_sizes) if effect_sizes else 0.0
         ranked_rows.append(
             (
-                primary_signal['rank'] if primary_signal is not None else 5,
-                best_p,
-                lower_ci if lower_ci is not None else float('inf'),
-                capability_value if capability_value is not None else float('inf'),
-                -max_effect,
-                str(metric_row.get('metric') or ''),
-                f"{metric_row.get('metric')} ({status}: {_build_metric_priority_reason(metric_row)})",
+                _metric_priority_sort_key(metric_row),
+                f"{summary['metric']} ({summary['status']}: {summary['reason']})",
             )
         )
 
@@ -724,47 +1221,6 @@ def _build_plot_coverage_summary(metric_rows, analysis_level):
         if count:
             parts.append(f"{label} omitted for {count} metric{'s' if count != 1 else ''}")
     return '; '.join(parts)
-
-
-def _build_group_analysis_summary_rows(payload, metric_rows):
-    diagnostics = payload.get('diagnostics') or {}
-    metric_count = len(metric_rows)
-    reference_count = diagnostics.get('reference_count')
-    group_count = diagnostics.get('group_count')
-    skipped_metric_count = int(diagnostics.get('skipped_metric_count') or 0)
-    warning_count = int((diagnostics.get('warning_summary') or {}).get('count') or 0)
-    unmatched_count = int((diagnostics.get('unmatched_metrics_summary') or {}).get('count') or 0)
-
-    coverage_parts = []
-    if group_count is not None:
-        coverage_parts.append(f"{int(group_count)} group{'s' if int(group_count) != 1 else ''}")
-    if reference_count is not None:
-        coverage_parts.append(f"{int(reference_count)} reference{'s' if int(reference_count) != 1 else ''}")
-
-    summary_rows = [
-        {'Field': 'Status', 'Value': payload.get('status')},
-        {'Field': 'Effective scope', 'Value': payload.get('effective_scope')},
-        {'Field': 'Analysis level', 'Value': _format_analysis_level_label(payload.get('analysis_level'))},
-        {'Field': 'Coverage', 'Value': ' across '.join(coverage_parts) if coverage_parts else 'Coverage unavailable'},
-        {'Field': 'Metric count', 'Value': metric_count},
-        {'Field': 'Attention summary', 'Value': _build_attention_summary(metric_rows, skipped_count=skipped_metric_count)},
-        {'Field': 'Start with', 'Value': _build_priority_metrics_summary(metric_rows), 'wrap_value': True},
-    ]
-
-    signal_parts = []
-    if warning_count:
-        signal_parts.append(f"{warning_count} warning signal{'s' if warning_count != 1 else ''}")
-    if unmatched_count:
-        signal_parts.append(f"{unmatched_count} metric{'s' if unmatched_count != 1 else ''} missing reference coverage")
-    plot_summary = _build_plot_coverage_summary(metric_rows, payload.get('analysis_level'))
-    if plot_summary:
-        signal_parts.append(plot_summary)
-    if signal_parts:
-        summary_rows.append({'Field': 'Coverage warnings', 'Value': '; '.join(signal_parts), 'wrap_value': True})
-
-    if payload.get('skip_reason'):
-        summary_rows.append({'Field': 'Skip reason', 'Value': payload['skip_reason'].get('message'), 'wrap_value': True})
-    return summary_rows
 
 
 def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
@@ -845,139 +1301,217 @@ def _apply_group_analysis_layout(workbook, worksheet, sheet_state):
                 worksheet.autofilter(block['header_row'], block['first_col'], block['last_row'], block['last_col'])
 
 
-def _write_manual_links(worksheet, row, *, sheet_state=None):
-    section_row = row
-    row = _write_section_title(worksheet, row, 'User manual')
-    if sheet_state is not None:
-        sheet_state['section_rows'].append(section_row)
-        sheet_state['styled_cells'].append((section_row, 0, 'User manual', 'section'))
+def _apply_group_analysis_print_layout(worksheet, *, title, last_row, repeat_to_row):
+    if worksheet is None:
+        return
+    target = _get_native_worksheet(worksheet)
+    if hasattr(target, 'set_landscape'):
+        target.set_landscape()
+    if hasattr(target, 'fit_to_pages'):
+        target.fit_to_pages(1, 0)
+    if hasattr(target, 'set_paper'):
+        target.set_paper(1)
+    if hasattr(target, 'repeat_rows'):
+        target.repeat_rows(0, max(0, int(repeat_to_row)))
+    if hasattr(target, 'print_area'):
+        target.print_area(0, 0, max(0, int(last_row)), METRIC_TITLE_LAST_COL)
+    if hasattr(target, 'set_footer'):
+        target.set_footer(f'&L{title}&RPage &P of &N')
 
-    manual_rows = [
-        {
-            'Field': 'Markdown guide (GitHub)',
-            'Label': 'Open Markdown manual',
-            'Target': GROUP_ANALYSIS_MANUAL_GITHUB_URL,
-            'Tip': 'Open the plain-English Group Analysis guide in the GitHub repository.',
-        },
-        {
-            'Field': 'Printable companion (local PDF)',
-            'Label': 'Open PDF manual',
-            'Target': GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL,
-            'Tip': 'Open the printable Group Analysis PDF companion in the GitHub repository.',
-        },
-    ]
 
-    for entry in manual_rows:
-        current_row = row
+def _write_top_guidance_row(worksheet, row, payload, metric_rows):
+    formats = _build_formats(worksheet)
+    normalized_level = str(payload.get('analysis_level') or 'light').strip().lower()
+    guidance = 'Tip: use the +/- outline controls on the left to expand metric details.'
+    if metric_rows:
+        guidance = f'{guidance} Low-priority no-difference metrics start collapsed.'
+    if normalized_level == 'standard':
+        guidance = f'{guidance} Plots are on the Group Analysis Plots sheet.'
+
+    _merge_row(worksheet, row, 0, 2, 'Tip', formats.get('detail_label_fmt'))
+    _merge_row(worksheet, row, 3, 11, guidance, formats.get('detail_note_fmt'))
+    if normalized_level == 'standard':
         if hasattr(worksheet, 'write_url'):
             worksheet.write_url(
-                current_row,
-                1,
-                entry['Target'],
-                _build_formats(worksheet).get('hyperlink_fmt'),
-                entry['Label'],
-                entry['Tip'],
+                row,
+                12,
+                "internal:'Group Analysis Plots'!A1",
+                formats.get('hyperlink_fmt'),
+                'Open plots sheet',
             )
         else:
-            worksheet.write(current_row, 1, entry['Label'])
-
-        if sheet_state is not None:
-            sheet_state['styled_cells'].append((current_row, 1, entry['Label'], 'hyperlink'))
-            sheet_state['summary_rows'].append(current_row)
-            sheet_state['wrapped_data_rows'].append((
-                current_row,
-                [{'value': entry['Label'], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': True}],
-            ))
-        row += 1
-
-    return row + SECTION_GAP
-
-
-def _write_named_value_rows(worksheet, row, rows, *, sheet_state=None):
-    start_row = row
-    for entry in rows:
-        worksheet.write(row, 0, entry.get('Field'))
-        worksheet.write(row, 1, entry.get('Value'))
-        if sheet_state is not None:
-            label_fmt = 'summary_label_wrap' if entry.get('wrap_label') else 'summary_label'
-            value_fmt = 'summary_value_wrap' if entry.get('wrap_value') else 'summary_value'
-            sheet_state['styled_cells'].append((row, 0, entry.get('Field'), label_fmt))
-            sheet_state['styled_cells'].append((row, 1, entry.get('Value'), value_fmt))
-            sheet_state['summary_rows'].append(row)
-            sheet_state['wrapped_data_rows'].append((
-                row,
+            worksheet.write(row, 12, 'Open plots sheet', formats.get('hyperlink_fmt'))
+    _set_row_height(
+        worksheet,
+        row,
+        max(
+            28,
+            _estimate_wrapped_row_height(
                 [
-                    {'value': entry.get('Field'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(0, 18), 'wrap': bool(entry.get('wrap_label'))},
-                    {'value': entry.get('Value'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': bool(entry.get('wrap_value'))},
+                    {'value': guidance, 'width': _column_span_width(3, 11), 'wrap': True},
                 ],
-            ))
-        row += 1
-    return row, {'first_row': start_row, 'last_row': row - 1}
+                minimum=28,
+                line_height=12,
+                padding=6,
+            ),
+        ),
+        formats.get('detail_note_fmt'),
+    )
+    return row + 1
+
+
+def _write_dashboard_row(worksheet, row, payload, metric_rows):
+    formats = _build_formats(worksheet)
+    diagnostics = payload.get('diagnostics') or {}
+    analysis_level = _format_analysis_level_label(payload.get('analysis_level'))
+    effective_scope = str(payload.get('effective_scope') or 'n/a').replace('_', ' ').title()
+    status_label = str(payload.get('status') or 'ready').strip().upper() or 'READY'
+    status_counts = _build_metric_status_counts(metric_rows)
+    coverage_text = 'Coverage unavailable'
+    coverage_parts = []
+    group_count = diagnostics.get('group_count')
+    reference_count = diagnostics.get('reference_count')
+    if group_count is not None:
+        coverage_parts.append(f"{int(group_count)} group{'s' if int(group_count) != 1 else ''}")
+    if reference_count is not None:
+        coverage_parts.append(f"{int(reference_count)} reference{'s' if int(reference_count) != 1 else ''}")
+    if coverage_parts:
+        coverage_text = ' across '.join(coverage_parts)
+    metric_count = len(metric_rows)
+    watch_summary = _build_watch_summary(payload, metric_rows)
+    top_focus = _truncate_text(_build_compact_priority_metrics_summary(metric_rows, limit=2), max_chars=88)
+    warning_count = int((diagnostics.get('warning_summary') or {}).get('count') or 0)
+
+    status_card = '\n'.join([
+        'STATUS',
+        status_label.title(),
+        f'{analysis_level} | {effective_scope}',
+    ])
+    coverage_card = '\n'.join([
+        'COVERAGE',
+        coverage_text,
+        f'{metric_count} metric{"s" if metric_count != 1 else ""}',
+    ])
+    difference_card = '\n'.join([
+        'DIFFERENCE',
+        f"{status_counts['DIFFERENCE']} metric{'s' if status_counts['DIFFERENCE'] != 1 else ''}",
+    ])
+    caution_card = '\n'.join([
+        'CAUTION / REVIEW',
+        f"{status_counts['CAUTION']} metric{'s' if status_counts['CAUTION'] != 1 else ''}",
+        f'{warning_count} warning{"s" if warning_count != 1 else ""}',
+    ])
+    clear_card = '\n'.join([
+        'NO DIFFERENCE',
+        f"{status_counts['NO DIFFERENCE']} metric{'s' if status_counts['NO DIFFERENCE'] != 1 else ''}",
+    ])
+    focus_lines = ['NEXT', f'Top: {top_focus}']
+    if watch_summary:
+        focus_lines.append(f"Watch: {_truncate_text(watch_summary, max_chars=90)}")
+    focus_card = '\n'.join(focus_lines)
+
+    _merge_row(worksheet, row, 0, 2, status_card, formats.get(_card_format_key(status_label)))
+    _merge_row(worksheet, row, 3, 5, coverage_card, formats.get('card_default_fmt'))
+    _merge_row(worksheet, row, 6, 7, difference_card, formats.get('card_emphasis_fmt'))
+    _merge_row(worksheet, row, 8, 9, caution_card, formats.get('card_warning_fmt'))
+    _merge_row(worksheet, row, 10, 11, clear_card, formats.get('card_success_fmt'))
+    _merge_row(worksheet, row, 12, 14, focus_card, formats.get('card_default_fmt'))
+    _set_row_height(
+        worksheet,
+        row,
+        max(
+            52,
+            _estimate_wrapped_row_height(
+                [
+                    {'value': status_card, 'width': _column_span_width(0, 2), 'wrap': True},
+                    {'value': coverage_card, 'width': _column_span_width(3, 5), 'wrap': True},
+                    {'value': difference_card, 'width': _column_span_width(6, 7), 'wrap': True},
+                    {'value': caution_card, 'width': _column_span_width(8, 9), 'wrap': True},
+                    {'value': clear_card, 'width': _column_span_width(10, 11), 'wrap': True},
+                    {'value': focus_card, 'width': _column_span_width(12, 14), 'wrap': True},
+                ],
+                minimum=52,
+                line_height=12,
+                padding=8,
+            ),
+        ),
+    )
+    return row + 1
 
 
 def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
-    section_row = row
-    row = _write_section_title(worksheet, row, 'Metric index')
-    if sheet_state is not None:
-        sheet_state['section_rows'].append(section_row)
-        sheet_state['styled_cells'].append((section_row, 0, 'Metric index', 'section'))
-
-    header_row = row
-    headers = ['Metric', 'Status', 'Jump to section', 'Spec status', 'Why review first', 'Restriction / mode']
-    for col, header in enumerate(headers):
-        worksheet.write(row, col, header)
-        if sheet_state is not None:
-            sheet_state['styled_cells'].append((row, col, header, 'header'))
-    if sheet_state is not None:
-        sheet_state['header_rows'].append((header_row, headers))
-        sheet_state['wrapped_data_rows'].append((
-            header_row,
-            [
-                {'value': headers[2], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(2, 16), 'wrap': True},
-                {'value': headers[3], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 12), 'wrap': True},
-                {'value': headers[4], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(4, 18), 'wrap': True},
-                {'value': headers[5], 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(5, 18), 'wrap': True},
-            ],
-        ))
+    formats = _build_formats(worksheet)
+    _merge_row(worksheet, row, 0, 8, 'Metric index', formats.get('section_fmt'))
+    worksheet.write(row, 10, 'Guide', formats.get('detail_label_fmt'))
+    if hasattr(worksheet, 'write_url'):
+        worksheet.write_url(
+            row,
+            11,
+            GROUP_ANALYSIS_MANUAL_GITHUB_URL,
+            formats.get('hyperlink_fmt'),
+            'Open Markdown manual',
+            'Open the plain-English Group Analysis guide in the GitHub repository.',
+        )
+        worksheet.write_url(
+            row,
+            13,
+            GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL,
+            formats.get('hyperlink_fmt'),
+            'Open PDF manual',
+            'Open the printable Group Analysis PDF companion in the GitHub repository.',
+        )
+    else:
+        worksheet.write(row, 11, 'Open Markdown manual', formats.get('hyperlink_fmt'))
+        worksheet.write(row, 13, 'Open PDF manual', formats.get('hyperlink_fmt'))
+    _set_row_height(worksheet, row, 24, formats.get('section_fmt'))
     row += 1
 
+    header_row = row
+    _merge_row(worksheet, row, 0, 0, 'Metric', formats.get('header_fmt'))
+    _merge_row(worksheet, row, 1, 1, 'Status', formats.get('header_fmt'))
+    _merge_row(worksheet, row, 2, 2, 'Jump', formats.get('header_fmt'))
+    _merge_row(worksheet, row, 3, 3, 'Spec', formats.get('header_fmt'))
+    _merge_row(worksheet, row, 4, 8, 'Priority signal', formats.get('header_fmt'))
+    _merge_row(worksheet, row, 9, 14, 'Next step', formats.get('header_fmt'))
+    _set_row_height(worksheet, row, 24, formats.get('header_fmt'))
+    row += 1
+
+    first_data_row = row
     for metric_row in metric_rows:
         metric_name = str(metric_row.get('metric') or 'Unknown')
         status_label = _resolve_metric_index_status(metric_row)
         spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
-        review_reason = _build_metric_priority_reason(metric_row)
-        restriction_label = _build_metric_index_restriction(metric_row)
-        worksheet.write(row, 0, metric_name)
-        worksheet.write(row, 1, status_label)
-        worksheet.write(row, 2, 'Go to metric')
-        worksheet.write(row, 3, spec_status_label)
-        worksheet.write(row, 4, review_reason)
-        worksheet.write(row, 5, restriction_label)
+        review_reason = _truncate_text(_build_metric_priority_reason(metric_row), max_chars=180)
+        next_step = _truncate_text(_build_metric_next_step(metric_row), max_chars=180)
+        banded = _is_banded_row(row, anchor_row=first_data_row)
+
+        worksheet.write(row, 0, metric_name, _row_format(formats, 'text_left_middle_fmt', 'band_text_left_middle_fmt', banded=banded))
+        worksheet.write(row, 1, status_label, formats.get(_status_format_key(status_label)))
+        worksheet.write(row, 2, 'Go to metric', formats.get('hyperlink_fmt'))
+        worksheet.write(row, 3, spec_status_label, _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
+        _merge_row(worksheet, row, 4, 8, review_reason, _row_format(formats, 'detail_value_fmt', 'band_detail_value_fmt', banded=banded))
+        _merge_row(worksheet, row, 9, 14, next_step, _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
+        _set_row_height(
+            worksheet,
+            row,
+            max(
+                26,
+                _estimate_wrapped_row_height(
+                    [
+                        {'value': review_reason, 'width': _column_span_width(4, 8), 'wrap': True},
+                        {'value': next_step, 'width': _column_span_width(9, 14), 'wrap': True},
+                    ],
+                    minimum=26,
+                    line_height=12,
+                    padding=6,
+                ),
+            ),
+        )
         if sheet_state is not None:
-            sheet_state['index_rows'].append(row)
-            sheet_state['styled_cells'].append((row, 0, metric_name, 'table_center'))
-            sheet_state['styled_cells'].append((row, 1, status_label, 'table_center'))
-            sheet_state['styled_cells'].append((row, 3, spec_status_label, 'table_center_wrap'))
-            sheet_state['styled_cells'].append((row, 4, review_reason, 'wrap'))
-            sheet_state['styled_cells'].append((row, 5, restriction_label, 'table_center_wrap'))
             sheet_state['metric_index_links'].append((row, 2, metric_name))
-            sheet_state['wrapped_data_rows'].append((
-                row,
-                [
-                    {'value': spec_status_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(3, 12), 'wrap': True},
-                    {'value': review_reason, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(4, 18), 'wrap': True},
-                    {'value': restriction_label, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(5, 18), 'wrap': True},
-                ],
-            ))
         row += 1
-    if sheet_state is not None:
-        sheet_state['autofilter_blocks'].append({
-            'header_row': header_row,
-            'first_col': 0,
-            'last_row': row - 1,
-            'last_col': len(headers) - 1,
-        })
-    return row + SECTION_GAP
+
+    return row + SECTION_GAP, {'header_row': header_row, 'first_data_row': first_data_row}
 
 
 def _apply_metric_pairwise_formats(worksheet, bounds):
@@ -987,17 +1521,31 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
     if first > last:
         return
     formats = _build_formats(worksheet)
+    column_lookup = bounds.get('column_lookup') or {}
 
-    difference_col = headers.index('difference')
-    comment_col = headers.index('caution')
-    flags_col = headers.index('Flags') if 'Flags' in headers else None
-    pvalue_col = headers.index('adj p-value')
-    effect_col = headers.index('effect size')
-    delta_mean_col = headers.index('Delta mean') if 'Delta mean' in headers else None
+    def _column_for(*labels):
+        for label in labels:
+            if label in column_lookup:
+                return column_lookup[label]
+        for label in labels:
+            if label in headers:
+                return headers.index(label)
+        raise ValueError(f'Missing expected pairwise column: {labels}')
 
-    _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'strong_warning', type='text', criteria='containing', value='YES'))
-    _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'neutral', type='text', criteria='containing', value='NO'))
-    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='caution'))
+    difference_col = _column_for('Status', 'difference')
+    comment_col = _column_for('Action', 'Insight / action', 'caution')
+    flags_col = column_lookup.get('Flags')
+    if flags_col is None and 'Flags' in headers:
+        flags_col = headers.index('Flags')
+    pvalue_col = _column_for('adj p-value')
+    effect_col = _column_for('effect size')
+    delta_mean_col = column_lookup.get('Delta mean')
+    if delta_mean_col is None and 'Delta mean' in headers:
+        delta_mean_col = headers.index('Delta mean')
+
+    _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='USE CAUTION'))
+    _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='APPROXIMATE'))
+    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='Caution:'))
     _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='descriptive only'))
 
     if flags_col is not None:
@@ -1019,6 +1567,190 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
             delta_mean_col,
             _style_rule(formats, 'delta_mean_fixed_3', type='no_blanks'),
         )
+
+
+def _write_metric_snapshot(worksheet, row, metric_row, capability_summary_text, *, compact=False):
+    formats = _build_formats(worksheet)
+    status_label = _resolve_metric_index_status(metric_row)
+    spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
+    restriction_label = _build_metric_index_restriction(metric_row)
+    next_step = _truncate_text(_build_metric_next_step(metric_row), max_chars=140 if compact else 220)
+
+    _merge_row(worksheet, row, 0, 2, f'STATUS\n{status_label}', formats.get(_card_format_key(status_label)))
+    _merge_row(worksheet, row, 3, 5, f'SPEC\n{spec_status_label}', formats.get('card_default_fmt'))
+    _merge_row(worksheet, row, 6, 8, f'MODE\n{restriction_label}', formats.get('card_default_fmt'))
+    _merge_row(worksheet, row, 9, 14, f'NEXT STEP\n{next_step}', formats.get('card_emphasis_fmt'))
+    _set_row_height(
+        worksheet,
+        row,
+        max(
+            36 if compact else 42,
+            _estimate_wrapped_row_height(
+                [
+                    {'value': f'STATUS\n{status_label}', 'width': _column_span_width(0, 2), 'wrap': True},
+                    {'value': f'SPEC\n{spec_status_label}', 'width': _column_span_width(3, 5), 'wrap': True},
+                    {'value': f'MODE\n{restriction_label}', 'width': _column_span_width(6, 8), 'wrap': True},
+                    {'value': f'NEXT STEP\n{next_step}', 'width': _column_span_width(9, 14), 'wrap': True},
+                ],
+                minimum=36 if compact else 42,
+                line_height=12,
+                padding=8,
+            ),
+        ),
+    )
+    row += 1
+
+    for label, value in _format_metric_highlights(metric_row, capability_summary_text):
+        detail_format = formats.get('detail_note_fmt') if label in {'Use caution', 'Recommended action'} else formats.get('detail_value_fmt')
+        _merge_row(worksheet, row, 0, 2, label, formats.get('detail_label_fmt'))
+        _merge_row(worksheet, row, 3, 14, value, detail_format)
+        _set_row_height(worksheet, row, _estimate_span_height(value, 3, 14, minimum=24, line_height=12, padding=6))
+        row += 1
+    return row + SECTION_GAP
+
+
+def _write_descriptive_stats_block(worksheet, row, metric_row):
+    formats = _build_formats(worksheet)
+    section_row = row
+    row = _write_section_title(worksheet, row, 'Descriptive stats', cell_format=formats.get('section_fmt'))
+    _set_row_height(worksheet, section_row, 22, formats.get('section_fmt'))
+
+    header_row = row
+    header_specs = [
+        ('Group', 0, 0),
+        ('n', 1, 1),
+        ('mean', 2, 2),
+        ('std', 3, 3),
+        ('median', 4, 4),
+        ('IQR', 5, 5),
+        ('Range', 6, 6),
+        ('Cp', 7, 7),
+        ('Capability', 8, 8),
+        ('Distribution / capability note', 9, 14),
+    ]
+    for label, first_col, last_col in header_specs:
+        _merge_row(worksheet, header_row, first_col, last_col, label, formats.get('header_fmt'))
+    _set_row_height(worksheet, header_row, 24, formats.get('header_fmt'))
+    row += 1
+
+    descriptive_rows = metric_row.get('descriptive_stats', []) or []
+    if not descriptive_rows:
+        _merge_row(worksheet, row, 0, 14, 'No descriptive statistics available.', formats.get('detail_note_fmt'))
+        _set_row_height(worksheet, row, 24, formats.get('detail_note_fmt'))
+        return row + 1 + SECTION_GAP
+
+    first_data_row = row
+    for entry in descriptive_rows:
+        range_text = _format_range_text(entry.get('min'), entry.get('max'))
+        note_text = _format_distribution_note(entry)
+        banded = _is_banded_row(row, anchor_row=first_data_row)
+        worksheet.write(row, 0, entry.get('group'), _row_format(formats, 'text_left_middle_fmt', 'band_text_left_middle_fmt', banded=banded))
+        worksheet.write(row, 1, entry.get('n'), _row_format(formats, 'table_center_fmt', 'band_table_center_fmt', banded=banded))
+        worksheet.write(row, 2, entry.get('mean'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 3, entry.get('std'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 4, entry.get('median'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 5, entry.get('iqr'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 6, range_text, _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
+        worksheet.write(row, 7, entry.get('cp'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 8, entry.get('capability'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        _merge_row(worksheet, row, 9, 14, note_text or 'No additional distribution notes.', _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
+        _set_row_height(
+            worksheet,
+            row,
+            max(
+                24,
+                _estimate_wrapped_row_height(
+                    [
+                        {'value': range_text, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(6, 14), 'wrap': True},
+                        {'value': note_text, 'width': _column_span_width(9, 14), 'wrap': True},
+                    ],
+                    minimum=24,
+                    line_height=12,
+                    padding=6,
+                ),
+            ),
+        )
+        row += 1
+    return row + SECTION_GAP
+
+
+def _write_pairwise_comparisons_block(worksheet, row, metric_row):
+    formats = _build_formats(worksheet)
+    section_row = row
+    row = _write_section_title(worksheet, row, 'Pairwise comparisons', cell_format=formats.get('section_fmt'))
+    _set_row_height(worksheet, section_row, 22, formats.get('section_fmt'))
+
+    header_row = row
+    header_specs = [
+        ('Comparison', 0, 0),
+        ('adj p-value', 1, 1),
+        ('effect size', 2, 2),
+        ('Delta mean', 3, 3),
+        ('Status', 4, 4),
+        ('Flags', 5, 5),
+        ('Test / why', 6, 6),
+        ('Takeaway', 7, 10),
+        ('Action', 11, 14),
+    ]
+    headers = [label for label, _first_col, _last_col in header_specs]
+    for label, first_col, last_col in header_specs:
+        _merge_row(worksheet, header_row, first_col, last_col, label, formats.get('header_fmt'))
+    _set_row_height(worksheet, header_row, 24, formats.get('header_fmt'))
+    row += 1
+
+    pairwise_rows = metric_row.get('pairwise_rows', []) or []
+    if not pairwise_rows:
+        _merge_row(worksheet, row, 0, 14, 'No pairwise comparisons available.', formats.get('detail_note_fmt'))
+        _set_row_height(worksheet, row, 24, formats.get('detail_note_fmt'))
+        return row + 1 + SECTION_GAP
+
+    first_data_row = row
+    for entry in pairwise_rows:
+        comparison_label = f"{entry.get('group_a')} vs {entry.get('group_b')}"
+        status_label = _coerce_status_label(entry.get('difference_label') or entry.get('difference')) or 'REVIEW'
+        banded = _is_banded_row(row, anchor_row=first_data_row)
+        takeaway_text = _format_pairwise_takeaway(entry)
+        action_text = _format_pairwise_action(entry)
+        test_context = _format_pairwise_test_context(entry)
+        worksheet.write(row, 0, comparison_label, _row_format(formats, 'text_left_middle_fmt', 'band_text_left_middle_fmt', banded=banded))
+        worksheet.write(row, 1, entry.get('adjusted_p_value'), _row_format(formats, 'pvalue_fmt', 'band_pvalue_fmt', banded=banded))
+        worksheet.write(row, 2, entry.get('effect_size'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 3, entry.get('delta_mean'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 4, status_label, formats.get(_status_format_key(status_label)))
+        worksheet.write(row, 5, entry.get('flags'), _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
+        worksheet.write(row, 6, test_context, _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
+        _merge_row(worksheet, row, 7, 10, takeaway_text, _row_format(formats, 'detail_value_fmt', 'band_detail_value_fmt', banded=banded))
+        _merge_row(worksheet, row, 11, 14, action_text or 'No immediate action note.', _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
+        _set_row_height(
+            worksheet,
+            row,
+            max(
+                24,
+                _estimate_wrapped_row_height(
+                    [
+                        {'value': entry.get('flags'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(5, 14), 'wrap': True},
+                        {'value': test_context, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(6, 14), 'wrap': True},
+                        {'value': takeaway_text, 'width': _column_span_width(7, 10), 'wrap': True},
+                        {'value': action_text, 'width': _column_span_width(11, 14), 'wrap': True},
+                    ],
+                    minimum=24,
+                    line_height=12,
+                    padding=6,
+                ),
+            ),
+        )
+        row += 1
+
+    _apply_metric_pairwise_formats(
+        worksheet,
+        {
+            'headers': headers,
+            'column_lookup': {label: first_col for label, first_col, _last_col in header_specs},
+            'first_data_row': first_data_row,
+            'last_data_row': row - 1,
+        },
+    )
+    return row + SECTION_GAP
 
 
 def _apply_spec_status_and_flag_formats(worksheet, bounds):
@@ -1051,206 +1783,80 @@ def _apply_spec_status_and_flag_formats(worksheet, bounds):
     _apply_conditional(worksheet, first, standard_col, last, standard_col, _style_rule(formats, 'no', type='text', criteria='containing', value='NO'))
 
 
-def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet_state=None):
+def _apply_metric_outline(worksheet, first_row, last_row, *, hidden=False):
+    if first_row > last_row:
+        return
+    for outline_row in range(first_row, last_row + 1):
+        _set_row_options(
+            worksheet,
+            outline_row,
+            level=1,
+            hidden=hidden,
+            collapsed=bool(hidden and outline_row == last_row),
+        )
+
+
+def _write_metric_plots_block(worksheet, row, metric_row, *, plot_assets=None, title='Plots'):
+    formats = _build_formats(worksheet)
+    plot_eligibility = metric_row.get('plot_eligibility') or {}
+    metric_assets = _resolve_metric_plot_assets(plot_assets, metric_row.get('metric'))
+
+    section_row = row
+    row = _write_section_title(worksheet, row, title, cell_format=formats.get('section_fmt'))
+    _set_row_height(worksheet, section_row, 22, formats.get('section_fmt'))
+    for plot_key, plot_label in (('violin', 'Violin'), ('histogram', 'Histogram')):
+        eligibility = plot_eligibility.get(plot_key) or {}
+        eligible = bool(eligibility.get('eligible'))
+        skip_reason = str(eligibility.get('skip_reason') or 'ineligible')
+        asset = metric_assets.get(plot_key)
+
+        subsection_row = row
+        _merge_row(worksheet, subsection_row, 0, 14, plot_label, formats.get('header_fmt'))
+        _set_row_height(worksheet, subsection_row, 22, formats.get('header_fmt'))
+
+        if not eligible:
+            message = _get_plot_skip_reason_label(skip_reason)
+            _merge_row(worksheet, subsection_row + 1, 0, 2, 'Note', formats.get('detail_label_fmt'))
+            _merge_row(worksheet, subsection_row + 1, 3, 14, message, formats.get('detail_note_fmt'))
+            _set_row_height(worksheet, subsection_row + 1, _estimate_span_height(message, 3, 14, minimum=24, line_height=12, padding=6))
+            row += 2
+            continue
+
+        inserted = _insert_plot_image(worksheet, row + 1, asset)
+        if inserted:
+            row_span = DEFAULT_PLOT_ROW_SPAN
+            if isinstance(asset, dict) and isinstance(asset.get('row_span'), int) and asset.get('row_span') > 0:
+                row_span = int(asset.get('row_span'))
+            row += 1 + row_span
+        else:
+            message = _get_plot_skip_reason_label('asset_missing')
+            _merge_row(worksheet, subsection_row + 1, 0, 2, 'Note', formats.get('detail_label_fmt'))
+            _merge_row(worksheet, subsection_row + 1, 3, 14, message, formats.get('detail_note_fmt'))
+            _set_row_height(worksheet, subsection_row + 1, _estimate_span_height(message, 3, 14, minimum=24, line_height=12, padding=6))
+            row += 2
+
+    return row + SECTION_GAP
+
+
+def _write_metric_section_dashboard(worksheet, row, metric_row, *, plot_assets=None, sheet_state=None):
+    formats = _build_formats(worksheet)
+    status_label = _resolve_metric_index_status(metric_row)
+    compact_metric = _is_compact_metric(metric_row)
     metric_title_row = row
-    metric_title = f"Metric: {metric_row.get('metric', 'Unknown')}"
-    row = _write_section_title(
-        worksheet,
-        row,
-        metric_title,
-        merge_to_col=METRIC_TITLE_LAST_COL,
-        cell_format=_build_formats(worksheet).get('metric_fmt'),
-    )
+    metric_title = _build_metric_anchor_text(metric_row)
+    _merge_row(worksheet, row, 0, 2, status_label, formats.get(_status_format_key(status_label)))
+    _merge_row(worksheet, row, 3, METRIC_TITLE_LAST_COL, metric_title, formats.get('metric_fmt'))
+    _set_row_height(worksheet, row, max(32, _estimate_metric_title_height(metric_title) + 6), formats.get('metric_fmt'))
     if sheet_state is not None:
-        sheet_state['metric_rows'].append((metric_title_row, metric_title))
         sheet_state['metric_anchor_rows'][str(metric_row.get('metric') or 'Unknown')] = metric_title_row
+    row += 1
 
-    spec_status_label = metric_row.get('spec_status_label') or get_spec_status_label(metric_row.get('spec_status'))
     capability_summary_text = _format_metric_capability_summary(metric_row)
-    section_row = row
-    row = _write_section_title(worksheet, row, 'Metric overview')
-    if sheet_state is not None:
-        sheet_state['section_rows'].append(section_row)
-        sheet_state['styled_cells'].append((section_row, 0, 'Metric overview', 'section'))
-    insights_text = _format_metric_insights(metric_row)
-    metric_meta_rows = [
-        {'Field': 'Spec status', 'Value': spec_status_label},
-        {'Field': 'Analysis mode / restrictions', 'Value': metric_row.get('analysis_restriction_label') or 'Review'},
-        {'Field': 'Capability summary', 'Value': capability_summary_text} if capability_summary_text else None,
-        {'Field': 'Key insights', 'Value': insights_text} if insights_text else None,
-        {'Field': 'Shape note', 'Value': metric_row.get('metric_note') or (metric_row.get('distribution_difference') or {}).get('comment / verdict')},
-        {'Field': 'Recommended action', 'Value': metric_row.get('recommended_action')},
-        {'Field': 'Use caution', 'Value': metric_row.get('diagnostics_comment') or (metric_row.get('comparability_summary') or {}).get('summary')},
-    ]
-    metric_meta_rows = [entry for entry in metric_meta_rows if entry is not None]
-    row, meta_bounds = _write_table_with_bounds(worksheet, row, ['Field', 'Value'], metric_meta_rows)
-    if sheet_state is not None:
-        sheet_state['header_rows'].append((meta_bounds['header_row'], meta_bounds['headers']))
-        sheet_state['styled_cells'].extend(
-            (meta_bounds['header_row'], col, header, 'header')
-            for col, header in enumerate(meta_bounds['headers'])
-        )
-        for data_row_idx, entry in enumerate(metric_meta_rows):
-            data_row = meta_bounds['first_data_row'] + data_row_idx
-            sheet_state['styled_cells'].append((data_row, 0, entry.get('Field'), 'text_left_middle'))
-            sheet_state['styled_cells'].append((data_row, 1, entry.get('Value'), 'overview_value'))
-            if entry.get('Field') in {'Capability summary', 'Key insights', 'Shape note', 'Recommended action', 'Use caution'} and entry.get('Value'):
-                sheet_state['note_rows'].append((data_row, entry.get('Value'), GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18)))
-            sheet_state['wrapped_data_rows'].append((
-                data_row,
-                [
-                    {'value': entry.get('Field'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(0, 18), 'wrap': False},
-                    {'value': entry.get('Value'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': True},
-                ],
-            ))
-    row += SECTION_GAP
-
-    section_row = row
-    row = _write_section_title(worksheet, row, 'Descriptive stats')
-    if sheet_state is not None:
-        sheet_state['section_rows'].append(section_row)
-        sheet_state['styled_cells'].append((section_row, 0, 'Descriptive stats', 'section'))
-    desc_rows = [
-        {
-            'Group': entry.get('group'),
-            'n': entry.get('n'),
-            'mean': entry.get('mean'),
-            'std': entry.get('std'),
-            'median': entry.get('median'),
-            'IQR': entry.get('iqr'),
-            'min': entry.get('min'),
-            'max': entry.get('max'),
-            'Cp': entry.get('cp'),
-            'Capability': entry.get('capability'),
-            'Capability detail': _format_capability_detail(entry),
-            'best fit model': entry.get('best_fit_model'),
-            'fit quality': entry.get('fit_quality'),
-            'caution': entry.get('distribution_shape_caution'),
-            'Flags': entry.get('flags'),
-        }
-        for entry in metric_row.get('descriptive_stats', [])
-    ]
-    row, desc_bounds = _write_table_with_bounds(
-        worksheet,
-        row,
-        [
-            'Group', 'n', 'mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability', 'Capability detail',
-            'best fit model', 'fit quality', 'caution', 'Flags',
-        ],
-        desc_rows,
-    )
-    if sheet_state is not None:
-        sheet_state['header_rows'].append((desc_bounds['header_row'], desc_bounds['headers']))
-        sheet_state['styled_cells'].extend(
-            (desc_bounds['header_row'], col, header, 'header')
-            for col, header in enumerate(desc_bounds['headers'])
-        )
-        sheet_state['autofilter_blocks'].append({
-            'header_row': desc_bounds['header_row'],
-            'first_col': 0,
-            'last_row': desc_bounds['last_data_row'],
-            'last_col': len(desc_bounds['headers']) - 1,
-        })
-        header_lookup = {header: idx for idx, header in enumerate(desc_bounds['headers'])}
-        for data_row_idx, entry in enumerate(desc_rows):
-            data_row = desc_bounds['first_data_row'] + data_row_idx
-            for header in ('mean', 'std', 'median', 'IQR', 'min', 'max', 'Cp', 'Capability'):
-                if header in header_lookup:
-                    sheet_state['numeric_cells'].append((data_row, header_lookup[header], entry.get(header), 'num'))
-            for header in ('Group', 'n', 'Flags'):
-                if header in header_lookup:
-                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center'))
-            for header in ('Capability detail', 'caution', 'best fit model', 'fit quality'):
-                if header in header_lookup and entry.get(header):
-                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'wrap'))
-            for header in ('Capability detail', 'caution'):
-                if header in header_lookup and entry.get(header):
-                    sheet_state['note_rows'].append((data_row, entry.get(header), GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup[header], 24)))
-            sheet_state['wrapped_data_rows'].append((
-                data_row,
-                [
-                    {'value': entry.get('Capability detail'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('Capability detail', 10), 21), 'wrap': True},
-                    {'value': entry.get('best fit model'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('best fit model', 11), 28), 'wrap': True},
-                    {'value': entry.get('fit quality'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('fit quality', 12), 16), 'wrap': True},
-                    {'value': entry.get('caution'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('caution', 13), 24), 'wrap': True},
-                ],
-            ))
-    row += SECTION_GAP
-
-    section_row = row
-    row = _write_section_title(worksheet, row, 'Pairwise comparisons')
-    if sheet_state is not None:
-        sheet_state['section_rows'].append(section_row)
-        sheet_state['styled_cells'].append((section_row, 0, 'Pairwise comparisons', 'section'))
-    pairwise_rows = [
-        {
-            'Group A': entry.get('group_a'),
-            'Group B': entry.get('group_b'),
-            'adj p-value': entry.get('adjusted_p_value'),
-            'effect size': entry.get('effect_size'),
-            'test': entry.get('test_used'),
-            'Delta mean': entry.get('delta_mean'),
-            'difference': _coerce_status_label(entry.get('difference_label') or entry.get('difference')),
-            'caution': entry.get('comment'),
-            'Takeaway': entry.get('takeaway'),
-            'Suggested action': entry.get('suggested_action'),
-            'Flags': entry.get('flags'),
-            'Why this test': entry.get('test_rationale'),
-        }
-        for entry in metric_row.get('pairwise_rows', [])
-    ]
-    row, pairwise_bounds = _write_table_with_bounds(
-        worksheet,
-        row,
-        ['Group A', 'Group B', 'adj p-value', 'effect size', 'test', 'Delta mean', 'difference', 'caution', 'Takeaway', 'Suggested action', 'Flags', 'Why this test'],
-        pairwise_rows,
-    )
-    if sheet_state is not None:
-        sheet_state['header_rows'].append((pairwise_bounds['header_row'], pairwise_bounds['headers']))
-        sheet_state['styled_cells'].extend(
-            (pairwise_bounds['header_row'], col, header, 'header')
-            for col, header in enumerate(pairwise_bounds['headers'])
-        )
-        sheet_state['autofilter_blocks'].append({
-            'header_row': pairwise_bounds['header_row'],
-            'first_col': 0,
-            'last_row': pairwise_bounds['last_data_row'],
-            'last_col': len(pairwise_bounds['headers']) - 1,
-        })
-        header_lookup = {header: idx for idx, header in enumerate(pairwise_bounds['headers'])}
-        for data_row_idx, entry in enumerate(pairwise_rows):
-            data_row = pairwise_bounds['first_data_row'] + data_row_idx
-            if 'adj p-value' in header_lookup:
-                sheet_state['numeric_cells'].append((data_row, header_lookup['adj p-value'], entry.get('adj p-value'), 'pvalue'))
-            if 'effect size' in header_lookup:
-                sheet_state['numeric_cells'].append((data_row, header_lookup['effect size'], entry.get('effect size'), 'num'))
-            if 'Delta mean' in header_lookup:
-                sheet_state['numeric_cells'].append((data_row, header_lookup['Delta mean'], entry.get('Delta mean'), 'num'))
-            for header in ('Group A', 'Group B', 'difference'):
-                if header in header_lookup:
-                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center'))
-            for header in ('test', 'Flags'):
-                if header in header_lookup and entry.get(header):
-                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'table_center_wrap'))
-            for header in ('caution', 'Takeaway', 'Suggested action', 'Why this test'):
-                if header in header_lookup and entry.get(header):
-                    sheet_state['styled_cells'].append((data_row, header_lookup[header], entry.get(header), 'wrap'))
-            if entry.get('caution'):
-                sheet_state['note_rows'].append((data_row, entry.get('caution'), GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup['caution'], 22)))
-            sheet_state['wrapped_data_rows'].append(
-                (
-                    data_row,
-                    [
-                        {'value': entry.get('test'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('test', 4), 18), 'wrap': True},
-                        {'value': entry.get('caution'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('caution', 7), 22), 'wrap': True},
-                        {'value': entry.get('Takeaway'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('Takeaway', 8), 22), 'wrap': True},
-                        {'value': entry.get('Suggested action'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('Suggested action', 9), 24), 'wrap': True},
-                        {'value': entry.get('Why this test'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(header_lookup.get('Why this test', 11), 28), 'wrap': True},
-                    ],
-                )
-            )
-    _apply_metric_pairwise_formats(worksheet, pairwise_bounds)
-    row += SECTION_GAP
+    snapshot_row = row
+    row = _write_metric_snapshot(worksheet, row, metric_row, capability_summary_text, compact=compact_metric)
+    detail_start_row = snapshot_row + 1 if compact_metric else row
+    row = _write_descriptive_stats_block(worksheet, row, metric_row)
+    row = _write_pairwise_comparisons_block(worksheet, row, metric_row)
 
     takeaway = str(metric_row.get('metric_takeaway') or '').strip()
     if not takeaway:
@@ -1263,119 +1869,111 @@ def _write_metric_section(worksheet, row, metric_row, *, plot_assets=None, sheet
             if action:
                 takeaway = f'{takeaway} {action}'
     if takeaway:
-        worksheet.write(row, 0, 'Takeaway')
-        worksheet.write(row, 1, takeaway)
-        if sheet_state is not None:
-            sheet_state['styled_cells'].append((row, 0, 'Takeaway', 'takeaway_label'))
-            sheet_state['styled_cells'].append((row, 1, takeaway, 'takeaway_value'))
-            sheet_state['wrapped_data_rows'].append((
-                row,
-                [
-                    {'value': 'Takeaway', 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(0, 18), 'wrap': False},
-                    {'value': takeaway, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18), 'wrap': True},
-                ],
-            ))
+        _merge_row(worksheet, row, 0, 2, 'Takeaway', formats.get('takeaway_label_fmt'))
+        _merge_row(worksheet, row, 3, 14, takeaway, formats.get('takeaway_value_fmt'))
+        _set_row_height(worksheet, row, _estimate_span_height(takeaway, 3, 14, minimum=24, line_height=12, padding=6))
         row += 1
 
-    plot_eligibility = metric_row.get('plot_eligibility') or {}
-    analysis_level = str(metric_row.get('analysis_level') or '').strip().lower()
-    if analysis_level == 'standard':
-        metric_assets = _resolve_metric_plot_assets(plot_assets, metric_row.get('metric'))
-        row += SECTION_GAP
-        section_row = row
-        row = _write_section_title(worksheet, row, 'Plots')
-        if sheet_state is not None:
-            sheet_state['section_rows'].append(section_row)
-            sheet_state['styled_cells'].append((section_row, 0, 'Plots', 'section'))
-        for plot_key, plot_label in (('violin', 'Violin'), ('histogram', 'Histogram')):
-            eligibility = plot_eligibility.get(plot_key) or {}
-            eligible = bool(eligibility.get('eligible'))
-            skip_reason = str(eligibility.get('skip_reason') or 'ineligible')
-            asset = metric_assets.get(plot_key)
-
-            subsection_row = row
-            native = _get_native_worksheet(worksheet)
-            if hasattr(native, 'merge_range'):
-                native.merge_range(subsection_row, 0, subsection_row, 1, plot_label, _build_formats(worksheet).get('header_fmt'))
-            else:
-                worksheet.write(subsection_row, 0, plot_label)
-            if sheet_state is not None:
-                sheet_state['subsection_rows'].append(subsection_row)
-
-            if not eligible:
-                message = _get_plot_skip_reason_label(skip_reason)
-                worksheet.write(subsection_row + 1, 0, 'Note')
-                worksheet.write(subsection_row + 1, 1, message)
-                if sheet_state is not None:
-                    sheet_state['styled_cells'].append((subsection_row + 1, 0, 'Note', 'wrap'))
-                    sheet_state['styled_cells'].append((subsection_row + 1, 1, message, 'note'))
-                    sheet_state['note_rows'].append((subsection_row + 1, message, GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18)))
-                row += 2
-                continue
-
-            inserted = _insert_plot_image(worksheet, row + 1, asset)
-            if inserted:
-                row_span = DEFAULT_PLOT_ROW_SPAN
-                if isinstance(asset, dict) and isinstance(asset.get('row_span'), int) and asset.get('row_span') > 0:
-                    row_span = int(asset.get('row_span'))
-                row += 1 + row_span
-            else:
-                message = _get_plot_skip_reason_label('asset_missing')
-                worksheet.write(subsection_row + 1, 0, 'Note')
-                worksheet.write(subsection_row + 1, 1, message)
-                if sheet_state is not None:
-                    sheet_state['styled_cells'].append((subsection_row + 1, 0, 'Note', 'wrap'))
-                    sheet_state['styled_cells'].append((subsection_row + 1, 1, message, 'note'))
-                    sheet_state['note_rows'].append((subsection_row + 1, message, GROUP_ANALYSIS_COLUMN_WIDTHS.get(1, 18)))
-                row += 2
+    _apply_metric_outline(worksheet, detail_start_row, row - 1, hidden=compact_metric)
 
     row += SECTION_GAP
     return row
 
 
-def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
-    """Write the canonical user-facing Group Analysis worksheet."""
+def write_group_analysis_plots_sheet(worksheet, payload, *, plot_assets=None):
+    """Write the standard-level plot appendix for Group Analysis."""
     sheet_state = {
         'title_rows': [],
-        'summary_rows': [],
-        'index_rows': [],
-        'metric_rows': [],
-        'section_rows': [],
-        'header_rows': [],
-        'subsection_rows': [],
-        'note_rows': [],
-        'wrapped_data_rows': [],
-        'styled_cells': [],
-        'numeric_cells': [],
-        'autofilter_blocks': [],
-        'metric_anchor_rows': {},
-        'metric_index_links': [],
         'freeze_panes': None,
     }
     row = 0
     title_row = row
-    row = _write_section_title(worksheet, row, 'Group Analysis', merge_to_col=TITLE_LAST_COL, cell_format=_build_formats(worksheet).get('title_fmt'))
+    formats = _build_formats(worksheet)
+    row = _write_section_title(worksheet, row, 'Group Analysis Plots', merge_to_col=TITLE_LAST_COL, cell_format=formats.get('title_fmt'))
     sheet_state['title_rows'].append(title_row)
+    _set_row_height(worksheet, title_row, 28, formats.get('title_fmt'))
+
+    note = 'Plots live on this separate sheet so the main Group Analysis sheet stays compact and decision-first.'
+    _merge_row(worksheet, row, 0, 2, 'Note', formats.get('detail_label_fmt'))
+    _merge_row(worksheet, row, 3, 11, note, formats.get('detail_note_fmt'))
+    if hasattr(worksheet, 'write_url'):
+        worksheet.write_url(
+            row,
+            12,
+            "internal:'Group Analysis'!A1",
+            formats.get('hyperlink_fmt'),
+            'Back to Group Analysis',
+        )
+    else:
+        worksheet.write(row, 12, 'Back to Group Analysis', formats.get('hyperlink_fmt'))
+    _set_row_height(worksheet, row, _estimate_span_height(note, 3, 11, minimum=24, line_height=12, padding=6))
+    row += 1 + SECTION_GAP
 
     normalized_level = str(payload.get('analysis_level') or 'light').strip().lower()
     metric_rows = [dict(metric_row) for metric_row in payload.get('metric_rows', [])]
     for metric_row in metric_rows:
         metric_row['index_status'] = _resolve_metric_index_status(metric_row)
         metric_row['analysis_level'] = normalized_level
+    metric_rows = _sorted_metric_rows(metric_rows)
 
-    summary_rows = _build_group_analysis_summary_rows(payload, metric_rows)
-    row, _summary_bounds = _write_named_value_rows(worksheet, row, summary_rows, sheet_state=sheet_state)
-    sheet_state['freeze_panes'] = (row, 0)
-    row += SECTION_GAP
-    row = _write_manual_links(worksheet, row, sheet_state=sheet_state)
+    for metric_row in metric_rows:
+        status_label = _resolve_metric_index_status(metric_row)
+        _merge_row(worksheet, row, 0, 2, status_label, formats.get(_status_format_key(status_label)))
+        _merge_row(worksheet, row, 3, 14, f"Metric: {metric_row.get('metric', 'Unknown')}", formats.get('metric_fmt'))
+        _set_row_height(worksheet, row, 30, formats.get('metric_fmt'))
+        row += 1
+
+        summary_text = _combine_nonempty_lines(
+            _format_metric_stat_signal(metric_row),
+            _format_metric_capability_summary(metric_row),
+        ) or 'No additional plot context available.'
+        _merge_row(worksheet, row, 0, 2, 'Summary', formats.get('detail_label_fmt'))
+        _merge_row(worksheet, row, 3, 14, summary_text, formats.get('detail_note_fmt'))
+        _set_row_height(worksheet, row, _estimate_span_height(summary_text, 3, 14, minimum=24, line_height=12, padding=6))
+        row += 1 + SECTION_GAP
+
+        row = _write_metric_plots_block(worksheet, row, metric_row, plot_assets=plot_assets, title='Plots')
+        row += SECTION_GAP
+
+    _apply_group_analysis_layout(_get_workbook(worksheet), worksheet, sheet_state)
+    _apply_group_analysis_print_layout(worksheet, title='Group Analysis Plots', last_row=row, repeat_to_row=1)
+
+
+def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
+    """Write the canonical user-facing Group Analysis worksheet."""
+    sheet_state = {
+        'title_rows': [],
+        'metric_anchor_rows': {},
+        'metric_index_links': [],
+        'freeze_panes': None,
+    }
+    row = 0
+    title_row = row
+    formats = _build_formats(worksheet)
+    row = _write_section_title(worksheet, row, 'Group Analysis', merge_to_col=TITLE_LAST_COL, cell_format=formats.get('title_fmt'))
+    sheet_state['title_rows'].append(title_row)
+    _set_row_height(worksheet, title_row, 28, formats.get('title_fmt'))
+
+    normalized_level = str(payload.get('analysis_level') or 'light').strip().lower()
+    metric_rows = [dict(metric_row) for metric_row in payload.get('metric_rows', [])]
+    for metric_row in metric_rows:
+        metric_row['index_status'] = _resolve_metric_index_status(metric_row)
+        metric_row['analysis_level'] = normalized_level
+    metric_rows = _sorted_metric_rows(metric_rows)
+
+    row = _write_dashboard_row(worksheet, row, payload, metric_rows)
+    row = _write_top_guidance_row(worksheet, row, payload, metric_rows)
+    repeat_to_row = row - 1
     if metric_rows:
-        row = _write_metric_index(worksheet, row, metric_rows, sheet_state=sheet_state)
+        row, _index_bounds = _write_metric_index(worksheet, row, metric_rows, sheet_state=sheet_state)
+        repeat_to_row = _index_bounds['header_row']
+    else:
+        row += SECTION_GAP
 
     for metric_row in metric_rows:
         metric_with_level = dict(metric_row)
-        row = _write_metric_section(worksheet, row, metric_with_level, plot_assets=plot_assets, sheet_state=sheet_state)
+        row = _write_metric_section_dashboard(worksheet, row, metric_with_level, plot_assets=plot_assets, sheet_state=sheet_state)
 
-    formats = _build_formats(worksheet)
     native = _get_native_worksheet(worksheet)
     for link_row, link_col, metric_name in sheet_state.get('metric_index_links', []):
         target_row = sheet_state['metric_anchor_rows'].get(metric_name)
@@ -1399,6 +1997,7 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
             )
 
     _apply_group_analysis_layout(_get_workbook(worksheet), worksheet, sheet_state)
+    _apply_group_analysis_print_layout(worksheet, title='Group Analysis', last_row=row, repeat_to_row=repeat_to_row)
 
 
 def write_group_analysis_diagnostics_sheet(worksheet, diagnostics_payload):
