@@ -228,8 +228,11 @@ def native_chart_backend_available() -> bool:
 
 def _native_extended_histogram_export_available() -> bool:
     """Return whether native histogram rendering can preserve extended-export parity."""
-
-    return resolve_chart_renderer_backend() == 'native' and native_histogram_backend_available()
+    # Extended histogram exports include dense matplotlib-authored details
+    # (annotations, fitted-overlay context, and rich right-side tables). Until
+    # native rendering reaches strict 1:1 parity for those workbook details,
+    # force the extended export path through matplotlib.
+    return False
 
 
 _INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
