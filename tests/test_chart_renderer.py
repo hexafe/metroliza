@@ -170,6 +170,40 @@ def test_native_chart_renderer_falls_back_to_matplotlib_when_extension_missing()
     assert len(result.png_bytes) > 0
 
 
+def test_native_chart_renderer_falls_back_when_visual_metadata_requires_parity():
+    payload = build_histogram_native_payload(
+        values=[1.0, 2.0, 3.0],
+        lsl=0.0,
+        usl=4.0,
+        title="Parity Histogram",
+    )
+    payload["visual_metadata"]["summary_stats_table"]["rows"] = [{"label": "Mean", "value": "2.0"}]
+
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.hist(payload["values"], bins=4)
+
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda _payload: b"native"):
+        result = NativeChartRenderer().render_histogram_png(payload, fallback_fig=fig)
+
+    plt.close(fig)
+    assert result.backend == "matplotlib"
+    assert result.png_bytes != b"native"
+
+
+def test_native_chart_renderer_raises_when_visual_metadata_requires_parity_without_fallback_figure():
+    payload = build_histogram_native_payload(
+        values=[1.0, 2.0, 3.0],
+        lsl=0.0,
+        usl=4.0,
+        title="Parity Histogram",
+    )
+    payload["visual_metadata"]["annotation_rows"] = [{"label": "LSL", "x": 0.0}]
+
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda _payload: b"native"):
+        with pytest.raises(RuntimeError, match="visual metadata parity"):
+            NativeChartRenderer().render_histogram_png(payload)
+
+
 def test_native_distribution_renderer_falls_back_to_matplotlib_when_extension_missing():
     payload = build_distribution_native_payload(
         values=[[1.0, 1.2, 1.3], [1.4, 1.45, 1.5]],
