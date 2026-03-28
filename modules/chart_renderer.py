@@ -89,6 +89,7 @@ class NativeChartRenderer(ChartRenderer):
 
     def __init__(self, *, fallback_renderer: ChartRenderer | None = None):
         self._fallback = fallback_renderer or MatplotlibChartRenderer()
+        self._visual_parity_warning_emitted = False
 
     def render_figure_png(self, fig: Any, *, mode: str = "workbook", chart_type: str | None = None) -> ChartRenderResult:
         return self._fallback.render_figure_png(fig, mode=mode, chart_type=chart_type)
@@ -102,11 +103,13 @@ class NativeChartRenderer(ChartRenderer):
 
         if _histogram_visual_metadata_requires_matplotlib_fallback(payload):
             if fallback_fig is None:
-                warnings.warn(
-                    "Native histogram payload requests visual metadata parity but no matplotlib fallback figure was provided; proceeding with native rendering without parity metadata.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+                if not self._visual_parity_warning_emitted:
+                    warnings.warn(
+                        "Native histogram payload requests visual metadata parity but no matplotlib fallback figure was provided; proceeding with native rendering without parity metadata.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    self._visual_parity_warning_emitted = True
             else:
                 fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="histogram")
                 return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)

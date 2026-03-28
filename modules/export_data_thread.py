@@ -3351,15 +3351,8 @@ class ExportDataThread(QThread):
             return type("RenderResult", (), {"png_bytes": png_bytes, "backend": backend})()
 
         if chart_type == 'histogram' and native_payload is not None:
-            histogram_payload = native_payload
-            if fig is None and isinstance(native_payload, dict) and 'visual_metadata' in native_payload:
-                # Native-only summary exports intentionally skip matplotlib figure
-                # generation. In that mode we cannot honor parity metadata, so
-                # avoid requesting it to prevent repeated runtime warnings.
-                histogram_payload = dict(native_payload)
-                histogram_payload.pop('visual_metadata', None)
             render_result = self._chart_renderer.render_histogram_png(
-                histogram_payload,
+                native_payload,
                 fallback_fig=fig,
                 mode=mode,
             )
