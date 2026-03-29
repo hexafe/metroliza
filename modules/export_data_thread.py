@@ -4679,22 +4679,24 @@ class ExportDataThread(QThread):
         if cp_value is not None and cpk_value is not None:
             palette_key = classify_capability_status(cp_value, cpk_value).get('palette_key')
             callout_lines = [
-                f"Overall (all groups pooled): {_readiness_label(palette_key)}",
-                f"Pooled Cp={cp_value:.3f}, Cpk={cpk_value:.3f}",
+                f"Capability: {_readiness_label(palette_key)}",
+                "Scope: all groups pooled",
+                f"Cp={cp_value:.3f}, Cpk={cpk_value:.3f}",
             ]
             description = (
-                "Capability summary: all groups pooled together for this index. "
-                f"Status is {_readiness_label(palette_key).lower()} with Cp={cp_value:.3f}, Cpk={cpk_value:.3f}."
+                f"Capability summary: {_readiness_label(palette_key).lower()}. Cp={cp_value:.3f}, Cpk={cpk_value:.3f}. "
+                "Overall capability is computed from all groups pooled together."
             )
         elif capability_value is not None:
             palette_key = classify_capability_value(capability_value, label_prefix=capability_type).get('palette_key')
             callout_lines = [
-                f"Overall (all groups pooled): {capability_type} {_readiness_label(palette_key).lower()}",
-                f"Pooled {capability_type}={capability_value:.3f}",
+                f"Capability: {capability_type} {_readiness_label(palette_key).lower()}",
+                "Scope: all groups pooled",
+                f"{capability_type}={capability_value:.3f}",
             ]
             description = (
-                "Capability summary: all groups pooled together for this index. "
-                f"{capability_type} is {_readiness_label(palette_key).lower()} at {capability_value:.3f}."
+                f"Capability summary: {capability_type} {_readiness_label(palette_key).lower()} at {capability_value:.3f}. "
+                "Overall capability is computed from all groups pooled together."
             )
         else:
             status = str(capability_payload.get('status') or '').strip().lower()
