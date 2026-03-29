@@ -1255,6 +1255,17 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
     if group_analysis.get("skip_reason_message"):
         skip_message = f'<p class="chart-note">{html.escape(group_analysis["skip_reason_message"])}</p>'
 
+    metric_nav = ""
+    if metrics:
+        metric_nav_chips = "".join(
+            f'<a class="section-chip" href="#{html.escape(str(metric.get("id") or ""))}">'
+            f'{html.escape(str(metric.get("metric") or "Metric"))}</a>'
+            for metric in metrics
+            if str(metric.get("id") or "").strip()
+        )
+        if metric_nav_chips:
+            metric_nav = f'<nav class="section-nav">{metric_nav_chips}</nav>'
+
     metrics_markup = "".join(_render_group_analysis_metric(metric) for metric in metrics)
     details_row = ""
     if warning_messages or histogram_block:
@@ -1273,6 +1284,7 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
         f'{skip_message}'
         f'{summary_table}'
         f'{details_row}'
+        f'{metric_nav}'
         f'<div class="metric-stack">{metrics_markup}</div>'
         '</section>'
     )
