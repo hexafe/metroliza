@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Sequence
 
 import numpy as np
+from modules.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
     from _metroliza_distribution_fit_native import (  # type: ignore
@@ -50,6 +51,8 @@ def estimate_ad_pvalue_monte_carlo_native(
     seed: int | None,
 ) -> tuple[float | None, int] | None:
     """Execute AD Monte Carlo p-value estimation via native backend when available."""
+    if should_prefer_python_backend_in_auto_mode():
+        return None
     if _native_estimate_ad_pvalue_monte_carlo is None:
         return None
 
@@ -72,6 +75,8 @@ def compute_ad_ks_statistics_native(
     sample_values: Sequence[float],
 ) -> tuple[float, float] | None:
     """Execute AD+KS statistic kernels via native backend when available."""
+    if should_prefer_python_backend_in_auto_mode():
+        return None
     if _native_compute_ad_ks_statistics is None:
         return None
 
