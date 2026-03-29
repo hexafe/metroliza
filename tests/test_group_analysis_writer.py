@@ -295,7 +295,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
             if col == 14 and isinstance(value, str) and value.startswith('Caution: caution')
         )
         pairwise_data_height = next(height for row, height, *_ in worksheet.rows if row == pairwise_data_row)
-        self.assertGreater(pairwise_data_height, DEFAULT_SIMPLE_ROW_HEIGHT := 22)
+        self.assertGreater(pairwise_data_height, 22)
         self.assertEqual(worksheet.write_formats[(pairwise_data_row, 14)].get('props', {}).get('align'), 'left')
         self.assertEqual(worksheet.write_formats[(pairwise_data_row, 14)].get('props', {}).get('valign'), 'top')
 
