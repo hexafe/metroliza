@@ -2427,7 +2427,47 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
     binning = resolve_histogram_bin_count(histogram_values)
     bin_count = int(binning['bin_count'])
 
-    if _HAS_SEABORN:
+    group_labels = []
+    is_grouped = False
+    grouped_hist_frame = None
+    if group_column and group_column in header_group.columns:
+        grouped_hist_frame = header_group[[group_column, 'MEAS']].copy()
+        grouped_hist_frame['MEAS'] = pd.to_numeric(grouped_hist_frame['MEAS'], errors='coerce')
+        grouped_hist_frame = grouped_hist_frame.dropna(subset=['MEAS'])
+        grouped_hist_frame[group_column] = grouped_hist_frame[group_column].astype(str).str.strip()
+        grouped_hist_frame = grouped_hist_frame[grouped_hist_frame[group_column] != '']
+        if not grouped_hist_frame.empty:
+            group_labels = grouped_hist_frame[group_column].drop_duplicates().tolist()
+            is_grouped = len(group_labels) > 1
+
+    if is_grouped and grouped_hist_frame is not None:
+        histogram_palette = [
+            SUMMARY_PLOT_PALETTE['distribution_base'],
+            SUMMARY_PLOT_PALETTE['distribution_foreground'],
+            SUMMARY_PLOT_PALETTE['density_line'],
+            SUMMARY_PLOT_PALETTE['spec_limit'],
+            SUMMARY_PLOT_PALETTE['sigma_band'],
+        ]
+        bin_edges = np.histogram_bin_edges(histogram_values, bins=bin_count)
+        for index, label in enumerate(group_labels):
+            values = grouped_hist_frame.loc[grouped_hist_frame[group_column] == label, 'MEAS'].to_numpy(dtype=float)
+            if values.size == 0:
+                continue
+            color = histogram_palette[index % len(histogram_palette)]
+            mean_value = float(np.mean(values))
+            ax.hist(
+                values,
+                bins=bin_edges,
+                density=False,
+                alpha=0.42,
+                color=color,
+                edgecolor=(1.0, 1.0, 1.0, 0.72),
+                linewidth=0.5,
+                label=f"{label} (n={values.size}, μ={mean_value:.3f})",
+            )
+            ax.axvline(mean_value, color=color, linestyle='-.', linewidth=1.0, alpha=0.85)
+        ax.legend(loc='upper left', frameon=True, fontsize=7.0, title='Group (n, mean)', title_fontsize=7.0)
+    elif _HAS_SEABORN:
         sns.histplot(
             x=histogram_values,
             bins=bin_count,
@@ -2465,8 +2505,8 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
         count_scale_factor = float(histogram_values.size) * representative_bin_width
 
     return {
-        'is_grouped': False,
-        'group_labels': [],
+        'is_grouped': is_grouped,
+        'group_labels': group_labels if is_grouped else [],
         'count_scale_factor': count_scale_factor,
     }
 
