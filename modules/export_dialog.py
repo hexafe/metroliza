@@ -233,6 +233,16 @@ class ExportDialog(QDialog):
     def apply_selected_preset(self):
         """Apply the selected preset values to export controls and save them."""
         try:
+            required_controls = (
+                'export_type_combobox',
+                'sort_measurements_combobox',
+                'violin_plot_min_samplesize',
+                'summary_plot_scale',
+                'hide_ok_results_checkbox',
+            )
+            if any(not hasattr(self, control_name) for control_name in required_controls):
+                return
+
             selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
             preset_options = build_export_options_for_preset(selected_preset)
             self.export_type_combobox.setCurrentText(preset_options['export_type'].title())
