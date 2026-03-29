@@ -375,13 +375,15 @@ class ExportDialog(QDialog):
             self.sort_measurements_combobox.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
 
             # The report profile section is tight enough on some styles that the wrapped notes and
-            # the final combobox clip by a few pixels. Give those controls a small vertical buffer.
-            for widget in (
-                self.google_sheets_note_label,
-                self.html_dashboard_note_label,
-                self.sort_measurements_combobox,
-            ):
-                widget.setMinimumHeight(widget.sizeHint().height() + 4)
+            # the final combobox clip by a few pixels. Give those controls a small vertical buffer
+            # and enforce conservative floors so style-dependent size hints do not regress layout.
+            buffered_minimums = {
+                self.google_sheets_note_label: 30,
+                self.html_dashboard_note_label: 24,
+                self.sort_measurements_combobox: 22,
+            }
+            for widget, minimum_floor in buffered_minimums.items():
+                widget.setMinimumHeight(max(widget.sizeHint().height() + 4, minimum_floor))
 
             self.group_analysis_level_label = QLabel("Group analysis level:")
             self.group_analysis_level_combobox = QComboBox()
