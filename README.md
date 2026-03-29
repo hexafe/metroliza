@@ -185,11 +185,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.03rc2(260322)`): Group Analysis is now easier to read, with updated user manuals for grouped export workflows.
+Current release highlight (`2026.03rc3(260329)`): Exports are faster and easier to review, with an updated Group Analysis sheet and optional HTML dashboard output when selected.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.03rc2(260322)`)
+### Changelog highlights (release `2026.03rc3(260329)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
