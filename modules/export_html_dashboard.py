@@ -865,6 +865,75 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       background: #fff;
       margin-top: 14px;
     }}
+    .chart-image-trigger {{
+      display: block;
+      width: 100%;
+      border: 0;
+      padding: 0;
+      margin: 0;
+      background: transparent;
+      cursor: zoom-in;
+      text-align: left;
+    }}
+    .chart-image-trigger:focus-visible {{
+      outline: 3px solid rgba(214, 110, 47, 0.45);
+      outline-offset: 2px;
+    }}
+    .lightbox {{
+      position: fixed;
+      inset: 0;
+      z-index: 900;
+      border: 0;
+      margin: 0;
+      padding: 0;
+      max-width: 100vw;
+      max-height: 100vh;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(10, 16, 24, 0.9);
+    }}
+    .lightbox::backdrop {{
+      background: rgba(10, 16, 24, 0.9);
+    }}
+    .lightbox-shell {{
+      position: relative;
+      width: min(1600px, calc(100vw - 24px));
+      height: min(96vh, calc(100vh - 24px));
+      margin: 12px auto;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 8px;
+    }}
+    .lightbox-close {{
+      justify-self: end;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+      padding: 8px 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .lightbox-figure {{
+      margin: 0;
+      min-height: 0;
+      display: grid;
+      justify-items: center;
+      align-content: center;
+      gap: 10px;
+    }}
+    .lightbox-figure img {{
+      width: auto;
+      max-width: 100%;
+      max-height: calc(100vh - 132px);
+      border-radius: 10px;
+      background: #fff;
+    }}
+    .lightbox-figure figcaption {{
+      color: #f3f7fb;
+      font-size: 15px;
+      text-align: center;
+    }}
     .detail-grid {{
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1018,6 +1087,50 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       <pre>{manifest_json}</pre>
     </details>
   </div>
+  <dialog id="chart-lightbox" class="lightbox" aria-label="Enlarged chart">
+    <div class="lightbox-shell">
+      <button type="button" class="lightbox-close" id="chart-lightbox-close">Close</button>
+      <figure class="lightbox-figure">
+        <img id="chart-lightbox-image" src="" alt="">
+        <figcaption id="chart-lightbox-caption"></figcaption>
+      </figure>
+    </div>
+  </dialog>
+  <script>
+    (() => {{
+      const lightbox = document.getElementById('chart-lightbox');
+      const lightboxImage = document.getElementById('chart-lightbox-image');
+      const lightboxCaption = document.getElementById('chart-lightbox-caption');
+      const closeButton = document.getElementById('chart-lightbox-close');
+      if (!lightbox || !lightboxImage || !closeButton) return;
+
+      const closeLightbox = () => {{
+        if (lightbox.open) {{
+          lightbox.close();
+        }}
+      }};
+
+      document.querySelectorAll('.chart-image-trigger').forEach((trigger) => {{
+        trigger.addEventListener('click', () => {{
+          const source = trigger.getAttribute('data-image-src') || '';
+          const caption = trigger.getAttribute('data-image-caption') || '';
+          if (!source) return;
+          lightboxImage.setAttribute('src', source);
+          lightboxImage.setAttribute('alt', caption || 'Enlarged chart');
+          lightboxCaption.textContent = caption;
+          lightbox.showModal();
+        }});
+      }});
+
+      closeButton.addEventListener('click', closeLightbox);
+      lightbox.addEventListener('click', (event) => {{
+        if (event.target === lightbox) closeLightbox();
+      }});
+      document.addEventListener('keydown', (event) => {{
+        if (event.key === 'Escape' && lightbox.open) closeLightbox();
+      }});
+    }})();
+  </script>
 </body>
 </html>
 """
@@ -1141,7 +1254,11 @@ def _render_chart_card(chart: dict[str, Any]) -> str:
         f'<h3>{html.escape(str(chart.get("title") or ""))}</h3>'
         f'{note_markup}'
         '</header>'
+        f'<button type="button" class="chart-image-trigger" aria-label="Enlarge chart: {html.escape(str(chart.get("title") or chart.get("chart_type") or "chart"))}" '
+        f'data-image-src="{html.escape(str(chart.get("image_path") or ""))}" '
+        f'data-image-caption="{html.escape(str(chart.get("title") or chart.get("chart_type") or "chart"))}">'
         f'<img src="{html.escape(str(chart.get("image_path") or ""))}" alt="{html.escape(str(chart.get("title") or chart.get("chart_type") or "chart"))}">'
+        '</button>'
         f'{detail_markup}'
         f'{details_toggle}'
         '</article>'
