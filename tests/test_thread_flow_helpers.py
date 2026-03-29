@@ -3000,6 +3000,61 @@ class TestExportBackendSmoke(unittest.TestCase):
         assert worksheet.insert_calls
         assert render_calls['count'] == 1
 
+    def test_summary_sheet_fill_histogram_uses_population_view_even_when_grouping_applied(self):
+        import pandas as pd
+        import modules.export_data_thread as export_thread_module
+        from modules.contracts import AppPaths, ExportOptions, ExportRequest
+
+        class _FakeSummaryWorksheet:
+            def __init__(self):
+                self.insert_calls = []
+
+            def write(self, *_args, **_kwargs):
+                return None
+
+            def insert_image(self, row, col, _path, options):
+                self.insert_calls.append((row, col, options))
+
+        request = ExportRequest(
+            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+            options=ExportOptions(generate_summary_sheet=True),
+        )
+        thread = ExportDataThread(request)
+        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
+        thread._register_chart_image = lambda payload: payload
+
+        header_group = pd.DataFrame(
+            {
+                'MEAS': [9.9, 10.0, 10.1, 10.2, 10.3, 10.4],
+                'NOM': [10.0] * 6,
+                '+TOL': [0.2] * 6,
+                '-TOL': [-0.2] * 6,
+                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
+                'DATE': ['2024-01-01'] * 6,
+            }
+        )
+        worksheet = _FakeSummaryWorksheet()
+        captured_group_columns = []
+        original_render_histogram = export_thread_module.render_histogram
+
+        def _capture_render_histogram(*args, **kwargs):
+            captured_group_columns.append(kwargs.get('group_column'))
+            return original_render_histogram(*args, **kwargs)
+
+        def _fake_apply_group_assignments(frame, _grouping_df):
+            grouped = frame.copy()
+            grouped['GROUP'] = ['A', 'A', 'B', 'B', 'A', 'B']
+            return grouped, True
+
+        thread._apply_group_assignments = _fake_apply_group_assignments
+
+        with mock.patch('modules.export_data_thread.render_histogram', side_effect=_capture_render_histogram):
+            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+
+        assert worksheet.insert_calls
+        assert captured_group_columns
+        assert captured_group_columns[-1] is None
+
     def test_summary_sheet_fill_histogram_native_and_matplotlib_paths_keep_same_worksheet_slot(self):
         import pandas as pd
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
