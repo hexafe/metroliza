@@ -223,21 +223,20 @@ def native_trend_backend_available() -> bool:
 
 
 def resolve_chart_renderer_backend() -> ResolvedBackend:
-    """Resolve the primary chart renderer backend policy for histogram exports."""
+    """Resolve the primary chart renderer backend policy for histogram exports.
+
+    Native rendering is temporarily disabled for export stability; all chart
+    rendering paths currently resolve to matplotlib.
+    """
     backend = _runtime_backend_choice()
     if backend == "matplotlib":
         return "matplotlib"
     if backend == "native":
-        if not native_chart_backend_available():
-            warnings.warn(
-                "METROLIZA_CHART_RENDERER_BACKEND=native requested but native histogram rendering is unavailable; falling back to matplotlib backend.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            return "matplotlib"
-        return "native"
-    if native_chart_backend_available():
-        return "native"
+        warnings.warn(
+            "METROLIZA_CHART_RENDERER_BACKEND=native requested but native chart rendering is temporarily disabled; falling back to matplotlib backend.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     return "matplotlib"
 
 
@@ -248,9 +247,11 @@ def resolve_distribution_renderer_backend() -> ResolvedBackend:
     if backend == "matplotlib":
         return "matplotlib"
     if backend == "native":
-        return "native" if native_distribution_backend_available() else "matplotlib"
-    if native_distribution_backend_available():
-        return "native"
+        warnings.warn(
+            "METROLIZA_CHART_RENDERER_BACKEND=native requested but native chart rendering is temporarily disabled; falling back to matplotlib backend.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     return "matplotlib"
 
 
