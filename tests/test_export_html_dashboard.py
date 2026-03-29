@@ -177,6 +177,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('Capability CI', html_text)
             self.assertIn('Cpk: 95% CI 0.213 to 0.647', html_text)
             self.assertIn('<th>Cpk</th>', html_text)
+            self.assertIn('chart-lightbox', html_text)
+            self.assertIn('chart-image-trigger', html_text)
+            self.assertIn('Enlarge chart: Diameter / X', html_text)
             self.assertNotIn('Capability type', html_text)
             self.assertNotIn('"cp": null', html_text)
 
