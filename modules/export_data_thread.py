@@ -4658,6 +4658,7 @@ class ExportDataThread(QThread):
                 continue
             per_group_capability.append((group_label, group_capability))
 
+        per_group_capability_label = 'Cpk' if cp_value is not None and cpk_value is not None else capability_type
         group_summary_line = None
         if per_group_capability:
             per_group_capability.sort(key=lambda item: item[0])
@@ -4666,12 +4667,12 @@ class ExportDataThread(QThread):
                     f"{label}={value:.3f}"
                     for label, value in per_group_capability
                 )
-                group_summary_line = f"Per-group: {rendered_groups}"
+                group_summary_line = f"Per-group {per_group_capability_label}: {rendered_groups}"
             else:
                 weakest_group = min(per_group_capability, key=lambda item: item[1])
                 strongest_group = max(per_group_capability, key=lambda item: item[1])
                 group_summary_line = (
-                    "Per-group range: "
+                    f"Per-group {per_group_capability_label} range: "
                     f"{weakest_group[0]}={weakest_group[1]:.3f} "
                     f"to {strongest_group[0]}={strongest_group[1]:.3f}"
                 )
@@ -4710,7 +4711,7 @@ class ExportDataThread(QThread):
 
         if group_summary_line:
             callout_lines.append(group_summary_line)
-            description = f"{description} Per-group capability values are shown separately for quick comparison."
+            description = f"{description} Per-group capability values are shown separately for quick comparison and are labeled explicitly on the plot."
 
         if ci_lower is not None and ci_upper is not None:
             callout_lines.append(f"95% CI {ci_lower:.3f} to {ci_upper:.3f}")
