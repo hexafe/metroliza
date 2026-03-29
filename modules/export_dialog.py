@@ -377,12 +377,12 @@ class ExportDialog(QDialog):
             # The report profile section is tight enough on some styles that the wrapped notes and
             # the final combobox clip by a few pixels. Give those controls a small vertical buffer
             # and enforce conservative floors so style-dependent size hints do not regress layout.
-            buffered_minimums = {
-                self.google_sheets_note_label: 30,
-                self.html_dashboard_note_label: 24,
-                self.sort_measurements_combobox: 22,
-            }
-            for widget, minimum_floor in buffered_minimums.items():
+            buffered_minimums = (
+                (self.google_sheets_note_label, 30),
+                (self.html_dashboard_note_label, 24),
+                (self.sort_measurements_combobox, 22),
+            )
+            for widget, minimum_floor in buffered_minimums:
                 widget.setMinimumHeight(max(widget.sizeHint().height() + 4, minimum_floor))
 
             self.group_analysis_level_label = QLabel("Group analysis level:")
