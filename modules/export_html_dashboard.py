@@ -583,8 +583,23 @@ def _normalize_rows_table(rows: Any, *, preferred_columns: list[str] | None = No
             if key not in column_order:
                 column_order.append(key)
 
+    column_labels: dict[str, str] = {}
+    if "capability" in column_order and "capability_type" in column_order:
+        capability_types = {
+            str(row.get("capability_type")).strip()
+            for row in normalized_rows
+            if str(row.get("capability_type") or "").strip()
+        }
+        if len(capability_types) == 1:
+            capability_label = next(iter(capability_types))
+            column_labels["capability"] = capability_label
+            column_order = [key for key in column_order if key != "capability_type"]
+
     return {
-        "columns": [{"key": key, "label": _humanize_field_label(str(key))} for key in column_order],
+        "columns": [
+            {"key": key, "label": column_labels.get(key) or _humanize_field_label(str(key))}
+            for key in column_order
+        ],
         "rows": [
             {
                 key: _format_capability_ci_value(row.get(key))

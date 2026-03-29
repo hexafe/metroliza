@@ -175,6 +175,8 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('Descriptive stats', html_text)
             self.assertIn('Capability CI', html_text)
             self.assertIn('Cpk: 95% CI 0.213 to 0.647', html_text)
+            self.assertIn('<th>Cpk</th>', html_text)
+            self.assertNotIn('Capability type', html_text)
             self.assertNotIn('"cp": null', html_text)
 
             asset_files = list(Path(result['html_dashboard_assets_path']).glob('*.png'))
