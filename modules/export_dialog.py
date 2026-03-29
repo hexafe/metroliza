@@ -233,6 +233,16 @@ class ExportDialog(QDialog):
     def apply_selected_preset(self):
         """Apply the selected preset values to export controls and save them."""
         try:
+            required_controls = (
+                'export_type_combobox',
+                'sort_measurements_combobox',
+                'violin_plot_min_samplesize',
+                'summary_plot_scale',
+                'hide_ok_results_checkbox',
+            )
+            if any(not hasattr(self, control_name) for control_name in required_controls):
+                return
+
             selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
             preset_options = build_export_options_for_preset(selected_preset)
             self.export_type_combobox.setCurrentText(preset_options['export_type'].title())
@@ -375,13 +385,17 @@ class ExportDialog(QDialog):
             self.sort_measurements_combobox.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
 
             # The report profile section is tight enough on some styles that the wrapped notes and
-            # the final combobox clip by a few pixels. Give those controls a small vertical buffer.
-            for widget in (
-                self.google_sheets_note_label,
-                self.html_dashboard_note_label,
-                self.sort_measurements_combobox,
-            ):
-                widget.setMinimumHeight(widget.sizeHint().height() + 4)
+            # the final combobox clip by a few pixels. Give those controls a small vertical buffer
+            # and enforce conservative floors so style-dependent size hints do not regress layout.
+            self.google_sheets_note_label.setMinimumHeight(
+                max(self.google_sheets_note_label.sizeHint().height() + 4, 30)
+            )
+            self.html_dashboard_note_label.setMinimumHeight(
+                max(self.html_dashboard_note_label.sizeHint().height() + 4, 24)
+            )
+            self.sort_measurements_combobox.setMinimumHeight(
+                max(self.sort_measurements_combobox.sizeHint().height() + 4, 22)
+            )
 
             self.group_analysis_level_label = QLabel("Group analysis level:")
             self.group_analysis_level_combobox = QComboBox()

@@ -39,14 +39,33 @@ class TestExportDialogLayout(unittest.TestCase):
             """
         )
 
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=Path(__file__).resolve().parents[1],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=Path(__file__).resolve().parents[1],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            headless_runtime_markers = (
+                "libGL.so.1",
+                "libEGL.so.1",
+                "Could not load the Qt platform plugin",
+                "no Qt platform plugin could be initialized",
+                "qt.qpa.plugin",
+            )
+            if any(marker in stderr for marker in headless_runtime_markers):
+                self.skipTest(f"PyQt runtime dependency missing in test environment: {stderr}")
+            self.fail(
+                "ExportDialog probe subprocess failed unexpectedly.\n"
+                f"Return code: {exc.returncode}\n"
+                f"STDOUT:\n{(exc.stdout or '').strip()}\n"
+                f"STDERR:\n{stderr}"
+            )
+
 
         payload = json.loads(result.stdout.strip().splitlines()[-1])
         expected_minimums = {
