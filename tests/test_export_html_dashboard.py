@@ -4,6 +4,7 @@ from io import BytesIO
 from pathlib import Path
 
 from modules.export_html_dashboard import (
+    _render_overview_cards,
     resolve_html_dashboard_assets_dir,
     resolve_html_dashboard_path,
     write_export_html_dashboard,
@@ -11,6 +12,23 @@ from modules.export_html_dashboard import (
 
 
 class TestExportHtmlDashboard(unittest.TestCase):
+    def test_render_overview_cards_formats_generated_as_date_and_time_lines(self):
+        html_markup = _render_overview_cards(
+            {
+                'generated_at': '2026-03-29T18:09:38+02:00',
+                'section_count': 3,
+                'chart_count': 7,
+                'chart_observability_summary': {
+                    'chart_backend_distribution': {'counts': {'native': 2, 'matplotlib': 5}},
+                },
+            }
+        )
+
+        self.assertIn('metric-value-line', html_markup)
+        self.assertIn('2026-03-29', html_markup)
+        self.assertIn('18:09:38+02:00', html_markup)
+        self.assertNotIn('2026-03-29T18:09:38+02:00', html_markup)
+
     def test_resolve_dashboard_paths_follow_workbook_stem(self):
         html_path = resolve_html_dashboard_path('reports/out.xlsx')
         assets_path = resolve_html_dashboard_assets_dir(html_path)
