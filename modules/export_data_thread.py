@@ -4637,6 +4637,8 @@ class ExportDataThread(QThread):
         if not isinstance(capability_payload, dict):
             return {}
 
+        descriptive_rows = metric_row.get('descriptive_stats') if isinstance(metric_row.get('descriptive_stats'), list) else []
+
         cp_value = _as_float(capability_payload.get('cp'))
         cpk_value = _as_float(capability_payload.get('cpk'))
         capability_value = _as_float(capability_payload.get('capability'))
@@ -4646,20 +4648,54 @@ class ExportDataThread(QThread):
         ci_lower = _as_float((cpk_ci or {}).get('lower')) if isinstance(cpk_ci, dict) else None
         ci_upper = _as_float((cpk_ci or {}).get('upper')) if isinstance(cpk_ci, dict) else None
 
+        per_group_capability = []
+        for row in descriptive_rows:
+            if not isinstance(row, dict):
+                continue
+            group_label = str(row.get('group') or '').strip()
+            group_capability = _as_float(row.get('capability'))
+            if not group_label or group_capability is None:
+                continue
+            per_group_capability.append((group_label, group_capability))
+
+        group_summary_line = None
+        if per_group_capability:
+            per_group_capability.sort(key=lambda item: item[0])
+            if len(per_group_capability) <= 3:
+                rendered_groups = ', '.join(
+                    f"{label}={value:.3f}"
+                    for label, value in per_group_capability
+                )
+                group_summary_line = f"Per-group: {rendered_groups}"
+            else:
+                weakest_group = min(per_group_capability, key=lambda item: item[1])
+                strongest_group = max(per_group_capability, key=lambda item: item[1])
+                group_summary_line = (
+                    "Per-group range: "
+                    f"{weakest_group[0]}={weakest_group[1]:.3f} "
+                    f"to {strongest_group[0]}={strongest_group[1]:.3f}"
+                )
+
         if cp_value is not None and cpk_value is not None:
             palette_key = classify_capability_status(cp_value, cpk_value).get('palette_key')
             callout_lines = [
-                f"Capability: {_readiness_label(palette_key)}",
-                f"Cp={cp_value:.3f}, Cpk={cpk_value:.3f}",
+                f"Overall (all groups pooled): {_readiness_label(palette_key)}",
+                f"Pooled Cp={cp_value:.3f}, Cpk={cpk_value:.3f}",
             ]
-            description = f"Capability summary: {_readiness_label(palette_key).lower()}. Cp={cp_value:.3f}, Cpk={cpk_value:.3f}."
+            description = (
+                "Capability summary: all groups pooled together for this index. "
+                f"Status is {_readiness_label(palette_key).lower()} with Cp={cp_value:.3f}, Cpk={cpk_value:.3f}."
+            )
         elif capability_value is not None:
             palette_key = classify_capability_value(capability_value, label_prefix=capability_type).get('palette_key')
             callout_lines = [
-                f"Capability: {capability_type} {_readiness_label(palette_key).lower()}",
-                f"{capability_type}={capability_value:.3f}",
+                f"Overall (all groups pooled): {capability_type} {_readiness_label(palette_key).lower()}",
+                f"Pooled {capability_type}={capability_value:.3f}",
             ]
-            description = f"Capability summary: {capability_type} {_readiness_label(palette_key).lower()} at {capability_value:.3f}."
+            description = (
+                "Capability summary: all groups pooled together for this index. "
+                f"{capability_type} is {_readiness_label(palette_key).lower()} at {capability_value:.3f}."
+            )
         else:
             status = str(capability_payload.get('status') or '').strip().lower()
             if status == 'not_applicable':
@@ -4669,6 +4705,10 @@ class ExportDataThread(QThread):
                     'description': 'Capability is not applicable with the current data or spec definition.',
                 }
             return {}
+
+        if group_summary_line:
+            callout_lines.append(group_summary_line)
+            description = f"{description} Per-group capability values are shown separately for quick comparison."
 
         if ci_lower is not None and ci_upper is not None:
             callout_lines.append(f"95% CI {ci_lower:.3f} to {ci_upper:.3f}")
