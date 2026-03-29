@@ -828,6 +828,33 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       letter-spacing: 0.12em;
       color: var(--muted);
     }}
+    .detail-cards {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 10px;
+    }}
+    .detail-card {{
+      background: rgba(255, 255, 255, 0.68);
+      border: 1px solid rgba(22, 35, 48, 0.08);
+      border-radius: 14px;
+      padding: 10px 12px;
+      min-width: 0;
+    }}
+    .detail-card-label {{
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.10em;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }}
+    .detail-card-value {{
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.35;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }}
     .detail-table,
     .data-table {{
       width: 100%;
@@ -1051,17 +1078,17 @@ def _render_chart_payload_details(details: dict[str, Any]) -> str:
         panels.append(
             _render_detail_panel(
                 summary_rows.get("title") or "Statistics",
-                _render_summary_table(rendered_summary_rows),
+                _render_detail_cards(rendered_summary_rows),
             )
         )
 
     annotations = _normalize_summary_rows(details.get("annotations"))
     if annotations:
-        panels.append(_render_detail_panel("Annotations", _render_summary_table(annotations)))
+        panels.append(_render_detail_panel("Annotations", _render_detail_cards(annotations)))
 
     spec_lines = _normalize_summary_rows(details.get("specification_lines"))
     if spec_lines:
-        panels.append(_render_detail_panel("Specification Lines", _render_summary_table(spec_lines)))
+        panels.append(_render_detail_panel("Specification Lines", _render_detail_cards(spec_lines)))
 
     overlay_meta = details.get("modeled_overlays") if isinstance(details.get("modeled_overlays"), dict) else {}
     overlay_rows = [str(item) for item in (overlay_meta.get("rows") or []) if str(item).strip()]
@@ -1080,13 +1107,24 @@ def _render_chart_payload_details(details: dict[str, Any]) -> str:
         ]
     )
     if context_rows:
-        panels.append(_render_detail_panel("Context", _render_summary_table(context_rows)))
+        panels.append(_render_detail_panel("Context", _render_detail_cards(context_rows)))
 
     return f'<div class="detail-grid">{"".join(panels)}</div>' if panels else ""
 
 
 def _render_detail_panel(title: str, content: str) -> str:
     return f'<section class="detail-panel"><h4>{html.escape(str(title or ""))}</h4>{content}</section>'
+
+
+def _render_detail_cards(rows: list[dict[str, str]]) -> str:
+    if not rows:
+        return ""
+    cards = "".join(
+        f'<div class="detail-card"><div class="detail-card-label">{html.escape(row["label"])}</div>'
+        f'<div class="detail-card-value">{html.escape(row["value"])}</div></div>'
+        for row in rows
+    )
+    return f'<div class="detail-cards">{cards}</div>'
 
 
 def _render_summary_table(rows: list[dict[str, str]]) -> str:

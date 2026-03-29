@@ -53,7 +53,20 @@ class TestExportHtmlDashboard(unittest.TestCase):
                                     'bin_count': 8,
                                     'visual_metadata': {
                                         'annotation_rows': [{'label': 'Mean', 'text': 'Mean = 10.01'}],
-                                        'summary_stats_table': {'rows': [('Mean', '10.01')]},
+                                        'summary_stats_table': {
+                                            'rows': [
+                                                ('Min', '9.90'),
+                                                ('Max', '10.10'),
+                                                ('Mean', '10.01'),
+                                                ('Median', '10.00'),
+                                                ('Std Dev', '0.07'),
+                                                ('Cp', '1.31'),
+                                                ('Cpk', '1.42'),
+                                                ('NOK', '1'),
+                                                ('NOK %', '12.50%'),
+                                                ('Samples', '8'),
+                                            ]
+                                        },
                                         'specification_lines': [
                                             {'label': 'LSL', 'value': 9.8, 'enabled': True},
                                             {'label': 'USL', 'value': 10.2, 'enabled': True},
@@ -133,6 +146,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
             html_text = Path(result['html_dashboard_path']).read_text(encoding='utf-8')
             self.assertIn('Diameter / X', html_text)
             self.assertIn('Extended histogram', html_text)
+            self.assertIn('detail-cards', html_text)
+            self.assertIn('detail-card-label', html_text)
+            self.assertIn('detail-card-value', html_text)
             self.assertIn('Mean = 10.01', html_text)
             self.assertIn('Selected model curve', html_text)
             self.assertIn('KDE reference (dashed)', html_text)
