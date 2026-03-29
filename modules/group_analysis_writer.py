@@ -16,20 +16,20 @@ DEFAULT_PLOT_ROW_SPAN = 16
 DEFAULT_ROW_HEIGHT = 22
 DEFAULT_LINE_HEIGHT = 14
 GROUP_ANALYSIS_COLUMN_WIDTHS = {
-    0: 20,
-    1: 12,
-    2: 14,
-    3: 12,
-    4: 14,
-    5: 14,
-    6: 14,
-    7: 14,
-    8: 14,
-    9: 14,
-    10: 16,
-    11: 18,
-    12: 16,
-    13: 18,
+    0: 16,
+    1: 10,
+    2: 11,
+    3: 11,
+    4: 11,
+    5: 11,
+    6: 11,
+    7: 11,
+    8: 12,
+    9: 12,
+    10: 12,
+    11: 16,
+    12: 14,
+    13: 14,
     14: 18,
 }
 METRIC_TITLE_LAST_COL = 14
@@ -120,6 +120,7 @@ def _build_formats(worksheet):
     if cached is not None:
         return cached
 
+    table_border = 1
     formats = {
         'title_fmt': workbook.add_format({
             'bg_color': '#1F2937',
@@ -128,16 +129,18 @@ def _build_formats(worksheet):
             'bold': True,
             'align': 'left',
             'valign': 'vcenter',
+            'border': table_border,
             'bottom': 2,
         }),
         'metric_fmt': workbook.add_format({
-            'bg_color': '#1D4E89',
+            'bg_color': '#1E3A5F',
             'pattern': 1,
             'font_color': '#FFFFFF',
             'bold': True,
             'align': 'left',
             'valign': 'vcenter',
             'text_wrap': False,
+            'border': table_border,
             'bottom': 2,
         }),
         'section_fmt': workbook.add_format({
@@ -147,57 +150,69 @@ def _build_formats(worksheet):
             'bold': True,
             'align': 'left',
             'valign': 'vcenter',
+            'border': table_border,
             'bottom': 1,
         }),
         'header_fmt': workbook.add_format({
-            'bg_color': '#D9EAF7',
+            'bg_color': '#E8EEF5',
             'pattern': 1,
+            'font_color': '#0F172A',
             'bold': True,
             'align': 'center',
             'valign': 'vcenter',
             'text_wrap': True,
+            'border': table_border,
             'bottom': 1,
         }),
         'text_wrap_fmt': workbook.add_format({
             'align': 'left',
             'valign': 'top',
             'text_wrap': True,
+            'border': table_border,
         }),
         'text_top_fmt': workbook.add_format({
             'align': 'left',
             'valign': 'top',
+            'border': table_border,
         }),
         'text_left_middle_fmt': workbook.add_format({
             'align': 'left',
             'valign': 'vcenter',
             'text_wrap': False,
+            'border': table_border,
         }),
         'table_center_fmt': workbook.add_format({
             'align': 'center',
             'valign': 'vcenter',
+            'border': table_border,
         }),
         'table_center_wrap_fmt': workbook.add_format({
             'align': 'center',
             'valign': 'vcenter',
             'text_wrap': True,
+            'border': table_border,
         }),
         'note_fmt': workbook.add_format({
-            'bg_color': '#FFF7D6',
+            'bg_color': '#F8FAFC',
             'pattern': 1,
+            'font_color': '#334155',
             'align': 'left',
             'valign': 'top',
             'text_wrap': True,
+            'border': table_border,
         }),
         'summary_label_fmt': workbook.add_format({
             'bold': True,
             'bg_color': '#EEF2F7',
             'pattern': 1,
+            'border': table_border,
             'bottom': 1,
         }),
         'summary_label_wrap_fmt': workbook.add_format({
             'bold': True,
             'bg_color': '#EEF2F7',
             'pattern': 1,
+            'border': table_border,
             'bottom': 1,
             'text_wrap': True,
             'valign': 'top',
@@ -206,54 +221,75 @@ def _build_formats(worksheet):
             'align': 'left',
             'valign': 'vcenter',
             'text_wrap': False,
+            'border': table_border,
             'bottom': 1,
         }),
         'summary_value_wrap_fmt': workbook.add_format({
             'align': 'left',
             'valign': 'top',
             'text_wrap': True,
+            'border': table_border,
             'bottom': 1,
         }),
         'overview_value_fmt': workbook.add_format({
             'align': 'left',
             'valign': 'top',
             'text_wrap': True,
+            'border': table_border,
             'bottom': 1,
-            'bg_color': '#FFF7D6',
+            'bg_color': '#F8FAFC',
             'pattern': 1,
         }),
         'takeaway_label_fmt': workbook.add_format({
             'bold': True,
             'bg_color': '#EEF2F7',
             'pattern': 1,
+            'border': table_border,
             'bottom': 1,
             'align': 'center',
             'valign': 'vcenter',
             'text_wrap': False,
         }),
         'takeaway_value_fmt': workbook.add_format({
-            'bg_color': '#FFF7D6',
+            'bg_color': '#F8FAFC',
             'pattern': 1,
             'align': 'left',
             'valign': 'top',
             'text_wrap': True,
+            'border': table_border,
             'bottom': 1,
         }),
-        'num_fmt': workbook.add_format({'num_format': '0.000', 'align': 'center', 'valign': 'vcenter'}),
-        'pvalue_fmt': workbook.add_format({'num_format': '0.0000', 'align': 'center', 'valign': 'vcenter'}),
-        'default_data_fmt': workbook.add_format({'align': 'center', 'valign': 'vcenter'}),
+        'num_fmt': workbook.add_format({'num_format': '0.000', 'align': 'center', 'valign': 'vcenter', 'border': table_border}),
+        'pvalue_fmt': workbook.add_format({'num_format': '0.0000', 'align': 'center', 'valign': 'vcenter', 'border': table_border}),
+        'default_data_fmt': workbook.add_format({'align': 'center', 'valign': 'vcenter', 'border': table_border}),
         'positive': workbook.add_format({'bg_color': '#E6F4EA', 'font_color': '#1E4620', 'pattern': 1}),
         'neutral': workbook.add_format({'bg_color': '#EEF2F7', 'font_color': '#334155', 'pattern': 1}),
         'warning': workbook.add_format({'bg_color': '#FFF4CC', 'font_color': '#7A4E00', 'pattern': 1}),
         'strong_warning': workbook.add_format({'bg_color': '#FDE2E1', 'font_color': '#8B1C13', 'bold': True, 'pattern': 1}),
-        'muted': workbook.add_format({'bg_color': '#F7F7F7', 'font_color': '#8A8F98', 'pattern': 1}),
+        'muted': workbook.add_format({'bg_color': '#F7F7F7', 'font_color': '#556270', 'pattern': 1}),
         'yes': workbook.add_format({'bg_color': '#E8F3FF', 'font_color': '#0B4F8C', 'bold': True, 'pattern': 1}),
         'no': workbook.add_format({'bg_color': '#F3F4F6', 'font_color': '#6B7280', 'pattern': 1}),
-        'delta_mean_fixed_3': workbook.add_format({'num_format': '0.000'}),
+        'delta_mean_fixed_3': workbook.add_format({'num_format': '0.000', 'border': table_border}),
         'hyperlink_fmt': workbook.add_format({
             'font_color': '#0B4F8C',
             'underline': 1,
             'valign': 'top',
+        }),
+        'hyperlink_cell_fmt': workbook.add_format({
+            'font_color': '#0B4F8C',
+            'underline': 1,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': table_border,
+        }),
+        'band_hyperlink_cell_fmt': workbook.add_format({
+            'bg_color': '#F8FAFC',
+            'pattern': 1,
+            'font_color': '#0B4F8C',
+            'underline': 1,
+            'align': 'center',
+            'valign': 'vcenter',
+            'border': table_border,
         }),
         'card_default_fmt': workbook.add_format({
             'bg_color': '#F8FAFC',
@@ -949,7 +985,6 @@ def _build_metric_anchor_text(metric_row):
 
 
 def _format_metric_highlights(metric_row, capability_summary_text):
-    insights_text = _format_metric_insights(metric_row)
     shape_note = str(
         metric_row.get('metric_note')
         or (metric_row.get('distribution_difference') or {}).get('comment / verdict')
@@ -962,16 +997,15 @@ def _format_metric_highlights(metric_row, capability_summary_text):
     ).strip()
     if _is_compact_metric(metric_row):
         highlights = [
-            ('Stat signal', _format_metric_stat_signal(metric_row)),
+            ('Priority signal', _build_metric_priority_reason(metric_row)),
             ('Capability summary', capability_summary_text),
             ('Recommended action', str(metric_row.get('recommended_action') or '').strip()),
         ]
         return [(label, value) for label, value in highlights if str(value or '').strip()]
     highlights = [
         ('Priority signal', _build_metric_priority_reason(metric_row)),
-        ('Stat signal', _format_metric_stat_signal(metric_row)),
         ('Capability summary', capability_summary_text),
-        ('Key insights', _combine_nonempty_lines(insights_text, shape_note)),
+        ('Shape note', shape_note),
         ('Recommended action', str(metric_row.get('recommended_action') or '').strip()),
         ('Use caution', caution_text),
     ]
@@ -1002,8 +1036,32 @@ def _format_distribution_note(entry):
     return _combine_nonempty_lines(capability_detail, fit_note, caution_note)
 
 
+def _format_descriptive_ci(entry):
+    capability_ci = ((entry.get('capability_ci') or {}).get('cpk') if isinstance(entry.get('capability_ci'), dict) else None)
+    return _format_ci_interval(capability_ci, digits=3)
+
+
+def _format_descriptive_fit_model(entry):
+    return str(entry.get('best_fit_model') or '').strip()
+
+
+def _format_descriptive_fit_quality(entry):
+    return str(entry.get('fit_quality') or '').strip()
+
+
+def _format_descriptive_notes(entry):
+    parts = []
+    caution = _first_sentence(entry.get('distribution_shape_caution'))
+    flags = str(entry.get('flags') or '').strip()
+    if caution:
+        parts.append(caution)
+    if flags and flags.lower() != 'none':
+        parts.append(flags)
+    return '; '.join(parts)
+
+
 def _format_pairwise_takeaway(entry):
-    takeaway = str(entry.get('takeaway') or '').strip()
+    takeaway = _first_sentence(entry.get('takeaway'))
     if takeaway:
         return takeaway
     status_label = _coerce_status_label(entry.get('difference_label') or entry.get('difference')) or 'REVIEW'
@@ -1011,20 +1069,22 @@ def _format_pairwise_takeaway(entry):
 
 
 def _format_pairwise_action(entry):
-    caution = str(entry.get('comment') or '').strip()
-    suggested_action = str(entry.get('suggested_action') or '').strip()
-    return _combine_nonempty_lines(
-        f'Caution: {caution}' if caution else '',
-        suggested_action if suggested_action else '',
-    )
+    return _first_sentence(entry.get('suggested_action'))
 
 
 def _format_pairwise_test_context(entry):
-    test_used = str(entry.get('test_used') or '').strip() or 'Comparison test'
-    rationale = _truncate_text(_first_sentence(entry.get('test_rationale')), max_chars=70)
-    if rationale:
-        return f'{test_used}\nWhy: {rationale}'
-    return test_used
+    return str(entry.get('test_used') or '').strip() or 'Comparison test'
+
+
+def _format_pairwise_rationale(entry):
+    return _truncate_text(_first_sentence(entry.get('test_rationale')), max_chars=60)
+
+
+def _format_pairwise_comment(entry):
+    caution = _first_sentence(entry.get('comment'))
+    if caution:
+        return f'Caution: {caution}'
+    return ''
 
 
 def _is_banded_row(row_index, *, anchor_row):
@@ -1487,7 +1547,7 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
 
         worksheet.write(row, 0, metric_name, _row_format(formats, 'text_left_middle_fmt', 'band_text_left_middle_fmt', banded=banded))
         worksheet.write(row, 1, status_label, formats.get(_status_format_key(status_label)))
-        worksheet.write(row, 2, 'Go to metric', formats.get('hyperlink_fmt'))
+        worksheet.write(row, 2, 'Go to metric', _row_format(formats, 'hyperlink_cell_fmt', 'band_hyperlink_cell_fmt', banded=banded))
         worksheet.write(row, 3, spec_status_label, _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
         _merge_row(worksheet, row, 4, 8, review_reason, _row_format(formats, 'detail_value_fmt', 'band_detail_value_fmt', banded=banded))
         _merge_row(worksheet, row, 9, 14, next_step, _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
@@ -1533,7 +1593,7 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
         raise ValueError(f'Missing expected pairwise column: {labels}')
 
     difference_col = _column_for('Status', 'difference')
-    comment_col = _column_for('Action', 'Insight / action', 'caution')
+    comment_col = _column_for('Comment', 'Action', 'Insight / action', 'caution')
     flags_col = column_lookup.get('Flags')
     if flags_col is None and 'Flags' in headers:
         flags_col = headers.index('Flags')
@@ -1618,15 +1678,20 @@ def _write_descriptive_stats_block(worksheet, row, metric_row):
     header_row = row
     header_specs = [
         ('Group', 0, 0),
-        ('n', 1, 1),
-        ('mean', 2, 2),
-        ('std', 3, 3),
-        ('median', 4, 4),
+        ('N', 1, 1),
+        ('Mean', 2, 2),
+        ('Std', 3, 3),
+        ('Median', 4, 4),
         ('IQR', 5, 5),
-        ('Range', 6, 6),
-        ('Cp', 7, 7),
-        ('Capability', 8, 8),
-        ('Distribution / capability note', 9, 14),
+        ('Min', 6, 6),
+        ('Max', 7, 7),
+        ('Cp', 8, 8),
+        ('Capability', 9, 9),
+        ('Cap type', 10, 10),
+        ('Capability CI', 11, 11),
+        ('Fit model', 12, 12),
+        ('Fit quality', 13, 13),
+        ('Notes', 14, 14),
     ]
     for label, first_col, last_col in header_specs:
         _merge_row(worksheet, header_row, first_col, last_col, label, formats.get('header_fmt'))
@@ -1641,8 +1706,8 @@ def _write_descriptive_stats_block(worksheet, row, metric_row):
 
     first_data_row = row
     for entry in descriptive_rows:
-        range_text = _format_range_text(entry.get('min'), entry.get('max'))
-        note_text = _format_distribution_note(entry)
+        capability_ci_text = _format_descriptive_ci(entry)
+        notes_text = _format_descriptive_notes(entry)
         banded = _is_banded_row(row, anchor_row=first_data_row)
         worksheet.write(row, 0, entry.get('group'), _row_format(formats, 'text_left_middle_fmt', 'band_text_left_middle_fmt', banded=banded))
         worksheet.write(row, 1, entry.get('n'), _row_format(formats, 'table_center_fmt', 'band_table_center_fmt', banded=banded))
@@ -1650,10 +1715,15 @@ def _write_descriptive_stats_block(worksheet, row, metric_row):
         worksheet.write(row, 3, entry.get('std'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
         worksheet.write(row, 4, entry.get('median'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
         worksheet.write(row, 5, entry.get('iqr'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
-        worksheet.write(row, 6, range_text, _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
-        worksheet.write(row, 7, entry.get('cp'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
-        worksheet.write(row, 8, entry.get('capability'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
-        _merge_row(worksheet, row, 9, 14, note_text or 'No additional distribution notes.', _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
+        worksheet.write(row, 6, entry.get('min'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 7, entry.get('max'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 8, entry.get('cp'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 9, entry.get('capability'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 10, entry.get('capability_type'), _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
+        worksheet.write(row, 11, capability_ci_text or 'N/A', _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
+        worksheet.write(row, 12, _format_descriptive_fit_model(entry), _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
+        worksheet.write(row, 13, _format_descriptive_fit_quality(entry), _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
+        worksheet.write(row, 14, notes_text, _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
         _set_row_height(
             worksheet,
             row,
@@ -1661,8 +1731,10 @@ def _write_descriptive_stats_block(worksheet, row, metric_row):
                 24,
                 _estimate_wrapped_row_height(
                     [
-                        {'value': range_text, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(6, 14), 'wrap': True},
-                        {'value': note_text, 'width': _column_span_width(9, 14), 'wrap': True},
+                        {'value': capability_ci_text, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(11, 16), 'wrap': True},
+                        {'value': _format_descriptive_fit_model(entry), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(12, 14), 'wrap': True},
+                        {'value': _format_descriptive_fit_quality(entry), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(13, 14), 'wrap': True},
+                        {'value': notes_text, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(14, 18), 'wrap': True},
                     ],
                     minimum=24,
                     line_height=12,
@@ -1682,15 +1754,18 @@ def _write_pairwise_comparisons_block(worksheet, row, metric_row):
 
     header_row = row
     header_specs = [
-        ('Comparison', 0, 0),
-        ('adj p-value', 1, 1),
-        ('effect size', 2, 2),
-        ('Delta mean', 3, 3),
-        ('Status', 4, 4),
-        ('Flags', 5, 5),
-        ('Test / why', 6, 6),
-        ('Takeaway', 7, 10),
-        ('Action', 11, 14),
+        ('Group A', 0, 0),
+        ('Group B', 1, 1),
+        ('adj p-value', 2, 2),
+        ('effect size', 3, 3),
+        ('Delta mean', 4, 4),
+        ('Status', 5, 5),
+        ('Flags', 6, 6),
+        ('Test', 7, 7),
+        ('Why', 8, 8),
+        ('Takeaway', 9, 11),
+        ('Action', 12, 13),
+        ('Comment', 14, 14),
     ]
     headers = [label for label, _first_col, _last_col in header_specs]
     for label, first_col, last_col in header_specs:
@@ -1706,21 +1781,25 @@ def _write_pairwise_comparisons_block(worksheet, row, metric_row):
 
     first_data_row = row
     for entry in pairwise_rows:
-        comparison_label = f"{entry.get('group_a')} vs {entry.get('group_b')}"
         status_label = _coerce_status_label(entry.get('difference_label') or entry.get('difference')) or 'REVIEW'
         banded = _is_banded_row(row, anchor_row=first_data_row)
         takeaway_text = _format_pairwise_takeaway(entry)
         action_text = _format_pairwise_action(entry)
-        test_context = _format_pairwise_test_context(entry)
-        worksheet.write(row, 0, comparison_label, _row_format(formats, 'text_left_middle_fmt', 'band_text_left_middle_fmt', banded=banded))
-        worksheet.write(row, 1, entry.get('adjusted_p_value'), _row_format(formats, 'pvalue_fmt', 'band_pvalue_fmt', banded=banded))
-        worksheet.write(row, 2, entry.get('effect_size'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
-        worksheet.write(row, 3, entry.get('delta_mean'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
-        worksheet.write(row, 4, status_label, formats.get(_status_format_key(status_label)))
-        worksheet.write(row, 5, entry.get('flags'), _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
-        worksheet.write(row, 6, test_context, _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
-        _merge_row(worksheet, row, 7, 10, takeaway_text, _row_format(formats, 'detail_value_fmt', 'band_detail_value_fmt', banded=banded))
-        _merge_row(worksheet, row, 11, 14, action_text or 'No immediate action note.', _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
+        test_name = _format_pairwise_test_context(entry)
+        rationale_text = _format_pairwise_rationale(entry)
+        comment_text = _format_pairwise_comment(entry)
+        worksheet.write(row, 0, entry.get('group_a'), _row_format(formats, 'text_left_middle_fmt', 'band_text_left_middle_fmt', banded=banded))
+        worksheet.write(row, 1, entry.get('group_b'), _row_format(formats, 'text_left_middle_fmt', 'band_text_left_middle_fmt', banded=banded))
+        worksheet.write(row, 2, entry.get('adjusted_p_value'), _row_format(formats, 'pvalue_fmt', 'band_pvalue_fmt', banded=banded))
+        worksheet.write(row, 3, entry.get('effect_size'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 4, entry.get('delta_mean'), _row_format(formats, 'num_fmt', 'band_num_fmt', banded=banded))
+        worksheet.write(row, 5, status_label, formats.get(_status_format_key(status_label)))
+        worksheet.write(row, 6, entry.get('flags'), _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
+        worksheet.write(row, 7, test_name, _row_format(formats, 'table_center_wrap_fmt', 'band_table_center_wrap_fmt', banded=banded))
+        worksheet.write(row, 8, rationale_text, _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
+        _merge_row(worksheet, row, 9, 11, takeaway_text, _row_format(formats, 'detail_value_fmt', 'band_detail_value_fmt', banded=banded))
+        _merge_row(worksheet, row, 12, 13, action_text or 'No immediate action note.', _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
+        worksheet.write(row, 14, comment_text, _row_format(formats, 'detail_note_fmt', 'band_detail_note_fmt', banded=banded))
         _set_row_height(
             worksheet,
             row,
@@ -1728,10 +1807,11 @@ def _write_pairwise_comparisons_block(worksheet, row, metric_row):
                 24,
                 _estimate_wrapped_row_height(
                     [
-                        {'value': entry.get('flags'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(5, 14), 'wrap': True},
-                        {'value': test_context, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(6, 14), 'wrap': True},
-                        {'value': takeaway_text, 'width': _column_span_width(7, 10), 'wrap': True},
-                        {'value': action_text, 'width': _column_span_width(11, 14), 'wrap': True},
+                        {'value': entry.get('flags'), 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(6, 14), 'wrap': True},
+                        {'value': rationale_text, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(8, 12), 'wrap': True},
+                        {'value': takeaway_text, 'width': _column_span_width(9, 11), 'wrap': True},
+                        {'value': action_text, 'width': _column_span_width(12, 13), 'wrap': True},
+                        {'value': comment_text, 'width': GROUP_ANALYSIS_COLUMN_WIDTHS.get(14, 18), 'wrap': True},
                     ],
                     minimum=24,
                     line_height=12,
@@ -1984,7 +2064,7 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
                 link_row,
                 link_col,
                 f'=HYPERLINK("#\'Group Analysis\'!A{target_row + 1}","Go to metric")',
-                formats.get('hyperlink_fmt'),
+                formats.get('hyperlink_cell_fmt'),
                 'Go to metric',
             )
         elif hasattr(worksheet, 'write_url'):
@@ -1992,7 +2072,7 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
                 link_row,
                 link_col,
                 f"internal:'Group Analysis'!A{target_row + 1}",
-                formats.get('hyperlink_fmt'),
+                formats.get('hyperlink_cell_fmt'),
                 'Go to metric',
             )
 

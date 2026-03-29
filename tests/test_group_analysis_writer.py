@@ -216,21 +216,23 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertTrue(any(isinstance(value, str) and value.startswith('DIFFERENCE\n1 metric') for value in values))
         self.assertTrue(any(isinstance(value, str) and 'Top: M1: location gap, adj p=0.0300' in value for value in values))
         self.assertIn('Priority signal', values)
-        self.assertIn('Stat signal', values)
         self.assertIn('Capability summary', values)
         self.assertIn('Recommended action', values)
         self.assertIn('Descriptive stats', values)
-        self.assertIn('Distribution / capability note', values)
+        self.assertIn('Capability CI', values)
+        self.assertIn('Fit model', values)
+        self.assertIn('Fit quality', values)
+        self.assertIn('Notes', values)
         self.assertIn('Pairwise comparisons', values)
-        self.assertIn('Test / why', values)
+        self.assertIn('Test', values)
+        self.assertIn('Why', values)
+        self.assertIn('Comment', values)
         self.assertIn('Action', values)
         self.assertIn('Takeaway', values)
         self.assertNotIn('Plots', values)
         self.assertNotIn('Violin', values)
         self.assertNotIn('Histogram', values)
-        self.assertTrue(any(isinstance(value, str) and 'Shape note:' in value for value in values))
-        self.assertTrue(any(isinstance(value, str) and 'Statistically different; adj p=0.0300' in value for value in values))
-        self.assertTrue(any(isinstance(value, str) and 'Why:' in value for value in values))
+        self.assertTrue(any(isinstance(value, str) and 'Chosen because only two groups are compared.' in value for value in values))
         self.assertTrue(any(isinstance(value, str) and 'plots on separate sheet' in value.lower() for value in values))
 
         text_values = [str(value).upper() for value in values]
@@ -238,9 +240,9 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertNotIn('FALSE', text_values)
         self.assertIsNone(worksheet.frozen)
         self.assertEqual(worksheet.gridlines_hidden, 2)
-        self.assertEqual(worksheet.columns[0][:3], (0, 0, 20))
-        self.assertEqual(worksheet.columns[1][:3], (1, 1, 12))
-        self.assertEqual(worksheet.columns[10][:3], (10, 10, 16))
+        self.assertEqual(worksheet.columns[0][:3], (0, 0, 16))
+        self.assertEqual(worksheet.columns[1][:3], (1, 1, 10))
+        self.assertEqual(worksheet.columns[10][:3], (10, 10, 12))
         self.assertEqual(worksheet.columns[-1][:3], (14, 14, 18))
         self.assertTrue(any(url[2] == GROUP_ANALYSIS_MANUAL_GITHUB_URL and url[3] == 'Open Markdown manual' for url in worksheet.urls))
         self.assertTrue(any(url[2] == GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL and url[3] == 'Open PDF manual' for url in worksheet.urls))
@@ -265,12 +267,14 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         metric_index_data_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'M1')
         self.assertEqual(worksheet.write_formats[(metric_index_data_row, 0)].get('props', {}).get('align'), 'left')
         self.assertEqual(worksheet.write_formats[(metric_index_data_row, 0)].get('props', {}).get('valign'), 'vcenter')
+        self.assertEqual(worksheet.write_formats[(metric_index_data_row, 0)].get('props', {}).get('border'), 1)
         self.assertEqual(worksheet.write_formats[(metric_index_data_row, 3)].get('props', {}).get('align'), 'center')
         self.assertTrue(worksheet.write_formats[(metric_index_data_row, 3)].get('props', {}).get('text_wrap'))
         self.assertEqual(worksheet.write_formats[(metric_index_data_row, 4)].get('props', {}).get('align'), 'left')
         self.assertTrue(worksheet.write_formats[(metric_index_data_row, 4)].get('props', {}).get('text_wrap'))
         self.assertEqual(worksheet.write_formats[(metric_index_data_row, 9)].get('props', {}).get('align'), 'left')
         self.assertTrue(worksheet.write_formats[(metric_index_data_row, 9)].get('props', {}).get('text_wrap'))
+        self.assertEqual(worksheet.write_formats[(metric_index_data_row, 2)].get('props', {}).get('border'), 1)
 
         overview_value_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Recommended action')
         self.assertEqual(worksheet.write_formats[(overview_value_row, 3)].get('props', {}).get('align'), 'left')
@@ -278,8 +282,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         self.assertTrue(worksheet.write_formats[(overview_value_row, 3)].get('props', {}).get('text_wrap'))
         self.assertEqual(worksheet.write_formats[(overview_value_row, 3)].get('props', {}).get('bg_color'), '#F8FAFC')
 
-        capability_detail_row = next(row for row, col, value in worksheet.writes if col == 9 and value == 'Cpk\n95% CI 0.600 to 1.100')
-        self.assertTrue(worksheet.write_formats[(capability_detail_row, 9)].get('props', {}).get('text_wrap'))
+        capability_detail_row = next(row for row, col, value in worksheet.writes if col == 11 and value == '95% CI 0.600 to 1.100')
+        self.assertTrue(worksheet.write_formats[(capability_detail_row, 11)].get('props', {}).get('text_wrap'))
 
         desc_group_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'A')
         self.assertEqual(worksheet.write_formats[(desc_group_row, 0)].get('props', {}).get('align'), 'left')
@@ -288,12 +292,20 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         pairwise_data_row = next(
             row
             for row, col, value in worksheet.writes
-            if col == 11 and isinstance(value, str) and value.startswith('Caution: caution')
+            if col == 14 and isinstance(value, str) and value.startswith('Caution: caution')
         )
         pairwise_data_height = next(height for row, height, *_ in worksheet.rows if row == pairwise_data_row)
         self.assertGreater(pairwise_data_height, DEFAULT_SIMPLE_ROW_HEIGHT := 22)
-        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 11)].get('props', {}).get('align'), 'left')
-        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 11)].get('props', {}).get('valign'), 'top')
+        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 14)].get('props', {}).get('align'), 'left')
+        self.assertEqual(worksheet.write_formats[(pairwise_data_row, 14)].get('props', {}).get('valign'), 'top')
+
+        rationale_row = next(
+            row
+            for row, col, value in worksheet.writes
+            if col == 8 and value == 'Chosen because only two groups are compared.'
+        )
+        self.assertEqual(worksheet.write_formats[(rationale_row, 8)].get('props', {}).get('align'), 'left')
+        self.assertEqual(worksheet.write_formats[(rationale_row, 8)].get('props', {}).get('valign'), 'top')
 
         takeaway_label_row = next(row for row, col, value in worksheet.writes if col == 0 and value == 'Takeaway')
         self.assertEqual(worksheet.write_formats[(takeaway_label_row, 0)].get('props', {}).get('align'), 'center')
@@ -309,7 +321,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         pairwise_rules = [
             rule
             for rule in worksheet.conditional_formats
-            if rule[1] in {1, 2, 3, 4, 5, 11}
+            if rule[1] in {2, 3, 4, 5, 6, 14}
         ]
         self.assertGreaterEqual(len(pairwise_rules), 6)
         self.assertTrue(any(r[4].get('criteria') == '<' and r[4].get('value') == 0.01 for r in pairwise_rules))
@@ -318,7 +330,7 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         delta_mean_rules = [
             rule
             for rule in worksheet.conditional_formats
-            if rule[1] == 3 and rule[3] == 3 and rule[4].get('type') == 'no_blanks'
+            if rule[1] == 4 and rule[3] == 4 and rule[4].get('type') == 'no_blanks'
         ]
         self.assertTrue(delta_mean_rules)
         self.assertEqual(delta_mean_rules[0][4].get('format', {}).get('props', {}).get('num_format'), '0.000')

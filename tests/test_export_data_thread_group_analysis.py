@@ -399,8 +399,9 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Plots', plot_values)
             self.assertIn('Violin', plot_values)
             self.assertIn('Histogram', plot_values)
-            self.assertIn('Test / why', analysis_values)
-            self.assertTrue(any(isinstance(value, str) and 'Why:' in value for value in analysis_values))
+            self.assertIn('Test', analysis_values)
+            self.assertIn('Why', analysis_values)
+            self.assertTrue(any(isinstance(value, str) and 'Chosen because' in value for value in analysis_values))
             self.assertNotIn('Shown', analysis_values)
             self.assertNotIn('Shown below.', analysis_values)
             self.assertNotIn('Detail', analysis_values)
@@ -444,22 +445,23 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Open PDF manual', analysis_values)
             self.assertIn('Metric index', analysis_values)
             self.assertIn('Priority signal', analysis_values)
-            self.assertIn('Stat signal', analysis_values)
             self.assertIn('Next step', analysis_values)
             self.assertIn('Capability summary', analysis_values)
-            self.assertIn('Key insights', analysis_values)
             self.assertIn('Descriptive stats', analysis_values)
-            self.assertIn('Distribution / capability note', analysis_values)
+            self.assertIn('Capability CI', analysis_values)
+            self.assertIn('Fit model', analysis_values)
+            self.assertIn('Fit quality', analysis_values)
+            self.assertIn('Notes', analysis_values)
             self.assertTrue(any(isinstance(value, str) and '95% CI' in value for value in analysis_values))
             self.assertIn('Pairwise comparisons', analysis_values)
-            self.assertTrue(any(isinstance(value, str) and 'Shape note:' in value for value in analysis_values))
             self.assertIn('Recommended action', analysis_values)
             self.assertIn('Takeaway', analysis_values)
             self.assertIn('Action', analysis_values)
-            self.assertIn('Test / why', analysis_values)
+            self.assertIn('Test', analysis_values)
+            self.assertIn('Why', analysis_values)
+            self.assertIn('Comment', analysis_values)
             self.assertTrue(any(isinstance(value, str) and 'Caution:' in value for value in analysis_values))
-            self.assertTrue(any(isinstance(value, str) and 'Why:' in value for value in analysis_values))
-            self.assertTrue(any(isinstance(value, str) and 'Shape note: no clear distribution-shape difference after correction.' in value for value in analysis_values))
+            self.assertTrue(any(isinstance(value, str) and 'no clear distribution-shape difference after correction.' in value for value in analysis_values))
             self.assertNotIn('Plots', analysis_values)
             self.assertNotIn('Violin', analysis_values)
             self.assertNotIn('Histogram', analysis_values)
@@ -474,10 +476,10 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
                 (int(col.attrib['min']), int(col.attrib['max']), float(col.attrib['width']))
                 for col in sheet_xml.findall('x:cols/x:col', ns)
             ]
-            self.assertAlmostEqual(_column_width_for(cols, 1), 20.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 2), 12.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 11), 16.7109375, places=3)
-            self.assertAlmostEqual(_column_width_for(cols, 12), 18.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 1), 16.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 2), 10.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 11), 12.7109375, places=3)
+            self.assertAlmostEqual(_column_width_for(cols, 12), 16.7109375, places=3)
             self.assertAlmostEqual(_column_width_for(cols, 15), 18.7109375, places=3)
 
             pane = sheet_xml.find('x:sheetViews/x:sheetView/x:pane', ns)
@@ -494,7 +496,6 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertTrue(any(attrs.get('wrapText') == '1' for attrs in alignment_by_style.values()))
             self.assertTrue(any(attrs.get('vertical') == 'top' for attrs in alignment_by_style.values()))
             self.assertTrue(any(border_id != '0' for border_id in border_by_style.values()))
-            self.assertTrue(any(border_id == '0' for border_id in border_by_style.values()))
             styled_rows = [
                 row
                 for row in sheet_xml.findall('x:sheetData/x:row', ns)
@@ -573,10 +574,9 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
                 for cell in styled_cells
             }
             self.assertEqual(wrap_styles.get('A1', {}).get('wrapText'), None)
-            self.assertTrue(any(ref.startswith('H') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
-            self.assertTrue(any(ref.startswith('I') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
             self.assertTrue(any(ref.startswith('J') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
             self.assertTrue(any(ref.startswith('L') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
+            self.assertTrue(any(ref.startswith('O') and attrs.get('wrapText') == '1' for ref, attrs in wrap_styles.items()))
 
             jump_header_row = next(int(ref[1:]) for ref, value in cell_text_map.items() if value == 'Jump')
             self.assertGreaterEqual(row_heights.get(jump_header_row, 0), 24)
@@ -597,7 +597,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             descriptive_wrapped_rows = [
                 int(ref[1:])
                 for ref, attrs in wrap_styles.items()
-                if ref.startswith(('J', 'K', 'L', 'M', 'N', 'O')) and attrs.get('wrapText') == '1'
+                if ref.startswith(('L', 'N', 'O')) and attrs.get('wrapText') == '1'
             ]
             self.assertTrue(descriptive_wrapped_rows)
             self.assertTrue(any(row_heights.get(row, 0) > 22 for row in descriptive_wrapped_rows))
@@ -605,7 +605,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             pairwise_wrapped_rows = [
                 int(ref[1:])
                 for ref, attrs in wrap_styles.items()
-                if ref.startswith(('E', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O')) and attrs.get('wrapText') == '1'
+                if ref.startswith(('G', 'I', 'J', 'M', 'O')) and attrs.get('wrapText') == '1'
             ]
             self.assertTrue(pairwise_wrapped_rows)
             self.assertTrue(any(row_heights.get(row, 0) > 22 for row in pairwise_wrapped_rows))
