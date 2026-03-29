@@ -164,12 +164,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
             html_text = Path(result['html_dashboard_path']).read_text(encoding='utf-8')
             self.assertIn('Diameter / X', html_text)
             self.assertIn('Extended histogram', html_text)
-            self.assertIn('detail-cards', html_text)
-            self.assertIn('detail-card-label', html_text)
-            self.assertIn('detail-card-value', html_text)
-            self.assertIn('Mean = 10.01', html_text)
-            self.assertIn('Selected model curve', html_text)
-            self.assertIn('KDE reference (dashed)', html_text)
+            self.assertNotIn(
+                '<img src="report_dashboard_assets/section_001_diameter-x_histogram_01.png" alt="Diameter / X"><div class="detail-grid">',
+                html_text,
+            )
             self.assertIn('chart_renderer: status=native_available', html_text)
             self.assertIn('Group Analysis', html_text)
             self.assertIn('FEATURE_1', html_text)

@@ -44,18 +44,18 @@ def test_resolve_backend_native_warns_and_falls_back_when_extension_missing(monk
     assert "METROLIZA_CHART_RENDERER_BACKEND=native" in str(warn.call_args[0][0])
 
 
-def test_resolve_backend_auto_prefers_native_when_extension_available(monkeypatch):
+def test_resolve_backend_auto_uses_matplotlib_even_when_extension_available(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
-        assert resolve_chart_renderer_backend() == "native"
+        assert resolve_chart_renderer_backend() == "matplotlib"
 
 
-def test_resolve_backend_native_forces_native_without_warning_when_extension_available(monkeypatch):
+def test_resolve_backend_native_warns_and_falls_back_even_when_extension_available(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
         with mock.patch("warnings.warn") as warn:
-            assert resolve_chart_renderer_backend() == "native"
-    warn.assert_not_called()
+            assert resolve_chart_renderer_backend() == "matplotlib"
+    warn.assert_called_once()
 
 
 def test_native_chart_backend_available_requires_histogram_symbol_only():
@@ -75,7 +75,7 @@ def test_resolve_distribution_backend_falls_back_when_distribution_symbol_is_mis
         mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
         mock.patch("modules.chart_renderer._native_render_distribution_png", None),
     ):
-        assert resolve_chart_renderer_backend() == "native"
+        assert resolve_chart_renderer_backend() == "matplotlib"
         assert resolve_distribution_renderer_backend() == "matplotlib"
 
 

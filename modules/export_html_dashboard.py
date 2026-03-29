@@ -1107,7 +1107,10 @@ def _render_chart_card(chart: dict[str, Any]) -> str:
         if str(chart.get("note") or "").strip()
         else ""
     )
-    detail_markup = _render_chart_payload_details(chart.get("payload_details") or {})
+    chart_type = str(chart.get("chart_type") or "").strip().lower()
+    detail_markup = ""
+    if chart_type != "histogram":
+        detail_markup = _render_chart_payload_details(chart.get("payload_details") or {})
     details_toggle = (
         '<details><summary>Chart metadata</summary>'
         f'<pre>{payload_json}</pre>'
