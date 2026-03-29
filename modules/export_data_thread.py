@@ -4571,12 +4571,12 @@ class ExportDataThread(QThread):
             tip='Open the printable Group Analysis PDF companion in the GitHub repository.',
         )
 
-    @staticmethod
-    def _build_group_analysis_plot_description(metric_row, plot_key, grouped_entries, spec_limits):
+    @classmethod
+    def _build_group_analysis_plot_description(cls, metric_row, plot_key, grouped_entries, spec_limits):
         """Return a concise workbook image description for Group Analysis plots."""
         metric_name = str((metric_row or {}).get('metric') or 'metric')
         plot_label = 'violin plot' if str(plot_key) == 'violin' else 'histogram'
-        capability_context = ExportDataThread._build_group_analysis_capability_context(metric_row)
+        capability_context = cls._build_group_analysis_capability_context(metric_row)
 
         group_parts = []
         for label, values in grouped_entries:
@@ -4685,8 +4685,8 @@ class ExportDataThread(QThread):
             'description': description,
         }
 
-    @staticmethod
-    def _render_group_analysis_plot_asset(metric_row, plot_key):
+    @classmethod
+    def _render_group_analysis_plot_asset(cls, metric_row, plot_key):
         """Build an in-memory chart asset for Group Analysis worksheet insertion."""
         chart_payload = metric_row.get('chart_payload') if isinstance(metric_row, dict) else None
         if not isinstance(chart_payload, dict):
@@ -4715,8 +4715,8 @@ class ExportDataThread(QThread):
         ]
 
         spec_limits = chart_payload.get('spec_limits') or {}
-        capability_context = ExportDataThread._build_group_analysis_capability_context(metric_row)
-        description = ExportDataThread._build_group_analysis_plot_description(
+        capability_context = cls._build_group_analysis_capability_context(metric_row)
+        description = cls._build_group_analysis_plot_description(
             metric_row,
             plot_key,
             filtered_entries,

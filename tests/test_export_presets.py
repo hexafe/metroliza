@@ -95,6 +95,28 @@ class TestExportPresetOptionMapping(unittest.TestCase):
 class TestExportPresetFlowIntegration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._missing = object()
+        cls._saved_modules = {
+            module_name: sys.modules.get(module_name)
+            for module_name in [
+                'PyQt6.QtCore',
+                'PyQt6.QtGui',
+                'PyQt6.QtWidgets',
+                'modules.base64_encoded_files',
+                'modules.export_data_thread',
+                'modules.filter_dialog',
+                'modules.data_grouping',
+                'modules.custom_logger',
+                'modules.export_dialog',
+            ]
+        }
+        cls._saved_module_attrs = {
+            ('modules.export_data_thread', 'ExportDataThread'): getattr(sys.modules.get('modules.export_data_thread'), 'ExportDataThread', cls._missing),
+            ('modules.filter_dialog', 'FilterDialog'): getattr(sys.modules.get('modules.filter_dialog'), 'FilterDialog', cls._missing),
+            ('modules.data_grouping', 'DataGrouping'): getattr(sys.modules.get('modules.data_grouping'), 'DataGrouping', cls._missing),
+            ('modules.custom_logger', 'CustomLogger'): getattr(sys.modules.get('modules.custom_logger'), 'CustomLogger', cls._missing),
+        }
+
         # Minimal stubs for Qt and dependencies so we can import payload builder.
         qtcore_stub = types.ModuleType('PyQt6.QtCore')
         qtcore_stub.QSize = object
@@ -150,6 +172,25 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         sys.modules['modules.filter_dialog'].FilterDialog = object
         sys.modules['modules.data_grouping'].DataGrouping = object
         sys.modules['modules.custom_logger'].CustomLogger = object
+        sys.modules.pop('modules.export_dialog', None)
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.modules.pop('modules.export_dialog', None)
+        for (module_name, attr_name), original_value in cls._saved_module_attrs.items():
+            module = sys.modules.get(module_name)
+            if module is None:
+                continue
+            if original_value is cls._missing:
+                if hasattr(module, attr_name):
+                    delattr(module, attr_name)
+            else:
+                setattr(module, attr_name, original_value)
+        for module_name, original_module in cls._saved_modules.items():
+            if original_module is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = original_module
 
     def test_selected_preset_changes_payload_deterministically(self):
         from modules.export_dialog import build_export_options_payload
@@ -188,7 +229,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
     def setUpClass(cls):
         TestExportPresetFlowIntegration.setUpClass()
 
-    def test_google_success_includes_converted_link(self):
+    def test_google_success_uses_standard_success_message(self):
         from modules.export_dialog import build_export_completion_message
 
         metadata = {
@@ -209,10 +250,9 @@ class TestExportCompletionMessaging(unittest.TestCase):
         expected_file_uri = Path('out.xlsx').resolve().as_uri()
         self.assertEqual(
             message,
-            'Data exported successfully to out.xlsx.\n'
-            f'Export file: {expected_file_uri}\n'
+            'Data exported successfully!\n'
             '\n'
-            'Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit',
+            f'Export file: {expected_file_uri}',
         )
 
     def test_google_fallback_promotes_warning_dialog(self):
@@ -283,7 +323,8 @@ class TestExportCompletionMessaging(unittest.TestCase):
         expected_file_uri = Path('out.xlsx').resolve().as_uri()
         self.assertEqual(
             message,
-            'Data exported successfully to out.xlsx.\n'
+            'Data exported successfully!\n'
+            '\n'
             f'Export file: {expected_file_uri}'
         )
 
@@ -346,7 +387,7 @@ class TestExportCompletionMessaging(unittest.TestCase):
         self.assertEqual(title, 'Export completed with Google fallback')
         self.assertIn('Google Sheet: https://docs.google.com/spreadsheets/d/abc/edit', message)
 
-    def test_excel_target_message_is_unchanged_even_with_google_metadata(self):
+    def test_excel_target_message_uses_standard_success_copy_even_with_google_metadata(self):
         from modules.export_dialog import build_export_completion_message
 
         metadata = {
@@ -366,11 +407,12 @@ class TestExportCompletionMessaging(unittest.TestCase):
         expected_file_uri = Path('out.xlsx').resolve().as_uri()
         self.assertEqual(
             message,
-            'Data exported successfully to out.xlsx.\n'
+            'Data exported successfully!\n'
+            '\n'
             f'Export file: {expected_file_uri}'
         )
 
-    def test_completion_message_includes_backend_diagnostics_panel_when_present(self):
+    def test_completion_message_ignores_backend_diagnostics_when_present(self):
         from modules.export_dialog import build_export_completion_message
 
         metadata = {
@@ -385,11 +427,14 @@ class TestExportCompletionMessaging(unittest.TestCase):
             completion_metadata=metadata,
         )
 
-        self.assertIn('Backend diagnostics:', message)
-        self.assertIn('- chart_renderer: status=native_available', message)
-        self.assertIn('- cmm_parser: status=native_unavailable_fallback', message)
+        self.assertEqual(
+            message,
+            'Data exported successfully!\n'
+            '\n'
+            f'Export file: {Path("out.xlsx").resolve().as_uri()}'
+        )
 
-    def test_completion_message_includes_html_dashboard_links_when_present(self):
+    def test_completion_message_includes_html_dashboard_link_without_assets(self):
         from modules.export_dialog import build_export_completion_message
 
         metadata = {
@@ -402,8 +447,16 @@ class TestExportCompletionMessaging(unittest.TestCase):
             completion_metadata=metadata,
         )
 
-        self.assertIn(f'HTML dashboard: {Path("out_dashboard.html").resolve().as_uri()}', message)
-        self.assertIn(f'Dashboard assets: {Path("out_dashboard_assets").resolve().as_uri()}', message)
+        expected_file_uri = Path('out.xlsx').resolve().as_uri()
+        expected_dashboard_uri = Path('out_dashboard.html').resolve().as_uri()
+        self.assertEqual(
+            message,
+            'Data exported successfully!\n'
+            '\n'
+            f'Export file: {expected_file_uri}\n'
+            '\n'
+            f'HTML dashboard: {expected_dashboard_uri}'
+        )
 
 
 class TestExportTargetSelection(unittest.TestCase):
@@ -599,7 +652,7 @@ class TestExportDialogCompletionFlow(unittest.TestCase):
 
         build_mock.assert_called_once()
         show_mock.assert_called_once()
-        self.assertEqual(_InfoMessageBox.information_calls, [(dialog, 'Export successful', 'Data exported successfully to out.xlsx.')])
+        self.assertEqual(_InfoMessageBox.information_calls, [(dialog, 'Export successful', 'ok')])
         self.assertEqual(dialog.loading_dialog.accept_calls, 1)
         self.assertFalse(dialog.accept_called)
         self.assertEqual(dialog.export_button.enabled_states, [True])

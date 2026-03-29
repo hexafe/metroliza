@@ -184,6 +184,46 @@ def test_backend_telemetry_snapshot_includes_normalization_counts(monkeypatch):
     assert snapshot["normalize"]["latency_python_s"] >= 0.0
 
 
+def test_native_normalize_coerces_legacy_tuple_blocks(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CMM_PERSIST_BACKEND", "native")
+    parser = importlib.reload(cmm_native_parser)
+
+    captured = {}
+
+    def _fake_native_normalize(blocks, reference, fileloc, filename, date, sample_number):
+        captured["blocks"] = blocks
+        captured["meta"] = (reference, fileloc, filename, date, sample_number)
+        return [
+            ("X", 10.0, 0.2, -0.2, 0.0, 10.1, 0.1, 0.0, "HEADER", reference, fileloc, filename, date, sample_number),
+        ]
+
+    monkeypatch.setattr(parser, "_native_normalize_measurement_rows", _fake_native_normalize)
+    monkeypatch.setattr(parser, "_native_persist_measurement_rows", lambda *_args, **_kwargs: True)
+
+    legacy_blocks = [
+        (
+            ["HEADER"],
+            [
+                ("X", 10.0, 0.2, -0.2, 0.0, 10.1, 0.1, 0.0),
+            ],
+        ),
+    ]
+
+    rows = parser.normalize_measurement_rows(
+        legacy_blocks,
+        reference="REF01",
+        fileloc="/tmp/reports",
+        filename="REF01_2024-01-02_123.pdf",
+        date="2024-01-02",
+        sample_number="123",
+        use_native=False,
+    )
+
+    assert rows[0][0] == "X"
+    assert captured["blocks"] == [[["HEADER"], [["X", 10.0, 0.2, -0.2, 0.0, 10.1, 0.1, 0.0]]]]
+    assert captured["meta"] == ("REF01", "/tmp/reports", "REF01_2024-01-02_123.pdf", "2024-01-02", "123")
+
+
 def test_parse_blocks_with_backend_keeps_tp_non_tp_mixed_semantic_token_parity(monkeypatch):
     monkeypatch.setenv("METROLIZA_CMM_PARSER_BACKEND", "auto")
     parser = importlib.reload(cmm_native_parser)

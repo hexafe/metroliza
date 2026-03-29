@@ -857,8 +857,8 @@ class ExportDialog(QDialog):
                     logger.exception("Failed to show rich export completion dialog; falling back to basic message box.")
                     QMessageBox.information(
                         self,
-                        "Export successful",
-                        f"Data exported successfully to {self.excel_file}.",
+                        title,
+                        message,
                     )
 
             # Close the loading dialog

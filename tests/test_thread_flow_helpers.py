@@ -3122,7 +3122,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(section['header'], 'H1')
         self.assertTrue(section['summary_rows'])
         self.assertEqual(section['charts'][0]['chart_type'], 'histogram')
-        self.assertEqual(section['charts'][0]['backend'], 'native')
+        self.assertEqual(section['charts'][0]['backend'], 'matplotlib')
 
     def test_google_retry_parse_error_logs_warning(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest

@@ -68,18 +68,12 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
     dashboard_warnings = [str(w) for w in metadata.get('html_dashboard_warnings', []) if str(w).strip()]
     fallback_message = str(metadata.get('fallback_message', '')).strip()
     converted_url = str(metadata.get('converted_url', '')).strip()
-    backend_diagnostic_lines = [str(line) for line in metadata.get('backend_diagnostics_lines', []) if str(line).strip()]
     export_directory_line = build_export_directory_link_line(excel_file)
     dashboard_file_line = build_export_artifact_link_line('HTML dashboard', metadata.get('html_dashboard_path'))
-    dashboard_assets_line = build_export_artifact_link_line('Dashboard assets', metadata.get('html_dashboard_assets_path'))
-
-    base_success_lines = [f"Data exported successfully to {excel_file}."]
-    if export_directory_line:
-        base_success_lines.append(export_directory_line)
-    if dashboard_file_line:
-        base_success_lines.append(dashboard_file_line)
-    if dashboard_assets_line:
-        base_success_lines.append(dashboard_assets_line)
+    base_success_lines = ["Data exported successfully!"]
+    artifact_lines = [line for line in (export_directory_line, dashboard_file_line) if line]
+    for artifact_line in artifact_lines:
+        base_success_lines.extend(["", artifact_line])
 
     if export_target == 'google_sheets_drive_convert':
         if warnings or fallback_message:
@@ -90,8 +84,6 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
                 message_lines.append(export_directory_line)
             if dashboard_file_line:
                 message_lines.append(dashboard_file_line)
-            if dashboard_assets_line:
-                message_lines.append(dashboard_assets_line)
             message_lines.extend([
                 "",
                 "Google Sheets conversion was not fully completed.",
@@ -103,26 +95,16 @@ def build_export_completion_message(*, excel_file, export_target, completion_met
                 message_lines.extend(f"- {warning}" for warning in warnings)
             if dashboard_warnings:
                 message_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
-            if backend_diagnostic_lines:
-                message_lines.extend(["", "Backend diagnostics:", *[f"- {line}" for line in backend_diagnostic_lines]])
             return 'warning', 'Export completed with Google fallback', "\n".join(message_lines)
 
         if converted_url:
             message_lines = list(base_success_lines)
-            message_lines.extend([
-                "",
-                f"Google Sheet: {converted_url}",
-            ])
             if dashboard_warnings:
                 message_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
-            if backend_diagnostic_lines:
-                message_lines.extend(["", "Backend diagnostics:", *[f"- {line}" for line in backend_diagnostic_lines]])
             return 'info', 'Export successful', "\n".join(message_lines)
 
     if dashboard_warnings:
         base_success_lines.extend(["", "HTML dashboard warnings:", *[f"- {warning}" for warning in dashboard_warnings]])
-    if backend_diagnostic_lines:
-        base_success_lines.extend(["", "Backend diagnostics:", *[f"- {line}" for line in backend_diagnostic_lines]])
     return 'info', 'Export successful', "\n".join(base_success_lines)
 
 

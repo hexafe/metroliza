@@ -167,6 +167,15 @@ class PersistBackendResult(NamedTuple):
     backend: ResolvedBackend
 
 
+def _coerce_native_sequence(value: Any) -> Any:
+    """Convert tuple-based legacy parser payloads into list-based native inputs."""
+    if isinstance(value, tuple):
+        return [_coerce_native_sequence(item) for item in value]
+    if isinstance(value, list):
+        return [_coerce_native_sequence(item) for item in value]
+    return value
+
+
 def _runtime_backend_choice() -> BackendChoice:
     choice = os.getenv("METROLIZA_CMM_PARSER_BACKEND", "auto").strip().lower()
     if choice in {"auto", "native", "python"}:
@@ -305,8 +314,9 @@ def normalize_measurement_rows(
     if backend == "native":
         if _native_normalize_measurement_rows is None:
             raise RuntimeError("Native measurement row normalization requested but unavailable")
+        native_blocks = _coerce_native_sequence(blocks)
         rows = _native_normalize_measurement_rows(
-            blocks,
+            native_blocks,
             reference,
             fileloc,
             filename,
