@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
+from modules.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
     from _metroliza_group_stats_native import coerce_sequence_to_float64 as _native_coerce_sequence_to_float64  # type: ignore
@@ -17,6 +18,8 @@ except Exception:  # pragma: no cover - optional native module
 def _runtime_backend_choice() -> str:
     choice = os.getenv("METROLIZA_GROUP_STATS_BACKEND", "auto").strip().lower()
     if choice in {"auto", "native", "python"}:
+        if choice == "auto" and should_prefer_python_backend_in_auto_mode():
+            return "python"
         return choice
     return "python"
 

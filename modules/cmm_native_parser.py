@@ -11,6 +11,7 @@ from typing import Any, Literal, NamedTuple
 from modules.cmm_schema import ensure_cmm_report_schema
 from modules.cmm_parsing import parse_raw_lines_to_blocks
 from modules.db import run_transaction_with_retry
+from modules.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
     from _metroliza_cmm_native import (  # type: ignore
@@ -179,6 +180,8 @@ def _coerce_native_sequence(value: Any) -> Any:
 def _runtime_backend_choice() -> BackendChoice:
     choice = os.getenv("METROLIZA_CMM_PARSER_BACKEND", "auto").strip().lower()
     if choice in {"auto", "native", "python"}:
+        if choice == "auto" and should_prefer_python_backend_in_auto_mode():
+            return "python"
         return choice
     return "auto"
 
@@ -186,6 +189,8 @@ def _runtime_backend_choice() -> BackendChoice:
 def _runtime_persistence_backend_choice() -> BackendChoice:
     choice = os.getenv("METROLIZA_CMM_PERSIST_BACKEND", "auto").strip().lower()
     if choice in {"auto", "native", "python"}:
+        if choice == "auto" and should_prefer_python_backend_in_auto_mode():
+            return "python"
         return choice
     return "auto"
 

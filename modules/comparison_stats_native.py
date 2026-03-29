@@ -6,6 +6,7 @@ import os
 from typing import Literal, Sequence
 
 import numpy as np
+from modules.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
     from _metroliza_comparison_stats_native import bootstrap_percentile_ci as _native_bootstrap_percentile_ci  # type: ignore
@@ -22,6 +23,8 @@ BackendChoice = Literal['auto', 'native', 'python']
 def _runtime_backend_choice() -> BackendChoice:
     choice = os.getenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'auto').strip().lower()
     if choice in {'auto', 'native', 'python'}:
+        if choice == 'auto' and should_prefer_python_backend_in_auto_mode():
+            return 'python'
         return choice
     return 'auto'
 
@@ -37,6 +40,8 @@ def native_backend_available() -> bool:
 def _runtime_pairwise_backend_choice() -> BackendChoice:
     choice = os.getenv('METROLIZA_COMPARISON_STATS_BACKEND', 'auto').strip().lower()
     if choice in {'auto', 'native', 'python'}:
+        if choice == 'auto' and should_prefer_python_backend_in_auto_mode():
+            return 'python'
         return choice
     return 'auto'
 
