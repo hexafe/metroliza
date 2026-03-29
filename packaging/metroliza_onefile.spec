@@ -13,6 +13,7 @@ exec((ROOT_DIR / "VersionDate.py").read_text(encoding="utf-8"), VERSION_NS)
 RELEASE_VERSION = VERSION_NS["RELEASE_VERSION"]
 VERSION_DATE = VERSION_NS["VERSION_DATE"]
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
+OUTPUT_NAME = f"metroliza_P_{VERSION_LABEL}"
 ICON_PATH = SPEC_DIR / 'metroliza_icon2.ico'
 
 
@@ -84,7 +85,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='metroliza',
+    name=OUTPUT_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

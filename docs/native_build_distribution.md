@@ -147,6 +147,7 @@ Runtime fallback from native execution errors in forced-`native` modes is intent
 Distribution audit status:
 
 - `pyinstaller packaging/metroliza_onefile.spec` produces a single-file artifact (`EXE(...)` with no `COLLECT(...)` stage), so it is configured as a onefile build rather than an onedir bundle.
+- default PyInstaller output filename follows release metadata: `metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>).exe`
 - The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
 - Confidence is still release-evidence based rather than absolute: the generated artifact must be smoke-launched on a clean target environment before calling it ready for non-technical users.
 
