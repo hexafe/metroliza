@@ -106,7 +106,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
                                 'histogram': {'eligible': True, 'skip_reason': ''},
                             },
                             'descriptive_stats': [
-                                {'group': 'A', 'n': 4, 'mean': 10.01, 'std': 0.02, 'median': 10.01, 'iqr': 0.03, 'min': 9.99, 'max': 10.03, 'cp': 1.3, 'capability': 1.2, 'capability_type': 'Cpk', 'best_fit_model': 'norm', 'fit_quality': 'good', 'flags': 'none'},
+                                {'group': 'A', 'n': 4, 'mean': 10.01, 'std': 0.02, 'median': 10.01, 'iqr': 0.03, 'min': 9.99, 'max': 10.03, 'cp': 1.3, 'capability': 1.2, 'capability_type': 'Cpk', 'capability_ci': {'cp': None, 'cpk': {'lower': 0.21250516502733194, 'upper': 0.647494834972668}}, 'best_fit_model': 'norm', 'fit_quality': 'good', 'flags': 'none'},
                                 {'group': 'B', 'n': 4, 'mean': 10.12, 'std': 0.03, 'median': 10.12, 'iqr': 0.04, 'min': 10.08, 'max': 10.16, 'cp': 1.1, 'capability': 0.95, 'capability_type': 'Cpk', 'best_fit_model': 'lognorm', 'fit_quality': 'medium', 'flags': 'LOW N'},
                             ],
                             'pairwise_rows': [
@@ -157,6 +157,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('FEATURE_1', html_text)
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('Descriptive stats', html_text)
+            self.assertIn('Capability CI', html_text)
+            self.assertIn('Cpk: 95% CI 0.213 to 0.647', html_text)
+            self.assertNotIn('"cp": null', html_text)
 
             asset_files = list(Path(result['html_dashboard_assets_path']).glob('*.png'))
             self.assertEqual(len(asset_files), 3)

@@ -357,6 +357,37 @@ def _format_display_value(value: Any) -> str:
     return str(value)
 
 
+def _coerce_finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _format_ci_interval(interval: Any, *, digits: int = 3) -> str:
+    if not isinstance(interval, dict):
+        return ""
+    lower = _coerce_finite_float(interval.get("lower"))
+    upper = _coerce_finite_float(interval.get("upper"))
+    if lower is None or upper is None:
+        return ""
+    return f"95% CI {lower:.{int(digits)}f} to {upper:.{int(digits)}f}"
+
+
+def _format_capability_ci_value(value: Any) -> str:
+    if not isinstance(value, dict):
+        return _format_display_value(value)
+
+    parts = []
+    for label, key in (("Cp", "cp"), ("Cpk", "cpk")):
+        interval_text = _format_ci_interval(value.get(key), digits=3)
+        if interval_text:
+            parts.append(f"{label}: {interval_text}")
+
+    return "; ".join(parts) if parts else "N/A"
+
+
 def _humanize_field_label(value: str) -> str:
     overrides = {
         "group": "Group",
@@ -374,6 +405,7 @@ def _humanize_field_label(value: str) -> str:
         "fit_quality": "Fit quality",
         "distribution_shape_caution": "Shape caution",
         "capability_type": "Capability type",
+        "capability_ci": "Capability CI",
         "metric_takeaway": "Takeaway",
         "recommended_action": "Recommended action",
         "diagnostics_comment": "Diagnostics",
@@ -554,7 +586,12 @@ def _normalize_rows_table(rows: Any, *, preferred_columns: list[str] | None = No
     return {
         "columns": [{"key": key, "label": _humanize_field_label(str(key))} for key in column_order],
         "rows": [
-            {key: _format_display_value(row.get(key)) for key in column_order}
+            {
+                key: _format_capability_ci_value(row.get(key))
+                if key == "capability_ci"
+                else _format_display_value(row.get(key))
+                for key in column_order
+            }
             for row in normalized_rows
         ],
     }
