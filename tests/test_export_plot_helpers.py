@@ -1071,7 +1071,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
-    def test_render_histogram_ignores_grouped_mode_for_summary_histograms(self):
+    def test_render_histogram_includes_grouped_mode_for_summary_histograms(self):
         histogram_frame = pd.DataFrame(
             {
                 'GROUP': ['A'] * 8 + ['B'] * 6,
@@ -1083,10 +1083,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         try:
             meta = render_histogram(ax, histogram_frame, group_column='GROUP')
 
-            self.assertFalse(meta['is_grouped'])
-            self.assertEqual(meta['group_labels'], [])
+            self.assertTrue(meta['is_grouped'])
+            self.assertEqual(meta['group_labels'], ['A', 'B'])
             self.assertEqual(len(fig.axes), 1)
-            self.assertIsNone(ax.get_legend())
+            self.assertIsNotNone(ax.get_legend())
         finally:
             plt.close(fig)
 
