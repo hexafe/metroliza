@@ -142,7 +142,13 @@ class NativeChartRenderer(ChartRenderer):
             return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
 
         _validate_distribution_native_payload(payload)
-        png_bytes = _native_render_distribution_png(payload)
+        try:
+            png_bytes = _native_render_distribution_png(payload)
+        except Exception:
+            if fallback_fig is None:
+                raise
+            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="distribution")
+            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native distribution renderer returned non-bytes payload.")
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")

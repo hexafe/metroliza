@@ -128,7 +128,8 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert "fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets('fitz')" in spec
     assert "binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries" in spec
     assert "datas=pymupdf_datas + fitz_datas" in spec
-    assert "hiddenimports=['_metroliza_cmm_native', '_metroliza_chart_native', 'pymupdf', 'fitz', 'modules.cmm_report_parser'" in spec
+    assert "'modules.cmm_report_parser'" in spec
+    assert "'modules.native_chart_compositor'" in spec
     assert "runtime_tmpdir=None" in spec
     assert 'exe = EXE(' in spec
     assert 'COLLECT(' not in spec

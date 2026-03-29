@@ -353,6 +353,27 @@ def test_native_distribution_renderer_validates_payload_contract():
             NativeChartRenderer().render_distribution_png(payload)
 
 
+def test_native_distribution_renderer_falls_back_when_native_call_raises():
+    payload = build_distribution_native_payload(
+        values=[[1.0, 1.2, 1.3], [1.4, 1.45, 1.5]],
+        labels=["A", "B"],
+        title="Runtime Failure Distribution",
+    )
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.scatter([0, 1, 2], [1.0, 1.1, 1.2], s=10)
+
+    def _raise_runtime_error(_payload):
+        raise RuntimeError("failed to import modules.native_chart_compositor")
+
+    with mock.patch("modules.chart_renderer._native_render_distribution_png", _raise_runtime_error):
+        result = NativeChartRenderer().render_distribution_png(payload, fallback_fig=fig)
+
+    plt.close(fig)
+    assert result.backend == "matplotlib"
+    assert isinstance(result.png_bytes, bytes)
+    assert len(result.png_bytes) > 0
+
+
 def test_native_iqr_renderer_validates_payload_contract():
     payload = {"type": "iqr", "labels": ["A"], "series": "invalid"}
     with mock.patch("modules.chart_renderer._native_render_iqr_png", lambda _payload: b"png"):
