@@ -52,6 +52,7 @@ class TestExportDialogLayout(unittest.TestCase):
             stderr = (exc.stderr or "").strip()
             headless_runtime_markers = (
                 "libGL.so.1",
+                "libEGL.so.1",
                 "Could not load the Qt platform plugin",
                 "no Qt platform plugin could be initialized",
                 "qt.qpa.plugin",
