@@ -720,6 +720,10 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       font-size: 28px;
       font-weight: 700;
     }}
+    .metric-value-line {{
+      display: block;
+      line-height: 1.15;
+    }}
     .section-nav {{
       display: flex;
       flex-wrap: wrap;
@@ -1011,19 +1015,41 @@ def _render_overview_cards(manifest: dict[str, Any]) -> str:
     native_count = int(backend_counts.get("native", 0))
     matplotlib_count = int(backend_counts.get("matplotlib", 0))
     cards = [
-        ("Generated", str(manifest.get("generated_at") or "n/a")),
-        ("Sections", str(manifest.get("section_count") or 0)),
-        ("Charts", str(manifest.get("chart_count") or 0)),
-        ("Native renders", str(native_count)),
-        ("Matplotlib renders", str(matplotlib_count)),
+        ("Generated", _format_generated_card_value(manifest.get("generated_at")), True),
+        ("Sections", str(manifest.get("section_count") or 0), False),
+        ("Charts", str(manifest.get("chart_count") or 0), False),
+        ("Native renders", str(native_count), False),
+        ("Matplotlib renders", str(matplotlib_count), False),
     ]
     metrics = group_analysis.get("metrics") or []
     if metrics:
-        cards.append(("Group metrics", str(len(metrics))))
+        cards.append(("Group metrics", str(len(metrics)), False))
     return '<div class="overview-grid">' + "".join(
-        f'<div class="metric-card"><div class="metric-label">{html.escape(label)}</div><div class="metric-value">{html.escape(value)}</div></div>'
-        for label, value in cards
+        f'<div class="metric-card"><div class="metric-label">{html.escape(label)}</div><div class="metric-value">{value if is_markup else html.escape(value)}</div></div>'
+        for label, value, is_markup in cards
     ) + '</div>'
+
+
+def _format_generated_card_value(generated_at: Any) -> str:
+    text = str(generated_at or "n/a").strip() or "n/a"
+    if text == "n/a":
+        escaped = html.escape(text)
+        return f'<span class="metric-value-line">{escaped}</span>'
+
+    if "T" in text:
+        date_part, time_part = text.split("T", 1)
+    elif " " in text:
+        date_part, time_part = text.split(" ", 1)
+    else:
+        escaped = html.escape(text)
+        return f'<span class="metric-value-line">{escaped}</span>'
+
+    date_markup = html.escape(date_part.strip() or "n/a")
+    time_markup = html.escape(time_part.strip() or "n/a")
+    return (
+        f'<span class="metric-value-line">{date_markup}</span>'
+        f'<span class="metric-value-line">{time_markup}</span>'
+    )
 
 
 def _render_diagnostics(lines: list[str]) -> str:
