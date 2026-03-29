@@ -39,14 +39,20 @@ class TestExportDialogLayout(unittest.TestCase):
             """
         )
 
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=Path(__file__).resolve().parents[1],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=Path(__file__).resolve().parents[1],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            if "libGL.so.1" in stderr:
+                self.skipTest(f"PyQt runtime dependency missing in test environment: {stderr}")
+            raise
 
         payload = json.loads(result.stdout.strip().splitlines()[-1])
         expected_minimums = {
