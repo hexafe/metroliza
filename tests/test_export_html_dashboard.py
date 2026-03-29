@@ -171,6 +171,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('chart_renderer: status=native_available', html_text)
             self.assertIn('Group Analysis', html_text)
             self.assertIn('FEATURE_1', html_text)
+            self.assertIn('<a class="section-chip" href="#group-metric-001">FEATURE_1</a>', html_text)
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('Descriptive stats', html_text)
             self.assertIn('Capability CI', html_text)
