@@ -16,6 +16,11 @@ try:  # pragma: no cover - optional SciPy path
 except Exception:  # pragma: no cover - optional SciPy path
     gaussian_kde = None
 
+from modules.chart_render_spec import (
+    ResolvedHistogramSpec,
+    build_resolved_histogram_spec,
+    histogram_spec_from_mapping,
+)
 from modules.export_summary_sheet_planner import (
     build_histogram_annotation_specs as _build_histogram_annotation_specs,
     compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
@@ -411,6 +416,303 @@ def _draw_table(
         cursor_y += row_height
 
 
+def _points_to_pixels(size_pt: float, *, dpi: int = DEFAULT_DPI) -> int:
+    return max(8, int(round(float(size_pt) * (max(int(dpi), 1) / 72.0))))
+
+
+def _normalized_rect_to_pixels(
+    rect: dict[str, Any] | None,
+    *,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int] | None:
+    if not isinstance(rect, dict):
+        return None
+    try:
+        left = float(rect["x"]) * float(width)
+        top = (1.0 - float(rect["y"]) - float(rect["height"])) * float(height)
+        right = left + (float(rect["width"]) * float(width))
+        bottom = top + (float(rect["height"]) * float(height))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (
+        int(round(left)),
+        int(round(top)),
+        int(round(right)),
+        int(round(bottom)),
+    )
+
+
+def _resolved_plot_rect(
+    resolved_render_spec: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    fallback_rect: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    resolved_plot_rect = _normalized_rect_to_pixels(
+        (
+            resolved_render_spec.get("plot_area")
+            if isinstance(resolved_render_spec.get("plot_area"), dict)
+            else resolved_render_spec.get("plot_rect")
+        )
+        if isinstance(resolved_render_spec, dict)
+        else None,
+        width=width,
+        height=height,
+    )
+    return resolved_plot_rect or fallback_rect
+
+
+def _resolved_ticks(axis_ticks: Any, fallback_ticks: list[tuple[float, str]]) -> list[tuple[float, str]]:
+    if not isinstance(axis_ticks, list):
+        return fallback_ticks
+    resolved: list[tuple[float, str]] = []
+    for item in axis_ticks:
+        if not isinstance(item, dict):
+            continue
+        value = _as_float(item.get("value"))
+        if value is None:
+            value = _as_float(item.get("position"))
+        if value is None:
+            continue
+        resolved.append((float(value), str(item.get("label") or "")))
+    return resolved or fallback_ticks
+
+
+def _draw_chart_title(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    *,
+    width: int,
+    height: int,
+    dpi: int,
+    title_spec: dict[str, Any],
+    fallback_text: str,
+    fallback_xy: tuple[float, float] = (54.0, 24.0),
+    fallback_font_px: int = 14,
+    fallback_color: str = SUMMARY_PLOT_PALETTE["distribution_foreground"],
+) -> None:
+    resolved_title_text = str(title_spec.get("text") or fallback_text or "")
+    title_anchor = title_spec.get("anchor") if isinstance(title_spec.get("anchor"), dict) else {}
+    title_font_spec = title_spec.get("font") if isinstance(title_spec.get("font"), dict) else {}
+    title_x = float(title_anchor.get("x")) * float(width) if _as_float(title_anchor.get("x")) is not None else (
+        float(title_spec.get("x")) * float(width) if _as_float(title_spec.get("x")) is not None else float(fallback_xy[0])
+    )
+    title_y = (1.0 - float(title_anchor.get("y"))) * float(height) if _as_float(title_anchor.get("y")) is not None else (
+        (1.0 - float(title_spec.get("y"))) * float(height) if _as_float(title_spec.get("y")) is not None else float(fallback_xy[1])
+    )
+    resolved_font_size = _as_float(title_font_spec.get("size"))
+    if resolved_font_size is None:
+        resolved_font_size = _as_float(title_spec.get("font_size"))
+    title_font = _font(
+        _points_to_pixels(float(resolved_font_size), dpi=dpi) if resolved_font_size is not None else int(fallback_font_px),
+        bold=str(title_font_spec.get("weight") or "").lower() == "bold" or bool(title_spec.get("bold", False)),
+    )
+    _draw_multiline_text(
+        draw,
+        (title_x, title_y),
+        resolved_title_text,
+        font=title_font,
+        fill=_hex_rgba(title_spec.get("color") or fallback_color),
+    )
+
+
+def _draw_reference_bands(
+    draw: ImageDraw.ImageDraw,
+    *,
+    rect: tuple[int, int, int, int],
+    bands: list[dict[str, Any]],
+    x_limits: tuple[float, float],
+    y_limits: tuple[float, float],
+) -> None:
+    left, top, right, bottom = rect
+    for band in bands:
+        if not isinstance(band, dict):
+            continue
+        axis = str(band.get("axis") or "y").lower()
+        start = _as_float(band.get("start"))
+        end = _as_float(band.get("end"))
+        if start is None or end is None:
+            continue
+        fill = _hex_rgba(band.get("color") or SUMMARY_PLOT_PALETTE["sigma_band"], float(band.get("alpha") or 0.12))
+        if axis == "x":
+            x0 = _map_linear(float(start), x_limits[0], x_limits[1], left, right)
+            x1 = _map_linear(float(end), x_limits[0], x_limits[1], left, right)
+            draw.rectangle((min(x0, x1), top, max(x0, x1), bottom), fill=fill)
+            continue
+        y0 = _map_linear(float(start), y_limits[0], y_limits[1], bottom, top)
+        y1 = _map_linear(float(end), y_limits[0], y_limits[1], bottom, top)
+        draw.rectangle((left, min(y0, y1), right, max(y0, y1)), fill=fill)
+
+
+def _draw_reference_lines(
+    draw: ImageDraw.ImageDraw,
+    *,
+    rect: tuple[int, int, int, int],
+    lines: list[dict[str, Any]],
+    x_limits: tuple[float, float],
+    y_limits: tuple[float, float],
+) -> None:
+    left, top, right, bottom = rect
+    for line in lines:
+        if not isinstance(line, dict):
+            continue
+        axis = str(line.get("axis") or "y").lower()
+        value = _as_float(line.get("value"))
+        if value is None:
+            continue
+        color = _hex_rgba(line.get("color") or SUMMARY_PLOT_PALETTE["spec_limit"], float(line.get("alpha") or 0.82))
+        width = max(1, int(round(float(line.get("width") or 2.0))))
+        dash = tuple(int(piece) for piece in line.get("dash")) if line.get("dash") else None
+        span0 = max(0.0, min(1.0, float(line.get("span0_axes") or 0.0)))
+        span1 = max(0.0, min(1.0, float(line.get("span1_axes") or 1.0)))
+        if axis == "x":
+            x = _map_linear(float(value), x_limits[0], x_limits[1], left, right)
+            y0 = top + ((1.0 - span1) * (bottom - top))
+            y1 = top + ((1.0 - span0) * (bottom - top))
+            if dash:
+                _draw_dashed_line(draw, [(x, y0), (x, y1)], fill=color, width=width, dash=dash)
+            else:
+                draw.line((x, y0, x, y1), fill=color, width=width)
+            continue
+        y = _map_linear(float(value), y_limits[0], y_limits[1], bottom, top)
+        x0 = left + (span0 * (right - left))
+        x1 = left + (span1 * (right - left))
+        if dash:
+            _draw_dashed_line(draw, [(x0, y), (x1, y)], fill=color, width=width, dash=dash)
+        else:
+            draw.line((x0, y, x1, y), fill=color, width=width)
+
+
+def _draw_distribution_polygon_body(
+    draw: ImageDraw.ImageDraw,
+    *,
+    body: dict[str, Any],
+    rect: tuple[int, int, int, int],
+    x_limits: tuple[float, float],
+    y_limits: tuple[float, float],
+) -> None:
+    polygon_points = list(body.get("polygon_points") or [])
+    if len(polygon_points) < 3:
+        return
+    left, top, right, bottom = rect
+    mapped_points: list[tuple[float, float]] = []
+    for point in polygon_points:
+        if not isinstance(point, dict):
+            continue
+        x_value = _as_float(point.get("x"))
+        y_value = _as_float(point.get("y"))
+        if x_value is None or y_value is None:
+            continue
+        mapped_points.append(
+            (
+                _map_linear(float(x_value), x_limits[0], x_limits[1], left, right),
+                _map_linear(float(y_value), y_limits[0], y_limits[1], bottom, top),
+            )
+        )
+    if len(mapped_points) < 3:
+        return
+    fill = _hex_rgba(body.get("fill_color") or SUMMARY_PLOT_PALETTE["distribution_base"], float(body.get("fill_alpha") or 0.45))
+    outline = _hex_rgba(body.get("edge_color") or SUMMARY_PLOT_PALETTE["distribution_foreground"], float(body.get("edge_alpha") or 0.85))
+    draw.polygon(mapped_points, fill=fill, outline=outline)
+
+
+def _draw_resolved_distribution_annotations(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    *,
+    annotations: dict[str, Any],
+    width: int,
+    height: int,
+    rect: tuple[int, int, int, int],
+    x_limits: tuple[float, float],
+    y_limits: tuple[float, float],
+) -> None:
+    left, top, right, bottom = rect
+    for marker in list(annotations.get("markers") or []):
+        if not isinstance(marker, dict):
+            continue
+        x_value = _as_float(marker.get("x"))
+        y_value = _as_float(marker.get("y"))
+        if x_value is None or y_value is None:
+            continue
+        _draw_marker(
+            draw,
+            kind=str(marker.get("kind") or "circle"),
+            x=_map_linear(float(x_value), x_limits[0], x_limits[1], left, right),
+            y=_map_linear(float(y_value), y_limits[0], y_limits[1], bottom, top),
+            size=max(4, int(round(float(marker.get("size") or 6.0)))),
+            fill=_hex_rgba(marker.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"], float(marker.get("alpha") or 1.0)),
+        )
+
+    for segment in list(annotations.get("segments") or []):
+        if not isinstance(segment, dict):
+            continue
+        x0 = _as_float(segment.get("x0"))
+        y0 = _as_float(segment.get("y0"))
+        x1 = _as_float(segment.get("x1"))
+        y1 = _as_float(segment.get("y1"))
+        if None in {x0, y0, x1, y1}:
+            continue
+        color = _hex_rgba(segment.get("color") or SUMMARY_PLOT_PALETTE["sigma_band"], float(segment.get("alpha") or 1.0))
+        width_px = max(1, int(round(float(segment.get("width") or 1.0))))
+        dash = tuple(int(piece) for piece in segment.get("dash")) if segment.get("dash") else None
+        mapped_points = [
+            (
+                _map_linear(float(x0), x_limits[0], x_limits[1], left, right),
+                _map_linear(float(y0), y_limits[0], y_limits[1], bottom, top),
+            ),
+            (
+                _map_linear(float(x1), x_limits[0], x_limits[1], left, right),
+                _map_linear(float(y1), y_limits[0], y_limits[1], bottom, top),
+            ),
+        ]
+        if dash:
+            _draw_dashed_line(draw, mapped_points, fill=color, width=width_px, dash=dash)
+        else:
+            draw.line((mapped_points[0], mapped_points[1]), fill=color, width=width_px)
+
+    for text in list(annotations.get("texts") or []):
+        if not isinstance(text, dict):
+            continue
+        text_rect = _normalized_rect_to_pixels(text.get("rect") if isinstance(text.get("rect"), dict) else None, width=width, height=height)
+        if text_rect is None:
+            continue
+        box_left, box_top, box_right, box_bottom = text_rect
+        _draw_box(
+            draw,
+            (box_left, box_top, box_right, box_bottom),
+            fill=(255, 255, 255, 240),
+            outline=_hex_rgba(SUMMARY_PLOT_PALETTE["annotation_box_edge"]),
+            width=1,
+            radius=5,
+        )
+        font = _font(max(8, int(round(float(text.get("font_size") or 8.0)))))
+        _draw_multiline_text(
+            draw,
+            (box_left + 6, box_top + 4),
+            str(text.get("text") or ""),
+            font=font,
+            fill=_hex_rgba(text.get("color") or SUMMARY_PLOT_PALETTE["annotation_text"], float(text.get("alpha") or 1.0)),
+        )
+        point_x = _as_float(text.get("point_x"))
+        point_y = _as_float(text.get("point_y"))
+        if point_x is not None and point_y is not None:
+            anchor_x = _map_linear(float(point_x), x_limits[0], x_limits[1], left, right)
+            anchor_y = _map_linear(float(point_y), y_limits[0], y_limits[1], bottom, top)
+            draw.line(
+                (
+                    anchor_x,
+                    anchor_y,
+                    box_left + ((box_right - box_left) / 2.0),
+                    box_top + ((box_bottom - box_top) / 2.0),
+                ),
+                fill=_hex_rgba(text.get("color") or SUMMARY_PLOT_PALETTE["annotation_text"], float(text.get("alpha") or 1.0)),
+                width=1,
+            )
+
+
 def _format_histogram_stat_value(value: Any, *, decimals: int = 3) -> str:
     numeric = _as_float(value)
     if numeric is None:
@@ -573,6 +875,7 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
         raise RuntimeError("histogram payload requires finite values")
 
     width, height = _canvas_size(payload)
+    dpi = int(((payload.get("canvas") or {}) if isinstance(payload.get("canvas"), dict) else {}).get("dpi") or DEFAULT_DPI)
     image = Image.new("RGBA", (width, height), WHITE)
     draw = ImageDraw.Draw(image)
 
@@ -593,22 +896,96 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
 
     visual_metadata, compact_mode = _resolve_histogram_visual_metadata(payload, x_min=x_min, x_max=x_max)
     overlays_meta = visual_metadata.get("modeled_overlays") if isinstance(visual_metadata.get("modeled_overlays"), dict) else {}
-    overlay_rows = list(overlays_meta.get("rows") or [])
+    resolved_render_spec = payload.get("resolved_render_spec") if isinstance(payload.get("resolved_render_spec"), dict) else {}
+    axis_spec = resolved_render_spec.get("axes") if isinstance(resolved_render_spec.get("axes"), dict) else {}
+    title_spec = resolved_render_spec.get("title") if isinstance(resolved_render_spec.get("title"), dict) else {}
+    side_panels_spec = resolved_render_spec.get("side_panels") if isinstance(resolved_render_spec.get("side_panels"), dict) else {}
+    overlay_rows = (
+        list(resolved_render_spec.get("overlay_curves") or [])
+        if isinstance(resolved_render_spec.get("overlay_curves"), list)
+        else list(overlays_meta.get("rows") or [])
+    )
+    note_spec = resolved_render_spec.get("note") if isinstance(resolved_render_spec.get("note"), dict) else None
+
     plot_left = 86
     plot_top = 72 if compact_mode else 104
     plot_bottom = height - 92
     table_width = 0 if compact_mode else int(width * 0.31)
     plot_right = width - table_width - 28
     plot_rect = (plot_left, plot_top, plot_right, plot_bottom)
-    for overlay in overlay_rows:
-        if str(overlay.get("kind")) == "curve":
-            curve_y = _finite_array(overlay.get("y") or [])
-            if curve_y.size:
-                max_count = max(max_count, float(np.max(curve_y)))
-    max_count *= 1.08
+    resolved_plot_rect = _normalized_rect_to_pixels(
+        (
+            resolved_render_spec.get("plot_area")
+            if isinstance(resolved_render_spec.get("plot_area"), dict)
+            else resolved_render_spec.get("plot_rect")
+        ) if isinstance(resolved_render_spec, dict) else None,
+        width=width,
+        height=height,
+    )
+    if resolved_plot_rect is not None:
+        plot_rect = resolved_plot_rect
+        plot_left, plot_top, plot_right, plot_bottom = plot_rect
 
-    x_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(x_min, x_max, count=6)]
-    y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(0.0, max_count, count=5)]
+    y_limits_spec = axis_spec.get("y_limits") if isinstance(axis_spec.get("y_limits"), dict) else {}
+    y_min = _as_float(y_limits_spec.get("min"))
+    y_max = _as_float(y_limits_spec.get("max"))
+    if y_min is None:
+        y_min = _as_float(resolved_render_spec.get("y_min"))
+    if y_max is None:
+        y_max = _as_float(resolved_render_spec.get("y_max"))
+    use_resolved_y_limits = y_min is not None and y_max is not None and y_max > y_min
+    if use_resolved_y_limits:
+        max_count = float(y_max)
+    else:
+        for overlay in overlay_rows:
+            if str(overlay.get("kind")) == "curve":
+                curve_y = _finite_array(overlay.get("y") or [])
+                if curve_y.size:
+                    max_count = max(max_count, float(np.max(curve_y)))
+        max_count *= 1.08
+        y_min = 0.0
+        y_max = max_count
+
+    x_ticks_spec = axis_spec.get("x_ticks") if isinstance(axis_spec.get("x_ticks"), list) else []
+    if x_ticks_spec:
+        x_ticks = [
+            (float(item.get("value") if _as_float(item.get("value")) is not None else item.get("position")), str(item.get("label") or ""))
+            for item in x_ticks_spec
+            if isinstance(item, dict) and (
+                _as_float(item.get("value")) is not None
+                or _as_float(item.get("position")) is not None
+            )
+        ]
+    else:
+        fallback_x_ticks = resolved_render_spec.get("x_ticks") if isinstance(resolved_render_spec.get("x_ticks"), list) else []
+        if fallback_x_ticks:
+            x_ticks = [
+                (float(item.get("position")), str(item.get("label") or ""))
+                for item in fallback_x_ticks
+                if isinstance(item, dict) and _as_float(item.get("position")) is not None
+            ]
+        else:
+            x_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(x_min, x_max, count=6)]
+    y_ticks_spec = axis_spec.get("y_ticks") if isinstance(axis_spec.get("y_ticks"), list) else []
+    if y_ticks_spec:
+        y_ticks = [
+            (float(item.get("value") if _as_float(item.get("value")) is not None else item.get("position")), str(item.get("label") or ""))
+            for item in y_ticks_spec
+            if isinstance(item, dict) and (
+                _as_float(item.get("value")) is not None
+                or _as_float(item.get("position")) is not None
+            )
+        ]
+    else:
+        fallback_y_ticks = resolved_render_spec.get("y_ticks") if isinstance(resolved_render_spec.get("y_ticks"), list) else []
+        if fallback_y_ticks:
+            y_ticks = [
+                (float(item.get("position")), str(item.get("label") or ""))
+                for item in fallback_y_ticks
+                if isinstance(item, dict) and _as_float(item.get("position")) is not None
+            ]
+        else:
+            y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(float(y_min or 0.0), float(y_max), count=5)]
     _draw_axis_shell(
         image,
         draw,
@@ -616,11 +993,11 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
         x_ticks=x_ticks,
         y_ticks=y_ticks,
         x_limits=(x_min, x_max),
-        y_limits=(0.0, max_count),
-        x_label=str((payload.get("style") or {}).get("axis_label_x") or "Measurement"),
-        y_label=str((payload.get("style") or {}).get("axis_label_y") or "Count"),
+        y_limits=(float(y_min or 0.0), float(y_max)),
+        x_label=str(axis_spec.get("x_label") or resolved_render_spec.get("x_label") or (payload.get("style") or {}).get("axis_label_x") or "Measurement"),
+        y_label=str(axis_spec.get("y_label") or resolved_render_spec.get("y_label") or (payload.get("style") or {}).get("axis_label_y") or "Count"),
         rotation=0,
-        grid_axis=str((payload.get("style") or {}).get("grid_axis") or "y"),
+        grid_axis=str(axis_spec.get("grid_axis") or resolved_render_spec.get("grid_axis") or (payload.get("style") or {}).get("grid_axis") or "y"),
     )
 
     bar_fill = _hex_rgba(SUMMARY_PLOT_PALETTE["distribution_base"], 0.84)
@@ -635,19 +1012,19 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
 
     for overlay in overlay_rows:
         kind = str(overlay.get("kind") or "").strip().lower()
-        x_values = _finite_array(overlay.get("x") or [])
-        y_values = _finite_array(overlay.get("y") or [])
+        x_values = _finite_array(overlay.get("x_values") or overlay.get("x") or [])
+        y_values = _finite_array(overlay.get("y_values") or overlay.get("y") or [])
         if x_values.size == 0 or y_values.size == 0 or x_values.size != y_values.size:
             continue
         points = [
             (
                 _map_linear(float(x), x_min, x_max, plot_left, plot_right),
-                _map_linear(float(y), 0.0, max_count, plot_bottom, plot_top),
+                _map_linear(float(y), float(y_min or 0.0), float(y_max), plot_bottom, plot_top),
             )
             for x, y in zip(x_values, y_values)
         ]
         color = _hex_rgba(overlay.get("color") or SUMMARY_PLOT_PALETTE["density_line"], float(overlay.get("alpha") or 1.0))
-        width_px = max(1, int(round(float(overlay.get("linewidth") or 1.0))))
+        width_px = max(1, int(round(float(overlay.get("width") or overlay.get("linewidth") or 1.0))))
         if bool(overlay.get("fill_to_baseline")):
             polygon = list(points)
             polygon.append((points[-1][0], plot_bottom))
@@ -657,22 +1034,28 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
             _draw_dashed_line(draw, points, fill=color, width=width_px, dash=tuple(int(item) for item in overlay.get("dash")))
         else:
             draw.line(points, fill=color, width=width_px)
-        if kind == "curve_note":
-            _draw_annotation_box(
-                image,
-                draw,
-                text=str(overlay.get("label") or ""),
-                anchor_x=plot_left + 18,
-                base_y=plot_bottom - 36,
-                color=_hex_rgba("#4d5968"),
-                font=_font(9),
-                plot_left=plot_left,
-                plot_right=plot_right,
-                leader_y=None,
-                align="left",
-            )
+    if note_spec is not None and str(note_spec.get("text") or "").strip():
+        note_x = int(round(float(note_spec.get("x") or 0.0) * float(width)))
+        note_y = int(round((1.0 - float(note_spec.get("y") or 0.0)) * float(height)))
+        _draw_annotation_box(
+            image,
+            draw,
+            text=str(note_spec.get("text") or ""),
+            anchor_x=note_x,
+            base_y=note_y,
+            color=_hex_rgba(note_spec.get("color") or "#4d5968"),
+            font=_font(_points_to_pixels(float(note_spec.get("font_size") or 9.0), dpi=dpi)),
+            plot_left=plot_left,
+            plot_right=plot_right,
+            leader_y=None,
+            align=str(note_spec.get("align") or "left"),
+        )
 
-    mean_line = payload.get("mean_line") if isinstance(payload.get("mean_line"), dict) else {}
+    mean_line = (
+        resolved_render_spec.get("mean_line")
+        if isinstance(resolved_render_spec.get("mean_line"), dict)
+        else payload.get("mean_line")
+    ) if isinstance(payload.get("mean_line"), dict) or isinstance(resolved_render_spec.get("mean_line"), dict) else {}
     mean_value = _as_float(mean_line.get("value"))
     if mean_value is not None:
         mean_x = _map_linear(mean_value, x_min, x_max, plot_left, plot_right)
@@ -680,27 +1063,60 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
             draw,
             [(mean_x, plot_top), (mean_x, plot_bottom)],
             fill=_hex_rgba(SUMMARY_PLOT_PALETTE["central_tendency"], float(mean_line.get("alpha") or 0.48)),
-            width=max(1, int(round(float(mean_line.get("linewidth") or 1.3)))),
+            width=max(1, int(round(float(mean_line.get("width") or mean_line.get("linewidth") or 1.3)))),
             dash=(8, 5),
         )
 
-    for line_meta in list(visual_metadata.get("specification_lines") or []):
+    line_items = (
+        list(resolved_render_spec.get("specification_lines") or [])
+        if isinstance(resolved_render_spec.get("specification_lines"), list)
+        else list(visual_metadata.get("specification_lines") or [])
+    )
+    for line_meta in line_items:
         if not isinstance(line_meta, dict) or not line_meta.get("enabled"):
             continue
         line_value = _as_float(line_meta.get("value"))
         if line_value is None:
             continue
         x = _map_linear(line_value, x_min, x_max, plot_left, plot_right)
-        draw.line((x, plot_top, x, plot_bottom - 26), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["spec_limit"], 0.82), width=2)
+        plot_height = max(float(plot_bottom - plot_top), 1.0)
+        y0_axes = _as_float(line_meta.get("y0_axes"))
+        y1_axes = _as_float(line_meta.get("y1_axes"))
+        y0_px = plot_bottom if y0_axes is None else float(plot_bottom) - (float(y0_axes) * plot_height)
+        y1_px = plot_top if y1_axes is None else float(plot_bottom) - (float(y1_axes) * plot_height)
+        draw.line((x, y0_px, x, y1_px), fill=_hex_rgba(line_meta.get("color") or SUMMARY_PLOT_PALETTE["spec_limit"], float(line_meta.get("alpha") or 0.82)), width=max(1, int(round(float(line_meta.get("width") or 2)))))
 
-    title_font = _font(15, bold=True)
-    _draw_multiline_text(draw, (54, 22), str(payload.get("title") or ""), font=title_font, fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]))
+    resolved_title_text = str(title_spec.get("text") or payload.get("title") or "")
+    title_anchor = title_spec.get("anchor") if isinstance(title_spec.get("anchor"), dict) else {}
+    title_font_spec = title_spec.get("font") if isinstance(title_spec.get("font"), dict) else {}
+    title_x = float(title_anchor.get("x")) * float(width) if _as_float(title_anchor.get("x")) is not None else (
+        float(title_spec.get("x")) * float(width) if _as_float(title_spec.get("x")) is not None else 54.0
+    )
+    title_y = (1.0 - float(title_anchor.get("y"))) * float(height) if _as_float(title_anchor.get("y")) is not None else (
+        (1.0 - float(title_spec.get("y"))) * float(height) if _as_float(title_spec.get("y")) is not None else 22.0
+    )
+    title_font = _font(
+        _points_to_pixels(float(title_font_spec.get("size") or title_spec.get("font_size") or 15.0), dpi=dpi),
+        bold=(
+            str(title_font_spec.get("weight") or "").lower() == "bold"
+            or bool(title_spec.get("bold", False))
+        ),
+    )
+    _draw_multiline_text(
+        draw,
+        (title_x, title_y),
+        resolved_title_text,
+        font=title_font,
+        fill=_hex_rgba(title_spec.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"]),
+    )
 
-    for annotation in list(visual_metadata.get("annotation_rows") or []):
+    resolved_annotations = resolved_render_spec.get("annotations") if isinstance(resolved_render_spec.get("annotations"), list) else []
+    annotation_rows = resolved_annotations or list(visual_metadata.get("annotation_rows") or [])
+    for annotation in annotation_rows:
         if not isinstance(annotation, dict):
             continue
         label_text = str(annotation.get("text") or annotation.get("label") or "")
-        x_value = _as_float(annotation.get("x"))
+        x_value = _as_float(annotation.get("x")) if _as_float(annotation.get("x")) is not None else _as_float(annotation.get("x_value"))
         if not label_text or x_value is None:
             continue
         row_index = int(annotation.get("row_index") or 0)
@@ -708,12 +1124,21 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
         align = str((annotation.get("placement_hint") or {}).get("ha") or "center")
         color = _hex_rgba(annotation.get("color") or (SUMMARY_PLOT_PALETTE["spec_limit"] if kind in {"lsl", "usl"} else SUMMARY_PLOT_PALETTE["annotation_text"]))
         leader_y = plot_top + 4
+        text_y_axes = _as_float(annotation.get("text_y_axes"))
+        box_y = _as_float(annotation.get("box_y"))
+        if box_y is not None:
+            base_y = (1.0 - float(box_y)) * float(height)
+        elif text_y_axes is not None:
+            plot_height = max(float(plot_bottom - plot_top), 1.0)
+            base_y = float(plot_bottom) - (float(text_y_axes) * plot_height)
+        else:
+            base_y = 44 + (row_index * 26)
         _draw_annotation_box(
             image,
             draw,
             text=label_text,
             anchor_x=_map_linear(x_value, x_min, x_max, plot_left, plot_right),
-            base_y=44 + (row_index * 26),
+            base_y=base_y,
             color=color,
             font=_font(10),
             plot_left=plot_left,
@@ -724,7 +1149,20 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
 
     if not compact_mode:
         table_rect = (plot_right + 20, plot_top - 10, width - 18, height - 26)
-        table_meta = visual_metadata.get("summary_stats_table") if isinstance(visual_metadata.get("summary_stats_table"), dict) else {}
+        resolved_table_rect = _normalized_rect_to_pixels(
+            (
+                side_panels_spec.get("right_info")
+                if isinstance(side_panels_spec.get("right_info"), dict)
+                else resolved_render_spec.get("table_rect")
+            ) if isinstance(resolved_render_spec, dict) else None,
+            width=width,
+            height=height,
+        )
+        if resolved_table_rect is not None:
+            table_rect = resolved_table_rect
+        table_meta = resolved_render_spec.get("table") if isinstance(resolved_render_spec.get("table"), dict) else {}
+        if not table_meta:
+            table_meta = visual_metadata.get("summary_stats_table") if isinstance(visual_metadata.get("summary_stats_table"), dict) else {}
         _draw_table(
             draw,
             table_rect,
@@ -795,17 +1233,30 @@ def _resolve_violin_points(series: np.ndarray, *, y_min: float, y_max: float, de
 
 def render_distribution_png(payload: dict[str, Any]) -> bytes:
     width, height = _canvas_size(payload, default_width=1080, default_height=600)
+    dpi = int(((payload.get("canvas") or {}) if isinstance(payload.get("canvas"), dict) else {}).get("dpi") or DEFAULT_DPI)
     image = Image.new("RGBA", (width, height), WHITE)
     draw = ImageDraw.Draw(image)
 
-    legend_items = list((payload.get("legend") or {}).get("items") or [])
-    plot_rect = (82, 88, width - 32, height - 92)
+    resolved_render_spec = payload.get("resolved_render_spec") if isinstance(payload.get("resolved_render_spec"), dict) else {}
+    axis_spec = resolved_render_spec.get("axes") if isinstance(resolved_render_spec.get("axes"), dict) else {}
+    title_spec = resolved_render_spec.get("title") if isinstance(resolved_render_spec.get("title"), dict) else {}
+    legend_spec = resolved_render_spec.get("legend") if isinstance(resolved_render_spec.get("legend"), dict) else {}
+    legend_items = (
+        list(legend_spec.get("items") or [])
+        if isinstance(legend_spec.get("items"), list)
+        else list((payload.get("legend") or {}).get("items") or [])
+    )
+    plot_rect = _resolved_plot_rect(
+        resolved_render_spec,
+        width=width,
+        height=height,
+        fallback_rect=(82, 88, width - 32, height - 92),
+    )
     layout = payload.get("layout") if isinstance(payload.get("layout"), dict) else {}
-    rotation = int(layout.get("rotation") or 0)
     labels = [str(item) for item in payload.get("labels") or []]
     display_positions = list(layout.get("display_positions") or list(range(len(labels))))
     display_labels = list(layout.get("display_labels") or labels)
-    render_mode = str(payload.get("render_mode") or "violin")
+    render_mode = str(resolved_render_spec.get("render_mode") or payload.get("render_mode") or "violin")
 
     all_values = _finite_array([value for series in payload.get("series") or [] for value in series])
     if all_values.size == 0 and render_mode == "scatter":
@@ -813,8 +1264,17 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
     if all_values.size == 0:
         raise RuntimeError("distribution payload requires finite values")
     y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
-    y_min = _as_float(y_limits.get("min"))
-    y_max = _as_float(y_limits.get("max"))
+    y_limits_spec = axis_spec.get("y_limits") if isinstance(axis_spec.get("y_limits"), dict) else {}
+    y_min = _as_float(y_limits_spec.get("min"))
+    y_max = _as_float(y_limits_spec.get("max"))
+    if y_min is None:
+        y_min = _as_float(resolved_render_spec.get("y_min"))
+    if y_max is None:
+        y_max = _as_float(resolved_render_spec.get("y_max"))
+    if y_min is None:
+        y_min = _as_float(y_limits.get("min"))
+    if y_max is None:
+        y_max = _as_float(y_limits.get("max"))
     if y_min is None:
         y_min = float(np.min(all_values))
     if y_max is None:
@@ -824,8 +1284,17 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
         y_max += 0.5
 
     x_domain = payload.get("x_domain") if isinstance(payload.get("x_domain"), dict) else {}
-    x_min = _as_float(x_domain.get("min"))
-    x_max = _as_float(x_domain.get("max"))
+    x_limits_spec = axis_spec.get("x_limits") if isinstance(axis_spec.get("x_limits"), dict) else {}
+    x_min = _as_float(x_limits_spec.get("min"))
+    x_max = _as_float(x_limits_spec.get("max"))
+    if x_min is None:
+        x_min = _as_float(resolved_render_spec.get("x_min"))
+    if x_max is None:
+        x_max = _as_float(resolved_render_spec.get("x_max"))
+    if x_min is None:
+        x_min = _as_float(x_domain.get("min"))
+    if x_max is None:
+        x_max = _as_float(x_domain.get("max"))
     if x_min is None or x_max is None:
         if render_mode == "scatter":
             x_values = _finite_array(payload.get("x_values") or [])
@@ -837,8 +1306,10 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
     if math.isclose(x_min, x_max):
         x_max += 1.0
 
-    x_ticks = list(zip(display_positions, display_labels))
-    y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(y_min, y_max, count=5)]
+    fallback_x_ticks = list(zip(display_positions, display_labels))
+    fallback_y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(y_min, y_max, count=5)]
+    x_ticks = _resolved_ticks(axis_spec.get("x_ticks") or resolved_render_spec.get("x_ticks"), fallback_x_ticks)
+    y_ticks = _resolved_ticks(axis_spec.get("y_ticks") or resolved_render_spec.get("y_ticks"), fallback_y_ticks)
     _draw_axis_shell(
         image,
         draw,
@@ -847,41 +1318,147 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
         y_ticks=y_ticks,
         x_limits=(x_min, x_max),
         y_limits=(y_min, y_max),
-        x_label=str(payload.get("x_label") or "Group"),
-        y_label=str(payload.get("y_label") or "Measurement"),
-        rotation=rotation,
-        grid_axis="y",
+        x_label=str(axis_spec.get("x_label") or resolved_render_spec.get("x_label") or payload.get("x_label") or "Group"),
+        y_label=str(axis_spec.get("y_label") or resolved_render_spec.get("y_label") or payload.get("y_label") or "Measurement"),
+        rotation=int(axis_spec.get("rotation") or layout.get("rotation") or 0),
+        grid_axis=str(axis_spec.get("grid_axis") or resolved_render_spec.get("grid_axis") or "y"),
     )
-    _draw_multiline_text(draw, (54, 24), str(payload.get("title") or ""), font=_font(14, bold=True), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]))
-    _draw_legend(draw, (plot_rect[0], 24, plot_rect[2], 52), items=legend_items)
+    _draw_chart_title(
+        image,
+        draw,
+        width=width,
+        height=height,
+        dpi=dpi,
+        title_spec=title_spec,
+        fallback_text=str(payload.get("title") or ""),
+    )
+    legend_rect = _normalized_rect_to_pixels(
+        legend_spec.get("rect") if isinstance(legend_spec.get("rect"), dict) else None,
+        width=width,
+        height=height,
+    ) or (plot_rect[0], 24, plot_rect[2], 52)
+    _draw_legend(draw, legend_rect, items=legend_items)
 
-    one_sided = bool(payload.get("one_sided"))
-    lsl = _as_float(payload.get("lsl"))
-    usl = _as_float(payload.get("usl"))
-    nominal = _as_float(payload.get("nominal"))
-    if usl is not None and (lsl is not None or one_sided):
-        band_bottom = _map_linear(0.0 if one_sided else lsl, y_min, y_max, plot_rect[3], plot_rect[1])
-        band_top = _map_linear(usl, y_min, y_max, plot_rect[3], plot_rect[1])
-        draw.rectangle((plot_rect[0], band_top, plot_rect[2], band_bottom), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["sigma_band"], 0.12))
-    for line_value, dashed in ((lsl, False), (usl, False), (nominal if payload.get("include_nominal") else None, True)):
-        if line_value is None:
-            continue
-        y = _map_linear(line_value, y_min, y_max, plot_rect[3], plot_rect[1])
-        if dashed:
-            _draw_dashed_line(draw, [(plot_rect[0], y), (plot_rect[2], y)], fill=_hex_rgba(SUMMARY_PLOT_PALETTE["spec_limit"], 0.82), width=2, dash=(8, 5))
-        else:
-            draw.line((plot_rect[0], y, plot_rect[2], y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["spec_limit"], 0.82), width=2)
+    reference_bands = resolved_render_spec.get("reference_bands") if isinstance(resolved_render_spec.get("reference_bands"), list) else None
+    if reference_bands is None:
+        one_sided = bool(payload.get("one_sided"))
+        lsl = _as_float(payload.get("lsl"))
+        usl = _as_float(payload.get("usl"))
+        reference_bands = []
+        if usl is not None and (lsl is not None or one_sided):
+            reference_bands.append(
+                {
+                    "axis": "y",
+                    "start": 0.0 if one_sided else lsl,
+                    "end": usl,
+                    "color": SUMMARY_PLOT_PALETTE["sigma_band"],
+                    "alpha": 0.12,
+                }
+            )
+    _draw_reference_bands(
+        draw,
+        rect=plot_rect,
+        bands=list(reference_bands or []),
+        x_limits=(x_min, x_max),
+        y_limits=(y_min, y_max),
+    )
+
+    reference_lines = resolved_render_spec.get("reference_lines") if isinstance(resolved_render_spec.get("reference_lines"), list) else None
+    if reference_lines is None:
+        lsl = _as_float(payload.get("lsl"))
+        usl = _as_float(payload.get("usl"))
+        nominal = _as_float(payload.get("nominal"))
+        reference_lines = [
+            {
+                "axis": "y",
+                "value": line_value,
+                "color": SUMMARY_PLOT_PALETTE["spec_limit"],
+                "alpha": 0.82,
+                "width": 2.0,
+                "dash": [8, 5] if dashed else None,
+            }
+            for line_value, dashed in ((lsl, False), (usl, False), (nominal if payload.get("include_nominal") else None, True))
+            if line_value is not None
+        ]
+    _draw_reference_lines(
+        draw,
+        rect=plot_rect,
+        lines=list(reference_lines or []),
+        x_limits=(x_min, x_max),
+        y_limits=(y_min, y_max),
+    )
 
     if render_mode == "scatter":
-        x_values = _finite_array(payload.get("x_values") or [])
-        y_values = _finite_array(payload.get("y_values") or [])
-        for x_value, y_value in zip(x_values, y_values):
+        scatter_points = resolved_render_spec.get("scatter_points") if isinstance(resolved_render_spec.get("scatter_points"), list) else None
+        if scatter_points is None:
+            x_values = _finite_array(payload.get("x_values") or [])
+            y_values = _finite_array(payload.get("y_values") or [])
+            scatter_points = [
+                {
+                    "x": float(x_value),
+                    "y": float(y_value),
+                    "marker": "circle",
+                    "size": 6,
+                    "color": SUMMARY_PLOT_PALETTE["distribution_foreground"],
+                }
+                for x_value, y_value in zip(x_values.tolist(), y_values.tolist())
+            ]
+        for point in scatter_points:
+            x_value = _as_float(point.get("x"))
+            y_value = _as_float(point.get("y"))
+            if x_value is None or y_value is None:
+                continue
             x = _map_linear(float(x_value), x_min, x_max, plot_rect[0], plot_rect[2])
             y = _map_linear(float(y_value), y_min, y_max, plot_rect[3], plot_rect[1])
-            _draw_marker(draw, kind="circle", x=x, y=y, size=6, fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]))
+            _draw_marker(
+                draw,
+                kind=str(point.get("marker") or "circle"),
+                x=x,
+                y=y,
+                size=max(4, int(point.get("size") or 6)),
+                fill=_hex_rgba(point.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"], float(point.get("alpha") or 1.0)),
+            )
         return _encode_png(image)
 
-    series_list = [_finite_array(series) for series in payload.get("series") or []]
+    resolved_violin_bodies = resolved_render_spec.get("violin_bodies") if isinstance(resolved_render_spec.get("violin_bodies"), list) else None
+    resolved_annotation_geometry = resolved_render_spec.get("annotations") if isinstance(resolved_render_spec.get("annotations"), dict) else None
+    if resolved_violin_bodies is not None:
+        for body in resolved_violin_bodies:
+            if isinstance(body, dict):
+                _draw_distribution_polygon_body(
+                    draw,
+                    body=body,
+                    rect=plot_rect,
+                    x_limits=(x_min, x_max),
+                    y_limits=(y_min, y_max),
+                )
+        if resolved_annotation_geometry is not None:
+            _draw_resolved_distribution_annotations(
+                image,
+                draw,
+                annotations=resolved_annotation_geometry,
+                width=width,
+                height=height,
+                rect=plot_rect,
+                x_limits=(x_min, x_max),
+                y_limits=(y_min, y_max),
+            )
+        return _encode_png(image)
+
+    violin_groups = resolved_render_spec.get("violin_groups") if isinstance(resolved_render_spec.get("violin_groups"), list) else None
+    if violin_groups is None:
+        positions = list(payload.get("positions") or list(range(len(payload.get("series") or []))))
+        series_list = [_finite_array(series) for series in payload.get("series") or []]
+        violin_groups = [
+            {
+                "position": float(position),
+                "values": [float(item) for item in series.tolist()],
+            }
+            for position, series in zip(positions, series_list)
+        ]
+    else:
+        series_list = [_finite_array(group.get("values") or []) for group in violin_groups if isinstance(group, dict)]
+
     density_peak = 0.0
     for series in series_list:
         if series.size >= 3 and gaussian_kde is not None and np.std(series, ddof=1) > 0:
@@ -890,14 +1467,17 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
             except Exception:
                 continue
     density_peak = max(density_peak, 1.0)
-    positions = list(payload.get("positions") or list(range(len(series_list))))
-    gap = (plot_rect[2] - plot_rect[0]) / max(2, len(series_list))
+    positions = [float(group.get("position") or 0.0) for group in violin_groups if isinstance(group, dict)]
+    gap = (plot_rect[2] - plot_rect[0]) / max(2, len(positions) or len(series_list))
     violin_half_width = max(10.0, gap * 0.22)
 
-    for index, series in enumerate(series_list):
+    for group in violin_groups:
+        if not isinstance(group, dict):
+            continue
+        series = _finite_array(group.get("values") or [])
         if series.size == 0:
             continue
-        center_value = float(positions[index]) if index < len(positions) else float(index)
+        center_value = float(group.get("position") or 0.0)
         center_x = _map_linear(center_value, x_min, x_max, plot_rect[0], plot_rect[2])
         density_points = _resolve_violin_points(series, y_min=y_min, y_max=y_max, density_peak=density_peak)
         if density_points is not None:
@@ -918,19 +1498,34 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
             ]
             draw.polygon(right_points + left_points, fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_base"], 0.55), outline=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"], 0.85))
 
-    annotation_style = payload.get("annotation_style") if isinstance(payload.get("annotation_style"), dict) else {}
-    violin_annotations = list(payload.get("violin_annotations") or [])
+    annotation_style = (
+        resolved_render_spec.get("annotation_style")
+        if isinstance(resolved_render_spec.get("annotation_style"), dict)
+        else payload.get("annotation_style")
+    ) if isinstance(payload.get("annotation_style"), dict) or isinstance(resolved_render_spec.get("annotation_style"), dict) else {}
+    violin_annotations = (
+        list(resolved_render_spec.get("violin_annotations") or [])
+        if isinstance(resolved_render_spec.get("violin_annotations"), list)
+        else list(payload.get("violin_annotations") or [])
+    )
     show_minmax = bool(annotation_style.get("show_minmax", True))
     show_sigma = bool(annotation_style.get("show_sigma", True))
     for item in violin_annotations:
-        xpos = float(item.get("position"))
+        xpos = _as_float(item.get("position"))
+        mean_value = _as_float(item.get("mean"))
+        minimum_value = _as_float(item.get("minimum"))
+        maximum_value = _as_float(item.get("maximum"))
+        sigma_start_value = _as_float(item.get("sigma_start"))
+        sigma_high_value = _as_float(item.get("sigma_high"))
+        if xpos is None or mean_value is None:
+            continue
         center_x = _map_linear(xpos, x_min, x_max, plot_rect[0], plot_rect[2])
-        mean_y = _map_linear(float(item.get("mean")), y_min, y_max, plot_rect[3], plot_rect[1])
+        mean_y = _map_linear(float(mean_value), y_min, y_max, plot_rect[3], plot_rect[1])
         _draw_marker(draw, kind="circle", x=center_x, y=mean_y, size=max(8, int(annotation_style.get("mean_marker_size") or 14) // 2), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["central_tendency"]))
         _draw_annotation_box(
             image,
             draw,
-            text=f"u={float(item.get('mean')):.3f}",
+            text=f"u={float(mean_value):.3f}",
             anchor_x=center_x + 6,
             base_y=mean_y - 20,
             color=_hex_rgba(SUMMARY_PLOT_PALETTE["annotation_text"]),
@@ -940,14 +1535,14 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
             leader_y=mean_y,
             align="left",
         )
-        if show_minmax:
-            minimum_y = _map_linear(float(item.get("minimum")), y_min, y_max, plot_rect[3], plot_rect[1])
-            maximum_y = _map_linear(float(item.get("maximum")), y_min, y_max, plot_rect[3], plot_rect[1])
+        if show_minmax and minimum_value is not None and maximum_value is not None:
+            minimum_y = _map_linear(float(minimum_value), y_min, y_max, plot_rect[3], plot_rect[1])
+            maximum_y = _map_linear(float(maximum_value), y_min, y_max, plot_rect[3], plot_rect[1])
             _draw_marker(draw, kind="triangle_down", x=center_x, y=minimum_y, size=8, fill=_hex_rgba(SUMMARY_PLOT_PALETTE["annotation_text"]))
             _draw_marker(draw, kind="triangle_up", x=center_x, y=maximum_y, size=8, fill=_hex_rgba(SUMMARY_PLOT_PALETTE["annotation_text"]))
-        if show_sigma and item.get("show_sigma_segment"):
-            sigma_start = _map_linear(float(item.get("sigma_start")), y_min, y_max, plot_rect[3], plot_rect[1])
-            sigma_high = _map_linear(float(item.get("sigma_high")), y_min, y_max, plot_rect[3], plot_rect[1])
+        if show_sigma and item.get("show_sigma_segment") and sigma_start_value is not None and sigma_high_value is not None:
+            sigma_start = _map_linear(float(sigma_start_value), y_min, y_max, plot_rect[3], plot_rect[1])
+            sigma_high = _map_linear(float(sigma_high_value), y_min, y_max, plot_rect[3], plot_rect[1])
             _draw_dashed_line(draw, [(center_x, sigma_start), (center_x, sigma_high)], fill=_hex_rgba(SUMMARY_PLOT_PALETTE["sigma_band"]), width=1, dash=(4, 4))
 
     return _encode_png(image)
@@ -955,9 +1550,14 @@ def render_distribution_png(payload: dict[str, Any]) -> bytes:
 
 def render_iqr_png(payload: dict[str, Any]) -> bytes:
     width, height = _canvas_size(payload, default_width=1080, default_height=600)
+    dpi = int(((payload.get("canvas") or {}) if isinstance(payload.get("canvas"), dict) else {}).get("dpi") or DEFAULT_DPI)
     image = Image.new("RGBA", (width, height), WHITE)
     draw = ImageDraw.Draw(image)
 
+    resolved_render_spec = payload.get("resolved_render_spec") if isinstance(payload.get("resolved_render_spec"), dict) else {}
+    axis_spec = resolved_render_spec.get("axes") if isinstance(resolved_render_spec.get("axes"), dict) else {}
+    title_spec = resolved_render_spec.get("title") if isinstance(resolved_render_spec.get("title"), dict) else {}
+    legend_spec = resolved_render_spec.get("legend") if isinstance(resolved_render_spec.get("legend"), dict) else {}
     labels = [str(item) for item in payload.get("labels") or []]
     series_list = [_finite_array(series) for series in payload.get("series") or []]
     flat_values = _finite_array([item for series in series_list for item in series])
@@ -965,21 +1565,49 @@ def render_iqr_png(payload: dict[str, Any]) -> bytes:
         raise RuntimeError("iqr payload requires finite values")
 
     layout = payload.get("layout") if isinstance(payload.get("layout"), dict) else {}
-    rotation = int(layout.get("rotation") or 0)
     display_positions = list(layout.get("display_positions") or list(range(1, len(labels) + 1)))
     display_labels = list(layout.get("display_labels") or labels)
     y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
-    y_min = _as_float(y_limits.get("min")) or float(np.min(flat_values))
-    y_max = _as_float(y_limits.get("max")) or float(np.max(flat_values))
+    y_limits_spec = axis_spec.get("y_limits") if isinstance(axis_spec.get("y_limits"), dict) else {}
+    y_min = _as_float(y_limits_spec.get("min"))
+    y_max = _as_float(y_limits_spec.get("max"))
+    if y_min is None:
+        y_min = _as_float(resolved_render_spec.get("y_min"))
+    if y_max is None:
+        y_max = _as_float(resolved_render_spec.get("y_max"))
+    if y_min is None:
+        y_min = _as_float(y_limits.get("min"))
+    if y_max is None:
+        y_max = _as_float(y_limits.get("max"))
+    if y_min is None:
+        y_min = float(np.min(flat_values))
+    if y_max is None:
+        y_max = float(np.max(flat_values))
     if math.isclose(y_min, y_max):
         y_min -= 0.5
         y_max += 0.5
 
-    x_min = 0.5
-    x_max = max(float(len(series_list)) + 0.5, 1.5)
-    plot_rect = (82, 88, width - 32, height - 92)
-    x_ticks = list(zip(display_positions, display_labels))
-    y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(y_min, y_max, count=5)]
+    x_limits_spec = axis_spec.get("x_limits") if isinstance(axis_spec.get("x_limits"), dict) else {}
+    x_min = _as_float(x_limits_spec.get("min"))
+    x_max = _as_float(x_limits_spec.get("max"))
+    if x_min is None:
+        x_min = _as_float(resolved_render_spec.get("x_min"))
+    if x_max is None:
+        x_max = _as_float(resolved_render_spec.get("x_max"))
+    if x_min is None:
+        x_min = 0.5
+    if x_max is None:
+        x_max = max(float(len(series_list)) + 0.5, 1.5)
+    plot_rect = _resolved_plot_rect(
+        resolved_render_spec,
+        width=width,
+        height=height,
+        fallback_rect=(82, 88, width - 32, height - 92),
+    )
+    fallback_x_ticks = list(zip(display_positions, display_labels))
+    fallback_y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(y_min, y_max, count=5)]
+    x_ticks = _resolved_ticks(axis_spec.get("x_ticks") or resolved_render_spec.get("x_ticks"), fallback_x_ticks)
+    y_ticks = _resolved_ticks(axis_spec.get("y_ticks") or resolved_render_spec.get("y_ticks"), fallback_y_ticks)
     _draw_axis_shell(
         image,
         draw,
@@ -988,43 +1616,120 @@ def render_iqr_png(payload: dict[str, Any]) -> bytes:
         y_ticks=y_ticks,
         x_limits=(x_min, x_max),
         y_limits=(y_min, y_max),
-        x_label=str(payload.get("x_label") or "Group"),
-        y_label=str(payload.get("y_label") or "Measurement"),
-        rotation=rotation,
-        grid_axis="y",
+        x_label=str(axis_spec.get("x_label") or resolved_render_spec.get("x_label") or payload.get("x_label") or "Group"),
+        y_label=str(axis_spec.get("y_label") or resolved_render_spec.get("y_label") or payload.get("y_label") or "Measurement"),
+        rotation=int(axis_spec.get("rotation") or layout.get("rotation") or 0),
+        grid_axis=str(axis_spec.get("grid_axis") or resolved_render_spec.get("grid_axis") or "y"),
     )
-    _draw_multiline_text(draw, (54, 24), str(payload.get("title") or ""), font=_font(14, bold=True), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]))
-    _draw_legend(draw, (plot_rect[0], 24, plot_rect[2], 52), items=list((payload.get("legend") or {}).get("items") or []))
+    _draw_chart_title(
+        image,
+        draw,
+        width=width,
+        height=height,
+        dpi=dpi,
+        title_spec=title_spec,
+        fallback_text=str(payload.get("title") or ""),
+    )
+    legend_items = (
+        list(legend_spec.get("items") or [])
+        if isinstance(legend_spec.get("items"), list)
+        else list((payload.get("legend") or {}).get("items") or [])
+    )
+    legend_rect = _normalized_rect_to_pixels(
+        legend_spec.get("rect") if isinstance(legend_spec.get("rect"), dict) else None,
+        width=width,
+        height=height,
+    ) or (plot_rect[0], 24, plot_rect[2], 52)
+    _draw_legend(draw, legend_rect, items=legend_items)
 
-    one_sided = bool(payload.get("one_sided"))
-    lsl = _as_float(payload.get("lsl"))
-    usl = _as_float(payload.get("usl"))
-    nominal = _as_float(payload.get("nominal"))
-    if usl is not None and (lsl is not None or one_sided):
-        band_bottom = _map_linear(0.0 if one_sided else lsl, y_min, y_max, plot_rect[3], plot_rect[1])
-        band_top = _map_linear(usl, y_min, y_max, plot_rect[3], plot_rect[1])
-        draw.rectangle((plot_rect[0], band_top, plot_rect[2], band_bottom), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["sigma_band"], 0.12))
-    for line_value, dashed in ((lsl, False), (usl, False), (nominal, True)):
-        if line_value is None:
+    reference_bands = resolved_render_spec.get("reference_bands") if isinstance(resolved_render_spec.get("reference_bands"), list) else None
+    if reference_bands is None:
+        one_sided = bool(payload.get("one_sided"))
+        lsl = _as_float(payload.get("lsl"))
+        usl = _as_float(payload.get("usl"))
+        reference_bands = []
+        if usl is not None and (lsl is not None or one_sided):
+            reference_bands.append(
+                {
+                    "axis": "y",
+                    "start": 0.0 if one_sided else lsl,
+                    "end": usl,
+                    "color": SUMMARY_PLOT_PALETTE["sigma_band"],
+                    "alpha": 0.12,
+                }
+            )
+    _draw_reference_bands(
+        draw,
+        rect=plot_rect,
+        bands=list(reference_bands or []),
+        x_limits=(x_min, x_max),
+        y_limits=(y_min, y_max),
+    )
+
+    reference_lines = resolved_render_spec.get("reference_lines") if isinstance(resolved_render_spec.get("reference_lines"), list) else None
+    if reference_lines is None:
+        lsl = _as_float(payload.get("lsl"))
+        usl = _as_float(payload.get("usl"))
+        nominal = _as_float(payload.get("nominal"))
+        reference_lines = [
+            {
+                "axis": "y",
+                "value": line_value,
+                "color": SUMMARY_PLOT_PALETTE["spec_limit"],
+                "alpha": 0.82,
+                "width": 2.0,
+                "dash": [8, 5] if dashed else None,
+            }
+            for line_value, dashed in ((lsl, False), (usl, False), (nominal, True))
+            if line_value is not None
+        ]
+    _draw_reference_lines(
+        draw,
+        rect=plot_rect,
+        lines=list(reference_lines or []),
+        x_limits=(x_min, x_max),
+        y_limits=(y_min, y_max),
+    )
+
+    boxes = resolved_render_spec.get("boxes") if isinstance(resolved_render_spec.get("boxes"), list) else None
+    if boxes is None and isinstance(resolved_render_spec.get("boxplots"), list):
+        boxes = list(resolved_render_spec.get("boxplots") or [])
+    if boxes is None:
+        boxes = []
+        for idx, series in enumerate(series_list, start=1):
+            if series.size == 0:
+                continue
+            q1, median, q3 = np.percentile(series, [25, 50, 75])
+            iqr = float(q3 - q1)
+            lower_bound = float(q1 - (1.5 * iqr))
+            upper_bound = float(q3 + (1.5 * iqr))
+            whisker_low = float(np.min(series[series >= lower_bound])) if np.any(series >= lower_bound) else float(np.min(series))
+            whisker_high = float(np.max(series[series <= upper_bound])) if np.any(series <= upper_bound) else float(np.max(series))
+            outliers = series[(series < lower_bound) | (series > upper_bound)]
+            boxes.append(
+                {
+                    "position": float(idx),
+                    "q1": float(q1),
+                    "median": float(median),
+                    "q3": float(q3),
+                    "whisker_low": float(whisker_low),
+                    "whisker_high": float(whisker_high),
+                    "outliers": [float(item) for item in outliers.tolist()],
+                }
+            )
+
+    for box in boxes:
+        if not isinstance(box, dict):
             continue
-        y = _map_linear(line_value, y_min, y_max, plot_rect[3], plot_rect[1])
-        if dashed:
-            _draw_dashed_line(draw, [(plot_rect[0], y), (plot_rect[2], y)], fill=_hex_rgba(SUMMARY_PLOT_PALETTE["spec_limit"], 0.82), width=2, dash=(8, 5))
-        else:
-            draw.line((plot_rect[0], y, plot_rect[2], y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["spec_limit"], 0.82), width=2)
-
-    for idx, series in enumerate(series_list, start=1):
-        if series.size == 0:
+        position = _as_float(box.get("position"))
+        q1 = _as_float(box.get("q1"))
+        median = _as_float(box.get("median"))
+        q3 = _as_float(box.get("q3"))
+        whisker_low = _as_float(box.get("whisker_low"))
+        whisker_high = _as_float(box.get("whisker_high"))
+        if None in {position, q1, median, q3, whisker_low, whisker_high}:
             continue
-        q1, median, q3 = np.percentile(series, [25, 50, 75])
-        iqr = float(q3 - q1)
-        lower_bound = float(q1 - (1.5 * iqr))
-        upper_bound = float(q3 + (1.5 * iqr))
-        whisker_low = float(np.min(series[series >= lower_bound])) if np.any(series >= lower_bound) else float(np.min(series))
-        whisker_high = float(np.max(series[series <= upper_bound])) if np.any(series <= upper_bound) else float(np.max(series))
-        outliers = series[(series < lower_bound) | (series > upper_bound)]
-
-        center_x = _map_linear(float(idx), x_min, x_max, plot_rect[0], plot_rect[2])
+        center_x = _map_linear(float(position), x_min, x_max, plot_rect[0], plot_rect[2])
         box_half_width = max(12.0, (plot_rect[2] - plot_rect[0]) / max(10, len(series_list) * 6))
         box_top = _map_linear(float(q3), y_min, y_max, plot_rect[3], plot_rect[1])
         box_bottom = _map_linear(float(q1), y_min, y_max, plot_rect[3], plot_rect[1])
@@ -1038,8 +1743,11 @@ def render_iqr_png(payload: dict[str, Any]) -> bytes:
         draw.line((center_x, box_bottom, center_x, whisker_low_y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]), width=2)
         draw.line((center_x - 8, whisker_high_y, center_x + 8, whisker_high_y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]), width=2)
         draw.line((center_x - 8, whisker_low_y, center_x + 8, whisker_low_y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]), width=2)
-        for outlier in outliers:
-            outlier_y = _map_linear(float(outlier), y_min, y_max, plot_rect[3], plot_rect[1])
+        for outlier in list(box.get("outliers") or []):
+            outlier_value = _as_float(outlier)
+            if outlier_value is None:
+                continue
+            outlier_y = _map_linear(float(outlier_value), y_min, y_max, plot_rect[3], plot_rect[1])
             _draw_marker(draw, kind="circle", x=center_x, y=outlier_y, size=6, fill=_hex_rgba(SUMMARY_PLOT_PALETTE["outlier"]))
 
     return _encode_png(image)
@@ -1047,33 +1755,65 @@ def render_iqr_png(payload: dict[str, Any]) -> bytes:
 
 def render_trend_png(payload: dict[str, Any]) -> bytes:
     width, height = _canvas_size(payload, default_width=1020, default_height=600)
+    dpi = int(((payload.get("canvas") or {}) if isinstance(payload.get("canvas"), dict) else {}).get("dpi") or DEFAULT_DPI)
     image = Image.new("RGBA", (width, height), WHITE)
     draw = ImageDraw.Draw(image)
 
+    resolved_render_spec = payload.get("resolved_render_spec") if isinstance(payload.get("resolved_render_spec"), dict) else {}
+    axis_spec = resolved_render_spec.get("axes") if isinstance(resolved_render_spec.get("axes"), dict) else {}
+    title_spec = resolved_render_spec.get("title") if isinstance(resolved_render_spec.get("title"), dict) else {}
     x_values = _finite_array(payload.get("x_values") or [])
     y_values = _finite_array(payload.get("y_values") or [])
     if x_values.size == 0 or y_values.size == 0:
         raise RuntimeError("trend payload requires finite x/y values")
 
     layout = payload.get("layout") if isinstance(payload.get("layout"), dict) else {}
-    rotation = int(layout.get("rotation") or 0)
     display_positions = list(layout.get("display_positions") or list(x_values))
     display_labels = list(layout.get("display_labels") or list(payload.get("labels") or []))
     y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
-    y_min = _as_float(y_limits.get("min")) or float(np.min(y_values))
-    y_max = _as_float(y_limits.get("max")) or float(np.max(y_values))
+    y_limits_spec = axis_spec.get("y_limits") if isinstance(axis_spec.get("y_limits"), dict) else {}
+    y_min = _as_float(y_limits_spec.get("min"))
+    y_max = _as_float(y_limits_spec.get("max"))
+    if y_min is None:
+        y_min = _as_float(resolved_render_spec.get("y_min"))
+    if y_max is None:
+        y_max = _as_float(resolved_render_spec.get("y_max"))
+    if y_min is None:
+        y_min = _as_float(y_limits.get("min"))
+    if y_max is None:
+        y_max = _as_float(y_limits.get("max"))
+    if y_min is None:
+        y_min = float(np.min(y_values))
+    if y_max is None:
+        y_max = float(np.max(y_values))
     if math.isclose(y_min, y_max):
         y_min -= 0.5
         y_max += 0.5
 
-    x_min = float(np.min(x_values))
-    x_max = float(np.max(x_values))
+    x_limits_spec = axis_spec.get("x_limits") if isinstance(axis_spec.get("x_limits"), dict) else {}
+    x_min = _as_float(x_limits_spec.get("min"))
+    x_max = _as_float(x_limits_spec.get("max"))
+    if x_min is None:
+        x_min = _as_float(resolved_render_spec.get("x_min"))
+    if x_max is None:
+        x_max = _as_float(resolved_render_spec.get("x_max"))
+    if x_min is None:
+        x_min = float(np.min(x_values))
+    if x_max is None:
+        x_max = float(np.max(x_values))
     if math.isclose(x_min, x_max):
         x_max += 1.0
 
-    plot_rect = (82, 88, width - 32, height - 92)
-    x_ticks = list(zip(display_positions, display_labels))
-    y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(y_min, y_max, count=5)]
+    plot_rect = _resolved_plot_rect(
+        resolved_render_spec,
+        width=width,
+        height=height,
+        fallback_rect=(82, 88, width - 32, height - 92),
+    )
+    fallback_x_ticks = list(zip(display_positions, display_labels))
+    fallback_y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(y_min, y_max, count=5)]
+    x_ticks = _resolved_ticks(axis_spec.get("x_ticks") or resolved_render_spec.get("x_ticks"), fallback_x_ticks)
+    y_ticks = _resolved_ticks(axis_spec.get("y_ticks") or resolved_render_spec.get("y_ticks"), fallback_y_ticks)
     _draw_axis_shell(
         image,
         draw,
@@ -1082,23 +1822,70 @@ def render_trend_png(payload: dict[str, Any]) -> bytes:
         y_ticks=y_ticks,
         x_limits=(x_min, x_max),
         y_limits=(y_min, y_max),
-        x_label=str(payload.get("x_label") or "Sample #"),
-        y_label=str(payload.get("y_label") or "Measurement"),
-        rotation=rotation,
-        grid_axis="y",
+        x_label=str(axis_spec.get("x_label") or resolved_render_spec.get("x_label") or payload.get("x_label") or "Sample #"),
+        y_label=str(axis_spec.get("y_label") or resolved_render_spec.get("y_label") or payload.get("y_label") or "Measurement"),
+        rotation=int(axis_spec.get("rotation") or layout.get("rotation") or 0),
+        grid_axis=str(axis_spec.get("grid_axis") or resolved_render_spec.get("grid_axis") or "y"),
     )
-    _draw_multiline_text(draw, (54, 24), str(payload.get("title") or ""), font=_font(14, bold=True), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]))
+    _draw_chart_title(
+        image,
+        draw,
+        width=width,
+        height=height,
+        dpi=dpi,
+        title_spec=title_spec,
+        fallback_text=str(payload.get("title") or ""),
+    )
 
-    for limit_value in list(payload.get("horizontal_limits") or []):
-        numeric = _as_float(limit_value)
-        if numeric is None:
+    reference_lines = resolved_render_spec.get("reference_lines") if isinstance(resolved_render_spec.get("reference_lines"), list) else None
+    if reference_lines is None:
+        reference_lines = [
+            {
+                "axis": "y",
+                "value": numeric,
+                "color": SUMMARY_PLOT_PALETTE["spec_limit"],
+                "alpha": 0.82,
+                "width": 2.0,
+            }
+            for limit_value in list(payload.get("horizontal_limits") or [])
+            if (numeric := _as_float(limit_value)) is not None
+        ]
+    _draw_reference_lines(
+        draw,
+        rect=plot_rect,
+        lines=list(reference_lines or []),
+        x_limits=(x_min, x_max),
+        y_limits=(y_min, y_max),
+    )
+
+    points = resolved_render_spec.get("points") if isinstance(resolved_render_spec.get("points"), list) else None
+    if points is None:
+        points = [
+            {
+                "x": float(x_value),
+                "y": float(y_value),
+                "marker": "circle",
+                "size": 6,
+                "color": SUMMARY_PLOT_PALETTE["distribution_foreground"],
+            }
+            for x_value, y_value in zip(x_values.tolist(), y_values.tolist())
+        ]
+    for point in points:
+        if not isinstance(point, dict):
             continue
-        y = _map_linear(numeric, y_min, y_max, plot_rect[3], plot_rect[1])
-        draw.line((plot_rect[0], y, plot_rect[2], y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["spec_limit"], 0.82), width=2)
-
-    for x_value, y_value in zip(x_values, y_values):
+        x_value = _as_float(point.get("x"))
+        y_value = _as_float(point.get("y"))
+        if x_value is None or y_value is None:
+            continue
         px = _map_linear(float(x_value), x_min, x_max, plot_rect[0], plot_rect[2])
         py = _map_linear(float(y_value), y_min, y_max, plot_rect[3], plot_rect[1])
-        _draw_marker(draw, kind="circle", x=px, y=py, size=6, fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]))
+        _draw_marker(
+            draw,
+            kind=str(point.get("marker") or "circle"),
+            x=px,
+            y=py,
+            size=max(4, int(point.get("size") or 6)),
+            fill=_hex_rgba(point.get("color") or SUMMARY_PLOT_PALETTE["distribution_foreground"], float(point.get("alpha") or 1.0)),
+        )
 
     return _encode_png(image)

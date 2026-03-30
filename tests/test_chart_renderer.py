@@ -19,6 +19,7 @@ from modules.chart_renderer import (
     native_chart_backend_available,
     native_full_chart_backend_available,
     native_histogram_backend_available,
+    native_chart_renderer_rollout_enabled,
     resolve_distribution_renderer_backend,
     resolve_chart_renderer_backend,
 )
@@ -44,6 +45,10 @@ def test_resolve_backend_native_warns_and_falls_back_when_extension_missing(monk
     assert "METROLIZA_CHART_RENDERER_BACKEND=native" in str(warn.call_args[0][0])
 
 
+def test_native_backend_rollout_gate_is_disabled_by_default():
+    assert native_chart_renderer_rollout_enabled() is False
+
+
 def test_resolve_backend_auto_uses_matplotlib_even_when_extension_available(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
@@ -56,6 +61,7 @@ def test_resolve_backend_native_warns_and_falls_back_even_when_extension_availab
         with mock.patch("warnings.warn") as warn:
             assert resolve_chart_renderer_backend() == "matplotlib"
     warn.assert_called_once()
+    assert "disabled by rollout policy" in str(warn.call_args[0][0])
 
 
 def test_native_chart_backend_available_requires_histogram_symbol_only():
@@ -86,6 +92,17 @@ def test_build_chart_renderer_native_env_falls_back_to_matplotlib_when_extension
     with mock.patch("modules.chart_renderer._native_render_histogram_png", None):
         renderer = build_chart_renderer()
     assert isinstance(renderer, MatplotlibChartRenderer)
+
+
+def test_build_chart_renderer_keeps_matplotlib_even_when_native_capability_is_present(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
+    with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
+        with mock.patch("warnings.warn") as warn:
+            renderer = build_chart_renderer()
+    assert isinstance(renderer, MatplotlibChartRenderer)
+    assert warn.called
+    assert "disabled by rollout policy" in str(warn.call_args[0][0])
+
 
 def test_build_chart_renderer_matplotlib(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib")
@@ -372,6 +389,64 @@ def test_native_distribution_renderer_falls_back_when_native_call_raises():
     assert result.backend == "matplotlib"
     assert isinstance(result.png_bytes, bytes)
     assert len(result.png_bytes) > 0
+
+
+def test_native_distribution_renderer_falls_back_when_resolved_geometry_is_missing():
+    payload = build_distribution_native_payload(
+        values=[[1.0, 1.2, 1.3], [1.4, 1.45, 1.5]],
+        labels=["A", "B"],
+        title="Missing Geometry Distribution",
+    )
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.scatter([0, 1, 2], [1.0, 1.1, 1.2], s=10)
+
+    native = mock.Mock(return_value=b"native")
+    with mock.patch("modules.chart_renderer._native_render_distribution_png", native):
+        result = NativeChartRenderer().render_distribution_png(payload, fallback_fig=fig)
+
+    plt.close(fig)
+    native.assert_not_called()
+    assert result.backend == "matplotlib"
+    assert isinstance(result.png_bytes, bytes)
+    assert len(result.png_bytes) > 0
+
+
+def test_native_distribution_renderer_uses_native_when_finalized_geometry_is_attached():
+    payload = build_distribution_native_payload(
+        values=[[1.0, 1.2, 1.3], [1.4, 1.45, 1.5]],
+        labels=["A", "B"],
+        title="Resolved Geometry Distribution",
+    )
+    payload["render_mode"] = "scatter"
+    payload["resolved_render_spec"] = {
+        "source": "matplotlib_finalized",
+        "render_mode": "scatter",
+        "title": {"text": "Resolved Geometry Distribution"},
+        "plot_area": {"x": 0.14, "y": 0.18, "width": 0.62, "height": 0.56},
+        "axes": {
+            "x_limits": {"min": 0.0, "max": 1.0},
+            "y_limits": {"min": 0.0, "max": 2.0},
+            "x_ticks": [{"value": 0.0, "label": "A"}, {"value": 1.0, "label": "B"}],
+            "y_ticks": [{"value": 0.0, "label": "0"}, {"value": 1.0, "label": "1"}, {"value": 2.0, "label": "2"}],
+        },
+        "legend": None,
+        "reference_lines": [],
+        "reference_bands": [],
+        "scatter_points": [{"x": 0.2, "y": 1.2, "marker": "circle", "size": 6.0, "color": "#0072B2"}],
+        "violin_bodies": [],
+        "annotations": {"markers": [], "segments": [], "texts": []},
+    }
+    fig, ax = plt.subplots(figsize=(6, 3))
+    ax.scatter([0, 1, 2], [1.0, 1.1, 1.2], s=10)
+
+    native = mock.Mock(return_value=b"native")
+    with mock.patch("modules.chart_renderer._native_render_distribution_png", native):
+        result = NativeChartRenderer().render_distribution_png(payload, fallback_fig=fig)
+
+    plt.close(fig)
+    native.assert_called_once_with(payload)
+    assert result.backend == "native"
+    assert result.png_bytes == b"native"
 
 
 def test_native_iqr_renderer_validates_payload_contract():

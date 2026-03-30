@@ -5,6 +5,7 @@ import tempfile
 import types
 import unittest
 import zipfile
+import inspect
 import xml.etree.ElementTree as ET
 from unittest.mock import MagicMock, patch
 
@@ -352,6 +353,24 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         thread = ExportDataThread(request)
         self.assertTrue(thread.get_export_backend().run(thread))
         return out_path
+
+    def test_summary_sheet_extended_charts_use_single_matplotlib_oracle_path(self):
+        method_source = inspect.getsource(export_data_thread_module.ExportDataThread.summary_sheet_fill)
+
+        self.assertNotIn('distribution_backend_native', method_source)
+        self.assertNotIn('iqr_backend_native', method_source)
+        self.assertNotIn('trend_backend_native', method_source)
+        self.assertNotIn('build_resolved_distribution_spec', method_source)
+        self.assertNotIn('build_resolved_iqr_spec', method_source)
+        self.assertNotIn('build_resolved_trend_spec', method_source)
+
+        self.assertIn('extract_distribution_geometry(', method_source)
+        self.assertIn('extract_iqr_geometry(', method_source)
+        self.assertIn('extract_trend_geometry(', method_source)
+
+        self.assertRegex(method_source, r"_save_summary_chart\(\s*fig,\s*chart_type='distribution'")
+        self.assertRegex(method_source, r"_save_summary_chart\(\s*fig,\s*chart_type='iqr'")
+        self.assertRegex(method_source, r"_save_summary_chart\(\s*fig,\s*chart_type='trend'")
 
     def test_off_mode_emits_no_group_analysis_sheets(self):
         with tempfile.TemporaryDirectory() as temp_dir:

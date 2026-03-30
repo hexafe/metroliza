@@ -206,6 +206,15 @@ from modules.chart_renderer import (
     native_trend_backend_available,
     resolve_chart_renderer_backend,
 )
+from modules.matplotlib_distribution_geometry import extract_distribution_geometry
+from modules.matplotlib_iqr_trend_geometry import extract_iqr_geometry, extract_trend_geometry
+from modules.chart_render_spec import (
+    build_histogram_mean_line_style as _build_histogram_mean_line_style_contract,
+    build_resolved_histogram_spec,
+    build_wrapped_chart_title as _build_wrapped_chart_title_contract,
+    histogram_spec_to_mapping,
+    resolve_histogram_x_view as _resolve_histogram_x_view_contract,
+)
 from modules.backend_diagnostics import (
     build_backend_diagnostic_summary,
     format_backend_diagnostic_lines,
@@ -624,13 +633,7 @@ def compute_histogram_annotation_rows(annotation_specs, distance_threshold, **kw
 
 def build_histogram_mean_line_style():
     """Return style contract for histogram mean reference line."""
-    return {
-        'color': SUMMARY_PLOT_PALETTE['central_tendency'],
-        'linestyle': '--',
-        'linewidth': 1.3,
-        'alpha': 0.48,
-        'zorder': 2,
-    }
+    return _build_histogram_mean_line_style_contract()
 
 
 def render_histogram_figure_title(
@@ -703,58 +706,13 @@ def resolve_edge_safe_label_anchor(x_data, x_min, x_max, edge_fraction=0.06):
 
 def resolve_histogram_x_view(values, *, lsl=None, usl=None, mean_value=None, margin_ratio=_HISTOGRAM_X_MARGIN_RATIO):
     """Resolve histogram x framing with local span + small fallback safety margin."""
-
-    finite_values = pd.to_numeric(pd.Series(values), errors='coerce').dropna().to_numpy(dtype=float)
-    if finite_values.size == 0:
-        return {'x_min': 0.0, 'x_max': 1.0, 'mode': 'full'}
-
-    data_min = float(np.min(finite_values))
-    data_max = float(np.max(finite_values))
-
-    left_limit = None
-    right_limit = None
-    for raw_limit, side in ((lsl, 'left'), (usl, 'right')):
-        if raw_limit is None:
-            continue
-        try:
-            limit_value = float(raw_limit)
-        except (TypeError, ValueError):
-            continue
-        if not np.isfinite(limit_value):
-            continue
-        if side == 'left':
-            left_limit = limit_value
-        else:
-            right_limit = limit_value
-
-    left_ref = data_min if left_limit is None else min(data_min, left_limit)
-    right_ref = data_max if right_limit is None else max(data_max, right_limit)
-
-    data_span = max(data_max - data_min, 0.0)
-    if left_limit is not None and right_limit is not None:
-        spec_span = max(right_limit - left_limit, 0.0)
-    else:
-        spec_span = max(right_ref - left_ref, 0.0)
-
-    mean_magnitude = 0.0
-    if mean_value is not None:
-        try:
-            candidate_mean = float(mean_value)
-            if np.isfinite(candidate_mean):
-                mean_magnitude = abs(candidate_mean)
-        except (TypeError, ValueError):
-            pass
-    ref_magnitude = max(mean_magnitude, abs(data_min), abs(data_max), 1.0)
-    fallback_span = max(1e-6, 1e-4 * ref_magnitude)
-
-    effective_span = max(data_span, spec_span, fallback_span)
-    margin = effective_span * max(0.0, float(margin_ratio))
-
-    return {
-        'x_min': left_ref - margin,
-        'x_max': right_ref + margin,
-        'mode': 'full',
-    }
+    return _resolve_histogram_x_view_contract(
+        values,
+        lsl=lsl,
+        usl=usl,
+        mean_value=mean_value,
+        margin_ratio=margin_ratio,
+    )
 
 
 def render_histogram_annotations(ax, annotation_specs, *, annotation_fontsize, annotation_box):
@@ -2337,21 +2295,7 @@ def finalize_extended_chart_layout(fig, ax, *, legend=None, strategy=None):
 
 def build_wrapped_chart_title(title, *, width=42, max_lines=3):
     """Wrap long chart titles so figure-level legends do not overlap plot headers."""
-
-    safe_title = str(title or '').strip()
-    if not safe_title:
-        return ''
-
-    wrapped_lines = textwrap.wrap(
-        safe_title,
-        width=max(20, int(width)),
-        break_long_words=False,
-        break_on_hyphens=False,
-    )
-    if len(wrapped_lines) > max_lines:
-        wrapped_lines = wrapped_lines[:max_lines]
-        wrapped_lines[-1] = wrapped_lines[-1].rstrip(' .') + '…'
-    return '\n'.join(wrapped_lines)
+    return _build_wrapped_chart_title_contract(title, width=width, max_lines=max_lines)
 
 def render_violin(
     ax,
@@ -5370,174 +5314,85 @@ class ExportDataThread(QThread):
             if self._summary_chart_required('distribution'):
                 try:
                     chart_start = time.perf_counter()
-                    distribution_backend_native = resolve_chart_renderer_backend() == 'native' and native_distribution_backend_available()
                     one_sided_distribution = bool(is_one_sided_geometric_tolerance(nom, LSL))
-                    if distribution_backend_native:
-                        if can_render_violin:
-                            positions = list(range(len(distribution_labels)))
-                            axis_layout = _resolve_native_axis_layout(
-                                distribution_labels,
-                                positions=positions,
-                                force_sparse=force_sparse_x_labels,
-                            )
-                            annotation_style = resolve_violin_annotation_style(
-                                group_count=len(distribution_values),
-                                x_limits=(0.0, max(float(len(distribution_labels) - 1), 1.0)),
-                                figure_size=(axis_layout['recommended_fig_width'], 4.0),
-                                mode='auto',
-                                readability_scale=self.summary_plot_scale,
-                            )
-                            violin_annotations = _build_violin_group_annotation_payload(
-                                distribution_values,
-                                positions,
-                                show_sigma=annotation_style.get('show_sigma', False),
-                                one_sided_sigma_mode=one_sided_distribution,
-                            )
-                            distribution_native_payload = build_distribution_native_payload(
-                                values=distribution_values,
-                                labels=distribution_labels,
-                                title=build_wrapped_chart_title(distribution_title),
-                                lsl=LSL,
-                                usl=USL,
-                            )
-                            distribution_native_payload.update(
-                                {
-                                    'render_mode': 'violin',
-                                    'positions': positions,
-                                    'layout': axis_layout,
-                                    'canvas': _build_native_canvas(figure_width=axis_layout['recommended_fig_width']),
-                                    'x_label': distribution_x_axis_label,
-                                    'y_label': 'Measurement',
-                                    'nominal': None if nom is None else float(nom),
-                                    'one_sided': one_sided_distribution,
-                                    'include_nominal': False,
-                                    'y_limits': _resolve_native_y_limits(
-                                        *distribution_values,
-                                        scale_factor=self.summary_plot_scale,
-                                        extra_values=[LSL, USL],
-                                    ),
-                                    'legend': {
-                                        'items': _build_violin_native_legend_items(annotation_style)
-                                        if show_violin_annotation_legend
-                                        else []
-                                    },
-                                    'annotation_style': {
-                                        'font_size': annotation_style.get('font_size'),
-                                        'mean_marker_size': annotation_style.get('mean_marker_size'),
-                                        'show_minmax': annotation_style.get('show_minmax'),
-                                        'show_sigma': annotation_style.get('show_sigma'),
-                                    },
-                                    'violin_annotations': violin_annotations,
-                                }
-                            )
-                        else:
-                            axis_layout = _resolve_native_axis_layout(
-                                distribution_labels,
-                                positions=label_positions,
-                                force_sparse=force_sparse_x_labels,
-                            )
-                            distribution_native_payload = {
-                                'type': 'distribution',
-                                'series': [[] for _ in distribution_labels],
-                                'labels': [str(label) for label in distribution_labels],
-                                'title': build_wrapped_chart_title(distribution_title),
-                                'lsl': None if LSL is None else float(LSL),
-                                'usl': None if USL is None else float(USL),
-                                'render_mode': 'scatter',
-                                'x_values': [float(value) for value in x_values],
-                                'y_values': [float(value) for value in y_values],
-                                'x_domain': {
-                                    'min': float(min(x_values)) if len(x_values) else 0.0,
-                                    'max': float(max(x_values)) if len(x_values) else 1.0,
-                                },
-                                'layout': axis_layout,
-                                'canvas': _build_native_canvas(figure_width=axis_layout['recommended_fig_width']),
-                                'x_label': distribution_x_axis_label,
-                                'y_label': 'Measurement',
-                                'nominal': None if nom is None else float(nom),
-                                'one_sided': one_sided_distribution,
-                                'include_nominal': False,
-                                'y_limits': _resolve_native_y_limits(
-                                    y_values,
-                                    scale_factor=self.summary_plot_scale,
-                                    extra_values=[LSL, USL],
-                                ),
-                                'legend': {'items': []},
-                            }
-
-                        distribution_render_result = self._save_summary_chart(
-                            None,
-                            chart_type='distribution',
-                            native_payload=distribution_native_payload,
-                        )
-                        image_data = self._register_chart_image(distribution_render_result.png_bytes)
-                        slot_fig = plt.figure(figsize=(distribution_native_payload['canvas']['width_px'] / 150.0, 4.0))
-                        distribution_slot = _reserve_summary_image_slot('distribution', slot_fig)
-                        plt.close(slot_fig)
-                    else:
-                        apply_summary_plot_theme()
-                        categorical_strategy = prepare_categorical_x_axis(distribution_labels)
-                        fig, ax = plt.subplots(figsize=(categorical_strategy['recommended_fig_width'], 4))
-                        if can_render_violin:
-                            render_violin(
-                                ax,
-                                distribution_values,
-                                distribution_labels,
-                                nom=nom,
-                                lsl=LSL,
-                                usl=USL,
-                                one_sided=one_sided_distribution,
-                                readability_scale=self.summary_plot_scale,
-                                use_dynamic_offsets=use_dynamic_annotation_offsets,
-                                show_annotation_legend=show_violin_annotation_legend,
-                            )
-                        else:
-                            render_scatter_numeric(ax, x_values, y_values)
-                            if LSL is not None and USL is not None:
-                                render_tolerance_band(
-                                    ax,
-                                    nom,
-                                    LSL,
-                                    USL,
-                                    one_sided=one_sided_distribution,
-                                )
-                            if LSL is not None or USL is not None:
-                                render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
-
-                        apply_minimal_axis_style(ax, grid_axis='y')
-                        axis_layout = apply_shared_x_axis_label_strategy(
+                    # Distribution parity uses the finalized matplotlib figure
+                    # as the layout oracle for both backends.
+                    apply_summary_plot_theme()
+                    categorical_strategy = prepare_categorical_x_axis(distribution_labels)
+                    fig, ax = plt.subplots(figsize=(categorical_strategy['recommended_fig_width'], 4))
+                    if can_render_violin:
+                        render_violin(
                             ax,
+                            distribution_values,
                             distribution_labels,
-                            positions=label_positions,
-                            force_sparse=force_sparse_x_labels,
-                        )
-
-                        current_y_limits = ax.get_ylim()
-                        y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                        ax.set_ylim(y_min, y_max)
-                        ax.set_xlabel(distribution_x_axis_label)
-                        ax.set_ylabel('Measurement')
-                        ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
-                        figure_legend = move_legend_to_figure(ax)
-                        finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
-                        distribution_native_payload = build_distribution_native_payload(
-                            values=distribution_values,
-                            labels=distribution_labels,
-                            title=build_wrapped_chart_title(distribution_title),
+                            nom=nom,
                             lsl=LSL,
                             usl=USL,
+                            one_sided=one_sided_distribution,
+                            readability_scale=self.summary_plot_scale,
+                            use_dynamic_offsets=use_dynamic_annotation_offsets,
+                            show_annotation_legend=show_violin_annotation_legend,
                         )
-                        distribution_render_result = self._save_summary_chart(
-                            fig,
-                            chart_type='distribution',
-                            native_payload=distribution_native_payload,
-                        )
-                        image_data = self._register_chart_image(distribution_render_result.png_bytes)
-                        distribution_slot = _reserve_summary_image_slot('distribution', fig)
-                        if self._check_canceled():
-                            plt.close(fig)
-                            return
+                    else:
+                        render_scatter_numeric(ax, x_values, y_values)
+                        if LSL is not None and USL is not None:
+                            render_tolerance_band(
+                                ax,
+                                nom,
+                                LSL,
+                                USL,
+                                one_sided=one_sided_distribution,
+                            )
+                        if LSL is not None or USL is not None:
+                            render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
+
+                    apply_minimal_axis_style(ax, grid_axis='y')
+                    axis_layout = apply_shared_x_axis_label_strategy(
+                        ax,
+                        distribution_labels,
+                        positions=label_positions,
+                        force_sparse=force_sparse_x_labels,
+                    )
+
+                    current_y_limits = ax.get_ylim()
+                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_ylim(y_min, y_max)
+                    ax.set_xlabel(distribution_x_axis_label)
+                    ax.set_ylabel('Measurement')
+                    ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
+                    figure_legend = move_legend_to_figure(ax)
+                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
+                    distribution_native_payload = build_distribution_native_payload(
+                        values=distribution_values,
+                        labels=distribution_labels,
+                        title=build_wrapped_chart_title(distribution_title),
+                        lsl=LSL,
+                        usl=USL,
+                    )
+                    distribution_native_payload.update(
+                        {
+                            'render_mode': 'violin' if can_render_violin else 'scatter',
+                            'x_label': distribution_x_axis_label,
+                            'y_label': 'Measurement',
+                        }
+                    )
+                    distribution_native_payload['resolved_render_spec'] = extract_distribution_geometry(
+                        fig,
+                        ax,
+                        render_mode='violin' if can_render_violin else 'scatter',
+                        payload=distribution_native_payload,
+                    )
+                    distribution_render_result = self._save_summary_chart(
+                        fig,
+                        chart_type='distribution',
+                        native_payload=distribution_native_payload,
+                    )
+                    image_data = self._register_chart_image(distribution_render_result.png_bytes)
+                    distribution_slot = _reserve_summary_image_slot('distribution', fig)
+                    if self._check_canceled():
                         plt.close(fig)
+                        return
+                    plt.close(fig)
 
                     self._record_chart_render_timing(
                         'distribution',
@@ -5573,98 +5428,69 @@ class ExportDataThread(QThread):
                         sampled_iqr_group,
                         grouping_active=grouping_applied,
                     )
-                    iqr_backend_native = resolve_chart_renderer_backend() == 'native' and native_iqr_backend_available()
-                    if iqr_backend_native:
-                        axis_layout = _resolve_native_axis_layout(
-                            boxplot_labels,
-                            positions=list(range(1, len(boxplot_labels) + 1)),
-                            force_sparse=force_sparse_x_labels,
-                        )
-                        iqr_native_payload = {
-                            'type': 'iqr',
-                            'labels': [str(label) for label in boxplot_labels],
-                            'series': [
-                                [float(item) for item in np.asarray(values, dtype=float)[np.isfinite(np.asarray(values, dtype=float))]]
-                                for values in boxplot_values
-                            ],
-                            'title': build_wrapped_chart_title(header),
-                            'lsl': None if LSL is None else float(LSL),
-                            'usl': None if USL is None else float(USL),
-                            'nominal': None if nom is None else float(nom),
-                            'one_sided': bool(is_one_sided_geometric_tolerance(nom, LSL)),
-                            'layout': axis_layout,
-                            'canvas': _build_native_canvas(figure_width=axis_layout['recommended_fig_width']),
-                            'x_label': 'Group',
-                            'y_label': 'Measurement',
-                            'y_limits': _resolve_native_y_limits(
-                                *boxplot_values,
-                                scale_factor=self.summary_plot_scale,
-                                extra_values=[LSL, USL, nom],
-                            ),
-                            'legend': {'items': _build_iqr_native_legend_items()},
-                        }
-                        iqr_render_result = self._save_summary_chart(
-                            None,
-                            chart_type='iqr',
-                            native_payload=iqr_native_payload,
-                        )
-                        image_data = self._register_chart_image(iqr_render_result.png_bytes)
-                        slot_fig = plt.figure(figsize=(axis_layout['recommended_fig_width'], 4))
-                        iqr_slot = _reserve_summary_image_slot('iqr', slot_fig)
-                        plt.close(slot_fig)
-                    else:
-                        iqr_strategy = prepare_categorical_x_axis(boxplot_labels)
-                        fig, ax = plt.subplots(figsize=(iqr_strategy['recommended_fig_width'], 4))
-                        render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
-                        render_tolerance_band(
-                            ax,
-                            nom,
-                            LSL,
-                            USL,
-                            one_sided=is_one_sided_geometric_tolerance(nom, LSL),
-                        )
-                        render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
-                        add_iqr_boxplot_legend(ax, include_tolerance_refs=False)
-                        figure_legend = move_legend_to_figure(ax)
-                        apply_minimal_axis_style(ax, grid_axis='y')
-                        axis_layout = apply_shared_x_axis_label_strategy(
-                            ax,
-                            boxplot_labels,
-                            positions=list(range(1, len(boxplot_labels) + 1)),
-                            force_sparse=force_sparse_x_labels,
-                        )
-                        ax.set_xlabel('Group')
-                        ax.set_ylabel('Measurement')
-                        ax.set_title(build_wrapped_chart_title(header), pad=20)
+                    # IQR parity uses the finalized matplotlib figure as the
+                    # layout oracle for both backends.
+                    iqr_strategy = prepare_categorical_x_axis(boxplot_labels)
+                    fig, ax = plt.subplots(figsize=(iqr_strategy['recommended_fig_width'], 4))
+                    render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
+                    render_tolerance_band(
+                        ax,
+                        nom,
+                        LSL,
+                        USL,
+                        one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                    )
+                    render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
+                    add_iqr_boxplot_legend(ax, include_tolerance_refs=False)
+                    figure_legend = move_legend_to_figure(ax)
+                    apply_minimal_axis_style(ax, grid_axis='y')
+                    axis_layout = apply_shared_x_axis_label_strategy(
+                        ax,
+                        boxplot_labels,
+                        positions=list(range(1, len(boxplot_labels) + 1)),
+                        force_sparse=force_sparse_x_labels,
+                    )
+                    ax.set_xlabel('Group')
+                    ax.set_ylabel('Measurement')
+                    ax.set_title(build_wrapped_chart_title(header), pad=20)
 
-                        current_y_limits = ax.get_ylim()
-                        y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                        ax.set_ylim(y_min, y_max)
-                        finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
-                        iqr_native_payload = {
-                            'type': 'iqr',
-                            'labels': [str(label) for label in boxplot_labels],
-                            'series': [
-                                [float(item) for item in np.asarray(values, dtype=float)[np.isfinite(np.asarray(values, dtype=float))]]
-                                for values in boxplot_values
-                            ],
-                            'title': build_wrapped_chart_title(header),
-                            'lsl': None if LSL is None else float(LSL),
-                            'usl': None if USL is None else float(USL),
-                            'nominal': None if nom is None else float(nom),
-                            'one_sided': bool(is_one_sided_geometric_tolerance(nom, LSL)),
-                            'x_label': 'Group',
-                            'y_label': 'Measurement',
-                            'legend': {'items': _build_iqr_native_legend_items()},
-                        }
+                    current_y_limits = ax.get_ylim()
+                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_ylim(y_min, y_max)
+                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
+                    iqr_native_payload = {
+                        'type': 'iqr',
+                        'labels': [str(label) for label in boxplot_labels],
+                        'series': [
+                            [float(item) for item in np.asarray(values, dtype=float)[np.isfinite(np.asarray(values, dtype=float))]]
+                            for values in boxplot_values
+                        ],
+                        'title': build_wrapped_chart_title(header),
+                        'lsl': None if LSL is None else float(LSL),
+                        'usl': None if USL is None else float(USL),
+                        'nominal': None if nom is None else float(nom),
+                        'one_sided': bool(is_one_sided_geometric_tolerance(nom, LSL)),
+                        'x_label': 'Group',
+                        'y_label': 'Measurement',
+                        'legend': {'items': _build_iqr_native_legend_items()},
+                    }
+                    iqr_native_payload['resolved_render_spec'] = extract_iqr_geometry(
+                        fig,
+                        ax,
+                        payload=iqr_native_payload,
+                    )
 
-                        iqr_render_result = self._save_summary_chart(fig, chart_type='iqr')
-                        image_data = self._register_chart_image(iqr_render_result.png_bytes)
-                        iqr_slot = _reserve_summary_image_slot('iqr', fig)
-                        if self._check_canceled():
-                            plt.close(fig)
-                            return
+                    iqr_render_result = self._save_summary_chart(
+                        fig,
+                        chart_type='iqr',
+                        native_payload=iqr_native_payload,
+                    )
+                    image_data = self._register_chart_image(iqr_render_result.png_bytes)
+                    iqr_slot = _reserve_summary_image_slot('iqr', fig)
+                    if self._check_canceled():
                         plt.close(fig)
+                        return
+                    plt.close(fig)
 
                     self._record_chart_render_timing('iqr', time.perf_counter() - chart_start, backend=iqr_render_result.backend)
                     write_start = time.perf_counter()
@@ -5763,9 +5589,18 @@ class ExportDataThread(QThread):
                         usl=USL,
                         mean_value=current_average,
                     )
+                    histogram_font_sizes = compute_histogram_font_sizes(
+                        base_histogram_figsize,
+                        has_table=True,
+                        readability_scale=self.summary_plot_scale,
+                    )
                     span = max(float(histogram_x_view['x_max']) - float(histogram_x_view['x_min']), 1e-12)
                     representative_bin_width = span / max(int(histogram_bin_count or 1), 1)
                     native_count_scale_factor = float(len(histogram_values)) * float(representative_bin_width)
+                    native_canvas = _build_native_canvas(
+                        figure_width=base_histogram_figsize[0],
+                        figure_height=base_histogram_figsize[1],
+                    )
                     visual_metadata = _build_histogram_native_visual_metadata(
                         summary_stats=summary_stats,
                         lsl=LSL,
@@ -5786,10 +5621,7 @@ class ExportDataThread(QThread):
                     )
                     histogram_native_payload.update(
                         {
-                            'canvas': _build_native_canvas(
-                                figure_width=base_histogram_figsize[0],
-                                figure_height=base_histogram_figsize[1],
-                            ),
+                            'canvas': native_canvas,
                             'x_view': {
                                 'min': float(histogram_x_view['x_min']),
                                 'max': float(histogram_x_view['x_max']),
@@ -5824,6 +5656,9 @@ class ExportDataThread(QThread):
                             'advanced_annotations_enabled': True,
                             'overlays_enabled': bool((visual_metadata.get('modeled_overlays') or {}).get('rows')),
                         }
+                    )
+                    histogram_native_payload['resolved_render_spec'] = histogram_spec_to_mapping(
+                        build_resolved_histogram_spec(histogram_native_payload)
                     )
                     if dashboard_section is not None:
                         dashboard_section['summary_rows'] = [
@@ -6095,88 +5930,60 @@ class ExportDataThread(QThread):
                     if trend_label_count > 40:
                         trend_figure_width = 10
 
-                    trend_backend_native = resolve_chart_renderer_backend() == 'native' and native_trend_backend_available()
-                    if trend_backend_native:
-                        axis_layout = _resolve_native_axis_layout(
-                            unique_labels,
-                            positions=data_x,
-                            force_sparse=force_sparse_x_labels,
-                            allow_thinning=bool(force_sparse_x_labels or trend_label_count > 24),
-                        )
-                        trend_native_payload = {
-                            'type': 'trend',
-                            'x_values': [float(value) for value in data_x],
-                            'y_values': [float(value) for value in data_y],
-                            'labels': [str(label) for label in unique_labels],
-                            'title': build_wrapped_chart_title(header),
-                            'x_label': distribution_x_axis_label,
-                            'y_label': 'Measurement',
-                            'layout': axis_layout,
-                            'canvas': _build_native_canvas(figure_width=trend_figure_width),
-                            'horizontal_limits': [
-                                float(value)
-                                for value in (USL, LSL)
-                                if value is not None
-                            ],
-                            'y_limits': _resolve_native_y_limits(
-                                data_y,
-                                scale_factor=self.summary_plot_scale,
-                                extra_values=[USL, LSL],
-                            ),
-                        }
-                        trend_render_result = self._save_summary_chart(
-                            None,
-                            chart_type='trend',
-                            native_payload=trend_native_payload,
-                        )
-                        image_data = self._register_chart_image(trend_render_result.png_bytes)
-                        slot_fig = plt.figure(figsize=(trend_figure_width, 4))
-                        trend_slot = _reserve_summary_image_slot('trend', slot_fig)
-                        plt.close(slot_fig)
-                    else:
-                        apply_summary_plot_theme()
-                        fig, ax = plt.subplots(figsize=(trend_figure_width, 4))
-                        ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
-                        for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                            ax.axhline(**line_spec)
+                    # Trend parity uses the finalized matplotlib figure as the
+                    # layout oracle for both backends.
+                    apply_summary_plot_theme()
+                    fig, ax = plt.subplots(figsize=(trend_figure_width, 4))
+                    ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
+                    for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                        ax.axhline(**line_spec)
 
-                        ax.set_xlabel(distribution_x_axis_label)
-                        ax.set_ylabel('Measurement')
-                        ax.set_title(build_wrapped_chart_title(header), pad=20)
-                        apply_minimal_axis_style(ax, grid_axis='y')
-                        apply_shared_x_axis_label_strategy(
-                            ax,
-                            unique_labels,
-                            positions=data_x,
-                            force_sparse=force_sparse_x_labels,
-                            allow_thinning=bool(force_sparse_x_labels or trend_label_count > 24),
-                        )
+                    ax.set_xlabel(distribution_x_axis_label)
+                    ax.set_ylabel('Measurement')
+                    ax.set_title(build_wrapped_chart_title(header), pad=20)
+                    apply_minimal_axis_style(ax, grid_axis='y')
+                    apply_shared_x_axis_label_strategy(
+                        ax,
+                        unique_labels,
+                        positions=data_x,
+                        force_sparse=force_sparse_x_labels,
+                        allow_thinning=bool(force_sparse_x_labels or trend_label_count > 24),
+                    )
 
-                        current_y_limits = ax.get_ylim()
-                        y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                        ax.set_ylim(y_min, y_max)
-                        trend_native_payload = {
-                            'type': 'trend',
-                            'x_values': [float(value) for value in data_x],
-                            'y_values': [float(value) for value in data_y],
-                            'labels': [str(label) for label in unique_labels],
-                            'title': build_wrapped_chart_title(header),
-                            'x_label': distribution_x_axis_label,
-                            'y_label': 'Measurement',
-                            'horizontal_limits': [
-                                float(value)
-                                for value in (USL, LSL)
-                                if value is not None
-                            ],
-                        }
+                    current_y_limits = ax.get_ylim()
+                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                    ax.set_ylim(y_min, y_max)
+                    trend_native_payload = {
+                        'type': 'trend',
+                        'x_values': [float(value) for value in data_x],
+                        'y_values': [float(value) for value in data_y],
+                        'labels': [str(label) for label in unique_labels],
+                        'title': build_wrapped_chart_title(header),
+                        'x_label': distribution_x_axis_label,
+                        'y_label': 'Measurement',
+                        'horizontal_limits': [
+                            float(value)
+                            for value in (USL, LSL)
+                            if value is not None
+                        ],
+                    }
+                    trend_native_payload['resolved_render_spec'] = extract_trend_geometry(
+                        fig,
+                        ax,
+                        payload=trend_native_payload,
+                    )
 
-                        trend_render_result = self._save_summary_chart(fig, chart_type='trend')
-                        image_data = self._register_chart_image(trend_render_result.png_bytes)
-                        trend_slot = _reserve_summary_image_slot('trend', fig)
-                        if self._check_canceled():
-                            plt.close(fig)
-                            return
+                    trend_render_result = self._save_summary_chart(
+                        fig,
+                        chart_type='trend',
+                        native_payload=trend_native_payload,
+                    )
+                    image_data = self._register_chart_image(trend_render_result.png_bytes)
+                    trend_slot = _reserve_summary_image_slot('trend', fig)
+                    if self._check_canceled():
                         plt.close(fig)
+                        return
+                    plt.close(fig)
 
                     self._record_chart_render_timing('trend', time.perf_counter() - chart_start, backend=trend_render_result.backend)
                     write_start = time.perf_counter()
