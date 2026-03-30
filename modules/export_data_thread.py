@@ -4894,33 +4894,38 @@ class ExportDataThread(QThread):
             elif plot_key == 'histogram':
                 all_values = np.concatenate(grouped_values)
                 bin_edges = np.histogram_bin_edges(all_values, bins='auto')
+                # Use a high-contrast, colorblind-safe group cycle so overlapping
+                # histogram bars remain distinguishable in workbook exports.
                 histogram_palette = [
-                    SUMMARY_PLOT_PALETTE['distribution_base'],
-                    SUMMARY_PLOT_PALETTE['distribution_foreground'],
-                    SUMMARY_PLOT_PALETTE['density_line'],
-                    SUMMARY_PLOT_PALETTE['spec_limit'],
-                    SUMMARY_PLOT_PALETTE['sigma_band'],
+                    '#0072B2',  # blue
+                    '#D55E00',  # vermillion
+                    '#009E73',  # bluish green
+                    '#CC79A7',  # reddish purple
+                    '#E69F00',  # orange
+                    '#56B4E9',  # sky blue
                 ]
                 for index, (label, values) in enumerate(zip(group_labels, grouped_values)):
                     color = histogram_palette[index % len(histogram_palette)]
                     mean_value = float(np.mean(values))
+                    std_value = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
                     ax.hist(
                         values,
                         bins=bin_edges,
                         edgecolor='black',
-                        alpha=0.42,
+                        linewidth=0.75,
+                        alpha=0.58,
                         color=color,
-                        label=f"{label} (n={values.size}, μ={mean_value:.3f})",
+                        label=f"{label} (n={values.size}, μ={mean_value:.3f}, σ={std_value:.3f})",
                     )
                     ax.axvline(
                         mean_value,
                         color=color,
                         linestyle='-.',
-                        linewidth=1.0,
-                        alpha=0.85,
+                        linewidth=1.15,
+                        alpha=0.92,
                     )
-                ax.legend(loc='upper left', frameon=True, fontsize=7.0, title='Group (n, mean)', title_fontsize=7.0)
-                histogram_note_lines = ['Dash-dot lines show group means']
+                ax.legend(loc='upper left', frameon=True, fontsize=7.0, title='Group (n, mean, σ)', title_fontsize=7.0)
+                histogram_note_lines = ['Dash-dot lines show group means', 'Legend includes per-group n, μ, and σ']
                 if capability_context.get('callout_lines'):
                     histogram_note_lines.extend(capability_context['callout_lines'])
                 palette_key = capability_context.get('palette_key') if capability_context else None
@@ -5886,7 +5891,10 @@ class ExportDataThread(QThread):
                             sampled_histogram_group,
                             lsl=LSL,
                             usl=USL,
-                            group_column=distribution_key if grouping_applied else None,
+                            # Extended summary histogram should always represent the
+                            # complete population as one distribution. Group-level
+                            # breakdowns belong to Group Analysis plots.
+                            group_column=None,
                         )
 
                         table_style_options = {

@@ -3682,8 +3682,12 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(len(captured_axes), 1)
         legend = captured_axes[0].get_legend()
         self.assertIsNotNone(legend)
+        self.assertEqual(legend.get_title().get_text(), 'Group (n, mean, σ)')
         labels = [text.get_text() for text in legend.get_texts()]
-        self.assertEqual(labels, ['A (n=3, μ=1.100)', 'B (n=3, μ=1.400)', 'C (n=3, μ=1.700)'])
+        self.assertEqual(
+            labels,
+            ['A (n=3, μ=1.100, σ=0.100)', 'B (n=3, μ=1.400, σ=0.100)', 'C (n=3, μ=1.700, σ=0.100)'],
+        )
 
 
     def test_render_tolerance_band_adds_horizontal_patch(self):
