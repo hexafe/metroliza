@@ -5,21 +5,6 @@ from modules.stats_utils import is_one_sided_geometric_tolerance
 
 
 LEGACY_MEASUREMENT_CHART_INSERT_ROW = 7
-_MEASUREMENT_FORMATS_CACHE = {}
-
-
-def _get_col_name_cached(col_index, cache=None):
-    """Return Excel column names with optional export-run caching."""
-    if cache is None:
-        return xl_col_to_name(col_index)
-
-    col_name_cache = cache.setdefault('col_name_by_index', {})
-    cached_name = col_name_cache.get(col_index)
-    if cached_name is not None:
-        return cached_name
-    cached_name = xl_col_to_name(col_index)
-    col_name_cache[col_index] = cached_name
-    return cached_name
 
 
 def build_spec_limit_anchor_rows(usl, lsl):
@@ -129,18 +114,14 @@ def _get_measurement_block_template(*, base_col, sample_size, cache=None):
             return cached
 
     measurement_plan = build_measurement_block_plan(base_col=base_col, sample_size=sample_size)
-    summary_col_name = _get_col_name_cached(measurement_plan['summary_column'], cache=cache)
-    stats_col_name = _get_col_name_cached(measurement_plan['stats_value_column'], cache=cache)
+    summary_col_name = xl_col_to_name(measurement_plan['summary_column'])
 
     template = {
         'measurement_plan': measurement_plan,
         'summary_col_name': summary_col_name,
-        'stats_col_name': stats_col_name,
         'nom_cell': f'${summary_col_name}$1',
         'usl_cell': f'${summary_col_name}$2',
         'lsl_cell': f'${summary_col_name}$3',
-        'usl_formula': f"=({summary_col_name}1+{summary_col_name}2)",
-        'lsl_formula': f"=({summary_col_name}1+{summary_col_name}3)",
         'static_row_labels': ((0, 'NOM'), (1, '+TOL'), (2, '-TOL')),
     }
 
@@ -159,7 +140,6 @@ def build_measurement_header_block_plan(header_group, base_col, cache=None):
     block_template = _get_measurement_block_template(base_col=base_col, sample_size=len(header_group), cache=cache)
     measurement_plan = block_template['measurement_plan']
     summary_col_name = block_template['summary_col_name']
-    stats_col_name = block_template['stats_col_name']
 
     nom_cell = block_template['nom_cell']
     usl_cell = block_template['usl_cell']
@@ -167,7 +147,7 @@ def build_measurement_header_block_plan(header_group, base_col, cache=None):
 
     stat_formulas = build_measurement_stat_formulas(
         summary_col=summary_col_name,
-        stats_col=stats_col_name,
+        stats_col=xl_col_to_name(measurement_plan['stats_value_column']),
         data_range_y=measurement_plan['data_range_y'],
         nom_cell=nom_cell,
         usl_cell=usl_cell,
@@ -192,8 +172,6 @@ def build_measurement_header_block_plan(header_group, base_col, cache=None):
         'nom_cell': nom_cell,
         'usl_cell': usl_cell,
         'lsl_cell': lsl_cell,
-        'usl_formula': block_template['usl_formula'],
-        'lsl_formula': block_template['lsl_formula'],
         'stat_rows': build_measurement_stat_row_specs(stat_formulas),
         'stat_formulas': stat_formulas,
         'measurement_plan': measurement_plan,
@@ -289,20 +267,13 @@ def write_measurement_summary_rows(worksheet, summary_rows, formats):
 
 
 def create_measurement_formats(workbook):
-    cache_key = id(workbook)
-    cached = _MEASUREMENT_FORMATS_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
-
-    cached = {
+    return {
         'default': workbook.add_format({'align': 'center', 'valign': 'vcenter'}),
         'border': workbook.add_format({'align': 'center', 'valign': 'vcenter', 'right': 1}),
         'wrap': workbook.add_format({'align': 'center', 'valign': 'vcenter', 'text_wrap': True}),
         'percent': workbook.add_format({'align': 'center', 'valign': 'vcenter', 'num_format': '0.00%'}),
         'red': workbook.add_format({'bg_color': 'red', 'font_color': 'white', 'align': 'center', 'valign': 'vcenter', 'right': 1}),
     }
-    _MEASUREMENT_FORMATS_CACHE[cache_key] = cached
-    return cached
 
 
 def write_measurement_block(worksheet, write_bundle, formats, *, base_col):
@@ -320,9 +291,9 @@ def write_measurement_block(worksheet, write_bundle, formats, *, base_col):
     worksheet.write(2, base_col, '-TOL')
     worksheet.write(2, base_col + 1, header_plan['minus_tol'])
     worksheet.write(3, base_col, 'USL')
-    worksheet.write_formula(3, base_col + 1, header_plan['usl_formula'])
+    worksheet.write_formula(3, base_col + 1, f"=({xl_col_to_name(base_col + 1)}1+{xl_col_to_name(base_col + 1)}2)")
     worksheet.write(4, base_col, 'LSL')
-    worksheet.write_formula(4, base_col + 1, header_plan['lsl_formula'])
+    worksheet.write_formula(4, base_col + 1, f"=({xl_col_to_name(base_col + 1)}1+{xl_col_to_name(base_col + 1)}3)")
     worksheet.write(5, base_col, 'NOK number')
     worksheet.write_formula(5, base_col + 1, stat_formulas['nok_total'])
     worksheet.write(6, base_col, 'NOK %')

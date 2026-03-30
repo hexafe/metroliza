@@ -64,7 +64,6 @@ class ExportOptions:
         summary_plot_scale: Non-negative scaling value for summary plots.
         hide_ok_results: Toggles hiding passing results in exports.
         generate_summary_sheet: Toggles summary sheet generation.
-        generate_html_dashboard: Toggles sidecar HTML dashboard generation.
         allow_non_essential_chart_skipping: Enables dropping optional summary
             charts under bottleneck optimization.
         chart_worker_count: Worker process/thread count, minimum of ``1``.
@@ -96,7 +95,6 @@ class ExportOptions:
     summary_plot_scale: int = 0
     hide_ok_results: bool = False
     generate_summary_sheet: bool = False
-    generate_html_dashboard: bool = False
     allow_non_essential_chart_skipping: bool = False
     chart_worker_count: int = 2
     chart_worker_queue_size: int = 4
@@ -374,9 +372,6 @@ def validate_export_options(options: ExportOptions) -> ExportOptions:
         summary_plot_scale=summary_scale,
         hide_ok_results=bool(getattr(options, "hide_ok_results", ExportOptions.hide_ok_results)),
         generate_summary_sheet=bool(getattr(options, "generate_summary_sheet", ExportOptions.generate_summary_sheet)),
-        generate_html_dashboard=bool(
-            getattr(options, "generate_html_dashboard", ExportOptions.generate_html_dashboard)
-        ),
         allow_non_essential_chart_skipping=bool(
             getattr(
                 options,

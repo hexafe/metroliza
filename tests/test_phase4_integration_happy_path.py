@@ -515,8 +515,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
 
                 analysis_values = _xlsx_sheet_text_values(out_path, 'Group Analysis')
                 self.assertIn('Group Analysis', analysis_values)
-                self.assertIn('Metric', analysis_values)
-                self.assertIn('Status', analysis_values)
+                self.assertIn('Field', analysis_values)
                 self.assertIn('Descriptive stats', analysis_values)
                 self.assertIn('Pairwise comparisons', analysis_values)
                 self.assertIn('Shape note: no clear distribution-shape difference after correction.', analysis_values)

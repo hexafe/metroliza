@@ -9,8 +9,6 @@ import warnings
 import numpy as np
 from scipy.stats import f, f_oneway, kruskal, levene, mannwhitneyu, shapiro, ttest_ind
 
-from modules.group_stats_native import coerce_sequence_to_float64
-
 
 @dataclass(frozen=True)
 class GroupPreprocessResult:
@@ -28,19 +26,14 @@ class GroupPreprocessResult:
 def preprocess_group(label: Any, values: Any, *, small_n_threshold: int = 3) -> GroupPreprocessResult:
     """Coerce one group to numeric, drop NaNs, and return quality flags."""
 
-    try:
-        numeric_values = coerce_sequence_to_float64(values)
-    except Exception:
-        # Defensive fallback: preserve current behavior even if native/path helpers fail.
-        numeric_values = np.asarray(values, dtype=object)
-        coerced: list[float] = []
-        for value in numeric_values:
-            try:
-                coerced.append(float(value))
-            except (TypeError, ValueError):
-                coerced.append(np.nan)
-        numeric_values = np.asarray(coerced, dtype=float)
-
+    numeric_values = np.asarray(values, dtype=object)
+    coerced: list[float] = []
+    for value in numeric_values:
+        try:
+            coerced.append(float(value))
+        except (TypeError, ValueError):
+            coerced.append(np.nan)
+    numeric_values = np.asarray(coerced, dtype=float)
     numeric_values = numeric_values[~np.isnan(numeric_values)]
 
     sample_size = int(numeric_values.size)

@@ -1,13 +1,6 @@
 # Native CMM parser
 
-This crate exposes the following Python extension entrypoints:
-
-- `_metroliza_cmm_native.parse_blocks(raw_lines)`
-- `_metroliza_cmm_native.normalize_measurement_rows(blocks, reference, fileloc, filename, date, sample_number)`
-- `_metroliza_cmm_native.persist_measurement_rows(database, rows)`
-
-`normalize_measurement_rows` emits a stable flat row schema:
-`(ax, nom, tol_plus, tol_minus, bonus, meas, dev, outtol, header, reference, fileloc, filename, date, sample_number)`.
+This crate exposes `_metroliza_cmm_native.parse_blocks(raw_lines)` as a Python extension.
 
 ## Runtime policy
 

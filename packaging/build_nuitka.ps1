@@ -14,19 +14,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
-
 $isWindowsHost = $env:OS -eq "Windows_NT"
-$isMacOSHost = $false
-$isLinuxHost = $false
-
-if ($PSVersionTable.PSEdition -eq 'Core') {
-    $macVar = Get-Variable -Name IsMacOS -ValueOnly -ErrorAction SilentlyContinue
-    $linuxVar = Get-Variable -Name IsLinux -ValueOnly -ErrorAction SilentlyContinue
-
-    $isMacOSHost = [bool]$macVar
-    $isLinuxHost = [bool]$linuxVar
-}
+$isMacOSHost = $PSVersionTable.PSVersion -and $IsMacOS
+$isLinuxHost = $PSVersionTable.PSVersion -and $IsLinux
 
 $compilerInstallConfig = @{
     Windows = @{
@@ -453,12 +443,6 @@ if ($LASTEXITCODE -eq 0) {
     $nativeModuleAvailable = $true
 }
 
-$chartNativeModuleAvailable = $false
-python -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('_metroliza_chart_native') else 1)" 2>$null
-if ($LASTEXITCODE -eq 0) {
-    $chartNativeModuleAvailable = $true
-}
-
 $pdfBackendPackageAvailable = $false
 python -c "import sys,pathlib;root=pathlib.Path.cwd();sys.path.insert(0, str(root));from scripts.validate_packaged_pdf_parser import require_pdf_backend_available;print(require_pdf_backend_available(allow_broken=False))" 2>$null
 if ($LASTEXITCODE -eq 0) {
@@ -522,12 +506,6 @@ if ($nativeModuleAvailable) {
     Write-Warning "Native module '_metroliza_cmm_native' not found in this environment. Building with pure-Python parser fallback only."
 }
 
-if ($chartNativeModuleAvailable) {
-    Write-Host '      Native chart packaging: include compiled native module'
-} else {
-    Write-Warning "Native module '_metroliza_chart_native' not found in this environment. Building with matplotlib chart fallback only."
-}
-
 # Section: Nuitka argument assembly
 # Keep parser/runtime imports explicit here because the rc1 plugin/backend refactor
 # introduced dynamic import paths that packagers may not infer reliably on their own.
@@ -565,10 +543,6 @@ if ($compilerResolution.Selected.NuitkaArgs) {
 
 if ($nativeModuleAvailable) {
     $commonArgs += '--include-module=_metroliza_cmm_native'
-}
-
-if ($chartNativeModuleAvailable) {
-    $commonArgs += '--include-module=_metroliza_chart_native'
 }
 
 if ($pdfBackendPackageAvailable) {

@@ -1,70 +1,6 @@
 import unittest
-from unittest import mock
 
-import numpy as np
-
-import modules.group_stats_native as native_helper
 from modules.group_stats_tests import preprocess_group, select_group_stat_test
-
-
-
-
-class TestGroupStatsNativeCoercion(unittest.TestCase):
-    def test_coerce_sequence_to_float64_marks_non_coercible_as_nan(self):
-        arr = native_helper.coerce_sequence_to_float64([1, '2.5', 'bad', None, float('nan')])
-
-        self.assertEqual(arr.dtype, np.float64)
-        self.assertTrue(arr.flags.c_contiguous)
-        np.testing.assert_allclose(arr[:2], np.array([1.0, 2.5]))
-        self.assertTrue(np.isnan(arr[2]))
-        self.assertTrue(np.isnan(arr[3]))
-        self.assertTrue(np.isnan(arr[4]))
-
-    def test_coerce_sequence_to_float64_parity_for_mixed_python_values(self):
-        values = [1, '2.5', '-7', 'bad-token', '', None, 'nan', '1e3']
-
-        native_values = native_helper.coerce_sequence_to_float64(values)
-        python_values = native_helper._coerce_sequence_to_float64_python(values)
-
-        np.testing.assert_allclose(native_values[:3], np.array([1.0, 2.5, -7.0]))
-        self.assertTrue(np.isnan(native_values[3]))
-        self.assertTrue(np.isnan(native_values[4]))
-        self.assertTrue(np.isnan(native_values[5]))
-        self.assertTrue(np.isnan(native_values[6]))
-        self.assertEqual(native_values[7], 1000.0)
-        np.testing.assert_equal(np.isnan(native_values), np.isnan(python_values))
-
-    def test_coerce_sequence_to_float64_prefers_contiguous_float64_native_input(self):
-        source = np.arange(6, dtype=np.float64).reshape(2, 3).T
-        self.assertFalse(source.flags.c_contiguous)
-        captured = {}
-
-        def _fake_native(values):
-            captured['values'] = values
-            return np.asarray(values, dtype=np.float64)
-
-        with mock.patch.object(native_helper, '_native_coerce_sequence_to_float64', side_effect=_fake_native):
-            arr = native_helper.coerce_sequence_to_float64(source)
-
-        self.assertIsInstance(captured['values'], np.ndarray)
-        self.assertEqual(captured['values'].dtype, np.float64)
-        self.assertTrue(captured['values'].flags.c_contiguous)
-        self.assertTrue(arr.flags.c_contiguous)
-
-    def test_coerce_sequence_to_float64_forced_python_mode_skips_native(self):
-        values = [1, "2.5", "bad"]
-        with mock.patch.dict("os.environ", {"METROLIZA_GROUP_STATS_BACKEND": "python"}):
-            with mock.patch.object(native_helper, "_native_coerce_sequence_to_float64", side_effect=AssertionError("native should not be called")):
-                arr = native_helper.coerce_sequence_to_float64(values)
-
-        np.testing.assert_allclose(arr[:2], np.array([1.0, 2.5]))
-        self.assertTrue(np.isnan(arr[2]))
-
-    def test_coerce_sequence_to_float64_forced_native_raises_when_native_unavailable(self):
-        with mock.patch.dict("os.environ", {"METROLIZA_GROUP_STATS_BACKEND": "native"}):
-            with mock.patch.object(native_helper, "_native_coerce_sequence_to_float64", None):
-                with self.assertRaisesRegex(RuntimeError, "requested but unavailable"):
-                    native_helper.coerce_sequence_to_float64([1, "2.5", "bad"])
 
 
 class TestGroupStatsTests(unittest.TestCase):
@@ -75,16 +11,6 @@ class TestGroupStatsTests(unittest.TestCase):
         self.assertEqual(result.sample_size, 2)
         self.assertFalse(result.is_empty)
         self.assertFalse(result.is_constant)
-
-    def test_preprocess_group_uses_python_fallback_when_helper_raises(self):
-        with mock.patch('modules.group_stats_tests.coerce_sequence_to_float64', side_effect=RuntimeError('boom')):
-            result = preprocess_group('A', [1, '2.5', 'bad', None, float('nan')])
-
-        self.assertEqual(result.label, 'A')
-        self.assertEqual(result.sample_size, 2)
-        self.assertFalse(result.is_empty)
-        self.assertFalse(result.is_constant)
-
 
     def test_two_group_student_t_selected_when_normal_and_homoscedastic(self):
         labels = ['A', 'B']

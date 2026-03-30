@@ -8,7 +8,6 @@ from modules.export_query_service import (
     ensure_sample_number_column,
     execute_export_query,
     fetch_partition_header_counts,
-    fetch_sql_measurement_summaries,
 )
 
 
@@ -70,44 +69,6 @@ class TestExportQueryService(unittest.TestCase):
 
         self.assertEqual(counts, {'REF_A': 2})
         self.assertIn("HEADER || ' - ' || AX", captured['query'])
-
-    def test_fetch_sql_measurement_summaries_groups_rows_by_reference_header_and_axis(self):
-        captured = {}
-
-        def fake_read_sql_query(_db_file, query, *, params=(), connection=None):
-            captured['query'] = query
-            captured['params'] = params
-            self.assertIsNone(connection)
-            return pd.DataFrame(
-                {
-                    'REFERENCE': ['REF_A'],
-                    'HEADER': ['H1'],
-                    'AX': ['AX1'],
-                    'sample_size': [3],
-                    'average': [1.5],
-                    'minimum': [1.0],
-                    'maximum': [2.0],
-                    'nok_count': [1],
-                    'sigma': [0.5],
-                }
-            )
-
-        from modules import export_query_service as service
-
-        previous_reader = service._read_sql_query
-        try:
-            service._read_sql_query = fake_read_sql_query
-            summaries = fetch_sql_measurement_summaries('db.sqlite', 'SELECT * FROM REPORTS', reference='REF_A')
-        finally:
-            service._read_sql_query = previous_reader
-
-        self.assertEqual(captured['params'], ('REF_A',))
-        self.assertIn('GROUP BY REFERENCE, HEADER, AX', captured['query'])
-        self.assertIn('MEAS > (NOM + "+TOL")', captured['query'])
-        self.assertEqual(
-            summaries[('REF_A', 'H1', 'AX1')]['sample_size'],
-            3,
-        )
 
 
 if __name__ == '__main__':

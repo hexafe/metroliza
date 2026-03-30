@@ -11,114 +11,12 @@ import numpy as np
 from scipy.stats import anderson_ksamp, ks_2samp, wasserstein_distance
 
 from modules.comparison_stats import _adjust_pvalues
-from modules.distribution_fit_service import (
-    fit_measurement_distribution as _fit_measurement_distribution,
-    measurement_fingerprint,
-)
-
-# Backward-compatible module attribute for patch-based tests/callers.
-fit_measurement_distribution = _fit_measurement_distribution
-
-
-DEFAULT_DISTRIBUTION_FIT_POLICY = {
-    'mode': 'always',
-    'max_fit_samples_per_metric': None,
-}
-
-
-def resolve_distribution_fit_policy(policy=None):
-    resolved = dict(DEFAULT_DISTRIBUTION_FIT_POLICY)
-    if policy:
-        resolved.update(policy)
-    resolved['mode'] = str(resolved.get('mode') or 'always').strip().lower()
-    max_fit_samples = resolved.get('max_fit_samples_per_metric')
-    resolved['max_fit_samples_per_metric'] = int(max_fit_samples) if max_fit_samples not in {None, ''} else None
-    return resolved
-
-
-def should_profile_distribution_fits(*, grouped_numeric, policy=None):
-    resolved = resolve_distribution_fit_policy(policy)
-    mode = resolved['mode']
-    if mode == 'never':
-        return False
-    if mode == 'always':
-        return True
-    if mode == 'skip_large_exports':
-        max_fit_samples = resolved.get('max_fit_samples_per_metric')
-        if max_fit_samples is None:
-            return True
-        total_samples = sum(int(values.size) for values in grouped_numeric.values())
-        return total_samples <= max_fit_samples
-    return True
+from modules.distribution_fit_service import fit_measurement_distribution
 
 
 def _clean_numeric(values):
     arr = np.asarray(values, dtype=float)
     return arr[np.isfinite(arr)]
-
-
-def _sample_fingerprint(values):
-    numeric = np.ascontiguousarray(np.asarray(values, dtype=np.float64))
-    return measurement_fingerprint(numeric)
-
-
-def _build_profile_compact_entry(metric, group_name, numeric_values, fit):
-    fit_quality = (fit.get('fit_quality') or {}).get('label')
-    gof = fit.get('gof_metrics') or {}
-    selected_model = fit.get('selected_model') or {}
-    support_mode = str(fit.get('inferred_support_mode') or 'unknown').replace('_', ' ')
-
-    warning = fit.get('warning')
-    if warning:
-        warning_text = 'Distribution fit unavailable for this group.'
-    else:
-        warning_text = _summarize_fit_notes(fit.get('notes') or [])
-
-    return (
-        metric,
-        group_name,
-        int(numeric_values.size),
-        selected_model.get('display_name') or 'Not available',
-        fit_quality or 'unreliable',
-        gof.get('ad_pvalue'),
-        gof.get('ks_pvalue'),
-        _yes_no(gof.get('is_acceptable')),
-        support_mode,
-        warning_text,
-        fit.get('status'),
-        str(fit_quality or '').lower(),
-    )
-
-
-def _expand_profile_compact_entry(compact_entry):
-    (
-        metric,
-        group_name,
-        sample_size,
-        best_model,
-        fit_quality,
-        ad_pvalue,
-        ks_pvalue,
-        gof_acceptable,
-        support_mode,
-        warning_text,
-        fit_status,
-        fit_quality_internal,
-    ) = compact_entry
-    return {
-        'Metric': metric,
-        'Group': group_name,
-        'n': sample_size,
-        'best fit model': best_model,
-        'fit quality': fit_quality,
-        'AD p-value': ad_pvalue,
-        'KS p-value': ks_pvalue,
-        'GOF acceptable?': gof_acceptable,
-        'Support mode': support_mode,
-        'Warning / notes summary': warning_text,
-        '_fit_status': fit_status,
-        '_fit_quality': fit_quality_internal,
-    }
 
 
 def _yes_no(flag):
@@ -164,72 +62,56 @@ def _run_anderson_ksamp(samples):
         return anderson_ksamp(samples, **kwargs)
 
 
-def build_distribution_profile_rows_compact(metric, grouped_values, *, fit_cache=None, values_are_clean=False):
-    numeric_by_group = {
-        group_name: np.ascontiguousarray(np.asarray(values, dtype=float) if values_are_clean else _clean_numeric(values))
-        for group_name, values in grouped_values.items()
+def _fit_profile_row(metric, group_name, values):
+    numeric = _clean_numeric(values)
+    fit = fit_measurement_distribution(numeric.tolist())
+    fit_quality = (fit.get('fit_quality') or {}).get('label')
+    gof = fit.get('gof_metrics') or {}
+    selected_model = fit.get('selected_model') or {}
+    support_mode = str(fit.get('inferred_support_mode') or 'unknown').replace('_', ' ')
+
+    warning = fit.get('warning')
+    if warning:
+        warning_text = 'Distribution fit unavailable for this group.'
+    else:
+        warning_text = _summarize_fit_notes(fit.get('notes') or [])
+
+    return {
+        'Metric': metric,
+        'Group': group_name,
+        'n': int(numeric.size),
+        'best fit model': selected_model.get('display_name') or 'Not available',
+        'fit quality': fit_quality or 'unreliable',
+        'AD p-value': gof.get('ad_pvalue'),
+        'KS p-value': gof.get('ks_pvalue'),
+        'GOF acceptable?': _yes_no(gof.get('is_acceptable')),
+        'Support mode': support_mode,
+        'Warning / notes summary': warning_text,
+        '_fit_status': fit.get('status'),
+        '_fit_quality': str(fit_quality or '').lower(),
     }
-    ordered_groups = sorted(numeric_by_group)
-    fingerprints = {group_name: _sample_fingerprint(numeric_by_group[group_name]) for group_name in ordered_groups}
-    fits_by_group = {
-        group_name: fit_measurement_distribution(
-            numeric_by_group[group_name],
-            memoization_cache=fit_cache,
-            measurement_signature=fingerprints[group_name],
-        )
-        for group_name in ordered_groups
-    }
-    return [
-        _build_profile_compact_entry(metric, group_name, numeric_by_group[group_name], fits_by_group[group_name])
-        for group_name in ordered_groups
-    ]
 
 
-def build_distribution_profile_rows(metric, grouped_values, *, fit_cache=None, values_are_clean=False):
-    return [
-        _expand_profile_compact_entry(entry)
-        for entry in build_distribution_profile_rows_compact(
-            metric,
-            grouped_values,
-            fit_cache=fit_cache,
-            values_are_clean=values_are_clean,
-        )
-    ]
+def build_distribution_profile_rows(metric, grouped_values):
+    rows = []
+    for group_name in sorted(grouped_values):
+        rows.append(_fit_profile_row(metric, group_name, grouped_values[group_name]))
+    return rows
 
 
-def _build_profile_rows(metric, numeric_by_group, *, fit_cache=None, fit_policy=None):
-    if not should_profile_distribution_fits(grouped_numeric=numeric_by_group, policy=fit_policy):
-        return [
-            {
-                'Metric': metric,
-                'Group': group_name,
-                'n': int(values.size),
-                'best fit model': 'Skipped by policy',
-                'fit quality': 'not run',
-                'AD p-value': None,
-                'KS p-value': None,
-                'GOF acceptable?': 'NO',
-                'Support mode': 'not assessed',
-                'Warning / notes summary': 'Distribution fit skipped by policy for large exports.',
-                '_fit_status': 'skipped_policy',
-                '_fit_quality': 'not run',
-            }
-            for group_name, values in sorted(numeric_by_group.items())
-        ]
-    return build_distribution_profile_rows(
-        metric,
-        numeric_by_group,
-        fit_cache=fit_cache,
-        values_are_clean=True,
-    )
+def compute_distribution_difference(metric, grouped_values, *, alpha=0.05, correction_method='holm'):
+    groups = sorted(grouped_values)
+    numeric = {name: _clean_numeric(grouped_values[name]) for name in groups}
+    profile_rows = build_distribution_profile_rows(metric, grouped_values)
 
+    weak_fit_present = any(row['_fit_quality'] in {'weak', 'unreliable', ''} for row in profile_rows)
+    fit_unavailable = any(row['_fit_status'] != 'ok' for row in profile_rows)
 
-def _build_pairwise_comparison_rows(metric, numeric_by_group, *, alpha=0.05, correction_method='holm', weak_fit_present=False):
     pairwise_rows = []
     raw_p_values = []
-    for group_a, group_b in combinations(sorted(numeric_by_group), 2):
-        sample_a = numeric_by_group[group_a]
-        sample_b = numeric_by_group[group_b]
+    for group_a, group_b in combinations(groups, 2):
+        sample_a = numeric[group_a]
+        sample_b = numeric[group_b]
         test_used = 'Kolmogorov-Smirnov (2-sample)'
         p_value = None
         distance = None
@@ -283,12 +165,7 @@ def _build_pairwise_comparison_rows(metric, numeric_by_group, *, alpha=0.05, cor
                 if adj < alpha
                 else 'No distribution shape difference after multiple-comparison correction.'
             )
-    return pairwise_rows
 
-
-def _build_omnibus_result(metric, numeric_by_group, profile_rows, pairwise_rows, *, alpha=0.05):
-    groups = sorted(numeric_by_group)
-    fit_unavailable = any(row['_fit_status'] not in {'ok', 'skipped_policy'} for row in profile_rows)
     omnibus_warning = 'None'
     omnibus_p = None
     omnibus_test = 'N/A'
@@ -298,7 +175,7 @@ def _build_omnibus_result(metric, numeric_by_group, profile_rows, pairwise_rows,
             omnibus_p = pairwise_rows[0]['raw p-value']
     elif len(groups) >= 3:
         omnibus_test = 'Anderson-Darling k-sample'
-        valid_samples = [numeric_by_group[group] for group in groups if numeric_by_group[group].size >= 2]
+        valid_samples = [numeric[group] for group in groups if numeric[group].size >= 2]
         if len(valid_samples) < 3:
             omnibus_warning = 'Too few samples for k-sample distribution test.'
         else:
@@ -320,7 +197,7 @@ def _build_omnibus_result(metric, numeric_by_group, profile_rows, pairwise_rows,
     if fit_unavailable:
         verdict = 'caution: distribution fit quality is unreliable for one or more groups.'
 
-    return {
+    omnibus_row = {
         'Metric': metric,
         'Test used': omnibus_test,
         'raw p-value': omnibus_p,
@@ -329,28 +206,6 @@ def _build_omnibus_result(metric, numeric_by_group, profile_rows, pairwise_rows,
         'warning / assumptions': omnibus_warning,
         'comment / verdict': verdict,
     }
-
-
-def compute_distribution_difference(
-    metric,
-    grouped_values,
-    *,
-    alpha=0.05,
-    correction_method='holm',
-    fit_cache=None,
-    fit_policy=None,
-):
-    numeric_by_group = {name: _clean_numeric(grouped_values[name]) for name in sorted(grouped_values)}
-    profile_rows = _build_profile_rows(metric, numeric_by_group, fit_cache=fit_cache, fit_policy=fit_policy)
-    weak_fit_present = any(row['_fit_quality'] in {'weak', 'unreliable', ''} for row in profile_rows)
-    pairwise_rows = _build_pairwise_comparison_rows(
-        metric,
-        numeric_by_group,
-        alpha=alpha,
-        correction_method=correction_method,
-        weak_fit_present=weak_fit_present,
-    )
-    omnibus_row = _build_omnibus_result(metric, numeric_by_group, profile_rows, pairwise_rows, alpha=alpha)
     return {
         'profile_rows': profile_rows,
         'omnibus_row': omnibus_row,
