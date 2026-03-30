@@ -12,6 +12,8 @@ from modules.export_sheet_writer import (
     write_measurement_block,
     write_measurement_summary_rows,
 )
+import xlsxwriter
+import tempfile
 
 
 class DummyWorksheet:
@@ -185,6 +187,35 @@ class TestExportSheetWriter(unittest.TestCase):
         self.assertGreater(uncached_elapsed, 0.0)
         self.assertGreater(cached_elapsed, 0.0)
         self.assertEqual(len(cache.get('measurement_block_templates', {})), 1)
+
+    def test_header_plan_exposes_cached_limit_formulas(self):
+        header_group = pd.DataFrame(
+            {
+                'DATE': ['2024-01-01', '2024-01-02'],
+                'SAMPLE_NUMBER': ['1', '2'],
+                'MEAS': [10.1, 10.2],
+                'NOM': [10.0, 10.0],
+                '+TOL': [0.5, 0.5],
+                '-TOL': [-0.5, -0.5],
+            }
+        )
+
+        plan = build_measurement_header_block_plan(header_group, 0, cache={})
+        self.assertEqual(plan['usl_formula'], '=(B1+B2)')
+        self.assertEqual(plan['lsl_formula'], '=(B1+B3)')
+
+    def test_create_measurement_formats_reuses_workbook_cache(self):
+        from modules.export_sheet_writer import create_measurement_formats
+
+        with tempfile.NamedTemporaryFile(suffix='.xlsx') as tmp:
+            workbook = xlsxwriter.Workbook(tmp.name)
+            try:
+                first = create_measurement_formats(workbook)
+                second = create_measurement_formats(workbook)
+            finally:
+                workbook.close()
+
+        self.assertIs(first, second)
 
 
 if __name__ == '__main__':

@@ -5,15 +5,18 @@ rows used by downstream grouping and export workflows.
 """
 
 import logging
+import os
 from pathlib import Path
+from time import perf_counter
 from time import strftime
 
 from modules.custom_logger import CustomLogger
-from modules.characteristic_alias_service import (
-    ensure_characteristic_alias_schema,
-    ensure_characteristic_alias_table,
+from modules.cmm_schema import ensure_cmm_report_schema
+from modules.cmm_native_parser import (
+    normalize_measurement_rows,
+    parse_blocks_with_backend_and_telemetry,
+    persist_measurement_rows_with_backend_and_telemetry,
 )
-from modules.cmm_native_parser import parse_blocks_with_backend_and_telemetry
 from modules.pdf_backend import require_pdf_backend, resolve_pdf_backend_module_name
 from modules.cmm_parsing import add_tolerances_to_blocks
 from modules.base_report_parser import BaseReportParser
@@ -32,27 +35,6 @@ from modules.parser_plugin_contracts import (
 
 
 logger = logging.getLogger(__name__)
-
-
-SCHEMA_INDEX_STATEMENTS = (
-    'CREATE INDEX IF NOT EXISTS idx_reports_reference ON REPORTS(REFERENCE)',
-    'CREATE INDEX IF NOT EXISTS idx_reports_filename ON REPORTS(FILENAME)',
-    'CREATE INDEX IF NOT EXISTS idx_reports_date ON REPORTS(DATE)',
-    'CREATE INDEX IF NOT EXISTS idx_reports_sample_number ON REPORTS(SAMPLE_NUMBER)',
-    'CREATE INDEX IF NOT EXISTS idx_reports_identity ON REPORTS(REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER)',
-    'CREATE INDEX IF NOT EXISTS idx_measurements_report_id ON MEASUREMENTS(REPORT_ID)',
-    'CREATE INDEX IF NOT EXISTS idx_measurements_header ON MEASUREMENTS(HEADER)',
-    'CREATE INDEX IF NOT EXISTS idx_measurements_ax ON MEASUREMENTS(AX)',
-)
-
-
-def ensure_schema_indexes(cursor):
-    """Create app indexes in a migration-safe way."""
-    for statement in SCHEMA_INDEX_STATEMENTS:
-        cursor.execute(statement)
-
-
-
 
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
@@ -104,6 +86,9 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         """Initialize parser for one CMM report file."""
         super().__init__(file_path=file_path, database=database, connection=connection)
         self.parse_backend_used = "unknown"
+        self.persistence_backend_used = "unknown"
+        self.stage_timings_s: dict[str, float] = {}
+        self._prepared_measurement_rows = None
 
     def open_database_and_check_filename(self):
         """Handle `open_database_and_check_filename` for `CMMReportParser`.
@@ -118,7 +103,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         """
 
         try:
-            ensure_characteristic_alias_schema(
+            ensure_cmm_report_schema(
                 self.database,
                 connection=self.connection,
                 retries=4,
@@ -288,9 +273,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
         try:
             """Method to split raw text from pdf to blocks - split by measurements"""
-            parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)
+            parse_start = perf_counter()
+            parse_result = parse_blocks_with_backend_and_telemetry(self.pdf_raw_text)
             self.blocks_text = parse_result.blocks
             self.parse_backend_used = parse_result.backend
+            self.stage_timings_s["parse_batch_runtime"] = perf_counter() - parse_start
         except Exception as e:
             self.log_and_exit(e)
 
@@ -424,35 +411,15 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 )
                 return
 
-            def create_tables_and_insert_report(transaction_cursor):
-                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS MEASUREMENTS (
-                                    ID INTEGER PRIMARY KEY,
-                                    AX TEXT,
-                                    NOM REAL,
-                                    "+TOL" REAL,
-                                    "-TOL" REAL,
-                                    BONUS REAL,
-                                    MEAS REAL,
-                                    DEV REAL,
-                                    OUTTOL REAL,
-                                    HEADER TEXT,
-                                    REPORT_ID INTEGER,
-                                    FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
-                                )''')
+            use_native_persistence = os.getenv("METROLIZA_CMM_NATIVE_PERSISTENCE", "0").strip() in {"1", "true", "yes", "on"}
 
-                transaction_cursor.execute('''CREATE TABLE IF NOT EXISTS REPORTS (
-                                    ID INTEGER PRIMARY KEY,
-                                    REFERENCE TEXT,
-                                    FILELOC TEXT,
-                                    FILENAME TEXT,
-                                    DATE TEXT,
-                                    SAMPLE_NUMBER TEXT
-                                )''')
+            normalize_start = perf_counter()
+            normalized_rows = self._normalized_rows_for_persistence(use_native=use_native_persistence)
+            self.stage_timings_s["normalize_runtime"] = perf_counter() - normalize_start
 
-                ensure_characteristic_alias_table(transaction_cursor)
+            db_write_start = perf_counter()
 
-                ensure_schema_indexes(transaction_cursor)
-
+            def insert_report(transaction_cursor):
                 transaction_cursor.execute(
                     'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
                     (self.reference, self.file_path, self.file_name, self.date, self.sample_number),
@@ -469,39 +436,46 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 )
                 report_id = transaction_cursor.lastrowid
 
-                for lst in self.blocks_text:
-                    table_name = ""
-                    for sublist in lst[0]:
-                        if isinstance(sublist, str):
-                            table_name += sublist
-                            table_name += ", "
-                        else:
-                            for item in sublist:
-                                if isinstance(item, str):
-                                    table_name += item
-                                    table_name += ", "
-
-                    table_name = table_name.replace('"', '')
-                    table_name = table_name[:-2]
-
-                    rows = [
-                        (None, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], table_name, report_id)
-                        for row in lst[1]
-                    ]
-                    transaction_cursor.executemany(
-                        'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        rows,
-                    )
+                transaction_cursor.executemany(
+                    'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [
+                        (
+                            None,
+                            row[0],
+                            row[1],
+                            row[2],
+                            row[3],
+                            row[4],
+                            row[5],
+                            row[6],
+                            row[7],
+                            row[8],
+                            report_id,
+                        )
+                        for row in normalized_rows
+                    ],
+                )
 
                 return True
 
-            was_inserted = run_transaction_with_retry(
-                self.database,
-                create_tables_and_insert_report,
-                connection=self.connection,
-                retries=4,
-                retry_delay_s=1,
-            )
+            if self.connection is None:
+                persist_result = persist_measurement_rows_with_backend_and_telemetry(
+                    self.database,
+                    normalized_rows,
+                    use_native=use_native_persistence,
+                )
+                self.persistence_backend_used = persist_result.backend
+                was_inserted = persist_result.inserted
+            else:
+                was_inserted = run_transaction_with_retry(
+                    self.database,
+                    insert_report,
+                    connection=self.connection,
+                    retries=4,
+                    retry_delay_s=1,
+                )
+                self.persistence_backend_used = "python"
+            self.stage_timings_s["db_write_runtime"] = perf_counter() - db_write_start
             if was_inserted:
                 logger.info("Report '%s' measurements inserted into the database.", self.file_name)
                 return
@@ -510,6 +484,57 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             return
         except Exception as e:
             self.log_and_exit(e)
+
+    def _normalized_rows_for_persistence(self, use_native=False):
+        if self._prepared_measurement_rows is not None:
+            return self._prepared_measurement_rows
+
+        return normalize_measurement_rows(
+            self.blocks_text,
+            reference=self.reference,
+            fileloc=self.file_path,
+            filename=self.file_name,
+            date=self.date,
+            sample_number=self.sample_number,
+            use_native=use_native,
+        )
+
+    def prepare_for_two_stage_pipeline(self):
+        """Prepare parser state and normalized rows for deferred single-writer persistence.
+
+        This stage performs file open/parsing/token normalization work only and stores
+        normalized rows on the parser instance so stage 2 can commit without re-parsing.
+        """
+        prepare_start = perf_counter()
+        if not self.raw_text:
+            self.open_report()
+        if not self.blocks_text:
+            self.split_text_to_blocks()
+            self.add_tolerances()
+
+        use_native_persistence = os.getenv("METROLIZA_CMM_NATIVE_PERSISTENCE", "0").strip() in {"1", "true", "yes", "on"}
+        normalize_start = perf_counter()
+        self._prepared_measurement_rows = normalize_measurement_rows(
+            self.blocks_text,
+            reference=self.reference,
+            fileloc=self.file_path,
+            filename=self.file_name,
+            date=self.date,
+            sample_number=self.sample_number,
+            use_native=use_native_persistence,
+        )
+        self.stage_timings_s["normalize_runtime"] = perf_counter() - normalize_start
+        self.stage_timings_s["prepare_pipeline_runtime"] = perf_counter() - prepare_start
+
+    def persist_prepared_report(self):
+        """Persist report data prepared during stage 1 of the two-stage pipeline.
+
+        Falls back to legacy open+check behavior when preparation did not complete.
+        """
+        if not self.blocks_text:
+            return self.open_database_and_check_filename()
+
+        return self.to_sqlite()
 
     def show_df(self):
         """Handle `show_df` for `CMMReportParser`.

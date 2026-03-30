@@ -87,6 +87,7 @@ Build commands:
 ```bash
 pyinstaller packaging/metroliza_onefile.spec
 python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml --release
 ```
 
 ```powershell
@@ -96,11 +97,13 @@ python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --r
 - [ ] PyInstaller output exists under `dist/` and launches. *(Owner: Release engineer/QA)*
 - [ ] Nuitka output executable exists and launches on a clean/sandbox target environment. *(Owner: Release engineer/QA)*
 - [ ] Native wheel build succeeds for release target(s), and `_metroliza_cmm_native` import smoke check passes. *(Owner: Release engineer/QA)*
+- [ ] Native chart wheel build succeeds for release target(s), and `_metroliza_chart_native` histogram render smoke check passes. *(Owner: Release engineer/QA)*
 - [ ] Pure-Python parser fallback works when native module is intentionally unavailable (`METROLIZA_CMM_PARSER_BACKEND=python`). *(Owner: QA)*
 - [ ] Basic startup flow works (open app, load a representative input, generate an export). *(Owner: QA)*
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
 
 - [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
+- [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage visibility output from `unit-tests` is reviewed (job log summary and `unit-test-coverage` artifact `coverage.xml`) as RC confidence evidence; this is informational and not a blocking PR check. *(Owner: Release owner/QA)*
 - [ ] Any optional manual smoke evidence (if executed) is linked from release notes or tracker (`packaging-smoke`, `google-conversion-smoke`). *(Owner: Release owner)*
 

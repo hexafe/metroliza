@@ -1,6 +1,13 @@
 # Changelog (for end users)
 
-## 2026.03rc2(260322) — current version
+## 2026.03rc3(260329) — current version
+- Faster export/report generation.
+- Export setup usability improved, with fewer layout/clipping issues at common window sizes.
+- Saved export presets load more reliably for repeat export workflows.
+- Updated Group Analysis sheet presentation improves readability and metric-by-metric comparison flow.
+- Added optional HTML dashboard output with extended plots and group analysis, when selected.
+
+## 2026.03rc2(260322)
 - Group Analysis is now the main release focus, with the grouped export presented as the primary worksheet for comparing groups metric-by-metric.
 - Expanded user manuals now cover Group Analysis reading order, plain-English interpretation, and the surrounding export workflow more clearly for end users.
 - The Group Analysis manual set now more explicitly supports non-technical readers who need to understand adjusted p-values, effect size, Delta mean, and caution notes.

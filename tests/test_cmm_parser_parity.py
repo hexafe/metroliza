@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from modules.cmm_native_parser import native_backend_available, parse_blocks_with_backend
+from modules.cmm_native_parser import (
+    native_backend_available,
+    native_persistence_backend_available,
+    normalize_measurement_rows,
+    parse_blocks_with_backend,
+    persist_measurement_rows_python,
+    persist_measurement_rows_with_backend_and_telemetry,
+)
+from modules.cmm_schema import ensure_cmm_report_schema
 from modules.cmm_parsing import add_tolerances_to_blocks, parse_raw_lines_to_blocks
 
 FIXTURE_DIR = Path("tests/fixtures/cmm_parser")
@@ -28,7 +36,8 @@ def test_parser_interface_matches_fixture_snapshot(fixture):
 
 def test_cmm_report_parser_wired_to_interface_layer():
     parser_source = Path("modules/cmm_report_parser.py").read_text()
-    assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)" in parser_source
+    assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text)" in parser_source
+    assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)" not in parser_source
 
 
 @pytest.mark.parametrize("fixture", _load_fixtures(), ids=lambda f: f["name"])
@@ -87,6 +96,17 @@ def test_interrupted_multiline_fixture_keeps_single_block_intent_explicit():
     assert [line[0] for line in parsed[0][1]] == ["X", "Y"]
 
 
+def test_unusual_token_layout_fixture_preserves_semantic_tp_and_numeric_x_mapping():
+    fixture = _fixture_by_name("unusual token/layout variants preserve parser semantics")
+
+    parsed = parse_raw_lines_to_blocks(fixture["raw_lines"])
+
+    assert len(parsed) == 1
+    assert parsed[0][0] == [["TOKEN LABELS"]]
+    assert parsed[0][1][0] == ["X", 10.0, 0.2, -0.2, "", 10.1, 0.1, 0.0]
+    assert parsed[0][1][1] == ["TP", 0.0, 0.3, 0, 0.05, 0.12, 0.12, 0.0]
+
+
 @pytest.fixture
 def first_line_comment_regression_inputs():
     base_lines = [
@@ -114,6 +134,19 @@ def test_first_line_comment_parsing_is_independent_of_last_line(first_line_comme
 
     assert parsed_with_trailing_comment[0][0] == [["FIRST HEADER"]]
     assert parsed_with_trailing_numeric_triplet[0][0] == [["FIRST HEADER"]]
+
+
+def test_trailing_comment_does_not_leave_terminal_empty_block():
+    raw_lines = [
+        "#RUNTIME",
+        "DIM",
+        "X 10 0.2 -0.2 10.03 0.03 0",
+        "#END",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed == [[[["RUNTIME"]], [["X", 10.0, 0.2, -0.2, 0, 10.03, 0.03, 0.0]]]]
 
 
 def test_measurement_rows_parse_for_single_token_start_format():
@@ -153,6 +186,61 @@ def test_measurement_rows_parse_for_inline_code_and_numbers_format():
     parsed = parse_raw_lines_to_blocks(raw_lines)
 
     assert any([line[0] for line in block[1]] == ["X", "Y"] for block in parsed)
+
+
+def test_multiline_tp_rows_preserve_semantic_tokens_and_tolerance_propagation():
+    raw_lines = [
+        "#TP MULTILINE",
+        "DIM",
+        "X 10 0.1 -0.1 10.0 0 0",
+        "TP",
+        "MMC",
+        "+TOL",
+        "0.4",
+        "BONUS",
+        "0.1",
+        "MEAS",
+        "0.25",
+        "DEV",
+        "0.25",
+        "OUTTOL",
+        "0",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed[0][1][1] == ["TP", 0.0, 0.4, 0, 0.1, 0.25, 0.25, 0.0]
+    assert parsed[0][1][0] == ["X", 10.0, 0.1, -0.1, "", 10.0, 0.0, 0.0]
+
+
+def test_interrupted_block_starts_new_header_after_measurement_gap():
+    raw_lines = [
+        "#BLOCK ONE",
+        "DIM",
+        "X 1 0.1 -0.1 1.0 0 0",
+        "#BLOCK TWO",
+        "DIM",
+        "Y 2 0.2 -0.2 2.0 0 0",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert [block[0] for block in parsed] == [[["BLOCK ONE"]], [["BLOCK TWO"]]]
+    assert parsed[0][1] == [["X", 1.0, 0.1, -0.1, 0.0, 1.0, 0.0, 0.0]]
+    assert parsed[1][1] == []
+
+
+def test_malformed_numeric_tokens_are_dropped_without_breaking_following_rows():
+    raw_lines = [
+        "#MALFORMED",
+        "DIM",
+        "X 10 BAD -0.2 10.1 0.1 0",
+        "Y 5 0.1 -0.1 5.05 0.05 0",
+    ]
+
+    parsed = parse_raw_lines_to_blocks(raw_lines)
+
+    assert parsed == [[[ ["MALFORMED"] ], []]]
 
 
 def test_add_tolerances_keeps_explicit_zero_values_for_tp_blocks():
@@ -261,6 +349,61 @@ def test_tp_parser_keeps_explicit_nom_for_qualified_rows_with_nom_label():
 
     assert parsed[0][1][0] == ["TP", 0.6, 0.2, 0, 0.0, 0.237, 0.237, 0.0]
 
+
+def test_native_parser_matches_python_for_non_tp_token_normalization_edge_when_available():
+    if not native_backend_available():
+        pytest.skip("Native CMM parser prototype module is not built in this environment")
+
+    raw_lines = [
+        "#TOKEN NORMALIZATION",
+        "DIM",
+        "M NOM 5 +TOL 0.1 -TOL -0.1 BONUS 0.0 MEAS 5.02 DEV 0.02 OUTTOL 0",
+        "#END",
+    ]
+
+    native = parse_blocks_with_backend(raw_lines, use_native=True)
+    python = parse_blocks_with_backend(raw_lines, use_native=False)
+
+    assert native == python
+
+
+def test_native_parser_matches_python_for_tolerance_propagation_edge_when_available():
+    if not native_backend_available():
+        pytest.skip("Native CMM parser prototype module is not built in this environment")
+
+    raw_lines = [
+        "#TOL PROPAGATION",
+        "DIM",
+        "X 10 0.2 -0.2 10.03 0.03 0",
+        "Y 5",
+        "5.0",
+        "0",
+        "#END",
+    ]
+
+    native = parse_blocks_with_backend(raw_lines, use_native=True)
+    python = parse_blocks_with_backend(raw_lines, use_native=False)
+
+    assert native == python
+
+
+def test_native_parser_matches_python_for_mixed_tp_and_non_tp_semantic_tokens_when_available():
+    if not native_backend_available():
+        pytest.skip("Native CMM parser prototype module is not built in this environment")
+
+    raw_lines = [
+        "#MIXED TOKENS",
+        "DIM",
+        "X NOM 10 +TOL 0.2 -TOL -0.2 MEAS 10.1 DEV 0.1 OUTTOL 0",
+        "TP MMC +TOL 0.4 BONUS 0.1 MEAS 0.25 DEV 0.25 OUTTOL 0",
+        "#END",
+    ]
+
+    native = parse_blocks_with_backend(raw_lines, use_native=True)
+    python = parse_blocks_with_backend(raw_lines, use_native=False)
+
+    assert native == python
+
 def test_non_tp_x_parser_ignores_semantic_labels_without_shifting_values():
     raw_lines = [
         "#X LABELED",
@@ -335,6 +478,7 @@ def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
     from modules.db import execute_with_retry
 
     db_path = str(tmp_path / "cmm.db")
+    ensure_cmm_report_schema(db_path)
     parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
     parser.pdf_reference = "REF01"
     parser.pdf_file_path = "/tmp/reports"
@@ -400,6 +544,7 @@ def _assert_tp_pipeline_roundtrip(parsed_blocks, tmp_path):
     assert parsed_blocks[0][1][0] == ["TP", 0.0, 0.2, 0, 0.0, 0.344, 0.344, 0.144]
 
     db_path = str(tmp_path / "tp_pipeline.db")
+    ensure_cmm_report_schema(db_path)
     parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
     parser.pdf_reference = "REF01"
     parser.pdf_file_path = "/tmp/reports"
@@ -473,3 +618,284 @@ def test_tp_qualifier_pipeline_roundtrip_native_backend_when_available(tmp_path)
 
     parsed = parse_blocks_with_backend(raw_lines, use_native=True)
     _assert_tp_pipeline_roundtrip(parsed, tmp_path)
+
+
+def test_measurement_row_normalization_parity_python_vs_native_when_available():
+    if not native_persistence_backend_available():
+        pytest.skip("Native CMM persistence module is not built in this environment")
+
+    blocks = parse_blocks_with_backend(
+        [
+            "#ROW PARITY",
+            "DIM",
+            "D1 10 0.2 -0.2 10.03",
+            "TP RFS 0.200 0.000 0.344 0.344 0.144",
+            "#END",
+        ],
+        use_native=False,
+    )
+    meta = dict(
+        reference="REF01",
+        fileloc="/tmp/reports",
+        filename="REF01_2024-01-02_123.pdf",
+        date="2024-01-02",
+        sample_number="123",
+    )
+
+    rows_python = normalize_measurement_rows(blocks, **meta, use_native=False)
+    rows_native = normalize_measurement_rows(blocks, **meta, use_native=True)
+
+    assert rows_python == rows_native
+    assert len(rows_python) == len(rows_native)
+
+
+def test_measurement_row_persistence_parity_python_vs_native_when_available(tmp_path):
+    if not native_persistence_backend_available():
+        pytest.skip("Native CMM persistence module is not built in this environment")
+
+    blocks = parse_blocks_with_backend(
+        [
+            "#PERSIST PARITY",
+            "DIM",
+            "D1 10 0.2 -0.2 10.03",
+            "D2 20 0.2 -0.2 20.01",
+            "#END",
+        ],
+        use_native=False,
+    )
+    rows = normalize_measurement_rows(
+        blocks,
+        reference="REF01",
+        fileloc="/tmp/reports",
+        filename="REF01_2024-01-02_123.pdf",
+        date="2024-01-02",
+        sample_number="123",
+        use_native=False,
+    )
+
+    py_db = str(tmp_path / "py_insert.db")
+    native_db = str(tmp_path / "native_insert.db")
+    ensure_cmm_report_schema(py_db)
+    ensure_cmm_report_schema(native_db)
+    assert persist_measurement_rows_python(py_db, rows) is True
+    assert persist_measurement_rows_python(py_db, rows) is False
+    native_result = persist_measurement_rows_with_backend_and_telemetry(native_db, rows, use_native=True)
+    assert native_result.backend == "native"
+    assert native_result.inserted is True
+    native_duplicate_result = persist_measurement_rows_with_backend_and_telemetry(
+        native_db, rows, use_native=True
+    )
+    assert native_duplicate_result.backend == "native"
+    assert native_duplicate_result.inserted is False
+
+    with sqlite3.connect(py_db) as py_conn, sqlite3.connect(native_db) as native_conn:
+        py_rows = py_conn.execute(
+            """
+            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
+                MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
+                MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
+                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
+            FROM MEASUREMENTS
+            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            ORDER BY MEASUREMENTS.ID
+            """
+        ).fetchall()
+        native_rows = native_conn.execute(
+            """
+            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
+                MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
+                MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
+                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
+            FROM MEASUREMENTS
+            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            ORDER BY MEASUREMENTS.ID
+            """
+        ).fetchall()
+
+    assert py_rows == native_rows
+
+
+@pytest.fixture
+def large_measurement_rows():
+    row_count = 20_000
+    header = "LARGE ROW PARITY"
+    return [
+        (
+            f"D{idx}",
+            10.0 + idx,
+            0.2,
+            -0.2,
+            0.0,
+            10.01 + idx,
+            0.01,
+            0.0,
+            header,
+            "REF_LARGE",
+            "/tmp/reports",
+            "REF_LARGE_2024-01-02_999.pdf",
+            "2024-01-02",
+            "999",
+        )
+        for idx in range(row_count)
+    ]
+
+
+def test_measurement_row_persistence_duplicate_detection_python_backend(tmp_path):
+    rows = [
+        (
+            "D1",
+            10.0,
+            0.2,
+            -0.2,
+            0.0,
+            10.03,
+            0.03,
+            0.0,
+            "PERSIST PARITY",
+            "REF01",
+            "/tmp/reports",
+            "REF01_2024-01-02_123.pdf",
+            "2024-01-02",
+            "123",
+        )
+    ]
+    py_db = str(tmp_path / "py_duplicate.db")
+    ensure_cmm_report_schema(py_db)
+
+    assert persist_measurement_rows_python(py_db, rows) is True
+    assert persist_measurement_rows_python(py_db, rows) is False
+
+    with sqlite3.connect(py_db) as conn:
+        report_count = conn.execute("SELECT COUNT(*) FROM REPORTS").fetchone()
+        measurement_count = conn.execute("SELECT COUNT(*) FROM MEASUREMENTS").fetchone()
+
+    assert report_count == (1,)
+    assert measurement_count == (1,)
+
+
+def test_large_row_persistence_python_backend(tmp_path, large_measurement_rows):
+    py_db = str(tmp_path / "py_large_insert.db")
+    ensure_cmm_report_schema(py_db)
+
+    assert persist_measurement_rows_python(py_db, large_measurement_rows) is True
+    assert persist_measurement_rows_python(py_db, large_measurement_rows) is False
+
+    with sqlite3.connect(py_db) as conn:
+        report_count = conn.execute("SELECT COUNT(*) FROM REPORTS").fetchone()
+        measurement_count = conn.execute("SELECT COUNT(*) FROM MEASUREMENTS").fetchone()
+
+    assert report_count == (1,)
+    assert measurement_count == (len(large_measurement_rows),)
+
+
+def test_large_row_persistence_parity_python_vs_native_when_available(tmp_path, large_measurement_rows):
+    if not native_persistence_backend_available():
+        pytest.skip("Native CMM persistence module is not built in this environment")
+
+    py_db = str(tmp_path / "py_large_insert.db")
+    native_db = str(tmp_path / "native_large_insert.db")
+    ensure_cmm_report_schema(py_db)
+    ensure_cmm_report_schema(native_db)
+
+    assert persist_measurement_rows_python(py_db, large_measurement_rows) is True
+    native_result = persist_measurement_rows_with_backend_and_telemetry(
+        native_db, large_measurement_rows, use_native=True
+    )
+    assert native_result.backend == "native"
+    assert native_result.inserted is True
+
+    with sqlite3.connect(py_db) as py_conn, sqlite3.connect(native_db) as native_conn:
+        py_counts = py_conn.execute(
+            "SELECT COUNT(*) FROM REPORTS, MEASUREMENTS WHERE REPORTS.ID = MEASUREMENTS.REPORT_ID"
+        ).fetchone()
+        native_counts = native_conn.execute(
+            "SELECT COUNT(*) FROM REPORTS, MEASUREMENTS WHERE REPORTS.ID = MEASUREMENTS.REPORT_ID"
+        ).fetchone()
+        py_edges = py_conn.execute(
+            """
+            SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER
+            FROM MEASUREMENTS
+            ORDER BY ID
+            LIMIT 1
+            """
+        ).fetchone(), py_conn.execute(
+            """
+            SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER
+            FROM MEASUREMENTS
+            ORDER BY ID DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        native_edges = native_conn.execute(
+            """
+            SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER
+            FROM MEASUREMENTS
+            ORDER BY ID
+            LIMIT 1
+            """
+        ).fetchone(), native_conn.execute(
+            """
+            SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER
+            FROM MEASUREMENTS
+            ORDER BY ID DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert py_counts == native_counts == (len(large_measurement_rows),)
+    assert py_edges == native_edges
+
+
+def test_cmm_report_parser_records_parse_and_db_stage_timings(tmp_path):
+    CMMReportParser = _load_cmm_report_parser_with_test_stubs()
+
+    db_path = str(tmp_path / "timing.db")
+    ensure_cmm_report_schema(db_path)
+    parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
+    parser.pdf_raw_text = [
+        "#TIMING",
+        "DIM",
+        "X 10 0.2 -0.2 10.03 0.03 0",
+        "#END",
+    ]
+    parser.split_text_to_blocks()
+    parser.add_tolerances()
+    parser.to_sqlite()
+
+    assert parser.stage_timings_s["parse_batch_runtime"] >= 0.0
+    assert parser.stage_timings_s["db_write_runtime"] >= 0.0
+
+
+def test_cmm_report_parser_split_text_to_blocks_uses_runtime_backend_result():
+    CMMReportParser = _load_cmm_report_parser_with_test_stubs()
+
+    parser = CMMReportParser("REF01_2024-01-02_123.pdf", database=":memory:")
+    parser.pdf_raw_text = [
+        "#RUNTIME BACKEND",
+        "DIM",
+        "X 10 0.2 -0.2 10.03 0.03 0",
+        "#END",
+    ]
+
+    fake_calls = {"count": 0}
+
+    def _fake_parse_blocks(raw_lines):
+        fake_calls["count"] += 1
+        assert raw_lines == parser.pdf_raw_text
+        return type(
+            "ParseResult",
+            (),
+            {"blocks": [[["RUNTIME BACKEND"], [["X", 10.0, 0.2, -0.2, "", 10.03, 0.03, 0.0]]]], "backend": "native"},
+        )()
+
+    split_globals = CMMReportParser.split_text_to_blocks.__globals__
+    original_parse_blocks = split_globals["parse_blocks_with_backend_and_telemetry"]
+    split_globals["parse_blocks_with_backend_and_telemetry"] = _fake_parse_blocks
+    try:
+        parser.split_text_to_blocks()
+    finally:
+        split_globals["parse_blocks_with_backend_and_telemetry"] = original_parse_blocks
+
+    assert fake_calls["count"] == 1
+    assert parser.parse_backend_used == "native"
+    assert parser.blocks_text == [[["RUNTIME BACKEND"], [["X", 10.0, 0.2, -0.2, "", 10.03, 0.03, 0.0]]]]

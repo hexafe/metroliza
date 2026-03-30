@@ -1,7 +1,14 @@
 # Native module build and distribution requirements
 
-This project ships an optional native extension module: `_metroliza_cmm_native`.
-The application defaults to native parsing when the extension is present and continues to run in pure-Python mode when it is not.
+This project ships optional native extension modules:
+
+- `_metroliza_cmm_native` (`modules/native/cmm_parser`)
+- `_metroliza_group_stats_native` (`modules/native/group_stats_coercion`)
+- `_metroliza_comparison_stats_native` (`modules/native/comparison_stats_bootstrap`)
+- `_metroliza_distribution_fit_native` (`modules/native/distribution_fit_ad`)
+- `_metroliza_chart_native` (`modules/native/chart_renderer`)
+
+Each extension is optional at runtime. The app must keep deterministic Python-path behavior when native binaries are unavailable.
 
 ## Supported platforms and architectures
 
@@ -16,27 +23,72 @@ On unsupported platforms, the app defaults to pure-Python parsing.
 
 ## Wheel build pipeline
 
-The extension source lives in `modules/native/cmm_parser`.
 Build tooling requirements are tracked in `requirements-build.txt` (`maturin`, `cibuildwheel`, `build`).
+
+Native crate manifests:
+
+- `modules/native/cmm_parser/Cargo.toml`
+- `modules/native/group_stats_coercion/Cargo.toml`
+- `modules/native/comparison_stats_bootstrap/Cargo.toml`
+- `modules/native/distribution_fit_ad/Cargo.toml`
+- `modules/native/chart_renderer/Cargo.toml`
 
 Local developer commands:
 
 ```bash
 # build binary wheel(s) for local interpreter
 python -m maturin build --manifest-path modules/native/cmm_parser/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/group_stats_coercion/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/distribution_fit_ad/Cargo.toml --release
+python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml --release
 
 # install extension in editable/dev mode
 python -m maturin develop --manifest-path modules/native/cmm_parser/Cargo.toml
+python -m maturin develop --manifest-path modules/native/group_stats_coercion/Cargo.toml
+python -m maturin develop --manifest-path modules/native/comparison_stats_bootstrap/Cargo.toml
+python -m maturin develop --manifest-path modules/native/distribution_fit_ad/Cargo.toml
+python -m maturin develop --manifest-path modules/native/chart_renderer/Cargo.toml
 ```
+
+Windows/PowerShell helper for the full native-first packaging flow:
+
+```powershell
+# build all native extensions, verify them, then package with Nuitka
+./packaging/build_native_and_package.ps1
+
+# build all native extensions, verify them, then package with PyInstaller
+./packaging/build_native_and_package.ps1 -Packager pyinstaller
+
+# only build+verify native extensions, skip packaging
+./packaging/build_native_and_package.ps1 -Packager none
+
+# narrow the build to the parser/chart hot paths
+./packaging/build_native_and_package.ps1 -NativeTargets cmm,chart -Packager nuitka
+```
+
+The helper script:
+
+- installs `requirements-build.txt` into the active Python environment,
+- builds the requested native modules with `python -m maturin develop --release`,
+- verifies backend availability in that same environment,
+- then optionally hands off to `packaging/build_nuitka.ps1` or `python -m PyInstaller`.
+
+On Windows, prefer CPython 3.11 x64 for release packaging. The helper warns on other interpreter versions because the project CI/wheel path is validated there first.
 
 CI uses `cibuildwheel` and `maturin` to:
 
-1. build wheels from `modules/native/cmm_parser/Cargo.toml`,
+1. build wheels for all native crate manifests,
 2. install a wheel artifact,
-3. run a native smoke check,
-4. run parser parity tests.
+3. run import + minimal smoke checks for each native module,
+4. validate explicit fallback behavior when extensions are intentionally absent,
+5. run parser parity tests.
 
 ## Runtime backend + fallback behavior
+
+Backend behavior varies per module and must remain explicit:
+
+### CMM parser/persistence (`modules/cmm_native_parser.py`)
 
 Parser backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
 
@@ -44,19 +96,58 @@ Parser backend selection is controlled by `METROLIZA_CMM_PARSER_BACKEND`:
 - `native`: require native backend and raise if unavailable.
 - `python`: force pure-Python backend (controlled operational rollback).
 
-Runtime fallback from native execution errors is intentionally disabled so backend behavior is explicit and observable. This ensures packaged apps keep working when the native binary is not bundled, while preserving deterministic rollback controls.
+Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the same value semantics (`auto`/`native`/`python`).
+
+### Comparison stats (`modules/comparison_stats_native.py`)
+
+- `METROLIZA_COMPARISON_STATS_CI_BACKEND` controls bootstrap CI native usage (`auto`/`native`/`python`).
+- `METROLIZA_COMPARISON_STATS_BACKEND` controls pairwise native usage (`auto`/`native`/`python`).
+- In `auto`, unavailable native symbols produce `None` so Python callers execute fallback logic.
+- In `native`, unavailable symbols raise `RuntimeError`.
+
+### Chart renderer (`modules/chart_renderer.py`)
+
+- Backend selection is controlled by `METROLIZA_CHART_RENDERER_BACKEND` (`auto`/`native`/`matplotlib`).
+- Native chart rendering is shipped when `_metroliza_chart_native` is available in the packaged build environment.
+- The current native module covers histogram, distribution, IQR, and trend summary charts through the `_metroliza_chart_native` extension surface.
+- The native chart path is a payload-driven non-matplotlib compositor intended for workbook/export rendering, not an HTML/interactive chart stack.
+- The optional HTML dashboard sidecar reuses the same export chart payloads and rendered PNGs, but it remains a separate Python-side export artifact rather than part of the native chart extension.
+- If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
+- `auto` uses native only when the extension is present; otherwise it defaults to matplotlib.
+- On Python `3.14`, local chart-renderer builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
+
+### Distribution fit (`modules/distribution_fit_native.py`)
+
+- Candidate-kernel backend selection is controlled by `METROLIZA_DISTRIBUTION_FIT_KERNEL` (`auto`/`native`/`python`).
+- `auto` (default) is availability-driven: native candidate kernels are attempted when present and otherwise Python fallback remains active.
+- `native` requires native candidate-kernel execution semantics (no silent mode switch to Python).
+- `python` forces pure-Python candidate metrics and skips native dispatch.
+- `_metroliza_distribution_fit_native` now exports native candidate metric kernels and native batch fit-parameter estimation.
+- The current native fit batch covers the full current candidate pool: `norm`, `skewnorm`, `halfnorm`, `foldnorm`, `gamma`, `weibull_min`, `lognorm`, and `johnsonsu`.
+- Backend diagnostics expose both `metrics_available` and `fit_available` for the distribution-fit candidate bridge.
+- On Python `3.14`, local distribution-fit builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
+
+### Group stats coercion (`modules/group_stats_native.py`)
+
+- Backend selection is controlled by `METROLIZA_GROUP_STATS_BACKEND` (`auto`/`native`/`python`).
+- `auto` (default): uses native coercion when available, otherwise wrapper falls back to Python coercion.
+- `native`: requires native coercion and raises if unavailable.
+- `python`: forces Python coercion and bypasses native dispatch.
+
+Runtime fallback from native execution errors in forced-`native` modes is intentionally disabled so backend behavior remains explicit and observable.
 
 ## PyInstaller inclusion rules and smoke checks
 
 `packaging/metroliza_onefile.spec` includes:
 
-- `hiddenimports=['_metroliza_cmm_native']`
+- `hiddenimports=['_metroliza_cmm_native', '_metroliza_chart_native']`
 - Windows Python runtime DLL collection (`libffi`, `python3*.dll`, `vcruntime`, `msvcp`) so onefile startup does not depend on a fragile ambient interpreter layout
 - PyMuPDF/`fitz` data files, native libraries, and discovered submodules so packaged PDF parsing survives frozen builds
 
 Distribution audit status:
 
 - `pyinstaller packaging/metroliza_onefile.spec` produces a single-file artifact (`EXE(...)` with no `COLLECT(...)` stage), so it is configured as a onefile build rather than an onedir bundle.
+- default PyInstaller output filename follows release metadata: `metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>).exe`
 - The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
 - Confidence is still release-evidence based rather than absolute: the generated artifact must be smoke-launched on a clean target environment before calling it ready for non-technical users.
 
@@ -91,6 +182,7 @@ PyInstaller is the closest current path to a turnkey single-file distribution fo
 - prints candidate diagnostics, selected compiler, selection reason, and whether an auto-install attempt ran before the build starts
 - can try an opt-in compiler install flow (`winget` on Windows, conventional package-manager flows on Linux/macOS when available), otherwise prints exact install guidance
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
+- auto-adds `--include-module=_metroliza_chart_native` only when `_metroliza_chart_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
 - explicitly includes `modules.cmm_report_parser`, `modules.report_parser_factory`, and `modules.pdf_backend` because the rc1 parser/plugin refactor introduced dynamic paths that packagers may otherwise under-detect
 - requires PyMuPDF to be importable in the build environment and fails closed by default when it is not available
@@ -128,7 +220,16 @@ Nuitka release mode is also configured as onefile (`--onefile` by default, `--st
 
 The native-artifacts CI job must validate all of the following:
 
-1. wheel build succeeds,
-2. wheel install succeeds,
-3. backend smoke checks for `python` and `native` selection behavior,
-4. parser parity test passes when native backend is available.
+1. wheel build succeeds for all native crate manifests,
+2. wheel install succeeds for all built wheel artifacts,
+3. each module imports and runs at least one minimal smoke function:
+   - `modules.cmm_native_parser` (`parse_blocks_with_backend`)
+   - `modules.group_stats_native` (`coerce_sequence_to_float64`)
+   - `modules.comparison_stats_native` (`bootstrap_percentile_ci_native`, `pairwise_stats_native`)
+   - `modules.distribution_fit_native` (`compute_ad_ks_statistics_native`, `estimate_ad_pvalue_monte_carlo_native`)
+   - `modules.chart_renderer` (native histogram renderer path via `build_chart_renderer`)
+4. fallback behavior is explicitly smoke-validated for intentionally absent extensions (mocked-unavailable symbols):
+   - CMM parser path continues in Python when not forced to native,
+   - comparison/distribution wrappers return `None` in availability-driven fallback mode,
+   - group-stats coercion returns Python-coerced `float64`/`NaN` output.
+5. parser parity tests pass when native backend is available.

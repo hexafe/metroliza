@@ -2,8 +2,10 @@
 
 import inspect
 import logging
+import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from modules.report_parser_factory import get_parser
 import modules.custom_logger as custom_logger
@@ -14,7 +16,7 @@ from tempfile import TemporaryDirectory
 import shutil
 from modules.report_fingerprint import build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
-from modules.characteristic_alias_service import ensure_characteristic_alias_schema
+from modules.cmm_schema import ensure_cmm_report_schema
 from modules.db import execute_with_retry, sqlite_connection_scope
 from modules.log_context import build_parse_log_extra, get_operation_logger
 from modules.progress_status import build_three_line_status
@@ -65,9 +67,74 @@ def parse_new_reports(
     should_cancel=lambda: False,
     on_progress=None,
     on_file_parsed=None,
+    enable_two_stage_pipeline=False,
+    worker_count=None,
 ):
     parsed_files = 0
     total_files = len(report_paths)
+
+    if enable_two_stage_pipeline:
+        max_workers = worker_count or max(1, min(8, os.cpu_count() or 1))
+
+        def _stage1_worker(report, enqueued_at):
+            parser = parser_factory(report)
+            stage_timings = getattr(parser, "stage_timings_s", None)
+            if isinstance(stage_timings, dict):
+                stage_timings["stage1_queue_wait_s"] = max(0.0, time.perf_counter() - enqueued_at)
+
+            prepare_method = getattr(parser, "prepare_for_two_stage_pipeline", None)
+            if callable(prepare_method):
+                prepare_method()
+
+            return parser, time.perf_counter()
+
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        futures = []
+        cancel_requested = False
+
+        try:
+            for report in report_paths:
+                if should_cancel():
+                    cancel_requested = True
+                    break
+                enqueued_at = time.perf_counter()
+                futures.append(executor.submit(_stage1_worker, report, enqueued_at))
+
+            for future in as_completed(futures):
+                if should_cancel():
+                    cancel_requested = True
+                    break
+
+                report_parse_start = time.perf_counter()
+                parser, stage1_completed_at = future.result()
+                stage_timings = getattr(parser, "stage_timings_s", None)
+                if isinstance(stage_timings, dict):
+                    stage_timings["stage2_queue_wait_s"] = max(0.0, time.perf_counter() - stage1_completed_at)
+
+                fingerprint = build_parser_fingerprint(parser)
+                if fingerprint not in report_fingerprints:
+                    persist_report(parser)
+                    report_fingerprints.add(fingerprint)
+
+                parsed_files += 1
+                parse_duration_s = time.perf_counter() - report_parse_start
+
+                if on_file_parsed:
+                    on_file_parsed(parser, parsed_files, total_files, parse_duration_s)
+
+                if on_progress:
+                    on_progress(parsed_files, total_files)
+        finally:
+            for future in futures:
+                if not future.done():
+                    future.cancel()
+
+            if cancel_requested:
+                executor.shutdown(wait=False, cancel_futures=True)
+            else:
+                executor.shutdown(wait=True, cancel_futures=True)
+
+        return ParseBatchResult(parsed_files=parsed_files, total_files=total_files)
 
     for report in report_paths:
         if should_cancel():
@@ -279,13 +346,6 @@ class ParseReportsThread(QThread):
             )
             self._emit_stage_progress('load_existing_reports', 0.0)
 
-            ensure_characteristic_alias_schema(
-                self.db_file,
-                connection=connection,
-                retries=5,
-                retry_delay_s=1,
-            )
-
             table_exists = execute_with_retry(
                 self.db_file,
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='REPORTS'",
@@ -407,6 +467,12 @@ class ParseReportsThread(QThread):
                 return
 
             with sqlite_connection_scope(self.db_file) as connection:
+                ensure_cmm_report_schema(
+                    self.db_file,
+                    connection=connection,
+                    retries=5,
+                    retry_delay_s=1,
+                )
                 report_fingerprints = self.get_report_fingerprints_in_database(connection)
 
                 logger.info(
@@ -424,14 +490,31 @@ class ParseReportsThread(QThread):
                 telemetry_batch_first_index = 1
                 telemetry_batch_elapsed_s = 0.0
                 telemetry_batch_backend_counts = {}
+                telemetry_batch_persistence_backend_counts = {}
+                telemetry_batch_stage_timing_totals = {}
+
+                def _rate_snapshot(counts):
+                    total = sum(counts.values())
+                    if total <= 0:
+                        return {}
+                    return {backend: round(count / total, 4) for backend, count in sorted(counts.items())}
 
                 def _record_file_telemetry(parser, parsed_files, total_files, parse_duration_s):
                     nonlocal telemetry_batch_start, telemetry_batch_first_index
                     nonlocal telemetry_batch_elapsed_s, telemetry_batch_backend_counts
+                    nonlocal telemetry_batch_persistence_backend_counts
+                    nonlocal telemetry_batch_stage_timing_totals
 
                     backend = getattr(parser, "parse_backend_used", "unknown")
+                    persistence_backend = getattr(parser, "persistence_backend_used", "unknown")
                     telemetry_batch_elapsed_s += parse_duration_s
                     telemetry_batch_backend_counts[backend] = telemetry_batch_backend_counts.get(backend, 0) + 1
+                    telemetry_batch_persistence_backend_counts[persistence_backend] = telemetry_batch_persistence_backend_counts.get(persistence_backend, 0) + 1
+                    stage_timings = getattr(parser, "stage_timings_s", {})
+                    if isinstance(stage_timings, dict):
+                        for timing_name, timing_value in stage_timings.items():
+                            if isinstance(timing_value, (int, float)):
+                                telemetry_batch_stage_timing_totals[timing_name] = telemetry_batch_stage_timing_totals.get(timing_name, 0.0) + float(timing_value)
 
                     completed_batch_size = parsed_files - telemetry_batch_first_index + 1
                     is_batch_boundary = (completed_batch_size >= PARSE_TELEMETRY_BATCH_SIZE) or (parsed_files == total_files)
@@ -455,6 +538,16 @@ class ParseReportsThread(QThread):
                             "batch_wall_elapsed_s": round(wall_clock_elapsed_s, 4),
                             "batch_avg_parse_s": round(telemetry_batch_elapsed_s / completed_batch_size, 4),
                             "batch_backend_counts": dict(telemetry_batch_backend_counts),
+                            "batch_backend_rates": _rate_snapshot(telemetry_batch_backend_counts),
+                            "batch_persistence_backend_counts": dict(telemetry_batch_persistence_backend_counts),
+                            "batch_persistence_backend_rates": _rate_snapshot(telemetry_batch_persistence_backend_counts),
+                            "batch_stage_timing_totals_s": {
+                                key: round(value, 4) for key, value in sorted(telemetry_batch_stage_timing_totals.items())
+                            },
+                            "batch_stage_timing_avg_s": {
+                                key: round(value / completed_batch_size, 4)
+                                for key, value in sorted(telemetry_batch_stage_timing_totals.items())
+                            },
                         },
                     )
 
@@ -462,12 +555,26 @@ class ParseReportsThread(QThread):
                     telemetry_batch_first_index = parsed_files + 1
                     telemetry_batch_elapsed_s = 0.0
                     telemetry_batch_backend_counts = {}
+                    telemetry_batch_persistence_backend_counts = {}
+                    telemetry_batch_stage_timing_totals = {}
+
+                two_stage_enabled = os.getenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", "0").strip().lower() in {"1", "true", "yes", "on"}
+                two_stage_workers_raw = os.getenv("METROLIZA_PARSE_TWO_STAGE_WORKERS", "0").strip()
+                try:
+                    two_stage_workers = int(two_stage_workers_raw or "0") or None
+                except ValueError:
+                    two_stage_workers = None
+
+                def _persist_report(parser):
+                    if two_stage_enabled and callable(getattr(parser, "persist_prepared_report", None)):
+                        return parser.persist_prepared_report()
+                    return parser.open_database_and_check_filename()
 
                 result = parse_new_reports(
                     list_of_reports,
                     report_fingerprints,
                     parser_factory=lambda report: get_parser(report, self.db_file, connection=connection),
-                    persist_report=lambda parser: parser.open_database_and_check_filename(),
+                    persist_report=_persist_report,
                     should_cancel=lambda: self.parsing_canceled,
                     on_progress=lambda parsed_files, total_files: (
                         self._emit_stage_progress('parse_reports', parsed_files / total_files if total_files else 1.0),
@@ -489,6 +596,8 @@ class ParseReportsThread(QThread):
                         ),
                     ),
                     on_file_parsed=_record_file_telemetry,
+                    enable_two_stage_pipeline=two_stage_enabled,
+                    worker_count=two_stage_workers,
                 )
 
             if result.total_files == 0:

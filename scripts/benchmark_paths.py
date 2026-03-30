@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import importlib.machinery
+import os
 import sys
 import tempfile
 import time
@@ -15,10 +16,15 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import statistics
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from modules.matplotlib_runtime import configure_headless_matplotlib
+
+configure_headless_matplotlib()
 
 
 def _install_headless_stubs() -> None:
@@ -71,6 +77,11 @@ def _install_headless_stubs() -> None:
         def open(self):
             return True
 
+    class _DummyApplication:
+        @staticmethod
+        def instance():
+            return None
+
     qtcore_stub.QCoreApplication = _DummyCoreApp
     qtcore_stub.QThread = _DummyThread
     qtcore_stub.pyqtSignal = _dummy_signal
@@ -85,6 +96,7 @@ def _install_headless_stubs() -> None:
         'QHeaderView', 'QCheckBox'
     ):
         setattr(qtwidgets_stub, attr, type(attr, (), {}))
+    qtwidgets_stub.QApplication = _DummyApplication
 
     qtgui_stub.QMovie = type('QMovie', (), {})
 
@@ -104,6 +116,12 @@ class ScenarioResult:
     wall_time_s: float
     stage_timings_s: dict[str, float]
     input_metrics: dict[str, float | int]
+
+
+def _collect_median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return float(statistics.median(float(v) for v in values))
 
 
 def _create_pdf_fixture_dir(base_dir: Path, count: int) -> Path:
@@ -179,6 +197,7 @@ def _create_csv_fixture(csv_path: Path, *, row_count: int, data_columns: int) ->
 
 def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
     from modules.cmm_report_parser import CMMReportParser
+    from modules.cmm_native_parser import get_backend_telemetry_snapshot, reset_backend_telemetry
     from modules.parse_reports_thread import ParseReportsThread, parse_new_reports
     from modules.contracts import ParseRequest
 
@@ -196,6 +215,7 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
     load_existing_s = time.perf_counter() - load_existing_start
 
     parse_start = time.perf_counter()
+    reset_backend_telemetry()
     parse_result = parse_new_reports(
         report_paths=reports,
         report_fingerprints=fingerprints,
@@ -203,6 +223,7 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
         persist_report=lambda _parser: None,
     )
     parse_loop_s = time.perf_counter() - parse_start
+    parse_telemetry = get_backend_telemetry_snapshot()
     wall_time_s = time.perf_counter() - t0
 
     return ScenarioResult(
@@ -217,6 +238,171 @@ def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
             'rows': parse_result.total_files,
             'headers': 0,
             'chart_count': 0,
+            'parse_python_backend_rate': float(parse_telemetry.get('parse', {}).get('python_rate', 0.0)),
+            'parse_native_backend_rate': float(parse_telemetry.get('parse', {}).get('native_rate', 0.0)),
+            'persistence_python_backend_rate': float(parse_telemetry.get('persistence', {}).get('python_rate', 0.0)),
+            'persistence_native_backend_rate': float(parse_telemetry.get('persistence', {}).get('native_rate', 0.0)),
+        },
+    )
+
+
+def benchmark_cmm_parser_backend_compare(
+    temp_dir: Path,
+    *,
+    report_count: int,
+    measurements_per_report: int,
+    benchmark_mode: str = "parse",
+) -> ScenarioResult:
+    from modules.cmm_native_parser import (
+        get_backend_telemetry_snapshot,
+        native_backend_available,
+        normalize_measurement_rows,
+        parse_blocks_with_backend,
+        persist_measurement_rows_with_backend_and_telemetry,
+        reset_backend_telemetry,
+    )
+
+    def _build_report_lines(report_index: int) -> list[str]:
+        lines: list[str] = [f"#BENCHMARK HEADER {report_index}", "DIM"]
+        for row_index in range(1, measurements_per_report + 1):
+            nominal = 10.0 + row_index
+            tol = 0.15 + ((row_index % 3) * 0.01)
+            measured = nominal + (((row_index % 5) - 2) * 0.01)
+            deviation = measured - nominal
+            outtol = 1 if abs(deviation) > tol else 0
+            lines.append(
+                f"X NOM {nominal:.4f} +TOL {tol:.4f} -TOL {-tol:.4f} "
+                f"MEAS {measured:.4f} DEV {deviation:.4f} OUTTOL {outtol}"
+            )
+            if row_index % 12 == 0:
+                lines.extend(
+                    [
+                        "TP MMC +TOL 0.400 BONUS 0.000 MEAS 0.250 DEV 0.250 OUTTOL 0.000",
+                    ]
+                )
+        lines.append("#END")
+        return lines
+
+    raw_batches = [_build_report_lines(index) for index in range(1, report_count + 1)]
+
+    report_meta = [
+        (
+            f"REF-{index:05d}",
+            "/bench",
+            f"REF-{index:05d}_2024-01-02_{index:04d}.pdf",
+            "2024-01-02",
+            f"{index:04d}",
+        )
+        for index in range(1, report_count + 1)
+    ]
+
+    # Always benchmark fallback.
+    os.environ["METROLIZA_CMM_PARSER_BACKEND"] = "python"
+    os.environ["METROLIZA_CMM_PERSIST_BACKEND"] = "python"
+    reset_backend_telemetry()
+    py_parse_start = time.perf_counter()
+    py_parsed_batches = [parse_blocks_with_backend(lines, use_native=False) for lines in raw_batches]
+    py_parse_s = time.perf_counter() - py_parse_start
+    py_measurements = sum(sum(len(block[1]) for block in parsed) for parsed in py_parsed_batches)
+    py_normalize_s = 0.0
+    py_persist_s = 0.0
+    if benchmark_mode == "stages":
+        py_normalize_start = time.perf_counter()
+        py_rows = [
+            normalize_measurement_rows(
+                blocks,
+                reference=meta[0],
+                fileloc=meta[1],
+                filename=meta[2],
+                date=meta[3],
+                sample_number=meta[4],
+                use_native=False,
+            )
+            for blocks, meta in zip(py_parsed_batches, report_meta)
+        ]
+        py_normalize_s = time.perf_counter() - py_normalize_start
+
+        py_db = temp_dir / "cmm_backend_benchmark_python.sqlite"
+        if py_db.exists():
+            py_db.unlink()
+        py_persist_start = time.perf_counter()
+        for rows in py_rows:
+            persist_measurement_rows_with_backend_and_telemetry(str(py_db), rows, use_native=False)
+        py_persist_s = time.perf_counter() - py_persist_start
+    python_snapshot = get_backend_telemetry_snapshot()
+
+    # Native benchmark only when extension is available.
+    native_parse_s: float | None = None
+    native_normalize_s = 0.0
+    native_persist_s = 0.0
+    native_measurements = 0
+    native_snapshot = {}
+    speedup_ratio = 0.0
+    if native_backend_available():
+        os.environ["METROLIZA_CMM_PARSER_BACKEND"] = "native"
+        os.environ["METROLIZA_CMM_PERSIST_BACKEND"] = "native"
+        reset_backend_telemetry()
+        native_parse_start = time.perf_counter()
+        native_parsed_batches = [parse_blocks_with_backend(lines, use_native=True) for lines in raw_batches]
+        native_parse_s = time.perf_counter() - native_parse_start
+        native_measurements = sum(sum(len(block[1]) for block in parsed) for parsed in native_parsed_batches)
+        if benchmark_mode == "stages":
+            native_normalize_start = time.perf_counter()
+            native_rows = [
+                normalize_measurement_rows(
+                    blocks,
+                    reference=meta[0],
+                    fileloc=meta[1],
+                    filename=meta[2],
+                    date=meta[3],
+                    sample_number=meta[4],
+                    use_native=True,
+                )
+                for blocks, meta in zip(native_parsed_batches, report_meta)
+            ]
+            native_normalize_s = time.perf_counter() - native_normalize_start
+
+            native_db = temp_dir / "cmm_backend_benchmark_native.sqlite"
+            if native_db.exists():
+                native_db.unlink()
+            native_persist_start = time.perf_counter()
+            for rows in native_rows:
+                persist_measurement_rows_with_backend_and_telemetry(str(native_db), rows, use_native=True)
+            native_persist_s = time.perf_counter() - native_persist_start
+        native_snapshot = get_backend_telemetry_snapshot()
+        speedup_ratio = (py_parse_s / native_parse_s) if native_parse_s > 0 else 0.0
+
+    return ScenarioResult(
+        scenario='cmm_parser_backend_compare',
+        wall_time_s=(py_parse_s + py_normalize_s + py_persist_s) + (native_parse_s or 0.0) + native_normalize_s + native_persist_s,
+        stage_timings_s={
+            'python_backend_parse': py_parse_s,
+            'python_backend_normalize': py_normalize_s,
+            'python_backend_persist': py_persist_s,
+            'native_backend_parse': native_parse_s or 0.0,
+            'native_backend_normalize': native_normalize_s,
+            'native_backend_persist': native_persist_s,
+            'native_speedup_ratio': speedup_ratio,
+        },
+        input_metrics={
+            'rows': py_measurements,
+            'headers': report_count,
+            'chart_count': 0,
+            'native_available': int(native_backend_available()),
+            'native_rows': native_measurements,
+            'python_parse_backend_rate': float(python_snapshot.get('parse', {}).get('python_rate', 0.0)),
+            'native_parse_backend_rate': float(native_snapshot.get('parse', {}).get('native_rate', 0.0)),
+            'python_normalize_backend_rate': float(python_snapshot.get('normalize', {}).get('python_rate', 0.0)),
+            'native_normalize_backend_rate': float(native_snapshot.get('normalize', {}).get('native_rate', 0.0)),
+            'python_normalize_rows': int(python_snapshot.get('normalize', {}).get('rows_python', 0)),
+            'native_normalize_rows': int(native_snapshot.get('normalize', {}).get('rows_native', 0)),
+            'python_normalize_latency_s': float(python_snapshot.get('normalize', {}).get('latency_python_s', 0.0)),
+            'native_normalize_latency_s': float(native_snapshot.get('normalize', {}).get('latency_native_s', 0.0)),
+            'python_persistence_rows': int(python_snapshot.get('persistence_rows', {}).get('python', 0)),
+            'native_persistence_rows': int(native_snapshot.get('persistence_rows', {}).get('native', 0)),
+            'python_persistence_latency_s': float(python_snapshot.get('persistence_rows', {}).get('latency_python_s', 0.0)),
+            'native_persistence_latency_s': float(native_snapshot.get('persistence_rows', {}).get('latency_native_s', 0.0)),
+            'cmm_benchmark_mode': benchmark_mode,
         },
     )
 
@@ -255,30 +441,18 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
         compute_measurement_summary(group, usl=usl, lsl=lsl, nom=nom)
     groupby_stats_s = time.perf_counter() - groupby_start
 
-    import modules.export_data_thread as export_module
-    original_insert_chart = export_module.insert_measurement_chart
-    chart_seconds = 0.0
-
-    def timed_insert_chart(*args, **kwargs):
-        nonlocal chart_seconds
-        chart_start = time.perf_counter()
-        try:
-            return original_insert_chart(*args, **kwargs)
-        finally:
-            chart_seconds += time.perf_counter() - chart_start
-
-    export_module.insert_measurement_chart = timed_insert_chart
     total_run_start = time.perf_counter()
-    try:
-        completed = thread.get_export_backend().run(thread)
-    finally:
-        export_module.insert_measurement_chart = original_insert_chart
+    completed = thread.get_export_backend().run(thread)
     total_run_s = time.perf_counter() - total_run_start
 
     if not completed:
         raise RuntimeError('Excel export benchmark did not complete successfully.')
 
-    workbook_write_s = max(0.0, total_run_s - chart_seconds)
+    observability_summary = thread.build_export_observability_summary(high_header_threshold=64)
+    stage_timings = observability_summary['stage_timings_s']
+    backend_counts = observability_summary['chart_backend_distribution']['counts']
+    per_chart_medians = observability_summary['per_chart_type_timing_medians_s']
+    high_header = observability_summary['high_header_cardinality_scenario']
 
     return ScenarioResult(
         scenario='excel_export_path',
@@ -286,13 +460,96 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
         stage_timings_s={
             'data_load': data_load_s,
             'groupby_stats': groupby_stats_s,
-            'chart_generation': chart_seconds,
-            'workbook_write': workbook_write_s,
+            'chart_payload_preparation': float(stage_timings.get('chart_payload_preparation', 0.0)),
+            'chart_rendering': float(stage_timings.get('chart_rendering', 0.0)),
+            'worksheet_writes': float(stage_timings.get('worksheet_writes', 0.0)),
         },
         input_metrics={
             'rows': fixture_metrics['measurement_rows'],
             'headers': fixture_metrics['headers'],
             'chart_count': fixture_metrics['headers'] * 2,
+            'chart_backend_native_count': int(backend_counts.get('native', 0)),
+            'chart_backend_matplotlib_count': int(backend_counts.get('matplotlib', 0)),
+            'chart_type_median_distribution_s': float(per_chart_medians.get('distribution', 0.0)),
+            'chart_type_median_iqr_s': float(per_chart_medians.get('iqr', 0.0)),
+            'chart_type_median_histogram_s': float(per_chart_medians.get('histogram', 0.0)),
+            'chart_type_median_trend_s': float(per_chart_medians.get('trend', 0.0)),
+            'high_header_cardinality_detected': int(bool(high_header.get('detected'))),
+            'high_header_cardinality_max_headers': int(high_header.get('max_headers_per_partition', 0)),
+        },
+    )
+
+
+def benchmark_export_write_vs_shape_path(temp_dir: Path, report_count: int, headers_per_report: int) -> ScenarioResult:
+    """Benchmark data-shaping preprocessing separately from worksheet write-only ops."""
+    import xlsxwriter
+    from modules.db import read_sql_dataframe
+    from modules.export_query_service import build_measurement_export_dataframe
+    from modules.export_sheet_writer import (
+        build_measurement_write_bundle_cached,
+        create_measurement_formats,
+        write_measurement_block,
+    )
+
+    db_path = temp_dir / 'export_write_vs_shape.sqlite'
+    fixture_metrics = _create_export_db_fixture(db_path, report_count=report_count, headers_per_report=headers_per_report)
+
+    loaded_df = build_measurement_export_dataframe(
+        read_sql_dataframe(
+            str(db_path),
+            """
+            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
+                   MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
+                   MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
+                   REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
+            FROM MEASUREMENTS
+            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            WHERE 1=1
+            """,
+        )
+    )
+    grouped = list(loaded_df.groupby(['REFERENCE', 'HEADER - AX'], sort=False))
+
+    cache: dict[str, Any] = {}
+    shape_start = time.perf_counter()
+    shaped = []
+    for idx, ((reference, header), group) in enumerate(grouped):
+        base_col = idx * 5
+        sorted_group = group.sort_values(
+            by=['HEADER', 'AX', 'DATE', 'SAMPLE_NUMBER'],
+            key=lambda col: col.astype(str).str.lower(),
+        )
+        write_bundle = build_measurement_write_bundle_cached(header, sorted_group, base_col, cache=cache)
+        shaped.append((reference, header, write_bundle))
+    shape_s = time.perf_counter() - shape_start
+
+    write_start = time.perf_counter()
+    write_only_sheet_count = 0
+    with xlsxwriter.Workbook(str(temp_dir / 'export_write_vs_shape.xlsx')) as workbook:
+        formats = create_measurement_formats(workbook)
+        current_reference = None
+        worksheet = None
+        for reference, _header, write_bundle in shaped:
+            if reference != current_reference:
+                worksheet = workbook.add_worksheet(f'REF_{write_only_sheet_count + 1}')
+                current_reference = reference
+                write_only_sheet_count += 1
+            write_measurement_block(worksheet, write_bundle, formats, base_col=write_bundle['measurement_plan']['summary_column'] - 1)
+    write_only_s = time.perf_counter() - write_start
+
+    return ScenarioResult(
+        scenario='excel_export_write_vs_shape_path',
+        wall_time_s=shape_s + write_only_s,
+        stage_timings_s={
+            'data_shaping': shape_s,
+            'write_only_worksheet_ops': write_only_s,
+            'write_to_shape_ratio': (write_only_s / shape_s) if shape_s > 0 else 0.0,
+        },
+        input_metrics={
+            'rows': fixture_metrics['measurement_rows'],
+            'headers': fixture_metrics['headers'],
+            'chart_count': 0,
+            'worksheets': write_only_sheet_count,
         },
     )
 
@@ -354,6 +611,104 @@ def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: 
     )
 
 
+
+
+def benchmark_distribution_fit_monte_carlo_path(temp_dir: Path, *, group_count: int, sample_size: int, monte_carlo_samples: int) -> ScenarioResult:
+    from modules.distribution_fit_service import fit_measurement_distribution
+
+    del temp_dir
+    rng = np.random.default_rng(314159)
+    groups = [
+        np.asarray(rng.normal(loc=10.0 + (idx * 0.05), scale=0.25 + ((idx % 4) * 0.03), size=sample_size), dtype=float)
+        for idx in range(group_count)
+    ]
+
+    ks_proxy_start = time.perf_counter()
+    for values in groups:
+        fit_measurement_distribution(values, monte_carlo_gof_samples=0)
+    ks_proxy_s = time.perf_counter() - ks_proxy_start
+
+    monte_carlo_start = time.perf_counter()
+    for values in groups:
+        fit_measurement_distribution(values, monte_carlo_gof_samples=monte_carlo_samples, monte_carlo_seed=2026)
+    monte_carlo_s = time.perf_counter() - monte_carlo_start
+
+    return ScenarioResult(
+        scenario='distribution_fit_monte_carlo_path',
+        wall_time_s=ks_proxy_s + monte_carlo_s,
+        stage_timings_s={
+            'ks_proxy_path': ks_proxy_s,
+            'monte_carlo_bootstrap_path': monte_carlo_s,
+            'slowdown_ratio': (monte_carlo_s / ks_proxy_s) if ks_proxy_s > 0 else 0.0,
+        },
+        input_metrics={
+            'rows': group_count * sample_size,
+            'headers': group_count,
+            'chart_count': group_count,
+        },
+    )
+
+def _coerce_legacy(values: list[Any]) -> np.ndarray:
+    numeric_values = np.asarray(values, dtype=object)
+    coerced: list[float] = []
+    for value in numeric_values:
+        try:
+            coerced.append(float(value))
+        except (TypeError, ValueError):
+            coerced.append(np.nan)
+    return np.asarray(coerced, dtype=float)
+
+
+def benchmark_group_preprocess_mixed_types_path(temp_dir: Path, *, group_count: int, values_per_group: int) -> ScenarioResult:
+    from modules.group_stats_native import coerce_sequence_to_float64
+
+    del temp_dir
+    rng = np.random.default_rng(2026)
+    groups: list[list[Any]] = []
+    for _ in range(group_count):
+        base = rng.normal(10.0, 0.8, size=values_per_group)
+        mixed: list[Any] = base.tolist()
+        for idx in range(0, values_per_group, 10):
+            mixed[idx] = f"{mixed[idx]:.6f}"
+        for idx in range(1, values_per_group, 25):
+            mixed[idx] = None
+        for idx in range(2, values_per_group, 33):
+            mixed[idx] = 'bad'
+        groups.append(mixed)
+
+    legacy_start = time.perf_counter()
+    legacy_total_values = 0
+    for group in groups:
+        values = _coerce_legacy(group)
+        legacy_total_values += int(np.count_nonzero(~np.isnan(values)))
+    legacy_s = time.perf_counter() - legacy_start
+
+    optimized_start = time.perf_counter()
+    optimized_total_values = 0
+    for group in groups:
+        values = coerce_sequence_to_float64(group)
+        optimized_total_values += int(np.count_nonzero(~np.isnan(values)))
+    optimized_s = time.perf_counter() - optimized_start
+
+    if optimized_total_values != legacy_total_values:
+        raise RuntimeError('optimized group coercion produced different non-NaN counts')
+
+    return ScenarioResult(
+        scenario='group_preprocess_mixed_types_compare',
+        wall_time_s=legacy_s + optimized_s,
+        stage_timings_s={
+            'legacy_coercion': legacy_s,
+            'optimized_coercion': optimized_s,
+            'speedup_ratio': (legacy_s / optimized_s) if optimized_s > 0 else 0.0,
+        },
+        input_metrics={
+            'rows': group_count * values_per_group,
+            'headers': group_count,
+            'chart_count': 0,
+        },
+    )
+
+
 def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int) -> ScenarioResult:
     from modules.csv_summary_dialog import DataProcessingThread, load_csv_with_fallbacks
 
@@ -401,13 +756,15 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
     import modules.csv_summary_dialog as csv_module
     stats_seconds = 0.0
     workbook_write_seconds = 0.0
-    original_stats = csv_module.compute_column_summary_stats
+    original_stats = getattr(csv_module, "compute_column_summary_stats", None)
     original_to_excel = pd.DataFrame.to_excel
 
     def timed_stats(*args, **kwargs):
         nonlocal stats_seconds
         start = time.perf_counter()
         try:
+            if original_stats is None:
+                return None
             return original_stats(*args, **kwargs)
         finally:
             stats_seconds += time.perf_counter() - start
@@ -420,7 +777,8 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         finally:
             workbook_write_seconds += time.perf_counter() - start
 
-    csv_module.compute_column_summary_stats = timed_stats
+    if original_stats is not None:
+        csv_module.compute_column_summary_stats = timed_stats
     pd.DataFrame.to_excel = timed_to_excel
 
     worker = BenchmarkCSVThread(
@@ -438,7 +796,8 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
     try:
         worker.run()
     finally:
-        csv_module.compute_column_summary_stats = original_stats
+        if original_stats is not None:
+            csv_module.compute_column_summary_stats = original_stats
         pd.DataFrame.to_excel = original_to_excel
 
     run_s = time.perf_counter() - run_start
@@ -463,6 +822,182 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
             'chart_count': data_columns * 3,
         },
     )
+
+
+def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histogram_points: int) -> ScenarioResult:
+    import matplotlib.pyplot as plt
+    from modules.chart_renderer import (
+        MatplotlibChartRenderer,
+        NativeChartRenderer,
+        benchmark_histogram_render_runtime,
+        native_chart_backend_available,
+        build_histogram_native_payload,
+    )
+
+    del temp_dir
+    rng = np.random.default_rng(20260325)
+    values = rng.normal(loc=10.0, scale=0.2, size=max(32, histogram_points))
+    payload = build_histogram_native_payload(
+        values=values.tolist(),
+        lsl=9.5,
+        usl=10.5,
+        title='Histogram budget benchmark',
+        bin_count=24,
+        compact_render=True,
+    )
+
+    matplotlib_samples: list[float] = []
+    native_samples: list[float] = []
+
+    for _ in range(max(1, iterations)):
+        mpl_runtime = benchmark_histogram_render_runtime(MatplotlibChartRenderer(), payload, iterations=1)
+        matplotlib_samples.append(float(mpl_runtime.get('median_s', 0.0)))
+        if native_chart_backend_available():
+            native_runtime = benchmark_histogram_render_runtime(NativeChartRenderer(), payload, iterations=1)
+            native_samples.append(float(native_runtime.get('median_s', 0.0)))
+
+    matplotlib_median = _collect_median(matplotlib_samples)
+    native_median = _collect_median(native_samples)
+    regression_ratio = (matplotlib_median / native_median) if native_median > 0 else 0.0
+
+    plt.close('all')
+    return ScenarioResult(
+        scenario='chart_render_budget_path',
+        wall_time_s=float(sum(matplotlib_samples) + sum(native_samples)),
+        stage_timings_s={
+            'histogram_matplotlib_median_s': matplotlib_median,
+            'histogram_native_median_s': native_median,
+            'histogram_branch_regression_ratio': regression_ratio,
+        },
+        input_metrics={
+            'rows': int(len(values)),
+            'headers': 1,
+            'chart_count': int(max(1, iterations) * (2 if native_chart_backend_available() else 1)),
+            'histogram_native_available': int(native_chart_backend_available()),
+        },
+    )
+
+
+def benchmark_chart_type_native_compare_path(temp_dir: Path, *, chart_type: str, iterations: int) -> ScenarioResult:
+    """Benchmark one summary chart type using ExportDataThread timing hooks."""
+    from modules.contracts import AppPaths, ExportOptions, ExportRequest
+    from modules.export_data_thread import ExportDataThread
+
+    class _BenchWorksheet:
+        def write(self, *_args, **_kwargs):
+            return None
+
+        def insert_image(self, *_args, **_kwargs):
+            return None
+
+    chart_key = str(chart_type).strip().lower()
+    if chart_key not in {"distribution", "iqr", "trend", "histogram"}:
+        raise ValueError(f"Unsupported chart_type benchmark: {chart_type}")
+
+    header_group = pd.DataFrame(
+        {
+            "MEAS": np.linspace(9.8, 10.2, 120),
+            "NOM": [10.0] * 120,
+            "+TOL": [0.2] * 120,
+            "-TOL": [-0.2] * 120,
+            "SAMPLE_NUMBER": [str(i + 1) for i in range(120)],
+            "DATE": ["2024-01-01"] * 120,
+        }
+    )
+
+    backend_stage_medians: dict[str, float] = {}
+    backend_native_counts: dict[str, int] = {}
+    backend_chart_medians: dict[str, float] = {}
+    original_backend_env = os.environ.get("METROLIZA_CHART_RENDERER_BACKEND")
+    try:
+        for backend in ("matplotlib", "native"):
+            os.environ["METROLIZA_CHART_RENDERER_BACKEND"] = backend
+            request = ExportRequest(
+                paths=AppPaths(db_file=str(temp_dir / "bench.sqlite"), excel_file=str(temp_dir / "bench.xlsx")),
+                options=ExportOptions(generate_summary_sheet=True, preset="fast_diagnostics"),
+            )
+            thread = ExportDataThread(request)
+            thread._optimization_toggles["summary_sheet_minimum_charts"] = {chart_key}
+            worksheet = _BenchWorksheet()
+
+            for _ in range(max(1, int(iterations))):
+                thread.summary_sheet_fill(worksheet, "BENCH_HEADER", header_group.copy(), col=0)
+
+            summary = thread.build_export_observability_summary()
+            backend_stage_medians[backend] = float(summary.get("stage_timings_s", {}).get("chart_rendering", 0.0))
+            backend_native_counts[backend] = int(
+                summary.get("per_chart_type_backend_distribution", {}).get(chart_key, {}).get("counts", {}).get("native", 0)
+            )
+            backend_chart_medians[backend] = float(summary.get("per_chart_type_timing_medians_s", {}).get(chart_key, 0.0))
+    finally:
+        if original_backend_env is None:
+            os.environ.pop("METROLIZA_CHART_RENDERER_BACKEND", None)
+        else:
+            os.environ["METROLIZA_CHART_RENDERER_BACKEND"] = original_backend_env
+
+    native_median = (
+        backend_chart_medians.get("native", 0.0)
+        if backend_native_counts.get("native", 0) > 0
+        else 0.0
+    )
+    matplotlib_median = backend_chart_medians.get("matplotlib", 0.0)
+    speedup = (matplotlib_median / native_median) if native_median > 0 else 0.0
+    return ScenarioResult(
+        scenario=f"chart_type_native_compare_{chart_key}",
+        wall_time_s=float(backend_stage_medians.get("matplotlib", 0.0) + backend_stage_medians.get("native", 0.0)),
+        stage_timings_s={
+            f"{chart_key}_matplotlib_median_s": matplotlib_median,
+            f"{chart_key}_native_median_s": native_median,
+            f"{chart_key}_native_speedup_ratio": speedup,
+        },
+        input_metrics={
+            "rows": int(len(header_group)),
+            "headers": 1,
+            "chart_count": int(max(1, int(iterations)) * 2),
+            f"{chart_key}_native_usage_count_matplotlib_backend": int(backend_native_counts.get("matplotlib", 0)),
+            f"{chart_key}_native_usage_count_native_backend": int(backend_native_counts.get("native", 0)),
+        },
+    )
+
+
+def build_benchmark_run_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    native_count = 0
+    matplotlib_count = 0
+    chart_type_samples: dict[str, list[float]] = {
+        'distribution': [],
+        'iqr': [],
+        'histogram': [],
+        'trend': [],
+    }
+    high_header_timing = {}
+    for result in results:
+        metrics = result.get('input_metrics') or {}
+        native_count += int(metrics.get('chart_backend_native_count', 0))
+        matplotlib_count += int(metrics.get('chart_backend_matplotlib_count', 0))
+
+        for chart_type in chart_type_samples:
+            key = f'chart_type_median_{chart_type}_s'
+            if key in metrics:
+                chart_type_samples[chart_type].append(float(metrics[key]))
+
+        if result.get('scenario') == 'excel_export_high_header_cardinality_compare':
+            high_header_timing = dict(result.get('stage_timings_s') or {})
+
+    total = native_count + matplotlib_count
+    return {
+        'chart_backend_distribution': {
+            'counts': {'native': native_count, 'matplotlib': matplotlib_count},
+            'rates': {
+                'native': (native_count / total) if total else 0.0,
+                'matplotlib': (matplotlib_count / total) if total else 0.0,
+            },
+        },
+        'per_chart_type_timing_medians_s': {
+            chart_type: _collect_median(samples)
+            for chart_type, samples in chart_type_samples.items()
+        },
+        'high_header_cardinality_scenario_timing_s': high_header_timing,
+    }
 
 
 def _write_outputs(output_dir: Path, payload: dict[str, Any]) -> tuple[Path, Path]:
@@ -496,30 +1031,154 @@ def main() -> int:
     parser.add_argument('--headers-per-report', type=int, default=10)
     parser.add_argument('--csv-rows', type=int, default=1500)
     parser.add_argument('--csv-columns', type=int, default=8)
+    parser.add_argument('--fit-group-count', type=int, default=40)
+    parser.add_argument('--fit-sample-size', type=int, default=120)
+    parser.add_argument('--fit-monte-carlo-samples', type=int, default=250)
+    parser.add_argument('--group-preprocess-groups', type=int, default=48)
+    parser.add_argument('--group-preprocess-values', type=int, default=20000)
+    parser.add_argument('--cmm-bench-report-count', type=int, default=180)
+    parser.add_argument('--cmm-bench-measurements-per-report', type=int, default=140)
+    parser.add_argument('--chart-render-iterations', type=int, default=5)
+    parser.add_argument('--chart-render-histogram-points', type=int, default=4000)
+    parser.add_argument('--chart-type-benchmark-iterations', type=int, default=3)
+    parser.add_argument(
+        '--chart-type-benchmark-chart',
+        choices=('distribution', 'iqr', 'trend', 'histogram'),
+        default='distribution',
+        help='Chart type used by chart_type_native_compare scenario.',
+    )
+    parser.add_argument('--enforce-chart-render-guardrail', action='store_true')
+    parser.add_argument('--chart-render-max-median-regression-ratio', type=float, default=2.5)
+    parser.add_argument(
+        '--cmm-benchmark-mode',
+        choices=('parse', 'stages'),
+        default='parse',
+        help='CMM backend benchmark mode: parse-only comparison or isolated parse/normalize/persist stages.',
+    )
+    parser.add_argument('--enforce-cmm-parser-guardrail', action='store_true')
+    parser.add_argument('--cmm-native-min-speedup-ratio', type=float, default=1.0)
+    parser.add_argument('--cmm-native-min-usage-rate', type=float, default=0.95)
+    parser.add_argument(
+        '--scenarios',
+        nargs='+',
+        choices=(
+            'pdf_parse_path',
+            'excel_export_path',
+            'excel_export_write_vs_shape_path',
+            'excel_export_high_header_cardinality_compare',
+            'csv_summary_export_path',
+            'distribution_fit_monte_carlo_path',
+            'group_preprocess_mixed_types_compare',
+            'cmm_parser_backend_compare',
+            'chart_render_budget_path',
+            'chart_type_native_compare',
+        ),
+        help='Optional list of scenario keys to run. Defaults to running all scenarios.',
+    )
     args = parser.parse_args()
+
+    scenario_runners = {
+        'pdf_parse_path': lambda temp_path: benchmark_parse_path(temp_path, pdf_count=args.pdf_count),
+        'excel_export_path': lambda temp_path: benchmark_excel_export_path(
+            temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report
+        ),
+        'excel_export_write_vs_shape_path': lambda temp_path: benchmark_export_write_vs_shape_path(
+            temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report
+        ),
+        'excel_export_high_header_cardinality_compare': lambda temp_path: benchmark_export_high_header_cardinality_path(
+            temp_path,
+            report_count=max(args.report_count, 100),
+            headers_per_report=max(args.headers_per_report, 64),
+        ),
+        'csv_summary_export_path': lambda temp_path: benchmark_csv_summary_path(
+            temp_path, row_count=args.csv_rows, data_columns=args.csv_columns
+        ),
+        'distribution_fit_monte_carlo_path': lambda temp_path: benchmark_distribution_fit_monte_carlo_path(
+            temp_path,
+            group_count=args.fit_group_count,
+            sample_size=args.fit_sample_size,
+            monte_carlo_samples=max(1, args.fit_monte_carlo_samples),
+        ),
+        'group_preprocess_mixed_types_compare': lambda temp_path: benchmark_group_preprocess_mixed_types_path(
+            temp_path,
+            group_count=max(1, args.group_preprocess_groups),
+            values_per_group=max(10, args.group_preprocess_values),
+        ),
+        'cmm_parser_backend_compare': lambda temp_path: benchmark_cmm_parser_backend_compare(
+            temp_path,
+            report_count=max(1, args.cmm_bench_report_count),
+            measurements_per_report=max(1, args.cmm_bench_measurements_per_report),
+            benchmark_mode=args.cmm_benchmark_mode,
+        ),
+        'chart_render_budget_path': lambda temp_path: benchmark_chart_render_budget_path(
+            temp_path,
+            iterations=max(1, args.chart_render_iterations),
+            histogram_points=max(32, args.chart_render_histogram_points),
+        ),
+        'chart_type_native_compare': lambda temp_path: benchmark_chart_type_native_compare_path(
+            temp_path,
+            chart_type=args.chart_type_benchmark_chart,
+            iterations=max(1, args.chart_type_benchmark_iterations),
+        ),
+    }
+    selected_scenarios = args.scenarios or list(scenario_runners.keys())
 
     with tempfile.TemporaryDirectory(prefix='metroliza-bench-') as temp_dir:
         temp_path = Path(temp_dir)
-        results = [
-            benchmark_parse_path(temp_path, pdf_count=args.pdf_count),
-            benchmark_excel_export_path(temp_path, report_count=args.report_count, headers_per_report=args.headers_per_report),
-            benchmark_export_high_header_cardinality_path(
-                temp_path,
-                report_count=max(args.report_count, 100),
-                headers_per_report=max(args.headers_per_report, 64),
-            ),
-            benchmark_csv_summary_path(temp_path, row_count=args.csv_rows, data_columns=args.csv_columns),
-        ]
+        results = [scenario_runners[scenario](temp_path) for scenario in selected_scenarios]
 
     payload = {
         'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         'config': vars(args),
         'results': [asdict(result) for result in results],
     }
+    payload['summary'] = build_benchmark_run_summary(payload['results'])
     json_path, csv_path = _write_outputs(Path(args.output_dir), payload)
 
     print(f'Benchmark JSON: {json_path}')
     print(f'Benchmark CSV: {csv_path}')
+
+    if args.enforce_cmm_parser_guardrail:
+        cmm = next((item for item in payload['results'] if item['scenario'] == 'cmm_parser_backend_compare'), None)
+        if cmm is None:
+            raise RuntimeError('cmm_parser_backend_compare scenario missing from benchmark payload')
+
+        native_available = int(cmm['input_metrics'].get('native_available', 0)) == 1
+        if native_available:
+            speedup_ratio = float(cmm['stage_timings_s'].get('native_speedup_ratio', 0.0))
+            native_usage_rate = float(cmm['input_metrics'].get('native_parse_backend_rate', 0.0))
+            if speedup_ratio < args.cmm_native_min_speedup_ratio:
+                raise RuntimeError(
+                    f'Native parser speedup ratio {speedup_ratio:.3f} below threshold {args.cmm_native_min_speedup_ratio:.3f}'
+                )
+            if native_usage_rate < args.cmm_native_min_usage_rate:
+                raise RuntimeError(
+                    f'Native parser usage rate {native_usage_rate:.3f} below threshold {args.cmm_native_min_usage_rate:.3f}'
+                )
+            print(
+                f"CMM parser guardrail passed: native_speedup_ratio={speedup_ratio:.3f}, "
+                f"native_usage_rate={native_usage_rate:.3f}"
+            )
+        else:
+            print('CMM parser guardrail skipped: native parser extension unavailable in this environment.')
+
+    if args.enforce_chart_render_guardrail:
+        chart_budget = next((item for item in payload['results'] if item['scenario'] == 'chart_render_budget_path'), None)
+        if chart_budget is None:
+            raise RuntimeError('chart_render_budget_path scenario missing from benchmark payload')
+        native_available = int(chart_budget['input_metrics'].get('histogram_native_available', 0)) == 1
+        if native_available:
+            regression_ratio = float(chart_budget['stage_timings_s'].get('histogram_branch_regression_ratio', 0.0))
+            if regression_ratio > args.chart_render_max_median_regression_ratio:
+                raise RuntimeError(
+                    f'Chart render median regression ratio {regression_ratio:.3f} exceeded threshold {args.chart_render_max_median_regression_ratio:.3f}'
+                )
+            print(
+                f"Chart render guardrail passed: histogram_branch_regression_ratio={regression_ratio:.3f}"
+            )
+        else:
+            print('Chart render guardrail skipped: native chart extension unavailable in this environment.')
+
     return 0
 
 

@@ -58,6 +58,7 @@ PROBE_RESULT_CACHE: dict[tuple[str, str], ProbeResult] = {}
 
 _EXTERNAL_PLUGINS_LOADED = False
 _EXTERNAL_PLUGIN_CONFIG_SIGNATURE: tuple[str, tuple[str, ...]] | None = None
+_EXTERNAL_PLUGIN_ENTRY_POINTS: tuple[object, ...] | None = None
 _EXTERNAL_PLUGIN_MODULE_COUNTER = 0
 
 
@@ -75,6 +76,16 @@ def reset_probe_cache() -> None:
     """Clear in-process probe cache (primarily for tests and long-running jobs)."""
 
     PROBE_RESULT_CACHE.clear()
+
+
+def reset_external_plugin_loader_state() -> None:
+    """Reset external plugin discovery state for tests and controlled reloads."""
+
+    global _EXTERNAL_PLUGINS_LOADED, _EXTERNAL_PLUGIN_CONFIG_SIGNATURE, _EXTERNAL_PLUGIN_ENTRY_POINTS
+
+    _EXTERNAL_PLUGINS_LOADED = False
+    _EXTERNAL_PLUGIN_CONFIG_SIGNATURE = None
+    _EXTERNAL_PLUGIN_ENTRY_POINTS = None
 
 
 def plugins_for_format(source_format: str) -> tuple[ParserType, ...]:
@@ -191,7 +202,19 @@ def _iter_external_plugin_entry_points(group: str = "metroliza.parser_plugins"):
     return tuple(entry_points.get(group, ()))
 
 
-def load_external_plugins(paths: str | tuple[str, ...] | None = None) -> ExternalPluginLoadResult:
+def _discover_external_plugin_entry_points(*, force_refresh: bool = False) -> tuple[object, ...]:
+    global _EXTERNAL_PLUGIN_ENTRY_POINTS
+
+    if force_refresh or _EXTERNAL_PLUGIN_ENTRY_POINTS is None:
+        _EXTERNAL_PLUGIN_ENTRY_POINTS = tuple(_iter_external_plugin_entry_points())
+    return _EXTERNAL_PLUGIN_ENTRY_POINTS
+
+
+def load_external_plugins(
+    paths: str | tuple[str, ...] | None = None,
+    *,
+    entry_points: tuple[object, ...] | None = None,
+) -> ExternalPluginLoadResult:
     """Load external parser plugins from python files/directories.
 
     Source can be supplied explicitly or via ``PARSER_EXTERNAL_PLUGIN_PATHS`` where
@@ -241,7 +264,8 @@ def load_external_plugins(paths: str | tuple[str, ...] | None = None) -> Externa
             except Exception as exc:  # pragma: no cover - defensive hardening
                 errors.append(f"{candidate}: {exc}")
 
-    for entry_point in _iter_external_plugin_entry_points():
+    entry_points_to_load = entry_points if entry_points is not None else _discover_external_plugin_entry_points(force_refresh=True)
+    for entry_point in entry_points_to_load:
         try:
             loaded = entry_point.load()
             parser_classes = loaded if isinstance(loaded, (list, tuple)) else (loaded,)
@@ -275,7 +299,13 @@ def _ensure_external_plugins_loaded_once() -> None:
     global _EXTERNAL_PLUGINS_LOADED, _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
 
     path_config = os.getenv("PARSER_EXTERNAL_PLUGIN_PATHS", "").strip()
-    entry_point_names = tuple(entry_point.name for entry_point in _iter_external_plugin_entry_points())
+    if _EXTERNAL_PLUGINS_LOADED and _EXTERNAL_PLUGIN_CONFIG_SIGNATURE is not None:
+        loaded_path_config, _loaded_entry_point_names = _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+        if loaded_path_config == path_config:
+            return
+
+    entry_points = _discover_external_plugin_entry_points(force_refresh=not _EXTERNAL_PLUGINS_LOADED)
+    entry_point_names = tuple(entry_point.name for entry_point in entry_points)
     config_signature = (path_config, entry_point_names)
 
     if _EXTERNAL_PLUGINS_LOADED and _EXTERNAL_PLUGIN_CONFIG_SIGNATURE == config_signature:
@@ -290,7 +320,7 @@ def _ensure_external_plugins_loaded_once() -> None:
         _EXTERNAL_PLUGIN_CONFIG_SIGNATURE = config_signature
         return
 
-    load_external_plugins()
+    load_external_plugins(entry_points=entry_points)
     _EXTERNAL_PLUGINS_LOADED = True
     _EXTERNAL_PLUGIN_CONFIG_SIGNATURE = config_signature
 

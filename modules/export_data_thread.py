@@ -12,15 +12,21 @@ import inspect
 import re
 import sqlite3
 import textwrap
+import statistics
+import math
 from io import BytesIO
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
+from modules.matplotlib_runtime import configure_headless_matplotlib
+
+configure_headless_matplotlib()
+
 import matplotlib
 import pandas as pd
 import numpy as np
 
-matplotlib.use('Agg')
+matplotlib.use(os.environ.get('MPLBACKEND', 'Agg'), force=True)
 
 import importlib.util
 
@@ -64,9 +70,6 @@ from modules.export_summary_utils import (
     build_sparse_unique_labels as _build_sparse_unique_labels,
     build_summary_panel_labels as _build_summary_panel_labels,
     build_trend_plot_payload as _build_trend_plot_payload,
-    compute_measurement_summary,
-    compute_normality_status,
-    compute_estimated_tail_metrics,
     resolve_histogram_bin_count,
     normalize_plot_axis_values as _normalize_plot_axis_values,
     resolve_nominal_and_limits,
@@ -95,6 +98,7 @@ from modules.export_query_service import (
     fetch_partition_header_counts,
     fetch_partition_values,
     fetch_sql_measurement_summary,
+    fetch_sql_measurement_summaries,
     load_measurement_export_partition_dataframe,
 )
 from modules.export_grouping_utils import (
@@ -107,6 +111,7 @@ from modules.export_grouping_utils import (
 from modules.group_analysis_service import build_group_analysis_payload
 from modules.group_analysis_writer import (
     write_group_analysis_diagnostics_sheet as _write_internal_group_analysis_diagnostics_sheet,
+    write_group_analysis_plots_sheet,
     write_group_analysis_sheet,
 )
 from modules.summary_plot_palette import (
@@ -150,6 +155,16 @@ from modules.export_summary_composition_service import (
     classify_nok_severity as _classify_nok_severity,
     classify_normality_status as _classify_normality_status,
 )
+from modules.export_summary_sheet_compute import (
+    append_group_sample_counts as _append_group_sample_counts_compute,
+    build_summary_worksheet_plan as _build_summary_worksheet_plan_compute,
+    compute_group_sample_counts as _compute_group_sample_counts_compute,
+    finalize_histogram_summary_payload as _finalize_histogram_summary_payload_compute,
+    normalize_summary_group_frame as _normalize_summary_group_frame_compute,
+    prepare_summary_chart_payloads as _prepare_summary_chart_payloads_compute,
+    resolve_sampling_context as _resolve_sampling_context_compute,
+    retrieve_summary_statistics as _retrieve_summary_statistics_compute,
+)
 from modules.export_group_analysis_annotation_service import (
     build_violin_group_annotation_payload as _build_violin_group_annotation_payload,
 )
@@ -167,16 +182,33 @@ from modules.export_sheet_writer import (
     build_spec_limit_anchor_rows as _build_spec_limit_anchor_rows,
     create_measurement_formats,
     write_measurement_block,
-    build_summary_panel_write_plan,
 )
-from modules.stats_utils import is_one_sided_geometric_tolerance, safe_process_capability
+from modules.export_html_dashboard import (
+    resolve_html_dashboard_assets_dir as _resolve_html_dashboard_assets_dir,
+    resolve_html_dashboard_path as _resolve_html_dashboard_path,
+    write_export_html_dashboard as _write_export_html_dashboard,
+)
+from modules.stats_utils import is_one_sided_geometric_tolerance
 # Canonical violin payload builder lives in `modules/chart_render_service.py`.
 from modules.chart_render_service import (
     BoundedWorkerPool,
     build_violin_payload_vectorized,
     resolve_chart_sampling_policy,
-    sample_frame_for_chart,
     deterministic_downsample_frame,
+)
+from modules.chart_renderer import (
+    build_chart_renderer,
+    build_distribution_native_payload,
+    build_histogram_native_payload,
+    native_distribution_backend_available,
+    native_histogram_backend_available,
+    native_iqr_backend_available,
+    native_trend_backend_available,
+    resolve_chart_renderer_backend,
+)
+from modules.backend_diagnostics import (
+    build_backend_diagnostic_summary,
+    format_backend_diagnostic_lines,
 )
 from modules.distribution_fit_service import fit_measurement_distribution
 
@@ -188,6 +220,19 @@ if _HAS_SEABORN:
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
+
+def native_chart_backend_available() -> bool:
+    """Backward-compatible patch point with histogram-specific semantics."""
+    return native_histogram_backend_available()
+
+
+def _native_extended_histogram_export_available() -> bool:
+    """Return whether native histogram rendering can preserve extended-export parity."""
+    # Extended histogram exports include dense matplotlib-authored details
+    # (annotations, fitted-overlay context, and rich right-side tables). Until
+    # native rendering reaches strict 1:1 parity for those workbook details,
+    # force the extended export path through matplotlib.
+    return False
 
 
 _INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
@@ -1206,6 +1251,313 @@ def _build_unified_histogram_dashboard_rows(*, statistics_rows, distribution_fit
     return list(statistics_rows or []) + list(distribution_fit_rows or [])
 
 
+def _build_native_canvas(*, figure_width, figure_height=4.0, dpi=150.0):
+    return {
+        'width_px': int(round(max(float(figure_width), 1.0) * float(dpi))),
+        'height_px': int(round(max(float(figure_height), 1.0) * float(dpi))),
+        'dpi': int(round(float(dpi))),
+    }
+
+
+def _resolve_native_axis_layout(
+    labels,
+    *,
+    positions=None,
+    truncate_labels=True,
+    max_label_chars=18,
+    thinning_threshold=24,
+    target_tick_count=16,
+    force_sparse=False,
+    allow_thinning=True,
+):
+    safe_labels = [str(label) if label is not None else '' for label in labels]
+    if positions is None:
+        positions = list(range(len(safe_labels)))
+    if len(positions) != len(safe_labels):
+        raise ValueError("positions and labels must have the same length")
+
+    strategy = prepare_categorical_x_axis(safe_labels)
+    rotation = int(strategy['rotation'])
+    display_labels = list(strategy['processed_labels'])
+    if truncate_labels:
+        normalized = []
+        for label in display_labels:
+            plain_label = str(label).replace('\n', ' ')
+            if max_label_chars >= 2 and len(plain_label) > max_label_chars:
+                plain_label = f"{plain_label[:max_label_chars - 1]}…"
+            normalized.append(plain_label)
+        display_labels = normalized
+
+    indices = list(range(len(safe_labels)))
+    if allow_thinning and (force_sparse or len(safe_labels) > thinning_threshold):
+        step = max(1, int(math.ceil(len(safe_labels) / max(target_tick_count, 1))))
+        indices = [idx for idx in indices if idx % step == 0]
+        if indices and indices[-1] != len(safe_labels) - 1:
+            indices.append(len(safe_labels) - 1)
+        elif not indices and safe_labels:
+            indices = [0]
+
+    return {
+        'rotation': rotation,
+        'display_positions': [positions[idx] for idx in indices],
+        'display_labels': [display_labels[idx] for idx in indices],
+        'recommended_fig_width': float(strategy['recommended_fig_width']),
+        'bottom_margin': float(strategy['bottom_margin']),
+    }
+
+
+def _resolve_native_y_limits(*series, scale_factor=0.0, extra_values=None):
+    finite = []
+    for values in series:
+        if values is None:
+            continue
+        arr = np.asarray(values, dtype=float)
+        arr = arr[np.isfinite(arr)]
+        if arr.size > 0:
+            finite.append(arr)
+    if extra_values:
+        extras = np.asarray(
+            [
+                float(value)
+                for value in extra_values
+                if isinstance(value, (int, float)) and np.isfinite(float(value))
+            ],
+            dtype=float,
+        )
+        if extras.size > 0:
+            finite.append(extras)
+    if not finite:
+        return {'min': 0.0, 'max': 1.0}
+    merged = np.concatenate(finite)
+    y_min = float(np.min(merged))
+    y_max = float(np.max(merged))
+    if np.isclose(y_min, y_max):
+        y_min -= 0.5
+        y_max += 0.5
+    scaled_min, scaled_max = _compute_scaled_y_limits((y_min, y_max), float(scale_factor))
+    return {'min': float(scaled_min), 'max': float(scaled_max)}
+
+
+def _build_violin_native_legend_items(annotation_style):
+    items = [
+        {
+            'label': 'Mean marker',
+            'kind': 'marker',
+            'marker': 'circle',
+            'color': SUMMARY_PLOT_PALETTE['central_tendency'],
+        },
+    ]
+    if bool((annotation_style or {}).get('show_minmax')):
+        items.extend(
+            [
+                {
+                    'label': 'Min marker',
+                    'kind': 'marker',
+                    'marker': 'triangle_down',
+                    'color': SUMMARY_PLOT_PALETTE['annotation_text'],
+                },
+                {
+                    'label': 'Max marker',
+                    'kind': 'marker',
+                    'marker': 'triangle_up',
+                    'color': SUMMARY_PLOT_PALETTE['annotation_text'],
+                },
+            ]
+        )
+    if bool((annotation_style or {}).get('show_sigma')):
+        items.append(
+            {
+                'label': '3sigma span',
+                'kind': 'line',
+                'dash': [4, 4],
+                'color': SUMMARY_PLOT_PALETTE['sigma_band'],
+            }
+        )
+    return items
+
+
+def _build_iqr_native_legend_items():
+    return [
+        {
+            'label': 'IQR range (Q1-Q3)',
+            'kind': 'band',
+            'fill_color': SUMMARY_PLOT_PALETTE['distribution_base'],
+        },
+        {
+            'label': 'Median',
+            'kind': 'line',
+            'color': SUMMARY_PLOT_PALETTE['central_tendency'],
+        },
+        {
+            'label': 'Whiskers (1.5 IQR rule)',
+            'kind': 'line',
+            'color': SUMMARY_PLOT_PALETTE['distribution_foreground'],
+        },
+        {
+            'label': 'Outliers',
+            'kind': 'marker',
+            'marker': 'circle',
+            'color': SUMMARY_PLOT_PALETTE['outlier'],
+        },
+    ]
+
+
+def _build_histogram_native_visual_metadata(*, summary_stats, lsl, usl, nominal, rendered_rows=None, row_badges=None, capability_badge=None, distribution_fit_result=None, count_scale_factor=None):
+    """Build stable visual-metadata payload contract for native histogram rendering."""
+    histogram_table_payload = _build_histogram_table_data(summary_stats)
+    if rendered_rows is None:
+        rendered_rows = histogram_table_payload.get('rows') or []
+
+    annotation_specs = _build_histogram_annotation_specs(summary_stats.get('average'), usl, lsl, 1.0)
+    finite_points = [
+        float(item)
+        for item in (summary_stats.get('average'), lsl, usl)
+        if isinstance(item, (int, float)) and np.isfinite(float(item))
+    ]
+    x_span = abs(max(finite_points) - min(finite_points)) if len(finite_points) >= 2 else 1.0
+    annotation_specs, _ = _compute_histogram_annotation_rows(
+        annotation_specs,
+        distance_threshold=0.04,
+        threshold_mode='axis_fraction',
+        x_span=max(x_span, 1e-12),
+        base_text_y_axes=1.01,
+        row_step=0.025,
+    )
+
+    def _line(label, value, *, role):
+        return {
+            'id': role,
+            'label': label,
+            'value': None if value is None else float(value),
+            'enabled': value is not None,
+            'style_hint': {'orientation': 'vertical', 'line_role': role},
+        }
+
+    normalized_row_badges = dict(row_badges or {})
+    if capability_badge:
+        for label in ('Cp', 'Cpk', 'Cpk+', 'Cpu', 'Cpl'):
+            normalized_row_badges.setdefault(label, {'palette_key': capability_badge['palette_key']})
+
+    table_rows = []
+    for label, value in rendered_rows:
+        table_rows.append(
+            {
+                'label': str(label),
+                'value': str(value),
+                'row_kind': 'summary_metric',
+                'badge_palette': (
+                    normalized_row_badges.get(label, {}).get('palette_key')
+                    if isinstance(normalized_row_badges.get(label), dict)
+                    else None
+                ),
+                'section_break_before': str(label).strip() == 'Model',
+            }
+        )
+
+    overlay_rows = []
+    fit_result = distribution_fit_result or {}
+    if fit_result:
+        selected_model_curve = fit_result.get('selected_model_pdf') or {}
+        model_x = np.asarray(selected_model_curve.get('x', []), dtype=float)
+        model_y = np.asarray(selected_model_curve.get('y', []), dtype=float)
+        if model_x.size > 1 and model_y.size == model_x.size:
+            if count_scale_factor is not None:
+                model_y = model_y * float(count_scale_factor)
+            model_style = resolve_selected_model_curve_style(fit_result)
+            overlay_rows.append(
+                {
+                    'kind': 'curve',
+                    'x': model_x.tolist(),
+                    'y': model_y.tolist(),
+                    'color': SUMMARY_PLOT_PALETTE['density_line'],
+                    'alpha': float(model_style['alpha']),
+                    'linewidth': float(model_style['linewidth']),
+                }
+            )
+            for limit_value, mask in (
+                (lsl, model_x <= float(lsl) if lsl is not None else None),
+                (usl, model_x >= float(usl) if usl is not None else None),
+            ):
+                if limit_value is None or mask is None or np.count_nonzero(mask) < 2:
+                    continue
+                overlay_rows.append(
+                    {
+                        'kind': 'curve',
+                        'x': model_x[mask].tolist(),
+                        'y': model_y[mask].tolist(),
+                        'color': SUMMARY_PLOT_PALETTE['spec_limit'],
+                        'fill_color': SUMMARY_PLOT_PALETTE['spec_limit'],
+                        'fill_alpha': 0.12,
+                        'fill_to_baseline': True,
+                        'alpha': 0.0,
+                        'linewidth': 1.0,
+                    }
+                )
+
+        kde_reference_curve = fit_result.get('kde_reference_pdf') or {}
+        kde_x = np.asarray(kde_reference_curve.get('x', []), dtype=float)
+        kde_y = np.asarray(kde_reference_curve.get('y', []), dtype=float)
+        if kde_x.size > 1 and kde_y.size == kde_x.size:
+            if count_scale_factor is not None:
+                kde_y = kde_y * float(count_scale_factor)
+            overlay_rows.append(
+                {
+                    'kind': 'curve',
+                    'x': kde_x.tolist(),
+                    'y': kde_y.tolist(),
+                    'color': SUMMARY_PLOT_PALETTE['density_line'],
+                    'alpha': 0.22,
+                    'linewidth': 1.0,
+                    'dash': [5, 4],
+                }
+            )
+            overlay_rows.append(
+                {
+                    'kind': 'curve_note',
+                    'label': 'Dashed KDE: descriptive only',
+                }
+            )
+
+    return {
+        'schema_version': 1,
+        'specification_lines': [
+            _line('LSL', lsl, role='lsl'),
+            _line('USL', usl, role='usl'),
+            _line('Nominal', nominal, role='nominal'),
+        ],
+        'summary_stats_table': {
+            'title': 'Parameter',
+            'columns': ['Parameter', 'Value'],
+            'rows': table_rows,
+        },
+        'annotation_rows': [
+            {
+                'label': spec.get('label'),
+                'text': spec.get('text'),
+                'kind': spec.get('kind'),
+                'color': spec.get('color'),
+                'x': spec.get('x'),
+                'y': spec.get('y'),
+                'row_index': spec.get('row_index'),
+                'text_y_axes': spec.get('text_y_axes'),
+                'xytext': spec.get('xytext'),
+                'placement_hint': {
+                    'textcoords': spec.get('textcoords', 'data'),
+                    'va': spec.get('va', 'bottom'),
+                    'ha': spec.get('ha', 'center'),
+                },
+            }
+            for spec in annotation_specs
+        ],
+        'modeled_overlays': {
+            'advanced_annotations_enabled': bool(overlay_rows),
+            'overlays_enabled': bool(overlay_rows),
+            'rows': overlay_rows,
+            'status': 'enabled' if overlay_rows else 'disabled',
+        },
+    }
+
+
 def _apply_table_section_separator(ax_table, table_data, *, transition_label='Model'):
     """Add subtle visual grouping by drawing a mild separator above transition row."""
 
@@ -2075,7 +2427,47 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
     binning = resolve_histogram_bin_count(histogram_values)
     bin_count = int(binning['bin_count'])
 
-    if _HAS_SEABORN:
+    group_labels = []
+    is_grouped = False
+    grouped_hist_frame = None
+    if group_column and group_column in header_group.columns:
+        grouped_hist_frame = header_group[[group_column, 'MEAS']].copy()
+        grouped_hist_frame['MEAS'] = pd.to_numeric(grouped_hist_frame['MEAS'], errors='coerce')
+        grouped_hist_frame = grouped_hist_frame.dropna(subset=['MEAS'])
+        grouped_hist_frame[group_column] = grouped_hist_frame[group_column].astype(str).str.strip()
+        grouped_hist_frame = grouped_hist_frame[grouped_hist_frame[group_column] != '']
+        if not grouped_hist_frame.empty:
+            group_labels = grouped_hist_frame[group_column].drop_duplicates().tolist()
+            is_grouped = len(group_labels) > 1
+
+    if is_grouped and grouped_hist_frame is not None:
+        histogram_palette = [
+            SUMMARY_PLOT_PALETTE['distribution_base'],
+            SUMMARY_PLOT_PALETTE['distribution_foreground'],
+            SUMMARY_PLOT_PALETTE['density_line'],
+            SUMMARY_PLOT_PALETTE['spec_limit'],
+            SUMMARY_PLOT_PALETTE['sigma_band'],
+        ]
+        bin_edges = np.histogram_bin_edges(histogram_values, bins=bin_count)
+        for index, label in enumerate(group_labels):
+            values = grouped_hist_frame.loc[grouped_hist_frame[group_column] == label, 'MEAS'].to_numpy(dtype=float)
+            if values.size == 0:
+                continue
+            color = histogram_palette[index % len(histogram_palette)]
+            mean_value = float(np.mean(values))
+            ax.hist(
+                values,
+                bins=bin_edges,
+                density=False,
+                alpha=0.42,
+                color=color,
+                edgecolor=(1.0, 1.0, 1.0, 0.72),
+                linewidth=0.5,
+                label=f"{label} (n={values.size}, μ={mean_value:.3f})",
+            )
+            ax.axvline(mean_value, color=color, linestyle='-.', linewidth=1.0, alpha=0.85)
+        ax.legend(loc='upper left', frameon=True, fontsize=7.0, title='Group (n, mean)', title_fontsize=7.0)
+    elif _HAS_SEABORN:
         sns.histplot(
             x=histogram_values,
             bins=bin_count,
@@ -2113,8 +2505,8 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
         count_scale_factor = float(histogram_values.size) * representative_bin_width
 
     return {
-        'is_grouped': False,
-        'group_labels': [],
+        'is_grouped': is_grouped,
+        'group_labels': group_labels if is_grouped else [],
         'count_scale_factor': count_scale_factor,
     }
 
@@ -2905,6 +3297,7 @@ class ExportDataThread(QThread):
         self.summary_plot_scale = validated_request.options.summary_plot_scale
         self.hide_ok_results = validated_request.options.hide_ok_results
         self.generate_summary_sheet = validated_request.options.generate_summary_sheet
+        self.generate_html_dashboard = validated_request.options.generate_html_dashboard
         self.allow_non_essential_chart_skipping = validated_request.options.allow_non_essential_chart_skipping
         self.chart_worker_count = validated_request.options.chart_worker_count
         self.chart_worker_queue_size = validated_request.options.chart_worker_queue_size
@@ -2920,14 +3313,46 @@ class ExportDataThread(QThread):
             "conversion_warnings": [],
             "conversion_warning_details": [],
             "converted_tab_titles": [],
+            "backend_diagnostics": {},
+            "backend_diagnostics_lines": [],
+            "html_dashboard_path": None,
+            "html_dashboard_assets_path": None,
+            "html_dashboard_warnings": [],
         }
+        self.html_dashboard_file = (
+            str(_resolve_html_dashboard_path(self.excel_file))
+            if self.generate_html_dashboard and self.excel_file
+            else None
+        )
+        self.html_dashboard_assets_dir = (
+            str(_resolve_html_dashboard_assets_dir(self.html_dashboard_file))
+            if self.html_dashboard_file
+            else None
+        )
         self._exported_sheet_names = []
         self._exported_sheet_name_set = set()
         self._last_emitted_progress = -1
         self._stage_timings = {
+            'summary_stat_retrieval': 0.0,
             'transform_grouping': 0.0,
-            'chart_rendering': 0.0,
+            'sampling_plan_resolution': 0.0,
+            'chart_payload_preparation': 0.0,
+            'worksheet_write_planning': 0.0,
             'worksheet_writes': 0.0,
+            'chart_rendering': 0.0,
+        }
+        self._chart_render_backend_counts = {'native': 0, 'matplotlib': 0}
+        self._chart_render_backend_counts_by_type = {
+            'distribution': {'native': 0, 'matplotlib': 0},
+            'iqr': {'native': 0, 'matplotlib': 0},
+            'histogram': {'native': 0, 'matplotlib': 0},
+            'trend': {'native': 0, 'matplotlib': 0},
+        }
+        self._chart_render_timings_by_type = {
+            'distribution': [],
+            'iqr': [],
+            'histogram': [],
+            'trend': [],
         }
         self._optimization_toggles = {
             'chart_density_mode': 'full',
@@ -2937,13 +3362,22 @@ class ExportDataThread(QThread):
         }
         self._chart_executor = None
         self._summary_prep_executor = None
+        self._chart_renderer = build_chart_renderer()
         self._active_chart_images = []
+        self._html_dashboard_sections = []
+        self._html_group_analysis_payload = None
+        self._html_group_analysis_plot_assets = None
         self._summary_sheet_failed = False
         self._summary_sheet_skip_warning_emitted = False
         self._db_connection = None
         self._snapshot_table_name = None
         self._active_export_query = self.filter_query
         self._cached_export_filtered_df = None
+        self._sql_measurement_summary_cache = {}
+        self._distribution_fit_memo = {}
+        self._backend_diagnostic_summary = build_backend_diagnostic_summary()
+        self.completion_metadata["backend_diagnostics"] = dict(self._backend_diagnostic_summary)
+        self.completion_metadata["backend_diagnostics_lines"] = format_backend_diagnostic_lines(self._backend_diagnostic_summary)
 
     def _register_chart_image(self, payload: bytes):
         image_data = BytesIO(payload)
@@ -2953,6 +3387,82 @@ class ExportDataThread(QThread):
 
     def _cleanup_chart_images(self):
         self._active_chart_images.clear()
+
+    def _begin_html_dashboard_section(
+        self,
+        *,
+        header,
+        subtitle,
+        reference,
+        axis,
+        grouping_applied,
+        sample_size,
+        limits,
+    ):
+        if not self.generate_html_dashboard:
+            return None
+        section = {
+            'header': str(header or ''),
+            'subtitle': str(subtitle or ''),
+            'reference': '' if reference is None else str(reference),
+            'axis': '' if axis is None else str(axis),
+            'grouping_applied': bool(grouping_applied),
+            'sample_size': int(sample_size or 0),
+            'limits': dict(limits or {}),
+            'summary_rows': [],
+            'charts': [],
+        }
+        self._html_dashboard_sections.append(section)
+        return section
+
+    @staticmethod
+    def _attach_html_dashboard_chart(section, *, chart_type, title, backend, image_buffer, payload, note=''):
+        if section is None:
+            return
+        section.setdefault('charts', []).append(
+            {
+                'chart_type': str(chart_type or ''),
+                'title': str(title or chart_type or ''),
+                'backend': str(backend or ''),
+                'image_buffer': image_buffer,
+                'payload': payload if isinstance(payload, dict) else {},
+                'note': str(note or ''),
+            }
+        )
+
+    def _write_html_dashboard_if_requested(self):
+        if not self.generate_html_dashboard or not self.html_dashboard_file or not self.html_dashboard_assets_dir:
+            return
+        try:
+            dashboard_result = _write_export_html_dashboard(
+                excel_file=self.excel_file,
+                output_path=self.html_dashboard_file,
+                assets_dir=self.html_dashboard_assets_dir,
+                sections=self._html_dashboard_sections,
+                chart_observability_summary=self.completion_metadata.get('chart_observability_summary', {}),
+                backend_diagnostics_lines=self.completion_metadata.get('backend_diagnostics_lines', []),
+                group_analysis_payload=self._html_group_analysis_payload,
+                group_analysis_plot_assets=self._html_group_analysis_plot_assets,
+            )
+        except Exception as exc:
+            warning_message = f"HTML dashboard export skipped: {exc}"
+            logger.warning(warning_message, exc_info=True)
+            self.completion_metadata.setdefault('html_dashboard_warnings', []).append(warning_message)
+            self._log_export_stage(
+                "HTML dashboard generation skipped after workbook export",
+                stage="dashboard_warning",
+                level="warning",
+                dashboard_warning=warning_message,
+            )
+            return
+
+        self.completion_metadata.update(dashboard_result)
+        self._log_export_stage(
+            "HTML dashboard generated",
+            stage="dashboard_completed",
+            html_dashboard_path=dashboard_result.get('html_dashboard_path'),
+            html_dashboard_chart_count=dashboard_result.get('html_dashboard_chart_count', 0),
+        )
 
     def _ensure_chart_executor(self):
         if not self._optimization_toggles.get('enable_chart_multiprocessing'):
@@ -3033,6 +3543,7 @@ class ExportDataThread(QThread):
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
+            self._sql_measurement_summary_cache.clear()
 
     def _iter_reference_partitions(self):
         partition_values = fetch_partition_values(
@@ -3060,6 +3571,115 @@ class ExportDataThread(QThread):
         if stage_name in self._stage_timings:
             self._stage_timings[stage_name] += max(0.0, float(elapsed))
 
+    def _record_chart_render_timing(self, chart_type, elapsed, *, backend='matplotlib'):
+        elapsed_s = max(0.0, float(elapsed))
+        self._record_stage_timing('chart_rendering', elapsed_s)
+        if chart_type in self._chart_render_timings_by_type:
+            self._chart_render_timings_by_type[chart_type].append(elapsed_s)
+        if backend in self._chart_render_backend_counts:
+            self._chart_render_backend_counts[backend] += 1
+        if chart_type in self._chart_render_backend_counts_by_type and backend in self._chart_render_backend_counts_by_type[chart_type]:
+            self._chart_render_backend_counts_by_type[chart_type][backend] += 1
+
+    def build_export_observability_summary(self, *, high_header_threshold=64):
+        """Build structured telemetry for one export run.
+
+        Args:
+            high_header_threshold (int): Distinct-header threshold used to flag
+                high-cardinality partitions.
+
+        Returns:
+            dict[str, object]: Observability payload containing:
+                - ``stage_timings_s``: chart prep/render/write stage totals.
+                - ``chart_backend_distribution``: native/matplotlib counts and rates.
+                - ``per_chart_type_timing_medians_s``: median render times per
+                  summary chart type.
+                - ``high_header_cardinality_scenario``: threshold, max headers,
+                  detection flag, and stage timing snapshot (when available).
+        """
+        chart_backend_total = sum(self._chart_render_backend_counts.values())
+        chart_backend_distribution = {
+            'counts': dict(self._chart_render_backend_counts),
+            'rates': {
+                backend: (count / chart_backend_total) if chart_backend_total else 0.0
+                for backend, count in self._chart_render_backend_counts.items()
+            },
+        }
+        per_chart_type_timing_medians_s = {
+            chart_type: (
+                float(statistics.median(samples))
+                if samples
+                else 0.0
+            )
+            for chart_type, samples in self._chart_render_timings_by_type.items()
+        }
+        per_chart_type_runtime_totals_s = {
+            chart_type: float(sum(samples))
+            for chart_type, samples in self._chart_render_timings_by_type.items()
+        }
+        per_chart_type_backend_distribution = {}
+        for chart_type, backend_counts in self._chart_render_backend_counts_by_type.items():
+            total = sum(int(v) for v in backend_counts.values())
+            per_chart_type_backend_distribution[chart_type] = {
+                'counts': {k: int(v) for k, v in backend_counts.items()},
+                'rates': {
+                    backend: (int(count) / total) if total else 0.0
+                    for backend, count in backend_counts.items()
+                },
+            }
+        high_header_cardinality = {
+            'threshold': int(high_header_threshold),
+            'max_headers_per_partition': 0,
+            'detected': False,
+            'timings_s': {},
+        }
+        try:
+            header_counts = fetch_partition_header_counts(
+                self.db_file,
+                self._active_export_query,
+                connection=self._db_connection,
+            )
+            max_headers = max((int(v) for v in header_counts.values()), default=0)
+            high_header_cardinality = {
+                'threshold': int(high_header_threshold),
+                'max_headers_per_partition': max_headers,
+                'detected': max_headers >= int(high_header_threshold),
+                'timings_s': {
+                    'chart_payload_preparation': float(self._stage_timings.get('chart_payload_preparation', 0.0)),
+                    'chart_rendering': float(self._stage_timings.get('chart_rendering', 0.0)),
+                    'worksheet_writes': float(self._stage_timings.get('worksheet_writes', 0.0)),
+                },
+            }
+        except Exception:
+            logger.debug("Unable to resolve high-header-cardinality summary metrics.", exc_info=True)
+
+        return {
+            'stage_timings_s': {
+                'chart_payload_preparation': float(self._stage_timings.get('chart_payload_preparation', 0.0)),
+                'chart_rendering': float(self._stage_timings.get('chart_rendering', 0.0)),
+                'worksheet_writes': float(self._stage_timings.get('worksheet_writes', 0.0)),
+            },
+            'chart_backend_distribution': chart_backend_distribution,
+            'per_chart_type_timing_medians_s': per_chart_type_timing_medians_s,
+            'per_chart_type_runtime_totals_s': per_chart_type_runtime_totals_s,
+            'per_chart_type_backend_distribution': per_chart_type_backend_distribution,
+            'high_header_cardinality_scenario': high_header_cardinality,
+            'backend_diagnostics': dict(self._backend_diagnostic_summary),
+        }
+
+    def _update_completion_chart_telemetry(self):
+        """Persist per-chart timing/backend counters into completion metadata."""
+        summary = self.build_export_observability_summary()
+        self.completion_metadata['chart_observability_summary'] = summary
+        self.completion_metadata['chart_native_usage_by_type'] = {
+            chart_type: int(data.get('counts', {}).get('native', 0))
+            for chart_type, data in summary.get('per_chart_type_backend_distribution', {}).items()
+        }
+        self.completion_metadata['chart_runtime_seconds_by_type'] = {
+            chart_type: float(value)
+            for chart_type, value in summary.get('per_chart_type_runtime_totals_s', {}).items()
+        }
+
     def _apply_bottleneck_optimizations(self):
         total = sum(self._stage_timings.values())
         if total <= 0.0:
@@ -3084,21 +3704,77 @@ class ExportDataThread(QThread):
         required_charts = self._optimization_toggles.get('summary_sheet_minimum_charts', set())
         return chart_name in required_charts
 
-    @staticmethod
-    def _save_summary_chart(fig, mode='workbook'):
-        """Persist summary-sheet charts with a workbook-friendly rendering policy."""
-        export_dpi = 150
-        save_kwargs = {
-            'format': 'png',
-            'dpi': export_dpi,
-        }
-        if mode == 'clipped':
-            # Keep a fallback for charts that may require clipping fixes.
-            save_kwargs['bbox_inches'] = 'tight'
+    def _lookup_sql_measurement_summary(self, *, reference, header, ax, usl, lsl):
+        if reference is not None:
+            reference_cache = self._sql_measurement_summary_cache.get(reference)
+            if reference_cache is None:
+                reference_cache = fetch_sql_measurement_summaries(
+                    self.db_file,
+                    self._active_export_query,
+                    reference=reference,
+                    connection=self._db_connection,
+                )
+                self._sql_measurement_summary_cache[reference] = reference_cache
+            cached_summary = reference_cache.get((reference, header, ax))
+            if cached_summary is not None:
+                return cached_summary
 
-        image_buffer = BytesIO()
-        fig.savefig(image_buffer, **save_kwargs)
-        return image_buffer.getvalue()
+        return fetch_sql_measurement_summary(
+            self.db_file,
+            self._active_export_query,
+            reference=reference,
+            header=header,
+            ax=ax,
+            usl=usl,
+            lsl=lsl,
+            connection=self._db_connection,
+        )
+
+    def _save_summary_chart(self, fig, mode='workbook', *, chart_type=None, native_payload=None):
+        """Persist summary-sheet charts with a workbook-friendly rendering policy."""
+        def _normalize_render_result(raw_result, *, default_backend='matplotlib'):
+            if hasattr(raw_result, 'png_bytes'):
+                png_bytes = raw_result.png_bytes
+                backend = getattr(raw_result, 'backend', default_backend)
+            else:
+                png_bytes = raw_result
+                backend = default_backend
+            return type("RenderResult", (), {"png_bytes": png_bytes, "backend": backend})()
+
+        if chart_type == 'histogram' and native_payload is not None:
+            render_result = self._chart_renderer.render_histogram_png(
+                native_payload,
+                fallback_fig=fig,
+                mode=mode,
+            )
+            return _normalize_render_result(render_result, default_backend='native')
+
+        if chart_type == 'distribution' and native_payload is not None and hasattr(self._chart_renderer, 'render_distribution_png'):
+            render_result = self._chart_renderer.render_distribution_png(
+                native_payload,
+                fallback_fig=fig,
+                mode=mode,
+            )
+            return _normalize_render_result(render_result, default_backend='native')
+
+        if chart_type == 'iqr' and native_payload is not None and hasattr(self._chart_renderer, 'render_iqr_png'):
+            render_result = self._chart_renderer.render_iqr_png(
+                native_payload,
+                fallback_fig=fig,
+                mode=mode,
+            )
+            return _normalize_render_result(render_result, default_backend='native')
+
+        if chart_type == 'trend' and native_payload is not None and hasattr(self._chart_renderer, 'render_trend_png'):
+            render_result = self._chart_renderer.render_trend_png(
+                native_payload,
+                fallback_fig=fig,
+                mode=mode,
+            )
+            return _normalize_render_result(render_result, default_backend='native')
+
+        render_result = self._chart_renderer.render_figure_png(fig, mode=mode, chart_type=chart_type)
+        return _normalize_render_result(render_result, default_backend='matplotlib')
 
     @staticmethod
     def _resolve_chart_cell_span(
@@ -3129,6 +3805,14 @@ class ExportDataThread(QThread):
         worksheet.insert_image(slot['row'], slot['col'], '', {'image_data': image_data})
 
     def _build_iqr_plot_payload(self, labels, values, sampled_group, *, grouping_active=False):
+        if not grouping_active and sampled_group is not None and 'MEAS' in sampled_group:
+            # A single ungrouped population should render as one boxplot. Building
+            # one box per sample creates thousands of degenerate single-point
+            # boxes, which is both slow and statistically misleading.
+            numeric_values = pd.to_numeric(sampled_group['MEAS'], errors='coerce').dropna().tolist()
+            if numeric_values:
+                return ['All'], [numeric_values]
+
         strategy_labels = build_summary_panel_labels(labels or ['All'], grouping_active=grouping_active)
         boxplot_labels = strategy_labels
         boxplot_values = values if values else [list(sampled_group['MEAS'])]
@@ -3162,30 +3846,11 @@ class ExportDataThread(QThread):
 
     @staticmethod
     def _compute_group_sample_counts(sampled_group, grouping_key):
-        if sampled_group is None or sampled_group.empty:
-            return {}
-        if grouping_key not in sampled_group.columns or 'MEAS' not in sampled_group.columns:
-            return {}
-
-        count_frame = sampled_group[[grouping_key, 'MEAS']].dropna(subset=[grouping_key, 'MEAS']).copy()
-        if count_frame.empty:
-            return {}
-
-        count_frame[grouping_key] = count_frame[grouping_key].astype(str)
-        grouped_counts = count_frame.groupby(grouping_key, sort=False)['MEAS'].size()
-        return {str(label): int(count) for label, count in grouped_counts.items()}
+        return _compute_group_sample_counts_compute(sampled_group, grouping_key)
 
     @staticmethod
     def _append_group_sample_counts(labels, sample_counts):
-        if not labels:
-            return []
-
-        formatted_labels = []
-        for label in labels:
-            normalized_label = str(label)
-            count = int(sample_counts.get(normalized_label, 0))
-            formatted_labels.append(f"{normalized_label} (n={count})")
-        return formatted_labels
+        return _append_group_sample_counts_compute(labels, sample_counts)
 
     @staticmethod
     def _downsample_frame(df, sample_limit):
@@ -3562,6 +4227,10 @@ class ExportDataThread(QThread):
                 self._emit_stage_progress('preparing_query', 0.0)
                 self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
                 self._log_export_stage("Export started", stage="started")
+                logger.info(
+                    "Backend diagnostic summary: %s",
+                    "; ".join(self.completion_metadata.get("backend_diagnostics_lines", [])),
+                )
                 if self.export_target == "google_sheets_drive_convert":
                     self._emit_google_stage("generating")
 
@@ -3655,6 +4324,8 @@ class ExportDataThread(QThread):
                     )
 
             self._emit_stage_progress('finalize', 1.0)
+            self._update_completion_chart_telemetry()
+            self._write_html_dashboard_if_requested()
             self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
             self._log_export_stage("Export completed successfully", stage="completed")
             self.finished.emit()
@@ -3668,6 +4339,8 @@ class ExportDataThread(QThread):
                 self.completion_metadata.update(build_google_fallback_metadata(excel_file=self.excel_file, error=e))
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
                 self.update_label.emit(build_three_line_status(f"Warning: {e}", "Exporting data...", "ETA --"))
+                self._update_completion_chart_telemetry()
+                self._write_html_dashboard_if_requested()
                 self.update_label.emit(build_three_line_status("Export completed successfully.", "Workbook and metadata finalized", "ETA 0:00"))
                 self._log_export_stage("Export completed with local fallback after Google conversion failure", stage="fallback", level="warning", fallback_reason=self.completion_metadata["fallback_message"])
                 self.finished.emit()
@@ -3777,19 +4450,30 @@ class ExportDataThread(QThread):
                 timing_enabled = os.getenv('METROLIZA_EXPORT_TIMING', '').lower() in {'1', 'true', 'yes', 'on'}
                 build_bundle_elapsed = 0.0
                 chart_insert_elapsed = 0.0
+                precompute_start = time.perf_counter()
+                precomputed_header_entries = []
                 for (header, header_group) in header_groups:
                     if self._check_canceled():
                         return
 
-                    transform_start = time.perf_counter()
                     header_group = self._sort_header_group(header_group)
+                    base_col = len(precomputed_header_entries) * 5
+                    build_bundle_start = time.perf_counter()
+                    write_bundle = _build_measurement_write_bundle_cached(
+                        header,
+                        header_group,
+                        base_col,
+                        cache=optimization_cache,
+                    )
+                    build_bundle_elapsed += time.perf_counter() - build_bundle_start
+                    precomputed_header_entries.append((header, header_group, write_bundle))
+                self._record_stage_timing('transform_grouping', time.perf_counter() - precompute_start)
+
+                for (header, header_group, write_bundle) in precomputed_header_entries:
+                    if self._check_canceled():
+                        return
+
                     base_col = col
-                    if timing_enabled:
-                        build_bundle_start = time.perf_counter()
-                    write_bundle = _build_measurement_write_bundle_cached(header, header_group, base_col, cache=optimization_cache)
-                    self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
-                    if timing_enabled:
-                        build_bundle_elapsed += time.perf_counter() - build_bundle_start
                     header_plan = write_bundle['header_plan']
                     write_start = time.perf_counter()
                     measurement_plan = write_measurement_block(worksheet, write_bundle, formats, base_col=base_col)
@@ -3876,12 +4560,13 @@ class ExportDataThread(QThread):
                         chart_insert_elapsed,
                         header_count,
                     )
+                    dominant_stage = max(self._stage_timings, key=self._stage_timings.get)
                     logger.debug(
-                        "Export stage totals [ref=%s]: transform=%.3fs chart=%.3fs worksheet=%.3fs toggles=%s",
+                        "Export stage totals [ref=%s]: timings=%s dominant_stage=%s dominant_elapsed=%.3fs toggles=%s",
                         ref,
-                        self._stage_timings['transform_grouping'],
-                        self._stage_timings['chart_rendering'],
-                        self._stage_timings['worksheet_writes'],
+                        self._stage_timings,
+                        dominant_stage,
+                        self._stage_timings.get(dominant_stage, 0.0),
                         self._optimization_toggles,
                     )
                     if self._stage_timings['chart_rendering'] > (self._stage_timings['transform_grouping'] * 2) and self._stage_timings['chart_rendering'] > self._stage_timings['worksheet_writes']:
@@ -3926,8 +4611,165 @@ class ExportDataThread(QThread):
             tip='Open the printable Group Analysis PDF companion in the GitHub repository.',
         )
 
+    @classmethod
+    def _build_group_analysis_plot_description(cls, metric_row, plot_key, grouped_entries, spec_limits):
+        """Return a concise workbook image description for Group Analysis plots."""
+        metric_name = str((metric_row or {}).get('metric') or 'metric')
+        plot_label = 'violin plot' if str(plot_key) == 'violin' else 'histogram'
+        capability_context = cls._build_group_analysis_capability_context(metric_row)
+
+        group_parts = []
+        for label, values in grouped_entries:
+            if values.size == 0:
+                continue
+            mean_value = float(np.mean(values))
+            group_parts.append(f"{label} n={values.size}, mean={mean_value:.3f}")
+
+        spec_parts = []
+        for key, label in (('lsl', 'LSL'), ('nominal', 'Nominal'), ('usl', 'USL')):
+            value = (spec_limits or {}).get(key)
+            if value is not None:
+                spec_parts.append(f"{label}={float(value):.3f}")
+
+        description_parts = [f"Group Analysis {plot_label} for {metric_name}."]
+        if group_parts:
+            description_parts.append(f"Groups: {'; '.join(group_parts)}.")
+        if spec_parts:
+            description_parts.append(f"Spec references: {', '.join(spec_parts)}.")
+        capability_description = str((capability_context or {}).get('description') or '').strip()
+        if capability_description:
+            description_parts.append(capability_description)
+        if str(plot_key) == 'violin':
+            description_parts.append('Mean, min, and max annotations are shown for each group when space allows.')
+        else:
+            description_parts.append('Legend entries include per-group sample count and mean.')
+        return ' '.join(description_parts)
+
     @staticmethod
-    def _render_group_analysis_plot_asset(metric_row, plot_key):
+    def _build_group_analysis_capability_context(metric_row):
+        """Return capability callout metadata for Group Analysis workbook plots."""
+        metric_row = metric_row if isinstance(metric_row, dict) else {}
+
+        def _as_float(value):
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return None
+            return number if np.isfinite(number) else None
+
+        def _readiness_label(palette_key):
+            return {
+                'quality_capable': 'Capable',
+                'quality_good': 'Good',
+                'quality_marginal': 'Marginal',
+                'quality_risk': 'Risk',
+                'quality_unknown': 'Unknown',
+            }.get(str(palette_key or '').strip().lower(), 'Unknown')
+
+        if metric_row.get('capability_allowed') is False:
+            return {
+                'palette_key': 'quality_unknown',
+                'callout_lines': ['Capability disabled', 'Spec limits differ across groups'],
+                'description': 'Capability is disabled because spec limits are not directly comparable across groups.',
+            }
+
+        capability_payload = metric_row.get('capability')
+        if not isinstance(capability_payload, dict):
+            return {}
+
+        descriptive_rows = metric_row.get('descriptive_stats') if isinstance(metric_row.get('descriptive_stats'), list) else []
+
+        cp_value = _as_float(capability_payload.get('cp'))
+        cpk_value = _as_float(capability_payload.get('cpk'))
+        capability_value = _as_float(capability_payload.get('capability'))
+        capability_type = str(capability_payload.get('capability_type') or 'Capability').strip() or 'Capability'
+        capability_ci = capability_payload.get('capability_ci') if isinstance(capability_payload.get('capability_ci'), dict) else {}
+        cpk_ci = capability_ci.get('cpk') if isinstance(capability_ci, dict) else None
+        ci_lower = _as_float((cpk_ci or {}).get('lower')) if isinstance(cpk_ci, dict) else None
+        ci_upper = _as_float((cpk_ci or {}).get('upper')) if isinstance(cpk_ci, dict) else None
+
+        per_group_capability = []
+        for row in descriptive_rows:
+            if not isinstance(row, dict):
+                continue
+            group_label = str(row.get('group') or '').strip()
+            group_capability = _as_float(row.get('capability'))
+            if not group_label or group_capability is None:
+                continue
+            per_group_capability.append((group_label, group_capability))
+
+        per_group_capability_label = 'Cpk' if cp_value is not None and cpk_value is not None else capability_type
+        group_summary_line = None
+        if per_group_capability:
+            per_group_capability.sort(key=lambda item: item[0])
+            if len(per_group_capability) <= 3:
+                rendered_groups = ', '.join(
+                    f"{label}={value:.3f}"
+                    for label, value in per_group_capability
+                )
+                group_summary_line = f"Per-group {per_group_capability_label}: {rendered_groups}"
+            else:
+                weakest_group = min(per_group_capability, key=lambda item: item[1])
+                strongest_group = max(per_group_capability, key=lambda item: item[1])
+                group_summary_line = (
+                    f"Per-group {per_group_capability_label} range: "
+                    f"{weakest_group[0]}={weakest_group[1]:.3f} "
+                    f"to {strongest_group[0]}={strongest_group[1]:.3f}"
+                )
+
+        if cp_value is not None and cpk_value is not None:
+            palette_key = classify_capability_status(cp_value, cpk_value).get('palette_key')
+            callout_lines = [
+                f"Capability: {_readiness_label(palette_key)}",
+                "Scope: all groups pooled",
+                f"Cp={cp_value:.3f}, Cpk={cpk_value:.3f}",
+            ]
+            description = (
+                f"Capability summary: {_readiness_label(palette_key).lower()}. Cp={cp_value:.3f}, Cpk={cpk_value:.3f}. "
+                "Overall capability is computed from all groups pooled together."
+            )
+        elif capability_value is not None:
+            palette_key = classify_capability_value(capability_value, label_prefix=capability_type).get('palette_key')
+            callout_lines = [
+                f"Capability: {capability_type} {_readiness_label(palette_key).lower()}",
+                "Scope: all groups pooled",
+                f"{capability_type}={capability_value:.3f}",
+            ]
+            description = (
+                f"Capability summary: {capability_type} {_readiness_label(palette_key).lower()} at {capability_value:.3f}. "
+                "Overall capability is computed from all groups pooled together."
+            )
+        else:
+            status = str(capability_payload.get('status') or '').strip().lower()
+            if status == 'not_applicable':
+                return {
+                    'palette_key': 'quality_unknown',
+                    'callout_lines': ['Capability not applicable', 'Check data spread or spec definition'],
+                    'description': 'Capability is not applicable with the current data or spec definition.',
+                }
+            return {}
+
+        if group_summary_line:
+            callout_lines.append(group_summary_line)
+            description = f"{description} Per-group capability values are shown separately for quick comparison and are labeled explicitly on the plot."
+
+        if ci_lower is not None and ci_upper is not None:
+            callout_lines.append(f"95% CI {ci_lower:.3f} to {ci_upper:.3f}")
+            if ci_lower < 1.0:
+                callout_lines.append('Lower CI < 1.000')
+                description = f'{description} 95% CI {ci_lower:.3f} to {ci_upper:.3f}; lower confidence bound is below 1.000.'
+            else:
+                callout_lines.append('Lower CI >= 1.000')
+                description = f'{description} 95% CI {ci_lower:.3f} to {ci_upper:.3f}; lower confidence bound stays at or above 1.000.'
+
+        return {
+            'palette_key': palette_key,
+            'callout_lines': callout_lines,
+            'description': description,
+        }
+
+    @classmethod
+    def _render_group_analysis_plot_asset(cls, metric_row, plot_key):
         """Build an in-memory chart asset for Group Analysis worksheet insertion."""
         chart_payload = metric_row.get('chart_payload') if isinstance(metric_row, dict) else None
         if not isinstance(chart_payload, dict):
@@ -3950,20 +4792,32 @@ class ExportDataThread(QThread):
 
         group_labels = [label for (label, _) in filtered_entries]
         grouped_values = [values for (_, values) in filtered_entries]
+        display_group_labels = [
+            f"{label}\n(n={values.size})"
+            for (label, values) in filtered_entries
+        ]
 
         spec_limits = chart_payload.get('spec_limits') or {}
+        capability_context = cls._build_group_analysis_capability_context(metric_row)
+        description = cls._build_group_analysis_plot_description(
+            metric_row,
+            plot_key,
+            filtered_entries,
+            spec_limits,
+        )
         fig, ax = plt.subplots(figsize=(6.2, 3.2))
         try:
             if plot_key == 'violin':
                 if _HAS_SEABORN:
                     sns.violinplot(data=grouped_values, inner='quartile', cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
-                    ax.set_xticks(range(len(group_labels)))
-                    ax.set_xticklabels(group_labels)
+                    positions = list(range(len(group_labels)))
+                    ax.set_xticks(positions)
+                    ax.set_xticklabels(display_group_labels)
                 else:
-                    positions = range(1, len(group_labels) + 1)
+                    positions = list(range(1, len(group_labels) + 1))
                     ax.violinplot(grouped_values, showmeans=False, showmedians=True, showextrema=False, positions=positions)
-                    ax.set_xticks(list(positions))
-                    ax.set_xticklabels(group_labels)
+                    ax.set_xticks(positions)
+                    ax.set_xticklabels(display_group_labels)
 
                 nominal_value = spec_limits.get('nominal')
                 lsl_value = spec_limits.get('lsl')
@@ -4006,27 +4860,91 @@ class ExportDataThread(QThread):
                         bbox=annotation_box,
                         clip_on=False,
                     )
+                annotate_violin_group_stats(
+                    ax,
+                    group_labels,
+                    grouped_values,
+                    positions,
+                    nom=nominal_value,
+                    lsl=lsl_value,
+                    readability_scale=0.9,
+                    annotation_mode='auto',
+                    use_dynamic_offsets=True,
+                )
+                if capability_context.get('callout_lines'):
+                    palette_key = capability_context.get('palette_key') or 'quality_unknown'
+                    ax.text(
+                        0.01,
+                        0.98,
+                        '\n'.join(capability_context['callout_lines']),
+                        transform=ax.transAxes,
+                        ha='left',
+                        va='top',
+                        fontsize=6.6,
+                        color=SUMMARY_PLOT_PALETTE.get(f'{palette_key}_text', SUMMARY_PLOT_PALETTE['annotation_text']),
+                        bbox={
+                            'boxstyle': 'round,pad=0.2',
+                            'facecolor': SUMMARY_PLOT_PALETTE.get(f'{palette_key}_bg', 'white'),
+                            'edgecolor': SUMMARY_PLOT_PALETTE.get(f'{palette_key}_text', SUMMARY_PLOT_PALETTE['annotation_box_edge']),
+                            'linewidth': 0.55,
+                            'alpha': 0.9,
+                        },
+                    )
                 ax.set_title(f"{metric_row.get('metric')} - Violin")
             elif plot_key == 'histogram':
                 all_values = np.concatenate(grouped_values)
                 bin_edges = np.histogram_bin_edges(all_values, bins='auto')
+                # Use a high-contrast, colorblind-safe group cycle so overlapping
+                # histogram bars remain distinguishable in workbook exports.
                 histogram_palette = [
-                    SUMMARY_PLOT_PALETTE['distribution_base'],
-                    SUMMARY_PLOT_PALETTE['distribution_foreground'],
-                    SUMMARY_PLOT_PALETTE['density_line'],
-                    SUMMARY_PLOT_PALETTE['spec_limit'],
-                    SUMMARY_PLOT_PALETTE['sigma_band'],
+                    '#0072B2',  # blue
+                    '#D55E00',  # vermillion
+                    '#009E73',  # bluish green
+                    '#CC79A7',  # reddish purple
+                    '#E69F00',  # orange
+                    '#56B4E9',  # sky blue
                 ]
                 for index, (label, values) in enumerate(zip(group_labels, grouped_values)):
+                    color = histogram_palette[index % len(histogram_palette)]
+                    mean_value = float(np.mean(values))
+                    std_value = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
                     ax.hist(
                         values,
                         bins=bin_edges,
                         edgecolor='black',
-                        alpha=0.42,
-                        color=histogram_palette[index % len(histogram_palette)],
-                        label=label,
+                        linewidth=0.75,
+                        alpha=0.58,
+                        color=color,
+                        label=f"{label} (n={values.size}, μ={mean_value:.3f}, σ={std_value:.3f})",
                     )
-                ax.legend(loc='upper left', frameon=True, fontsize=7.0)
+                    ax.axvline(
+                        mean_value,
+                        color=color,
+                        linestyle='-.',
+                        linewidth=1.15,
+                        alpha=0.92,
+                    )
+                ax.legend(loc='upper left', frameon=True, fontsize=7.0, title='Group (n, mean, σ)', title_fontsize=7.0)
+                histogram_note_lines = ['Dash-dot lines show group means', 'Legend includes per-group n, μ, and σ']
+                if capability_context.get('callout_lines'):
+                    histogram_note_lines.extend(capability_context['callout_lines'])
+                palette_key = capability_context.get('palette_key') if capability_context else None
+                ax.text(
+                    0.99,
+                    0.98,
+                    '\n'.join(histogram_note_lines),
+                    transform=ax.transAxes,
+                    ha='right',
+                    va='top',
+                    fontsize=6.7,
+                    color=SUMMARY_PLOT_PALETTE.get(f'{palette_key}_text', '#4d5968') if palette_key else '#4d5968',
+                    bbox={
+                        'boxstyle': 'round,pad=0.18',
+                        'facecolor': SUMMARY_PLOT_PALETTE.get(f'{palette_key}_bg', (1.0, 1.0, 1.0, 0.78)) if palette_key else (1.0, 1.0, 1.0, 0.78),
+                        'edgecolor': SUMMARY_PLOT_PALETTE.get(f'{palette_key}_text', SUMMARY_PLOT_PALETTE['annotation_box_edge']) if palette_key else SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                        'linewidth': 0.45,
+                    },
+                )
 
                 for limit_key, style in (
                     ('lsl', {'linestyle': '--', 'color': '#B45309'}),
@@ -4046,7 +4964,7 @@ class ExportDataThread(QThread):
             image_data = BytesIO()
             fig.savefig(image_data, format='png', dpi=120)
             image_data.seek(0)
-            return {'image_data': image_data, 'row_span': 16}
+            return {'image_data': image_data, 'row_span': 16, 'description': description}
         except Exception:
             logger.debug('Failed to render group-analysis %s plot for %r', plot_key, metric_row.get('metric'), exc_info=True)
             return {}
@@ -4104,6 +5022,9 @@ class ExportDataThread(QThread):
             analysis_level=mode,
             alias_db_path=self.db_file,
         )
+        if self.generate_html_dashboard:
+            self._html_group_analysis_payload = payload
+            self._html_group_analysis_plot_assets = {'metrics': {}}
 
         group_sheet_name = unique_sheet_name('Group Analysis', used_sheet_names)
         group_worksheet = workbook.add_worksheet(group_sheet_name)
@@ -4120,7 +5041,14 @@ class ExportDataThread(QThread):
             self._write_group_analysis_message_sheet(group_worksheet, short_message)
         else:
             plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode)
+            if self.generate_html_dashboard:
+                self._html_group_analysis_plot_assets = plot_assets
             write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
+            if mode == 'standard':
+                plots_sheet_name = unique_sheet_name('Group Analysis Plots', used_sheet_names)
+                plots_worksheet = workbook.add_worksheet(plots_sheet_name)
+                self._record_exported_sheet_name(plots_sheet_name)
+                write_group_analysis_plots_sheet(plots_worksheet, payload, plot_assets=plot_assets)
 
         if _internal_group_analysis_diagnostics_enabled():
             diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
@@ -4231,135 +5159,96 @@ class ExportDataThread(QThread):
         try:
             if self._check_canceled():
                 return
-            transform_start = time.perf_counter()
+
             header_group = self._ensure_sample_number_column(header_group)
+
+            summary_start = time.perf_counter()
             limits = resolve_nominal_and_limits(header_group)
             nom = limits['nom']
             USL = limits['usl']
             LSL = limits['lsl']
-
             reference_value = header_group['REFERENCE'].iloc[0] if 'REFERENCE' in header_group.columns and not header_group.empty else None
             header_value = header_group['HEADER'].iloc[0] if 'HEADER' in header_group.columns and not header_group.empty else None
             axis_value = header_group['AX'].iloc[0] if 'AX' in header_group.columns and not header_group.empty else None
-
-            summary_stats = None
+            sql_summary = None
             if reference_value is not None and header_value is not None and axis_value is not None:
-                sql_summary = fetch_sql_measurement_summary(
-                    self.db_file,
-                    self._active_export_query,
+                sql_summary = self._lookup_sql_measurement_summary(
                     reference=reference_value,
                     header=header_value,
                     ax=axis_value,
                     usl=USL,
                     lsl=LSL,
-                    connection=self._db_connection,
                 )
-                if sql_summary is not None:
-                    sample_size = int(sql_summary.get('sample_size') or 0)
-                    average_raw = sql_summary.get('average')
-                    minimum_raw = sql_summary.get('minimum')
-                    maximum_raw = sql_summary.get('maximum')
-                    sigma_raw = sql_summary.get('sigma')
-                    nok_count = int(sql_summary.get('nok_count') or 0)
+            summary_stats = _retrieve_summary_statistics_compute(
+                header_group,
+                sql_summary=sql_summary,
+                nom=nom,
+                usl=USL,
+                lsl=LSL,
+            )
+            self._record_stage_timing('summary_stat_retrieval', time.perf_counter() - summary_start)
 
-                    has_complete_sql_summary = (
-                        sample_size > 0
-                        and average_raw is not None
-                        and minimum_raw is not None
-                        and maximum_raw is not None
-                    )
-                    if has_complete_sql_summary:
-                        average = float(average_raw)
-                        sigma = float(sigma_raw or 0.0)
-                        cp, cpk = safe_process_capability(nom, USL, LSL, sigma, average)
-                        one_sided_mode = bool(is_one_sided_geometric_tolerance(nom, LSL))
-                        normality = compute_normality_status(
-                            header_group['MEAS'],
-                            one_sided=one_sided_mode,
-                            location_bound=LSL,
-                        )
-                        summary_stats = {
-                            'minimum': float(minimum_raw),
-                            'maximum': float(maximum_raw),
-                            'sigma': sigma,
-                            'average': average,
-                            'median': float(header_group['MEAS'].median()),
-                            'cp': cp,
-                            'cpk': cpk,
-                            'sample_size': sample_size,
-                            'nok_count': nok_count,
-                            'nok_pct': (nok_count / sample_size),
-                            'observed_nok_count': nok_count,
-                            'observed_nok_pct': (nok_count / sample_size),
-                            'estimated_nok_pct': None,
-                            'estimated_nok_ppm': None,
-                            'estimated_yield_pct': None,
-                            'normality_status': normality['status'],
-                            'normality_text': normality['text'],
-                            'normality_test_name': normality.get('test_name', 'Shapiro'),
-                            'normality_p_value': normality.get('p_value'),
-                            'usl': USL,
-                        }
-
-            if summary_stats is None:
-                summary_stats = compute_measurement_summary(header_group, usl=USL, lsl=LSL, nom=nom)
-            summary_stats.setdefault('normality_test_name', 'Shapiro')
-            summary_stats.setdefault('normality_p_value', None)
-            summary_stats.setdefault('observed_nok_count', summary_stats.get('nok_count', 0))
-            summary_stats.setdefault('observed_nok_pct', summary_stats.get('nok_pct', 0))
-            summary_stats.setdefault('estimated_nok_pct', None)
-            summary_stats.setdefault('estimated_nok_ppm', None)
-            summary_stats.setdefault('estimated_yield_pct', None)
-            meas_series = pd.to_numeric(header_group.get('MEAS'), errors='coerce')
-            if LSL is not None:
-                summary_stats.setdefault('observed_nok_below_lsl_count', int((meas_series < LSL).sum()))
-            if USL is not None:
-                summary_stats.setdefault('observed_nok_above_usl_count', int((meas_series > USL).sum()))
-            summary_stats['usl'] = USL
-            average = summary_stats['average']
-            histogram_table_payload = build_histogram_table_data(summary_stats)
-            summary_table_composition = build_summary_table_composition(summary_stats, histogram_table_payload)
-            capability_badge = summary_table_composition['capability_badge']
-            histogram_row_badges = summary_table_composition['histogram_row_badges']
-            panel_subtitle = summary_table_composition['panel_subtitle']
-
+            grouping_start = time.perf_counter()
             grouping_df = self.prepared_grouping_df
             header_group, grouping_applied = self._apply_group_assignments(header_group, grouping_df)
-            sampling_policy = resolve_chart_sampling_policy(density_mode=self._optimization_toggles['chart_density_mode'])
-            sampled_distribution_group = sample_frame_for_chart(header_group, 'distribution', sampling_policy)
-            sampled_iqr_group = sample_frame_for_chart(header_group, 'iqr', sampling_policy)
-            sampled_histogram_group = sample_frame_for_chart(header_group, 'histogram', sampling_policy)
-            sampled_trend_group = sample_frame_for_chart(header_group, 'trend', sampling_policy)
-            self._record_stage_timing('transform_grouping', time.perf_counter() - transform_start)
-
             distribution_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
-            scatter_key = 'GROUP' if grouping_applied else 'SAMPLE_NUMBER'
+            scatter_key = distribution_key
+            normalized_group = _normalize_summary_group_frame_compute(header_group, grouping_key=distribution_key)
+            self._record_stage_timing('transform_grouping', time.perf_counter() - grouping_start)
 
-            chart_mp_enabled = self._chart_executor is not None and len(header_group) >= 2500
+            sampling_start = time.perf_counter()
+            sampling_policy = resolve_chart_sampling_policy(density_mode=self._optimization_toggles['chart_density_mode'])
+            sampling_context = _resolve_sampling_context_compute(
+                normalized_group,
+                grouping_applied=grouping_applied,
+                sampling_policy=sampling_policy,
+                violin_plot_min_samplesize=self.violin_plot_min_samplesize,
+            )
+            sampled_distribution_group = sampling_context['sampled_frames']['distribution']
+            sampled_iqr_group = sampling_context['sampled_frames']['iqr']
+            sampled_histogram_group = sampling_context['sampled_frames']['histogram']
+            sampled_trend_group = sampling_context['sampled_frames']['trend']
+            self._record_stage_timing('sampling_plan_resolution', time.perf_counter() - sampling_start)
+
+            chart_prep_start = time.perf_counter()
+            chart_mp_enabled = self._chart_executor is not None and len(normalized_group) >= 2500
             precomputed_distribution_fit = None
-            precomputed_trend_payload = None
+            precomputed_trend_payload = sampling_context['trend_payload']['payload']
+            native_histogram_capable = None
             if chart_mp_enabled:
                 try:
-                    distribution_fit_future = self._chart_executor.submit(
-                        fit_measurement_distribution,
-                        sampled_histogram_group['MEAS'],
-                        lsl=LSL,
-                        usl=USL,
-                        nom=nom,
-                        point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
-                        include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
-                    )
+                    should_precompute_distribution_fit = self._summary_chart_required('histogram')
+                    if should_precompute_distribution_fit and native_histogram_capable is None:
+                        native_histogram_capable = _native_extended_histogram_export_available()
+
+                    distribution_fit_future = None
+                    if should_precompute_distribution_fit:
+                        distribution_fit_future = self._chart_executor.submit(
+                            fit_measurement_distribution,
+                            sampling_context['histogram_payload']['measurements'],
+                            lsl=LSL,
+                            usl=USL,
+                            nom=nom,
+                            point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
+                            include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
+                        )
                     trend_future = self._chart_executor.submit(
                         build_trend_plot_payload,
                         sampled_trend_group,
                         grouping_active=grouping_applied,
                         label_column=distribution_key,
                     )
-                    precomputed_distribution_fit = distribution_fit_future.result()
+                    if distribution_fit_future is not None:
+                        precomputed_distribution_fit = distribution_fit_future.result()
                     precomputed_trend_payload = trend_future.result()
                 except Exception:
                     precomputed_distribution_fit = None
-                    precomputed_trend_payload = None
+
+            distribution_labels = sampling_context['distribution_payload']['labels']
+            distribution_values = sampling_context['distribution_payload']['values']
+            can_render_violin = sampling_context['distribution_payload']['can_render_violin']
+            iqr_labels = sampling_context['iqr_payload']['labels']
+            iqr_values = sampling_context['iqr_payload']['values']
 
             prep_executor = self._summary_prep_executor
             if prep_executor is not None:
@@ -4378,52 +5267,58 @@ class ExportDataThread(QThread):
                     )
                     distribution_labels, distribution_values, can_render_violin = distribution_future.result()
                     iqr_labels, iqr_values, _ = iqr_future.result()
+                    sampling_context['distribution_payload'] = {
+                        'labels': distribution_labels,
+                        'values': distribution_values,
+                        'can_render_violin': can_render_violin,
+                    }
+                    sampling_context['iqr_payload'] = {
+                        'labels': iqr_labels,
+                        'values': iqr_values,
+                    }
                 except Exception:
                     logger.debug(
                         "Summary prep executor failed; falling back to in-process payload generation.",
                         exc_info=True,
                     )
-                    distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
-                        sampled_distribution_group,
-                        distribution_key,
-                        self.violin_plot_min_samplesize,
-                    )
-                    iqr_labels, iqr_values, _ = build_violin_payload_vectorized(
-                        sampled_iqr_group,
-                        distribution_key,
-                        self.violin_plot_min_samplesize,
-                    )
-            else:
-                distribution_labels, distribution_values, can_render_violin = build_violin_payload_vectorized(
-                    sampled_distribution_group,
-                    distribution_key,
-                    self.violin_plot_min_samplesize,
-                )
-                iqr_labels, iqr_values, _ = build_violin_payload_vectorized(
-                    sampled_iqr_group,
-                    distribution_key,
-                    self.violin_plot_min_samplesize,
-                )
 
-            if grouping_applied:
-                distribution_counts = self._compute_group_sample_counts(sampled_distribution_group, distribution_key)
-                iqr_counts = self._compute_group_sample_counts(sampled_iqr_group, distribution_key)
-                distribution_labels = self._append_group_sample_counts(distribution_labels, distribution_counts)
-                iqr_labels = self._append_group_sample_counts(iqr_labels, iqr_counts)
-
-            distribution_labels = build_summary_panel_labels(
-                distribution_labels,
-                grouping_active=grouping_applied,
+            chart_payloads = _prepare_summary_chart_payloads_compute(
+                header=header,
+                grouping_applied=grouping_applied,
+                sampling_context=sampling_context,
+                summary_stats=summary_stats,
             )
-            iqr_labels = build_summary_panel_labels(
-                iqr_labels,
-                grouping_active=grouping_applied,
+            histogram_table_payload = chart_payloads['histogram']['histogram_table_payload']
+            summary_table_composition = chart_payloads['composition']
+            capability_badge = summary_table_composition['capability_badge']
+            histogram_row_badges = summary_table_composition['histogram_row_badges']
+            panel_subtitle = summary_table_composition['panel_subtitle']
+            dashboard_section = self._begin_html_dashboard_section(
+                header=header,
+                subtitle=panel_subtitle,
+                reference=reference_value,
+                axis=axis_value,
+                grouping_applied=grouping_applied,
+                sample_size=summary_stats.get('sample_size', 0),
+                limits={
+                    'nominal': nom,
+                    'lsl': LSL,
+                    'usl': USL,
+                },
             )
+            distribution_labels = chart_payloads['distribution']['labels']
+            distribution_values = chart_payloads['distribution']['values']
+            can_render_violin = chart_payloads['distribution']['can_render_violin']
+            iqr_labels = chart_payloads['iqr']['labels']
+            iqr_values = chart_payloads['iqr']['values']
+            trend_payload = precomputed_trend_payload or chart_payloads['trend']
+            self._record_stage_timing('chart_payload_preparation', time.perf_counter() - chart_prep_start)
 
             label_positions = None
             x_values = None
             y_values = None
             distribution_x_axis_label = 'Group' if grouping_applied else 'Sample #'
+            distribution_title = chart_payloads['distribution']['title']
             if not can_render_violin:
                 x_values, y_values, distribution_labels = self._build_grouped_summary_scatter_payload(
                     sampled_distribution_group,
@@ -4432,21 +5327,21 @@ class ExportDataThread(QThread):
                 )
                 label_positions = list(x_values)
 
-            distribution_title = header
-            if not can_render_violin:
-                distribution_title = f"{header} (means)"
-
-            summary_point_count = len(distribution_labels) if can_render_violin else len(label_positions or [])
-            annotation_strategy = resolve_summary_annotation_strategy(x_point_count=summary_point_count)
+            annotation_strategy = chart_payloads['annotation_strategy']
             force_sparse_x_labels = annotation_strategy['label_mode'] == 'sparse'
             use_dynamic_annotation_offsets = annotation_strategy['annotation_mode'] == 'dynamic'
             show_violin_annotation_legend = annotation_strategy['show_violin_legend']
 
-            summary_anchors = build_summary_image_anchor_plan(col)
-            panel_plan = build_summary_panel_write_plan(summary_anchors, header)
-            header_cell = panel_plan['header_cell']
-            default_image_slots = panel_plan['image_slots']
+            write_plan_start = time.perf_counter()
+            worksheet_plan = _build_summary_worksheet_plan_compute(
+                header=header,
+                col=col,
+                panel_subtitle=panel_subtitle,
+            )
+            header_cell = worksheet_plan['header_cell']
+            default_image_slots = worksheet_plan['image_slots']
             distribution_overflow_cols = 0
+            self._record_stage_timing('worksheet_write_planning', time.perf_counter() - write_plan_start)
 
             def _reserve_summary_image_slot(chart_name, fig):
                 nonlocal distribution_overflow_cols
@@ -4469,70 +5364,200 @@ class ExportDataThread(QThread):
 
             write_start = time.perf_counter()
             summary_worksheet.write(header_cell['row'], header_cell['col'], header_cell['value'])
-            summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, panel_subtitle)
+            summary_worksheet.write(header_cell['row'], header_cell['col'] + 1, worksheet_plan['subtitle_value'])
             self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
 
             if self._summary_chart_required('distribution'):
                 try:
-                    apply_summary_plot_theme()
                     chart_start = time.perf_counter()
+                    distribution_backend_native = resolve_chart_renderer_backend() == 'native' and native_distribution_backend_available()
+                    one_sided_distribution = bool(is_one_sided_geometric_tolerance(nom, LSL))
+                    if distribution_backend_native:
+                        if can_render_violin:
+                            positions = list(range(len(distribution_labels)))
+                            axis_layout = _resolve_native_axis_layout(
+                                distribution_labels,
+                                positions=positions,
+                                force_sparse=force_sparse_x_labels,
+                            )
+                            annotation_style = resolve_violin_annotation_style(
+                                group_count=len(distribution_values),
+                                x_limits=(0.0, max(float(len(distribution_labels) - 1), 1.0)),
+                                figure_size=(axis_layout['recommended_fig_width'], 4.0),
+                                mode='auto',
+                                readability_scale=self.summary_plot_scale,
+                            )
+                            violin_annotations = _build_violin_group_annotation_payload(
+                                distribution_values,
+                                positions,
+                                show_sigma=annotation_style.get('show_sigma', False),
+                                one_sided_sigma_mode=one_sided_distribution,
+                            )
+                            distribution_native_payload = build_distribution_native_payload(
+                                values=distribution_values,
+                                labels=distribution_labels,
+                                title=build_wrapped_chart_title(distribution_title),
+                                lsl=LSL,
+                                usl=USL,
+                            )
+                            distribution_native_payload.update(
+                                {
+                                    'render_mode': 'violin',
+                                    'positions': positions,
+                                    'layout': axis_layout,
+                                    'canvas': _build_native_canvas(figure_width=axis_layout['recommended_fig_width']),
+                                    'x_label': distribution_x_axis_label,
+                                    'y_label': 'Measurement',
+                                    'nominal': None if nom is None else float(nom),
+                                    'one_sided': one_sided_distribution,
+                                    'include_nominal': False,
+                                    'y_limits': _resolve_native_y_limits(
+                                        *distribution_values,
+                                        scale_factor=self.summary_plot_scale,
+                                        extra_values=[LSL, USL],
+                                    ),
+                                    'legend': {
+                                        'items': _build_violin_native_legend_items(annotation_style)
+                                        if show_violin_annotation_legend
+                                        else []
+                                    },
+                                    'annotation_style': {
+                                        'font_size': annotation_style.get('font_size'),
+                                        'mean_marker_size': annotation_style.get('mean_marker_size'),
+                                        'show_minmax': annotation_style.get('show_minmax'),
+                                        'show_sigma': annotation_style.get('show_sigma'),
+                                    },
+                                    'violin_annotations': violin_annotations,
+                                }
+                            )
+                        else:
+                            axis_layout = _resolve_native_axis_layout(
+                                distribution_labels,
+                                positions=label_positions,
+                                force_sparse=force_sparse_x_labels,
+                            )
+                            distribution_native_payload = {
+                                'type': 'distribution',
+                                'series': [[] for _ in distribution_labels],
+                                'labels': [str(label) for label in distribution_labels],
+                                'title': build_wrapped_chart_title(distribution_title),
+                                'lsl': None if LSL is None else float(LSL),
+                                'usl': None if USL is None else float(USL),
+                                'render_mode': 'scatter',
+                                'x_values': [float(value) for value in x_values],
+                                'y_values': [float(value) for value in y_values],
+                                'x_domain': {
+                                    'min': float(min(x_values)) if len(x_values) else 0.0,
+                                    'max': float(max(x_values)) if len(x_values) else 1.0,
+                                },
+                                'layout': axis_layout,
+                                'canvas': _build_native_canvas(figure_width=axis_layout['recommended_fig_width']),
+                                'x_label': distribution_x_axis_label,
+                                'y_label': 'Measurement',
+                                'nominal': None if nom is None else float(nom),
+                                'one_sided': one_sided_distribution,
+                                'include_nominal': False,
+                                'y_limits': _resolve_native_y_limits(
+                                    y_values,
+                                    scale_factor=self.summary_plot_scale,
+                                    extra_values=[LSL, USL],
+                                ),
+                                'legend': {'items': []},
+                            }
 
-                    categorical_strategy = prepare_categorical_x_axis(distribution_labels)
-                    fig, ax = plt.subplots(figsize=(categorical_strategy['recommended_fig_width'], 4))
-                    if can_render_violin:
-                        render_violin(
+                        distribution_render_result = self._save_summary_chart(
+                            None,
+                            chart_type='distribution',
+                            native_payload=distribution_native_payload,
+                        )
+                        image_data = self._register_chart_image(distribution_render_result.png_bytes)
+                        slot_fig = plt.figure(figsize=(distribution_native_payload['canvas']['width_px'] / 150.0, 4.0))
+                        distribution_slot = _reserve_summary_image_slot('distribution', slot_fig)
+                        plt.close(slot_fig)
+                    else:
+                        apply_summary_plot_theme()
+                        categorical_strategy = prepare_categorical_x_axis(distribution_labels)
+                        fig, ax = plt.subplots(figsize=(categorical_strategy['recommended_fig_width'], 4))
+                        if can_render_violin:
+                            render_violin(
+                                ax,
+                                distribution_values,
+                                distribution_labels,
+                                nom=nom,
+                                lsl=LSL,
+                                usl=USL,
+                                one_sided=one_sided_distribution,
+                                readability_scale=self.summary_plot_scale,
+                                use_dynamic_offsets=use_dynamic_annotation_offsets,
+                                show_annotation_legend=show_violin_annotation_legend,
+                            )
+                        else:
+                            render_scatter_numeric(ax, x_values, y_values)
+                            if LSL is not None and USL is not None:
+                                render_tolerance_band(
+                                    ax,
+                                    nom,
+                                    LSL,
+                                    USL,
+                                    one_sided=one_sided_distribution,
+                                )
+                            if LSL is not None or USL is not None:
+                                render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
+
+                        apply_minimal_axis_style(ax, grid_axis='y')
+                        axis_layout = apply_shared_x_axis_label_strategy(
                             ax,
-                            distribution_values,
                             distribution_labels,
-                            nom=nom,
+                            positions=label_positions,
+                            force_sparse=force_sparse_x_labels,
+                        )
+
+                        current_y_limits = ax.get_ylim()
+                        y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                        ax.set_ylim(y_min, y_max)
+                        ax.set_xlabel(distribution_x_axis_label)
+                        ax.set_ylabel('Measurement')
+                        ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
+                        figure_legend = move_legend_to_figure(ax)
+                        finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
+                        distribution_native_payload = build_distribution_native_payload(
+                            values=distribution_values,
+                            labels=distribution_labels,
+                            title=build_wrapped_chart_title(distribution_title),
                             lsl=LSL,
                             usl=USL,
-                            one_sided=is_one_sided_geometric_tolerance(nom, LSL),
-                            readability_scale=self.summary_plot_scale,
-                            use_dynamic_offsets=use_dynamic_annotation_offsets,
-                            show_annotation_legend=show_violin_annotation_legend,
                         )
-                    else:
-                        render_scatter_numeric(ax, x_values, y_values)
-                        if LSL is not None and USL is not None:
-                            render_tolerance_band(
-                                ax,
-                                nom,
-                                LSL,
-                                USL,
-                                one_sided=is_one_sided_geometric_tolerance(nom, LSL),
-                            )
-                        if LSL is not None or USL is not None:
-                            render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
+                        distribution_render_result = self._save_summary_chart(
+                            fig,
+                            chart_type='distribution',
+                            native_payload=distribution_native_payload,
+                        )
+                        image_data = self._register_chart_image(distribution_render_result.png_bytes)
+                        distribution_slot = _reserve_summary_image_slot('distribution', fig)
+                        if self._check_canceled():
+                            plt.close(fig)
+                            return
+                        plt.close(fig)
 
-                    apply_minimal_axis_style(ax, grid_axis='y')
-                    axis_layout = apply_shared_x_axis_label_strategy(
-                        ax,
-                        distribution_labels,
-                        positions=label_positions,
-                        force_sparse=force_sparse_x_labels,
+                    self._record_chart_render_timing(
+                        'distribution',
+                        time.perf_counter() - chart_start,
+                        backend=distribution_render_result.backend,
                     )
-
-                    current_y_limits = ax.get_ylim()
-                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                    ax.set_ylim(y_min, y_max)
-                    ax.set_xlabel(distribution_x_axis_label)
-                    ax.set_ylabel('Measurement')
-                    ax.set_title(build_wrapped_chart_title(distribution_title), pad=20)
-                    figure_legend = move_legend_to_figure(ax)
-                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
-                    image_data = self._register_chart_image(self._save_summary_chart(fig))
-                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-
-                    distribution_slot = _reserve_summary_image_slot('distribution', fig)
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, distribution_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
-
+                    self._attach_html_dashboard_chart(
+                        dashboard_section,
+                        chart_type='distribution',
+                        title=distribution_native_payload.get('title') if isinstance(distribution_native_payload, dict) else build_wrapped_chart_title(distribution_title),
+                        backend=distribution_render_result.backend,
+                        image_buffer=image_data,
+                        payload=distribution_native_payload if isinstance(distribution_native_payload, dict) else {},
+                        note='Violin distribution view' if can_render_violin else 'Grouped mean scatter view',
+                    )
                     if self._check_canceled():
-                        plt.close(fig)
                         return
-                    plt.close(fig)
                 finally:
                     pass
 
@@ -4548,46 +5573,115 @@ class ExportDataThread(QThread):
                         sampled_iqr_group,
                         grouping_active=grouping_applied,
                     )
-                    iqr_strategy = prepare_categorical_x_axis(boxplot_labels)
-                    fig, ax = plt.subplots(figsize=(iqr_strategy['recommended_fig_width'], 4))
-                    render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
-                    render_tolerance_band(
-                        ax,
-                        nom,
-                        LSL,
-                        USL,
-                        one_sided=is_one_sided_geometric_tolerance(nom, LSL),
-                    )
-                    render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
-                    add_iqr_boxplot_legend(ax, include_tolerance_refs=False)
-                    figure_legend = move_legend_to_figure(ax)
-                    apply_minimal_axis_style(ax, grid_axis='y')
-                    axis_layout = apply_shared_x_axis_label_strategy(
-                        ax,
-                        boxplot_labels,
-                        positions=list(range(1, len(boxplot_labels) + 1)),
-                        force_sparse=force_sparse_x_labels,
-                    )
-                    ax.set_xlabel('Group')
-                    ax.set_ylabel('Measurement')
-                    ax.set_title(build_wrapped_chart_title(header), pad=20)
+                    iqr_backend_native = resolve_chart_renderer_backend() == 'native' and native_iqr_backend_available()
+                    if iqr_backend_native:
+                        axis_layout = _resolve_native_axis_layout(
+                            boxplot_labels,
+                            positions=list(range(1, len(boxplot_labels) + 1)),
+                            force_sparse=force_sparse_x_labels,
+                        )
+                        iqr_native_payload = {
+                            'type': 'iqr',
+                            'labels': [str(label) for label in boxplot_labels],
+                            'series': [
+                                [float(item) for item in np.asarray(values, dtype=float)[np.isfinite(np.asarray(values, dtype=float))]]
+                                for values in boxplot_values
+                            ],
+                            'title': build_wrapped_chart_title(header),
+                            'lsl': None if LSL is None else float(LSL),
+                            'usl': None if USL is None else float(USL),
+                            'nominal': None if nom is None else float(nom),
+                            'one_sided': bool(is_one_sided_geometric_tolerance(nom, LSL)),
+                            'layout': axis_layout,
+                            'canvas': _build_native_canvas(figure_width=axis_layout['recommended_fig_width']),
+                            'x_label': 'Group',
+                            'y_label': 'Measurement',
+                            'y_limits': _resolve_native_y_limits(
+                                *boxplot_values,
+                                scale_factor=self.summary_plot_scale,
+                                extra_values=[LSL, USL, nom],
+                            ),
+                            'legend': {'items': _build_iqr_native_legend_items()},
+                        }
+                        iqr_render_result = self._save_summary_chart(
+                            None,
+                            chart_type='iqr',
+                            native_payload=iqr_native_payload,
+                        )
+                        image_data = self._register_chart_image(iqr_render_result.png_bytes)
+                        slot_fig = plt.figure(figsize=(axis_layout['recommended_fig_width'], 4))
+                        iqr_slot = _reserve_summary_image_slot('iqr', slot_fig)
+                        plt.close(slot_fig)
+                    else:
+                        iqr_strategy = prepare_categorical_x_axis(boxplot_labels)
+                        fig, ax = plt.subplots(figsize=(iqr_strategy['recommended_fig_width'], 4))
+                        render_iqr_boxplot(ax, boxplot_values, boxplot_labels)
+                        render_tolerance_band(
+                            ax,
+                            nom,
+                            LSL,
+                            USL,
+                            one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                        )
+                        render_spec_reference_lines(ax, nom, LSL, USL, include_nominal=False)
+                        add_iqr_boxplot_legend(ax, include_tolerance_refs=False)
+                        figure_legend = move_legend_to_figure(ax)
+                        apply_minimal_axis_style(ax, grid_axis='y')
+                        axis_layout = apply_shared_x_axis_label_strategy(
+                            ax,
+                            boxplot_labels,
+                            positions=list(range(1, len(boxplot_labels) + 1)),
+                            force_sparse=force_sparse_x_labels,
+                        )
+                        ax.set_xlabel('Group')
+                        ax.set_ylabel('Measurement')
+                        ax.set_title(build_wrapped_chart_title(header), pad=20)
 
-                    current_y_limits = ax.get_ylim()
-                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                    ax.set_ylim(y_min, y_max)
-                    finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
+                        current_y_limits = ax.get_ylim()
+                        y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                        ax.set_ylim(y_min, y_max)
+                        finalize_extended_chart_layout(fig, ax, legend=figure_legend, strategy=axis_layout)
+                        iqr_native_payload = {
+                            'type': 'iqr',
+                            'labels': [str(label) for label in boxplot_labels],
+                            'series': [
+                                [float(item) for item in np.asarray(values, dtype=float)[np.isfinite(np.asarray(values, dtype=float))]]
+                                for values in boxplot_values
+                            ],
+                            'title': build_wrapped_chart_title(header),
+                            'lsl': None if LSL is None else float(LSL),
+                            'usl': None if USL is None else float(USL),
+                            'nominal': None if nom is None else float(nom),
+                            'one_sided': bool(is_one_sided_geometric_tolerance(nom, LSL)),
+                            'x_label': 'Group',
+                            'y_label': 'Measurement',
+                            'legend': {'items': _build_iqr_native_legend_items()},
+                        }
 
-                    image_data = self._register_chart_image(self._save_summary_chart(fig))
-                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    iqr_slot = _reserve_summary_image_slot('iqr', fig)
+                        iqr_render_result = self._save_summary_chart(fig, chart_type='iqr')
+                        image_data = self._register_chart_image(iqr_render_result.png_bytes)
+                        iqr_slot = _reserve_summary_image_slot('iqr', fig)
+                        if self._check_canceled():
+                            plt.close(fig)
+                            return
+                        plt.close(fig)
+
+                    self._record_chart_render_timing('iqr', time.perf_counter() - chart_start, backend=iqr_render_result.backend)
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, iqr_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    self._attach_html_dashboard_chart(
+                        dashboard_section,
+                        chart_type='iqr',
+                        title=iqr_native_payload.get('title') if isinstance(iqr_native_payload, dict) else build_wrapped_chart_title(header),
+                        backend=iqr_render_result.backend,
+                        image_buffer=image_data,
+                        payload=iqr_native_payload if isinstance(iqr_native_payload, dict) else {},
+                        note='Interquartile range boxplot',
+                    )
 
                     if self._check_canceled():
-                        plt.close(fig)
                         return
-                    plt.close(fig)
                 finally:
                     pass
 
@@ -4595,20 +5689,34 @@ class ExportDataThread(QThread):
                 try:
                     base_histogram_figsize = (8.8, 4.0)
                     chart_start = time.perf_counter()
-
+                    histogram_values = sampling_context['histogram_payload']['measurements']
+                    histogram_title = build_wrapped_chart_title(header)
+                    histogram_bin_count = resolve_histogram_bin_count(histogram_values).get('bin_count')
+                    if native_histogram_capable is None:
+                        native_histogram_capable = _native_extended_histogram_export_available()
                     distribution_fit_result = precomputed_distribution_fit
                     if distribution_fit_result is None:
                         distribution_fit_result = fit_measurement_distribution(
-                            sampled_histogram_group['MEAS'],
+                            histogram_values,
                             lsl=LSL,
                             usl=USL,
                             nom=nom,
                             point_count=40 if self._optimization_toggles['chart_density_mode'] == 'reduced' else 100,
                             include_kde_reference=self._optimization_toggles['chart_density_mode'] != 'reduced',
+                            memoization_cache=self._distribution_fit_memo,
                         )
 
-                    summary_stats.update(compute_estimated_tail_metrics(distribution_fit_result, lsl=LSL, usl=USL))
-                    histogram_table_payload = build_histogram_table_data(summary_stats)
+                    histogram_summary_payload = _finalize_histogram_summary_payload_compute(
+                        summary_stats,
+                        distribution_fit_result,
+                        lsl=LSL,
+                        usl=USL,
+                    )
+                    summary_stats = histogram_summary_payload['summary_stats']
+                    histogram_table_payload = histogram_summary_payload['histogram_table_payload']
+                    summary_table_composition = histogram_summary_payload['summary_table_composition']
+                    histogram_row_badges = summary_table_composition['histogram_row_badges']
+                    capability_badge = summary_table_composition['capability_badge']
                     histogram_table_payload = _apply_non_normal_cpk_reference_label(
                         histogram_table_payload,
                         distribution_fit_result,
@@ -4627,94 +5735,13 @@ class ExportDataThread(QThread):
                         distribution_fit_rows=distribution_fit_rows,
                     )
 
-                    histogram_figsize = base_histogram_figsize
-                    fig = plt.figure(figsize=histogram_figsize)
-                    histogram_font_sizes = compute_histogram_font_sizes(
-                        histogram_figsize,
-                        has_table=True,
-                        readability_scale=self.summary_plot_scale,
-                    )
-
-                    panel_rects = compute_histogram_plot_with_right_info_layout(
-                        histogram_figsize,
-                        table_fontsize=histogram_font_sizes['table_fontsize'],
-                        fit_row_count=0,
-                        stats_row_count=len(unified_rows),
-                        fit_rows=[],
-                        stats_rows=unified_rows,
-                        note_line_count=0,
-                        right_container_width_hint=0.34,
-                        dpi=fig.dpi,
-                    )
-                    assert_non_overlapping_rectangles(
-                        {
-                            'plot_rect': panel_rects['plot_rect'],
-                            'right_table_rect': panel_rects['right_container_rect'],
-                            'footer_rect': panel_rects['footer_rect'],
-                        }
-                    )
-
-                    plot_rect = panel_rects['plot_rect']
-                    right_table_rect = panel_rects['right_container_rect']
-
-                    plot_ax = fig.add_axes([
-                        plot_rect['x'],
-                        plot_rect['y'],
-                        plot_rect['width'],
-                        plot_rect['height'],
-                    ])
-                    right_table_ax = fig.add_axes([
-                        right_table_rect['x'],
-                        right_table_rect['y'],
-                        right_table_rect['width'],
-                        right_table_rect['height'],
-                    ])
-                    right_table_ax.set_axis_off()
-
-
-                    histogram_render_meta = render_histogram(
-                        plot_ax,
-                        sampled_histogram_group,
-                        lsl=LSL,
-                        usl=USL,
-                        group_column=distribution_key if grouping_applied else None,
-                    )
-
-                    table_style_options = {
-                        'fontsize': histogram_font_sizes['table_fontsize'],
-                        'min_fontsize': 7.4,
-                        'max_fontsize': 10.4,
-                        'cell_padding_points': 2.2,
-                        'compact_label_mapping': {
-                            **_DISTRIBUTION_FIT_COMPACT_LABELS,
-                            'Normality': 'Norm.',
-                        },
-                    }
-
-                    unified_table_meta = render_panel_table_in_panel_axes(
-                        ax=right_table_ax,
-                        title='Parameter',
-                        rows=unified_rows,
-                        style_options={
-                            **table_style_options,
-                            'explicit_label_fraction': _UNIFIED_HISTOGRAM_LABEL_FRACTION,
-                            'explicit_value_fraction': _UNIFIED_HISTOGRAM_VALUE_FRACTION,
-                            'value_wrap_width': 26,
-                            'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
-                        },
-                        row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
-                        pad_y=0.0,
-                        valign='top',
-                    )
-                    unified_table = unified_table_meta['table']
-
                     non_normal_row_badges = dict(histogram_row_badges or {})
                     if non_normal_reference_mode:
                         for label in ('Cp (ref)', 'Cpk (ref)'):
                             non_normal_row_badges[label] = {'palette_key': 'quality_unknown'}
 
                     fit_quality_value = None
-                    for label, value in unified_table_meta.get('rendered_rows', []):
+                    for label, value in unified_rows:
                         if label == 'Fit quality':
                             fit_quality_value = str(value).strip().lower()
                             break
@@ -4729,153 +5756,334 @@ class ExportDataThread(QThread):
                     if fit_quality_palette:
                         non_normal_row_badges['Fit quality'] = {'palette_key': fit_quality_palette}
 
-                    style_histogram_stats_table(
-                        unified_table,
-                        unified_table_meta['rendered_rows'],
+                    current_average = summary_stats.get('average')
+                    histogram_x_view = resolve_histogram_x_view(
+                        histogram_values,
+                        lsl=LSL,
+                        usl=USL,
+                        mean_value=current_average,
+                    )
+                    span = max(float(histogram_x_view['x_max']) - float(histogram_x_view['x_min']), 1e-12)
+                    representative_bin_width = span / max(int(histogram_bin_count or 1), 1)
+                    native_count_scale_factor = float(len(histogram_values)) * float(representative_bin_width)
+                    visual_metadata = _build_histogram_native_visual_metadata(
+                        summary_stats=summary_stats,
+                        lsl=LSL,
+                        usl=USL,
+                        nominal=nom,
+                        rendered_rows=unified_rows,
+                        row_badges=non_normal_row_badges,
                         capability_badge=capability_badge,
-                        capability_row_badges=non_normal_row_badges,
+                        distribution_fit_result=distribution_fit_result,
+                        count_scale_factor=native_count_scale_factor,
                     )
-                    _apply_table_section_separator(
-                        unified_table,
-                        unified_table_meta['rendered_rows'],
-                        transition_label='Model',
+                    histogram_native_payload = build_histogram_native_payload(
+                        values=histogram_values,
+                        lsl=LSL,
+                        usl=USL,
+                        title=histogram_title,
+                        bin_count=histogram_bin_count,
                     )
-                    adjust_histogram_stats_table_geometry(
-                        unified_table,
-                        statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
-                        row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
-                        explicit_row_heights=unified_table_meta.get('explicit_row_heights'),
-                    )
-
-                    selected_model_curve = distribution_fit_result.get('selected_model_pdf')
-                    annotation_specs = build_histogram_annotation_specs(average, USL, LSL, 1.0)
-                    x_left, x_right = plot_ax.get_xlim()
-                    x_span = abs(float(x_right) - float(x_left))
-                    annotation_specs, _ = compute_histogram_annotation_rows(
-                        annotation_specs,
-                        distance_threshold=0.04,
-                        threshold_mode='axis_fraction',
-                        x_span=x_span,
-                        base_text_y_axes=1.01,
-                        row_step=0.025,
-                    )
-
-                    if selected_model_curve is not None:
-                        model_curve_style = resolve_selected_model_curve_style(distribution_fit_result)
-                        model_curve_y = np.asarray(selected_model_curve['y'], dtype=float)
-                        count_scale_factor = histogram_render_meta.get('count_scale_factor')
-                        if count_scale_factor is not None:
-                            model_curve_y = model_curve_y * float(count_scale_factor)
-                        render_density_line(
-                            plot_ax,
-                            selected_model_curve['x'],
-                            model_curve_y,
-                            alpha=model_curve_style['alpha'],
-                            linewidth=model_curve_style['linewidth'],
-                        )
-                        distribution_fit_result['selected_model_pdf'] = {
-                            **selected_model_curve,
-                            'y': model_curve_y,
-                        }
-                        render_modeled_tail_shading(plot_ax, distribution_fit_result, lsl=LSL, usl=USL)
-                    kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
-                    if kde_reference_curve is not None:
-                        kde_curve_y = np.asarray(kde_reference_curve['y'], dtype=float)
-                        count_scale_factor = histogram_render_meta.get('count_scale_factor')
-                        if count_scale_factor is not None:
-                            kde_curve_y = kde_curve_y * float(count_scale_factor)
-                        render_density_line(
-                            plot_ax,
-                            kde_reference_curve['x'],
-                            kde_curve_y,
-                            color=SUMMARY_PLOT_PALETTE['density_line'],
-                            alpha=0.22,
-                            linewidth=0.9,
-                            linestyle='--',
-                        )
-                        plot_ax.text(
-                            0.02,
-                            0.02,
-                            'Dashed KDE: descriptive only',
-                            transform=plot_ax.transAxes,
-                            ha='left',
-                            va='bottom',
-                            fontsize=max(6.5, histogram_font_sizes['table_fontsize'] - 1.0),
-                            color='#4d5968',
-                            bbox={
-                                'boxstyle': 'round,pad=0.16',
-                                'facecolor': (1.0, 1.0, 1.0, 0.74),
-                                'edgecolor': '#c7ced7',
-                                'linewidth': 0.45,
+                    histogram_native_payload.update(
+                        {
+                            'canvas': _build_native_canvas(
+                                figure_width=base_histogram_figsize[0],
+                                figure_height=base_histogram_figsize[1],
+                            ),
+                            'x_view': {
+                                'min': float(histogram_x_view['x_min']),
+                                'max': float(histogram_x_view['x_max']),
                             },
-                            zorder=8,
+                            'limits': {
+                                'lsl': None if LSL is None else float(LSL),
+                                'usl': None if USL is None else float(USL),
+                                'nominal': None if nom is None else float(nom),
+                            },
+                            'summary': {
+                                'count': float(summary_stats.get('sample_size', 0) or 0),
+                                'mean': current_average,
+                                'std': summary_stats.get('sigma'),
+                                'min': summary_stats.get('minimum'),
+                                'max': summary_stats.get('maximum'),
+                            },
+                            'style': {
+                                'axis_label_x': 'Measurement',
+                                'axis_label_y': 'Count',
+                                'grid_axis': 'y',
+                            },
+                            'mean_line': {
+                                **build_histogram_mean_line_style(),
+                                'value': None if current_average is None else float(current_average),
+                            },
+                            'summary_table_title': str((visual_metadata.get('summary_stats_table') or {}).get('title') or 'Parameter'),
+                            'summary_table_rows': list(((visual_metadata.get('summary_stats_table') or {}).get('rows') or [])),
+                            'annotation_rows': list(visual_metadata.get('annotation_rows') or []),
+                            'specification_lines': list(visual_metadata.get('specification_lines') or []),
+                            'modeled_overlay_rows': list(((visual_metadata.get('modeled_overlays') or {}).get('rows') or [])),
+                            'visual_metadata': visual_metadata,
+                            'advanced_annotations_enabled': True,
+                            'overlays_enabled': bool((visual_metadata.get('modeled_overlays') or {}).get('rows')),
+                        }
+                    )
+                    if dashboard_section is not None:
+                        dashboard_section['summary_rows'] = [
+                            {'label': str(label or ''), 'value': str(value or '')}
+                            for label, value in unified_rows
+                        ]
+
+                    if native_histogram_capable:
+                        histogram_render_result = self._save_summary_chart(
+                            None,
+                            chart_type='histogram',
+                            native_payload=histogram_native_payload,
+                        )
+                        image_data = self._register_chart_image(histogram_render_result.png_bytes)
+                        slot_fig = plt.figure(figsize=base_histogram_figsize)
+                        histogram_slot = _reserve_summary_image_slot('histogram', slot_fig)
+                        plt.close(slot_fig)
+                    else:
+                        histogram_figsize = base_histogram_figsize
+                        fig = plt.figure(figsize=histogram_figsize)
+                        histogram_font_sizes = compute_histogram_font_sizes(
+                            histogram_figsize,
+                            has_table=True,
+                            readability_scale=self.summary_plot_scale,
                         )
 
-                    lock_histogram_y_axis_to_bar_heights(plot_ax)
+                        panel_rects = compute_histogram_plot_with_right_info_layout(
+                            histogram_figsize,
+                            table_fontsize=histogram_font_sizes['table_fontsize'],
+                            fit_row_count=0,
+                            stats_row_count=len(unified_rows),
+                            fit_rows=[],
+                            stats_rows=unified_rows,
+                            note_line_count=0,
+                            right_container_width_hint=0.34,
+                            dpi=fig.dpi,
+                        )
+                        assert_non_overlapping_rectangles(
+                            {
+                                'plot_rect': panel_rects['plot_rect'],
+                                'right_table_rect': panel_rects['right_container_rect'],
+                                'footer_rect': panel_rects['footer_rect'],
+                            }
+                        )
 
-                    fit_warning = distribution_fit_result.get('warning')
-                    if fit_warning:
-                        logger.warning("%s Header=%s", fit_warning, header)
+                        plot_rect = panel_rects['plot_rect']
+                        right_table_rect = panel_rects['right_container_rect']
 
-                    mean_line_style = build_histogram_mean_line_style()
-                    plot_ax.axvline(average, **mean_line_style)
-                    render_tolerance_band(
-                        plot_ax,
-                        nom,
-                        LSL,
-                        USL,
-                        one_sided=is_one_sided_geometric_tolerance(nom, LSL),
-                        orientation='vertical',
-                    )
-                    render_spec_reference_lines(plot_ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
-                    plot_ax.set_xlabel('Measurement')
-                    if not histogram_render_meta.get('is_grouped'):
-                        plot_ax.set_ylabel('Count')
-                    title_artist = render_histogram_title(
-                        plot_ax,
-                        build_wrapped_chart_title(header),
-                        fontsize=max(histogram_font_sizes['annotation_fontsize'] + 1.1, 8.8),
-                    )
-                    apply_minimal_axis_style(plot_ax, grid_axis='y')
+                        plot_ax = fig.add_axes([
+                            plot_rect['x'],
+                            plot_rect['y'],
+                            plot_rect['width'],
+                            plot_rect['height'],
+                        ])
+                        right_table_ax = fig.add_axes([
+                            right_table_rect['x'],
+                            right_table_rect['y'],
+                            right_table_rect['width'],
+                            right_table_rect['height'],
+                        ])
+                        right_table_ax.set_axis_off()
 
-                    annotation_box = {
-                        'boxstyle': 'round,pad=0.15',
-                        'fc': 'white',
-                        'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
-                        'alpha': 0.94,
-                        'plot_rect': plot_rect,
-                        'title_artist': title_artist,
-                    }
-                    render_histogram_annotations(
-                        plot_ax,
-                        annotation_specs,
-                        annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
-                        annotation_box=annotation_box,
+                        histogram_render_meta = render_histogram(
+                            plot_ax,
+                            sampled_histogram_group,
+                            lsl=LSL,
+                            usl=USL,
+                            # Extended summary histogram should always represent the
+                            # complete population as one distribution. Group-level
+                            # breakdowns belong to Group Analysis plots.
+                            group_column=None,
+                        )
+
+                        table_style_options = {
+                            'fontsize': histogram_font_sizes['table_fontsize'],
+                            'min_fontsize': 7.4,
+                            'max_fontsize': 10.4,
+                            'cell_padding_points': 2.2,
+                            'compact_label_mapping': {
+                                **_DISTRIBUTION_FIT_COMPACT_LABELS,
+                                'Normality': 'Norm.',
+                            },
+                        }
+
+                        unified_table_meta = render_panel_table_in_panel_axes(
+                            ax=right_table_ax,
+                            title='Parameter',
+                            rows=unified_rows,
+                            style_options={
+                                **table_style_options,
+                                'explicit_label_fraction': _UNIFIED_HISTOGRAM_LABEL_FRACTION,
+                                'explicit_value_fraction': _UNIFIED_HISTOGRAM_VALUE_FRACTION,
+                                'value_wrap_width': 26,
+                                'low_priority_labels': {'Est. PPM', 'NOK (PPM)', 'Yield %'},
+                            },
+                            row_height=_EXTENDED_HISTOGRAM_PANEL_ROW_HEIGHT,
+                            pad_y=0.0,
+                            valign='top',
+                        )
+                        unified_table = unified_table_meta['table']
+
+                        style_histogram_stats_table(
+                            unified_table,
+                            unified_table_meta['rendered_rows'],
+                            capability_badge=capability_badge,
+                            capability_row_badges=non_normal_row_badges,
+                        )
+                        _apply_table_section_separator(
+                            unified_table,
+                            unified_table_meta['rendered_rows'],
+                            transition_label='Model',
+                        )
+                        adjust_histogram_stats_table_geometry(
+                            unified_table,
+                            statistic_col_width_ratio=_EXTENDED_HISTOGRAM_STATISTIC_COL_WIDTH_RATIO,
+                            row_height_scale=_EXTENDED_HISTOGRAM_TABLE_ROW_HEIGHT_SCALE,
+                            explicit_row_heights=unified_table_meta.get('explicit_row_heights'),
+                        )
+
+                        selected_model_curve = distribution_fit_result.get('selected_model_pdf')
+                        annotation_specs = build_histogram_annotation_specs(current_average, USL, LSL, 1.0)
+                        x_left, x_right = plot_ax.get_xlim()
+                        x_span = abs(float(x_right) - float(x_left))
+                        annotation_specs, _ = compute_histogram_annotation_rows(
+                            annotation_specs,
+                            distance_threshold=0.04,
+                            threshold_mode='axis_fraction',
+                            x_span=x_span,
+                            base_text_y_axes=1.01,
+                            row_step=0.025,
+                        )
+
+                        if selected_model_curve is not None:
+                            model_curve_style = resolve_selected_model_curve_style(distribution_fit_result)
+                            model_curve_y = np.asarray(selected_model_curve['y'], dtype=float)
+                            count_scale_factor = histogram_render_meta.get('count_scale_factor')
+                            if count_scale_factor is not None:
+                                model_curve_y = model_curve_y * float(count_scale_factor)
+                            render_density_line(
+                                plot_ax,
+                                selected_model_curve['x'],
+                                model_curve_y,
+                                alpha=model_curve_style['alpha'],
+                                linewidth=model_curve_style['linewidth'],
+                            )
+                            distribution_fit_result['selected_model_pdf'] = {
+                                **selected_model_curve,
+                                'y': model_curve_y,
+                            }
+                            render_modeled_tail_shading(plot_ax, distribution_fit_result, lsl=LSL, usl=USL)
+                        kde_reference_curve = distribution_fit_result.get('kde_reference_pdf')
+                        if kde_reference_curve is not None:
+                            kde_curve_y = np.asarray(kde_reference_curve['y'], dtype=float)
+                            count_scale_factor = histogram_render_meta.get('count_scale_factor')
+                            if count_scale_factor is not None:
+                                kde_curve_y = kde_curve_y * float(count_scale_factor)
+                            render_density_line(
+                                plot_ax,
+                                kde_reference_curve['x'],
+                                kde_curve_y,
+                                color=SUMMARY_PLOT_PALETTE['density_line'],
+                                alpha=0.22,
+                                linewidth=0.9,
+                                linestyle='--',
+                            )
+                            plot_ax.text(
+                                0.02,
+                                0.02,
+                                'Dashed KDE: descriptive only',
+                                transform=plot_ax.transAxes,
+                                ha='left',
+                                va='bottom',
+                                fontsize=max(6.5, histogram_font_sizes['table_fontsize'] - 1.0),
+                                color='#4d5968',
+                                bbox={
+                                    'boxstyle': 'round,pad=0.16',
+                                    'facecolor': (1.0, 1.0, 1.0, 0.74),
+                                    'edgecolor': '#c7ced7',
+                                    'linewidth': 0.45,
+                                },
+                                zorder=8,
+                            )
+
+                        lock_histogram_y_axis_to_bar_heights(plot_ax)
+
+                        fit_warning = distribution_fit_result.get('warning')
+                        if fit_warning:
+                            logger.warning("%s Header=%s", fit_warning, header)
+
+                        mean_line_style = build_histogram_mean_line_style()
+                        plot_ax.axvline(current_average, **mean_line_style)
+                        render_tolerance_band(
+                            plot_ax,
+                            nom,
+                            LSL,
+                            USL,
+                            one_sided=is_one_sided_geometric_tolerance(nom, LSL),
+                            orientation='vertical',
+                        )
+                        render_spec_reference_lines(plot_ax, nom, LSL, USL, orientation='vertical', include_nominal=False)
+                        plot_ax.set_xlabel('Measurement')
+                        if not histogram_render_meta.get('is_grouped'):
+                            plot_ax.set_ylabel('Count')
+                        title_artist = render_histogram_title(
+                            plot_ax,
+                            build_wrapped_chart_title(header),
+                            fontsize=max(histogram_font_sizes['annotation_fontsize'] + 1.1, 8.8),
+                        )
+                        apply_minimal_axis_style(plot_ax, grid_axis='y')
+
+                        annotation_box = {
+                            'boxstyle': 'round,pad=0.15',
+                            'fc': 'white',
+                            'ec': SUMMARY_PLOT_PALETTE['annotation_box_edge'],
+                            'alpha': 0.94,
+                            'plot_rect': plot_rect,
+                            'title_artist': title_artist,
+                        }
+                        render_histogram_annotations(
+                            plot_ax,
+                            annotation_specs,
+                            annotation_fontsize=histogram_font_sizes['annotation_fontsize'],
+                            annotation_box=annotation_box,
+                        )
+                        histogram_render_result = self._save_summary_chart(
+                            fig,
+                            chart_type='histogram',
+                        )
+                        image_data = self._register_chart_image(histogram_render_result.png_bytes)
+                        histogram_slot = _reserve_summary_image_slot('histogram', fig)
+                        if self._check_canceled():
+                            plt.close(fig)
+                            return
+                        plt.close(fig)
+
+                    self._record_chart_render_timing(
+                        'histogram',
+                        time.perf_counter() - chart_start,
+                        backend=histogram_render_result.backend,
                     )
-                    image_data = self._register_chart_image(self._save_summary_chart(fig))
-                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    histogram_slot = _reserve_summary_image_slot('histogram', fig)
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, histogram_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
-
+                    self._attach_html_dashboard_chart(
+                        dashboard_section,
+                        chart_type='histogram',
+                        title=histogram_native_payload.get('title') if isinstance(histogram_native_payload, dict) else histogram_title,
+                        backend=histogram_render_result.backend,
+                        image_buffer=image_data,
+                        payload=histogram_native_payload if isinstance(histogram_native_payload, dict) else {},
+                        note='Extended histogram with modeled overlays, annotations, and right-side statistics',
+                    )
                     if self._check_canceled():
-                        plt.close(fig)
                         return
-                    plt.close(fig)
                 finally:
                     pass
 
             if self._summary_chart_required('trend'):
                 try:
-                    apply_summary_plot_theme()
-
                     chart_start = time.perf_counter()
-                    trend_payload = precomputed_trend_payload or build_trend_plot_payload(
-                        sampled_trend_group,
-                        grouping_active=grouping_applied,
-                        label_column=distribution_key,
-                    )
                     data_x = trend_payload['x']
                     data_y = trend_payload['y']
                     unique_labels = trend_payload['labels']
@@ -4887,37 +6095,104 @@ class ExportDataThread(QThread):
                     if trend_label_count > 40:
                         trend_figure_width = 10
 
-                    fig, ax = plt.subplots(figsize=(trend_figure_width, 4))
-                    ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
-                    for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                        ax.axhline(**line_spec)
+                    trend_backend_native = resolve_chart_renderer_backend() == 'native' and native_trend_backend_available()
+                    if trend_backend_native:
+                        axis_layout = _resolve_native_axis_layout(
+                            unique_labels,
+                            positions=data_x,
+                            force_sparse=force_sparse_x_labels,
+                            allow_thinning=bool(force_sparse_x_labels or trend_label_count > 24),
+                        )
+                        trend_native_payload = {
+                            'type': 'trend',
+                            'x_values': [float(value) for value in data_x],
+                            'y_values': [float(value) for value in data_y],
+                            'labels': [str(label) for label in unique_labels],
+                            'title': build_wrapped_chart_title(header),
+                            'x_label': distribution_x_axis_label,
+                            'y_label': 'Measurement',
+                            'layout': axis_layout,
+                            'canvas': _build_native_canvas(figure_width=trend_figure_width),
+                            'horizontal_limits': [
+                                float(value)
+                                for value in (USL, LSL)
+                                if value is not None
+                            ],
+                            'y_limits': _resolve_native_y_limits(
+                                data_y,
+                                scale_factor=self.summary_plot_scale,
+                                extra_values=[USL, LSL],
+                            ),
+                        }
+                        trend_render_result = self._save_summary_chart(
+                            None,
+                            chart_type='trend',
+                            native_payload=trend_native_payload,
+                        )
+                        image_data = self._register_chart_image(trend_render_result.png_bytes)
+                        slot_fig = plt.figure(figsize=(trend_figure_width, 4))
+                        trend_slot = _reserve_summary_image_slot('trend', slot_fig)
+                        plt.close(slot_fig)
+                    else:
+                        apply_summary_plot_theme()
+                        fig, ax = plt.subplots(figsize=(trend_figure_width, 4))
+                        ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
+                        for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                            ax.axhline(**line_spec)
 
-                    ax.set_xlabel(distribution_x_axis_label)
-                    ax.set_ylabel('Measurement')
-                    ax.set_title(build_wrapped_chart_title(header), pad=20)
-                    apply_minimal_axis_style(ax, grid_axis='y')
-                    apply_shared_x_axis_label_strategy(
-                        ax,
-                        unique_labels,
-                        positions=data_x,
-                        force_sparse=force_sparse_x_labels,
-                        allow_thinning=False,
-                    )
+                        ax.set_xlabel(distribution_x_axis_label)
+                        ax.set_ylabel('Measurement')
+                        ax.set_title(build_wrapped_chart_title(header), pad=20)
+                        apply_minimal_axis_style(ax, grid_axis='y')
+                        apply_shared_x_axis_label_strategy(
+                            ax,
+                            unique_labels,
+                            positions=data_x,
+                            force_sparse=force_sparse_x_labels,
+                            allow_thinning=bool(force_sparse_x_labels or trend_label_count > 24),
+                        )
 
-                    current_y_limits = ax.get_ylim()
-                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                    ax.set_ylim(y_min, y_max)
+                        current_y_limits = ax.get_ylim()
+                        y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
+                        ax.set_ylim(y_min, y_max)
+                        trend_native_payload = {
+                            'type': 'trend',
+                            'x_values': [float(value) for value in data_x],
+                            'y_values': [float(value) for value in data_y],
+                            'labels': [str(label) for label in unique_labels],
+                            'title': build_wrapped_chart_title(header),
+                            'x_label': distribution_x_axis_label,
+                            'y_label': 'Measurement',
+                            'horizontal_limits': [
+                                float(value)
+                                for value in (USL, LSL)
+                                if value is not None
+                            ],
+                        }
 
-                    image_data = self._register_chart_image(self._save_summary_chart(fig))
-                    self._record_stage_timing('chart_rendering', time.perf_counter() - chart_start)
-                    trend_slot = _reserve_summary_image_slot('trend', fig)
+                        trend_render_result = self._save_summary_chart(fig, chart_type='trend')
+                        image_data = self._register_chart_image(trend_render_result.png_bytes)
+                        trend_slot = _reserve_summary_image_slot('trend', fig)
+                        if self._check_canceled():
+                            plt.close(fig)
+                            return
+                        plt.close(fig)
+
+                    self._record_chart_render_timing('trend', time.perf_counter() - chart_start, backend=trend_render_result.backend)
                     write_start = time.perf_counter()
                     self._insert_summary_image(summary_worksheet, trend_slot, image_data)
                     self._record_stage_timing('worksheet_writes', time.perf_counter() - write_start)
+                    self._attach_html_dashboard_chart(
+                        dashboard_section,
+                        chart_type='trend',
+                        title=trend_native_payload.get('title') if isinstance(trend_native_payload, dict) else build_wrapped_chart_title(header),
+                        backend=trend_render_result.backend,
+                        image_buffer=image_data,
+                        payload=trend_native_payload if isinstance(trend_native_payload, dict) else {},
+                        note='Measurement trend scatter',
+                    )
                     if self._check_canceled():
-                        plt.close(fig)
                         return
-                    plt.close(fig)
                 finally:
                     pass
 
