@@ -336,6 +336,67 @@ class TestParseHelpers(unittest.TestCase):
         self.assertLessEqual(result.parsed_files, 2)
         self.assertEqual(len(persisted), result.parsed_files)
 
+    def test_parse_new_reports_two_stage_cancel_does_not_wait_for_executor_shutdown(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+                self.pdf_reference = 'R'
+                self.pdf_file_path = '/tmp'
+                self.pdf_file_name = str(report)
+                self.pdf_date = '2024-01-01'
+                self.pdf_sample_number = report.replace('.pdf', '')
+                self.stage_timings_s = {}
+
+            def prepare_for_two_stage_pipeline(self):
+                return None
+
+        class FakeFuture:
+            def __init__(self):
+                self.cancel_called = False
+
+            def done(self):
+                return False
+
+            def cancel(self):
+                self.cancel_called = True
+                return True
+
+        class FakeExecutor:
+            def __init__(self):
+                self.futures = []
+                self.shutdown_calls = []
+
+            def submit(self, fn, report, enqueued_at):
+                future = FakeFuture()
+                self.futures.append(future)
+                return future
+
+            def shutdown(self, wait=True, cancel_futures=True):
+                self.shutdown_calls.append((wait, cancel_futures))
+
+        fake_executor = FakeExecutor()
+        checks = {'count': 0}
+
+        def should_cancel():
+            checks['count'] += 1
+            return checks['count'] > 3
+
+        with mock.patch('modules.parse_reports_thread.ThreadPoolExecutor', return_value=fake_executor):
+            with mock.patch('modules.parse_reports_thread.as_completed', side_effect=lambda futures: iter(futures[:1])):
+                result = parse_new_reports(
+                    ['a.pdf', 'b.pdf', 'c.pdf'],
+                    set(),
+                    parser_factory=DummyParser,
+                    persist_report=lambda parser: None,
+                    should_cancel=should_cancel,
+                    enable_two_stage_pipeline=True,
+                    worker_count=2,
+                )
+
+        self.assertEqual(result.parsed_files, 0)
+        self.assertEqual(fake_executor.shutdown_calls, [(False, True)])
+        self.assertTrue(all(future.cancel_called for future in fake_executor.futures))
+
     def test_parse_new_reports_two_stage_deterministic_end_state_matches_sequential(self):
         class DummyParser:
             def __init__(self, report):

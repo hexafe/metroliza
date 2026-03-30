@@ -88,16 +88,21 @@ def parse_new_reports(
 
             return parser, time.perf_counter()
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        futures = []
+        cancel_requested = False
+
+        try:
             for report in report_paths:
                 if should_cancel():
+                    cancel_requested = True
                     break
                 enqueued_at = time.perf_counter()
                 futures.append(executor.submit(_stage1_worker, report, enqueued_at))
 
             for future in as_completed(futures):
                 if should_cancel():
+                    cancel_requested = True
                     break
 
                 report_parse_start = time.perf_counter()
@@ -119,10 +124,15 @@ def parse_new_reports(
 
                 if on_progress:
                     on_progress(parsed_files, total_files)
-
+        finally:
             for future in futures:
                 if not future.done():
                     future.cancel()
+
+            if cancel_requested:
+                executor.shutdown(wait=False, cancel_futures=True)
+            else:
+                executor.shutdown(wait=True, cancel_futures=True)
 
         return ParseBatchResult(parsed_files=parsed_files, total_files=total_files)
 
