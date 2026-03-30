@@ -18,7 +18,8 @@ The following checks must pass on every PR and branch push.
 | Lint and static validation | `static-checks` | Python compile check, Ruff lint, release metadata consistency check, and repository/diff JSON secret scan. |
 | Metadata checks | `static-checks` | `scripts/sync_release_metadata.py --check` is enforced in this job. |
 | Full pytest suite + coverage visibility | `unit-tests` | Runs `python -m pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml` for the full Python test suite and publishes coverage outputs. |
-| Native artifact build + smoke/parity checks | `native-artifacts` | Builds native wheel, installs it, runs backend smoke checks, and executes native parser parity tests. |
+| Native artifact build + smoke/parity checks | `native-artifacts` | Builds all native wheels, installs them, runs import/smoke checks for each native module plus explicit fallback checks, and executes native parser parity tests. |
+| CMM parser perf guardrail + trend gate | `cmm-parser-perf-gate` | Runs `scripts/benchmark_paths.py` for `cmm_parser_backend_compare` with fixed synthetic workload, enforces native speed/usage guardrails, and compares measured medians to checked-in baseline via `scripts/benchmark_trend_compare.py`. |
 
 
 ### Coverage reporting semantics
@@ -102,6 +103,7 @@ Use this quick checklist when opening or reviewing PRs:
 - [ ] Metadata consistency checks pass (`static-checks`)
 - [ ] Full pytest suite passes (`unit-tests`)
 - [ ] Native artifact smoke/parity checks pass (`native-artifacts`)
+- [ ] CMM parser perf guardrail and trend comparison pass (`cmm-parser-perf-gate`)
 - [ ] Optional/manual non-blocking checks reviewed as needed (`packaging-smoke`, `google-conversion-smoke`)
 
 ### Additional checklist for parser plugin changes

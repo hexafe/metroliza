@@ -41,6 +41,7 @@ class TestValidateExportOptions(unittest.TestCase):
                 summary_plot_scale=-3,
                 hide_ok_results=1,
                 generate_summary_sheet=0,
+                generate_html_dashboard=1,
             )
         )
 
@@ -53,6 +54,7 @@ class TestValidateExportOptions(unittest.TestCase):
         self.assertEqual(options.summary_plot_scale, 0)
         self.assertTrue(options.hide_ok_results)
         self.assertFalse(options.generate_summary_sheet)
+        self.assertTrue(options.generate_html_dashboard)
         self.assertFalse(options.allow_non_essential_chart_skipping)
         self.assertEqual(options.chart_worker_count, 2)
         self.assertEqual(options.chart_worker_queue_size, 4)

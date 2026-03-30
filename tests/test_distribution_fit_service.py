@@ -1,17 +1,61 @@
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
 from scipy.stats import foldnorm, gamma, halfnorm, lognorm, norm, skewnorm, weibull_min
 
+import modules.distribution_fit_candidate_native as distribution_fit_candidate_native
 import modules.distribution_fit_service as distribution_fit_service
 from modules.distribution_fit_service import (
     _BILATERAL_CANDIDATES,
     _POSITIVE_CANDIDATES,
     _candidate_pool_for_mode,
     _compute_tail_risk,
+    build_fit_curve_payload,
+    compute_estimated_tail_metrics,
     fit_measurement_distribution,
+    fit_measurement_distribution_batch,
+    measurement_fingerprint,
 )
+
+
+_STRICT_RANKING_METRIC_DELTAS = {
+    'nll': 1e-12,
+    'aic': 1e-12,
+    'bic': 1e-12,
+    'ad_statistic': 1e-12,
+    'ks_statistic': 1e-12,
+}
+
+_NATIVE_METRICS_RANKING_METRIC_DELTAS = {
+    'nll': 1e-8,
+    'aic': 1e-8,
+    'bic': 1e-8,
+    'ad_statistic': 1e-6,
+    'ks_statistic': 1e-8,
+}
+
+_NATIVE_FIT_RANKING_METRIC_DELTAS = {
+    'nll': 1e-2,
+    'aic': 1e-2,
+    'bic': 1e-2,
+    'ad_statistic': 1e-4,
+    'ks_statistic': 1e-4,
+}
+
+
+def _ranking_metric_deltas(*, allow_native_fit_drift=False):
+    if allow_native_fit_drift and distribution_fit_candidate_native.native_fit_backend_available():
+        return _NATIVE_FIT_RANKING_METRIC_DELTAS
+    if distribution_fit_candidate_native.native_metrics_backend_available():
+        return _NATIVE_METRICS_RANKING_METRIC_DELTAS
+    return _STRICT_RANKING_METRIC_DELTAS
+
+
+def _assert_ranking_metric_parity(test_case, left, right, *, allow_native_fit_drift=False):
+    for metric_key, delta in _ranking_metric_deltas(allow_native_fit_drift=allow_native_fit_drift).items():
+        test_case.assertAlmostEqual(left[metric_key], right[metric_key], delta=delta)
 
 
 class TestDistributionFitService(unittest.TestCase):
@@ -82,6 +126,39 @@ class TestDistributionFitService(unittest.TestCase):
             _POSITIVE_CANDIDATES,
         )
 
+    def test_near_normal_bilateral_fit_skips_johnsonsu_candidate(self):
+        rng = np.random.default_rng(123)
+        sample = rng.normal(loc=0.0, scale=1.0, size=180).astype(float)
+        seen_candidates = []
+        original_fit_candidate = distribution_fit_service._fit_candidate
+
+        def _recording_fit(candidate, values, **kwargs):
+            seen_candidates.append(candidate.name)
+            return original_fit_candidate(candidate, values, **kwargs)
+
+        with mock.patch.object(distribution_fit_service, '_fit_candidate', side_effect=_recording_fit):
+            result = fit_measurement_distribution(sample, include_kde_reference=False)
+
+        self.assertEqual(result['status'], 'ok')
+        self.assertIn(result['selected_model']['name'], {'norm', 'skewnorm'})
+        self.assertEqual(seen_candidates, ['norm', 'skewnorm'])
+
+    def test_heavy_tailed_bilateral_fit_keeps_johnsonsu_candidate(self):
+        rng = np.random.default_rng(321)
+        sample = np.asarray(rng.standard_t(df=3, size=180), dtype=float)
+        seen_candidates = []
+        original_fit_candidate = distribution_fit_service._fit_candidate
+
+        def _recording_fit(candidate, values, **kwargs):
+            seen_candidates.append(candidate.name)
+            return original_fit_candidate(candidate, values, **kwargs)
+
+        with mock.patch.object(distribution_fit_service, '_fit_candidate', side_effect=_recording_fit):
+            result = fit_measurement_distribution(sample, include_kde_reference=False)
+
+        self.assertEqual(result['status'], 'ok')
+        self.assertIn('johnsonsu', seen_candidates)
+
     def test_synthetic_signed_families_fit_with_bilateral_candidates(self):
         rng = np.random.default_rng(42)
         normal_sample = norm.rvs(loc=0.0, scale=1.0, size=180, random_state=rng)
@@ -139,6 +216,58 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertEqual(result['below_lsl_probability'], 0.0)
         self.assertAlmostEqual(result['outside_probability'], expected_upper_tail, places=6)
 
+    def test_build_fit_curve_payload_matches_fit_overlay_payload_for_selected_model_and_kde(self):
+        measurements = [0.0, 0.0, 0.1, 0.2, 0.4, 3.0, 7.0]
+        fit_result = fit_measurement_distribution(measurements, usl=7.5)
+
+        model_curve = build_fit_curve_payload(
+            measurements,
+            point_count=100,
+            distribution_fit_result=fit_result,
+        )
+        kde_curve = build_fit_curve_payload(
+            measurements,
+            point_count=100,
+            mode='kde',
+            distribution_fit_result=fit_result,
+        )
+
+        np.testing.assert_allclose(model_curve['x'], fit_result['selected_model_pdf']['x'])
+        np.testing.assert_allclose(model_curve['y'], fit_result['selected_model_pdf']['y'])
+        np.testing.assert_allclose(kde_curve['x'], fit_result['kde_reference_pdf']['x'])
+        np.testing.assert_allclose(kde_curve['y'], fit_result['kde_reference_pdf']['y'])
+
+    def test_compute_estimated_tail_metrics_matches_selected_model_risk_estimates(self):
+        fit_result = fit_measurement_distribution([-2, -1, -0.2, 0.1, 0.6, 1.3, 2.1], lsl=-1.5, usl=1.5)
+
+        metrics = compute_estimated_tail_metrics(fit_result, lsl=-1.5, usl=1.5)
+
+        self.assertAlmostEqual(metrics['estimated_nok_pct'], fit_result['risk_estimates']['outside_probability'])
+        self.assertAlmostEqual(metrics['estimated_nok_ppm'], fit_result['risk_estimates']['ppm_nok'])
+        self.assertAlmostEqual(
+            metrics['estimated_tail_below_lsl'],
+            fit_result['risk_estimates']['below_lsl_probability'],
+        )
+        self.assertAlmostEqual(
+            metrics['estimated_tail_above_usl'],
+            fit_result['risk_estimates']['above_usl_probability'],
+        )
+
+    def test_fit_measurement_distribution_memoizes_identical_requests_within_cache(self):
+        measurements = [1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15]
+        memo = {}
+
+        with mock.patch.object(distribution_fit_service, '_fit_candidate', wraps=distribution_fit_service._fit_candidate) as wrapped_fit:
+            first = fit_measurement_distribution(measurements, usl=1.4, memoization_cache=memo)
+            second = fit_measurement_distribution(measurements, usl=1.4, memoization_cache=memo)
+
+        self.assertEqual(first['status'], 'ok')
+        self.assertEqual(second['status'], 'ok')
+        self.assertEqual(wrapped_fit.call_count, len(_BILATERAL_CANDIDATES))
+        self.assertEqual(len(memo), 1)
+        self.assertIsNot(first, second)
+        self.assertIsNot(first['selected_model_pdf'], second['selected_model_pdf'])
+
     def test_one_sided_zero_bound_forces_loc_zero_for_positive_candidates(self):
         result = fit_measurement_distribution([0.0, 0.05, 0.2, 0.4, 0.8, 1.1, 1.5, 2.0], usl=2.5)
 
@@ -169,7 +298,7 @@ class TestDistributionFitService(unittest.TestCase):
     def test_poor_fit_path_downgrades_quality_when_no_acceptable_gof(self):
         values = np.linspace(-1.0, 1.0, 60)
 
-        def _poor_candidate(_candidate, _values):
+        def _poor_candidate(_candidate, _values, **_kwargs):
             return {
                 'model': 'norm',
                 'display_name': 'Normal',
@@ -191,6 +320,323 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertEqual(result['fit_quality']['label'], 'unreliable')
         self.assertIn('No model met GOF threshold', ' '.join(result['notes']))
 
+
+
+    def test_fit_measurement_distribution_batch_accepts_numpy_arrays_and_matches_single_fit(self):
+        grouped = {
+            'A': np.ascontiguousarray(np.array([1.0, 1.1, 1.2, 1.3, 1.4], dtype=float)),
+            'B': np.ascontiguousarray(np.array([-0.4, -0.2, 0.0, 0.2, 0.5, 0.8], dtype=float)),
+        }
+
+        batch = fit_measurement_distribution_batch(grouped, usl_by_group={'A': 1.5, 'B': 1.0})
+        single_a = fit_measurement_distribution(grouped['A'], usl=1.5)
+        single_b = fit_measurement_distribution(grouped['B'], usl=1.0)
+
+        self.assertEqual(batch['A']['selected_model']['name'], single_a['selected_model']['name'])
+        self.assertEqual(batch['B']['selected_model']['name'], single_b['selected_model']['name'])
+        self.assertAlmostEqual(batch['A']['risk_estimates']['outside_probability'], single_a['risk_estimates']['outside_probability'])
+        self.assertAlmostEqual(batch['B']['risk_estimates']['outside_probability'], single_b['risk_estimates']['outside_probability'])
+
+    def test_fit_measurement_distribution_batch_converts_lists_and_zero_copies_contiguous_ndarrays(self):
+        contiguous_array = np.ascontiguousarray(np.array([1.0, 1.1, 1.2], dtype=np.float64))
+        grouped = {
+            'FROM_LIST': [0.1, 0.2, 0.3],
+            'FROM_ARRAY': contiguous_array,
+        }
+        captured_values = {}
+
+        def _stub_fit_measurement_distribution(values, **kwargs):
+            del kwargs
+            captured_values[len(captured_values)] = values
+            return {
+                'status': 'ok',
+                'selected_model': {'name': 'norm'},
+                'risk_estimates': {'outside_probability': 0.0},
+                'ranking_metrics': [],
+            }
+
+        with mock.patch.object(distribution_fit_service, '_fit_candidates_batch_native', return_value={}), mock.patch.object(
+            distribution_fit_service,
+            'fit_measurement_distribution',
+            side_effect=_stub_fit_measurement_distribution,
+        ):
+            fit_measurement_distribution_batch(grouped)
+
+        list_values = captured_values[0]
+        ndarray_values = captured_values[1]
+        self.assertIsInstance(list_values, np.ndarray)
+        self.assertEqual(list_values.dtype, np.float64)
+        self.assertTrue(list_values.flags['C_CONTIGUOUS'])
+        self.assertIsNot(list_values, grouped['FROM_LIST'])
+
+        self.assertIs(ndarray_values, contiguous_array)
+
+    def test_batch_candidate_kernel_mode_parity_preserves_full_ranking_for_deterministic_fixture(self):
+        rng = np.random.default_rng(20260325)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.3, scale=0.9, size=90).astype(float)),
+            'G_BI': np.ascontiguousarray(rng.normal(loc=0.0, scale=1.0, size=90).astype(float)),
+        }
+
+        baseline = fit_measurement_distribution_batch(
+            grouped,
+            candidate_kernel_mode='python',
+            candidate_fit_batch_mode='legacy',
+        )
+        candidate = fit_measurement_distribution_batch(
+            grouped,
+            candidate_kernel_mode='auto',
+            candidate_fit_batch_mode='legacy',
+        )
+
+        for group_name in grouped:
+            left = baseline[group_name]['ranking_metrics']
+            right = candidate[group_name]['ranking_metrics']
+            self.assertEqual([row['model'] for row in left], [row['model'] for row in right])
+            self.assertEqual([row['rank'] for row in left], [row['rank'] for row in right])
+            for lhs, rhs in zip(left, right, strict=False):
+                _assert_ranking_metric_parity(self, lhs, rhs)
+
+    def test_batch_native_dispatch_parity_matches_python_baseline_for_ranking_selection_and_risk(self):
+        rng = np.random.default_rng(20260326)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.8, scale=0.6, size=120).astype(float)),
+            'G_BI': np.ascontiguousarray(rng.normal(loc=-0.1, scale=0.9, size=120).astype(float)),
+        }
+
+        baseline = fit_measurement_distribution_batch(
+            grouped,
+            usl_by_group={'G_POS': 2.2, 'G_BI': 1.8},
+            lsl_by_group={'G_BI': -1.8},
+            candidate_kernel_mode='python',
+            candidate_fit_batch_mode='legacy',
+        )
+
+        def _fake_native_batch(kernel_input):
+            nll = []
+            aic = []
+            bic = []
+            ad = []
+            ks = []
+            flags = []
+            for distribution, params, sample in zip(
+                kernel_input.distributions,
+                kernel_input.fitted_params_batch,
+                kernel_input.sample_values_batch,
+                strict=False,
+            ):
+                dist = distribution_fit_service._DISTRIBUTION_BY_NAME[distribution]
+                params_tuple = tuple(float(v) for v in params)
+                values = np.asarray(sample, dtype=float)
+                logpdf = dist.logpdf(values, *params_tuple)
+                nll_value = float(-np.sum(logpdf))
+                k = len(params_tuple)
+                n = values.size
+                nll.append(nll_value)
+                aic.append(float(2 * k + 2 * nll_value))
+                bic.append(float(k * np.log(n) + 2 * nll_value))
+                ad.append(float(distribution_fit_service._ad_statistic(values, lambda x: dist.cdf(x, *params_tuple))))
+                ks.append(float(distribution_fit_service.kstest(values, dist.cdf, args=params_tuple).statistic))
+                flags.append(0)
+            return SimpleNamespace(
+                nll=tuple(nll),
+                aic=tuple(aic),
+                bic=tuple(bic),
+                ad_statistic=tuple(ad),
+                ks_statistic=tuple(ks),
+                error_flags=tuple(flags),
+            )
+
+        with mock.patch.object(distribution_fit_service, 'native_metrics_backend_available', return_value=True), mock.patch.object(
+            distribution_fit_service,
+            'compute_candidate_metrics_batch_native',
+            side_effect=_fake_native_batch,
+        ) as batch_stub:
+            candidate = fit_measurement_distribution_batch(
+                grouped,
+                usl_by_group={'G_POS': 2.2, 'G_BI': 1.8},
+                lsl_by_group={'G_BI': -1.8},
+                candidate_kernel_mode='auto',
+                candidate_fit_batch_mode='legacy',
+            )
+
+        self.assertGreater(batch_stub.call_count, 0)
+        for group_name in grouped:
+            baseline_rank = baseline[group_name]['ranking_metrics']
+            candidate_rank = candidate[group_name]['ranking_metrics']
+            self.assertEqual([row['model'] for row in baseline_rank], [row['model'] for row in candidate_rank])
+            self.assertEqual(baseline[group_name]['selected_model']['name'], candidate[group_name]['selected_model']['name'])
+            self.assertAlmostEqual(
+                baseline[group_name]['risk_estimates']['outside_probability'],
+                candidate[group_name]['risk_estimates']['outside_probability'],
+                delta=1e-12,
+            )
+
+    def test_batch_candidate_kernel_default_mode_uses_auto_dispatch(self):
+        rng = np.random.default_rng(20260326)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.8, scale=0.6, size=120).astype(float)),
+            'G_BI': np.ascontiguousarray(rng.normal(loc=-0.1, scale=0.9, size=120).astype(float)),
+        }
+
+        def _fake_native_batch(kernel_input):
+            nll = []
+            aic = []
+            bic = []
+            ad = []
+            ks = []
+            flags = []
+            for distribution, params, sample in zip(
+                kernel_input.distributions,
+                kernel_input.fitted_params_batch,
+                kernel_input.sample_values_batch,
+                strict=False,
+            ):
+                dist = distribution_fit_service._DISTRIBUTION_BY_NAME[distribution]
+                params_tuple = tuple(float(v) for v in params)
+                values = np.asarray(sample, dtype=float)
+                logpdf = dist.logpdf(values, *params_tuple)
+                nll_value = float(-np.sum(logpdf))
+                k = len(params_tuple)
+                n = values.size
+                nll.append(nll_value)
+                aic.append(float(2 * k + 2 * nll_value))
+                bic.append(float(k * np.log(n) + 2 * nll_value))
+                ad.append(float(distribution_fit_service._ad_statistic(values, lambda x: dist.cdf(x, *params_tuple))))
+                ks.append(float(distribution_fit_service.kstest(values, dist.cdf, args=params_tuple).statistic))
+                flags.append(0)
+            return SimpleNamespace(
+                nll=tuple(nll),
+                aic=tuple(aic),
+                bic=tuple(bic),
+                ad_statistic=tuple(ad),
+                ks_statistic=tuple(ks),
+                error_flags=tuple(flags),
+            )
+
+        with mock.patch.object(distribution_fit_service, 'native_metrics_backend_available', return_value=True), mock.patch.object(
+            distribution_fit_service,
+            'compute_candidate_metrics_batch_native',
+            side_effect=_fake_native_batch,
+        ) as batch_stub:
+            fit_measurement_distribution_batch(grouped)
+
+        self.assertGreater(batch_stub.call_count, 0)
+
+    def test_batch_native_fit_mode_preserves_ranking_parity_with_legacy_fit_loop(self):
+        rng = np.random.default_rng(20260327)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.2, scale=0.7, size=100).astype(float)),
+            'G_BI': np.ascontiguousarray(rng.normal(loc=0.0, scale=1.0, size=100).astype(float)),
+        }
+
+        legacy = fit_measurement_distribution_batch(
+            grouped,
+            candidate_kernel_mode='auto',
+            candidate_fit_batch_mode='legacy',
+        )
+        native_fit = fit_measurement_distribution_batch(
+            grouped,
+            candidate_kernel_mode='auto',
+            candidate_fit_batch_mode='native',
+        )
+
+        for group_name in grouped:
+            legacy_rank = legacy[group_name]['ranking_metrics']
+            native_rank = native_fit[group_name]['ranking_metrics']
+            self.assertEqual([row['model'] for row in legacy_rank], [row['model'] for row in native_rank])
+            self.assertEqual([row['rank'] for row in legacy_rank], [row['rank'] for row in native_rank])
+            for left, right in zip(legacy_rank, native_rank, strict=False):
+                _assert_ranking_metric_parity(self, left, right, allow_native_fit_drift=True)
+
+    def test_batch_native_fit_mode_uses_fit_batch_bridge_and_legacy_mode_skips_it(self):
+        rng = np.random.default_rng(20260327)
+        grouped = {
+            'G_POS': np.ascontiguousarray(rng.gamma(shape=2.0, scale=0.8, size=80).astype(float)),
+        }
+
+        def _fake_native_batch(kernel_input):
+            nll = []
+            aic = []
+            bic = []
+            ad = []
+            ks = []
+            flags = []
+            for distribution, params, sample in zip(
+                kernel_input.distributions,
+                kernel_input.fitted_params_batch,
+                kernel_input.sample_values_batch,
+                strict=False,
+            ):
+                dist = distribution_fit_service._DISTRIBUTION_BY_NAME[distribution]
+                params_tuple = tuple(float(v) for v in params)
+                values = np.asarray(sample, dtype=float)
+                logpdf = dist.logpdf(values, *params_tuple)
+                nll_value = float(-np.sum(logpdf))
+                k = len(params_tuple)
+                n = values.size
+                nll.append(nll_value)
+                aic.append(float(2 * k + 2 * nll_value))
+                bic.append(float(k * np.log(n) + 2 * nll_value))
+                ad.append(float(distribution_fit_service._ad_statistic(values, lambda x: dist.cdf(x, *params_tuple))))
+                ks.append(float(distribution_fit_service.kstest(values, dist.cdf, args=params_tuple).statistic))
+                flags.append(0)
+            return SimpleNamespace(
+                nll=tuple(nll),
+                aic=tuple(aic),
+                bic=tuple(bic),
+                ad_statistic=tuple(ad),
+                ks_statistic=tuple(ks),
+                error_flags=tuple(flags),
+            )
+
+        with mock.patch.object(distribution_fit_service, 'native_metrics_backend_available', return_value=True), mock.patch.object(
+            distribution_fit_service,
+            'compute_candidate_metrics_batch_native',
+            side_effect=_fake_native_batch,
+        ), mock.patch.object(
+            distribution_fit_service,
+            'compute_candidate_fit_batch',
+            wraps=distribution_fit_service.compute_candidate_fit_batch,
+        ) as fit_batch_stub:
+            fit_measurement_distribution_batch(grouped, candidate_kernel_mode='auto', candidate_fit_batch_mode='native')
+            native_calls = fit_batch_stub.call_count
+            fit_measurement_distribution_batch(grouped, candidate_kernel_mode='auto', candidate_fit_batch_mode='legacy')
+            legacy_calls = fit_batch_stub.call_count - native_calls
+
+        self.assertGreater(native_calls, 0)
+        self.assertEqual(legacy_calls, 0)
+
+    def test_batch_auto_mode_skips_fit_batch_bridge_without_native_metrics_backend(self):
+        grouped = {
+            'G_POS': np.ascontiguousarray(np.array([0.8, 1.0, 1.2, 1.1, 0.9, 1.3], dtype=float)),
+        }
+
+        with mock.patch.object(distribution_fit_service, 'native_metrics_backend_available', return_value=False), mock.patch.object(
+            distribution_fit_service,
+            'compute_candidate_fit_batch',
+            side_effect=AssertionError('fit batch bridge should be skipped when native metrics are unavailable'),
+        ):
+            result = fit_measurement_distribution_batch(
+                grouped,
+                candidate_kernel_mode='auto',
+                candidate_fit_batch_mode='native',
+            )
+
+        self.assertEqual(result['G_POS']['status'], 'ok')
+
+    def test_fit_measurement_distribution_uses_provided_measurement_signature_for_cache_key(self):
+        measurements = np.ascontiguousarray(np.array([1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15], dtype=float))
+        memo = {}
+        signature = measurement_fingerprint(measurements)
+
+        with mock.patch.object(distribution_fit_service, '_measurement_fingerprint', side_effect=AssertionError('fingerprint should not be recomputed')):
+            first = fit_measurement_distribution(measurements, usl=1.4, memoization_cache=memo, measurement_signature=signature)
+            second = fit_measurement_distribution(measurements, usl=1.4, memoization_cache=memo, measurement_signature=signature)
+
+        self.assertEqual(first['status'], 'ok')
+        self.assertEqual(second['status'], 'ok')
+        self.assertEqual(len(memo), 1)
 
 if __name__ == '__main__':
     unittest.main()

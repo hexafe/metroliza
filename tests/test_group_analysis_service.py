@@ -4,8 +4,13 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from modules.characteristic_alias_service import ensure_characteristic_alias_schema, upsert_characteristic_alias
+from modules.characteristic_alias_service import (
+    ensure_characteristic_alias_schema,
+    resolve_characteristic_alias,
+    upsert_characteristic_alias,
+)
 from modules.group_analysis_service import (
+    _resolve_canonical_metric_aliases,
     build_group_analysis_payload,
     build_metric_insights,
     build_pairwise_rows,
@@ -21,6 +26,69 @@ from modules.group_analysis_service import (
 
 
 class TestGroupAnalysisService(unittest.TestCase):
+    def test_resolve_canonical_metric_aliases_matches_row_wise_behavior(self):
+        frame = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-2', None, 'REF-1'],
+            }
+        )
+        canonical_metric_series = pd.Series(['DIA - X', 'DIA - X', 'DIA - X', ''], index=frame.index)
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='GLOBAL DIA',
+                scope_type='global',
+            )
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='REF1 DIA',
+                scope_type='reference',
+                scope_value='REF-1',
+            )
+
+            expected = canonical_metric_series.fillna('').astype(str).str.strip().copy()
+            reference_series = frame['REFERENCE'].fillna('').astype(str).str.strip()
+            for row_index, metric_name in expected.items():
+                if not metric_name:
+                    continue
+                reference_value = reference_series.get(row_index) or None
+                expected.at[row_index] = resolve_characteristic_alias(metric_name, reference_value, db_path)
+
+            actual = _resolve_canonical_metric_aliases(
+                frame,
+                canonical_metric_series,
+                alias_db_path=db_path,
+            )
+
+        self.assertEqual(actual.tolist(), expected.tolist())
+
+    def test_resolve_canonical_metric_aliases_without_reference_column_preserves_blank_metrics(self):
+        frame = pd.DataFrame({'GROUP': ['A', 'A', 'B']})
+        canonical_metric_series = pd.Series(['', 'DIA - X', '   '], index=frame.index)
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='GLOBAL DIA',
+                scope_type='global',
+            )
+
+            resolved = _resolve_canonical_metric_aliases(
+                frame,
+                canonical_metric_series,
+                alias_db_path=db_path,
+            )
+
+        self.assertEqual(resolved.tolist(), ['', 'GLOBAL DIA', ''])
+
     def test_build_payload_resolves_reference_scoped_metric_aliases(self):
         grouped_df = pd.DataFrame(
             {
@@ -92,6 +160,46 @@ class TestGroupAnalysisService(unittest.TestCase):
             )
 
         self.assertEqual(payload['metric_rows'][0]['metric'], 'REF DIA')
+
+    def test_build_payload_multi_reference_applies_reference_specific_aliases_per_reference(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1', 'REF-1', 'REF-2', 'REF-2'],
+                'HEADER - AX': ['DIA - X'] * 4,
+                'GROUP': ['A', 'B', 'A', 'B'],
+                'MEAS': [10.0, 10.1, 9.9, 10.2],
+                'LSL': [9.0] * 4,
+                'NOMINAL': [10.0] * 4,
+                'USL': [11.0] * 4,
+            }
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = f'{tmpdir}/aliases.sqlite'
+            ensure_characteristic_alias_schema(db_path)
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='GLOBAL DIA',
+                scope_type='global',
+            )
+            upsert_characteristic_alias(
+                db_path,
+                alias_name='DIA - X',
+                canonical_name='REF1 DIA',
+                scope_type='reference',
+                scope_value='REF-1',
+            )
+
+            payload = build_group_analysis_payload(
+                grouped_df,
+                requested_scope='multi_reference',
+                analysis_level='light',
+                alias_db_path=db_path,
+            )
+
+        metric_names = sorted(row['metric'] for row in payload['metric_rows'])
+        self.assertEqual(metric_names, ['REF-1 :: REF1 DIA', 'REF-2 :: GLOBAL DIA'])
 
 
     def test_build_payload_keeps_metric_identity_when_no_alias_mapping_exists(self):
@@ -374,6 +482,50 @@ class TestGroupAnalysisService(unittest.TestCase):
         )
         self.assertEqual(status, 'LIMIT_MISMATCH')
 
+    def test_classify_metric_spec_status_matches_legacy_outputs_for_mixed_validity_rows(self):
+        def legacy_classify(metric_rows_df, spec_columns):
+            normalized_specs = []
+            for _, row in metric_rows_df.iterrows():
+                normalized_specs.append(
+                    normalize_spec_limits(
+                        row[spec_columns['lsl']] if spec_columns['lsl'] else None,
+                        row[spec_columns['nominal']] if spec_columns['nominal'] else None,
+                        row[spec_columns['usl']] if spec_columns['usl'] else None,
+                    )
+                )
+
+            if not normalized_specs:
+                return 'INVALID_SPEC', {'lsl': None, 'nominal': None, 'usl': None}
+            if any(classify_spec_status(spec) == 'INVALID_SPEC' for spec in normalized_specs):
+                return 'INVALID_SPEC', normalized_specs[0]
+
+            unique_nominals = {spec['nominal'] for spec in normalized_specs}
+            unique_limits = {(spec['lsl'], spec['usl']) for spec in normalized_specs}
+            canonical_spec = normalized_specs[0]
+            if len(unique_nominals) > 1:
+                return 'NOM_MISMATCH', canonical_spec
+            if len(unique_limits) > 1:
+                return 'LIMIT_MISMATCH', canonical_spec
+            return 'EXACT_MATCH', canonical_spec
+
+        fixture_frames = [
+            pd.DataFrame({'LSL': [1, 1], 'NOMINAL': [2, 2], 'USL': [3, 3]}),
+            pd.DataFrame({'LSL': [1, 1], 'NOMINAL': [2, 2.1], 'USL': [3, 3]}),
+            pd.DataFrame({'LSL': [1, 1.1], 'NOMINAL': [2, 2], 'USL': [3, 3.1]}),
+            pd.DataFrame({'LSL': [1, 'bad'], 'NOMINAL': [2, 2], 'USL': [3, 3]}),
+            pd.DataFrame({'LSL': [4, 4], 'NOMINAL': [2, 2], 'USL': [3, 3]}),
+            pd.DataFrame({'LSL': [1.00049, 1.0004], 'NOMINAL': [2.00049, 2.0004], 'USL': [3.00049, 3.0004]}),
+            pd.DataFrame({'LSL': ['1.5', '1.5'], 'NOMINAL': ['1.4', '1.5'], 'USL': ['1.7', '1.7']}),
+        ]
+        spec_columns = {'lsl': 'LSL', 'nominal': 'NOMINAL', 'usl': 'USL'}
+
+        for fixture in fixture_frames:
+            with self.subTest(frame=fixture.to_dict(orient='list')):
+                legacy_status, legacy_canonical = legacy_classify(fixture, spec_columns)
+                status, canonical = classify_metric_spec_status(fixture, spec_columns)
+                self.assertEqual(status, legacy_status)
+                self.assertEqual(canonical, legacy_canonical)
+
     def test_capability_payload_marks_not_applicable_without_valid_spec(self):
         payload = compute_capability_payload([1.0, 1.1, 1.2], {'lsl': None, 'nominal': None, 'usl': None})
         self.assertEqual(payload['status'], 'not_applicable')
@@ -461,6 +613,7 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIn('median', metric['descriptive_stats'][0])
         self.assertIn('iqr', metric['descriptive_stats'][0])
         self.assertIn('flags', metric['descriptive_stats'][0])
+        self.assertIn('capability_ci', metric['descriptive_stats'][0])
         self.assertIn('delta_mean', metric['pairwise_rows'][0])
         self.assertIn('difference', metric['pairwise_rows'][0])
         self.assertIn('comment', metric['pairwise_rows'][0])
@@ -743,6 +896,8 @@ class TestGroupAnalysisService(unittest.TestCase):
 
     def test_build_metric_insights_prioritizes_shape_with_three_line_cap(self):
         metric_row = {
+            'spec_status': 'EXACT_MATCH',
+            'analysis_restriction_label': 'Full analysis',
             'comparability_summary': {'status': 'EXACT_MATCH', 'interpretation_limits': 'none'},
             'descriptive_stats': [
                 {'group': 'A', 'mean': 10.2},
@@ -758,9 +913,107 @@ class TestGroupAnalysisService(unittest.TestCase):
         insights = build_metric_insights(metric_row)
 
         self.assertEqual(len(insights), 3)
-        self.assertTrue(insights[0].startswith('Comparability='))
-        self.assertIn('Strongest pairwise location signal', insights[1])
-        self.assertEqual(insights[2], 'Distribution shape: Clear shape mismatch across groups.')
+        self.assertEqual(insights[0], 'Status: Exact match; mode=Full analysis.')
+        self.assertEqual(insights[1], 'Primary signal: A vs B is DIFFERENCE (adj p=0.0009).')
+        self.assertEqual(insights[2], 'Shape signal: Clear shape mismatch across groups.')
+
+    @patch('modules.group_analysis_service.compute_distribution_difference')
+    @patch('modules.group_analysis_service.compute_pairwise_rows')
+    def test_shape_only_metrics_surface_caution_status_takeaway_and_action(self, mock_compute_pairwise_rows, mock_distribution_difference):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['M1'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [10.0, 10.1, 10.2, 10.0, 9.9, 10.0, 10.1, 9.9],
+                'LSL': [9.0] * 8,
+                'NOMINAL': [10.0] * 8,
+                'USL': [11.0] * 8,
+            }
+        )
+        mock_compute_pairwise_rows.return_value = []
+        mock_distribution_difference.return_value = {
+            'profile_rows': [],
+            'pairwise_rows': [],
+            'omnibus_row': {
+                'Metric': 'M1',
+                'Test used': 'Kolmogorov-Smirnov (2-sample)',
+                'raw p-value': 0.004,
+                'adjusted p-value': 0.004,
+                'significant?': 'YES',
+                'warning / assumptions': 'None',
+                'comment / verdict': 'Clear shape mismatch across groups.',
+            },
+        }
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['index_status'], 'USE CAUTION')
+        self.assertEqual(
+            metric['recommended_action'],
+            'Recommended action: review spread and consistency by group; averages may look similar, but the distribution pattern differs.',
+        )
+        self.assertEqual(
+            metric['metric_takeaway'],
+            'Clear shape mismatch across groups. Review spread and consistency by group.',
+        )
+        self.assertEqual(metric['insights'][2], 'Shape signal: Clear shape mismatch across groups.')
+
+    def test_build_group_analysis_payload_cache_hits_preserve_payload_parity(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1'] * 8,
+                'HEADER - AX': ['DIA - X'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [10.0, 10.1, 10.2, 10.3, 9.7, 9.8, 9.9, 10.0],
+                'LSL': [9.0] * 8,
+                'NOMINAL': [10.0] * 8,
+                'USL': [11.0] * 8,
+            }
+        )
+
+        fit_result = {
+            'status': 'ok',
+            'fit_quality': {'label': 'good'},
+            'gof_metrics': {'ad_pvalue': 0.2, 'ks_pvalue': 0.3, 'is_acceptable': True},
+            'selected_model': {'display_name': 'Normal'},
+            'inferred_support_mode': 'unbounded',
+            'notes': ['Use fit quality as guidance only.'],
+        }
+
+        with patch('modules.distribution_shape_analysis.fit_measurement_distribution', return_value=fit_result) as mock_fit:
+            first = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+            second = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+
+        self.assertEqual(first, second)
+        self.assertEqual(mock_fit.call_count, 4)
+
+    def test_build_group_analysis_payload_can_skip_distribution_fits_for_large_exports(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['REF-1'] * 120,
+                'HEADER - AX': ['DIA - X'] * 120,
+                'GROUP': ['A'] * 60 + ['B'] * 60,
+                'MEAS': [10.0 + (i / 100.0) for i in range(60)] + [9.4 + (i / 100.0) for i in range(60)],
+                'LSL': [9.0] * 120,
+                'NOMINAL': [10.0] * 120,
+                'USL': [11.0] * 120,
+            }
+        )
+
+        payload = build_group_analysis_payload(
+            grouped_df,
+            requested_scope='auto',
+            analysis_level='light',
+            distribution_fit_policy={'mode': 'skip_large_exports', 'max_fit_samples_per_metric': 100},
+        )
+
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['descriptive_stats'][0]['best_fit_model'], 'Skipped by policy')
+        self.assertEqual(metric['descriptive_stats'][0]['fit_quality'], 'not run')
+        self.assertTrue(metric['distribution_pairwise_rows'])
+        self.assertIsNotNone(metric['distribution_pairwise_rows'][0]['Wasserstein distance'])
 
 
 if __name__ == '__main__':

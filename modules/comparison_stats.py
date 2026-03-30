@@ -20,8 +20,13 @@ from itertools import combinations
 from typing import Any, Callable
 
 import numpy as np
-from scipy.stats import mannwhitneyu, ttest_ind
+from scipy.stats import mannwhitneyu, rankdata, ttest_ind
 
+from modules.comparison_stats_native import (
+    bootstrap_percentile_ci_batch_native,
+    bootstrap_percentile_ci_native,
+    pairwise_stats_native,
+)
 from modules.group_stats_tests import select_group_stat_test
 
 
@@ -53,12 +58,14 @@ def _cohen_d(sample_a: np.ndarray, sample_b: np.ndarray) -> float | None:
 def _cliffs_delta(sample_a: np.ndarray, sample_b: np.ndarray) -> float | None:
     if sample_a.size == 0 or sample_b.size == 0:
         return None
-    greater = 0
-    lesser = 0
-    for left in sample_a:
-        greater += int(np.sum(left > sample_b))
-        lesser += int(np.sum(left < sample_b))
-    return float((greater - lesser) / (sample_a.size * sample_b.size))
+
+    n_a = sample_a.size
+    n_b = sample_b.size
+    pooled = np.concatenate((sample_a, sample_b))
+    ranks = rankdata(pooled, method='average')
+    rank_sum_a = float(np.sum(ranks[:n_a], dtype=np.float64))
+    u_statistic = rank_sum_a - (n_a * (n_a + 1) / 2.0)
+    return float((2.0 * u_statistic) / (n_a * n_b) - 1.0)
 
 
 def _eta_or_omega_squared(groups: list[np.ndarray], *, use_omega: bool) -> float | None:
@@ -106,9 +113,205 @@ def _bootstrap_ci(
     if not estimates:
         return None
 
+    return _percentile_interval(np.asarray(estimates, dtype=np.float64), level=level)
+
+
+def _percentile_interval(estimates: np.ndarray, *, level: float) -> tuple[float, float] | None:
+    finite = np.asarray(estimates, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return None
+
     lower_q = ((1.0 - level) / 2.0) * 100.0
     upper_q = (1.0 - (1.0 - level) / 2.0) * 100.0
-    return (float(np.percentile(estimates, lower_q)), float(np.percentile(estimates, upper_q)))
+    return (float(np.percentile(finite, lower_q)), float(np.percentile(finite, upper_q)))
+
+
+def _bootstrap_cohen_d_percentile_ci(
+    *,
+    sample_a: np.ndarray,
+    sample_b: np.ndarray,
+    level: float,
+    iterations: int,
+    seed: int,
+) -> tuple[float, float] | None:
+    if sample_a.size < 2 or sample_b.size < 2:
+        return None
+
+    resolved_iterations = max(1, int(iterations))
+    rng = np.random.default_rng(seed)
+    resampled_a = sample_a[rng.integers(0, sample_a.size, size=(resolved_iterations, sample_a.size))]
+    resampled_b = sample_b[rng.integers(0, sample_b.size, size=(resolved_iterations, sample_b.size))]
+
+    mean_a = np.mean(resampled_a, axis=1)
+    mean_b = np.mean(resampled_b, axis=1)
+    var_a = np.var(resampled_a, axis=1, ddof=1)
+    var_b = np.var(resampled_b, axis=1, ddof=1)
+    pooled = (((sample_a.size - 1) * var_a) + ((sample_b.size - 1) * var_b)) / (sample_a.size + sample_b.size - 2)
+    valid = np.isfinite(pooled) & (pooled > 0.0)
+    if not np.any(valid):
+        return None
+
+    estimates = (mean_a[valid] - mean_b[valid]) / np.sqrt(pooled[valid])
+    return _percentile_interval(estimates, level=level)
+
+
+def _bootstrap_multi_group_effect_percentile_ci(
+    *,
+    groups: list[np.ndarray],
+    level: float,
+    iterations: int,
+    seed: int,
+    use_omega: bool,
+) -> tuple[float, float] | None:
+    if len(groups) < 2:
+        return None
+
+    sample_sizes = np.array([group.size for group in groups], dtype=np.float64)
+    if np.any(sample_sizes < 2):
+        return None
+
+    resolved_iterations = max(1, int(iterations))
+    total_n = float(np.sum(sample_sizes))
+    group_count = float(len(groups))
+    rng = np.random.default_rng(seed)
+
+    means_by_group: list[np.ndarray] = []
+    ss_within = np.zeros(resolved_iterations, dtype=np.float64)
+    for group in groups:
+        sampled = group[rng.integers(0, group.size, size=(resolved_iterations, group.size))]
+        mean = np.mean(sampled, axis=1)
+        means_by_group.append(mean)
+        centered = sampled - mean[:, None]
+        ss_within += np.sum(centered * centered, axis=1, dtype=np.float64)
+
+    means_matrix = np.vstack(means_by_group)
+    grand_mean = np.sum(means_matrix * sample_sizes[:, None], axis=0, dtype=np.float64) / total_n
+    ss_between = np.sum(sample_sizes[:, None] * (means_matrix - grand_mean) ** 2, axis=0, dtype=np.float64)
+    ss_total = ss_between + ss_within
+    valid = np.isfinite(ss_total) & (ss_total > 0.0)
+
+    if use_omega:
+        df_between = group_count - 1.0
+        df_within = total_n - group_count
+        if df_within <= 0.0:
+            return None
+        ms_within = ss_within / df_within
+        denom = ss_total + ms_within
+        valid &= np.isfinite(denom) & (denom > 0.0)
+        estimates = (ss_between[valid] - (df_between * ms_within[valid])) / denom[valid]
+        estimates = np.maximum(estimates, 0.0)
+    else:
+        estimates = ss_between[valid] / ss_total[valid]
+
+    return _percentile_interval(estimates, level=level)
+
+
+def _bootstrap_effect_percentile_ci(
+    *,
+    effect_kernel: str,
+    groups: list[np.ndarray],
+    level: float,
+    iterations: int,
+    seed: int = 42,
+) -> tuple[float, float] | None:
+    native_ci = bootstrap_percentile_ci_native(
+        effect_kernel=effect_kernel,
+        groups=groups,
+        level=level,
+        iterations=iterations,
+        seed=seed,
+    )
+    if native_ci is not None:
+        return native_ci
+
+    if effect_kernel == 'cohen_d':
+        if len(groups) != 2:
+            return None
+        return _bootstrap_cohen_d_percentile_ci(
+            sample_a=groups[0],
+            sample_b=groups[1],
+            level=level,
+            iterations=iterations,
+            seed=seed,
+        )
+
+    if effect_kernel in {'eta_squared', 'omega_squared'}:
+        return _bootstrap_multi_group_effect_percentile_ci(
+            groups=groups,
+            level=level,
+            iterations=iterations,
+            seed=seed,
+            use_omega=effect_kernel == 'omega_squared',
+        )
+
+    rng = np.random.default_rng(seed)
+    if effect_kernel == 'cliffs_delta':
+        if len(groups) != 2:
+            return None
+        sample_a = groups[0]
+        sample_b = groups[1]
+        if sample_a.size == 0 or sample_b.size == 0:
+            return None
+        return _bootstrap_ci(
+            rng=rng,
+            sample_builder=lambda: [
+                sample_a[rng.integers(0, sample_a.size, sample_a.size)],
+                sample_b[rng.integers(0, sample_b.size, sample_b.size)],
+            ],
+            effect_fn=lambda sampled: _pairwise_effect_size(
+                sampled[0],
+                sampled[1],
+                non_parametric=effect_kernel == 'cliffs_delta',
+            ),
+            level=level,
+            iterations=iterations,
+        )
+    raise ValueError(f'Unsupported effect kernel: {effect_kernel}')
+
+
+def _bootstrap_pairwise_effect_percentile_ci_batch(
+    *,
+    effect_kernel: str,
+    labels: list[str],
+    numeric_groups: dict[str, np.ndarray],
+    pairwise_rows: list[dict[str, Any]],
+    level: float,
+    iterations: int,
+    seed: int = 42,
+) -> dict[tuple[str, str], tuple[float, float] | None]:
+    eligible_pairs = [
+        (str(row['group_a']), str(row['group_b']))
+        for row in pairwise_rows
+        if row.get('effect_size') is not None
+    ]
+    if not eligible_pairs:
+        return {}
+
+    label_to_index = {label: idx for idx, label in enumerate(labels)}
+    pair_indices = [(label_to_index[group_a], label_to_index[group_b]) for group_a, group_b in eligible_pairs]
+
+    native_batch = bootstrap_percentile_ci_batch_native(
+        effect_kernel=effect_kernel,
+        groups=[numeric_groups[label] for label in labels],
+        pairs=pair_indices,
+        level=level,
+        iterations=iterations,
+        seed=seed,
+    )
+    if native_batch is not None:
+        return {pair: ci for pair, ci in zip(eligible_pairs, native_batch)}
+
+    return {
+        (group_a, group_b): _bootstrap_effect_percentile_ci(
+            effect_kernel=effect_kernel,
+            groups=[numeric_groups[group_a], numeric_groups[group_b]],
+            level=level,
+            iterations=iterations,
+            seed=seed,
+        )
+        for group_a, group_b in eligible_pairs
+    }
 
 
 def _adjust_pvalues(p_values: list[float | None], method: str) -> list[float | None]:
@@ -202,6 +405,52 @@ def _pairwise_effect_size(sample_a: np.ndarray, sample_b: np.ndarray, *, non_par
     return _cliffs_delta(sample_a, sample_b) if non_parametric else _cohen_d(sample_a, sample_b)
 
 
+def _coerce_float64_contiguous_non_nan(values: list[float] | np.ndarray) -> np.ndarray:
+    if isinstance(values, np.ndarray):
+        array = values if values.dtype == np.float64 else np.asarray(values, dtype=np.float64)
+    else:
+        array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1:
+        array = array.reshape(-1)
+    finite = array[~np.isnan(array)]
+    if finite.flags['C_CONTIGUOUS'] and finite.dtype == np.float64:
+        return finite
+    return np.ascontiguousarray(finite, dtype=np.float64)
+
+
+def _compute_pairwise_core_native(
+    *,
+    labels: list[str],
+    numeric_groups: dict[str, np.ndarray],
+    config: ComparisonStatsConfig,
+    is_non_parametric: bool,
+    equal_var: bool,
+) -> list[dict[str, Any]] | None:
+    native_rows = pairwise_stats_native(
+        labels=labels,
+        groups=[numeric_groups[label] for label in labels],
+        alpha=config.alpha,
+        correction_method=config.correction_method,
+        non_parametric=is_non_parametric,
+        equal_var=equal_var,
+    )
+    if native_rows is None:
+        return None
+    return [
+        {
+            'group_a': str(row['group_a']),
+            'group_b': str(row['group_b']),
+            'test_used': str(row['test_used']),
+            'pairwise_test_name': str(row['test_used']),
+            'p_value': row.get('p_value'),
+            'effect_size': row.get('effect_size'),
+            'adjusted_p_value': row.get('adjusted_p_value'),
+            'significant': bool(row.get('significant', False)),
+        }
+        for row in native_rows
+    ]
+
+
 def compute_metric_pairwise_stats(
     metric_key: str,
     grouped_values: dict[str, list[float] | np.ndarray],
@@ -222,10 +471,7 @@ def compute_metric_pairwise_stats(
     config = config or ComparisonStatsConfig()
 
     labels = list(grouped_values.keys())
-    numeric_groups = {
-        label: np.asarray(values, dtype=float)[~np.isnan(np.asarray(values, dtype=float))]
-        for label, values in grouped_values.items()
-    }
+    numeric_groups = {label: _coerce_float64_contiguous_non_nan(values) for label, values in grouped_values.items()}
     selector_result = select_group_stat_test(labels=labels, grouped_values=[numeric_groups[label] for label in labels])
     selected_test = selector_result.get('test_name') or 'Unknown'
     is_non_parametric = selected_test in {'Mann-Whitney U', 'Kruskal-Wallis'}
@@ -256,54 +502,68 @@ def compute_metric_pairwise_stats(
             use_omega=config.multi_group_effect == 'omega_squared',
         )
         if config.include_effect_size_ci and overall_effect is not None:
-            rng = np.random.default_rng(42)
-            arrays = [numeric_groups[label] for label in labels]
-
-            def sample_builder() -> list[np.ndarray]:
-                return [arr[rng.integers(0, arr.size, arr.size)] for arr in arrays]
-
-            overall_ci = _bootstrap_ci(
-                rng=rng,
-                sample_builder=sample_builder,
-                effect_fn=lambda sampled: _eta_or_omega_squared(sampled, use_omega=config.multi_group_effect == 'omega_squared'),
+            overall_ci = _bootstrap_effect_percentile_ci(
+                effect_kernel='omega_squared' if config.multi_group_effect == 'omega_squared' else 'eta_squared',
+                groups=[numeric_groups[label] for label in labels],
                 level=config.ci_level,
                 iterations=config.ci_bootstrap_iterations,
             )
+
+    pairwise_rows = _compute_pairwise_core_native(
+        labels=labels,
+        numeric_groups=numeric_groups,
+        config=config,
+        is_non_parametric=is_non_parametric,
+        equal_var=equal_var,
+    )
+    if pairwise_rows is None:
+        pairwise_rows = []
+        raw_p_values: list[float | None] = []
+        for group_a, group_b in combinations(labels, 2):
+            sample_a = numeric_groups[group_a]
+            sample_b = numeric_groups[group_b]
+            test_used, p_value = _pairwise_p_value(sample_a, sample_b, non_parametric=is_non_parametric, equal_var=equal_var)
+            raw_p_values.append(p_value)
+            pairwise_rows.append(
+                {
+                    'group_a': group_a,
+                    'group_b': group_b,
+                    'test_used': test_used,
+                    'pairwise_test_name': test_used,
+                    'p_value': p_value,
+                    'effect_size': _pairwise_effect_size(sample_a, sample_b, non_parametric=is_non_parametric),
+                }
+            )
+        adjusted = _adjust_pvalues(raw_p_values, config.correction_method)
+        for row, adjusted_p in zip(pairwise_rows, adjusted):
+            row['adjusted_p_value'] = adjusted_p
+            row['significant'] = bool(adjusted_p is not None and adjusted_p < config.alpha)
 
     rows: list[dict[str, Any]] = []
-    raw_p_values: list[float | None] = []
-    for group_a, group_b in combinations(labels, 2):
-        sample_a = numeric_groups[group_a]
-        sample_b = numeric_groups[group_b]
-        test_used, p_value = _pairwise_p_value(sample_a, sample_b, non_parametric=is_non_parametric, equal_var=equal_var)
-        raw_p_values.append(p_value)
+    pairwise_effect_cis: dict[tuple[str, str], tuple[float, float] | None] = {}
+    if config.include_effect_size_ci:
+        pairwise_effect_cis = _bootstrap_pairwise_effect_percentile_ci_batch(
+            effect_kernel='cliffs_delta' if is_non_parametric else 'cohen_d',
+            labels=labels,
+            numeric_groups=numeric_groups,
+            pairwise_rows=pairwise_rows,
+            level=config.ci_level,
+            iterations=config.ci_bootstrap_iterations,
+        )
 
-        effect_size = _pairwise_effect_size(sample_a, sample_b, non_parametric=is_non_parametric)
-        effect_ci = None
-        if config.include_effect_size_ci and effect_size is not None:
-            rng = np.random.default_rng(42)
-
-            def effect_fn(sampled: list[np.ndarray]) -> float | None:
-                return _pairwise_effect_size(sampled[0], sampled[1], non_parametric=is_non_parametric)
-
-            effect_ci = _bootstrap_ci(
-                rng=rng,
-                sample_builder=lambda: [
-                    sample_a[rng.integers(0, sample_a.size, sample_a.size)],
-                    sample_b[rng.integers(0, sample_b.size, sample_b.size)],
-                ],
-                effect_fn=effect_fn,
-                level=config.ci_level,
-                iterations=config.ci_bootstrap_iterations,
-            )
+    for pairwise in pairwise_rows:
+        group_a = str(pairwise['group_a'])
+        group_b = str(pairwise['group_b'])
+        effect_size = pairwise.get('effect_size')
+        effect_ci = pairwise_effect_cis.get((group_a, group_b))
 
         row = {
             'metric': metric_key,
             'group_a': group_a,
             'group_b': group_b,
-            'test_used': test_used,
-            'pairwise_test_name': test_used,
-            'p_value': p_value,
+            'test_used': pairwise['test_used'],
+            'pairwise_test_name': pairwise['pairwise_test_name'],
+            'p_value': pairwise.get('p_value'),
             'effect_size': effect_size,
             'effect_type': pairwise_effect_type,
             'pairwise_effect_type': pairwise_effect_type,
@@ -329,11 +589,9 @@ def compute_metric_pairwise_stats(
             if overall_ci is not None:
                 row['omnibus_effect_size_ci'] = overall_ci
         rows.append(row)
-
-    adjusted = _adjust_pvalues(raw_p_values, config.correction_method)
-    for row, adjusted_p in zip(rows, adjusted):
-        row['adjusted_p_value'] = adjusted_p
-        row['significant'] = bool(adjusted_p is not None and adjusted_p < config.alpha)
+    for row, pairwise in zip(rows, pairwise_rows):
+        row['adjusted_p_value'] = pairwise.get('adjusted_p_value')
+        row['significant'] = bool(pairwise.get('significant', False))
         row.setdefault('effect_types', {'pairwise': pairwise_effect_type, 'omnibus': row.get('omnibus_effect_type')})
 
     return rows

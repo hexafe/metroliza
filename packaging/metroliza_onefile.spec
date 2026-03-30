@@ -13,6 +13,7 @@ exec((ROOT_DIR / "VersionDate.py").read_text(encoding="utf-8"), VERSION_NS)
 RELEASE_VERSION = VERSION_NS["RELEASE_VERSION"]
 VERSION_DATE = VERSION_NS["VERSION_DATE"]
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
+OUTPUT_NAME = f"metroliza_P_{VERSION_LABEL}"
 ICON_PATH = SPEC_DIR / 'metroliza_icon2.ico'
 
 
@@ -65,7 +66,16 @@ a = Analysis(
     pathex=[],
     binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries,
     datas=pymupdf_datas + fitz_datas,
-    hiddenimports=['_metroliza_cmm_native', 'pymupdf', 'fitz', 'modules.cmm_report_parser', *pymupdf_hiddenimports, *fitz_hiddenimports],
+    hiddenimports=[
+        '_metroliza_cmm_native',
+        '_metroliza_chart_native',
+        'pymupdf',
+        'fitz',
+        'modules.cmm_report_parser',
+        'modules.native_chart_compositor',
+        *pymupdf_hiddenimports,
+        *fitz_hiddenimports,
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -84,7 +94,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='metroliza',
+    name=OUTPUT_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -3,17 +3,35 @@
 from __future__ import annotations
 
 import math
+from collections.abc import MutableMapping
 from dataclasses import asdict, dataclass, field
+from hashlib import blake2b
 from typing import Callable
 
 import numpy as np
 import pandas as pd
+from modules.distribution_fit_native import (
+    compute_ad_ks_statistics_native,
+    estimate_ad_pvalue_monte_carlo_native,
+)
+from modules.distribution_fit_candidate_native import (
+    ERROR_NONE,
+    build_kernel_input,
+    build_batch_fit_input,
+    build_batch_kernel_input,
+    compute_candidate_fit_batch,
+    compute_candidate_metrics,
+    compute_candidate_metrics_batch_native,
+    native_metrics_backend_available,
+    resolve_kernel_mode,
+)
 from scipy.stats import (
     foldnorm,
     gamma,
     gaussian_kde,
     halfnorm,
     johnsonsu,
+    kstwo,
     kstest,
     lognorm,
     norm,
@@ -75,6 +93,33 @@ _POSITIVE_CANDIDATES: tuple[_CandidateDistribution, ...] = (
     _CandidateDistribution('lognorm', 'Lognormal', lognorm, lognorm.fit, True, True),
 )
 
+_DISTRIBUTION_BY_NAME = {
+    'norm': norm,
+    'skewnorm': skewnorm,
+    'johnsonsu': johnsonsu,
+    'halfnorm': halfnorm,
+    'foldnorm': foldnorm,
+    'gamma': gamma,
+    'weibull_min': weibull_min,
+    'lognorm': lognorm,
+}
+
+# Stable candidate-kernel contract (frozen for Rust/Python parity):
+# Input: contiguous float64 1D sample array + candidate model metadata (distribution + fitted params).
+# Output: nll, aic, bic, ad_statistic, ks_statistic, and kernel error flags (consumed internally for fallback).
+
+
+def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
+    """Resolve curve point density and KDE smoothing safeguards for low sample sizes."""
+    n = max(0, int(sample_size))
+    if n <= 10:
+        return {'point_count': min(int(requested_point_count), 40), 'kde_min_bandwidth': 0.45}
+    if n <= 20:
+        return {'point_count': min(int(requested_point_count), 60), 'kde_min_bandwidth': 0.35}
+    if n <= 40:
+        return {'point_count': min(int(requested_point_count), 80), 'kde_min_bandwidth': 0.25}
+    return {'point_count': max(20, int(requested_point_count)), 'kde_min_bandwidth': 0.0}
+
 
 def _safe_float(value):
     if value is None:
@@ -84,6 +129,37 @@ def _safe_float(value):
     except (TypeError, ValueError):
         return None
     return parsed if np.isfinite(parsed) else None
+
+
+def _as_float64_1d_contiguous(values) -> np.ndarray:
+    if isinstance(values, np.ndarray) and values.dtype == np.float64 and values.flags['C_CONTIGUOUS']:
+        array = values
+    else:
+        array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1:
+        array = array.reshape(-1)
+    if array.flags['C_CONTIGUOUS'] and array.dtype == np.float64:
+        return array
+    return np.ascontiguousarray(array, dtype=np.float64)
+
+
+def _coerce_measurements_array(measurements) -> np.ndarray:
+    if isinstance(measurements, np.ndarray):
+        values = _as_float64_1d_contiguous(measurements)
+        if np.all(np.isfinite(values)):
+            return values
+        finite_values = values[np.isfinite(values)]
+        if finite_values.flags['C_CONTIGUOUS']:
+            return finite_values
+        return np.ascontiguousarray(finite_values, dtype=np.float64)
+
+    values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
+    return _as_float64_1d_contiguous(values)
+
+
+def measurement_fingerprint(values: np.ndarray):
+    """Public fingerprint helper for callers that precompute cache keys per group."""
+    return _measurement_fingerprint(values)
 
 
 def _infer_support_mode(values: np.ndarray, tolerance: float = 1e-9) -> str:
@@ -99,6 +175,100 @@ def _candidate_pool_for_mode(mode: str) -> tuple[_CandidateDistribution, ...]:
     if mode == 'one_sided_zero_bound_positive':
         return _POSITIVE_CANDIDATES
     return _BILATERAL_CANDIDATES
+
+
+def _resolve_active_candidate_pool(values: np.ndarray, mode: str) -> tuple[_CandidateDistribution, ...]:
+    pool = _candidate_pool_for_mode(mode)
+    if mode != 'bilateral_signed' or values.size < 60:
+        return pool
+
+    centered = values - float(np.mean(values))
+    second_moment = float(np.mean(centered ** 2))
+    if second_moment <= 0.0 or not np.isfinite(second_moment):
+        return pool
+
+    third_moment = float(np.mean(centered ** 3))
+    fourth_moment = float(np.mean(centered ** 4))
+    skewness = third_moment / (second_moment ** 1.5)
+    excess_kurtosis = fourth_moment / (second_moment ** 2) - 3.0
+
+    if abs(skewness) < 0.6 and abs(excess_kurtosis) < 1.0:
+        return tuple(candidate for candidate in pool if candidate.name != 'johnsonsu')
+    return pool
+
+
+def _resolve_curve_x_values(values: np.ndarray, *, point_count: int, coverage_padding: float = 0.03):
+    x_min = float(np.min(values))
+    x_max = float(np.max(values))
+    if np.isclose(x_min, x_max):
+        return None
+    spread = x_max - x_min
+    sampling = resolve_density_curve_sampling(int(values.size), requested_point_count=point_count)
+    resolved_point_count = max(20, int(sampling['point_count']))
+    return np.linspace(x_min - (coverage_padding * spread), x_max + (coverage_padding * spread), resolved_point_count)
+
+
+def _measurement_fingerprint(values: np.ndarray):
+    normalized = _as_float64_1d_contiguous(values)
+    digest = blake2b(normalized.tobytes(), digest_size=16).hexdigest()
+    return (int(normalized.size), digest)
+
+
+def _fit_cache_key(
+    *,
+    values: np.ndarray,
+    lsl,
+    usl,
+    point_count: int,
+    include_kde_reference: bool,
+    gof_acceptance_alpha: float,
+    monte_carlo_gof_samples: int,
+    monte_carlo_seed: int | None,
+):
+    return (
+        _measurement_fingerprint(values),
+        _safe_float(lsl),
+        _safe_float(usl),
+        int(point_count),
+        bool(include_kde_reference),
+        float(gof_acceptance_alpha),
+        int(monte_carlo_gof_samples),
+        None if monte_carlo_seed is None else int(monte_carlo_seed),
+    )
+
+
+def _clone_curve_payload(curve: dict | None):
+    if not isinstance(curve, dict):
+        return curve
+    cloned = dict(curve)
+    if curve.get('x') is not None:
+        cloned['x'] = np.asarray(curve['x'], dtype=float).copy()
+    if curve.get('y') is not None:
+        cloned['y'] = np.asarray(curve['y'], dtype=float).copy()
+    return cloned
+
+
+def clone_fit_payload(payload: dict | None):
+    if not isinstance(payload, dict):
+        return payload
+    cloned = dict(payload)
+    for key in ('selected_model_pdf', 'selected_model_cdf', 'kde_reference_pdf'):
+        cloned[key] = _clone_curve_payload(payload.get(key))
+    if isinstance(payload.get('selected_model'), dict):
+        cloned['selected_model'] = dict(payload['selected_model'])
+    if isinstance(payload.get('gof_metrics'), dict):
+        cloned['gof_metrics'] = dict(payload['gof_metrics'])
+    if isinstance(payload.get('fit_quality'), dict):
+        cloned['fit_quality'] = dict(payload['fit_quality'])
+    if isinstance(payload.get('risk_estimates'), dict):
+        cloned['risk_estimates'] = dict(payload['risk_estimates'])
+    if isinstance(payload.get('ranking_metrics'), list):
+        cloned['ranking_metrics'] = [dict(item) if isinstance(item, dict) else item for item in payload['ranking_metrics']]
+    if isinstance(payload.get('model_candidates'), list):
+        cloned['model_candidates'] = [dict(item) if isinstance(item, dict) else item for item in payload['model_candidates']]
+    if isinstance(payload.get('notes'), list):
+        cloned['notes'] = list(payload['notes'])
+    return cloned
 
 
 def _build_density_curve(dist, params, x_values: np.ndarray):
@@ -126,14 +296,8 @@ def _build_kde_reference_curve(values: np.ndarray, x_values: np.ndarray):
         return None
     try:
         kde = gaussian_kde(values)
-        sample_size = int(values.size)
-        min_bandwidth = 0.0
-        if sample_size <= 10:
-            min_bandwidth = 0.45
-        elif sample_size <= 20:
-            min_bandwidth = 0.35
-        elif sample_size <= 40:
-            min_bandwidth = 0.25
+        sampling = resolve_density_curve_sampling(int(values.size), requested_point_count=int(np.asarray(x_values).size))
+        min_bandwidth = float(sampling.get('kde_min_bandwidth', 0.0))
         if min_bandwidth > 0:
             kde.set_bandwidth(bw_method=max(float(kde.factor), min_bandwidth))
         y_values = kde(x_values)
@@ -157,6 +321,7 @@ def _ad_statistic(sample: np.ndarray, cdf: Callable[[np.ndarray], np.ndarray]) -
 def _estimate_ad_pvalue_monte_carlo(
     *,
     dist,
+    distribution_name: str,
     params: tuple,
     sample_size: int,
     observed_stat: float,
@@ -165,6 +330,19 @@ def _estimate_ad_pvalue_monte_carlo(
 ):
     if iterations <= 0:
         return None
+
+    native_result = estimate_ad_pvalue_monte_carlo_native(
+        distribution=distribution_name,
+        fitted_params=params,
+        sample_size=sample_size,
+        observed_stat=observed_stat,
+        iterations=iterations,
+        seed=random_seed,
+    )
+    if native_result is not None:
+        p_value, _valid_trials = native_result
+        return p_value
+
     rng = np.random.default_rng(random_seed)
     exceed_count = 0
     valid_trials = 0
@@ -193,7 +371,7 @@ def _classify_fit_quality(gof_pvalue: float | None, selected_is_acceptable: bool
     return {'label': 'unreliable', 'score': 0.1}
 
 
-def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray):
+def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray, *, kernel_mode: str | None = None):
     fit_kwargs = {'floc': 0.0} if candidate.force_loc_zero else {}
     params = tuple(candidate.fit_method(values, **fit_kwargs))
     if candidate.positive_support and params:
@@ -201,18 +379,48 @@ def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray):
         params[-2] = 0.0
         params = tuple(params)
 
-    logpdf = candidate.scipy_dist.logpdf(values, *params)
-    if not np.all(np.isfinite(logpdf)):
-        raise ValueError('logpdf returned invalid values')
+    kernel_input = build_kernel_input(
+        sample_values=values,
+        distribution=candidate.name,
+        fitted_params=params,
+    )
+    kernel_output = compute_candidate_metrics(kernel_input, mode=kernel_mode)
 
     n = values.size
-    nll = float(-np.sum(logpdf))
-    k = len(params)
-    aic = float(2 * k + 2 * nll)
-    bic = float(k * math.log(n) + 2 * nll)
+    nll = None if kernel_output is None else kernel_output.nll
+    aic = None if kernel_output is None else kernel_output.aic
+    bic = None if kernel_output is None else kernel_output.bic
+    ad_stat = None if kernel_output is None else kernel_output.ad_statistic
+    ks_stat = None if kernel_output is None else kernel_output.ks_statistic
 
-    ad_stat = _ad_statistic(values, lambda x: candidate.scipy_dist.cdf(x, *params))
-    ks_stat, ks_pvalue = kstest(values, candidate.scipy_dist.cdf, args=params)
+    if nll is None or aic is None or bic is None:
+        logpdf = candidate.scipy_dist.logpdf(values, *params)
+        if not np.all(np.isfinite(logpdf)):
+            raise ValueError('logpdf returned invalid values')
+        nll = float(-np.sum(logpdf))
+        k = len(params)
+        aic = float(2 * k + 2 * nll)
+        bic = float(k * math.log(n) + 2 * nll)
+
+    if ad_stat is None:
+        native_stats = compute_ad_ks_statistics_native(
+            distribution=candidate.name,
+            fitted_params=params,
+            sample_values=values,
+        )
+        if native_stats is not None:
+            ad_stat, ks_stat = native_stats
+
+    if ad_stat is None:
+        ad_stat = _ad_statistic(values, lambda x: candidate.scipy_dist.cdf(x, *params))
+
+    if ks_stat is None:
+        ks_stat, ks_pvalue = kstest(values, candidate.scipy_dist.cdf, args=params)
+        ks_stat = float(ks_stat)
+        ks_pvalue = float(ks_pvalue)
+    else:
+        ks_stat = float(ks_stat)
+        ks_pvalue = float(kstwo.sf(ks_stat, n)) if n > 0 else None
 
     return {
         'model': candidate.name,
@@ -226,6 +434,232 @@ def _fit_candidate(candidate: _CandidateDistribution, values: np.ndarray):
             'ks_statistic': float(ks_stat),
             'ks_pvalue': float(ks_pvalue),
         },
+    }
+
+
+def _fit_candidates_batch_native(
+    grouped_values: dict[str, np.ndarray],
+    *,
+    support_mode_by_group: dict[str, str],
+    kernel_mode: str | None = None,
+    fit_batch_mode: str = 'native',
+) -> dict[str, dict[str, dict]] | None:
+    if resolve_kernel_mode(kernel_mode) == 'python':
+        return None
+    if not native_metrics_backend_available():
+        return None
+
+    fit_metadata: list[tuple[str, _CandidateDistribution, np.ndarray]] = []
+    fit_distributions: list[str] = []
+    fit_sample_values: list[np.ndarray] = []
+    fit_force_loc_zero: list[bool] = []
+
+    for group_name, values in grouped_values.items():
+        if values.size < 3:
+            continue
+        if np.isclose(float(np.min(values)), float(np.max(values))):
+            continue
+        for candidate in _resolve_active_candidate_pool(values, support_mode_by_group[group_name]):
+            fit_metadata.append((group_name, candidate, values))
+            fit_distributions.append(candidate.name)
+            fit_sample_values.append(values)
+            fit_force_loc_zero.append(bool(candidate.force_loc_zero))
+
+    if not fit_metadata:
+        return None
+
+    distributions: list[str] = []
+    fitted_params_batch: list[tuple[float, ...]] = []
+    sample_values_batch: list[np.ndarray] = []
+    metadata: list[tuple[str, _CandidateDistribution, tuple[float, ...], np.ndarray]] = []
+    if fit_batch_mode == 'legacy':
+        for group_name, candidate, values in fit_metadata:
+            fit_kwargs = {'floc': 0.0} if candidate.force_loc_zero else {}
+            params = tuple(candidate.fit_method(values, **fit_kwargs))
+            if candidate.positive_support and params:
+                mutable = list(params)
+                mutable[-2] = 0.0
+                params = tuple(mutable)
+            distributions.append(candidate.name)
+            fitted_params_batch.append(params)
+            sample_values_batch.append(values)
+            metadata.append((group_name, candidate, params, values))
+    else:
+        fitters_by_distribution = {
+            candidate.name: candidate.fit_method
+            for candidate in (*_BILATERAL_CANDIDATES, *_POSITIVE_CANDIDATES)
+        }
+        fit_output = compute_candidate_fit_batch(
+            build_batch_fit_input(
+                sample_values_batch=fit_sample_values,
+                distributions=fit_distributions,
+                force_loc_zero_batch=fit_force_loc_zero,
+            ),
+            mode=kernel_mode,
+            fitters_by_distribution=fitters_by_distribution,
+        )
+        if fit_output is None:
+            return None
+
+        for idx, (group_name, candidate, values) in enumerate(fit_metadata):
+            if fit_output.error_flags[idx] != ERROR_NONE:
+                continue
+            params = fit_output.fitted_params_batch[idx]
+            if params is None:
+                continue
+            resolved_params = tuple(float(v) for v in params)
+            if candidate.positive_support and resolved_params:
+                mutable = list(resolved_params)
+                mutable[-2] = 0.0
+                resolved_params = tuple(mutable)
+            distributions.append(candidate.name)
+            fitted_params_batch.append(resolved_params)
+            sample_values_batch.append(values)
+            metadata.append((group_name, candidate, resolved_params, values))
+
+    if not metadata:
+        return None
+
+    batch_output = compute_candidate_metrics_batch_native(
+        build_batch_kernel_input(
+            sample_values_batch=sample_values_batch,
+            distributions=distributions,
+            fitted_params_batch=fitted_params_batch,
+        )
+    )
+    if batch_output is None:
+        return None
+
+    result: dict[str, dict[str, dict]] = {}
+    for idx, (group_name, candidate, params, values) in enumerate(metadata):
+        n = values.size
+        nll = batch_output.nll[idx]
+        aic = batch_output.aic[idx]
+        bic = batch_output.bic[idx]
+        ad_stat = batch_output.ad_statistic[idx]
+        ks_stat = batch_output.ks_statistic[idx]
+
+        if nll is None or aic is None or bic is None:
+            logpdf = candidate.scipy_dist.logpdf(values, *params)
+            if not np.all(np.isfinite(logpdf)):
+                raise ValueError('logpdf returned invalid values')
+            nll = float(-np.sum(logpdf))
+            k = len(params)
+            aic = float(2 * k + 2 * nll)
+            bic = float(k * math.log(n) + 2 * nll)
+
+        if ad_stat is None:
+            ad_stat = _ad_statistic(values, lambda x: candidate.scipy_dist.cdf(x, *params))
+
+        if ks_stat is None:
+            ks_stat, ks_pvalue = kstest(values, candidate.scipy_dist.cdf, args=params)
+            ks_stat = float(ks_stat)
+            ks_pvalue = float(ks_pvalue)
+        else:
+            ks_stat = float(ks_stat)
+            ks_pvalue = float(kstwo.sf(ks_stat, n)) if n > 0 else None
+
+        result.setdefault(group_name, {})[candidate.name] = {
+            'model': candidate.name,
+            'display_name': candidate.display_name,
+            'params': tuple(float(v) for v in params),
+            'metrics': {'nll': nll, 'aic': aic, 'bic': bic},
+            'gof': {
+                'ad_statistic': float(ad_stat),
+                'ad_pvalue': None,
+                'ad_pvalue_method': 'not_estimated',
+                'ks_statistic': float(ks_stat),
+                'ks_pvalue': float(ks_pvalue),
+            },
+        }
+    return result
+
+
+def build_fit_curve_payload(
+    measurements,
+    *,
+    point_count: int = 100,
+    mode: str = 'normal_fit',
+    distribution_fit_result: dict | None = None,
+):
+    """Return canonical histogram overlay curve payloads for export/render callers."""
+    values = _coerce_measurements_array(measurements)
+    if values.size == 0:
+        return None
+
+    if distribution_fit_result:
+        if mode == 'kde':
+            kde_curve = distribution_fit_result.get('kde_reference_pdf')
+            if kde_curve is not None:
+                return _clone_curve_payload(kde_curve)
+        else:
+            selected_curve = distribution_fit_result.get('selected_model_pdf')
+            if selected_curve is not None:
+                return _clone_curve_payload(selected_curve)
+
+    x_values = _resolve_curve_x_values(values, point_count=point_count, coverage_padding=0.0)
+    if x_values is None:
+        return None
+
+    if mode == 'kde':
+        return _build_kde_reference_curve(values, x_values)
+
+    if distribution_fit_result:
+        selected_model = distribution_fit_result.get('selected_model') or {}
+        model_name = selected_model.get('name') or selected_model.get('model')
+        params = selected_model.get('params')
+        dist = _DISTRIBUTION_BY_NAME.get(model_name)
+        if dist is not None and params:
+            return _build_density_curve(dist, params, x_values)
+
+    mu, std = norm.fit(values)
+    if std <= 0:
+        return None
+    return _build_density_curve(norm, (mu, std), x_values)
+
+
+def compute_estimated_tail_metrics(distribution_fit_result, *, lsl=None, usl=None):
+    """Return export-friendly tail metrics derived from canonical fit risk estimates."""
+    distribution_fit_result = distribution_fit_result or {}
+    risk_estimates = distribution_fit_result.get('risk_estimates') or {}
+    outside_probability = risk_estimates.get('outside_probability')
+    if outside_probability is None:
+        selected_model = distribution_fit_result.get('selected_model') or {}
+        model_name = selected_model.get('name') or selected_model.get('model')
+        params = selected_model.get('params')
+        dist = _DISTRIBUTION_BY_NAME.get(model_name)
+        inferred_support_mode = distribution_fit_result.get('inferred_support_mode')
+        if dist is None or not params:
+            return {
+                'estimated_nok_pct': None,
+                'estimated_nok_ppm': None,
+                'estimated_yield_pct': None,
+                'estimated_tail_below_lsl': None,
+                'estimated_tail_above_usl': None,
+            }
+        recomputed = _compute_tail_risk(
+            dist,
+            params,
+            lsl,
+            usl,
+            inferred_support_mode=inferred_support_mode,
+        )
+        outside_probability = recomputed.get('outside_probability')
+        risk_estimates = recomputed
+        if outside_probability is None:
+            return {
+                'estimated_nok_pct': None,
+                'estimated_nok_ppm': None,
+                'estimated_yield_pct': None,
+                'estimated_tail_below_lsl': None,
+                'estimated_tail_above_usl': None,
+            }
+    return {
+        'estimated_nok_pct': outside_probability,
+        'estimated_nok_ppm': risk_estimates.get('ppm_nok'),
+        'estimated_yield_pct': 1.0 - outside_probability,
+        'estimated_tail_below_lsl': risk_estimates.get('below_lsl_probability'),
+        'estimated_tail_above_usl': risk_estimates.get('above_usl_probability'),
     }
 
 
@@ -319,6 +753,10 @@ def fit_measurement_distribution(
     gof_acceptance_alpha: float = 0.05,
     monte_carlo_gof_samples: int = 0,
     monte_carlo_seed: int | None = None,
+    candidate_kernel_mode: str | None = None,
+    memoization_cache: MutableMapping | None = None,
+    measurement_signature: tuple[int, str] | None = None,
+    precomputed_candidates_by_model: dict[str, dict] | None = None,
 ):
     """Fit distributions, score GOF, classify quality, and estimate tail risk.
 
@@ -327,8 +765,25 @@ def fit_measurement_distribution(
 
     del nom  # kept for backwards compatibility in call-sites.
 
-    values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
+    values = _coerce_measurements_array(measurements)
     sample_size = int(values.size)
+
+    cache_key = None
+    if memoization_cache is not None and sample_size > 0:
+        fit_signature = measurement_signature if measurement_signature is not None else _measurement_fingerprint(values)
+        cache_key = (
+            fit_signature,
+            _safe_float(lsl),
+            _safe_float(usl),
+            int(point_count),
+            bool(include_kde_reference),
+            float(gof_acceptance_alpha),
+            int(monte_carlo_gof_samples),
+            None if monte_carlo_seed is None else int(monte_carlo_seed),
+        )
+        cached = memoization_cache.get(cache_key)
+        if cached is not None:
+            return clone_fit_payload(cached)
 
     inferred_mode = 'unknown'
     if sample_size >= 1:
@@ -353,24 +808,24 @@ def fit_measurement_distribution(
     lsl_value = _safe_float(lsl)
     usl_value = _safe_float(usl)
 
-    spread = x_max - x_min
-    resolved_point_count = max(20, int(point_count))
-    if sample_size <= 10:
-        resolved_point_count = min(resolved_point_count, 40)
-    elif sample_size <= 20:
-        resolved_point_count = min(resolved_point_count, 60)
-    elif sample_size <= 40:
-        resolved_point_count = min(resolved_point_count, 80)
-    x_values = np.linspace(x_min - 0.03 * spread, x_max + 0.03 * spread, resolved_point_count)
+    x_values = _resolve_curve_x_values(values, point_count=point_count)
 
     notes: list[str] = []
     candidates = []
-    for candidate in _candidate_pool_for_mode(inferred_mode):
+    active_candidate_pool = _resolve_active_candidate_pool(values, inferred_mode)
+    for candidate in active_candidate_pool:
         try:
-            fitted = _fit_candidate(candidate, values)
+            fitted = None if precomputed_candidates_by_model is None else precomputed_candidates_by_model.get(candidate.name)
+            if fitted is None:
+                fitted = _fit_candidate(candidate, values, kernel_mode=candidate_kernel_mode)
+            else:
+                fitted = dict(fitted)
+                fitted['metrics'] = dict(fitted.get('metrics') or {})
+                fitted['gof'] = dict(fitted.get('gof') or {})
             if monte_carlo_gof_samples > 0:
                 fitted['gof']['ad_pvalue'] = _estimate_ad_pvalue_monte_carlo(
                     dist=candidate.scipy_dist,
+                    distribution_name=candidate.name,
                     params=fitted['params'],
                     sample_size=sample_size,
                     observed_stat=fitted['gof']['ad_statistic'],
@@ -412,7 +867,7 @@ def fit_measurement_distribution(
     ranked = sorted(candidates, key=lambda c: c['metrics']['bic'])
 
     selected_dist = next(
-        c.scipy_dist for c in _candidate_pool_for_mode(inferred_mode) if c.name == best['model']
+        c.scipy_dist for c in active_candidate_pool if c.name == best['model']
     )
     selected_pdf = _build_density_curve(selected_dist, best['params'], x_values)
     selected_cdf = _build_cdf_curve(selected_dist, best['params'], x_values)
@@ -462,4 +917,58 @@ def fit_measurement_distribution(
         model_candidates=ranked,
         notes=sorted(set(notes)),
     )
-    return result.to_dict()
+    payload = result.to_dict()
+    if memoization_cache is not None and cache_key is not None:
+        memoization_cache[cache_key] = clone_fit_payload(payload)
+    return payload
+
+
+def fit_measurement_distribution_batch(
+    grouped_measurements: dict[str, np.ndarray],
+    *,
+    lsl_by_group: dict[str, float | None] | None = None,
+    usl_by_group: dict[str, float | None] | None = None,
+    point_count: int = 100,
+    include_kde_reference: bool = True,
+    gof_acceptance_alpha: float = 0.05,
+    monte_carlo_gof_samples: int = 0,
+    monte_carlo_seed: int | None = None,
+    candidate_kernel_mode: str | None = None,
+    candidate_fit_batch_mode: str = 'native',
+    memoization_cache: MutableMapping | None = None,
+    fingerprints_by_group: dict[str, tuple[int, str]] | None = None,
+) -> dict[str, dict]:
+    """Batch distribution-fit API for pre-cleaned, contiguous ndarray inputs."""
+
+    lsl_by_group = lsl_by_group or {}
+    usl_by_group = usl_by_group or {}
+    result: dict[str, dict] = {}
+
+    normalized_values = {group_name: _as_float64_1d_contiguous(values) for group_name, values in grouped_measurements.items()}
+    support_mode_by_group = {
+        group_name: ('unknown' if values.size < 1 else _infer_support_mode(values))
+        for group_name, values in normalized_values.items()
+    }
+    precomputed_by_group = _fit_candidates_batch_native(
+        normalized_values,
+        support_mode_by_group=support_mode_by_group,
+        kernel_mode=candidate_kernel_mode,
+        fit_batch_mode=candidate_fit_batch_mode,
+    ) or {}
+
+    for group_name, group_values in normalized_values.items():
+        result[group_name] = fit_measurement_distribution(
+            group_values,
+            lsl=lsl_by_group.get(group_name),
+            usl=usl_by_group.get(group_name),
+            point_count=point_count,
+            include_kde_reference=include_kde_reference,
+            gof_acceptance_alpha=gof_acceptance_alpha,
+            monte_carlo_gof_samples=monte_carlo_gof_samples,
+            monte_carlo_seed=monte_carlo_seed,
+            candidate_kernel_mode=candidate_kernel_mode,
+            memoization_cache=memoization_cache,
+            measurement_signature=None if fingerprints_by_group is None else fingerprints_by_group.get(group_name),
+            precomputed_candidates_by_model=precomputed_by_group.get(group_name),
+        )
+    return result

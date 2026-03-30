@@ -35,12 +35,14 @@ pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec('pymupdf', loader=None)
 sys.modules.setdefault('pymupdf', pymupdf_stub)
 
 import modules.cmm_report_parser as cmm_report_parser_module  # noqa: E402
+from modules.cmm_schema import ensure_cmm_report_schema  # noqa: E402
 
 CMMReportParser = cmm_report_parser_module.CMMReportParser
 
 
 class TestSchemaIndexQueryPlans(unittest.TestCase):
     def _insert_report(self, db_path: str, reference: str, sample_number: str, day: int) -> None:
+        ensure_cmm_report_schema(db_path)
         parser = CMMReportParser(f'{reference}_2024-02-{day:02d}_{sample_number}.pdf', db_path)
         parser.pdf_reference = reference
         parser.pdf_file_path = '/tmp/reports'
@@ -129,6 +131,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_reports_sample_number',
                 'idx_reports_identity',
                 'idx_measurements_report_id',
+                'idx_measurements_report_header_ax',
                 'idx_measurements_header',
                 'idx_measurements_ax',
             }
@@ -154,6 +157,12 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
             "WHERE REFERENCE='REF_A' AND FILELOC='/tmp/reports' AND "
             "FILENAME='REF_A_2024-02-10_010.pdf' AND DATE='2024-02-10' AND SAMPLE_NUMBER='010'"
         )
+        measurement_summary_query = """
+            SELECT REPORT_ID, HEADER, AX, COUNT(MEAS)
+            FROM MEASUREMENTS
+            WHERE REPORT_ID IN (1, 2, 3, 4, 5)
+            GROUP BY REPORT_ID, HEADER, AX
+        """
 
         with tempfile.TemporaryDirectory() as temp_dir:
             no_index_db = Path(temp_dir) / 'no_indexes.db'
@@ -165,6 +174,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 no_index_filter_plan = self._explain(conn, filter_join_query)
                 no_index_group_plan = self._explain(conn, group_dialog_query)
                 no_index_duplicate_plan = self._explain(conn, duplicate_guard_query)
+                no_index_summary_plan = self._explain(conn, measurement_summary_query)
 
             for i in range(1, 61):
                 reference = 'REF_A' if i % 2 == 0 else 'REF_B'
@@ -176,6 +186,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 indexed_filter_plan = self._explain(conn, filter_join_query)
                 indexed_group_plan = self._explain(conn, group_dialog_query)
                 indexed_duplicate_plan = self._explain(conn, duplicate_guard_query)
+                indexed_summary_plan = self._explain(conn, measurement_summary_query)
 
         self.assertIn('SCAN MEASUREMENTS', no_index_filter_plan)
         self.assertIn('idx_measurements_ax', indexed_filter_plan)
@@ -185,6 +196,9 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
 
         self.assertIn('SCAN REPORTS', no_index_duplicate_plan)
         self.assertIn('idx_reports_identity', indexed_duplicate_plan)
+
+        self.assertIn('SCAN MEASUREMENTS', no_index_summary_plan)
+        self.assertIn('idx_measurements_report_header_ax', indexed_summary_plan)
 
 
 if __name__ == '__main__':

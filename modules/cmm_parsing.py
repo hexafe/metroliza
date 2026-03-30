@@ -10,7 +10,6 @@ Output contract:
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 MEASUREMENT_LINE_MAP = {
@@ -32,8 +31,41 @@ MEASUREMENT_LINE_MAP = {
 }
 
 
+
+def _strip_comment_prefix(text: str) -> str:
+    """Strip leading CMM comment markers without regex overhead."""
+    if not text or text[0] not in "#*/":
+        return text.strip()
+
+    idx = 0
+    while idx < len(text) and text[idx] in "#*/":
+        idx += 1
+    return text[idx:].strip()
+
+
+def _drop_trailing_empty_blocks(pdf_blocks_text: list[list[Any]]) -> None:
+    """Remove terminal cleanup blocks that carry no useful measurement rows."""
+
+    def _is_disposable_terminal_block(block: list[Any]) -> bool:
+        if len(block) <= 1 or block[1]:
+            return False
+
+        header_tokens: list[str] = []
+        for header_entry in block[0]:
+            if isinstance(header_entry, str):
+                header_tokens.append(header_entry)
+            elif isinstance(header_entry, list):
+                header_tokens.extend(str(item) for item in header_entry if isinstance(item, str))
+
+        normalized_header = " ".join(token.strip() for token in header_tokens if token.strip()).upper()
+        return not normalized_header or normalized_header.startswith("END")
+
+    while pdf_blocks_text and _is_disposable_terminal_block(pdf_blocks_text[-1]):
+        pdf_blocks_text.pop()
+
 def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
     """Parse raw report lines into legacy block structure."""
+    split_lines = [line.split() for line in raw_lines]
 
     def is_comment_or_header(line: str) -> bool:
         return line.startswith(("#", "*"))
@@ -41,30 +73,17 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
     def is_dim_line(line: str) -> bool:
         return line.startswith("DIM")
 
-    def is_numerical(line: str) -> bool:
+    def parse_numeric_token(value: str) -> float | None:
         try:
-            float(line.strip())
-            return True
+            return float(value)
         except ValueError:
-            return False
+            return None
 
-    def is_number(value: str) -> bool:
-        try:
-            float(value)
-            return True
-        except ValueError:
-            return False
-
-    def process_line(line: list[str]) -> list[Any]:
+    def process_line(line: list[Any]) -> list[Any]:
         processed_line: list[Any] = []
+        code = line[0] if line else ""
 
-        # Keep code token but normalize payload to numeric tokens for
-        # non-TP measurement parsers. This makes non-TP parsing resilient to
-        # semantic labels/qualifiers embedded in report text while preserving
-        # existing positional mappings for numeric fields.
-        numeric_normalized_line = [line[0], *[token for token in line[1:] if is_number(token)]]
-
-        def process_tp_line(tokens: list[str]) -> list[Any]:
+        def process_tp_line(tokens: list[Any]) -> list[Any]:
             tp_qualifiers = {
                 "RFS",
                 "MMC",
@@ -81,10 +100,12 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
 
             numeric_values: list[float] = []
             for token in tokens[1:]:
-                normalized_token = token.upper().rstrip(":")
-                if is_number(token):
-                    numeric_values.append(float(token))
-                elif normalized_token in tp_qualifiers:
+                if isinstance(token, float):
+                    numeric_values.append(token)
+                    continue
+
+                normalized_token = str(token).upper().rstrip(":")
+                if normalized_token in tp_qualifiers:
                     has_tp_qualifier = True
                     continue
                 elif normalized_token in semantic_labels:
@@ -106,156 +127,160 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
 
             return ["TP", nom, tol_plus, "", bonus, meas, dev, outtol]
 
-        line = numeric_normalized_line if not line[0].startswith("TP") else line
-
-        if (line[0] in ["X", "Y", "Z"]) and len(line) == 4:
-            processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-        elif (line[0] in ["X", "Y", "Z"]) and len(line) == 7:
-            processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                float(line[3]),
-                "",
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
-            ]
-        elif line[0].startswith("TP"):
+        if str(code).startswith("TP"):
             processed_line = process_tp_line(line)
-        elif line[0] == "M" and len(line) == 7:
+            return processed_line
+
+        numeric_values = line[1:]
+
+        if code in ["X", "Y", "Z"] and len(numeric_values) == 3:
+            processed_line = [code, numeric_values[0], "", "", "", numeric_values[1], numeric_values[2], ""]
+        elif code in ["X", "Y", "Z"] and len(numeric_values) == 6:
             processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                float(line[3]),
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
                 "",
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
+                numeric_values[3],
+                numeric_values[4],
+                numeric_values[5],
             ]
-        elif line[0] == "M" and len(line) == 8:
+        elif code == "M" and len(numeric_values) == 6:
             processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                float(line[3]),
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
-                float(line[7]),
-            ]
-        elif line[0] == "D" and len(line) == 7:
-            processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                float(line[3]),
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
                 "",
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
+                numeric_values[3],
+                numeric_values[4],
+                numeric_values[5],
             ]
-        elif line[0] == "RN" and len(line) == 7:
+        elif code == "M" and len(numeric_values) == 7:
             processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                float(line[3]),
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
+                numeric_values[3],
+                numeric_values[4],
+                numeric_values[5],
+                numeric_values[6],
+            ]
+        elif code == "D" and len(numeric_values) == 6:
+            processed_line = [
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
                 "",
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
+                numeric_values[3],
+                numeric_values[4],
+                numeric_values[5],
             ]
-        elif line[0] == "DF" and len(line) == 8:
+        elif code == "RN" and len(numeric_values) == 6:
             processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                float(line[3]),
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
-                float(line[7]),
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
+                "",
+                numeric_values[3],
+                numeric_values[4],
+                numeric_values[5],
             ]
-        elif line[0] == "DF" and len(line) == 7:
+        elif code == "DF" and len(numeric_values) == 7:
             processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                float(line[3]),
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
+                numeric_values[3],
+                numeric_values[4],
+                numeric_values[5],
+                numeric_values[6],
+            ]
+        elif code == "DF" and len(numeric_values) == 6:
+            processed_line = [
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
                 "0",
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
+                numeric_values[3],
+                numeric_values[4],
+                numeric_values[5],
             ]
-        elif line[0] == "PR" and len(line) == 7:
+        elif code == "PR" and len(numeric_values) == 6:
             processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                float(line[3]),
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
                 "",
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
+                numeric_values[3],
+                numeric_values[4],
+                numeric_values[5],
             ]
-        elif line[0] == "PR" and len(line) == 4:
-            processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-        elif line[0] == "PA" and len(line) == 4:
-            processed_line = [line[0], float(line[1]), "", "", "", float(line[2]), float(line[3]), ""]
-        elif line[0] in {"D1", "D2", "D3", "D4"} and len(line) == 5 and is_number(line[1]):
-            processed_line = [line[0], float(line[1]), float(line[2]), float(line[3]), "", float(line[4]), "", ""]
-        elif line[0] == "A" and len(line) == 7:
+        elif code == "PR" and len(numeric_values) == 3:
+            processed_line = [code, numeric_values[0], "", "", "", numeric_values[1], numeric_values[2], ""]
+        elif code == "PA" and len(numeric_values) == 3:
+            processed_line = [code, numeric_values[0], "", "", "", numeric_values[1], numeric_values[2], ""]
+        elif code in {"D1", "D2", "D3", "D4"} and len(numeric_values) == 4:
+            processed_line = [code, numeric_values[0], numeric_values[1], numeric_values[2], "", numeric_values[3], "", ""]
+        elif code == "A" and len(numeric_values) == 6:
             processed_line = [
-                line[0],
-                float(line[1]),
-                float(line[2]),
-                float(line[3]),
+                code,
+                numeric_values[0],
+                numeric_values[1],
+                numeric_values[2],
                 "0",
-                float(line[4]),
-                float(line[5]),
-                float(line[6]),
+                numeric_values[3],
+                numeric_values[4],
+                numeric_values[5],
             ]
         return processed_line
 
     def extract_measurement_tokens_and_raw_lines_consumed(
-        lines: list[str], preserve_non_numeric_tokens: bool = False
-    ) -> tuple[list[str], int]:
-        if not lines:
+        start_index: int, preserve_non_numeric_tokens: bool = False
+    ) -> tuple[list[Any], int]:
+        if start_index >= len(raw_lines):
             return [], 0
 
-        code_tokens = lines[0].split()
+        code_tokens = split_lines[start_index]
         if not code_tokens:
             return [], 0
 
         code, *first_line_tokens = code_tokens
-        parsed_tokens: list[str] = [code]
+        parsed_tokens: list[Any] = [code]
+        numeric_token_count = 0
         raw_lines_consumed = 1
         max_token_count = MEASUREMENT_LINE_MAP.get(code, 0)
         max_numeric_count = max(max_token_count - 1, 0) if max_token_count else 0
 
-        def numeric_tokens_consumed() -> int:
-            return sum(1 for token in parsed_tokens[1:] if is_number(token))
-
         def append_tokens(tokens: list[str]) -> None:
+            nonlocal numeric_token_count
             for token in tokens:
-                if is_number(token):
-                    parsed_tokens.append(token)
-                    if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
+                numeric_token = parse_numeric_token(token)
+                if numeric_token is not None:
+                    parsed_tokens.append(numeric_token)
+                    numeric_token_count += 1
+                    if max_numeric_count and numeric_token_count >= max_numeric_count:
                         break
                 elif preserve_non_numeric_tokens:
                     parsed_tokens.append(token)
-                    if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
+                    if max_numeric_count and numeric_token_count >= max_numeric_count:
                         break
 
         append_tokens(first_line_tokens)
 
-        for raw_line in lines[1:]:
-            if max_numeric_count and numeric_tokens_consumed() >= max_numeric_count:
+        for follow_index in range(start_index + 1, len(raw_lines)):
+            if max_numeric_count and numeric_token_count >= max_numeric_count:
                 break
 
-            raw_line_tokens = raw_line.split()
+            raw_line = raw_lines[follow_index]
+            raw_line_tokens = split_lines[follow_index]
             if not raw_line_tokens:
                 raw_lines_consumed += 1
                 continue
@@ -303,13 +328,14 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                 pdf_blocks_text.append(text_block)
                 text_block, header_comment, dim_block = [], [], []
 
-        if not is_comment_or_header(line) and len(line.split()) == 3:
+        line_tokens = split_lines[index]
+        if not is_comment_or_header(line) and len(line_tokens) == 3:
             continue
 
         if text_block:
             if is_comment_or_header(line) or is_dim_line(line):
                 if is_comment_or_header(line) and prev_line is not None and is_comment_or_header(prev_line):
-                    formatted_line = re.sub(r"^[#*/]+", "", line).strip()
+                    formatted_line = _strip_comment_prefix(line)
                     header_comment.append([formatted_line])
 
                 if is_dim_line(line) and prev_line is not None and not is_comment_or_header(prev_line):
@@ -322,17 +348,16 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                     text_block = [header_comment] + [dim_block]
                     pdf_blocks_text.append(text_block)
                     text_block, header_comment, dim_block = [], [], []
-                    formatted_line = re.sub(r"^[#*/]+", "", line).strip()
+                    formatted_line = _strip_comment_prefix(line)
                     header_comment.append([formatted_line])
                     text_block.append(header_comment)
 
             else:
-                tokens = line.split()
+                tokens = line_tokens
                 if tokens and tokens[0] in MEASUREMENT_LINE_MAP:
-                    candidate_lines = raw_lines[index:]
                     preserve_non_numeric_tokens = tokens[0].startswith("TP")
                     parsed_tokens, raw_lines_consumed = extract_measurement_tokens_and_raw_lines_consumed(
-                        candidate_lines,
+                        index,
                         preserve_non_numeric_tokens=preserve_non_numeric_tokens,
                     )
 
@@ -343,7 +368,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
         else:
             if not pdf_blocks_text:
                 if is_comment_or_header(line):
-                    formatted_line = re.sub(r"^[#*/]+", "", line).strip()
+                    formatted_line = _strip_comment_prefix(line)
                     header_comment.append([formatted_line])
                     text_block.append(header_comment)
                 elif is_dim_line(line):
@@ -356,7 +381,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
                     text_block, dim_block = [], []
                 if is_comment_or_header(line):
                     text_block, header_comment, dim_block = [], [], []
-                    formatted_line = re.sub(r"^[#*/]+", "", line).strip()
+                    formatted_line = _strip_comment_prefix(line)
                     header_comment.append([formatted_line])
 
     if text_block:
@@ -365,6 +390,7 @@ def parse_raw_lines_to_blocks(raw_lines: list[str]) -> list[list[Any]]:
             pdf_blocks_text.append(candidate_block)
 
     add_tolerances_to_blocks(pdf_blocks_text)
+    _drop_trailing_empty_blocks(pdf_blocks_text)
     return pdf_blocks_text
 
 

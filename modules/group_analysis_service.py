@@ -19,10 +19,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from modules.characteristic_alias_service import resolve_characteristic_alias
+from modules.characteristic_alias_service import resolve_characteristic_aliases_bulk
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.export_grouping_utils import normalize_group_labels
-from modules.distribution_shape_analysis import compute_distribution_difference
+from modules.distribution_shape_analysis import compute_distribution_difference, resolve_distribution_fit_policy
 from modules.stats_utils import compute_capability_confidence_intervals, safe_process_capability
 
 _SKIP_REASON_MESSAGES = {
@@ -165,14 +165,22 @@ def _build_metric_plot_eligibility(*, grouped_values, analysis_level, include_me
     }
 
 
-def _round_display_value(value, *, precision=3):
-    """Round numeric values for display payloads while preserving nulls."""
+def _coerce_numeric_scalar(value):
+    """Convert a scalar-like value to float, returning None when coercion fails."""
     if value is None:
         return None
-    parsed = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
+    parsed = pd.to_numeric(value, errors='coerce')
     if pd.isna(parsed):
         return None
-    return round(float(parsed), precision)
+    return float(parsed)
+
+
+def _round_display_value(value, *, precision=3):
+    """Round numeric values for display payloads while preserving nulls."""
+    parsed = _coerce_numeric_scalar(value)
+    if parsed is None:
+        return None
+    return round(parsed, precision)
 
 
 def _round_display_value_adj_p(value):
@@ -262,21 +270,33 @@ def _resolve_canonical_metric_aliases(frame, canonical_metric_series, *, alias_d
         return canonical_metric_series
 
     resolved_metric_series = canonical_metric_series.fillna('').astype(str).str.strip().copy()
-    reference_series = None
-    if 'REFERENCE' in frame.columns:
-        reference_series = frame['REFERENCE'].fillna('').astype(str).str.strip()
+    non_empty_metric_mask = resolved_metric_series != ''
+    if not non_empty_metric_mask.any():
+        return resolved_metric_series
 
-    for row_index, metric_name in resolved_metric_series.items():
-        if not metric_name:
-            continue
-        reference_value = None
-        if reference_series is not None:
-            reference_value = reference_series.get(row_index) or None
-        resolved_metric_series.at[row_index] = resolve_characteristic_alias(
-            metric_name,
-            reference_value,
-            alias_db_path,
-        )
+    def _normalize_reference_key(value):
+        if pd.isna(value):
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    if 'REFERENCE' in frame.columns:
+        reference_values = [_normalize_reference_key(value) for value in frame['REFERENCE'].tolist()]
+    else:
+        reference_values = [None] * len(resolved_metric_series)
+
+    lookup_key_series = pd.Series(
+        list(zip(resolved_metric_series.tolist(), reference_values)),
+        index=resolved_metric_series.index,
+        dtype=object,
+    )
+    unique_lookup_keys = list(dict.fromkeys(lookup_key_series.loc[non_empty_metric_mask].tolist()))
+    resolved_lookup = resolve_characteristic_aliases_bulk(unique_lookup_keys, alias_db_path)
+
+    mapped = lookup_key_series.loc[non_empty_metric_mask].map(resolved_lookup)
+    resolved_metric_series.loc[non_empty_metric_mask] = mapped.fillna(
+        resolved_metric_series.loc[non_empty_metric_mask]
+    )
 
     return resolved_metric_series
 
@@ -285,12 +305,10 @@ def normalize_spec_limits(lsl, nominal, usl, *, precision=3):
     """Normalize spec values to rounded numeric payload fields with explicit nulls."""
 
     def _to_rounded(value):
-        if value is None:
+        parsed = _coerce_numeric_scalar(value)
+        if parsed is None:
             return None
-        parsed = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
-        if pd.isna(parsed):
-            return None
-        return round(float(parsed), precision)
+        return round(parsed, precision)
 
     return {
         'lsl': _to_rounded(lsl),
@@ -316,29 +334,38 @@ def classify_spec_status(spec_payload):
 
 def classify_metric_spec_status(metric_rows_df, spec_columns):
     """Classify a metric's cross-row spec comparability status."""
-    normalized_specs = []
-    for _, row in metric_rows_df.iterrows():
-        normalized_specs.append(
-            normalize_spec_limits(
-                row[spec_columns['lsl']] if spec_columns['lsl'] else None,
-                row[spec_columns['nominal']] if spec_columns['nominal'] else None,
-                row[spec_columns['usl']] if spec_columns['usl'] else None,
-            )
-        )
-
-    if not normalized_specs:
+    if metric_rows_df.empty:
         return 'INVALID_SPEC', {'lsl': None, 'nominal': None, 'usl': None}
 
-    if any(classify_spec_status(spec) == 'INVALID_SPEC' for spec in normalized_specs):
-        return 'INVALID_SPEC', normalized_specs[0]
+    def _coerced_spec_series(column_name):
+        if not column_name:
+            return pd.Series(np.nan, index=metric_rows_df.index, dtype=float)
+        return pd.to_numeric(metric_rows_df[column_name], errors='coerce').round(3)
 
-    unique_nominals = {spec['nominal'] for spec in normalized_specs}
-    unique_limits = {(spec['lsl'], spec['usl']) for spec in normalized_specs}
-    canonical_spec = normalized_specs[0]
+    lsl_series = _coerced_spec_series(spec_columns.get('lsl'))
+    nominal_series = _coerced_spec_series(spec_columns.get('nominal'))
+    usl_series = _coerced_spec_series(spec_columns.get('usl'))
 
-    if len(unique_nominals) > 1:
+    canonical_spec = {
+        'lsl': None if pd.isna(lsl_series.iloc[0]) else float(lsl_series.iloc[0]),
+        'nominal': None if pd.isna(nominal_series.iloc[0]) else float(nominal_series.iloc[0]),
+        'usl': None if pd.isna(usl_series.iloc[0]) else float(usl_series.iloc[0]),
+    }
+
+    invalid_spec_mask = (
+        lsl_series.isna()
+        | nominal_series.isna()
+        | usl_series.isna()
+        | (lsl_series > usl_series)
+        | (nominal_series < lsl_series)
+        | (nominal_series > usl_series)
+    )
+    if invalid_spec_mask.any():
+        return 'INVALID_SPEC', canonical_spec
+
+    if nominal_series.nunique(dropna=False) > 1:
         return 'NOM_MISMATCH', canonical_spec
-    if len(unique_limits) > 1:
+    if pd.DataFrame({'lsl': lsl_series, 'usl': usl_series}).drop_duplicates().shape[0] > 1:
         return 'LIMIT_MISMATCH', canonical_spec
     return 'EXACT_MATCH', canonical_spec
 
@@ -429,6 +456,7 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
             'cp': capability.get('cp'),
             'capability': capability.get('capability'),
             'capability_type': capability.get('capability_type'),
+            'capability_ci': capability.get('capability_ci'),
         }
         raw_output_row['flags'] = _build_group_flags(raw_output_row, metric_flags)
 
@@ -444,6 +472,7 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
             'cp': _round_display_value(raw_output_row.get('cp')),
             'capability': _round_display_value(raw_output_row.get('capability')),
             'capability_type': raw_output_row.get('capability_type'),
+            'capability_ci': raw_output_row.get('capability_ci'),
             'flags': raw_output_row.get('flags'),
         }
         output.append(output_row)
@@ -453,8 +482,7 @@ def build_group_descriptive_rows(grouped_values, *, spec_payload, allow_capabili
 
 
 def _safe_numeric(value):
-    parsed = pd.to_numeric(pd.Series([value]), errors='coerce').iloc[0]
-    return None if pd.isna(parsed) else float(parsed)
+    return _coerce_numeric_scalar(value)
 
 
 def _pairwise_practical_magnitude(effect_value):
@@ -552,6 +580,103 @@ def _distribution_metric_note(distribution_difference):
     return f'Shape note: {verdict}'
 
 
+def _distribution_shape_signal_level(distribution_difference):
+    verdict = str((distribution_difference or {}).get('comment / verdict') or '').strip()
+    if not verdict:
+        return None
+    lowered = verdict.lower()
+    if 'no statistically significant distribution shape difference' in lowered or 'no distribution shape difference' in lowered:
+        return None
+    if lowered.startswith('caution:'):
+        return 'caution'
+    if 'difference' in lowered or 'mismatch' in lowered:
+        return 'difference'
+    return None
+
+
+def _distribution_shape_message(distribution_difference):
+    verdict = str((distribution_difference or {}).get('comment / verdict') or '').strip()
+    if not verdict:
+        return ''
+
+    lowered = verdict.lower()
+    if 'no statistically significant distribution shape difference' in lowered or 'no distribution shape difference' in lowered:
+        return ''
+    if lowered.startswith('caution: distribution fit quality is unreliable'):
+        return 'review spread and consistency cautiously; fit quality is unreliable for one or more groups.'
+    if lowered == 'difference detected in distribution shape.':
+        return 'spread or pattern differs across groups.'
+    return verdict.rstrip('.!?') + '.'
+
+
+def _pairwise_status_label(row):
+    label = str((row or {}).get('difference_label') or '').strip()
+    if label:
+        return label
+    return _difference_status_label(
+        adjusted_p_value=(row or {}).get('adjusted_p_value'),
+        effect_size=(row or {}).get('effect_size'),
+        flags=(row or {}).get('flags'),
+    )
+
+
+def _priority_pairwise_row(pairwise_rows):
+    if not pairwise_rows:
+        return None
+
+    status_rank = {
+        'DIFFERENCE': 0,
+        'USE CAUTION': 1,
+        'APPROXIMATE': 2,
+        'NO DIFFERENCE': 3,
+    }
+    return sorted(
+        pairwise_rows,
+        key=lambda row: (
+            status_rank.get(_pairwise_status_label(row), 4),
+            _safe_numeric(row.get('adjusted_p_value')) is None,
+            _safe_numeric(row.get('adjusted_p_value')) if _safe_numeric(row.get('adjusted_p_value')) is not None else float('inf'),
+            -abs(_safe_numeric(row.get('effect_size')) or 0.0),
+            str(row.get('group_a') or ''),
+            str(row.get('group_b') or ''),
+        ),
+    )[0]
+
+
+def _format_primary_pairwise_signal(pairwise_rows):
+    best = _priority_pairwise_row(pairwise_rows)
+    if best is None:
+        return ''
+
+    status_label = _pairwise_status_label(best)
+    detail_parts = []
+    adjusted_p = _safe_numeric(best.get('adjusted_p_value'))
+    effect_size = _safe_numeric(best.get('effect_size'))
+    if adjusted_p is not None:
+        detail_parts.append(f'adj p={adjusted_p:.4f}')
+    if effect_size is not None:
+        detail_parts.append(f'effect={effect_size:.3f}')
+
+    detail_suffix = f" ({', '.join(detail_parts)})" if detail_parts else ''
+    return f"Primary signal: {best.get('group_a')} vs {best.get('group_b')} is {status_label}{detail_suffix}."
+
+
+def _format_mean_range_signal(desc_rows):
+    sorted_by_mean = sorted(
+        [row for row in (desc_rows or []) if row.get('mean') is not None],
+        key=lambda row: row.get('mean'),
+    )
+    if not sorted_by_mean:
+        return ''
+
+    low = sorted_by_mean[0]
+    high = sorted_by_mean[-1]
+    return (
+        f"Mean range: lowest={low.get('group')} ({low.get('mean'):.4g}), "
+        f"highest={high.get('group')} ({high.get('mean'):.4g})."
+    )
+
+
 def _recommended_metric_action(*, pairwise_rows, distribution_difference, analysis_policy):
     if not analysis_policy.get('allow_pairwise'):
         return 'Recommended action: use descriptive results only; direct pairwise interpretation is not supported for this metric.'
@@ -572,14 +697,16 @@ def _recommended_metric_action(*, pairwise_rows, distribution_difference, analys
             f"{strongest.get('group_a')} vs {strongest.get('group_b')} and verify likely process drivers before changing settings."
         )
 
-    verdict = str((distribution_difference or {}).get('comment / verdict') or '').lower()
-    if 'statistically significant' in verdict and 'no statistically significant' not in verdict:
-        return 'Recommended action: averages may be similar, but review variation and consistency by group before changing the process.'
+    shape_signal = _distribution_shape_signal_level(distribution_difference)
+    if shape_signal == 'caution':
+        return 'Recommended action: review spread and consistency by group, but treat the shape signal cautiously because fit quality is unreliable.'
+    if shape_signal == 'difference':
+        return 'Recommended action: review spread and consistency by group; averages may look similar, but the distribution pattern differs.'
 
     return 'Recommended action: no immediate escalation; keep monitoring and collect more data if the gap still matters.'
 
 
-def _metric_index_status(*, pairwise_rows, diagnostics_comment):
+def _metric_index_status(*, pairwise_rows, diagnostics_comment, distribution_difference=None):
     labels = [
         _difference_status_label(
             adjusted_p_value=row.get('adjusted_p_value'),
@@ -590,6 +717,8 @@ def _metric_index_status(*, pairwise_rows, diagnostics_comment):
     ]
     if 'DIFFERENCE' in labels:
         return 'DIFFERENCE'
+    if _distribution_shape_signal_level(distribution_difference) is not None:
+        return 'USE CAUTION'
     if 'USE CAUTION' in labels or 'Descriptive-only' in str(diagnostics_comment or ''):
         return 'USE CAUTION'
     if 'APPROXIMATE' in labels:
@@ -599,22 +728,17 @@ def _metric_index_status(*, pairwise_rows, diagnostics_comment):
 
 def _metric_takeaway(*, pairwise_rows, diagnostics_comment, distribution_difference):
     if pairwise_rows:
-        ranked = sorted(
-            pairwise_rows,
-            key=lambda row: (
-                str(row.get('difference_label') or '') != 'DIFFERENCE',
-                _safe_numeric(row.get('adjusted_p_value')) is None,
-                _safe_numeric(row.get('adjusted_p_value')) if _safe_numeric(row.get('adjusted_p_value')) is not None else float('inf'),
-            ),
-        )
-        best = ranked[0]
-        summary = f"{best.get('group_a')} vs {best.get('group_b')}: {best.get('difference_label') or 'REVIEW'}."
+        best = _priority_pairwise_row(pairwise_rows)
+        summary = f"{best.get('group_a')} vs {best.get('group_b')}: {_pairwise_status_label(best) or 'REVIEW'}."
         action = str(best.get('suggested_action') or '').strip()
         return f'{summary} {action}'.strip()
 
-    shape_note = str((distribution_difference or {}).get('comment / verdict') or '').strip()
-    if shape_note:
-        return shape_note
+    shape_signal = _distribution_shape_signal_level(distribution_difference)
+    shape_message = _distribution_shape_message(distribution_difference)
+    if shape_signal == 'caution':
+        return 'Review spread and consistency cautiously because distribution-fit quality is unreliable for one or more groups.'
+    if shape_message:
+        return f'{shape_message} Review spread and consistency by group.'
     return str(diagnostics_comment or 'Review descriptive statistics only.').strip()
 
 def _build_pairwise_test_rationale(*, group_count, test_used):
@@ -770,53 +894,34 @@ def build_metric_insights(metric_row):
     desc_rows = metric_row.get('descriptive_stats', [])
     pairwise_rows = metric_row.get('pairwise_rows', [])
     comparability = metric_row.get('comparability_summary', {})
+    spec_status = metric_row.get('spec_status') or comparability.get('status')
+    restriction_label = str(metric_row.get('analysis_restriction_label') or '').strip()
+    if not restriction_label:
+        restriction_label = _build_analysis_restriction_fields(
+            spec_status,
+            metric_row.get('analysis_policy') or {},
+        ).get('analysis_restriction_label', 'Descriptive only')
+    status_label = get_spec_status_label(spec_status)
 
-    required_lines = [
-        (
-            f"Comparability={comparability.get('status')} "
-            f"(limits: {comparability.get('interpretation_limits', 'none')})."
-        )
-    ]
-    optional_lines = []
-
-    if desc_rows:
-        sorted_by_mean = sorted(
-            [row for row in desc_rows if row.get('mean') is not None],
-            key=lambda row: row['mean'],
-        )
-        if sorted_by_mean:
-            low = sorted_by_mean[0]
-            high = sorted_by_mean[-1]
-            optional_lines.append(
-                (
-                    f"Mean range spans {low.get('group')} ({low.get('mean'):.4g}) to "
-                    f"{high.get('group')} ({high.get('mean'):.4g})."
-                )
-            )
+    insight_lines = [f'Status: {status_label}; mode={restriction_label}.']
+    primary_signal = _format_primary_pairwise_signal(pairwise_rows)
+    if primary_signal:
+        insight_lines.append(primary_signal)
+    elif metric_row.get('analysis_policy', {}).get('allow_pairwise'):
+        insight_lines.append('Primary signal: no valid pairwise rows were produced.')
+    else:
+        insight_lines.append('Primary signal: pairwise comparison is disabled for this metric.')
 
     distribution_difference = metric_row.get('distribution_difference') or {}
-    shape_verdict = distribution_difference.get('comment / verdict')
-
-    if pairwise_rows:
-        best = sorted(
-            pairwise_rows,
-            key=lambda row: (row.get('adjusted_p_value') is None, row.get('adjusted_p_value') or float('inf')),
-        )[0]
-        required_lines.append(
-            (
-                f"Strongest pairwise location signal: {best.get('group_a')} vs {best.get('group_b')} "
-                f"(adj p={best.get('adjusted_p_value')}, comment={best.get('comment')})."
-            )
-        )
-    elif metric_row.get('analysis_policy', {}).get('allow_pairwise'):
-        required_lines.append('Pairwise location test enabled but no valid A/B rows were produced.')
+    shape_message = _distribution_shape_message(distribution_difference)
+    if shape_message:
+        insight_lines.append(f'Shape signal: {shape_message}')
     else:
-        required_lines.append('Pairwise location interpretation is disabled for this metric.')
+        mean_range_signal = _format_mean_range_signal(desc_rows)
+        if mean_range_signal:
+            insight_lines.append(mean_range_signal)
 
-    if shape_verdict:
-        required_lines.append(f"Distribution shape: {shape_verdict}")
-
-    return (required_lines + optional_lines)[:3]
+    return insight_lines[:3]
 
 
 def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correction_method='holm'):
@@ -1244,6 +1349,169 @@ def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eli
     }
 
 
+def _partition_metric_analysis_inputs(metric_rows_df, *, metric_identity, effective_scope, reference_column, spec_columns, analysis_level):
+    reference_value = None
+    if effective_scope == 'multi_reference' and reference_column is not None and reference_column in metric_rows_df.columns:
+        reference_candidates = metric_rows_df[reference_column].dropna().astype(str).str.strip()
+        reference_value = reference_candidates.iloc[0] if not reference_candidates.empty else None
+
+    grouped_values = {
+        group_name: group_df['MEAS'].to_numpy(dtype=float)
+        for group_name, group_df in metric_rows_df.groupby('GROUP', sort=True)
+    }
+    populated_groups = [name for name, values in grouped_values.items() if np.isfinite(values).sum() > 0]
+    spec_status, spec_payload = classify_metric_spec_status(metric_rows_df, spec_columns)
+    policy = _resolve_analysis_policy(spec_status, analysis_level)
+    return {
+        'metric': metric_identity,
+        'reference': reference_value,
+        'grouped_values': grouped_values,
+        'populated_groups': populated_groups,
+        'spec_status': spec_status,
+        'spec_payload': spec_payload,
+        'analysis_policy': policy,
+    }
+
+
+def _build_metric_descriptive_stage(*, metric_partition):
+    grouped_values = metric_partition['grouped_values']
+    spec_payload = metric_partition['spec_payload']
+    policy = metric_partition['analysis_policy']
+    descriptive_stats = build_group_descriptive_rows(
+        grouped_values,
+        spec_payload=spec_payload,
+        allow_capability=policy['allow_capability'],
+        spec_status=metric_partition['spec_status'],
+    )
+    all_metric_values = np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
+    capability = (
+        compute_capability_payload(all_metric_values, spec_payload)
+        if policy['allow_capability']
+        else {
+            'cp': None,
+            'capability': None,
+            'capability_type': None,
+            'cpk': None,
+            'status': 'not_applicable',
+            'sigma': float(np.std(all_metric_values, ddof=1)) if all_metric_values.size > 1 else 0.0,
+            'mean': float(np.mean(all_metric_values)) if all_metric_values.size else None,
+        }
+    )
+    return {
+        'descriptive_stats': descriptive_stats,
+        'capability': capability,
+    }
+
+
+def _build_metric_pairwise_stage(*, metric_partition, alpha, correction_method):
+    policy = metric_partition['analysis_policy']
+    pairwise_rows = (
+        build_pairwise_rows(
+            metric_partition['metric'],
+            metric_partition['grouped_values'],
+            alpha=alpha,
+            correction_method=correction_method,
+            spec_status=metric_partition['spec_status'],
+        )
+        if policy['allow_pairwise']
+        else []
+    )
+    return {'pairwise_rows': pairwise_rows}
+
+
+def _build_metric_distribution_stage(*, metric_partition, alpha, correction_method, fit_cache, fit_policy):
+    return compute_distribution_difference(
+        metric_partition['metric'],
+        metric_partition['grouped_values'],
+        alpha=alpha,
+        correction_method=correction_method,
+        fit_cache=fit_cache,
+        fit_policy=fit_policy,
+    )
+
+
+def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_stage, distribution_stage, normalized_level):
+    descriptive_stats = descriptive_stage['descriptive_stats']
+    pairwise_rows = pairwise_stage['pairwise_rows']
+    distribution_omnibus = distribution_stage.get('omnibus_row')
+    profile_by_group = {row.get('Group'): row for row in distribution_stage.get('profile_rows', [])}
+    for desc_row in descriptive_stats:
+        group_profile = profile_by_group.get(desc_row.get('group')) or {}
+        desc_row['best_fit_model'] = group_profile.get('best fit model') or group_profile.get('Best fit model')
+        desc_row['fit_quality'] = group_profile.get('fit quality') or group_profile.get('Fit quality')
+        desc_row['distribution_shape_caution'] = group_profile.get('Warning / notes summary')
+
+    spec_status = metric_partition['spec_status']
+    spec_payload = metric_partition['spec_payload']
+    policy = metric_partition['analysis_policy']
+    metric_level_flags = _join_flags(_build_metric_level_flags((row.get('n', 0) for row in descriptive_stats), spec_status=spec_status))
+    comparability_summary = build_comparability_summary(spec_status, policy)
+    restriction_fields = _build_analysis_restriction_fields(spec_status, policy)
+    plot_eligibility = _build_metric_plot_eligibility(
+        grouped_values=metric_partition['grouped_values'],
+        analysis_level=normalized_level,
+        include_metric=policy.get('include_metric', True),
+    )
+    diagnostics_comment = build_diagnostics_comment(
+        include_metric=policy.get('include_metric', True),
+        allow_pairwise=policy.get('allow_pairwise', False),
+        allow_capability=policy.get('allow_capability', False),
+        spec_status=spec_status,
+        pairwise_rows_count=len(pairwise_rows),
+    )
+    histogram_meta = plot_eligibility.get('histogram') or {}
+    if normalized_level == 'standard' and not bool(histogram_meta.get('eligible')):
+        diagnostics_comment = (
+            f"{diagnostics_comment} Histogram omitted: {_plot_skip_reason_message(histogram_meta.get('skip_reason'))}."
+        )
+
+    metric_payload = {
+        'metric': metric_partition['metric'],
+        'reference': metric_partition['reference'],
+        'group_count': len(metric_partition['populated_groups']),
+        'descriptive_stats': descriptive_stats,
+        'pairwise_rows': pairwise_rows,
+        'distribution_difference': distribution_omnibus,
+        'distribution_pairwise_rows': distribution_stage.get('pairwise_rows', []),
+        'spec': spec_payload,
+        'spec_status': spec_status,
+        'spec_status_label': get_spec_status_label(spec_status),
+        'analysis_policy': policy,
+        'pairwise_allowed': restriction_fields['pairwise_allowed'],
+        'capability_allowed': restriction_fields['capability_allowed'],
+        'analysis_restriction_label': restriction_fields['analysis_restriction_label'],
+        'capability': descriptive_stage['capability'],
+        'comparability_summary': comparability_summary,
+        'plot_eligibility': plot_eligibility,
+        'chart_payload': _build_metric_chart_payload(
+            grouped_values=metric_partition['grouped_values'],
+            spec_payload=spec_payload,
+        ),
+        'diagnostics_comment': diagnostics_comment,
+        'metric_flags': metric_level_flags,
+        'metric_note': _distribution_metric_note(distribution_omnibus),
+        'recommended_action': _recommended_metric_action(
+            pairwise_rows=pairwise_rows,
+            distribution_difference=distribution_omnibus,
+            analysis_policy=policy,
+        ),
+    }
+    metric_payload['index_status'] = _metric_index_status(
+        pairwise_rows=pairwise_rows,
+        diagnostics_comment=diagnostics_comment,
+        distribution_difference=distribution_omnibus,
+    )
+    if not policy.get('allow_pairwise') and metric_payload['index_status'] == 'NO DIFFERENCE':
+        metric_payload['index_status'] = 'USE CAUTION'
+    metric_payload['metric_takeaway'] = _metric_takeaway(
+        pairwise_rows=pairwise_rows,
+        diagnostics_comment=diagnostics_comment,
+        distribution_difference=distribution_omnibus,
+    )
+    metric_payload['insights'] = build_metric_insights(metric_payload)
+    return metric_payload
+
+
 def build_group_analysis_payload(
     grouped_df,
     *,
@@ -1253,6 +1521,7 @@ def build_group_analysis_payload(
     correction_method='holm',
     analysis_level='light',
     alias_db_path=None,
+    distribution_fit_policy=None,
 ):
     """Assemble metric-level Group Analysis payload for writer modules."""
     if not isinstance(grouped_df, pd.DataFrame):
@@ -1329,6 +1598,9 @@ def build_group_analysis_payload(
     if effective_scope == 'multi_reference' and reference_column is not None:
         grouping_columns.append(reference_column)
 
+    distribution_fit_policy = resolve_distribution_fit_policy(distribution_fit_policy)
+    distribution_fit_cache = {}
+
     for key_tuple, metric_rows_df in metric_frame.groupby(grouping_columns, dropna=False, sort=True):
         if not isinstance(key_tuple, tuple):
             key_tuple = (key_tuple,)
@@ -1336,138 +1608,44 @@ def build_group_analysis_payload(
         reference_value = key_tuple[1] if len(key_tuple) > 1 else None
         metric_identity = normalize_metric_identity(metric_name, reference_value, scope=effective_scope)
 
-        grouped_values = {
-            group_name: group_df['MEAS'].to_numpy(dtype=float)
-            for group_name, group_df in metric_rows_df.groupby('GROUP', sort=True)
-        }
-        populated_groups = [name for name, values in grouped_values.items() if np.isfinite(values).sum() > 0]
-        if len(populated_groups) < 2:
-            skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups', 'group_count': len(populated_groups)})
+        metric_partition = _partition_metric_analysis_inputs(
+            metric_rows_df,
+            metric_identity=metric_identity,
+            effective_scope=effective_scope,
+            reference_column=reference_column,
+            spec_columns=spec_columns,
+            analysis_level=analysis_level,
+        )
+        if len(metric_partition['populated_groups']) < 2:
+            skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups', 'group_count': len(metric_partition['populated_groups'])})
             continue
 
-        spec_status, spec_payload = classify_metric_spec_status(metric_rows_df, spec_columns)
-        policy = _resolve_analysis_policy(spec_status, analysis_level)
-        if not policy['include_metric']:
-            skipped_metrics.append({'metric': metric_identity, 'reason': spec_status.lower(), 'group_count': len(populated_groups)})
+        if not metric_partition['analysis_policy']['include_metric']:
+            skipped_metrics.append({'metric': metric_identity, 'reason': metric_partition['spec_status'].lower(), 'group_count': len(metric_partition['populated_groups'])})
             continue
 
-        descriptive_stats = build_group_descriptive_rows(
-            grouped_values,
-            spec_payload=spec_payload,
-            allow_capability=policy['allow_capability'],
-            spec_status=spec_status,
-        )
-        all_metric_values = np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
-        capability = (
-            compute_capability_payload(all_metric_values, spec_payload)
-            if policy['allow_capability']
-            else {
-                'cp': None,
-                'capability': None,
-                'capability_type': None,
-                'cpk': None,
-                'status': 'not_applicable',
-                'sigma': float(np.std(all_metric_values, ddof=1)) if all_metric_values.size > 1 else 0.0,
-                'mean': float(np.mean(all_metric_values)) if all_metric_values.size else None,
-            }
-        )
-        pairwise_rows = (
-            build_pairwise_rows(
-                metric_identity,
-                grouped_values,
-                alpha=alpha,
-                correction_method=correction_method,
-                spec_status=spec_status,
-            )
-            if policy['allow_pairwise']
-            else []
-        )
-
-        metric_level_flags = _join_flags(_build_metric_level_flags((row.get('n', 0) for row in descriptive_stats), spec_status=spec_status))
-
-        comparability_summary = build_comparability_summary(spec_status, policy)
-        restriction_fields = _build_analysis_restriction_fields(spec_status, policy)
-        plot_eligibility = _build_metric_plot_eligibility(
-            grouped_values=grouped_values,
-            analysis_level=normalized_level,
-            include_metric=policy.get('include_metric', True),
-        )
-
-        diagnostics_comment = build_diagnostics_comment(
-            include_metric=policy.get('include_metric', True),
-            allow_pairwise=policy.get('allow_pairwise', False),
-            allow_capability=policy.get('allow_capability', False),
-            spec_status=spec_status,
-            pairwise_rows_count=len(pairwise_rows),
-        )
-        histogram_meta = plot_eligibility.get('histogram') or {}
-        if normalized_level == 'standard' and not bool(histogram_meta.get('eligible')):
-            diagnostics_comment = (
-                f"{diagnostics_comment} Histogram omitted: {_plot_skip_reason_message(histogram_meta.get('skip_reason'))}."
-            )
-
-        distribution_analysis = compute_distribution_difference(
-            metric_identity,
-            grouped_values,
+        descriptive_stage = _build_metric_descriptive_stage(metric_partition=metric_partition)
+        pairwise_stage = _build_metric_pairwise_stage(
+            metric_partition=metric_partition,
             alpha=alpha,
             correction_method=correction_method,
         )
-        profile_by_group = {
-            row.get('Group'): row
-            for row in distribution_analysis.get('profile_rows', [])
-        }
-        for desc_row in descriptive_stats:
-            group_profile = profile_by_group.get(desc_row.get('group')) or {}
-            desc_row['best_fit_model'] = group_profile.get('best fit model') or group_profile.get('Best fit model')
-            desc_row['fit_quality'] = group_profile.get('fit quality') or group_profile.get('Fit quality')
-            desc_row['distribution_shape_caution'] = group_profile.get('Warning / notes summary')
-
-        distribution_omnibus = distribution_analysis.get('omnibus_row')
+        distribution_stage = _build_metric_distribution_stage(
+            metric_partition=metric_partition,
+            alpha=alpha,
+            correction_method=correction_method,
+            fit_cache=distribution_fit_cache,
+            fit_policy=distribution_fit_policy,
+        )
         metrics.append(
-            {
-                'metric': metric_identity,
-                'reference': reference_value,
-                'group_count': len(populated_groups),
-                'descriptive_stats': descriptive_stats,
-                'pairwise_rows': pairwise_rows,
-                'distribution_difference': distribution_omnibus,
-                'distribution_pairwise_rows': distribution_analysis.get('pairwise_rows', []),
-                'spec': spec_payload,
-                'spec_status': spec_status,
-                'spec_status_label': get_spec_status_label(spec_status),
-                'analysis_policy': policy,
-                'pairwise_allowed': restriction_fields['pairwise_allowed'],
-                'capability_allowed': restriction_fields['capability_allowed'],
-                'analysis_restriction_label': restriction_fields['analysis_restriction_label'],
-                'capability': capability,
-                'comparability_summary': comparability_summary,
-                'plot_eligibility': plot_eligibility,
-                'chart_payload': _build_metric_chart_payload(
-                    grouped_values=grouped_values,
-                    spec_payload=spec_payload,
-                ),
-                'diagnostics_comment': diagnostics_comment,
-                'metric_flags': metric_level_flags,
-                'metric_note': _distribution_metric_note(distribution_omnibus),
-                'recommended_action': _recommended_metric_action(
-                    pairwise_rows=pairwise_rows,
-                    distribution_difference=distribution_omnibus,
-                    analysis_policy=policy,
-                ),
-            }
+            _assemble_metric_payload(
+                metric_partition=metric_partition,
+                descriptive_stage=descriptive_stage,
+                pairwise_stage=pairwise_stage,
+                distribution_stage=distribution_stage,
+                normalized_level=normalized_level,
+            )
         )
-        metrics[-1]['index_status'] = _metric_index_status(
-            pairwise_rows=pairwise_rows,
-            diagnostics_comment=diagnostics_comment,
-        )
-        if not policy.get('allow_pairwise') and metrics[-1]['index_status'] == 'NO DIFFERENCE':
-            metrics[-1]['index_status'] = 'USE CAUTION'
-        metrics[-1]['metric_takeaway'] = _metric_takeaway(
-            pairwise_rows=pairwise_rows,
-            diagnostics_comment=diagnostics_comment,
-            distribution_difference=distribution_omnibus,
-        )
-        metrics[-1]['insights'] = build_metric_insights(metrics[-1])
 
     diagnostics = build_group_analysis_diagnostics_payload(
         effective_scope=effective_scope,

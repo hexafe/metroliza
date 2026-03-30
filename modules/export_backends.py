@@ -90,6 +90,24 @@ class WorksheetContract(Protocol):
     def hide_gridlines(self, option: int = 2) -> None:
         """Hide worksheet gridlines for report-style sheets."""
 
+    def set_landscape(self) -> None:
+        """Set worksheet page orientation to landscape when supported."""
+
+    def fit_to_pages(self, width: int, height: int) -> None:
+        """Scale worksheet output to the given page width/height."""
+
+    def set_paper(self, paper_type: int) -> None:
+        """Set worksheet paper size using engine-specific numeric codes."""
+
+    def repeat_rows(self, first_row: int, last_row: int) -> None:
+        """Repeat rows at the top of each printed page."""
+
+    def print_area(self, first_row: int, first_col: int, last_row: int, last_col: int) -> None:
+        """Restrict the worksheet print area to the given range."""
+
+    def set_footer(self, footer: str) -> None:
+        """Set worksheet footer text for printed output."""
+
 
 class WorkbookContract(Protocol):
     """Protocol for workbook-level writer interactions."""
@@ -252,6 +270,30 @@ class XlsxWorksheetAdapter:
     def merge_range(self, first_row: int, first_col: int, last_row: int, last_col: int, data: Any, cell_format: Any = None) -> None:
         """Merge a rectangular cell range and write the provided value."""
         self._worksheet.merge_range(first_row, first_col, last_row, last_col, data, cell_format)
+
+    def set_landscape(self) -> None:
+        """Set landscape page orientation for print/PDF export."""
+        self._worksheet.set_landscape()
+
+    def fit_to_pages(self, width: int, height: int) -> None:
+        """Scale worksheet printing to the requested page count."""
+        self._worksheet.fit_to_pages(width, height)
+
+    def set_paper(self, paper_type: int) -> None:
+        """Set paper size for print/PDF export."""
+        self._worksheet.set_paper(paper_type)
+
+    def repeat_rows(self, first_row: int, last_row: int) -> None:
+        """Repeat rows at the top of each printed page."""
+        self._worksheet.repeat_rows(first_row, last_row)
+
+    def print_area(self, first_row: int, first_col: int, last_row: int, last_col: int) -> None:
+        """Restrict the printed area to the specified rectangle."""
+        self._worksheet.print_area(first_row, first_col, last_row, last_col)
+
+    def set_footer(self, footer: str) -> None:
+        """Set worksheet footer text for printed output."""
+        self._worksheet.set_footer(footer)
 
 
 @dataclass
