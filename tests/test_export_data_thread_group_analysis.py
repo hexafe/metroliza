@@ -700,7 +700,9 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         self.assertEqual(ax.axvline.call_count, 5)
         ax.axhline.assert_not_called()
         histogram_labels = [kwargs.get('label') for _args, kwargs in ax.hist.call_args_list]
-        self.assertEqual(histogram_labels, ['A (n=3, μ=1.020)', 'B (n=3, μ=1.010)'])
+        self.assertEqual(histogram_labels, ['A (n=3, μ=1.020, σ=0.010)', 'B (n=3, μ=1.010, σ=0.010)'])
+        _legend_args, legend_kwargs = ax.legend.call_args
+        self.assertEqual(legend_kwargs.get('title'), 'Group (n, mean, σ)')
         histogram_note_texts = [args[2] for args, _kwargs in ax.text.call_args_list if len(args) >= 3]
         self.assertTrue(any('Capability: Marginal' in str(text) for text in histogram_note_texts))
         self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in histogram_note_texts))
