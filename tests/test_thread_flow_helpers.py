@@ -275,166 +275,6 @@ class TestParseHelpers(unittest.TestCase):
         self.assertEqual(persisted, ['a.pdf', 'b.pdf'])
         self.assertEqual(progress_updates, [(1, 3), (2, 3)])
 
-    def test_parse_new_reports_two_stage_duplicate_detection(self):
-        class DummyParser:
-            def __init__(self, report):
-                self.FILE_PATH = str(report)
-                self.pdf_reference = 'R'
-                self.pdf_file_path = '/tmp'
-                self.pdf_file_name = str(report)
-                self.pdf_date = '2024-01-01'
-                self.pdf_sample_number = '1'
-                self.stage_timings_s = {}
-
-            def prepare_for_two_stage_pipeline(self):
-                return None
-
-        persisted = []
-        result = parse_new_reports(
-            ['a.pdf', 'b.pdf'],
-            {'R|/tmp|b.pdf|2024-01-01|1'},
-            parser_factory=DummyParser,
-            persist_report=lambda parser: persisted.append(parser.FILE_PATH),
-            enable_two_stage_pipeline=True,
-            worker_count=2,
-        )
-
-        self.assertEqual(result.parsed_files, 2)
-        self.assertEqual(persisted, ['a.pdf'])
-
-    def test_parse_new_reports_two_stage_honors_cancel(self):
-        class DummyParser:
-            def __init__(self, report):
-                self.FILE_PATH = str(report)
-                self.pdf_reference = 'R'
-                self.pdf_file_path = '/tmp'
-                self.pdf_file_name = str(report)
-                self.pdf_date = '2024-01-01'
-                self.pdf_sample_number = report.replace('.pdf', '')
-                self.stage_timings_s = {}
-
-            def prepare_for_two_stage_pipeline(self):
-                return None
-
-        checks = {'count': 0}
-
-        def should_cancel():
-            checks['count'] += 1
-            return checks['count'] > 2
-
-        persisted = []
-        result = parse_new_reports(
-            ['a.pdf', 'b.pdf', 'c.pdf'],
-            set(),
-            parser_factory=DummyParser,
-            persist_report=lambda parser: persisted.append(parser.FILE_PATH),
-            should_cancel=should_cancel,
-            enable_two_stage_pipeline=True,
-            worker_count=2,
-        )
-
-        self.assertLessEqual(result.parsed_files, 2)
-        self.assertEqual(len(persisted), result.parsed_files)
-
-    def test_parse_new_reports_two_stage_cancel_does_not_wait_for_executor_shutdown(self):
-        class DummyParser:
-            def __init__(self, report):
-                self.FILE_PATH = str(report)
-                self.pdf_reference = 'R'
-                self.pdf_file_path = '/tmp'
-                self.pdf_file_name = str(report)
-                self.pdf_date = '2024-01-01'
-                self.pdf_sample_number = report.replace('.pdf', '')
-                self.stage_timings_s = {}
-
-            def prepare_for_two_stage_pipeline(self):
-                return None
-
-        class FakeFuture:
-            def __init__(self):
-                self.cancel_called = False
-
-            def done(self):
-                return False
-
-            def cancel(self):
-                self.cancel_called = True
-                return True
-
-        class FakeExecutor:
-            def __init__(self):
-                self.futures = []
-                self.shutdown_calls = []
-
-            def submit(self, fn, report, enqueued_at):
-                future = FakeFuture()
-                self.futures.append(future)
-                return future
-
-            def shutdown(self, wait=True, cancel_futures=True):
-                self.shutdown_calls.append((wait, cancel_futures))
-
-        fake_executor = FakeExecutor()
-        checks = {'count': 0}
-
-        def should_cancel():
-            checks['count'] += 1
-            return checks['count'] > 3
-
-        with mock.patch('modules.parse_reports_thread.ThreadPoolExecutor', return_value=fake_executor):
-            with mock.patch('modules.parse_reports_thread.as_completed', side_effect=lambda futures: iter(futures[:1])):
-                result = parse_new_reports(
-                    ['a.pdf', 'b.pdf', 'c.pdf'],
-                    set(),
-                    parser_factory=DummyParser,
-                    persist_report=lambda parser: None,
-                    should_cancel=should_cancel,
-                    enable_two_stage_pipeline=True,
-                    worker_count=2,
-                )
-
-        self.assertEqual(result.parsed_files, 0)
-        self.assertEqual(fake_executor.shutdown_calls, [(False, True)])
-        self.assertTrue(all(future.cancel_called for future in fake_executor.futures))
-
-    def test_parse_new_reports_two_stage_deterministic_end_state_matches_sequential(self):
-        class DummyParser:
-            def __init__(self, report):
-                self.FILE_PATH = str(report)
-                self.pdf_reference = 'R'
-                self.pdf_file_path = '/tmp'
-                self.pdf_file_name = str(report)
-                self.pdf_date = '2024-01-01'
-                self.pdf_sample_number = report.replace('.pdf', '')
-                self.stage_timings_s = {}
-
-            def prepare_for_two_stage_pipeline(self):
-                return None
-
-        reports = ['a.pdf', 'b.pdf', 'c.pdf']
-        persisted_sequential = []
-        fingerprints_sequential = set()
-        parse_new_reports(
-            reports,
-            fingerprints_sequential,
-            parser_factory=DummyParser,
-            persist_report=lambda parser: persisted_sequential.append(parser.FILE_PATH),
-        )
-
-        persisted_two_stage = []
-        fingerprints_two_stage = set()
-        parse_new_reports(
-            reports,
-            fingerprints_two_stage,
-            parser_factory=DummyParser,
-            persist_report=lambda parser: persisted_two_stage.append(parser.FILE_PATH),
-            enable_two_stage_pipeline=True,
-            worker_count=2,
-        )
-
-        self.assertEqual(set(persisted_two_stage), set(persisted_sequential))
-        self.assertEqual(fingerprints_two_stage, fingerprints_sequential)
-
     def test_parse_label_includes_multiline_progress_details(self):
         from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
@@ -1279,8 +1119,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 }
             )
 
-            with mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'):
-                thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
         finally:
             export_thread_module.finalize_extended_chart_layout = previous_finalize
             export_thread_module.compute_scaled_y_limits = previous_scale
@@ -1337,60 +1176,6 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertTrue(thread._optimization_toggles['defer_non_essential_charts'])
         self.assertEqual(thread._optimization_toggles['summary_sheet_minimum_charts'], {'distribution', 'iqr', 'histogram'})
         self.assertFalse(thread._summary_chart_required('trend'))
-
-    def test_export_observability_summary_preserves_payload_shape_and_keys(self):
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True),
-        )
-        thread = ExportDataThread(request)
-        thread._stage_timings.update(
-            {
-                'chart_payload_preparation': 2.0,
-                'chart_rendering': 3.0,
-                'worksheet_writes': 4.0,
-            }
-        )
-        thread._record_chart_render_timing('distribution', 0.4, backend='matplotlib')
-        thread._record_chart_render_timing('histogram', 0.2, backend='native')
-
-        with mock.patch('modules.export_data_thread.fetch_partition_header_counts', return_value={'REF-A': 80}):
-            summary = thread.build_export_observability_summary(high_header_threshold=64)
-
-        self.assertIn('stage_timings_s', summary)
-        self.assertIn('chart_backend_distribution', summary)
-        self.assertIn('per_chart_type_timing_medians_s', summary)
-        self.assertIn('per_chart_type_runtime_totals_s', summary)
-        self.assertIn('per_chart_type_backend_distribution', summary)
-        self.assertIn('high_header_cardinality_scenario', summary)
-        self.assertEqual(summary['stage_timings_s']['chart_payload_preparation'], 2.0)
-        self.assertEqual(summary['chart_backend_distribution']['counts']['native'], 1)
-        self.assertEqual(summary['chart_backend_distribution']['counts']['matplotlib'], 1)
-        self.assertIn('distribution', summary['per_chart_type_timing_medians_s'])
-        self.assertIn('histogram', summary['per_chart_type_timing_medians_s'])
-        self.assertGreater(summary['per_chart_type_runtime_totals_s']['distribution'], 0.0)
-        self.assertEqual(summary['per_chart_type_backend_distribution']['histogram']['counts']['native'], 1)
-        self.assertTrue(summary['high_header_cardinality_scenario']['detected'])
-        self.assertEqual(summary['high_header_cardinality_scenario']['max_headers_per_partition'], 80)
-
-    def test_export_observability_summary_handles_header_count_lookup_failures(self):
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True),
-        )
-        thread = ExportDataThread(request)
-
-        with mock.patch('modules.export_data_thread.fetch_partition_header_counts', side_effect=RuntimeError('db unavailable')):
-            summary = thread.build_export_observability_summary(high_header_threshold=32)
-
-        high_header = summary['high_header_cardinality_scenario']
-        self.assertFalse(high_header['detected'])
-        self.assertEqual(high_header['max_headers_per_partition'], 0)
-        self.assertEqual(high_header['timings_s'], {})
 
     def test_summary_sheet_fill_deferred_mode_still_renders_trend_by_default(self):
         import pandas as pd
@@ -1483,7 +1268,7 @@ class TestExportBackendSmoke(unittest.TestCase):
         self.assertEqual(calls['shutdown'], 1)
         self.assertIsNone(thread._chart_executor)
 
-    def test_summary_sheet_fill_uses_executor_precompute_for_large_original_groups_in_non_native_mode(self):
+    def test_summary_sheet_fill_uses_executor_precompute_for_large_original_groups(self):
         import pandas as pd
 
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -1534,77 +1319,12 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
         )
 
-        with (
-            mock.patch('modules.export_data_thread.native_chart_backend_available', return_value=False),
-            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'),
-        ):
-            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
+        thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
 
         self.assertEqual(len(executor.calls), 2)
         sampled_limit = thread._chart_sample_limit()
         self.assertLessEqual(len(executor.calls[0][1][0]), sampled_limit)
         self.assertEqual(len(executor.calls[0][1][0]), len(executor.calls[1][1][0]))
-
-    def test_summary_sheet_fill_precomputes_distribution_fit_when_native_backend_is_selected_for_histogram(self):
-        import pandas as pd
-
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        class _FakeSummaryWorksheet:
-            def __init__(self):
-                self.inserted_images = []
-
-            def write(self, *_args, **_kwargs):
-                return None
-
-            def insert_image(self, row, col, *_args, **_kwargs):
-                self.inserted_images.append((row, col))
-
-        class _ImmediateFuture:
-            def __init__(self, value):
-                self._value = value
-
-            def result(self):
-                return self._value
-
-        class _RecordingExecutor:
-            def __init__(self):
-                self.calls = []
-
-            def submit(self, fn, *args, **kwargs):
-                self.calls.append((fn.__name__, args, kwargs))
-                return _ImmediateFuture(fn(*args, **kwargs))
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True),
-        )
-        thread = ExportDataThread(request)
-        executor = _RecordingExecutor()
-        thread._chart_executor = executor
-
-        worksheet = _FakeSummaryWorksheet()
-        row_count = 2600
-        header_group = pd.DataFrame(
-            {
-                'MEAS': [10.0 + (idx % 9) * 0.01 for idx in range(row_count)],
-                'NOM': [10.0] * row_count,
-                '+TOL': [0.2] * row_count,
-                '-TOL': [-0.2] * row_count,
-                'SAMPLE_NUMBER': [str(idx + 1) for idx in range(row_count)],
-                'DATE': ['2024-01-01'] * row_count,
-            }
-        )
-
-        with (
-            mock.patch('modules.export_data_thread.native_chart_backend_available', return_value=True),
-            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='native'),
-        ):
-            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
-
-        call_names = [name for name, _args, _kwargs in executor.calls]
-        self.assertEqual(call_names.count('fit_measurement_distribution'), 1)
-        self.assertEqual(call_names.count('build_trend_plot_payload'), 1)
 
     def test_summary_sheet_fill_falls_back_to_in_process_when_executor_submit_fails(self):
         import pandas as pd
@@ -1671,31 +1391,6 @@ class TestExportBackendSmoke(unittest.TestCase):
 
         self.assertEqual(iqr_labels, ['All'])
         self.assertEqual(iqr_values, [[1.0, 2.0, 3.0]])
-
-    def test_build_iqr_plot_payload_aggregates_ungrouped_samples_into_single_box(self):
-        import pandas as pd
-
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True),
-        )
-        thread = ExportDataThread(request)
-
-        sampled_group = pd.DataFrame({'MEAS': [1.0, '2.0', None, 3.5]})
-        labels = ['1', '2', '3']
-        values = [[1.0], [2.0], [3.5]]
-
-        iqr_labels, iqr_values = thread._build_iqr_plot_payload(
-            labels,
-            values,
-            sampled_group,
-            grouping_active=False,
-        )
-
-        self.assertEqual(iqr_labels, ['All'])
-        self.assertEqual(iqr_values, [[1.0, 2.0, 3.5]])
 
     def test_grouped_summary_scatter_payload_appends_group_sample_sizes_to_labels(self):
         import pandas as pd
@@ -1836,8 +1531,7 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
 
-            with mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'):
-                thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
         finally:
             export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
 
@@ -1886,8 +1580,7 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
 
-            with mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'):
-                thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
         finally:
             export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
 
@@ -1941,10 +1634,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                     captured_labels.append(label)
                     return original_set_xlabel(ax, label, *args, **kwargs)
 
-                with (
-                    mock.patch('matplotlib.axes.Axes.set_xlabel', new=_capture_set_xlabel),
-                    mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'),
-                ):
+                with mock.patch('matplotlib.axes.Axes.set_xlabel', new=_capture_set_xlabel):
                     thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
 
                 self.assertIn(expected_label, captured_labels)
@@ -1990,63 +1680,12 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
 
-            with mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'):
-                thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
         finally:
             export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
 
         self.assertEqual(captured['labels'], ['1', '1', '2', '2', '3', '3'])
         self.assertFalse(captured['allow_thinning'])
-
-    def test_summary_sheet_trend_allows_thinning_for_large_label_sets(self):
-        import pandas as pd
-
-        import modules.export_data_thread as export_thread_module
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        class _FakeSummaryWorksheet:
-            def write(self, *_args, **_kwargs):
-                return None
-
-            def insert_image(self, *_args, **_kwargs):
-                return None
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True),
-        )
-        thread = ExportDataThread(request)
-        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
-
-        label_count = 40
-        header_group = pd.DataFrame(
-            {
-                'MEAS': [10.0 + (index * 0.01) for index in range(label_count)],
-                'NOM': [10.0] * label_count,
-                '+TOL': [0.2] * label_count,
-                '-TOL': [-0.2] * label_count,
-                'SAMPLE_NUMBER': [str(index + 1) for index in range(label_count)],
-                'DATE': ['2024-01-01'] * label_count,
-            }
-        )
-
-        captured = {}
-        original_apply_labels = export_thread_module.apply_shared_x_axis_label_strategy
-        try:
-            def _capture_labels(_ax, labels, **kwargs):
-                captured['labels'] = list(labels)
-                captured['allow_thinning'] = kwargs.get('allow_thinning')
-                return None
-
-            export_thread_module.apply_shared_x_axis_label_strategy = _capture_labels
-
-            with mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'):
-                thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
-        finally:
-            export_thread_module.apply_shared_x_axis_label_strategy = original_apply_labels
-
-        self.assertEqual(len(captured['labels']), label_count)
-        self.assertTrue(captured['allow_thinning'])
 
 
     def test_summary_sheet_distribution_scatter_fallback_draws_only_lsl_usl_reference_lines(self):
@@ -2089,8 +1728,7 @@ class TestExportBackendSmoke(unittest.TestCase):
                 return []
 
             export_thread_module.render_spec_reference_lines = _capture_spec_lines
-            with mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'):
-                thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
         finally:
             export_thread_module.render_spec_reference_lines = original_render_spec_lines
 
@@ -2930,315 +2568,13 @@ class TestExportBackendSmoke(unittest.TestCase):
             export_thread_module.render_violin = _capture_violin
             export_thread_module.render_iqr_boxplot = _capture_iqr
 
-            with mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'):
-                thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
+            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
         finally:
             export_thread_module.render_violin = original_render_violin
             export_thread_module.render_iqr_boxplot = original_render_iqr_boxplot
 
         self.assertEqual(captured['violin_labels'], ['A (n=2)', 'B (n=3)'])
         self.assertEqual(captured['iqr_labels'], ['A (n=2)', 'B (n=3)'])
-
-    def test_summary_sheet_fill_histogram_uses_matplotlib_path_for_extended_dashboard_even_when_native_backend_is_selected(self):
-        import pandas as pd
-        import modules.export_data_thread as export_thread_module
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        class _FakeSummaryWorksheet:
-            def __init__(self):
-                self.insert_calls = []
-
-            def write(self, *_args, **_kwargs):
-                return None
-
-            def insert_image(self, row, col, _path, options):
-                self.insert_calls.append((row, col, options))
-
-        class _FakeRenderer:
-            def __init__(self):
-                self.figure_calls = 0
-                self.histogram_calls = 0
-                self.last_payload = None
-
-            def render_figure_png(self, fig, *, mode='workbook', chart_type=None):
-                self.figure_calls += 1
-                return type("Result", (), {"png_bytes": b"matplotlib-bytes", "backend": "matplotlib"})()
-
-            def render_histogram_png(self, payload, *, fallback_fig=None, mode='workbook'):
-                self.histogram_calls += 1
-                self.last_payload = payload
-                return type("Result", (), {"png_bytes": b"native-bytes", "backend": "native"})()
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True),
-        )
-        thread = ExportDataThread(request)
-        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
-        thread._chart_renderer = _FakeRenderer()
-        thread._register_chart_image = lambda payload: payload
-
-        header_group = pd.DataFrame(
-            {
-                'MEAS': [9.9, 10.0, 10.1, 10.2, 10.3],
-                'NOM': [10.0] * 5,
-                '+TOL': [0.2] * 5,
-                '-TOL': [-0.2] * 5,
-                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
-                'DATE': ['2024-01-01'] * 5,
-            }
-        )
-        worksheet = _FakeSummaryWorksheet()
-        render_calls = {'count': 0}
-        original_render_histogram = export_thread_module.render_histogram
-
-        def _count_render(*args, **kwargs):
-            render_calls['count'] += 1
-            return original_render_histogram(*args, **kwargs)
-
-        with (
-            mock.patch('modules.export_data_thread.native_histogram_backend_available', return_value=True),
-            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='native'),
-            mock.patch('modules.export_data_thread.render_histogram', side_effect=_count_render),
-        ):
-            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
-
-        assert worksheet.insert_calls
-        assert render_calls['count'] == 1
-        assert thread._chart_renderer.figure_calls >= 1
-        assert thread._chart_renderer.histogram_calls == 0
-        assert thread._chart_renderer.last_payload is None
-
-    def test_summary_sheet_fill_histogram_uses_matplotlib_fallback_when_native_unavailable(self):
-        import pandas as pd
-        import modules.export_data_thread as export_thread_module
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        class _FakeSummaryWorksheet:
-            def __init__(self):
-                self.insert_calls = []
-
-            def write(self, *_args, **_kwargs):
-                return None
-
-            def insert_image(self, row, col, _path, options):
-                self.insert_calls.append((row, col, options))
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True),
-        )
-        thread = ExportDataThread(request)
-        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
-        thread._register_chart_image = lambda payload: payload
-
-        header_group = pd.DataFrame(
-            {
-                'MEAS': [9.9, 10.0, 10.1, 10.2, 10.3],
-                'NOM': [10.0] * 5,
-                '+TOL': [0.2] * 5,
-                '-TOL': [-0.2] * 5,
-                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
-                'DATE': ['2024-01-01'] * 5,
-            }
-        )
-        worksheet = _FakeSummaryWorksheet()
-        render_calls = {'count': 0}
-
-        original_render_histogram = export_thread_module.render_histogram
-
-        def _count_render(*args, **kwargs):
-            render_calls['count'] += 1
-            return original_render_histogram(*args, **kwargs)
-
-        with (
-            mock.patch('modules.export_data_thread.native_histogram_backend_available', return_value=False),
-            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'),
-            mock.patch('modules.export_data_thread.render_histogram', side_effect=_count_render),
-        ):
-            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
-
-        assert worksheet.insert_calls
-        assert render_calls['count'] == 1
-
-    def test_summary_sheet_fill_histogram_uses_population_view_even_when_grouping_applied(self):
-        import pandas as pd
-        import modules.export_data_thread as export_thread_module
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        class _FakeSummaryWorksheet:
-            def __init__(self):
-                self.insert_calls = []
-
-            def write(self, *_args, **_kwargs):
-                return None
-
-            def insert_image(self, row, col, _path, options):
-                self.insert_calls.append((row, col, options))
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True),
-        )
-        thread = ExportDataThread(request)
-        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
-        thread._register_chart_image = lambda payload: payload
-
-        header_group = pd.DataFrame(
-            {
-                'MEAS': [9.9, 10.0, 10.1, 10.2, 10.3, 10.4],
-                'NOM': [10.0] * 6,
-                '+TOL': [0.2] * 6,
-                '-TOL': [-0.2] * 6,
-                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5', '6'],
-                'DATE': ['2024-01-01'] * 6,
-            }
-        )
-        worksheet = _FakeSummaryWorksheet()
-        captured_group_columns = []
-        original_render_histogram = export_thread_module.render_histogram
-
-        def _capture_render_histogram(*args, **kwargs):
-            captured_group_columns.append(kwargs.get('group_column'))
-            return original_render_histogram(*args, **kwargs)
-
-        def _fake_apply_group_assignments(frame, _grouping_df):
-            grouped = frame.copy()
-            grouped['GROUP'] = ['A', 'A', 'B', 'B', 'A', 'B']
-            return grouped, True
-
-        thread._apply_group_assignments = _fake_apply_group_assignments
-
-        with mock.patch('modules.export_data_thread.render_histogram', side_effect=_capture_render_histogram):
-            thread.summary_sheet_fill(worksheet, 'H1', header_group, col=5)
-
-        assert worksheet.insert_calls
-        assert captured_group_columns
-        assert captured_group_columns[-1] is None
-
-    def test_summary_sheet_fill_histogram_native_and_matplotlib_paths_keep_same_worksheet_slot(self):
-        import pandas as pd
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        class _FakeSummaryWorksheet:
-            def __init__(self):
-                self.insert_calls = []
-
-            def write(self, *_args, **_kwargs):
-                return None
-
-            def insert_image(self, row, col, _path, options):
-                self.insert_calls.append((row, col, options))
-
-        class _FakeNativeRenderer:
-            def __init__(self):
-                self.figure_calls = 0
-                self.histogram_calls = 0
-
-            def render_figure_png(self, fig, *, mode='workbook', chart_type=None):
-                self.figure_calls += 1
-                return type("Result", (), {"png_bytes": b"matplotlib-bytes", "backend": "matplotlib"})()
-
-            def render_histogram_png(self, payload, *, fallback_fig=None, mode='workbook'):
-                self.histogram_calls += 1
-                return type("Result", (), {"png_bytes": b"native-bytes", "backend": "native"})()
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True),
-        )
-        header_group = pd.DataFrame(
-            {
-                'MEAS': [9.9, 10.0, 10.1, 10.2, 10.3],
-                'NOM': [10.0] * 5,
-                '+TOL': [0.2] * 5,
-                '-TOL': [-0.2] * 5,
-                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
-                'DATE': ['2024-01-01'] * 5,
-            }
-        )
-
-        native_thread = ExportDataThread(request)
-        native_thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
-        native_thread._chart_renderer = _FakeNativeRenderer()
-        native_thread._register_chart_image = lambda payload: payload
-        native_worksheet = _FakeSummaryWorksheet()
-
-        matplotlib_thread = ExportDataThread(request)
-        matplotlib_thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
-        matplotlib_thread._register_chart_image = lambda payload: payload
-        matplotlib_worksheet = _FakeSummaryWorksheet()
-
-        with (
-            mock.patch('modules.export_data_thread.native_histogram_backend_available', return_value=True),
-            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='native'),
-        ):
-            native_thread.summary_sheet_fill(native_worksheet, 'H1', header_group.copy(), col=5)
-
-        with (
-            mock.patch('modules.export_data_thread.native_histogram_backend_available', return_value=False),
-            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='matplotlib'),
-        ):
-            matplotlib_thread.summary_sheet_fill(matplotlib_worksheet, 'H1', header_group.copy(), col=5)
-
-        assert native_worksheet.insert_calls
-        assert matplotlib_worksheet.insert_calls
-        assert native_thread._chart_renderer.figure_calls >= 1
-        assert native_thread._chart_renderer.histogram_calls == 0
-        native_row, native_col, _native_options = native_worksheet.insert_calls[-1]
-        mpl_row, mpl_col, _mpl_options = matplotlib_worksheet.insert_calls[-1]
-        assert (native_row, native_col) == (mpl_row, mpl_col)
-
-    def test_summary_sheet_fill_collects_html_dashboard_section_for_histogram(self):
-        import pandas as pd
-        from modules.contracts import AppPaths, ExportOptions, ExportRequest
-
-        class _FakeSummaryWorksheet:
-            def write(self, *_args, **_kwargs):
-                return None
-
-            def insert_image(self, *_args, **_kwargs):
-                return None
-
-        class _FakeNativeRenderer:
-            def render_figure_png(self, fig, *, mode='workbook', chart_type=None):
-                return type("Result", (), {"png_bytes": b"matplotlib-bytes", "backend": "matplotlib"})()
-
-            def render_histogram_png(self, payload, *, fallback_fig=None, mode='workbook'):
-                return type("Result", (), {"png_bytes": b"native-bytes", "backend": "native"})()
-
-        request = ExportRequest(
-            paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
-            options=ExportOptions(generate_summary_sheet=True, generate_html_dashboard=True),
-        )
-        thread = ExportDataThread(request)
-        thread._optimization_toggles['summary_sheet_minimum_charts'] = {'histogram'}
-        thread._chart_renderer = _FakeNativeRenderer()
-        thread._register_chart_image = lambda payload: payload
-
-        header_group = pd.DataFrame(
-            {
-                'MEAS': [9.9, 10.0, 10.1, 10.2, 10.3],
-                'NOM': [10.0] * 5,
-                '+TOL': [0.2] * 5,
-                '-TOL': [-0.2] * 5,
-                'SAMPLE_NUMBER': ['1', '2', '3', '4', '5'],
-                'DATE': ['2024-01-01'] * 5,
-            }
-        )
-
-        with (
-            mock.patch('modules.export_data_thread.native_histogram_backend_available', return_value=True),
-            mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='native'),
-        ):
-            thread.summary_sheet_fill(_FakeSummaryWorksheet(), 'H1', header_group, col=5)
-
-        self.assertEqual(len(thread._html_dashboard_sections), 1)
-        section = thread._html_dashboard_sections[0]
-        self.assertEqual(section['header'], 'H1')
-        self.assertTrue(section['summary_rows'])
-        self.assertEqual(section['charts'][0]['chart_type'], 'histogram')
-        self.assertEqual(section['charts'][0]['backend'], 'matplotlib')
 
     def test_google_retry_parse_error_logs_warning(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest

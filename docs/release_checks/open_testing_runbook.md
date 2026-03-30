@@ -15,7 +15,7 @@ Use this runbook to coordinate release-candidate (RC) open testing with internal
 
 - RC package install/launch validation on supported targets.
 - Core workflows: representative input load, processing, and export generation.
-- Release-gated checks from the RC checklist, including packaging/startup expectations, CMM parser perf gate review, and optional manual smoke evidence collection (`packaging-smoke`, `google-conversion-smoke`).
+- Release-gated checks from the RC checklist, including packaging/startup expectations and optional manual smoke evidence collection (`packaging-smoke`, `google-conversion-smoke`).
 - Regression checks for recently changed areas and prior high-impact defects.
 
 Packaging smoke semantics for open-testing evidence review:

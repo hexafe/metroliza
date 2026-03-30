@@ -1071,7 +1071,7 @@ class TestExportPlotHelpers(unittest.TestCase):
         finally:
             plt.close(fig)
 
-    def test_render_histogram_includes_grouped_mode_for_summary_histograms(self):
+    def test_render_histogram_ignores_grouped_mode_for_summary_histograms(self):
         histogram_frame = pd.DataFrame(
             {
                 'GROUP': ['A'] * 8 + ['B'] * 6,
@@ -1083,10 +1083,10 @@ class TestExportPlotHelpers(unittest.TestCase):
         try:
             meta = render_histogram(ax, histogram_frame, group_column='GROUP')
 
-            self.assertTrue(meta['is_grouped'])
-            self.assertEqual(meta['group_labels'], ['A', 'B'])
+            self.assertFalse(meta['is_grouped'])
+            self.assertEqual(meta['group_labels'], [])
             self.assertEqual(len(fig.axes), 1)
-            self.assertIsNotNone(ax.get_legend())
+            self.assertIsNone(ax.get_legend())
         finally:
             plt.close(fig)
 
@@ -3652,7 +3652,7 @@ class TestExportPlotHelpers(unittest.TestCase):
 
         ax = captured_axes[0]
         labels = [tick.get_text() for tick in ax.get_xticklabels()]
-        self.assertEqual(labels, ['A\n(n=2)', 'C\n(n=1)'])
+        self.assertEqual(labels, ['A', 'C'])
         self.assertEqual(len(labels), 2)
 
     def test_group_analysis_histogram_asset_includes_multi_group_legend(self):
@@ -3682,12 +3682,8 @@ class TestExportPlotHelpers(unittest.TestCase):
         self.assertEqual(len(captured_axes), 1)
         legend = captured_axes[0].get_legend()
         self.assertIsNotNone(legend)
-        self.assertEqual(legend.get_title().get_text(), 'Group (n, mean, σ)')
         labels = [text.get_text() for text in legend.get_texts()]
-        self.assertEqual(
-            labels,
-            ['A (n=3, μ=1.100, σ=0.100)', 'B (n=3, μ=1.400, σ=0.100)', 'C (n=3, μ=1.700, σ=0.100)'],
-        )
+        self.assertEqual(labels, ['A', 'B', 'C'])
 
 
     def test_render_tolerance_band_adds_horizontal_patch(self):

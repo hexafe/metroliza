@@ -1,6 +1,5 @@
 import tempfile
 import importlib.machinery
-import sqlite3
 import unittest
 from pathlib import Path
 import sys
@@ -22,8 +21,6 @@ for name in [
 ]:
     setattr(qtwidgets_stub, name, type(name, (), {}))
 sys.modules.setdefault('PyQt6.QtWidgets', qtwidgets_stub)
-qtgui_stub = types.ModuleType('PyQt6.QtGui')
-sys.modules.setdefault('PyQt6.QtGui', qtgui_stub)
 
 custom_logger_stub = types.ModuleType('modules.custom_logger')
 custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *args, **kwargs: None})
@@ -37,7 +34,6 @@ pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec('pymupdf', loader=None)
 sys.modules.setdefault('pymupdf', pymupdf_stub)
 
 from modules.cmm_report_parser import CMMReportParser  # noqa: E402
-from modules.cmm_schema import ensure_cmm_report_schema  # noqa: E402
 from modules.modify_db import ModifyDB  # noqa: E402
 from modules.db import execute_with_retry, run_transaction_with_retry  # noqa: E402
 
@@ -53,7 +49,6 @@ class TestPhase2DbMigratedBehaviors(unittest.TestCase):
     def test_cmm_to_sqlite_remains_duplicate_safe(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'reports.db')
-            ensure_cmm_report_schema(db_path)
             parser = CMMReportParser('REF01_2024-01-02_123.pdf', db_path)
             parser.pdf_reference = 'REF01'
             parser.pdf_file_path = '/tmp/reports'
@@ -77,64 +72,6 @@ class TestPhase2DbMigratedBehaviors(unittest.TestCase):
 
             self.assertEqual(reports_count, 1)
             self.assertEqual(measurements_count, 1)
-
-    def test_cmm_schema_bootstrap_initializes_empty_database(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = str(Path(temp_dir) / 'bootstrap.db')
-
-            ensure_cmm_report_schema(db_path)
-
-            with sqlite3.connect(db_path) as conn:
-                tables = {
-                    row[0]
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('REPORTS', 'MEASUREMENTS', 'CHARACTERISTIC_ALIASES')"
-                    ).fetchall()
-                }
-                indexes = {
-                    row[0]
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
-                    ).fetchall()
-                }
-
-            self.assertEqual(tables, {'REPORTS', 'MEASUREMENTS', 'CHARACTERISTIC_ALIASES'})
-            self.assertIn('idx_reports_identity', indexes)
-            self.assertIn('idx_measurements_report_header_ax', indexes)
-
-    def test_cmm_to_sqlite_insert_behavior_unchanged_after_bootstrap(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = str(Path(temp_dir) / 'insert_behavior.db')
-            ensure_cmm_report_schema(db_path)
-
-            parser = CMMReportParser('REF02_2024-01-03_321.pdf', db_path)
-            parser.pdf_reference = 'REF02'
-            parser.pdf_file_path = '/tmp/reports'
-            parser.pdf_file_name = 'REF02_2024-01-03_321.pdf'
-            parser.pdf_date = '2024-01-03'
-            parser.pdf_sample_number = '321'
-            parser.pdf_blocks_text = [
-                (
-                    ['HEADER B'],
-                    [
-                        ['2', 20.0, 0.2, -0.2, 0.0, 20.05, 0.05, 0.0],
-                    ],
-                )
-            ]
-
-            parser.to_sqlite()
-
-            report_row = execute_with_retry(
-                db_path,
-                'SELECT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS',
-            )
-            measurement_row = execute_with_retry(
-                db_path,
-                'SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER FROM MEASUREMENTS',
-            )
-
-            self.assertEqual(report_row, [('REF02', '/tmp/reports', 'REF02_2024-01-03_321.pdf', '2024-01-03', '321')])
-            self.assertEqual(measurement_row, [('2', 20.0, 0.2, -0.2, 0.0, 20.05, 0.05, 0.0, 'HEADER B')])
 
 
     def test_to_df_uses_pdf_reference_for_reference_column(self):

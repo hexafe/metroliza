@@ -14,20 +14,6 @@ testing.py
 metroliza.log
 __pycache__/VersionDate.cpython-39.pyc
 license.key
-
-# Local Python caches and scratch data
-__pycache__/
-.pytest_cache/
-test.db
-
-# Local benchmark output
-benchmark_results/
-
-# Local native extension build outputs
-_metroliza_*_native.so
-modules/native/**/target/
-modules/native/**/Cargo.lock
-
 # Google API local secrets
 credentials.json
 token.json

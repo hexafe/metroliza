@@ -56,30 +56,6 @@ Dependency files:
 
 Parity between native and Python backends is enforced through fixture-based tests in `tests/test_cmm_parser_parity.py`.
 
-## Chart renderer backend policy
-
-- `METROLIZA_CHART_RENDERER_BACKEND` accepts `auto` (default), `native`, or `matplotlib`.
-- Native chart rendering via `_metroliza_chart_native` is included when the native extension is built/installed in the packaging environment.
-- If `native` is forced while the native module is unavailable, Metroliza warns and falls back to matplotlib rendering.
-- For deterministic rollback behavior, set `METROLIZA_CHART_RENDERER_BACKEND=matplotlib`.
-
-## Additional native backend controls
-
-- `METROLIZA_CMM_PERSIST_BACKEND`: controls CMM persistence backend (`auto`/`native`/`python`).
-- `METROLIZA_COMPARISON_STATS_CI_BACKEND`: controls comparison bootstrap CI backend (`auto`/`native`/`python`).
-- `METROLIZA_COMPARISON_STATS_BACKEND`: controls comparison pairwise backend (`auto`/`native`/`python`).
-- `METROLIZA_DISTRIBUTION_FIT_KERNEL`: controls distribution-fit candidate kernel backend (`auto`/`native`/`python`).
-- `METROLIZA_GROUP_STATS_BACKEND`: controls group-stats coercion backend (`auto`/`native`/`python`).
-- See [`docs/native_build_distribution.md`](docs/native_build_distribution.md) for full backend semantics and packaging requirements.
-
-### Local native chart extension build (optional)
-
-```bash
-python -m maturin develop --manifest-path modules/native/chart_renderer/Cargo.toml
-# or build wheel artifacts
-python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml --release
-```
-
 ## Parser plugin resolver controls
 
 - Default selection accepts parser probes with confidence `>=1` and resolves ties by confidence, plugin priority, then plugin id.
@@ -185,11 +161,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.03rc3(260329)`): Exports are faster and easier to review, with an updated Group Analysis sheet and optional HTML dashboard output when selected.
+Current release highlight (`2026.03rc2(260322)`): Group Analysis is now easier to read, with updated user manuals for grouped export workflows.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.03rc3(260329)`)
+### Changelog highlights (release `2026.03rc2(260322)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

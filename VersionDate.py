@@ -1,23 +1,14 @@
-RELEASE_VERSION = "2026.03rc3"
-VERSION_DATE = "260329"
+RELEASE_VERSION = "2026.03rc2"
+VERSION_DATE = "260322"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Exports are faster and easier to review, with an updated Group Analysis sheet and optional HTML dashboard output when selected."
+    "Group Analysis is now easier to read, with updated user manuals for grouped export workflows."
 )
 
 release_notes = f"""
     <br><b>Current version {VERSION_LABEL}:</b><br>
-    - Faster export/report generation<br>
-    - Export setup screens are easier to use, with fewer layout issues in common window sizes<br>
-    - Saved export presets now load more reliably for repeat workflows<br>
-    - The updated Group Analysis sheet is easier to scan, compare, and interpret during routine review<br>
-    - Added optional HTML dashboard output with extended plots and group analysis, when selected<br>
-
-    <br><b>Archive:</b><br>
-
-    <br><b>Version 2026.03rc2 (build 260322):</b><br>
-    - Group Analysis became easier to read and interpret in grouped export workflows<br>
-    - User manuals were expanded for clearer grouped export setup and worksheet reading<br>
+    - Group Analysis is easier to read and interpret in the grouped export workflow<br>
+    - Updated user manuals help users understand grouped export setup and worksheet reading<br>
 
     <br><b>Version 2026.03rc1 (build 260319):</b><br>
     - Histogram table polishing improved readability and visual consistency<br>

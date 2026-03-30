@@ -10,13 +10,6 @@ exclude = [
   "dist",
 ]
 
-[tool.ruff.lint]
-
-[tool.ruff.lint.per-file-ignores]
-"modules/chart_renderer.py" = ["E402"]
-"modules/export_data_thread.py" = ["E402"]
-"scripts/benchmark_paths.py" = ["E402"]
-
 [tool.pytest.ini_options]
 # Optional test runner normalization for contributors/tools that use pytest.
 testpaths = ["tests"]
