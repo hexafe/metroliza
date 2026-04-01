@@ -9,6 +9,7 @@ import inspect
 import xml.etree.ElementTree as ET
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pandas as pd
 
 from pathlib import Path
@@ -725,6 +726,35 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         histogram_note_texts = [args[2] for args, _kwargs in ax.text.call_args_list if len(args) >= 3]
         self.assertTrue(any('Capability: Marginal' in str(text) for text in histogram_note_texts))
         self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in histogram_note_texts))
+
+    def test_group_analysis_histogram_reuses_resolved_histogram_bin_strategy(self):
+        metric_row = {
+            'metric': 'M1',
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [0.95, 1.00, 1.05, 1.08]},
+                    {'group': 'B', 'values': [0.98, 1.01, 1.02, 1.06]},
+                ],
+                'spec_limits': {},
+            },
+        }
+
+        fig = MagicMock()
+        ax = MagicMock()
+        with (
+            patch('modules.export_data_thread.plt.subplots', return_value=(fig, ax)),
+            patch('modules.export_data_thread.plt.close'),
+            patch('modules.export_data_thread.resolve_histogram_bin_count', return_value={'bin_count': 7, 'method': 'fd', 'sample_size': 8}) as resolve_bins,
+            patch('modules.export_data_thread.np.histogram_bin_edges', return_value=[0.95, 0.97, 0.99, 1.01, 1.03, 1.05, 1.07, 1.08]) as histogram_bin_edges,
+        ):
+            result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram')
+
+        self.assertIn('image_data', result)
+        resolve_bins.assert_called_once()
+        histogram_values = resolve_bins.call_args.args[0]
+        self.assertEqual(histogram_values.shape, (8,))
+        histogram_bin_edges.assert_called_once()
+        self.assertEqual(histogram_bin_edges.call_args.kwargs['bins'], 7)
 
     def test_standard_mode_html_dashboard_includes_group_analysis_data(self):
         with tempfile.TemporaryDirectory() as temp_dir:

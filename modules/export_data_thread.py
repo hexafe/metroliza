@@ -4834,7 +4834,8 @@ class ExportDataThread(QThread):
                 ax.set_title(f"{metric_row.get('metric')} - Violin")
             elif plot_key == 'histogram':
                 all_values = np.concatenate(grouped_values)
-                bin_edges = np.histogram_bin_edges(all_values, bins='auto')
+                binning = resolve_histogram_bin_count(all_values)
+                bin_edges = np.histogram_bin_edges(all_values, bins=int(binning['bin_count']))
                 # Use a high-contrast, colorblind-safe group cycle so overlapping
                 # histogram bars remain distinguishable in workbook exports.
                 histogram_palette = [
@@ -5670,9 +5671,7 @@ class ExportDataThread(QThread):
                             native_payload=histogram_native_payload,
                         )
                         image_data = self._register_chart_image(histogram_render_result.png_bytes)
-                        slot_fig = plt.figure(figsize=base_histogram_figsize)
-                        histogram_slot = _reserve_summary_image_slot('histogram', slot_fig)
-                        plt.close(slot_fig)
+                        histogram_slot = _reserve_summary_image_slot('histogram', None)
                     else:
                         histogram_figsize = base_histogram_figsize
                         fig = plt.figure(figsize=histogram_figsize)
