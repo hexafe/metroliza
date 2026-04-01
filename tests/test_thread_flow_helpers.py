@@ -3112,8 +3112,10 @@ class TestExportBackendSmoke(unittest.TestCase):
         with (
             mock.patch('modules.export_data_thread.native_histogram_backend_available', return_value=True),
             mock.patch('modules.export_data_thread.resolve_chart_renderer_backend', return_value='native'),
+            mock.patch('modules.export_data_thread.plt.figure') as native_slot_figure,
         ):
             native_thread.summary_sheet_fill(native_worksheet, 'H1', header_group.copy(), col=5)
+        native_slot_figure.assert_not_called()
 
         with (
             mock.patch('modules.export_data_thread.native_histogram_backend_available', return_value=False),
