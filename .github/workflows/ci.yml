@@ -352,6 +352,12 @@ jobs:
           print("Native smoke checks passed for all modules (available + intentionally absent fallback).")
           PYCODE
 
+      - name: Native chart renderer smoke test (compiled wheel)
+        env:
+          METROLIZA_CHART_RENDERER_BACKEND: auto
+          METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS: histogram,distribution,iqr,trend
+        run: PYTHONPATH=. python -m pytest tests/test_native_chart_renderer_smoke.py -q
+
       - name: Parser parity tests (native enabled)
         run: PYTHONPATH=. python -m pytest tests/test_cmm_parser_parity.py -q
 

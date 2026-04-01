@@ -115,6 +115,7 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 - The optional HTML dashboard sidecar reuses the same export chart payloads and rendered PNGs, but it remains a separate Python-side export artifact rather than part of the native chart extension.
 - If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
 - `auto` uses native only when the extension is present and the chart kind is allowlisted for rollout; otherwise it defaults to matplotlib.
+- CI's native-artifacts job now runs `tests/test_native_chart_renderer_smoke.py` against the compiled wheel so histogram, distribution, IQR, and trend all prove native dispatch when finalized geometry is present.
 - On Python `3.14`, local chart-renderer builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
 
 ### Distribution fit (`modules/distribution_fit_native.py`)

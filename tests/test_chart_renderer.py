@@ -11,6 +11,8 @@ from modules import native_chart_compositor
 from modules.chart_render_spec import (
     build_resolved_distribution_spec,
     build_resolved_histogram_spec,
+    build_resolved_iqr_spec,
+    build_resolved_trend_spec,
     histogram_spec_to_mapping,
 )
 from modules.chart_renderer import (
@@ -597,6 +599,59 @@ def test_native_distribution_renderer_uses_native_when_finalized_geometry_is_att
         native.assert_called_once_with(payload)
         assert result.backend == "native"
         assert result.png_bytes == b"native"
+
+
+def test_native_iqr_renderer_uses_native_when_finalized_geometry_is_attached(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "iqr")
+    payload = {
+        "type": "iqr",
+        "labels": ["Only"],
+        "series": [[1.0, 1.1, 1.2, 1.3, 5.0]],
+        "title": "Resolved Geometry IQR",
+        "lsl": 0.8,
+        "usl": 5.2,
+        "nominal": 1.2,
+        "one_sided": False,
+        "layout": {"rotation": 0, "display_positions": [1.0], "display_labels": ["Only"], "bottom_margin": 0.18},
+        "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+        "x_label": "Group",
+        "y_label": "Measurement",
+        "legend": {"items": [{"label": "Median", "kind": "line", "color": "#E69F00"}]},
+    }
+    payload["resolved_render_spec"] = build_resolved_iqr_spec(payload)
+
+    native = mock.Mock(return_value=b"native")
+    with mock.patch("modules.chart_renderer._native_render_iqr_png", native):
+        result = NativeChartRenderer().render_iqr_png(payload)
+
+    native.assert_called_once_with(payload)
+    assert result.backend == "native"
+    assert result.png_bytes == b"native"
+
+
+def test_native_trend_renderer_uses_native_when_finalized_geometry_is_attached(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "trend")
+    payload = {
+        "type": "trend",
+        "x_values": [0.0, 1.0, 2.0, 3.0],
+        "y_values": [1.0, 1.2, 1.1, 1.35],
+        "labels": ["S1", "S2", "S3", "S4"],
+        "title": "Resolved Geometry Trend",
+        "x_label": "Sample #",
+        "y_label": "Measurement",
+        "horizontal_limits": [0.9, 1.4],
+        "layout": {"rotation": 0, "display_positions": [0.0, 1.0, 2.0, 3.0], "display_labels": ["S1", "S2", "S3", "S4"], "bottom_margin": 0.22},
+        "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+    }
+    payload["resolved_render_spec"] = build_resolved_trend_spec(payload)
+
+    native = mock.Mock(return_value=b"native")
+    with mock.patch("modules.chart_renderer._native_render_trend_png", native):
+        result = NativeChartRenderer().render_trend_png(payload)
+
+    native.assert_called_once_with(payload)
+    assert result.backend == "native"
+    assert result.png_bytes == b"native"
 
 
 def test_native_iqr_renderer_validates_payload_contract():
