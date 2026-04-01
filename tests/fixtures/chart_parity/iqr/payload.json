@@ -1,0 +1,61 @@
+{
+  "canvas": {
+    "dpi": 150,
+    "height_px": 540,
+    "width_px": 960
+  },
+  "labels": [
+    "Alpha",
+    "Beta"
+  ],
+  "layout": {
+    "bottom_margin": 0.22,
+    "display_labels": [
+      "Alpha",
+      "Beta"
+    ],
+    "display_positions": [
+      1.0,
+      2.0
+    ],
+    "rotation": 0
+  },
+  "legend": {
+    "items": [
+      {
+        "alpha": 0.45,
+        "color": "#0072B2",
+        "fill_color": "#8cb8d9",
+        "kind": "band",
+        "label": "IQR"
+      },
+      {
+        "color": "#E69F00",
+        "kind": "line",
+        "label": "Median"
+      }
+    ]
+  },
+  "lsl": 0.8,
+  "nominal": 2.0,
+  "one_sided": false,
+  "series": [
+    [
+      1.0,
+      1.1,
+      1.2,
+      1.3
+    ],
+    [
+      2.0,
+      2.1,
+      2.2,
+      5.0
+    ]
+  ],
+  "title": "IQR Parity",
+  "type": "iqr",
+  "usl": 5.2,
+  "x_label": "Group",
+  "y_label": "Measurement"
+}

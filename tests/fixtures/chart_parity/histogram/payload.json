@@ -1,0 +1,90 @@
+{
+  "annotation_rows": [
+    {
+      "kind": "lsl",
+      "label": "LSL",
+      "row_index": 1,
+      "text": "LSL=0.900",
+      "x": 0.9
+    },
+    {
+      "kind": "mean",
+      "label": "Mean",
+      "row_index": 0,
+      "text": "Mean=1.340",
+      "x": 1.34
+    },
+    {
+      "kind": "usl",
+      "label": "USL",
+      "row_index": 1,
+      "text": "USL=1.850",
+      "x": 1.85
+    }
+  ],
+  "bin_count": 7,
+  "canvas": {
+    "dpi": 150,
+    "height_px": 540,
+    "width_px": 960
+  },
+  "compact_render": false,
+  "lsl": 0.9,
+  "modeled_overlay_rows": [],
+  "specification_lines": [],
+  "summary_table_rows": [
+    {
+      "label": "Samples",
+      "value": "10"
+    },
+    {
+      "label": "Mean",
+      "value": "1.34"
+    },
+    {
+      "label": "Sigma",
+      "value": "0.27"
+    },
+    {
+      "label": "Cp",
+      "value": "1.16"
+    },
+    {
+      "label": "Cpk",
+      "value": "1.02"
+    }
+  ],
+  "summary_table_title": "Parameter",
+  "title": "Histogram Parity",
+  "type": "histogram",
+  "usl": 1.85,
+  "values": [
+    1.0,
+    1.05,
+    1.1,
+    1.2,
+    1.25,
+    1.35,
+    1.4,
+    1.55,
+    1.7,
+    1.8
+  ],
+  "visual_metadata": {
+    "annotation_rows": [],
+    "modeled_overlays": {
+      "advanced_annotations_enabled": false,
+      "overlays_enabled": false,
+      "rows": []
+    },
+    "specification_lines": [],
+    "summary_stats_table": {
+      "columns": [
+        "Parameter",
+        "Value"
+      ],
+      "rows": [],
+      "title": "Parameter"
+    }
+  }
+}

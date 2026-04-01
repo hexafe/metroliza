@@ -1,0 +1,207 @@
+{
+  "annotation_style": {
+    "show_minmax": true,
+    "show_sigma": true
+  },
+  "axes": {
+    "grid_axis": "y",
+    "rotation": 0,
+    "x_label": "Group",
+    "x_limits": {
+      "max": 1.0,
+      "min": 0.0
+    },
+    "x_ticks": [
+      {
+        "label": "Alpha",
+        "value": 0.0
+      },
+      {
+        "label": "Beta",
+        "value": 1.0
+      }
+    ],
+    "y_label": "Measurement",
+    "y_limits": {
+      "max": 1.55,
+      "min": 0.96
+    },
+    "y_ticks": [
+      {
+        "label": "0.96",
+        "value": 0.96
+      },
+      {
+        "label": "1.107",
+        "value": 1.1075
+      },
+      {
+        "label": "1.255",
+        "value": 1.255
+      },
+      {
+        "label": "1.403",
+        "value": 1.4025
+      },
+      {
+        "label": "1.55",
+        "value": 1.55
+      }
+    ]
+  },
+  "canvas": {
+    "dpi": 150,
+    "height_px": 540,
+    "width_px": 960
+  },
+  "chart_type": "distribution",
+  "grid_axis": "y",
+  "legend": {
+    "items": [
+      {
+        "color": "#0072B2",
+        "kind": "marker",
+        "label": "Mean",
+        "marker": "circle"
+      },
+      {
+        "color": "#D55E00",
+        "kind": "line",
+        "label": "Spec limits"
+      }
+    ],
+    "rect": {
+      "height": 0.05,
+      "width": 0.845,
+      "x": 0.12,
+      "y": 0.905
+    }
+  },
+  "plot_area": {
+    "height": 0.5800000000000001,
+    "width": 0.845,
+    "x": 0.12,
+    "y": 0.22
+  },
+  "reference_bands": [
+    {
+      "alpha": 0.12,
+      "axis": "y",
+      "color": "#6C7A89",
+      "end": 1.8,
+      "start": 0.9
+    }
+  ],
+  "reference_lines": [
+    {
+      "alpha": 0.82,
+      "axis": "y",
+      "color": "#9b1c1c",
+      "dash": null,
+      "value": 0.9,
+      "width": 2.0
+    },
+    {
+      "alpha": 0.82,
+      "axis": "y",
+      "color": "#9b1c1c",
+      "dash": null,
+      "value": 1.8,
+      "width": 2.0
+    }
+  ],
+  "render_mode": "violin",
+  "scatter_points": [],
+  "title": {
+    "anchor": {
+      "x": 0.12,
+      "y": 0.972
+    },
+    "color": "#0072B2",
+    "font": {
+      "size": 10.0,
+      "weight": "bold"
+    },
+    "text": "Distribution Parity Violin"
+  },
+  "violin_annotations": [
+    {
+      "maximum": 1.14,
+      "mean": 1.05,
+      "minimum": 0.96,
+      "position": 0.0,
+      "show_sigma_segment": true,
+      "sigma_high": 1.12,
+      "sigma_start": 0.98
+    },
+    {
+      "maximum": 1.55,
+      "mean": 1.43,
+      "minimum": 1.32,
+      "position": 1.0,
+      "show_sigma_segment": true,
+      "sigma_high": 1.5,
+      "sigma_start": 1.36
+    }
+  ],
+  "violin_groups": [
+    {
+      "position": 0.0,
+      "values": [
+        0.96,
+        1.0,
+        1.05,
+        1.1,
+        1.14
+      ]
+    },
+    {
+      "position": 1.0,
+      "values": [
+        1.32,
+        1.37,
+        1.42,
+        1.48,
+        1.55
+      ]
+    }
+  ],
+  "x_label": "Group",
+  "x_max": 1.0,
+  "x_min": 0.0,
+  "x_ticks": [
+    {
+      "label": "Alpha",
+      "position": 0.0
+    },
+    {
+      "label": "Beta",
+      "position": 1.0
+    }
+  ],
+  "y_label": "Measurement",
+  "y_max": 1.55,
+  "y_min": 0.96,
+  "y_ticks": [
+    {
+      "label": "0.96",
+      "position": 0.96
+    },
+    {
+      "label": "1.107",
+      "position": 1.1075
+    },
+    {
+      "label": "1.255",
+      "position": 1.255
+    },
+    {
+      "label": "1.403",
+      "position": 1.4025
+    },
+    {
+      "label": "1.55",
+      "position": 1.55
+    }
+  ]
+}

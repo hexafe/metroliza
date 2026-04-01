@@ -869,6 +869,107 @@ def _resolve_histogram_visual_metadata(
     return resolved_visual_metadata, compact_mode
 
 
+def _resolved_histogram_overlay_rows(
+    resolved_render_spec: dict[str, Any],
+    *,
+    fallback_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if isinstance(resolved_render_spec.get("overlay_curves"), list):
+        return list(resolved_render_spec.get("overlay_curves") or [])
+    if isinstance(resolved_render_spec.get("overlays"), list):
+        return list(resolved_render_spec.get("overlays") or [])
+    return list(fallback_rows)
+
+
+def _resolved_histogram_mean_line(
+    payload: dict[str, Any],
+    *,
+    resolved_render_spec: dict[str, Any],
+) -> dict[str, Any]:
+    if isinstance(resolved_render_spec.get("mean_line"), dict):
+        return dict(resolved_render_spec.get("mean_line") or {})
+    line_spec = resolved_render_spec.get("lines") if isinstance(resolved_render_spec.get("lines"), dict) else {}
+    if isinstance(line_spec.get("mean"), dict):
+        return dict(line_spec.get("mean") or {})
+    if isinstance(payload.get("mean_line"), dict):
+        return dict(payload.get("mean_line") or {})
+    return {}
+
+
+def _resolved_histogram_specification_lines(
+    resolved_render_spec: dict[str, Any],
+    *,
+    fallback_lines: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if isinstance(resolved_render_spec.get("specification_lines"), list):
+        return list(resolved_render_spec.get("specification_lines") or [])
+    line_spec = resolved_render_spec.get("lines") if isinstance(resolved_render_spec.get("lines"), dict) else {}
+    if isinstance(line_spec.get("specification"), list):
+        return list(line_spec.get("specification") or [])
+    return list(fallback_lines)
+
+
+def _draw_histogram_bars(
+    draw: ImageDraw.ImageDraw,
+    *,
+    bars: list[dict[str, Any]],
+    rect: tuple[int, int, int, int],
+    x_limits: tuple[float, float],
+    y_limits: tuple[float, float],
+) -> None:
+    left, top, right, bottom = rect
+    y_min, y_max = y_limits
+    for bar in bars:
+        if not isinstance(bar, dict):
+            continue
+        left_edge = _as_float(bar.get("left_edge"))
+        right_edge = _as_float(bar.get("right_edge"))
+        count = _as_float(bar.get("count"))
+        if None in {left_edge, right_edge, count}:
+            continue
+        x0 = _map_linear(float(left_edge), x_limits[0], x_limits[1], left, right)
+        x1 = _map_linear(float(right_edge), x_limits[0], x_limits[1], left, right)
+        y0 = _map_linear(float(count), y_min, y_max, bottom, top)
+        fill = _hex_rgba(bar.get("fill_color") or SUMMARY_PLOT_PALETTE["distribution_base"], float(bar.get("fill_alpha") or 0.84))
+        outline = _hex_rgba(bar.get("edge_color") or "#ffffff", float(bar.get("edge_alpha") or 0.72))
+        edge_width = max(1, int(round(float(bar.get("edge_width") or 1.0))))
+        draw.rectangle(
+            (
+                min(x0, x1),
+                min(y0, bottom - 1),
+                max(x0, x1),
+                max(y0, bottom - 1),
+            ),
+            fill=fill,
+            outline=outline,
+            width=edge_width,
+        )
+
+
+def _map_horizontal_box_coordinate(
+    value: float,
+    *,
+    position: float | None,
+    left_bound: float | None,
+    right_bound: float | None,
+    x_limits: tuple[float, float],
+    plot_left: int,
+    plot_right: int,
+) -> float:
+    if (
+        left_bound is not None
+        and right_bound is not None
+        and 0.0 <= float(left_bound) <= 1.0
+        and 0.0 <= float(right_bound) <= 1.0
+        and (
+            position is None
+            or not (float(left_bound) <= float(position) <= float(right_bound))
+        )
+    ):
+        return plot_left + (float(value) * (plot_right - plot_left))
+    return _map_linear(float(value), x_limits[0], x_limits[1], plot_left, plot_right)
+
+
 def render_histogram_png(payload: dict[str, Any]) -> bytes:
     values = _finite_array(payload.get("values") or [])
     if values.size == 0:
@@ -879,9 +980,20 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
     image = Image.new("RGBA", (width, height), WHITE)
     draw = ImageDraw.Draw(image)
 
+    resolved_render_spec = payload.get("resolved_render_spec") if isinstance(payload.get("resolved_render_spec"), dict) else {}
+    axis_spec = resolved_render_spec.get("axes") if isinstance(resolved_render_spec.get("axes"), dict) else {}
+    x_limits_spec = axis_spec.get("x_limits") if isinstance(axis_spec.get("x_limits"), dict) else {}
     x_view = payload.get("x_view") if isinstance(payload.get("x_view"), dict) else {}
-    x_min = _as_float(x_view.get("min"))
-    x_max = _as_float(x_view.get("max"))
+    x_min = _as_float(x_limits_spec.get("min"))
+    x_max = _as_float(x_limits_spec.get("max"))
+    if x_min is None:
+        x_min = _as_float(resolved_render_spec.get("x_min"))
+    if x_max is None:
+        x_max = _as_float(resolved_render_spec.get("x_max"))
+    if x_min is None:
+        x_min = _as_float(x_view.get("min"))
+    if x_max is None:
+        x_max = _as_float(x_view.get("max"))
     if x_min is None:
         x_min = float(np.min(values))
     if x_max is None:
@@ -890,20 +1002,27 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
         x_min -= 0.5
         x_max += 0.5
 
-    bin_count = max(1, int(payload.get("bin_count") or 20))
-    counts, edges = np.histogram(values, bins=bin_count, range=(x_min, x_max))
-    max_count = float(max(1, int(np.max(counts)) if counts.size else 1))
+    resolved_bars = list(resolved_render_spec.get("bars") or []) if isinstance(resolved_render_spec.get("bars"), list) else None
+    counts = np.asarray([], dtype=float)
+    edges = np.asarray([], dtype=float)
+    max_count = 1.0
+    if resolved_bars is None:
+        bin_count = max(1, int(payload.get("bin_count") or 20))
+        counts, edges = np.histogram(values, bins=bin_count, range=(x_min, x_max))
+        max_count = float(max(1, int(np.max(counts)) if counts.size else 1))
+    else:
+        resolved_counts = [_as_float(item.get("count")) for item in resolved_bars if isinstance(item, dict)]
+        resolved_counts = [float(item) for item in resolved_counts if item is not None]
+        if resolved_counts:
+            max_count = max(max_count, max(resolved_counts))
 
     visual_metadata, compact_mode = _resolve_histogram_visual_metadata(payload, x_min=x_min, x_max=x_max)
     overlays_meta = visual_metadata.get("modeled_overlays") if isinstance(visual_metadata.get("modeled_overlays"), dict) else {}
-    resolved_render_spec = payload.get("resolved_render_spec") if isinstance(payload.get("resolved_render_spec"), dict) else {}
-    axis_spec = resolved_render_spec.get("axes") if isinstance(resolved_render_spec.get("axes"), dict) else {}
     title_spec = resolved_render_spec.get("title") if isinstance(resolved_render_spec.get("title"), dict) else {}
     side_panels_spec = resolved_render_spec.get("side_panels") if isinstance(resolved_render_spec.get("side_panels"), dict) else {}
-    overlay_rows = (
-        list(resolved_render_spec.get("overlay_curves") or [])
-        if isinstance(resolved_render_spec.get("overlay_curves"), list)
-        else list(overlays_meta.get("rows") or [])
+    overlay_rows = _resolved_histogram_overlay_rows(
+        resolved_render_spec,
+        fallback_rows=list(overlays_meta.get("rows") or []),
     )
     note_spec = resolved_render_spec.get("note") if isinstance(resolved_render_spec.get("note"), dict) else None
 
@@ -1000,15 +1119,24 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
         grid_axis=str(axis_spec.get("grid_axis") or resolved_render_spec.get("grid_axis") or (payload.get("style") or {}).get("grid_axis") or "y"),
     )
 
-    bar_fill = _hex_rgba(SUMMARY_PLOT_PALETTE["distribution_base"], 0.84)
-    bar_outline = _hex_rgba("#ffffff", 0.72)
-    for left_edge, right_edge, count in zip(edges[:-1], edges[1:], counts):
-        if count <= 0:
-            continue
-        x0 = _map_linear(left_edge, x_min, x_max, plot_left, plot_right)
-        x1 = _map_linear(right_edge, x_min, x_max, plot_left, plot_right)
-        y0 = _map_linear(float(count), 0.0, max_count, plot_bottom, plot_top)
-        draw.rectangle((x0 + 1, y0, x1 - 1, plot_bottom - 1), fill=bar_fill, outline=bar_outline)
+    if resolved_bars is not None:
+        _draw_histogram_bars(
+            draw,
+            bars=resolved_bars,
+            rect=plot_rect,
+            x_limits=(x_min, x_max),
+            y_limits=(float(y_min or 0.0), float(y_max)),
+        )
+    else:
+        bar_fill = _hex_rgba(SUMMARY_PLOT_PALETTE["distribution_base"], 0.84)
+        bar_outline = _hex_rgba("#ffffff", 0.72)
+        for left_edge, right_edge, count in zip(edges[:-1], edges[1:], counts):
+            if count <= 0:
+                continue
+            x0 = _map_linear(left_edge, x_min, x_max, plot_left, plot_right)
+            x1 = _map_linear(right_edge, x_min, x_max, plot_left, plot_right)
+            y0 = _map_linear(float(count), 0.0, max_count, plot_bottom, plot_top)
+            draw.rectangle((x0 + 1, y0, x1 - 1, plot_bottom - 1), fill=bar_fill, outline=bar_outline)
 
     for overlay in overlay_rows:
         kind = str(overlay.get("kind") or "").strip().lower()
@@ -1051,11 +1179,7 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
             align=str(note_spec.get("align") or "left"),
         )
 
-    mean_line = (
-        resolved_render_spec.get("mean_line")
-        if isinstance(resolved_render_spec.get("mean_line"), dict)
-        else payload.get("mean_line")
-    ) if isinstance(payload.get("mean_line"), dict) or isinstance(resolved_render_spec.get("mean_line"), dict) else {}
+    mean_line = _resolved_histogram_mean_line(payload, resolved_render_spec=resolved_render_spec)
     mean_value = _as_float(mean_line.get("value"))
     if mean_value is not None:
         mean_x = _map_linear(mean_value, x_min, x_max, plot_left, plot_right)
@@ -1067,13 +1191,14 @@ def render_histogram_png(payload: dict[str, Any]) -> bytes:
             dash=(8, 5),
         )
 
-    line_items = (
-        list(resolved_render_spec.get("specification_lines") or [])
-        if isinstance(resolved_render_spec.get("specification_lines"), list)
-        else list(visual_metadata.get("specification_lines") or [])
+    line_items = _resolved_histogram_specification_lines(
+        resolved_render_spec,
+        fallback_lines=list(visual_metadata.get("specification_lines") or []),
     )
     for line_meta in line_items:
-        if not isinstance(line_meta, dict) or not line_meta.get("enabled"):
+        if not isinstance(line_meta, dict):
+            continue
+        if "enabled" in line_meta and not line_meta.get("enabled"):
             continue
         line_value = _as_float(line_meta.get("value"))
         if line_value is None:
@@ -1729,26 +1854,86 @@ def render_iqr_png(payload: dict[str, Any]) -> bytes:
         whisker_high = _as_float(box.get("whisker_high"))
         if None in {position, q1, median, q3, whisker_low, whisker_high}:
             continue
-        center_x = _map_linear(float(position), x_min, x_max, plot_rect[0], plot_rect[2])
-        box_half_width = max(12.0, (plot_rect[2] - plot_rect[0]) / max(10, len(series_list) * 6))
+        box_left_value = _as_float(box.get("box_left"))
+        box_right_value = _as_float(box.get("box_right"))
+        if box_left_value is not None and box_right_value is not None:
+            box_left = _map_horizontal_box_coordinate(
+                float(box_left_value),
+                position=position,
+                left_bound=box_left_value,
+                right_bound=box_right_value,
+                x_limits=(x_min, x_max),
+                plot_left=plot_rect[0],
+                plot_right=plot_rect[2],
+            )
+            box_right = _map_horizontal_box_coordinate(
+                float(box_right_value),
+                position=position,
+                left_bound=box_left_value,
+                right_bound=box_right_value,
+                x_limits=(x_min, x_max),
+                plot_left=plot_rect[0],
+                plot_right=plot_rect[2],
+            )
+            center_x = (box_left + box_right) / 2.0
+        else:
+            center_x = _map_linear(float(position), x_min, x_max, plot_rect[0], plot_rect[2])
+            box_half_width = max(12.0, (plot_rect[2] - plot_rect[0]) / max(10, len(series_list) * 6))
+            box_left = center_x - box_half_width
+            box_right = center_x + box_half_width
         box_top = _map_linear(float(q3), y_min, y_max, plot_rect[3], plot_rect[1])
         box_bottom = _map_linear(float(q1), y_min, y_max, plot_rect[3], plot_rect[1])
         median_y = _map_linear(float(median), y_min, y_max, plot_rect[3], plot_rect[1])
         whisker_low_y = _map_linear(float(whisker_low), y_min, y_max, plot_rect[3], plot_rect[1])
         whisker_high_y = _map_linear(float(whisker_high), y_min, y_max, plot_rect[3], plot_rect[1])
+        edge_color = _hex_rgba(box.get("edge_color") or SUMMARY_PLOT_PALETTE["distribution_foreground"])
+        edge_width = max(1, int(round(float(box.get("edge_width") or 2.0))))
+        median_color = _hex_rgba(box.get("median_color") or SUMMARY_PLOT_PALETTE["central_tendency"])
+        fill_color = _hex_rgba(box.get("fill_color") or SUMMARY_PLOT_PALETTE["distribution_base"], float(box.get("fill_alpha") or 0.45))
+        cap_left_value = _as_float(box.get("cap_left"))
+        cap_right_value = _as_float(box.get("cap_right"))
+        if cap_left_value is not None and cap_right_value is not None:
+            cap_left = _map_horizontal_box_coordinate(
+                float(cap_left_value),
+                position=position,
+                left_bound=cap_left_value,
+                right_bound=cap_right_value,
+                x_limits=(x_min, x_max),
+                plot_left=plot_rect[0],
+                plot_right=plot_rect[2],
+            )
+            cap_right = _map_horizontal_box_coordinate(
+                float(cap_right_value),
+                position=position,
+                left_bound=cap_left_value,
+                right_bound=cap_right_value,
+                x_limits=(x_min, x_max),
+                plot_left=plot_rect[0],
+                plot_right=plot_rect[2],
+            )
+        else:
+            cap_left = box_left
+            cap_right = box_right
 
-        draw.rectangle((center_x - box_half_width, box_top, center_x + box_half_width, box_bottom), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_base"], 0.45), outline=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]), width=2)
-        draw.line((center_x - box_half_width, median_y, center_x + box_half_width, median_y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["central_tendency"]), width=2)
-        draw.line((center_x, whisker_high_y, center_x, box_top), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]), width=2)
-        draw.line((center_x, box_bottom, center_x, whisker_low_y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]), width=2)
-        draw.line((center_x - 8, whisker_high_y, center_x + 8, whisker_high_y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]), width=2)
-        draw.line((center_x - 8, whisker_low_y, center_x + 8, whisker_low_y), fill=_hex_rgba(SUMMARY_PLOT_PALETTE["distribution_foreground"]), width=2)
+        draw.rectangle((box_left, box_top, box_right, box_bottom), fill=fill_color, outline=edge_color, width=edge_width)
+        draw.line((box_left, median_y, box_right, median_y), fill=median_color, width=edge_width)
+        draw.line((center_x, whisker_high_y, center_x, box_top), fill=edge_color, width=edge_width)
+        draw.line((center_x, box_bottom, center_x, whisker_low_y), fill=edge_color, width=edge_width)
+        draw.line((cap_left, whisker_high_y, cap_right, whisker_high_y), fill=edge_color, width=edge_width)
+        draw.line((cap_left, whisker_low_y, cap_right, whisker_low_y), fill=edge_color, width=edge_width)
         for outlier in list(box.get("outliers") or []):
             outlier_value = _as_float(outlier)
             if outlier_value is None:
                 continue
             outlier_y = _map_linear(float(outlier_value), y_min, y_max, plot_rect[3], plot_rect[1])
-            _draw_marker(draw, kind="circle", x=center_x, y=outlier_y, size=6, fill=_hex_rgba(SUMMARY_PLOT_PALETTE["outlier"]))
+            _draw_marker(
+                draw,
+                kind=str(box.get("outlier_marker") or "circle"),
+                x=center_x,
+                y=outlier_y,
+                size=max(4, int(round(float(box.get("outlier_size") or 6.0)))),
+                fill=_hex_rgba(box.get("outlier_color") or SUMMARY_PLOT_PALETTE["outlier"], float(box.get("outlier_alpha") or 1.0)),
+            )
 
     return _encode_png(image)
 

@@ -1,0 +1,49 @@
+{
+  "canvas": {
+    "dpi": 150,
+    "height_px": 540,
+    "width_px": 960
+  },
+  "horizontal_limits": [
+    0.9,
+    1.4
+  ],
+  "labels": [
+    "S1",
+    "S2",
+    "S3",
+    "S4"
+  ],
+  "layout": {
+    "bottom_margin": 0.24,
+    "display_labels": [
+      "S1",
+      "S2",
+      "S3",
+      "S4"
+    ],
+    "display_positions": [
+      0.0,
+      1.0,
+      2.0,
+      3.0
+    ],
+    "rotation": 0
+  },
+  "title": "Trend Parity",
+  "type": "trend",
+  "x_label": "Sample #",
+  "x_values": [
+    0.0,
+    1.0,
+    2.0,
+    3.0
+  ],
+  "y_label": "Measurement",
+  "y_values": [
+    1.0,
+    1.2,
+    1.1,
+    1.35
+  ]
+}

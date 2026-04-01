@@ -60,7 +60,16 @@ Parity between native and Python backends is enforced through fixture-based test
 
 - `METROLIZA_CHART_RENDERER_BACKEND` accepts `auto` (default), `native`, or `matplotlib`.
 - Native chart rendering via `_metroliza_chart_native` is included when the native extension is built/installed in the packaging environment.
+- `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` accepts a comma-separated allowlist such as `histogram,distribution,iqr,trend`; only listed chart kinds may use the native backend.
+- In `auto`, the runtime export path prefers the native backend only for allowlisted chart kinds whose native extension symbols are available.
 - If `native` is forced while the native module is unavailable, Metroliza warns and falls back to matplotlib rendering.
+- If `native` is forced for a chart kind that is not allowlisted for rollout, Metroliza warns and falls back to matplotlib rendering for that chart kind.
+- Runtime export rendering is split into three layers:
+  - `runtime` decides whether a chart kind may use the native backend.
+  - `oracle` means the export path has already resolved matplotlib-derived geometry/spec data for parity-sensitive charts.
+  - `fast-path` means the native compositor can render from that resolved payload without re-running matplotlib layout.
+- Histogram currently uses the fast-path in the export runtime. Distribution, IQR, and trend still rely on a matplotlib oracle pass before native rendering, so their parity is strong but their end-to-end export path is not yet fully matplotlib-free.
+- The lower-level `_metroliza_chart_native` compositor entrypoints remain backward-compatible and can still synthesize fallback geometry/metadata for legacy payloads when called directly.
 - For deterministic rollback behavior, set `METROLIZA_CHART_RENDERER_BACKEND=matplotlib`.
 
 ## Additional native backend controls

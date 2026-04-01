@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
+from modules import native_chart_compositor
 from modules.chart_render_spec import (
     build_resolved_distribution_spec,
     build_resolved_histogram_spec,
@@ -21,6 +22,23 @@ def _non_white_pixels(image: np.ndarray, *, y0: float, y1: float, x0: float, x1:
     height, width = image.shape[:2]
     region = image[int(height * y0): int(height * y1), int(width * x0): int(width * x1), :3]
     return int(np.count_nonzero(np.any(region < 0.97, axis=2)))
+
+
+def _near_rgb_pixels(
+    image: np.ndarray,
+    *,
+    y0: float,
+    y1: float,
+    x0: float,
+    x1: float,
+    rgb: tuple[int, int, int],
+    atol: float = 0.12,
+) -> int:
+    height, width = image.shape[:2]
+    region = image[int(height * y0): int(height * y1), int(width * x0): int(width * x1), :3]
+    target = np.asarray(rgb, dtype=np.float32) / 255.0
+    deltas = np.max(np.abs(region - target), axis=2)
+    return int(np.count_nonzero(deltas <= float(atol)))
 
 
 def test_build_histogram_render_spec_exposes_layout_title_and_axes_contract():
@@ -89,6 +107,56 @@ def test_render_histogram_png_honors_resolved_render_spec_title_and_panel_geomet
     assert moved_pixels > 250
     assert moved_pixels > left_pixels
     assert table_pixels > 1200
+
+
+def test_render_histogram_png_replays_resolved_bars_without_histogram_recompute(monkeypatch):
+    payload = build_histogram_native_payload(
+        values=[0.04, 0.05, 0.06, 0.07],
+        lsl=None,
+        usl=None,
+        title="Resolved Bars Replay",
+        bin_count=7,
+    )
+    payload["canvas"] = {"width_px": 900, "height_px": 450, "dpi": 150}
+    payload["resolved_render_spec"] = {
+        "title": {
+            "text": "Resolved Bars Replay",
+            "anchor": {"x": 0.10, "y": 0.96},
+            "font": {"size": 10.0, "weight": "bold"},
+            "color": "#0072B2",
+        },
+        "plot_area": {"x": 0.14, "y": 0.18, "width": 0.62, "height": 0.56},
+        "axes": {
+            "x_limits": {"min": 0.0, "max": 10.0},
+            "y_limits": {"min": 0.0, "max": 10.0},
+            "x_ticks": [{"value": 0.0, "label": "0"}, {"value": 10.0, "label": "10"}],
+            "y_ticks": [{"value": 0.0, "label": "0"}, {"value": 5.0, "label": "5"}, {"value": 10.0, "label": "10"}],
+            "x_label": "Measurement",
+            "y_label": "Count",
+            "grid_axis": "y",
+        },
+        "bars": [
+            {
+                "left_edge": 8.0,
+                "right_edge": 9.0,
+                "count": 9.0,
+                "fill_color": "#ff007f",
+                "fill_alpha": 1.0,
+                "edge_color": "#111111",
+                "edge_alpha": 1.0,
+                "edge_width": 1.0,
+            }
+        ],
+        "lines": {"mean": None, "specification": []},
+        "overlays": [],
+        "annotations": [],
+    }
+
+    def _forbidden_histogram(*_args, **_kwargs):
+        raise AssertionError("np.histogram should not be called when resolved bars are provided")
+
+    monkeypatch.setattr(native_chart_compositor.np, "histogram", _forbidden_histogram)
+    _ = render_histogram_png(payload)
 
 
 def test_histogram_spec_to_mapping_serializes_native_layout_contract():
@@ -299,6 +367,64 @@ def test_render_iqr_png_honors_resolved_render_spec_box_statistics():
     assert moved_title_pixels > 140
     assert moved_title_pixels > left_title_pixels
     assert upper_plot_pixels > lower_plot_pixels
+
+
+def test_render_iqr_png_replays_resolved_box_rect_and_style():
+    payload = {
+        "type": "iqr",
+        "labels": ["Only"],
+        "series": [[1.0, 1.1, 1.2, 1.3]],
+        "title": "IQR Strict Replay",
+        "canvas": {"width_px": 900, "height_px": 450, "dpi": 150},
+    }
+    payload["resolved_render_spec"] = {
+        "title": {
+            "text": "IQR Strict Replay",
+            "anchor": {"x": 0.24, "y": 0.96},
+            "font": {"size": 10.0, "weight": "bold"},
+            "color": "#0072B2",
+        },
+        "plot_area": {"x": 0.14, "y": 0.18, "width": 0.62, "height": 0.56},
+        "axes": {
+            "x_limits": {"min": 0.0, "max": 10.0},
+            "y_limits": {"min": 0.0, "max": 12.0},
+            "x_ticks": [{"value": 0.0, "label": "0"}, {"value": 10.0, "label": "10"}],
+            "y_ticks": [{"value": 0.0, "label": "0"}, {"value": 6.0, "label": "6"}, {"value": 12.0, "label": "12"}],
+            "x_label": "Group",
+            "y_label": "Measurement",
+            "grid_axis": "y",
+            "rotation": 0,
+        },
+        "reference_lines": [],
+        "reference_bands": [],
+        "boxes": [
+            {
+                "position": 1.0,
+                "box_left": 0.46,
+                "box_right": 0.54,
+                "q1": 8.0,
+                "median": 9.0,
+                "q3": 10.0,
+                "whisker_low": 7.0,
+                "whisker_high": 11.0,
+                "outliers": [],
+                "fill_color": "#ff007f",
+                "fill_alpha": 1.0,
+                "edge_color": "#00ff00",
+                "edge_width": 3.0,
+                "median_color": "#ffff00",
+            }
+        ],
+    }
+
+    image = plt.imread(BytesIO(render_iqr_png(payload)), format="png")
+
+    left_box_region = _non_white_pixels(image, y0=0.24, y1=0.74, x0=0.18, x1=0.30)
+    center_box_region = _non_white_pixels(image, y0=0.24, y1=0.74, x0=0.44, x1=0.58)
+    magenta_center = _near_rgb_pixels(image, y0=0.24, y1=0.74, x0=0.44, x1=0.58, rgb=(255, 0, 127))
+
+    assert center_box_region > left_box_region
+    assert magenta_center > 200
 
 
 def test_render_trend_png_honors_resolved_render_spec_points_and_limit_lines():

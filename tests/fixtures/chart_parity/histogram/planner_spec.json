@@ -1,0 +1,337 @@
+{
+  "annotations": [
+    {
+      "align": "center",
+      "box_y": 0.8910849999999999,
+      "color": "#9b1c1c",
+      "leader_y": 0.8425925925925926,
+      "row_index": 1,
+      "text": "LSL=0.900",
+      "x_value": 0.9
+    },
+    {
+      "align": "center",
+      "box_y": 0.85747,
+      "color": "#2F3B4A",
+      "leader_y": 0.8425925925925926,
+      "row_index": 0,
+      "text": "Mean=1.340",
+      "x_value": 1.34
+    },
+    {
+      "align": "center",
+      "box_y": 0.8910849999999999,
+      "color": "#9b1c1c",
+      "leader_y": 0.8425925925925926,
+      "row_index": 1,
+      "text": "USL=1.850",
+      "x_value": 1.85
+    }
+  ],
+  "axes": {
+    "grid_axis": "y",
+    "x_label": "Measurement",
+    "x_limits": {
+      "max": 1.8,
+      "min": 1.0
+    },
+    "x_ticks": [
+      {
+        "label": "1",
+        "value": 1.0
+      },
+      {
+        "label": "1.16",
+        "value": 1.16
+      },
+      {
+        "label": "1.32",
+        "value": 1.32
+      },
+      {
+        "label": "1.48",
+        "value": 1.48
+      },
+      {
+        "label": "1.64",
+        "value": 1.6400000000000001
+      },
+      {
+        "label": "1.8",
+        "value": 1.8
+      }
+    ],
+    "y_label": "Count",
+    "y_limits": {
+      "max": 3.24,
+      "min": 0.0
+    },
+    "y_ticks": [
+      {
+        "label": "0",
+        "value": 0.0
+      },
+      {
+        "label": "0.81",
+        "value": 0.81
+      },
+      {
+        "label": "1.62",
+        "value": 1.62
+      },
+      {
+        "label": "2.43",
+        "value": 2.43
+      },
+      {
+        "label": "3.24",
+        "value": 3.24
+      }
+    ]
+  },
+  "bars": [
+    {
+      "count": 3.0,
+      "edge_alpha": 0.72,
+      "edge_color": "#ffffff",
+      "edge_width": 1,
+      "fill_alpha": 0.84,
+      "fill_color": "#56B4E9",
+      "left_edge": 1.0,
+      "right_edge": 1.1142857142857143
+    },
+    {
+      "count": 1.0,
+      "edge_alpha": 0.72,
+      "edge_color": "#ffffff",
+      "edge_width": 1,
+      "fill_alpha": 0.84,
+      "fill_color": "#56B4E9",
+      "left_edge": 1.1142857142857143,
+      "right_edge": 1.2285714285714286
+    },
+    {
+      "count": 1.0,
+      "edge_alpha": 0.72,
+      "edge_color": "#ffffff",
+      "edge_width": 1,
+      "fill_alpha": 0.84,
+      "fill_color": "#56B4E9",
+      "left_edge": 1.2285714285714286,
+      "right_edge": 1.342857142857143
+    },
+    {
+      "count": 2.0,
+      "edge_alpha": 0.72,
+      "edge_color": "#ffffff",
+      "edge_width": 1,
+      "fill_alpha": 0.84,
+      "fill_color": "#56B4E9",
+      "left_edge": 1.342857142857143,
+      "right_edge": 1.4571428571428573
+    },
+    {
+      "count": 1.0,
+      "edge_alpha": 0.72,
+      "edge_color": "#ffffff",
+      "edge_width": 1,
+      "fill_alpha": 0.84,
+      "fill_color": "#56B4E9",
+      "left_edge": 1.4571428571428573,
+      "right_edge": 1.5714285714285716
+    },
+    {
+      "count": 2.0,
+      "edge_alpha": 0.72,
+      "edge_color": "#ffffff",
+      "edge_width": 1,
+      "fill_alpha": 0.84,
+      "fill_color": "#56B4E9",
+      "left_edge": 1.6857142857142857,
+      "right_edge": 1.8
+    }
+  ],
+  "canvas": {
+    "dpi": 150,
+    "height_px": 540,
+    "width_px": 960
+  },
+  "chart_type": "histogram",
+  "grid_axis": "y",
+  "lines": {
+    "mean": null,
+    "specification": [
+      {
+        "alpha": 0.82,
+        "color": "#9b1c1c",
+        "dash": null,
+        "value": 0.9,
+        "width": 2,
+        "y0_axes": 0.0,
+        "y1_axes": 1.0
+      },
+      {
+        "alpha": 0.82,
+        "color": "#9b1c1c",
+        "dash": null,
+        "value": 1.85,
+        "width": 2,
+        "y0_axes": 0.0,
+        "y1_axes": 1.0
+      }
+    ]
+  },
+  "overlays": [],
+  "plot_area": {
+    "height": 0.747,
+    "width": 0.5659999999999998,
+    "x": 0.056,
+    "y": 0.103
+  },
+  "plot_rect": {
+    "height": 0.747,
+    "width": 0.5659999999999998,
+    "x": 0.056,
+    "y": 0.103
+  },
+  "side_panels": {
+    "right_info": {
+      "height": 0.747,
+      "width": 0.33,
+      "x": 0.6539999999999999,
+      "y": 0.103
+    }
+  },
+  "specification_lines": [
+    {
+      "alpha": 0.82,
+      "color": "#9b1c1c",
+      "dash": null,
+      "value": 0.9,
+      "width": 2,
+      "y0_axes": 0.0,
+      "y1_axes": 1.0
+    },
+    {
+      "alpha": 0.82,
+      "color": "#9b1c1c",
+      "dash": null,
+      "value": 1.85,
+      "width": 2,
+      "y0_axes": 0.0,
+      "y1_axes": 1.0
+    }
+  ],
+  "table": {
+    "rows": [
+      {
+        "badge_palette": null,
+        "label": "Samples",
+        "row_kind": "summary_metric",
+        "section_break_before": false,
+        "value": "10"
+      },
+      {
+        "badge_palette": null,
+        "label": "Mean",
+        "row_kind": "summary_metric",
+        "section_break_before": false,
+        "value": "1.34"
+      },
+      {
+        "badge_palette": null,
+        "label": "Sigma",
+        "row_kind": "summary_metric",
+        "section_break_before": false,
+        "value": "0.27"
+      },
+      {
+        "badge_palette": null,
+        "label": "Cp",
+        "row_kind": "summary_metric",
+        "section_break_before": false,
+        "value": "1.16"
+      },
+      {
+        "badge_palette": null,
+        "label": "Cpk",
+        "row_kind": "summary_metric",
+        "section_break_before": false,
+        "value": "1.02"
+      }
+    ],
+    "title": "Parameter"
+  },
+  "table_rect": {
+    "height": 0.747,
+    "width": 0.33,
+    "x": 0.6539999999999999,
+    "y": 0.103
+  },
+  "title": {
+    "anchor": {
+      "x": 0.06,
+      "y": 0.985
+    },
+    "color": "#0072B2",
+    "font": {
+      "size": 9.646666666666667,
+      "weight": "bold"
+    },
+    "text": "Histogram Parity"
+  },
+  "x_label": "Measurement",
+  "x_max": 1.8,
+  "x_min": 1.0,
+  "x_ticks": [
+    {
+      "label": "1",
+      "position": 1.0
+    },
+    {
+      "label": "1.16",
+      "position": 1.16
+    },
+    {
+      "label": "1.32",
+      "position": 1.32
+    },
+    {
+      "label": "1.48",
+      "position": 1.48
+    },
+    {
+      "label": "1.64",
+      "position": 1.6400000000000001
+    },
+    {
+      "label": "1.8",
+      "position": 1.8
+    }
+  ],
+  "y_label": "Count",
+  "y_max": 3.24,
+  "y_min": 0.0,
+  "y_ticks": [
+    {
+      "label": "0",
+      "position": 0.0
+    },
+    {
+      "label": "0.81",
+      "position": 0.81
+    },
+    {
+      "label": "1.62",
+      "position": 1.62
+    },
+    {
+      "label": "2.43",
+      "position": 2.43
+    },
+    {
+      "label": "3.24",
+      "position": 3.24
+    }
+  ]
+}

@@ -193,11 +193,13 @@ Interpretation:
 - The old native chart path accelerated only the stripped histogram surface and deliberately refused the rich worksheet histogram/dashboard layout.
 - The new native path wins decisively on the actual export workload where matplotlib had to compose titles, axes, legends, annotation bands, and the right-side histogram panel.
 - The remaining stripped-histogram gap is now small enough that it is no longer the dominant chart concern on this branch.
+- For the covered charts, the current runtime split is now more precise: histogram is the native fast-path, while distribution, IQR, and trend still use matplotlib as an oracle pass before native rendering.
+- That means the remaining export bottleneck is no longer the compositor alone; on distribution/IQR/trend the matplotlib oracle pass is still part of the end-to-end latency budget.
 
 Fix landed:
 - Added a payload-driven native chart compositor in [`modules/native_chart_compositor.py`](../../modules/native_chart_compositor.py).
 - Extended the native chart module bridge in [`lib.rs`](../../modules/native/chart_renderer/src/lib.rs) and [`Cargo.toml`](../../modules/native/chart_renderer/Cargo.toml).
-- Enabled native export for histogram, distribution, IQR, and trend summary charts in [`modules/export_data_thread.py`](../../modules/export_data_thread.py).
+- Enabled a native-capable export path for histogram, distribution, IQR, and trend summary charts in [`modules/export_data_thread.py`](../../modules/export_data_thread.py), with runtime rollout now gated per chart kind in [`modules/chart_renderer.py`](../../modules/chart_renderer.py).
 - Updated renderer contracts and validation in [`modules/chart_renderer.py`](../../modules/chart_renderer.py).
 - Added an optional HTML dashboard sidecar that reuses the same rendered summary charts and chart payload metadata in [`modules/export_html_dashboard.py`](../../modules/export_html_dashboard.py).
 - Added a compact histogram fast-encode path so stripped render-budget payloads no longer pay workbook-grade PNG compression in [`modules/native_chart_compositor.py`](../../modules/native_chart_compositor.py).
@@ -213,6 +215,16 @@ From the focused export benchmark:
 Implication:
 - The existing export-path cleanup is not wrong, but it is no longer the obvious compute bottleneck.
 - The remaining export budget is now more likely in workbook write density, large-sheet image counts, and any future HTML/dashboard interactivity layers than in chart composition or distribution-fit parameter estimation for the covered plots.
+
+### P2. Trend fast-path is still only a candidate
+
+Trend is the only covered chart that remains a plausible next native-fast-path candidate without changing the oracle contract elsewhere. It should only be pursued if it can:
+
+- reuse the existing finalized geometry contract from the matplotlib oracle pass,
+- preserve the current parity gate thresholds, and
+- show a measurable end-to-end export improvement, not just a compositor-only improvement.
+
+Until then, treat the chart runtime as parity-first rather than fully matplotlib-free.
 
 Build caveat:
 - On Python `3.14`, `PyO3 0.21` still needed `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` for the local wheel build to proceed.
@@ -231,9 +243,10 @@ Build caveat:
 2. Reduce candidate-fit volume before optimization starts where repeated groups still appear.
    - Add low-risk candidate pruning heuristics based on support mode and simple shape stats.
    - Consider caching fitted params by `(distribution, measurement_fingerprint)` when repeated export flows revisit identical groups.
-3. Convert the local native build recipe into a repo-supported workflow for Python `3.14+`.
+3. Evaluate a trend-only native fast-path implementation only if the export benchmark shows a meaningful win and the parity fixtures remain green.
+4. Convert the local native build recipe into a repo-supported workflow for Python `3.14+`.
    - Either upgrade `PyO3` or codify the forward-compat build flag where appropriate.
-4. Add an interactive layer on top of the new HTML dashboard/export sidecar.
+5. Add an interactive layer on top of the new HTML dashboard/export sidecar.
    - Keep `xlsx` as the portable static artifact and the current HTML dashboard as the dependency-free browser artifact.
    - Reuse the same payloads for future Plotly/interactive HTML output instead of re-deriving chart semantics.
 

@@ -24,8 +24,13 @@ from modules.chart_renderer import (
     build_chart_renderer,
     build_distribution_native_payload,
     native_full_chart_backend_available,
+    native_chart_renderer_rollout_enabled,
+    native_chart_renderer_rollout_enabled_for,
+    resolve_histogram_renderer_backend,
     resolve_chart_renderer_backend,
     resolve_distribution_renderer_backend,
+    resolve_iqr_renderer_backend,
+    resolve_trend_renderer_backend,
 )
 from modules.native_chart_compositor import (
     render_distribution_png,
@@ -453,8 +458,34 @@ def test_backend_policy_stays_matplotlib_even_when_native_capability_is_ready(mo
         mock.patch("warnings.warn") as warn,
     ):
         assert native_full_chart_backend_available() is True
+        assert native_chart_renderer_rollout_enabled() is False
+        assert native_chart_renderer_rollout_enabled_for("histogram") is False
         assert resolve_chart_renderer_backend() == "matplotlib"
         assert resolve_distribution_renderer_backend() == "matplotlib"
+        assert resolve_histogram_renderer_backend() == "matplotlib"
+        assert resolve_iqr_renderer_backend() == "matplotlib"
+        assert resolve_trend_renderer_backend() == "matplotlib"
         assert isinstance(build_chart_renderer(), MatplotlibChartRenderer)
     assert warn.called
     assert "disabled by rollout policy" in str(warn.call_args[0][0])
+
+
+def test_backend_policy_enables_selected_chart_types_with_rollout_allowlist(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "distribution,trend")
+    with (
+        mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
+        mock.patch("modules.chart_renderer._native_render_distribution_png", lambda payload: b"png"),
+        mock.patch("modules.chart_renderer._native_render_iqr_png", lambda payload: b"png"),
+        mock.patch("modules.chart_renderer._native_render_trend_png", lambda payload: b"png"),
+    ):
+        assert native_chart_renderer_rollout_enabled() is True
+        assert native_chart_renderer_rollout_enabled_for("histogram") is False
+        assert native_chart_renderer_rollout_enabled_for("distribution") is True
+        assert native_chart_renderer_rollout_enabled_for("iqr") is False
+        assert native_chart_renderer_rollout_enabled_for("trend") is True
+        assert resolve_histogram_renderer_backend() == "matplotlib"
+        assert resolve_distribution_renderer_backend() == "native"
+        assert resolve_iqr_renderer_backend() == "matplotlib"
+        assert resolve_trend_renderer_backend() == "native"
+        assert type(build_chart_renderer()).__name__ == "NativeChartRenderer"

@@ -1,0 +1,175 @@
+{
+  "axes": {
+    "grid_axis": "y",
+    "rotation": 0,
+    "x_label": "Sample #",
+    "x_limits": {
+      "max": 3.0,
+      "min": 0.0
+    },
+    "x_ticks": [
+      {
+        "label": "S1",
+        "value": 0.0
+      },
+      {
+        "label": "S2",
+        "value": 1.0
+      },
+      {
+        "label": "S3",
+        "value": 2.0
+      },
+      {
+        "label": "S4",
+        "value": 3.0
+      }
+    ],
+    "y_label": "Measurement",
+    "y_limits": {
+      "max": 1.35,
+      "min": 1.0
+    },
+    "y_ticks": [
+      {
+        "label": "1",
+        "value": 1.0
+      },
+      {
+        "label": "1.087",
+        "value": 1.0875
+      },
+      {
+        "label": "1.175",
+        "value": 1.175
+      },
+      {
+        "label": "1.263",
+        "value": 1.2625000000000002
+      },
+      {
+        "label": "1.35",
+        "value": 1.35
+      }
+    ]
+  },
+  "canvas": {
+    "dpi": 150,
+    "height_px": 540,
+    "width_px": 960
+  },
+  "chart_type": "trend",
+  "grid_axis": "y",
+  "plot_area": {
+    "height": 0.6,
+    "width": 0.845,
+    "x": 0.12,
+    "y": 0.24
+  },
+  "points": [
+    {
+      "color": "#0072B2",
+      "marker": "circle",
+      "size": 6,
+      "x": 0.0,
+      "y": 1.0
+    },
+    {
+      "color": "#0072B2",
+      "marker": "circle",
+      "size": 6,
+      "x": 1.0,
+      "y": 1.2
+    },
+    {
+      "color": "#0072B2",
+      "marker": "circle",
+      "size": 6,
+      "x": 2.0,
+      "y": 1.1
+    },
+    {
+      "color": "#0072B2",
+      "marker": "circle",
+      "size": 6,
+      "x": 3.0,
+      "y": 1.35
+    }
+  ],
+  "reference_lines": [
+    {
+      "alpha": 0.82,
+      "axis": "y",
+      "color": "#9b1c1c",
+      "dash": null,
+      "value": 0.9,
+      "width": 2.0
+    },
+    {
+      "alpha": 0.82,
+      "axis": "y",
+      "color": "#9b1c1c",
+      "dash": null,
+      "value": 1.4,
+      "width": 2.0
+    }
+  ],
+  "title": {
+    "anchor": {
+      "x": 0.12,
+      "y": 0.972
+    },
+    "color": "#0072B2",
+    "font": {
+      "size": 10.0,
+      "weight": "bold"
+    },
+    "text": "Trend Parity"
+  },
+  "x_label": "Sample #",
+  "x_max": 3.0,
+  "x_min": 0.0,
+  "x_ticks": [
+    {
+      "label": "S1",
+      "position": 0.0
+    },
+    {
+      "label": "S2",
+      "position": 1.0
+    },
+    {
+      "label": "S3",
+      "position": 2.0
+    },
+    {
+      "label": "S4",
+      "position": 3.0
+    }
+  ],
+  "y_label": "Measurement",
+  "y_max": 1.35,
+  "y_min": 1.0,
+  "y_ticks": [
+    {
+      "label": "1",
+      "position": 1.0
+    },
+    {
+      "label": "1.087",
+      "position": 1.0875
+    },
+    {
+      "label": "1.175",
+      "position": 1.175
+    },
+    {
+      "label": "1.263",
+      "position": 1.2625000000000002
+    },
+    {
+      "label": "1.35",
+      "position": 1.35
+    }
+  ]
+}

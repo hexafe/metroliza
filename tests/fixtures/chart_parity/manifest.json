@@ -1,0 +1,12 @@
+{
+  "fixture_set": "chart_parity",
+  "fixtures": [
+    "histogram",
+    "distribution_scatter",
+    "distribution_violin",
+    "iqr",
+    "trend"
+  ],
+  "generator": "scripts/generate_chart_parity_fixtures.py",
+  "version": 1
+}

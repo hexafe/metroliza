@@ -1,0 +1,89 @@
+{
+  "annotation_style": {
+    "show_minmax": true,
+    "show_sigma": true
+  },
+  "canvas": {
+    "dpi": 150,
+    "height_px": 540,
+    "width_px": 960
+  },
+  "labels": [
+    "Alpha",
+    "Beta"
+  ],
+  "layout": {
+    "bottom_margin": 0.22,
+    "display_labels": [
+      "Alpha",
+      "Beta"
+    ],
+    "display_positions": [
+      0.0,
+      1.0
+    ],
+    "rotation": 0
+  },
+  "legend": {
+    "items": [
+      {
+        "color": "#0072B2",
+        "kind": "marker",
+        "label": "Mean",
+        "marker": "circle"
+      },
+      {
+        "color": "#D55E00",
+        "kind": "line",
+        "label": "Spec limits"
+      }
+    ]
+  },
+  "lsl": 0.9,
+  "positions": [
+    0.0,
+    1.0
+  ],
+  "render_mode": "violin",
+  "series": [
+    [
+      0.96,
+      1.0,
+      1.05,
+      1.1,
+      1.14
+    ],
+    [
+      1.32,
+      1.37,
+      1.42,
+      1.48,
+      1.55
+    ]
+  ],
+  "title": "Distribution Parity Violin",
+  "type": "distribution",
+  "usl": 1.8,
+  "violin_annotations": [
+    {
+      "maximum": 1.14,
+      "mean": 1.05,
+      "minimum": 0.96,
+      "position": 0.0,
+      "show_sigma_segment": true,
+      "sigma_high": 1.12,
+      "sigma_start": 0.98
+    },
+    {
+      "maximum": 1.55,
+      "mean": 1.43,
+      "minimum": 1.32,
+      "position": 1.0,
+      "show_sigma_segment": true,
+      "sigma_high": 1.5,
+      "sigma_start": 1.36
+    }
+  ],
+  "x_label": "Group",
+  "y_label": "Measurement"
+}

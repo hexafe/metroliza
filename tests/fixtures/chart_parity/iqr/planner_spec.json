@@ -1,0 +1,215 @@
+{
+  "axes": {
+    "grid_axis": "y",
+    "rotation": 0,
+    "x_label": "Group",
+    "x_limits": {
+      "max": 2.5,
+      "min": 0.5
+    },
+    "x_ticks": [
+      {
+        "label": "Alpha",
+        "value": 1.0
+      },
+      {
+        "label": "Beta",
+        "value": 2.0
+      }
+    ],
+    "y_label": "Measurement",
+    "y_limits": {
+      "max": 5.0,
+      "min": 1.0
+    },
+    "y_ticks": [
+      {
+        "label": "1",
+        "value": 1.0
+      },
+      {
+        "label": "2",
+        "value": 2.0
+      },
+      {
+        "label": "3",
+        "value": 3.0
+      },
+      {
+        "label": "4",
+        "value": 4.0
+      },
+      {
+        "label": "5",
+        "value": 5.0
+      }
+    ]
+  },
+  "boxes": [
+    {
+      "median": 1.15,
+      "outliers": [],
+      "position": 1.0,
+      "q1": 1.0750000000000002,
+      "q3": 1.225,
+      "whisker_high": 1.3,
+      "whisker_low": 1.0
+    },
+    {
+      "median": 2.1500000000000004,
+      "outliers": [
+        5.0
+      ],
+      "position": 2.0,
+      "q1": 2.075,
+      "q3": 2.9000000000000004,
+      "whisker_high": 2.2,
+      "whisker_low": 2.0
+    }
+  ],
+  "boxplots": [
+    {
+      "median": 1.15,
+      "outliers": [],
+      "position": 1.0,
+      "q1": 1.0750000000000002,
+      "q3": 1.225,
+      "whisker_high": 1.3,
+      "whisker_low": 1.0
+    },
+    {
+      "median": 2.1500000000000004,
+      "outliers": [
+        5.0
+      ],
+      "position": 2.0,
+      "q1": 2.075,
+      "q3": 2.9000000000000004,
+      "whisker_high": 2.2,
+      "whisker_low": 2.0
+    }
+  ],
+  "canvas": {
+    "dpi": 150,
+    "height_px": 540,
+    "width_px": 960
+  },
+  "chart_type": "iqr",
+  "grid_axis": "y",
+  "legend": {
+    "items": [
+      {
+        "alpha": 0.45,
+        "color": "#0072B2",
+        "fill_color": "#8cb8d9",
+        "kind": "band",
+        "label": "IQR"
+      },
+      {
+        "color": "#E69F00",
+        "kind": "line",
+        "label": "Median"
+      }
+    ],
+    "rect": {
+      "height": 0.05,
+      "width": 0.845,
+      "x": 0.12,
+      "y": 0.905
+    }
+  },
+  "plot_area": {
+    "height": 0.5800000000000001,
+    "width": 0.845,
+    "x": 0.12,
+    "y": 0.22
+  },
+  "reference_bands": [
+    {
+      "alpha": 0.12,
+      "axis": "y",
+      "color": "#6C7A89",
+      "end": 5.2,
+      "start": 0.8
+    }
+  ],
+  "reference_lines": [
+    {
+      "alpha": 0.82,
+      "axis": "y",
+      "color": "#9b1c1c",
+      "dash": null,
+      "value": 0.8,
+      "width": 2.0
+    },
+    {
+      "alpha": 0.82,
+      "axis": "y",
+      "color": "#9b1c1c",
+      "dash": null,
+      "value": 5.2,
+      "width": 2.0
+    },
+    {
+      "alpha": 0.82,
+      "axis": "y",
+      "color": "#9b1c1c",
+      "dash": [
+        8,
+        5
+      ],
+      "value": 2.0,
+      "width": 2.0
+    }
+  ],
+  "title": {
+    "anchor": {
+      "x": 0.12,
+      "y": 0.972
+    },
+    "color": "#0072B2",
+    "font": {
+      "size": 10.0,
+      "weight": "bold"
+    },
+    "text": "IQR Parity"
+  },
+  "x_label": "Group",
+  "x_max": 2.5,
+  "x_min": 0.5,
+  "x_ticks": [
+    {
+      "label": "Alpha",
+      "position": 1.0
+    },
+    {
+      "label": "Beta",
+      "position": 2.0
+    }
+  ],
+  "y_label": "Measurement",
+  "y_max": 5.0,
+  "y_min": 1.0,
+  "y_ticks": [
+    {
+      "label": "1",
+      "position": 1.0
+    },
+    {
+      "label": "2",
+      "position": 2.0
+    },
+    {
+      "label": "3",
+      "position": 3.0
+    },
+    {
+      "label": "4",
+      "position": 4.0
+    },
+    {
+      "label": "5",
+      "position": 5.0
+    }
+  ]
+}

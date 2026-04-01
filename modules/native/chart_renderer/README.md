@@ -16,15 +16,36 @@ IQR/trend payloads are assembled by the summary export path in `modules/export_d
 
 The current native backend uses a payload-driven Pillow compositor behind the
 PyO3 extension surface. It is native in backend selection and packaging terms,
-while intentionally avoiding matplotlib on the export path.
+while the export runtime uses a split model:
+
+- `runtime` decides whether a chart kind may use native rendering.
+- `oracle` means the export path has already resolved matplotlib-derived
+  geometry/spec payloads for parity-sensitive charts.
+- `fast-path` means the compositor can draw from that resolved payload without
+  re-running matplotlib layout.
+
+Histogram currently reaches the native fast-path in the export runtime.
+Distribution, IQR, and trend still use a matplotlib oracle pass before native
+rendering, so their visual parity is strong but their end-to-end export path is
+not yet fully matplotlib-free.
 
 ## Runtime behavior
 
-`modules/chart_renderer.py` controls backend selection using `METROLIZA_CHART_RENDERER_BACKEND`:
+`modules/chart_renderer.py` controls backend selection using `METROLIZA_CHART_RENDERER_BACKEND`
+and `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS`:
 
-- `auto` (default): use native chart rendering when this extension is importable.
-- `native`: require native chart rendering; when unavailable, Python warns and falls back to matplotlib.
+- `auto` (default): use native chart rendering only for chart kinds that are
+  allowlisted in `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` and available from
+  this extension.
+- `native`: prefer native chart rendering for allowlisted chart kinds; when a
+  chart kind is unavailable or not allowlisted, Python warns and falls back to
+  matplotlib.
 - `matplotlib`: force matplotlib rendering for rollback and diagnostics.
+
+This rollout policy applies to the runtime export path. The direct
+`_metroliza_chart_native` compositor entrypoints are still designed to accept
+legacy payloads and may synthesize missing geometry or metadata when invoked
+outside the runtime gate.
 
 ## Build commands
 
