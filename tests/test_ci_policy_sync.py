@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from VersionDate import RELEASE_VERSION, VERSION_DATE
+
 
 CI_WORKFLOW_PATH = Path('.github/workflows/ci.yml')
 CI_POLICY_PATH = Path('docs/ci-policy.md')
@@ -78,10 +80,14 @@ def test_ci_workflow_keeps_native_chart_planner_parity_smoke_step() -> None:
     native_build_distribution = NATIVE_BUILD_DISTRIBUTION_PATH.read_text(encoding='utf-8')
 
     assert 'name: Native chart planner parity smoke' in workflow
+    assert 'name: Export runtime native fast-path contract smoke' in workflow
     assert 'planner_built_resolved_specs_match_checked_in_parity_references' in workflow
     assert 'tests/test_native_chart_parity_fixtures.py' in workflow
+    assert 'tests/test_export_data_thread_group_analysis.py -k runtime_native_fast_path_contract_is_behavioral' in workflow
     assert 'native chart planner/parity smoke checks' in ci_policy
+    assert 'export-runtime fast-path contract smoke for extended summary charts' in ci_policy
     assert 'native chart planner parity smoke passes against the checked-in chart fixtures' in native_build_distribution
+    assert 'export runtime fast-path contract is smoke-validated for the extended summary-sheet chart path' in native_build_distribution
     assert 'distribution scatter, distribution violin, IQR, and trend dispatch' in native_build_distribution
 
 
@@ -123,3 +129,9 @@ def test_release_status_and_runbook_keep_gate_semantics_aligned() -> None:
         'optional manual smoke evidence collection (`packaging-smoke`, `google-conversion-smoke`)'
         in open_testing_runbook
     )
+
+
+def test_release_status_keeps_current_release_line_metadata() -> None:
+    release_status = RELEASE_STATUS_PATH.read_text(encoding='utf-8')
+
+    assert f'`RELEASE_VERSION={RELEASE_VERSION}`, `VERSION_DATE={VERSION_DATE}`' in release_status

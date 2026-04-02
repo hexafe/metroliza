@@ -1752,6 +1752,7 @@ def build_resolved_trend_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
         has_legend=False,
     )
 
+    x_limits = payload.get("x_limits") if isinstance(payload.get("x_limits"), Mapping) else {}
     y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), Mapping) else {}
     y_min = _as_float(y_limits.get("min"))
     y_max = _as_float(y_limits.get("max"))
@@ -1763,15 +1764,19 @@ def build_resolved_trend_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
         y_min -= 0.5
         y_max += 0.5
 
-    x_min = float(np.min(x_values))
-    x_max = float(np.max(x_values))
+    x_min = _as_float(x_limits.get("min"))
+    x_max = _as_float(x_limits.get("max"))
+    if x_min is None:
+        x_min = float(np.min(x_values))
+    if x_max is None:
+        x_max = float(np.max(x_values))
     if math.isclose(x_min, x_max):
         x_max += 1.0
 
     positions = list(layout.get("display_positions") or list(x_values.tolist()))
     axis_layout = _resolve_axis_layout(labels, positions=[float(item) for item in positions], layout=layout)
     x_ticks = list(zip(axis_layout["display_positions"], axis_layout["display_labels"]))
-    y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(float(y_min), float(y_max), count=5)]
+    y_ticks = [(tick, _format_tick(tick)) for tick in _nice_axis_ticks(float(y_min), float(y_max), target_steps=6)]
     reference_lines = [
         _build_reference_line_mapping(
             axis="y",

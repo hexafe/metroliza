@@ -364,6 +364,14 @@ jobs:
             tests/test_chart_render_spec.py -k planner_built_resolved_specs_match_checked_in_parity_references \
             tests/test_native_chart_parity_fixtures.py
 
+      - name: Export runtime native fast-path contract smoke
+        env:
+          METROLIZA_CHART_RENDERER_BACKEND: auto
+          METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS: histogram,distribution,iqr,trend
+        run: |
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_export_data_thread_group_analysis.py -k runtime_native_fast_path_contract_is_behavioral
+
       - name: Parser parity tests (native enabled)
         run: PYTHONPATH=. python -m pytest tests/test_cmm_parser_parity.py -q
 

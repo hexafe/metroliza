@@ -16,7 +16,7 @@ import pandas as pd
 from pathlib import Path
 
 from modules.db import execute_with_retry  # noqa: E402
-from modules.chart_render_spec import build_resolved_distribution_spec, build_resolved_iqr_spec  # noqa: E402
+from modules.chart_render_spec import build_resolved_distribution_spec, build_resolved_iqr_spec, build_resolved_trend_spec  # noqa: E402
 
 
 qtcore_stub = sys.modules.get('PyQt6.QtCore') or types.ModuleType('PyQt6.QtCore')
@@ -357,23 +357,23 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         self.assertTrue(thread.get_export_backend().run(thread))
         return out_path
 
-    def test_summary_sheet_extended_charts_keep_native_fast_paths_for_distribution_and_iqr(self):
+    def test_summary_sheet_extended_charts_keep_native_fast_paths_for_distribution_iqr_and_trend(self):
         module_source = inspect.getsource(export_data_thread_module)
 
         self.assertIn('distribution_backend_native', module_source)
         self.assertIn('iqr_backend_native', module_source)
-        self.assertNotIn('trend_backend_native', module_source)
+        self.assertIn('trend_backend_native', module_source)
         self.assertIn('build_resolved_distribution_spec', module_source)
         self.assertIn('build_resolved_iqr_spec', module_source)
-        self.assertNotIn('build_resolved_trend_spec', module_source)
+        self.assertIn('build_resolved_trend_spec', module_source)
 
         self.assertIn('extract_distribution_geometry(', module_source)
         self.assertIn('extract_iqr_geometry(', module_source)
-        self.assertIn('extract_trend_geometry(', module_source)
+        self.assertNotIn('extract_trend_geometry(', module_source)
 
         self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='distribution'")
         self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='iqr'")
-        self.assertRegex(module_source, r"_save_summary_chart\(\s*fig,\s*chart_type='trend'")
+        self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='trend'")
 
     def test_summary_sheet_extended_charts_runtime_native_fast_path_contract_is_behavioral(self):
         # Valid 1x1 PNG used to bypass renderer internals while testing branch behavior.
@@ -397,6 +397,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             tempfile.TemporaryDirectory() as temp_dir,
             patch.object(export_data_thread_module, 'resolve_distribution_renderer_backend', return_value='native'),
             patch.object(export_data_thread_module, 'resolve_iqr_renderer_backend', return_value='native'),
+            patch.object(export_data_thread_module, 'resolve_trend_renderer_backend', return_value='native'),
             patch.object(
                 ExportDataThread,
                 '_summary_chart_required',
@@ -418,8 +419,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
 
         self.assertIsNone(distribution_call['fig'])
         self.assertIsNone(iqr_call['fig'])
-        self.assertIsNotNone(trend_call['fig'])
-        self.assertTrue(hasattr(trend_call['fig'], 'get_figwidth'))
+        self.assertIsNone(trend_call['fig'])
 
         distribution_payload = distribution_call['native_payload']
         self.assertIsInstance(distribution_payload, dict)
@@ -441,7 +441,9 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         self.assertIsInstance(trend_payload, dict)
         trend_spec = trend_payload.get('resolved_render_spec')
         self.assertIsInstance(trend_spec, dict)
-        self.assertEqual('matplotlib_finalized', trend_spec.get('source'))
+        trend_payload_input = copy.deepcopy(trend_payload)
+        trend_payload_input.pop('resolved_render_spec', None)
+        self.assertEqual(build_resolved_trend_spec(trend_payload_input), trend_spec)
 
     def test_off_mode_emits_no_group_analysis_sheets(self):
         with tempfile.TemporaryDirectory() as temp_dir:

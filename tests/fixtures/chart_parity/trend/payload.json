@@ -15,7 +15,7 @@
     "S4"
   ],
   "layout": {
-    "bottom_margin": 0.24,
+    "bottom_margin": 0.22,
     "display_labels": [
       "S1",
       "S2",
@@ -33,6 +33,10 @@
   "title": "Trend Parity",
   "type": "trend",
   "x_label": "Sample #",
+  "x_limits": {
+    "max": 3.15,
+    "min": -0.15000000000000002
+  },
   "x_values": [
     0.0,
     1.0,
@@ -40,6 +44,10 @@
     3.0
   ],
   "y_label": "Measurement",
+  "y_limits": {
+    "max": 1.4249999999999998,
+    "min": 0.875
+  },
   "y_values": [
     1.0,
     1.2,

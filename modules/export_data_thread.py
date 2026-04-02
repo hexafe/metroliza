@@ -65,6 +65,7 @@ from modules.export_logging_service import (
 from modules.export_summary_utils import (
     apply_shared_x_axis_label_strategy as _apply_shared_x_axis_label_strategy,
     prepare_categorical_x_axis as _prepare_categorical_x_axis,
+    resolve_shared_x_axis_label_layout as _resolve_shared_x_axis_label_layout,
     resolve_extended_chart_fig_width as _resolve_extended_chart_fig_width,
     build_histogram_density_curve_payload as _build_histogram_density_curve_payload,
     build_sparse_unique_labels as _build_sparse_unique_labels,
@@ -204,14 +205,16 @@ from modules.chart_renderer import (
     resolve_chart_renderer_backend,
     resolve_distribution_renderer_backend,
     resolve_iqr_renderer_backend,
+    resolve_trend_renderer_backend,
 )
 from modules.matplotlib_distribution_geometry import extract_distribution_geometry
-from modules.matplotlib_iqr_trend_geometry import extract_iqr_geometry, extract_trend_geometry
+from modules.matplotlib_iqr_trend_geometry import extract_iqr_geometry
 from modules.chart_render_spec import (
     build_resolved_distribution_spec,
     build_histogram_mean_line_style as _build_histogram_mean_line_style_contract,
     build_resolved_iqr_spec,
     build_resolved_histogram_spec,
+    build_resolved_trend_spec,
     build_wrapped_chart_title as _build_wrapped_chart_title_contract,
     histogram_spec_to_mapping,
     resolve_histogram_x_view as _resolve_histogram_x_view_contract,
@@ -252,6 +255,12 @@ def _native_extended_iqr_export_available() -> bool:
     """Return whether extended IQR export should use the native renderer."""
 
     return resolve_iqr_renderer_backend() == 'native'
+
+
+def _native_extended_trend_export_available() -> bool:
+    """Return whether extended trend export should use the native renderer."""
+
+    return resolve_trend_renderer_backend() == 'native'
 
 
 _INTERNAL_GROUP_ANALYSIS_DIAGNOSTICS_ENV_VAR = 'METROLIZA_EXPORT_GROUP_ANALYSIS_DIAGNOSTICS'
@@ -6055,6 +6064,7 @@ class ExportDataThread(QThread):
                     data_x = trend_payload['x']
                     data_y = trend_payload['y']
                     unique_labels = trend_payload['labels']
+                    trend_backend_native = _native_extended_trend_export_available()
 
                     trend_label_count = len(unique_labels)
                     trend_figure_width = 6
@@ -6062,36 +6072,51 @@ class ExportDataThread(QThread):
                         trend_figure_width = 8
                     if trend_label_count > 40:
                         trend_figure_width = 10
-
-                    # Trend parity uses the finalized matplotlib figure as the
-                    # layout oracle for both backends.
-                    apply_summary_plot_theme()
-                    fig, ax = plt.subplots(figsize=(trend_figure_width, 4))
-                    ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
-                    for line_spec in build_horizontal_limit_line_specs(USL, LSL):
-                        ax.axhline(**line_spec)
-
-                    ax.set_xlabel(distribution_x_axis_label)
-                    ax.set_ylabel('Measurement')
-                    ax.set_title(build_wrapped_chart_title(header), pad=20)
-                    apply_minimal_axis_style(ax, grid_axis='y')
-                    apply_shared_x_axis_label_strategy(
-                        ax,
+                    trend_layout = _resolve_shared_x_axis_label_layout(
                         unique_labels,
                         positions=data_x,
                         force_sparse=force_sparse_x_labels,
                         allow_thinning=bool(force_sparse_x_labels or trend_label_count > 24),
+                    ) or {
+                        'rotation': 0,
+                        'display_positions': [float(value) for value in data_x],
+                        'display_labels': [str(label) for label in unique_labels],
+                        'recommended_fig_width': float(trend_figure_width),
+                        'bottom_margin': 0.16,
+                    }
+                    trend_figure_width = max(
+                        trend_figure_width,
+                        float(trend_layout.get('recommended_fig_width') or trend_figure_width),
                     )
-
-                    current_y_limits = ax.get_ylim()
-                    y_min, y_max = compute_scaled_y_limits(current_y_limits, self.summary_plot_scale)
-                    ax.set_ylim(y_min, y_max)
+                    trend_title = build_wrapped_chart_title(header)
+                    trend_canvas = {
+                        'width_px': int(round(float(trend_figure_width) * 150.0)),
+                        'height_px': 600,
+                        'dpi': 150,
+                    }
+                    trend_x_values = np.asarray(data_x, dtype=float)
+                    trend_x_min = float(np.min(trend_x_values))
+                    trend_x_max = float(np.max(trend_x_values))
+                    if math.isclose(trend_x_min, trend_x_max):
+                        baseline_x_limits = (trend_x_min - 0.5, trend_x_max + 0.5)
+                    else:
+                        baseline_x_padding = max((trend_x_max - trend_x_min) * 0.05, 1e-9)
+                        baseline_x_limits = (
+                            trend_x_min - baseline_x_padding,
+                            trend_x_max + baseline_x_padding,
+                        )
+                    trend_y_values = np.asarray(data_y, dtype=float)
+                    trend_y_limits = _resolve_native_y_limits(
+                        trend_y_values,
+                        scale_factor=self.summary_plot_scale,
+                        extra_values=[USL, LSL],
+                    )
                     trend_native_payload = {
                         'type': 'trend',
-                        'x_values': [float(value) for value in data_x],
-                        'y_values': [float(value) for value in data_y],
+                        'x_values': trend_x_values.tolist(),
+                        'y_values': trend_y_values.tolist(),
                         'labels': [str(label) for label in unique_labels],
-                        'title': build_wrapped_chart_title(header),
+                        'title': trend_title,
                         'x_label': distribution_x_axis_label,
                         'y_label': 'Measurement',
                         'horizontal_limits': [
@@ -6099,24 +6124,61 @@ class ExportDataThread(QThread):
                             for value in (USL, LSL)
                             if value is not None
                         ],
+                        'canvas': trend_canvas,
+                        'layout': {
+                            'rotation': int(trend_layout.get('rotation') or 0),
+                            'display_positions': [float(value) for value in list(trend_layout.get('display_positions') or [])],
+                            'display_labels': [str(label) for label in list(trend_layout.get('display_labels') or [])],
+                            'bottom_margin': float(trend_layout.get('bottom_margin') or 0.16),
+                            'recommended_fig_width': float(trend_figure_width),
+                        },
+                        'x_limits': {'min': float(baseline_x_limits[0]), 'max': float(baseline_x_limits[1])},
+                        'y_limits': trend_y_limits,
                     }
-                    trend_native_payload['resolved_render_spec'] = extract_trend_geometry(
-                        fig,
-                        ax,
-                        payload=trend_native_payload,
-                    )
+                    trend_native_payload['resolved_render_spec'] = build_resolved_trend_spec(trend_native_payload)
+                    if trend_backend_native:
+                        trend_render_result = self._save_summary_chart(
+                            None,
+                            chart_type='trend',
+                            native_payload=trend_native_payload,
+                        )
+                        image_data = self._register_chart_image(trend_render_result.png_bytes)
+                        trend_slot = _reserve_summary_image_slot('trend', trend_canvas)
+                        if self._check_canceled():
+                            return
+                    else:
+                        apply_summary_plot_theme()
+                        fig, ax = plt.subplots(figsize=(trend_figure_width, 4))
+                        ax.scatter(data_x, data_y, color=SUMMARY_PLOT_PALETTE['distribution_foreground'], marker='.', s=20)
+                        for line_spec in build_horizontal_limit_line_specs(USL, LSL):
+                            ax.axhline(**line_spec)
 
-                    trend_render_result = self._save_summary_chart(
-                        fig,
-                        chart_type='trend',
-                        native_payload=trend_native_payload,
-                    )
-                    image_data = self._register_chart_image(trend_render_result.png_bytes)
-                    trend_slot = _reserve_summary_image_slot('trend', fig)
-                    if self._check_canceled():
+                        ax.set_xlabel(distribution_x_axis_label)
+                        ax.set_ylabel('Measurement')
+                        ax.set_title(trend_title, pad=20)
+                        apply_minimal_axis_style(ax, grid_axis='y')
+                        apply_shared_x_axis_label_strategy(
+                            ax,
+                            unique_labels,
+                            positions=data_x,
+                            force_sparse=force_sparse_x_labels,
+                            allow_thinning=bool(force_sparse_x_labels or trend_label_count > 24),
+                        )
+                        ax.set_ylim(
+                            float(trend_y_limits['min']),
+                            float(trend_y_limits['max']),
+                        )
+                        trend_render_result = self._save_summary_chart(
+                            fig,
+                            chart_type='trend',
+                            native_payload=trend_native_payload,
+                        )
+                        image_data = self._register_chart_image(trend_render_result.png_bytes)
+                        trend_slot = _reserve_summary_image_slot('trend', fig)
+                        if self._check_canceled():
+                            plt.close(fig)
+                            return
                         plt.close(fig)
-                        return
-                    plt.close(fig)
 
                     self._record_chart_render_timing('trend', time.perf_counter() - chart_start, backend=trend_render_result.backend)
                     write_start = time.perf_counter()

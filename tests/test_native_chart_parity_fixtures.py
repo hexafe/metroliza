@@ -59,7 +59,7 @@ def _fixture_payload(fixture_name: str) -> dict:
     elif fixture_name == "iqr":
         payload["resolved_render_spec"] = build_resolved_iqr_spec(payload)
     elif fixture_name == "trend":
-        payload["resolved_render_spec"] = _read_json(FIXTURE_ROOT / fixture_name / "matplotlib_oracle_geometry.json")
+        payload["resolved_render_spec"] = build_resolved_trend_spec(payload)
     else:
         raise ValueError(f"Unsupported fixture: {fixture_name}")
     return payload

@@ -115,8 +115,8 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 - The optional HTML dashboard sidecar reuses the same export chart payloads and rendered PNGs, but it remains a separate Python-side export artifact rather than part of the native chart extension.
 - If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
 - `auto` uses native only when the extension is present and the chart kind is allowlisted for rollout; otherwise it defaults to matplotlib.
-- CI's native-artifacts job now runs `tests/test_native_chart_renderer_smoke.py` against the compiled wheel so histogram, distribution, IQR, and trend all prove native dispatch when finalized geometry is present.
-- In the export runtime, histogram, distribution, and IQR now use planner-driven resolved specs on the native fast-path. Trend still uses a matplotlib-oracle resolved payload for parity.
+- CI's native-artifacts job now runs `tests/test_native_chart_renderer_smoke.py` against the compiled wheel so histogram, distribution, IQR, and trend all prove native dispatch with planner-built resolved specs attached, and it also runs a focused export-runtime fast-path contract smoke for the extended summary-sheet charts.
+- In the export runtime, histogram, distribution, IQR, and trend now use planner-driven resolved specs on the native fast-path.
 - On Python `3.14`, local chart-renderer builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
 
 ### Distribution fit (`modules/distribution_fit_native.py`)
@@ -238,5 +238,6 @@ The native-artifacts CI job must validate all of the following:
 5. native chart planner parity smoke passes against the checked-in chart fixtures:
    - live planner builders match `tests/fixtures/chart_parity/*/planner_spec.json`,
    - native chart rendering stays within the configured image-diff thresholds against the checked-in matplotlib references,
-   - the compiled-wheel smoke covers histogram, distribution scatter, distribution violin, IQR, and trend dispatch.
+   - the compiled-wheel smoke covers histogram, distribution scatter, distribution violin, IQR, and trend dispatch,
+   - the export runtime fast-path contract is smoke-validated for the extended summary-sheet chart path.
 6. parser parity tests pass when native backend is available.

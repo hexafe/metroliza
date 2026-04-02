@@ -13,12 +13,12 @@ Each fixture directory contains:
 - `payload.json`: chart payload input.
 - `planner_spec.json`: checked-in resolved spec built from the live planner in `modules/chart_render_spec.py`.
 - `matplotlib_reference.png`: canonical matplotlib image artifact.
-- `matplotlib_oracle_geometry.json`: finalized matplotlib geometry extraction when that oracle payload is still retained for runtime/reference use.
+- `matplotlib_oracle_geometry.json`: finalized matplotlib geometry extraction when a historical/reference oracle payload is still retained alongside the fixture.
 
 Current runtime/parity split:
 
-- Histogram, distribution, and IQR build their resolved specs directly from the planner helpers and compare those live planner outputs against `planner_spec.json`.
-- Trend still retains a checked-in matplotlib-oracle geometry payload for runtime parity while also keeping `planner_spec.json` under fixture control.
+- Histogram, distribution, IQR, and trend build their resolved specs directly from the planner helpers and compare those live planner outputs against `planner_spec.json`.
+- `matplotlib_oracle_geometry.json` is retained only as historical/reference parity evidence for fixture sets that still include it; runtime fast-path behavior now follows the planner-built resolved specs for all four chart types.
 
 ## Regeneration
 

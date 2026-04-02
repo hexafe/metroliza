@@ -489,21 +489,32 @@ def _build_iqr_figure(payload: dict[str, Any]) -> tuple[plt.Figure, plt.Axes]:
 
 
 def _trend_payload() -> dict[str, Any]:
+    x_values = [0.0, 1.0, 2.0, 3.0]
+    y_values = [1.0, 1.2, 1.1, 1.35]
+    horizontal_limits = [0.9, 1.4]
+    x_min = min(x_values)
+    x_max = max(x_values)
+    x_padding = (x_max - x_min) * 0.05
+    y_min = min(y_values + horizontal_limits)
+    y_max = max(y_values + horizontal_limits)
+    y_padding = (y_max - y_min) * 0.05
     return {
         "type": "trend",
-        "x_values": [0.0, 1.0, 2.0, 3.0],
-        "y_values": [1.0, 1.2, 1.1, 1.35],
+        "x_values": x_values,
+        "y_values": y_values,
         "labels": ["S1", "S2", "S3", "S4"],
         "title": "Trend Parity",
         "x_label": "Sample #",
         "y_label": "Measurement",
-        "horizontal_limits": [0.9, 1.4],
+        "horizontal_limits": horizontal_limits,
         "layout": {
             "rotation": 0,
             "display_positions": [0.0, 1.0, 2.0, 3.0],
             "display_labels": ["S1", "S2", "S3", "S4"],
-            "bottom_margin": 0.24,
+            "bottom_margin": 0.22,
         },
+        "x_limits": {"min": x_min - x_padding, "max": x_max + x_padding},
+        "y_limits": {"min": y_min - y_padding, "max": y_max + y_padding},
         "canvas": {"width_px": 960, "height_px": 540, "dpi": DEFAULT_DPI},
     }
 
@@ -528,6 +539,13 @@ def _build_trend_figure(payload: dict[str, Any]) -> tuple[plt.Figure, plt.Axes]:
     if display_positions and display_labels and len(display_positions) == len(display_labels):
         ax.set_xticks(display_positions)
         ax.set_xticklabels(display_labels, rotation=int(layout.get("rotation") or 0))
+
+    x_limits = payload.get("x_limits") if isinstance(payload.get("x_limits"), Mapping) else {}
+    y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), Mapping) else {}
+    if "min" in x_limits and "max" in x_limits:
+        ax.set_xlim(float(x_limits["min"]), float(x_limits["max"]))
+    if "min" in y_limits and "max" in y_limits:
+        ax.set_ylim(float(y_limits["min"]), float(y_limits["max"]))
 
     ax.set_xlabel(str(payload.get("x_label") or "Sample #"))
     ax.set_ylabel(str(payload.get("y_label") or "Measurement"))
@@ -651,6 +669,19 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _clean_output_dir(output_dir: Path) -> None:
+    """Remove generated fixture artifacts while preserving static root docs."""
+    if not output_dir.exists():
+        return
+    for path in output_dir.iterdir():
+        if path.name == "README.md":
+            continue
+        if path.is_dir():
+            shutil.rmtree(path)
+            continue
+        path.unlink()
+
+
 def main() -> int:
     args = _parse_args()
     _configure_matplotlib()
@@ -658,7 +689,7 @@ def main() -> int:
 
     output_dir = Path(args.output_dir).resolve()
     if args.clean and output_dir.exists():
-        shutil.rmtree(output_dir)
+        _clean_output_dir(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     _generate_histogram_fixture(output_dir)

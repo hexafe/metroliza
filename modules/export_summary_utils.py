@@ -262,8 +262,7 @@ def build_histogram_density_curve_payload(measurements, point_count=100, *, mode
     )
 
 
-def apply_shared_x_axis_label_strategy(
-    ax,
+def resolve_shared_x_axis_label_layout(
     labels,
     *,
     positions=None,
@@ -271,17 +270,13 @@ def apply_shared_x_axis_label_strategy(
     max_label_chars=18,
     thinning_threshold=24,
     target_tick_count=16,
-    tick_padding=6,
     force_sparse=False,
     allow_thinning=True,
 ):
-    """Apply a consistent categorical x-axis strategy and return layout metadata."""
-    if ax is None:
-        return
-
+    """Return shared categorical x-axis layout metadata without mutating an axis."""
     safe_labels = [str(label) if label is not None else '' for label in labels]
     if not safe_labels:
-        return
+        return None
 
     if positions is None:
         positions = list(range(len(safe_labels)))
@@ -319,24 +314,64 @@ def apply_shared_x_axis_label_strategy(
 
     display_positions = [positions[idx] for idx in indices]
     display_text = [display_labels[idx] for idx in indices]
-    horizontal_alignment = 'center' if rotation == 0 else 'right'
-
-    ax.set_xticks(display_positions)
-    ax.set_xticklabels(display_text)
-    for tick in ax.get_xticklabels():
-        tick.set_rotation(rotation)
-        tick.set_horizontalalignment(horizontal_alignment)
-        tick.set_rotation_mode('anchor')
-
-    ax.tick_params(axis='x', pad=max(tick_padding, strategy['tick_padding']))
 
     return {
         'rotation': rotation,
-        'ha': horizontal_alignment,
+        'ha': 'center' if rotation == 0 else 'right',
         'display_labels': display_text,
         'display_positions': display_positions,
         'recommended_fig_width': strategy['recommended_fig_width'],
         'bottom_margin': strategy['bottom_margin'],
+        'tick_padding': max(6, strategy['tick_padding']),
+    }
+
+
+def apply_shared_x_axis_label_strategy(
+    ax,
+    labels,
+    *,
+    positions=None,
+    truncate_labels=True,
+    max_label_chars=18,
+    thinning_threshold=24,
+    target_tick_count=16,
+    tick_padding=6,
+    force_sparse=False,
+    allow_thinning=True,
+):
+    """Apply a consistent categorical x-axis strategy and return layout metadata."""
+    if ax is None:
+        return
+
+    layout = resolve_shared_x_axis_label_layout(
+        labels,
+        positions=positions,
+        truncate_labels=truncate_labels,
+        max_label_chars=max_label_chars,
+        thinning_threshold=thinning_threshold,
+        target_tick_count=target_tick_count,
+        force_sparse=force_sparse,
+        allow_thinning=allow_thinning,
+    )
+    if layout is None:
+        return
+
+    ax.set_xticks(layout['display_positions'])
+    ax.set_xticklabels(layout['display_labels'])
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(layout['rotation'])
+        tick.set_horizontalalignment(layout['ha'])
+        tick.set_rotation_mode('anchor')
+
+    ax.tick_params(axis='x', pad=max(tick_padding, layout['tick_padding']))
+
+    return {
+        'rotation': layout['rotation'],
+        'ha': layout['ha'],
+        'display_labels': layout['display_labels'],
+        'display_positions': layout['display_positions'],
+        'recommended_fig_width': layout['recommended_fig_width'],
+        'bottom_margin': layout['bottom_margin'],
     }
 
 

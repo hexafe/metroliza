@@ -24,10 +24,8 @@ while the export runtime uses a split model:
 - `fast-path` means the compositor can draw from that resolved payload without
   re-running matplotlib layout.
 
-Histogram, distribution, and IQR reach the native fast-path in the
-export runtime when rollout/native availability allow them. Trend still uses a
-matplotlib oracle pass before native rendering, so its visual parity is strong
-but its end-to-end export path is not yet fully matplotlib-free.
+Histogram, distribution, IQR, and trend reach the native fast-path in the
+export runtime when rollout/native availability allow them.
 
 ## Runtime behavior
 

@@ -297,6 +297,7 @@ def test_build_resolved_trend_spec_contains_points_ticks_and_limit_lines():
         "x_label": "Sample #",
         "y_label": "Measurement",
         "horizontal_limits": [0.9, 1.4],
+        "x_limits": {"min": -0.25, "max": 3.25},
         "layout": {"rotation": 45, "display_positions": [0.0, 2.0, 3.0], "display_labels": ["S1", "S3", "S4"], "bottom_margin": 0.26},
         "canvas": {"width_px": 900, "height_px": 500, "dpi": 150},
     }
@@ -308,6 +309,8 @@ def test_build_resolved_trend_spec_contains_points_ticks_and_limit_lines():
     assert spec["title"]["text"] == "Trend Title"
     assert spec["title"]["anchor"]["x"] == pytest.approx(0.55)
     assert spec["title"]["ha"] == "center"
+    assert spec["x_min"] == pytest.approx(-0.25)
+    assert spec["x_max"] == pytest.approx(3.25)
     assert spec["axes"]["rotation"] == 45
     assert [tick["label"] for tick in spec["axes"]["x_ticks"]] == ["S1", "S3", "S4"]
     assert len(spec["reference_lines"]) == 2

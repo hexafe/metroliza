@@ -12,6 +12,7 @@ from modules.export_summary_utils import (
     build_histogram_density_curve_payload,
     compute_measurement_summary,
     compute_estimated_tail_metrics,
+    resolve_shared_x_axis_label_layout,
     resolve_nominal_and_limits,
 )
 
@@ -122,6 +123,22 @@ class TestExportSummaryUtils(unittest.TestCase):
             self.assertEqual(int(rendered[0].get_rotation()), 90)
         finally:
             plt.close(fig)
+
+    def test_resolve_shared_x_axis_label_layout_matches_sparse_tick_contract(self):
+        labels = [f'Label-{index:02d}' for index in range(30)]
+        positions = list(range(len(labels)))
+
+        layout = resolve_shared_x_axis_label_layout(
+            labels,
+            positions=positions,
+            thinning_threshold=10,
+            target_tick_count=5,
+            force_sparse=True,
+        )
+
+        self.assertIsInstance(layout, dict)
+        self.assertEqual(layout['display_positions'], [0, 6, 12, 18, 24, 29])
+        self.assertEqual(len(layout['display_labels']), len(layout['display_positions']))
 
 
 if __name__ == '__main__':
