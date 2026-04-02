@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable, Type
 
 from modules.cmm_report_parser import CMMReportParser
+from modules import parser_plugin_paths
 from modules.parser_plugin_contracts import (
     BaseReportParserPlugin,
     PluginManifest,
@@ -57,7 +58,7 @@ PARSER_DETECTORS: dict[str, DetectorType] = {}
 PROBE_RESULT_CACHE: dict[tuple[str, str], ProbeResult] = {}
 
 _EXTERNAL_PLUGINS_LOADED = False
-_EXTERNAL_PLUGIN_CONFIG_SIGNATURE: tuple[str, tuple[str, ...]] | None = None
+_EXTERNAL_PLUGIN_CONFIG_SIGNATURE: tuple[tuple[str, ...], tuple[str, ...]] | None = None
 _EXTERNAL_PLUGIN_ENTRY_POINTS: tuple[object, ...] | None = None
 _EXTERNAL_PLUGIN_MODULE_COUNTER = 0
 
@@ -217,8 +218,9 @@ def load_external_plugins(
 ) -> ExternalPluginLoadResult:
     """Load external parser plugins from python files/directories.
 
-    Source can be supplied explicitly or via ``PARSER_EXTERNAL_PLUGIN_PATHS`` where
-    entries are separated by ``os.pathsep``.
+    Source can be supplied explicitly, via the default drop-in directory under the
+    user's Metroliza home, or via ``PARSER_EXTERNAL_PLUGIN_PATHS`` where entries
+    are separated by ``os.pathsep``.
     """
 
     loaded_plugin_ids: list[str] = []
@@ -228,10 +230,9 @@ def load_external_plugins(
     errors: list[str] = []
 
     if paths is None:
-        raw_paths = os.getenv("PARSER_EXTERNAL_PLUGIN_PATHS", "")
-        path_entries = [entry.strip() for entry in raw_paths.split(os.pathsep) if entry.strip()]
+        path_entries = list(parser_plugin_paths.configured_external_plugin_path_entries())
     elif isinstance(paths, str):
-        path_entries = [entry.strip() for entry in paths.split(os.pathsep) if entry.strip()]
+        path_entries = list(parser_plugin_paths.split_external_plugin_paths(paths))
     else:
         path_entries = [entry for entry in paths if entry]
 
@@ -298,20 +299,20 @@ def load_external_plugins(
 def _ensure_external_plugins_loaded_once() -> None:
     global _EXTERNAL_PLUGINS_LOADED, _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
 
-    path_config = os.getenv("PARSER_EXTERNAL_PLUGIN_PATHS", "").strip()
+    path_entries = parser_plugin_paths.configured_external_plugin_path_entries()
     if _EXTERNAL_PLUGINS_LOADED and _EXTERNAL_PLUGIN_CONFIG_SIGNATURE is not None:
-        loaded_path_config, _loaded_entry_point_names = _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
-        if loaded_path_config == path_config:
+        loaded_path_entries, _loaded_entry_point_names = _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+        if loaded_path_entries == path_entries:
             return
 
     entry_points = _discover_external_plugin_entry_points(force_refresh=not _EXTERNAL_PLUGINS_LOADED)
     entry_point_names = tuple(entry_point.name for entry_point in entry_points)
-    config_signature = (path_config, entry_point_names)
+    config_signature = (path_entries, entry_point_names)
 
     if _EXTERNAL_PLUGINS_LOADED and _EXTERNAL_PLUGIN_CONFIG_SIGNATURE == config_signature:
         return
 
-    has_path_config = bool(path_config)
+    has_path_config = bool(path_entries)
     has_entry_points = bool(entry_point_names)
 
     # No-op only when neither file-based paths nor package entry points are available.

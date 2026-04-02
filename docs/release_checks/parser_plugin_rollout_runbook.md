@@ -3,10 +3,17 @@
 ## Purpose
 Operational checklist for enabling parser-plugin updates (including LLM-assisted candidates) with clear ownership and rollback controls.
 
+Active operator docs:
+
+- [`../parser_plugins/README.md`](../parser_plugins/README.md)
+- [`../parser_plugins/non_technical_workflow.md`](../parser_plugins/non_technical_workflow.md)
+- [`../parser_plugins/llm_plugin_specification.md`](../parser_plugins/llm_plugin_specification.md)
+
 ## PR governance checklist
 Use this checklist on parser plugin PRs before merge:
 
 - [ ] Plugin owner and backup owner are listed in the PR description.
+- [ ] Workspace and sample pack were prepared with `python scripts/create_parser_plugin_workspace.py ...` or an equivalent documented packet.
 - [ ] Plugin manifest versioning decision is documented (`patch`/`minor`/`major`).
 - [ ] `python scripts/validate_parser_plugins.py` output is attached.
 - [ ] If validation failed during development, repair-loop artifact (`scripts/build_parser_plugin_repair_prompt.py`) is attached or linked.
@@ -26,6 +33,14 @@ Use this checklist on parser plugin PRs before merge:
    - Compare unresolved field counts to baseline.
 4. **Broad rollout**
    - Record final sign-off and promotion timestamp.
+
+## Installation note
+
+Validated end-user parser plugins are installed by copying the final plugin file into:
+
+`~/.metroliza/parser_plugins/`
+
+Metroliza auto-discovers plugins from that folder on the next process start.
 
 ## Rollback steps
 

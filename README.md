@@ -91,9 +91,12 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 
 ## Parser plugin resolver controls
 
+- End-user drop-in folder: Metroliza automatically discovers parser plugins placed in `~/.metroliza/parser_plugins/`.
 - Default selection accepts parser probes with confidence `>=1` and resolves ties by confidence, plugin priority, then plugin id.
 - Optional strict selection: set `PARSER_STRICT_MATCHING=true` to require confidence `>=80`.
 - Probe results are cached per plugin/path during process runtime to reduce repeated probe work in batch parses.
+- Advanced override: `PARSER_EXTERNAL_PLUGIN_PATHS` can point to extra plugin files or directories.
+- Active parser plugin onboarding docs live under [`docs/parser_plugins/README.md`](docs/parser_plugins/README.md).
 
 ## Group Analysis
 
@@ -190,6 +193,7 @@ Examples of metric availability by spec type:
 - Docs policy and lifecycle: [`docs/documentation_policy.md`](docs/documentation_policy.md)
 - Release runbooks/checklists: [`docs/release_checks/`](docs/release_checks/)
 - Google conversion smoke runbook: [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md)
+- Parser plugin generation and onboarding: [`docs/parser_plugins/README.md`](docs/parser_plugins/README.md)
 - Historical plans and retired docs: [`docs/archive/`](docs/archive/)
 
 ## Release metadata

@@ -111,3 +111,4 @@ Use this quick checklist when opening or reviewing PRs:
 When a PR touches parser plugin contracts/registry/plugins, also complete the governance checklist in:
 
 - [`docs/release_checks/parser_plugin_rollout_runbook.md`](./release_checks/parser_plugin_rollout_runbook.md)
+- [`docs/parser_plugins/README.md`](./parser_plugins/README.md)

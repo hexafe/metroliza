@@ -30,6 +30,7 @@ sys.modules.pop("modules.cmm_report_parser", None)
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
 contracts_module = importlib.import_module("modules.parser_plugin_contracts")
+parser_plugin_paths_module = importlib.import_module("modules.parser_plugin_paths")
 
 
 CMMReportParser = importlib.import_module("modules.cmm_report_parser").CMMReportParser
@@ -532,6 +533,87 @@ def test_load_external_plugins_reports_skipped_paths_for_missing_input(tmp_path)
 
     result = load_external_plugins(missing_path)
     assert missing_path in result.skipped_paths
+
+
+def test_resolver_loads_plugins_from_default_drop_in_directory(monkeypatch, tmp_path):
+    plugin_dir = tmp_path / "parser_plugins"
+    plugin_dir.mkdir()
+    plugin_file = plugin_dir / "dropin_supplier.py"
+    plugin_file.write_text(
+        """
+from modules.base_report_parser import BaseReportParser
+from modules.parser_plugin_contracts import BaseReportParserPlugin, PluginManifest, ProbeResult
+
+class DropInSupplierParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id="dropin_supplier",
+        display_name="Drop-In Supplier",
+        version="1.0.0",
+        supported_formats=("pdf",),
+        priority=1000,
+    )
+
+    @classmethod
+    def probe(cls, _input_ref, _context):
+        return ProbeResult(plugin_id="dropin_supplier", can_parse=True, confidence=101)
+
+    def open_report(self):
+        self.raw_text = ["ok"]
+
+    def split_text_to_blocks(self):
+        self.blocks_text = []
+
+    def parse_to_v2(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def to_legacy_blocks(_parse_result_v2):
+        return []
+"""
+    )
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    original_loaded = factory_module._EXTERNAL_PLUGINS_LOADED
+    original_signature = factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    original_entry_points = factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS
+    original_env = os.environ.get("PARSER_EXTERNAL_PLUGIN_PATHS")
+    try:
+        monkeypatch.setattr(
+            parser_plugin_paths_module,
+            "configured_external_plugin_path_entries",
+            lambda raw_paths=None, include_default_dir=True, home=None: (str(plugin_dir),),
+        )
+        os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+        factory_module._EXTERNAL_PLUGINS_LOADED = False
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = None
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = None
+        reset_probe_cache()
+        _restore_real_cmm_registration()
+
+        diagnostics = resolve_parser_with_diagnostics(tmp_path / "dropin_report.pdf")
+
+        assert diagnostics.selected is not None
+        assert diagnostics.selected.plugin_id == "dropin_supplier"
+        assert "dropin_supplier" in PARSER_MAP
+    finally:
+        if original_env is None:
+            os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+        else:
+            os.environ["PARSER_EXTERNAL_PLUGIN_PATHS"] = original_env
+        factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = original_entry_points
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
 
 
 def test_resolver_reloads_external_plugins_when_path_config_changes(tmp_path):

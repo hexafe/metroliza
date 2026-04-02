@@ -38,6 +38,17 @@ jobs:
       - name: Compile check
         run: python -m compileall -x '^\./\.git/' .
 
+      - name: Parser plugin workspace smoke
+        run: |
+          workspace="artifacts/parser_plugin_workspace_ci"
+          PYTHONPATH=. python scripts/create_parser_plugin_workspace.py \
+            --plugin-id ci_smoke \
+            --source-format pdf \
+            --output-dir "${workspace}"
+          PYTHONPATH=. python scripts/validate_parser_plugins.py \
+            --paths "${workspace}/generated_plugin.py" \
+            --plugin-id ci_smoke
+
       - name: Ruff lint (full repository)
         run: ruff check .
 
