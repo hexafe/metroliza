@@ -16,11 +16,6 @@ try:  # pragma: no cover - optional SciPy path
 except Exception:  # pragma: no cover - optional SciPy path
     gaussian_kde = None
 
-from modules.chart_render_spec import (
-    ResolvedHistogramSpec,
-    build_resolved_histogram_spec,
-    histogram_spec_from_mapping,
-)
 from modules.export_summary_sheet_planner import (
     build_histogram_annotation_specs as _build_histogram_annotation_specs,
     compute_histogram_annotation_rows as _compute_histogram_annotation_rows,
@@ -494,14 +489,10 @@ def _draw_chart_title(
     fallback_color: str = SUMMARY_PLOT_PALETTE["distribution_foreground"],
 ) -> None:
     resolved_title_text = str(title_spec.get("text") or fallback_text or "")
+    if not resolved_title_text:
+        return
     title_anchor = title_spec.get("anchor") if isinstance(title_spec.get("anchor"), dict) else {}
     title_font_spec = title_spec.get("font") if isinstance(title_spec.get("font"), dict) else {}
-    title_x = float(title_anchor.get("x")) * float(width) if _as_float(title_anchor.get("x")) is not None else (
-        float(title_spec.get("x")) * float(width) if _as_float(title_spec.get("x")) is not None else float(fallback_xy[0])
-    )
-    title_y = (1.0 - float(title_anchor.get("y"))) * float(height) if _as_float(title_anchor.get("y")) is not None else (
-        (1.0 - float(title_spec.get("y"))) * float(height) if _as_float(title_spec.get("y")) is not None else float(fallback_xy[1])
-    )
     resolved_font_size = _as_float(title_font_spec.get("size"))
     if resolved_font_size is None:
         resolved_font_size = _as_float(title_spec.get("font_size"))
@@ -509,6 +500,32 @@ def _draw_chart_title(
         _points_to_pixels(float(resolved_font_size), dpi=dpi) if resolved_font_size is not None else int(fallback_font_px),
         bold=str(title_font_spec.get("weight") or "").lower() == "bold" or bool(title_spec.get("bold", False)),
     )
+    title_rect = _normalized_rect_to_pixels(
+        title_spec.get("rect") if isinstance(title_spec.get("rect"), dict) else None,
+        width=width,
+        height=height,
+    )
+    if title_rect is not None:
+        title_x = float(title_rect[0])
+        title_y = float(title_rect[1])
+    else:
+        title_x = float(title_anchor.get("x")) * float(width) if _as_float(title_anchor.get("x")) is not None else (
+            float(title_spec.get("x")) * float(width) if _as_float(title_spec.get("x")) is not None else float(fallback_xy[0])
+        )
+        title_y = (1.0 - float(title_anchor.get("y"))) * float(height) if _as_float(title_anchor.get("y")) is not None else (
+            (1.0 - float(title_spec.get("y"))) * float(height) if _as_float(title_spec.get("y")) is not None else float(fallback_xy[1])
+        )
+        text_width, text_height = _multiline_text_size(draw, resolved_title_text, title_font)
+        title_ha = str(title_spec.get("ha") or "left").lower()
+        title_va = str(title_spec.get("va") or "top").lower()
+        if title_ha == "center":
+            title_x -= text_width / 2.0
+        elif title_ha == "right":
+            title_x -= text_width
+        if title_va in {"center", "center_baseline"}:
+            title_y -= text_height / 2.0
+        elif title_va in {"baseline", "bottom"}:
+            title_y -= text_height
     _draw_multiline_text(
         draw,
         (title_x, title_y),

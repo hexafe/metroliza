@@ -1,13 +1,13 @@
-# Group Analysis Feature Docs
+# Group Analysis Feature Workspace (Archived)
 
 ## Metadata
 - **Owner:** Data Export & Analysis Team
-- **Status:** Active (draft)
-- **Scope:** Temporary working documentation for planning, implementing, validating, and documenting the Group Analysis export surface.
-- **Exit criteria:** Feature implementation is merged, validation checklist is complete, and temporary docs in this folder are archived per `docs/documentation_policy.md`.
+- **Status:** Archived / historical completed workspace
+- **Scope:** Preserved implementation-cycle planning and validation docs from the completed Group Analysis export workstream.
+- **Exit criteria:** Retained only as historical context after implementation and closeout.
 
 ## Purpose
-This folder contains the temporary planning and execution documentation for the canonical Group Analysis workstream.
+This folder preserves the temporary planning and execution documentation that was used during the canonical Group Analysis workstream.
 
 Current default export contract: Light and Standard create the canonical user-facing `Group Analysis` worksheet without automatically adding a separate diagnostics worksheet. Internal/debug exports may still enable a separate internal diagnostics sheet explicitly.
 
@@ -24,11 +24,13 @@ Group Analysis is the single active grouped statistical export surface.
 - Standard adds more on-sheet support, especially plots; Light keeps the same reading order with less visual/detail density.
 
 ## Workspace status
-This directory is the **only active feature-doc workspace** for grouped statistical export planning and validation.
+This directory is **archived**. It is not an active planning workspace.
 
-The older `docs/feature/group-comparison-xlsx/` workspace is retained only as legacy reference material and should not be treated as an active source of requirements.
+For active end-user guidance, use [`../../../user_manual/group_analysis/README.md`](../../../user_manual/group_analysis/README.md).
+For historical Group Analysis indexing and retained design notes, use [`../../../group_analysis/README.md`](../../../group_analysis/README.md).
+The archived pre-consolidation Group Comparison XLSX workspace lives at `docs/archive/2026/feature-group-comparison-xlsx/`.
 
 ## Documents
-- `implementation_plan.md` — implementation approach and sequencing.
-- `todo.md` — actionable task list.
-- `checklist.md` — completion and quality gates.
+- `implementation_plan.md` — archived implementation approach and sequencing snapshot.
+- `todo.md` — archived task snapshot.
+- `checklist.md` — archived completion-gate snapshot.

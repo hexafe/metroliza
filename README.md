@@ -68,7 +68,7 @@ Parity between native and Python backends is enforced through fixture-based test
   - `runtime` decides whether a chart kind may use the native backend.
   - `oracle` means the export path has already resolved matplotlib-derived geometry/spec data for parity-sensitive charts.
   - `fast-path` means the native compositor can render from that resolved payload without re-running matplotlib layout.
-- Histogram currently uses the fast-path in the export runtime. Distribution, IQR, and trend still rely on a matplotlib oracle pass before native rendering, so their parity is strong but their end-to-end export path is not yet fully matplotlib-free.
+- Histogram, distribution, and IQR now use planner-driven native fast-path payloads in the export runtime whenever the chart kind is allowlisted and the native backend is available. Only trend still relies on a matplotlib oracle pass before native rendering, so its parity is strong but its end-to-end export path is not yet fully matplotlib-free.
 - The lower-level `_metroliza_chart_native` compositor entrypoints remain backward-compatible and can still synthesize fallback geometry/metadata for legacy payloads when called directly.
 - For deterministic rollback behavior, set `METROLIZA_CHART_RENDERER_BACKEND=matplotlib`.
 

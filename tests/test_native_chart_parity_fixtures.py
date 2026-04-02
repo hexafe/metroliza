@@ -11,6 +11,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
+from modules.chart_render_spec import (
+    build_resolved_distribution_spec,
+    build_resolved_iqr_spec,
+    build_resolved_trend_spec,
+    histogram_spec_to_mapping,
+    build_resolved_histogram_spec,
+)
 from modules.native_chart_compositor import (
     render_distribution_png,
     render_histogram_png,
@@ -45,9 +52,33 @@ def _mean_absolute_image_difference(left: np.ndarray, right: np.ndarray) -> floa
 
 def _fixture_payload(fixture_name: str) -> dict:
     payload = _read_json(FIXTURE_ROOT / fixture_name / "payload.json")
-    resolved_spec_name = "planner_spec.json" if fixture_name == "histogram" else "matplotlib_oracle_geometry.json"
-    payload["resolved_render_spec"] = _read_json(FIXTURE_ROOT / fixture_name / resolved_spec_name)
+    if fixture_name == "histogram":
+        payload["resolved_render_spec"] = histogram_spec_to_mapping(build_resolved_histogram_spec(payload))
+    elif fixture_name.startswith("distribution_"):
+        payload["resolved_render_spec"] = build_resolved_distribution_spec(payload)
+    elif fixture_name == "iqr":
+        payload["resolved_render_spec"] = build_resolved_iqr_spec(payload)
+    elif fixture_name == "trend":
+        payload["resolved_render_spec"] = _read_json(FIXTURE_ROOT / fixture_name / "matplotlib_oracle_geometry.json")
+    else:
+        raise ValueError(f"Unsupported fixture: {fixture_name}")
     return payload
+
+
+def _planner_spec_for_fixture(fixture_name: str) -> dict:
+    return _read_json(FIXTURE_ROOT / fixture_name / "planner_spec.json")
+
+
+def _build_planner_spec_from_payload(*, fixture_name: str, payload: dict) -> dict:
+    if fixture_name == "histogram":
+        return histogram_spec_to_mapping(build_resolved_histogram_spec(payload))
+    if fixture_name.startswith("distribution_"):
+        return build_resolved_distribution_spec(payload)
+    if fixture_name == "iqr":
+        return build_resolved_iqr_spec(payload)
+    if fixture_name == "trend":
+        return build_resolved_trend_spec(payload)
+    raise ValueError(f"Unsupported fixture: {fixture_name}")
 
 
 def _fixture_reference_image(fixture_name: str) -> np.ndarray:
@@ -103,3 +134,11 @@ def test_oracle_geometry_fixtures_remain_matplotlib_finalized(fixture_name: str)
     assert oracle_geometry.get("source") == "matplotlib_finalized"
     assert isinstance(oracle_geometry.get("plot_area"), dict)
     assert isinstance(oracle_geometry.get("axes"), dict)
+
+
+@pytest.mark.parametrize("fixture_name", sorted(PARITY_THRESHOLDS))
+def test_planner_spec_fixtures_match_live_planner_builders(fixture_name: str):
+    payload = _read_json(FIXTURE_ROOT / fixture_name / "payload.json")
+    checked_in_planner_spec = _planner_spec_for_fixture(fixture_name)
+
+    assert _build_planner_spec_from_payload(fixture_name=fixture_name, payload=payload) == checked_in_planner_spec

@@ -4,12 +4,12 @@
 - **Owner:** Data Export & Analysis Team
 - **Status:** Superseded / legacy reference
 - **Scope:** Historical planning notes from the earlier Group Comparison XLSX framing.
-- **Exit criteria:** Retained only until the team decides whether to archive or delete the historical notes entirely.
+- **Exit criteria:** Retained only as archived background context; not an active workspace.
 
 ## Status
 This workspace is **not active**.
 
-Its content has been superseded by the canonical Group Analysis documentation in [`../group-analysis/README.md`](../group-analysis/README.md), which is now the only active feature-doc workspace for the grouped statistical export surface.
+Its content has been superseded by the canonical Group Analysis documentation in [`../../../group_analysis/README.md`](../../../group_analysis/README.md) and the active end-user manual in [`../../../user_manual/group_analysis/README.md`](../../../user_manual/group_analysis/README.md).
 
 The current product contract is explicit: normal grouped exports create only the user-facing `Group Analysis` worksheet. A separate `Group Comparison` sheet is legacy/internal history only.
 

@@ -11,3 +11,7 @@ All items below are historical/completed and should not be used as active execut
 - `group_analysis_spec_and_implementation_plan.md` — historical completed Group Analysis specification and implementation roadmap.
 - `group_analysis_codex_implementation_instructions.md` — historical completed Group Analysis runbook/instruction sequence used during execution.
 - `group_analysis_next_steps_pr_plan.md` — historical completed closure/audit plan for Group Analysis execution.
+- `feature-group-analysis/` — archived Group Analysis implementation-cycle workspace after feature completion.
+- `feature-group-comparison-xlsx/` — archived legacy Group Comparison XLSX planning workspace retained for historical context.
+- `native_plot_matplotlib_parity_2026_03.md` — archived native chart parity audit/execution plan after rollout-ready closeout.
+- `performance_boost_audit_2026_03.md` — archived performance audit/implementation plan after the audited fixes landed.

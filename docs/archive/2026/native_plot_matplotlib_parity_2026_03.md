@@ -1,4 +1,7 @@
-# Native Plot Matplotlib Parity Audit And Execution Plan
+# Native Plot Matplotlib Parity Audit And Execution Plan (Archived)
+
+> Historical context note: archived on 2026-04-02 after the rollout-ready closeout for this workstream.
+> For current runtime guidance, use [`../../../README.md`](../../../README.md), [`../../native_build_distribution.md`](../../native_build_distribution.md), and [`../../ci-policy.md`](../../ci-policy.md).
 
 ## Goal
 
@@ -436,15 +439,15 @@ Each chart type must satisfy all of the following before native becomes the defa
 Completed:
 
 - histogram emits a resolved spec and the runtime native histogram path now requires that resolved spec rather than allowing heuristic workbook rendering through the export backend
-- distribution captures finalized matplotlib geometry after `fig.canvas.draw()`, including plot area, axes, legend, reference lines/bands, scatter points, violin polygons, and annotation geometry
-- IQR captures finalized matplotlib geometry, including boxplot statistics, legend placement, and reference geometry
+- distribution resolved-spec planning now carries the geometry/styling needed for the native export fast-path, while matplotlib geometry extraction remains available as the fallback/runtime oracle path
+- IQR resolved-spec planning now carries the box/legend/reference geometry needed for the native export fast-path, while matplotlib geometry extraction remains available as the fallback/runtime oracle path
 - trend captures finalized matplotlib geometry, including final ticks, plot area, points, and horizontal limits
-- export orchestration builds one matplotlib-oracle path for distribution, IQR, and trend before dispatching to backend rendering
+- export orchestration now uses planner-driven native fast-path branches for distribution and IQR when the effective backend is native, and preserves matplotlib-oracle fallback paths for rollback/non-native environments
 - runtime native rendering is now gated per chart kind through `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS`, so backend enablement is chart-by-chart instead of all-or-nothing
 - histogram, distribution, IQR, and trend all fall back to matplotlib when finalized oracle/spec payload coverage is missing or incomplete
 - checked-in parity fixtures now exist under `tests/fixtures/chart_parity/`, along with a deterministic regeneration script at `scripts/generate_chart_parity_fixtures.py`
-- fixture-driven parity tests now gate native-vs-matplotlib image drift for histogram, distribution scatter, distribution violin, IQR, and trend
-- histogram is the only summary-chart path that currently behaves like a true native fast-path in the export runtime; distribution, IQR, and trend still pay a matplotlib oracle pass before native rendering
+- fixture-driven parity tests now gate native-vs-matplotlib image drift for histogram, distribution scatter, distribution violin, IQR, and trend, with the live distribution/IQR builders evaluated directly against the checked-in matplotlib references
+- histogram, distribution, and IQR now behave like true native fast-paths in the export runtime when rollout/native availability allow them; trend still pays a matplotlib oracle pass before native rendering
 
 Remaining non-blocking follow-up work:
 
@@ -460,8 +463,8 @@ The original execution workstreams are complete enough for rollout:
 - still relevant as a contract for any future fast-path work on trend or other charts: native rendering should remain a consumer of finalized geometry, not a second planner
 
 2. Export oracle emission cleanup
-- completed for the summary export path now that distribution/IQR/trend all attach finalized matplotlib geometry before render dispatch
-- this is the current tradeoff point: parity is strong, but the export path still depends on matplotlib for oracle capture on those charts
+- completed for histogram, distribution, and IQR on the native fast-path
+- still relevant for trend and for rollback/non-native environments, where matplotlib geometry extraction remains the parity oracle
 
 3. Parity harness and rollout gate
 - completed through checked-in parity fixtures, generator tooling, fixture-driven image tests, and per-chart rollout policy in `modules/chart_renderer.py`

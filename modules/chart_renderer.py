@@ -665,8 +665,12 @@ def _distribution_payload_requires_matplotlib_fallback(payload: dict[str, Any]) 
             and isinstance(resolved.get("annotations"), dict)
             and isinstance(resolved.get("violin_bodies"), list)
         )
-    return not (
+    has_violin_geometry = (
         isinstance(resolved.get("violin_bodies"), list)
+        and len(resolved.get("violin_bodies") or []) > 0
+    ) or isinstance(resolved.get("violin_groups"), list)
+    return not (
+        has_violin_geometry
         and isinstance(resolved.get("annotations"), dict)
         and isinstance(resolved.get("scatter_points"), list)
     )

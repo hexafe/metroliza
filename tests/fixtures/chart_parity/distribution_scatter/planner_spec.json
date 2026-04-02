@@ -1,5 +1,10 @@
 {
   "annotation_style": {},
+  "annotations": {
+    "markers": [],
+    "segments": [],
+    "texts": []
+  },
   "axes": {
     "grid_axis": "y",
     "rotation": 0,
@@ -20,29 +25,37 @@
     ],
     "y_label": "Measurement",
     "y_limits": {
-      "max": 1.52,
-      "min": 1.0
+      "max": 1.85,
+      "min": 0.85
     },
     "y_ticks": [
+      {
+        "label": "0.8",
+        "value": 0.8
+      },
       {
         "label": "1",
         "value": 1.0
       },
       {
-        "label": "1.13",
-        "value": 1.13
+        "label": "1.2",
+        "value": 1.2000000000000002
       },
       {
-        "label": "1.26",
-        "value": 1.26
+        "label": "1.4",
+        "value": 1.4000000000000001
       },
       {
-        "label": "1.39",
-        "value": 1.3900000000000001
+        "label": "1.6",
+        "value": 1.6
       },
       {
-        "label": "1.52",
-        "value": 1.52
+        "label": "1.8",
+        "value": 1.8
+      },
+      {
+        "label": "2",
+        "value": 2.0
       }
     ]
   },
@@ -53,69 +66,73 @@
   },
   "chart_type": "distribution",
   "grid_axis": "y",
+  "legend": null,
   "plot_area": {
-    "height": 0.62,
-    "width": 0.845,
-    "x": 0.12,
+    "height": 0.6,
+    "width": 0.82,
+    "x": 0.14,
     "y": 0.22
   },
-  "reference_bands": [
-    {
-      "alpha": 0.12,
-      "axis": "y",
-      "color": "#6C7A89",
-      "end": 1.8,
-      "start": 0.9
-    }
-  ],
+  "plot_rect": {
+    "height": 0.6,
+    "width": 0.82,
+    "x": 0.14,
+    "y": 0.22
+  },
+  "reference_bands": [],
   "reference_lines": [
     {
       "alpha": 0.82,
       "axis": "y",
-      "color": "#9b1c1c",
+      "color": "#D55E00",
       "dash": null,
       "value": 0.9,
-      "width": 2.0
+      "width": 1.8
     },
     {
       "alpha": 0.82,
       "axis": "y",
-      "color": "#9b1c1c",
+      "color": "#D55E00",
       "dash": null,
       "value": 1.8,
-      "width": 2.0
+      "width": 1.8
     }
   ],
   "render_mode": "scatter",
   "scatter_points": [
     {
+      "alpha": 1.0,
       "color": "#0072B2",
       "marker": "circle",
-      "size": 6,
+      "size": 5.291502622129181,
       "x": 0.2,
       "y": 1.05
     },
     {
+      "alpha": 1.0,
       "color": "#0072B2",
       "marker": "circle",
-      "size": 6,
+      "size": 5.291502622129181,
       "x": 0.8,
       "y": 1.41
     }
   ],
   "title": {
     "anchor": {
-      "x": 0.12,
-      "y": 0.972
+      "x": 0.55,
+      "y": 0.8894444444444444
     },
-    "color": "#0072B2",
+    "color": "#000000",
     "font": {
-      "size": 10.0,
-      "weight": "bold"
+      "size": 12.0,
+      "weight": "normal"
     },
-    "text": "Distribution Parity Scatter"
+    "ha": "center",
+    "text": "Distribution Parity Scatter",
+    "va": "baseline"
   },
   "violin_annotations": [],
+  "violin_bodies": [],
   "violin_groups": [],
   "x_label": "Group",
   "x_max": 1.0,
@@ -131,28 +148,36 @@
     }
   ],
   "y_label": "Measurement",
-  "y_max": 1.52,
-  "y_min": 1.0,
+  "y_max": 1.85,
+  "y_min": 0.85,
   "y_ticks": [
+    {
+      "label": "0.8",
+      "position": 0.8
+    },
     {
       "label": "1",
       "position": 1.0
     },
     {
-      "label": "1.13",
-      "position": 1.13
+      "label": "1.2",
+      "position": 1.2000000000000002
     },
     {
-      "label": "1.26",
-      "position": 1.26
+      "label": "1.4",
+      "position": 1.4000000000000001
     },
     {
-      "label": "1.39",
-      "position": 1.3900000000000001
+      "label": "1.6",
+      "position": 1.6
     },
     {
-      "label": "1.52",
-      "position": 1.52
+      "label": "1.8",
+      "position": 1.8
+    },
+    {
+      "label": "2",
+      "position": 2.0
     }
   ]
 }

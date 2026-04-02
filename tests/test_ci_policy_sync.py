@@ -5,6 +5,7 @@ from pathlib import Path
 
 CI_WORKFLOW_PATH = Path('.github/workflows/ci.yml')
 CI_POLICY_PATH = Path('docs/ci-policy.md')
+NATIVE_BUILD_DISTRIBUTION_PATH = Path('docs/native_build_distribution.md')
 RC_CHECKLIST_PATH = Path('docs/release_checks/release_candidate_checklist.md')
 RELEASE_STATUS_PATH = Path('docs/release_checks/release_status.md')
 OPEN_TESTING_RUNBOOK_PATH = Path('docs/release_checks/open_testing_runbook.md')
@@ -69,6 +70,19 @@ def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
     assert 'METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT: METROLIZA PDF PARSER SMOKE' in workflow
     assert 'timeout 60s ./dist/metroliza' in workflow
     assert 'name: packaging-smoke-artifacts' in workflow
+
+
+def test_ci_workflow_keeps_native_chart_planner_parity_smoke_step() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    native_build_distribution = NATIVE_BUILD_DISTRIBUTION_PATH.read_text(encoding='utf-8')
+
+    assert 'name: Native chart planner parity smoke' in workflow
+    assert 'planner_built_resolved_specs_match_checked_in_parity_references' in workflow
+    assert 'tests/test_native_chart_parity_fixtures.py' in workflow
+    assert 'native chart planner/parity smoke checks' in ci_policy
+    assert 'native chart planner parity smoke passes against the checked-in chart fixtures' in native_build_distribution
+    assert 'distribution scatter, distribution violin, IQR, and trend dispatch' in native_build_distribution
 
 
 def test_ci_workflow_keeps_manual_smoke_inputs_opt_in_by_default() -> None:

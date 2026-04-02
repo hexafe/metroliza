@@ -1,10 +1,13 @@
-# Group Analysis Implementation Plan
+# Group Analysis Implementation Plan (Archived)
 
 ## Metadata
 - **Owner:** Data Export & Analysis Team
-- **Status:** Active (draft)
-- **Scope:** Define the implementation phases, dependencies, validation strategy, and rollout order for Group Analysis.
-- **Exit criteria:** All planned phases are completed or intentionally deferred with rationale, and resulting behavior is validated by tests/checklist sign-off.
+- **Status:** Archived / historical snapshot
+- **Scope:** Preserved implementation phases, dependencies, validation strategy, and rollout order from the completed Group Analysis cycle.
+- **Exit criteria:** Retained as archive context only; not an active plan.
+
+## Archive note
+This file is preserved as a historical snapshot. It should not be used as an active execution tracker.
 
 ## Plan
 1. **Discovery and requirements alignment**

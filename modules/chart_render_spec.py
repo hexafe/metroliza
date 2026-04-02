@@ -24,11 +24,29 @@ from modules.export_summary_sheet_planner import (
 from modules.export_workbook_planning_helpers import compute_histogram_font_sizes
 from modules.summary_plot_palette import SUMMARY_PLOT_PALETTE
 
+try:
+    from scipy.stats import gaussian_kde
+except Exception:  # pragma: no cover - scipy is optional in some environments
+    gaussian_kde = None
+
 
 DEFAULT_DPI = 150
 DEFAULT_WIDTH_PX = 1320
 DEFAULT_HEIGHT_PX = 600
 _HISTOGRAM_X_MARGIN_RATIO = 0.10
+_EXTENDED_CHART_LEFT = 0.14
+_EXTENDED_CHART_RIGHT = 0.96
+_EXTENDED_CHART_TOP = 0.82
+_EXTENDED_CHART_MIN_BOTTOM = 0.22
+_EXTENDED_CHART_TITLE_Y = 0.8894444444444444
+_EXTENDED_CHART_TITLE_X = 0.55
+_EXTENDED_CHART_LEGEND_RIGHT = 0.97415
+_EXTENDED_CHART_LEGEND_TOP = 0.96571
+_PARITY_DISTRIBUTION_FILL = "#8cb8d9"
+_PARITY_FOREGROUND = "#0072B2"
+_PARITY_SPEC_LIMIT = "#D55E00"
+_PARITY_CENTRAL_TENDENCY = "#E69F00"
+_PARITY_ANNOTATION_TEXT = "#4d5968"
 
 
 @dataclass(frozen=True)
@@ -196,6 +214,67 @@ def _format_tick(value: float) -> str:
     if abs(numeric) >= 10:
         return f"{numeric:.1f}"
     return f"{numeric:.3f}".rstrip("0").rstrip(".")
+
+
+def _nice_tick_step(min_value: float, max_value: float, *, target_steps: int = 5) -> float:
+    span = abs(float(max_value) - float(min_value))
+    if not math.isfinite(span) or span <= 0:
+        return 1.0
+    raw_step = span / max(1, int(target_steps))
+    magnitude = 10.0 ** math.floor(math.log10(raw_step))
+    normalized = raw_step / magnitude
+    if normalized <= 1.0:
+        nice = 1.0
+    elif normalized <= 2.0:
+        nice = 2.0
+    elif normalized <= 5.0:
+        nice = 5.0
+    else:
+        nice = 10.0
+    return nice * magnitude
+
+
+def _nice_axis_ticks(min_value: float, max_value: float, *, target_steps: int = 5) -> list[float]:
+    if not math.isfinite(min_value) or not math.isfinite(max_value):
+        return [0.0, 1.0]
+    if math.isclose(min_value, max_value):
+        return [float(min_value)]
+    step = _nice_tick_step(min_value, max_value, target_steps=target_steps)
+    start = math.floor(float(min_value) / step) * step
+    end = math.ceil(float(max_value) / step) * step
+    tick_count = int(round((end - start) / step)) + 1
+    return [float(start + (idx * step)) for idx in range(max(2, tick_count))]
+
+
+def _resolve_vertical_limits(
+    values: np.ndarray,
+    *,
+    explicit_min: float | None = None,
+    explicit_max: float | None = None,
+    reference_values: Iterable[float | None] = (),
+    pad_ratio: float = 0.0,
+) -> tuple[float, float]:
+    lower = explicit_min
+    upper = explicit_max
+    if lower is None:
+        lower = float(np.min(values))
+    if upper is None:
+        upper = float(np.max(values))
+
+    finite_reference_values = [float(item) for item in reference_values if _as_float(item) is not None]
+    if finite_reference_values:
+        lower = min(float(lower), *finite_reference_values)
+        upper = max(float(upper), *finite_reference_values)
+
+    if math.isclose(lower, upper):
+        lower -= 0.5
+        upper += 0.5
+
+    if pad_ratio > 0.0:
+        pad = max((float(upper) - float(lower)) * float(pad_ratio), 0.05)
+        lower -= pad
+        upper += pad
+    return float(lower), float(upper)
 
 
 def build_wrapped_chart_title(title: str, *, width: int = 42, max_lines: int = 3) -> str:
@@ -1020,6 +1099,8 @@ def _build_title_mapping(
     font_size: float = 10.0,
     color: str = SUMMARY_PLOT_PALETTE["distribution_foreground"],
     bold: bool = True,
+    ha: str = "left",
+    va: str = "top",
 ) -> dict[str, Any]:
     return {
         "text": str(text or ""),
@@ -1032,6 +1113,8 @@ def _build_title_mapping(
             "weight": "bold" if bold else "normal",
         },
         "color": str(color),
+        "ha": str(ha),
+        "va": str(va),
     }
 
 
@@ -1039,11 +1122,11 @@ def _build_standard_chart_layout(
     *,
     bottom_margin: float | None,
     has_legend: bool,
-    left_margin: float = 0.12,
-    right_margin: float = 0.965,
+    left_margin: float = 0.14,
+    right_margin: float = 0.96,
 ) -> tuple[RectSpec, RectSpec | None]:
-    resolved_bottom = min(0.36, max(0.14, float(bottom_margin or 0.16)))
-    resolved_top = 0.80 if has_legend else 0.84
+    resolved_bottom = min(0.36, max(0.22, float(bottom_margin or 0.22)))
+    resolved_top = 0.82
     if resolved_top <= resolved_bottom + 0.20:
         resolved_top = min(0.94, resolved_bottom + 0.20)
     plot_rect = RectSpec(
@@ -1055,12 +1138,27 @@ def _build_standard_chart_layout(
     legend_rect = None
     if has_legend:
         legend_rect = RectSpec(
-            x=float(plot_rect.x),
-            y=0.905,
-            width=float(plot_rect.width),
-            height=0.05,
+            x=float(max(plot_rect.x, right_margin - 0.20)),
+            y=0.842,
+            width=float(min(0.20, right_margin - plot_rect.x)),
+            height=0.12,
         )
     return plot_rect, legend_rect
+
+
+def _build_standard_summary_title_mapping(*, text: str, plot_rect: RectSpec) -> dict[str, Any]:
+    """Mirror the centered title framing used by finalized matplotlib exports."""
+
+    return _build_title_mapping(
+        text=str(text or ""),
+        x=float(plot_rect.x + (plot_rect.width / 2.0)),
+        y=0.8894444444444444,
+        font_size=12.0,
+        color="#000000",
+        bold=False,
+        ha="center",
+        va="baseline",
+    )
 
 
 def _truncate_tick_labels(labels: list[str], *, max_label_chars: int = 18) -> list[str]:
@@ -1156,6 +1254,195 @@ def _coerce_finite_series_list(series_list: Iterable[Any]) -> list[list[float]]:
     return normalized
 
 
+def _estimate_upper_right_legend_rect(items: list[dict[str, Any]]) -> RectSpec:
+    label_width = max((len(str(item.get("label") or "")) for item in items), default=0)
+    width = min(0.24, max(0.12, 0.10 + (label_width * 0.009)))
+    height = min(0.18, max(0.07, 0.012 + (0.056 * max(1, len(items)))))
+    return RectSpec(
+        x=max(_EXTENDED_CHART_LEFT, _EXTENDED_CHART_LEGEND_RIGHT - width),
+        y=max(0.78, _EXTENDED_CHART_LEGEND_TOP - height),
+        width=width,
+        height=height,
+    )
+
+
+def _normalize_distribution_legend(legend_items: list[Any]) -> dict[str, Any] | None:
+    normalized: list[dict[str, Any]] = []
+    for item in legend_items:
+        if not isinstance(item, Mapping):
+            continue
+        kind = str(item.get("kind") or "line")
+        resolved = {
+            "label": str(item.get("label") or ""),
+            "kind": kind,
+        }
+        if kind == "marker":
+            resolved.update(
+                {
+                    "marker": "o" if str(item.get("marker") or "").lower() == "circle" else str(item.get("marker") or "o"),
+                    "color": str(item.get("color") or _PARITY_FOREGROUND),
+                    "alpha": 1.0,
+                }
+            )
+        elif kind == "band":
+            resolved.update(
+                {
+                    "fill_color": str(item.get("fill_color") or _PARITY_DISTRIBUTION_FILL),
+                    "color": str(item.get("color") or _PARITY_FOREGROUND),
+                    "alpha": float(item.get("alpha") or 0.45),
+                }
+            )
+        else:
+            resolved.update(
+                {
+                    "color": str(item.get("color") or _PARITY_SPEC_LIMIT),
+                    "alpha": 1.0,
+                    "dash": None,
+                    "width": float(item.get("width") or 1.6),
+                }
+            )
+        normalized.append(resolved)
+    if not normalized:
+        return None
+    return {
+        "rect": _rect_mapping(_estimate_upper_right_legend_rect(normalized)),
+        "items": normalized,
+    }
+
+
+def _resolve_violin_density_shape(series: np.ndarray, *, y_min: float, y_max: float) -> tuple[np.ndarray, np.ndarray] | None:
+    if series.size == 0:
+        return None
+    sample_y = np.linspace(y_min, y_max, 101)
+    density = None
+    if gaussian_kde is not None and series.size >= 3 and np.std(series, ddof=1) > 0:
+        try:
+            density = gaussian_kde(series)(sample_y)
+        except Exception:
+            density = None
+    if density is None:
+        hist, edges = np.histogram(series, bins=min(24, max(6, int(math.sqrt(series.size)))), range=(y_min, y_max), density=True)
+        if hist.size == 0:
+            return None
+        sample_y = np.linspace(float(edges[0]), float(edges[-2]), hist.size)
+        density = hist
+    density = np.asarray(density, dtype=float)
+    peak = float(np.max(density)) if density.size else 0.0
+    if peak <= 0.0 or not math.isfinite(peak):
+        return None
+    return sample_y, density / peak
+
+
+def _build_resolved_violin_bodies(positions: list[float], series_list: list[list[float]], *, y_min: float, y_max: float) -> list[dict[str, Any]]:
+    bodies: list[dict[str, Any]] = []
+    for position, series in zip(positions, series_list):
+        numeric = _finite_array(series)
+        density_shape = _resolve_violin_density_shape(numeric, y_min=y_min, y_max=y_max)
+        if density_shape is None:
+            continue
+        sample_y, density = density_shape
+        right_points = [
+            {"x": float(position + (float(width_scale) * 0.25)), "y": float(y_value)}
+            for y_value, width_scale in zip(sample_y, density)
+        ]
+        left_points = [
+            {"x": float(position - (float(width_scale) * 0.25)), "y": float(y_value)}
+            for y_value, width_scale in zip(sample_y[::-1], density[::-1])
+        ]
+        bodies.append(
+            {
+                "fill_color": _PARITY_DISTRIBUTION_FILL,
+                "fill_alpha": 0.45,
+                "edge_color": _PARITY_FOREGROUND,
+                "edge_alpha": 0.45,
+                "edge_width": 1.0,
+                "polygon_points": right_points + left_points + [right_points[0]],
+            }
+        )
+    return bodies
+
+
+def _build_resolved_distribution_annotations(
+    annotations: list[Any],
+    *,
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+    plot_rect: RectSpec,
+) -> dict[str, Any]:
+    markers: list[dict[str, Any]] = []
+    texts: list[dict[str, Any]] = []
+    x_span = max(x_max - x_min, 1e-9)
+    y_span = max(y_max - y_min, 1e-9)
+    for item in annotations:
+        if not isinstance(item, Mapping):
+            continue
+        position = _as_float(item.get("position"))
+        mean_value = _as_float(item.get("mean"))
+        minimum_value = _as_float(item.get("minimum"))
+        maximum_value = _as_float(item.get("maximum"))
+        if position is None or mean_value is None:
+            continue
+        markers.append(
+            {
+                "kind": "circle",
+                "x": float(position),
+                "y": float(mean_value),
+                "size": float(math.sqrt(32.0)),
+                "color": _PARITY_FOREGROUND,
+                "alpha": 1.0,
+            }
+        )
+        if minimum_value is not None:
+            markers.append(
+                {
+                    "kind": "triangle_down",
+                    "x": float(position),
+                    "y": float(minimum_value),
+                    "size": float(math.sqrt(24.0)),
+                    "color": _PARITY_ANNOTATION_TEXT,
+                    "alpha": 1.0,
+                }
+            )
+        if maximum_value is not None:
+            markers.append(
+                {
+                    "kind": "triangle_up",
+                    "x": float(position),
+                    "y": float(maximum_value),
+                    "size": float(math.sqrt(24.0)),
+                    "color": _PARITY_ANNOTATION_TEXT,
+                    "alpha": 1.0,
+                }
+            )
+        x_fraction = (float(position) - x_min) / x_span
+        y_fraction = (float(mean_value) - y_min) / y_span
+        texts.append(
+            {
+                "text": f"u={float(mean_value):.3f}",
+                "color": _PARITY_ANNOTATION_TEXT,
+                "alpha": 1.0,
+                "font_size": 8.0,
+                "ha": "left",
+                "va": "center",
+                "point_x": float(position),
+                "point_y": float(mean_value),
+                "rect": {
+                    "x": float(plot_rect.x + (x_fraction * plot_rect.width) + 0.01),
+                    "y": float(plot_rect.y + (y_fraction * plot_rect.height) - 0.017),
+                    "width": 0.075,
+                    "height": 0.03333333333333333,
+                },
+            }
+        )
+    return {
+        "markers": markers,
+        "segments": [],
+        "texts": texts,
+    }
+
+
 def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
     width_px, height_px, dpi = _canvas_size(payload)
     labels = [str(item) for item in payload.get("labels") or []]
@@ -1177,13 +1464,17 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
     y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), Mapping) else {}
     y_min = _as_float(y_limits.get("min"))
     y_max = _as_float(y_limits.get("max"))
-    if y_min is None:
-        y_min = float(np.min(all_values))
-    if y_max is None:
-        y_max = float(np.max(all_values))
-    if math.isclose(y_min, y_max):
-        y_min -= 0.5
-        y_max += 0.5
+    lsl = _as_float(payload.get("lsl"))
+    usl = _as_float(payload.get("usl"))
+    nominal = _as_float(payload.get("nominal"))
+    include_nominal = bool(payload.get("include_nominal"))
+    y_min, y_max = _resolve_vertical_limits(
+        all_values,
+        explicit_min=y_min,
+        explicit_max=y_max,
+        reference_values=(lsl, usl, nominal if include_nominal else None),
+        pad_ratio=0.05,
+    )
 
     x_domain = payload.get("x_domain") if isinstance(payload.get("x_domain"), Mapping) else {}
     if render_mode == "scatter":
@@ -1204,20 +1495,23 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
                 "x": float(x_value),
                 "y": float(y_value),
                 "marker": "circle",
-                "size": 6,
-                "color": SUMMARY_PLOT_PALETTE["distribution_foreground"],
+                "size": float(math.sqrt(28.0)),
+                "color": _PARITY_FOREGROUND,
+                "alpha": 1.0,
             }
             for x_value, y_value in zip(x_values.tolist(), _finite_array(payload.get("y_values") or []).tolist())
         ]
         violin_groups: list[dict[str, Any]] = []
+        annotations: dict[str, Any] = {"markers": [], "segments": [], "texts": []}
+        violin_bodies: list[dict[str, Any]] = []
     else:
         positions = [float(item) for item in list(payload.get("positions") or list(range(len(labels))))]
         x_min = _as_float(x_domain.get("min"))
         x_max = _as_float(x_domain.get("max"))
         if x_min is None:
-            x_min = 0.0
+            x_min = min(positions or [0.0]) - 0.325
         if x_max is None:
-            x_max = max(float(len(labels) - 1), 1.0)
+            x_max = max(positions or [0.0]) + 0.325
         if math.isclose(x_min, x_max):
             x_max += 1.0
         scatter_points = []
@@ -1228,35 +1522,36 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
             }
             for position, series in zip(positions, series_list)
         ]
+        annotations = _build_resolved_distribution_annotations(
+            list(payload.get("violin_annotations") or []),
+            x_min=float(x_min),
+            x_max=float(x_max),
+            y_min=float(y_min),
+            y_max=float(y_max),
+            plot_rect=plot_rect,
+        )
+        violin_bodies = _build_resolved_violin_bodies(
+            positions,
+            series_list,
+            y_min=float(y_min),
+            y_max=float(y_max),
+        )
 
     axis_layout = _resolve_axis_layout(labels, positions=positions, layout=layout)
     x_ticks = list(zip(axis_layout["display_positions"], axis_layout["display_labels"]))
-    y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(float(y_min), float(y_max), count=5)]
+    y_ticks = [(tick, _format_tick(tick)) for tick in _nice_axis_ticks(float(y_min), float(y_max), target_steps=5)]
 
     reference_bands: list[dict[str, Any]] = []
-    lsl = _as_float(payload.get("lsl"))
-    usl = _as_float(payload.get("usl"))
-    nominal = _as_float(payload.get("nominal"))
     one_sided = bool(payload.get("one_sided"))
-    include_nominal = bool(payload.get("include_nominal"))
-    if usl is not None and (lsl is not None or one_sided):
-        reference_bands.append(
-            {
-                "axis": "y",
-                "start": float(0.0 if one_sided else lsl),
-                "end": float(usl),
-                "color": SUMMARY_PLOT_PALETTE["sigma_band"],
-                "alpha": 0.12,
-            }
-        )
+    del one_sided
 
     reference_lines = [
         _build_reference_line_mapping(
             axis="y",
             value=float(limit_value),
-            color=SUMMARY_PLOT_PALETTE["spec_limit"],
+            color=_PARITY_SPEC_LIMIT,
             alpha=0.82,
-            width=2.0,
+            width=1.8,
             dash=(8, 5) if dashed else None,
         )
         for limit_value, dashed in (
@@ -1284,12 +1579,12 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
         "chart_type": "distribution",
         "canvas": {"width_px": width_px, "height_px": height_px, "dpi": dpi},
         "render_mode": render_mode,
-        "title": _build_title_mapping(
+        "title": _build_standard_summary_title_mapping(
             text=str(payload.get("title") or ""),
-            x=float(plot_rect.x),
-            y=0.972,
+            plot_rect=plot_rect,
         ),
         "plot_area": _rect_mapping(plot_rect),
+        "plot_rect": _rect_mapping(plot_rect),
         "axes": axes,
         "x_ticks": [{"position": value, "label": label} for value, label in x_ticks],
         "y_ticks": [{"position": value, "label": label} for value, label in y_ticks],
@@ -1306,12 +1601,13 @@ def build_resolved_distribution_spec(payload: Mapping[str, Any]) -> dict[str, An
         "violin_annotations": list(payload.get("violin_annotations") or []),
         "violin_groups": violin_groups,
         "scatter_points": scatter_points,
+        "annotations": annotations,
+        "violin_bodies": violin_bodies,
+        "legend": None,
     }
-    if legend_rect is not None or legend_items:
-        spec["legend"] = {
-            "rect": _rect_mapping(legend_rect),
-            "items": legend_items,
-        }
+    normalized_legend = _normalize_distribution_legend(legend_items)
+    if normalized_legend is not None:
+        spec["legend"] = normalized_legend
     return spec
 
 
@@ -1333,44 +1629,35 @@ def build_resolved_iqr_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
     y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), Mapping) else {}
     y_min = _as_float(y_limits.get("min"))
     y_max = _as_float(y_limits.get("max"))
-    if y_min is None:
-        y_min = float(np.min(flat_values))
-    if y_max is None:
-        y_max = float(np.max(flat_values))
-    if math.isclose(y_min, y_max):
-        y_min -= 0.5
-        y_max += 0.5
 
-    positions = list(range(1, len(series_list) + 1))
-    axis_layout = _resolve_axis_layout(labels, positions=[float(item) for item in positions], layout=layout)
+    positions = [float(item) for item in list(layout.get("display_positions") or list(range(1, len(series_list) + 1)))]
+    axis_layout = _resolve_axis_layout(labels, positions=positions, layout=layout)
     x_min = 0.5
     x_max = max(float(len(series_list)) + 0.5, 1.5)
     x_ticks = list(zip(axis_layout["display_positions"], axis_layout["display_labels"]))
-    y_ticks = [(tick, _format_tick(tick)) for tick in _line_ticks(float(y_min), float(y_max), count=5)]
 
     one_sided = bool(payload.get("one_sided"))
     lsl = _as_float(payload.get("lsl"))
     usl = _as_float(payload.get("usl"))
     nominal = _as_float(payload.get("nominal"))
+    y_min, y_max = _resolve_vertical_limits(
+        flat_values,
+        explicit_min=y_min,
+        explicit_max=y_max,
+        reference_values=(lsl, usl, nominal),
+        pad_ratio=0.0,
+    )
+    y_ticks = [(tick, _format_tick(tick)) for tick in _nice_axis_ticks(float(y_min), float(y_max), target_steps=5)]
     reference_bands: list[dict[str, Any]] = []
-    if usl is not None and (lsl is not None or one_sided):
-        reference_bands.append(
-            {
-                "axis": "y",
-                "start": float(0.0 if one_sided else lsl),
-                "end": float(usl),
-                "color": SUMMARY_PLOT_PALETTE["sigma_band"],
-                "alpha": 0.12,
-            }
-        )
+    del one_sided
     reference_lines = [
         _build_reference_line_mapping(
             axis="y",
             value=float(limit_value),
-            color=SUMMARY_PLOT_PALETTE["spec_limit"],
+            color=_PARITY_SPEC_LIMIT,
             alpha=0.82,
-            width=2.0,
-            dash=(8, 5) if dashed else None,
+            width=1.6 if dashed else 1.8,
+            dash=None,
         )
         for limit_value, dashed in ((lsl, False), (usl, False), (nominal, True))
         if limit_value is not None
@@ -1390,13 +1677,21 @@ def build_resolved_iqr_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
         outliers = numeric[(numeric < lower_bound) | (numeric > upper_bound)]
         boxes.append(
             {
-                "position": float(index),
+                "position": float(positions[index - 1] if index - 1 < len(positions) else index),
+                "label": labels[index - 1] if index - 1 < len(labels) else "",
+                "box_left": float((positions[index - 1] if index - 1 < len(positions) else index) - 0.14),
+                "box_right": float((positions[index - 1] if index - 1 < len(positions) else index) + 0.14),
                 "q1": float(q1),
                 "median": float(median),
                 "q3": float(q3),
                 "whisker_low": float(whisker_low),
-                "whisker_high": float(whisker_high),
+                "whisker_high": float(max(q3, whisker_high)),
                 "outliers": [float(item) for item in outliers.tolist()],
+                "fill_color": _PARITY_DISTRIBUTION_FILL,
+                "fill_alpha": 0.45,
+                "edge_color": _PARITY_FOREGROUND,
+                "edge_width": 1.2,
+                "median_color": _PARITY_CENTRAL_TENDENCY,
             }
         )
 
@@ -1416,10 +1711,9 @@ def build_resolved_iqr_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
     spec: dict[str, Any] = {
         "chart_type": "iqr",
         "canvas": {"width_px": width_px, "height_px": height_px, "dpi": dpi},
-        "title": _build_title_mapping(
+        "title": _build_standard_summary_title_mapping(
             text=str(payload.get("title") or ""),
-            x=float(plot_rect.x),
-            y=0.972,
+            plot_rect=plot_rect,
         ),
         "plot_area": _rect_mapping(plot_rect),
         "axes": axes,
@@ -1436,12 +1730,11 @@ def build_resolved_iqr_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
         "reference_lines": reference_lines,
         "boxes": boxes,
         "boxplots": [dict(box) for box in boxes],
+        "legend": None,
     }
-    if legend_rect is not None or legend_items:
-        spec["legend"] = {
-            "rect": _rect_mapping(legend_rect),
-            "items": legend_items,
-        }
+    normalized_legend = _normalize_distribution_legend(legend_items)
+    if normalized_legend is not None:
+        spec["legend"] = normalized_legend
     return spec
 
 
@@ -1507,10 +1800,9 @@ def build_resolved_trend_spec(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "chart_type": "trend",
         "canvas": {"width_px": width_px, "height_px": height_px, "dpi": dpi},
-        "title": _build_title_mapping(
+        "title": _build_standard_summary_title_mapping(
             text=str(payload.get("title") or ""),
-            x=float(plot_rect.x),
-            y=0.972,
+            plot_rect=plot_rect,
         ),
         "plot_area": _rect_mapping(plot_rect),
         "axes": axes,

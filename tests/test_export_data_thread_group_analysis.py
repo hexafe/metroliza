@@ -6,15 +6,17 @@ import types
 import unittest
 import zipfile
 import inspect
+import copy
+import base64
 import xml.etree.ElementTree as ET
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pandas as pd
 
 from pathlib import Path
 
 from modules.db import execute_with_retry  # noqa: E402
+from modules.chart_render_spec import build_resolved_distribution_spec, build_resolved_iqr_spec  # noqa: E402
 
 
 qtcore_stub = sys.modules.get('PyQt6.QtCore') or types.ModuleType('PyQt6.QtCore')
@@ -341,37 +343,105 @@ def _seed_grouped_measurements(db_path):
 
 
 class TestExportDataThreadGroupAnalysis(unittest.TestCase):
-    def _run_export(self, temp_dir, *, level):
+    def _run_export(self, temp_dir, *, level, generate_summary_sheet=False):
         db_path = str(Path(temp_dir) / 'metroliza.sqlite')
         out_path = str(Path(temp_dir) / f'export_{level}.xlsx')
         grouping_df = _seed_grouped_measurements(db_path)
 
         request = ExportRequest(
             paths=AppPaths(db_file=db_path, excel_file=out_path),
-            options=ExportOptions(generate_summary_sheet=False, group_analysis_level=level),
+            options=ExportOptions(generate_summary_sheet=generate_summary_sheet, group_analysis_level=level),
             grouping_df=grouping_df,
         )
         thread = ExportDataThread(request)
         self.assertTrue(thread.get_export_backend().run(thread))
         return out_path
 
-    def test_summary_sheet_extended_charts_use_single_matplotlib_oracle_path(self):
-        method_source = inspect.getsource(export_data_thread_module.ExportDataThread.summary_sheet_fill)
+    def test_summary_sheet_extended_charts_keep_native_fast_paths_for_distribution_and_iqr(self):
+        module_source = inspect.getsource(export_data_thread_module)
 
-        self.assertNotIn('distribution_backend_native', method_source)
-        self.assertNotIn('iqr_backend_native', method_source)
-        self.assertNotIn('trend_backend_native', method_source)
-        self.assertNotIn('build_resolved_distribution_spec', method_source)
-        self.assertNotIn('build_resolved_iqr_spec', method_source)
-        self.assertNotIn('build_resolved_trend_spec', method_source)
+        self.assertIn('distribution_backend_native', module_source)
+        self.assertIn('iqr_backend_native', module_source)
+        self.assertNotIn('trend_backend_native', module_source)
+        self.assertIn('build_resolved_distribution_spec', module_source)
+        self.assertIn('build_resolved_iqr_spec', module_source)
+        self.assertNotIn('build_resolved_trend_spec', module_source)
 
-        self.assertIn('extract_distribution_geometry(', method_source)
-        self.assertIn('extract_iqr_geometry(', method_source)
-        self.assertIn('extract_trend_geometry(', method_source)
+        self.assertIn('extract_distribution_geometry(', module_source)
+        self.assertIn('extract_iqr_geometry(', module_source)
+        self.assertIn('extract_trend_geometry(', module_source)
 
-        self.assertRegex(method_source, r"_save_summary_chart\(\s*fig,\s*chart_type='distribution'")
-        self.assertRegex(method_source, r"_save_summary_chart\(\s*fig,\s*chart_type='iqr'")
-        self.assertRegex(method_source, r"_save_summary_chart\(\s*fig,\s*chart_type='trend'")
+        self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='distribution'")
+        self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='iqr'")
+        self.assertRegex(module_source, r"_save_summary_chart\(\s*fig,\s*chart_type='trend'")
+
+    def test_summary_sheet_extended_charts_runtime_native_fast_path_contract_is_behavioral(self):
+        # Valid 1x1 PNG used to bypass renderer internals while testing branch behavior.
+        tiny_png_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a1cAAAAASUVORK5CYII="
+        )
+        save_calls = []
+
+        def _fake_save_summary_chart(self, fig, *, chart_type=None, native_payload=None, mode='workbook'):
+            del mode
+            save_calls.append(
+                {
+                    'chart_type': chart_type,
+                    'fig': fig,
+                    'native_payload': copy.deepcopy(native_payload) if isinstance(native_payload, dict) else native_payload,
+                }
+            )
+            return types.SimpleNamespace(png_bytes=tiny_png_bytes, backend='native')
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(export_data_thread_module, 'resolve_distribution_renderer_backend', return_value='native'),
+            patch.object(export_data_thread_module, 'resolve_iqr_renderer_backend', return_value='native'),
+            patch.object(
+                ExportDataThread,
+                '_summary_chart_required',
+                new=lambda _thread, chart_name: chart_name in {'distribution', 'iqr', 'trend'},
+            ),
+            patch.object(ExportDataThread, '_save_summary_chart', new=_fake_save_summary_chart),
+        ):
+            self._run_export(temp_dir, level='off', generate_summary_sheet=True)
+
+        def _first_call(chart_type):
+            for call in save_calls:
+                if call.get('chart_type') == chart_type:
+                    return call
+            raise AssertionError(f"Missing _save_summary_chart call for {chart_type}")
+
+        distribution_call = _first_call('distribution')
+        iqr_call = _first_call('iqr')
+        trend_call = _first_call('trend')
+
+        self.assertIsNone(distribution_call['fig'])
+        self.assertIsNone(iqr_call['fig'])
+        self.assertIsNotNone(trend_call['fig'])
+        self.assertTrue(hasattr(trend_call['fig'], 'get_figwidth'))
+
+        distribution_payload = distribution_call['native_payload']
+        self.assertIsInstance(distribution_payload, dict)
+        distribution_spec = distribution_payload.get('resolved_render_spec')
+        self.assertIsInstance(distribution_spec, dict)
+        distribution_payload_input = copy.deepcopy(distribution_payload)
+        distribution_payload_input.pop('resolved_render_spec', None)
+        self.assertEqual(build_resolved_distribution_spec(distribution_payload_input), distribution_spec)
+
+        iqr_payload = iqr_call['native_payload']
+        self.assertIsInstance(iqr_payload, dict)
+        iqr_spec = iqr_payload.get('resolved_render_spec')
+        self.assertIsInstance(iqr_spec, dict)
+        iqr_payload_input = copy.deepcopy(iqr_payload)
+        iqr_payload_input.pop('resolved_render_spec', None)
+        self.assertEqual(build_resolved_iqr_spec(iqr_payload_input), iqr_spec)
+
+        trend_payload = trend_call['native_payload']
+        self.assertIsInstance(trend_payload, dict)
+        trend_spec = trend_payload.get('resolved_render_spec')
+        self.assertIsInstance(trend_spec, dict)
+        self.assertEqual('matplotlib_finalized', trend_spec.get('source'))
 
     def test_off_mode_emits_no_group_analysis_sheets(self):
         with tempfile.TemporaryDirectory() as temp_dir:

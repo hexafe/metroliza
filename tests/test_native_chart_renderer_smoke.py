@@ -54,6 +54,42 @@ def test_native_chart_renderer_smoke_covers_all_supported_summary_charts(monkeyp
         }
     )
     distribution_payload["resolved_render_spec"] = build_resolved_distribution_spec(distribution_payload)
+    distribution_violin_payload = build_distribution_native_payload(
+        values=[[1.0, 1.08, 1.12], [1.34, 1.43, 1.52]],
+        labels=["Alpha", "Beta"],
+        title="Smoke Distribution Violin",
+        lsl=0.9,
+        usl=1.8,
+    )
+    distribution_violin_payload.update(
+        {
+            "render_mode": "violin",
+            "positions": [0.0, 1.0],
+            "layout": {
+                "rotation": 0,
+                "display_positions": [0.0, 1.0],
+                "display_labels": ["Alpha", "Beta"],
+                "bottom_margin": 0.22,
+            },
+            "x_label": "Group",
+            "y_label": "Measurement",
+            "canvas": {"width_px": 960, "height_px": 540, "dpi": 150},
+            "legend": {"items": [{"label": "Mean marker", "kind": "marker", "marker": "circle", "color": "#0072B2"}]},
+            "annotation_style": {"show_minmax": True, "show_sigma": True},
+            "violin_annotations": [
+                {
+                    "position": 0.0,
+                    "mean": 1.066,
+                    "minimum": 1.0,
+                    "maximum": 1.12,
+                    "sigma_start": 1.0,
+                    "sigma_high": 1.12,
+                    "show_sigma_segment": True,
+                }
+            ],
+        }
+    )
+    distribution_violin_payload["resolved_render_spec"] = build_resolved_distribution_spec(distribution_violin_payload)
 
     iqr_payload = {
         "type": "iqr",
@@ -89,6 +125,7 @@ def test_native_chart_renderer_smoke_covers_all_supported_summary_charts(monkeyp
     for chart_type, payload in (
         ("histogram", histogram_payload),
         ("distribution", distribution_payload),
+        ("distribution", distribution_violin_payload),
         ("iqr", iqr_payload),
         ("trend", trend_payload),
     ):

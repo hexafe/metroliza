@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -16,6 +18,9 @@ from modules.chart_render_spec import (
 )
 from modules.chart_renderer import build_distribution_native_payload, build_histogram_native_payload
 from modules.native_chart_compositor import render_distribution_png, render_histogram_png, render_iqr_png, render_trend_png
+
+
+FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "chart_parity"
 
 
 def _non_white_pixels(image: np.ndarray, *, y0: float, y1: float, x0: float, x1: float) -> int:
@@ -39,6 +44,23 @@ def _near_rgb_pixels(
     target = np.asarray(rgb, dtype=np.float32) / 255.0
     deltas = np.max(np.abs(region - target), axis=2)
     return int(np.count_nonzero(deltas <= float(atol)))
+
+
+def _decode_png_bytes(png_bytes: bytes) -> np.ndarray:
+    return plt.imread(BytesIO(png_bytes), format="png")[..., :3]
+
+
+def _fixture_payload(name: str) -> dict:
+    return json.loads((FIXTURE_ROOT / name / "payload.json").read_text(encoding="utf-8"))
+
+
+def _fixture_reference_image(name: str) -> np.ndarray:
+    return plt.imread(str(FIXTURE_ROOT / name / "matplotlib_reference.png"))[..., :3]
+
+
+def _mean_absolute_image_difference(left: np.ndarray, right: np.ndarray) -> float:
+    assert left.shape == right.shape
+    return float(np.mean(np.abs(left.astype(np.float32) - right.astype(np.float32))))
 
 
 def test_build_histogram_render_spec_exposes_layout_title_and_axes_contract():
@@ -208,13 +230,23 @@ def test_build_distribution_resolved_spec_violin_exposes_layout_legend_and_group
     spec = build_resolved_distribution_spec(payload)
 
     assert spec["render_mode"] == "violin"
-    assert spec["plot_area"]["width"] > 0.5
+    assert spec["plot_area"]["x"] == pytest.approx(0.14)
+    assert spec["plot_area"]["width"] == pytest.approx(0.82)
     assert spec["title"]["text"] == "Distribution Title"
+    assert spec["title"]["anchor"]["x"] == pytest.approx(0.55)
+    assert spec["title"]["ha"] == "center"
+    assert spec["title"]["va"] == "baseline"
     assert spec["axes"]["rotation"] == 30
     assert len(spec["axes"]["x_ticks"]) == 2
     assert spec["legend"]["items"][0]["label"] == "Mean marker"
-    assert len(spec["reference_bands"]) == 1
+    assert spec["legend"]["rect"]["x"] > 0.75
+    assert spec["legend"]["rect"]["y"] > 0.80
+    assert len(spec["reference_bands"]) == 0
+    assert len(spec["reference_lines"]) == 2
+    assert spec["reference_lines"][0]["color"] == "#D55E00"
     assert len(spec["violin_groups"]) == 2
+    assert len(spec["violin_bodies"]) == 2
+    assert len(spec["annotations"]["markers"]) == 3
 
 
 def test_build_resolved_iqr_spec_contains_precomputed_box_statistics():
@@ -236,13 +268,23 @@ def test_build_resolved_iqr_spec_contains_precomputed_box_statistics():
 
     spec = build_resolved_iqr_spec(payload)
 
-    assert spec["plot_area"]["width"] > 0.5
+    assert spec["plot_area"]["x"] == pytest.approx(0.14)
+    assert spec["plot_area"]["width"] == pytest.approx(0.82)
     assert spec["title"]["text"] == "IQR Title"
+    assert spec["title"]["anchor"]["x"] == pytest.approx(0.55)
+    assert spec["title"]["ha"] == "center"
     assert len(spec["boxes"]) == 2
     assert spec["boxes"][1]["outliers"] == [5.0]
     assert spec["boxes"][0]["median"] == pytest.approx(1.15)
     assert spec["legend"]["items"][0]["label"] == "Median"
+    assert spec["legend"]["rect"]["x"] > 0.75
+    assert spec["legend"]["rect"]["y"] > 0.80
+    assert len(spec["reference_bands"]) == 0
     assert len(spec["reference_lines"]) == 3
+    assert spec["reference_lines"][0]["color"] == "#D55E00"
+    assert spec["boxes"][0]["box_left"] == pytest.approx(0.86)
+    assert spec["boxes"][0]["box_right"] == pytest.approx(1.14)
+    assert spec["boxes"][0]["fill_color"] == "#8cb8d9"
 
 
 def test_build_resolved_trend_spec_contains_points_ticks_and_limit_lines():
@@ -261,8 +303,11 @@ def test_build_resolved_trend_spec_contains_points_ticks_and_limit_lines():
 
     spec = build_resolved_trend_spec(payload)
 
-    assert spec["plot_area"]["height"] > 0.4
+    assert spec["plot_area"]["x"] == pytest.approx(0.14)
+    assert spec["plot_area"]["width"] == pytest.approx(0.82)
     assert spec["title"]["text"] == "Trend Title"
+    assert spec["title"]["anchor"]["x"] == pytest.approx(0.55)
+    assert spec["title"]["ha"] == "center"
     assert spec["axes"]["rotation"] == 45
     assert [tick["label"] for tick in spec["axes"]["x_ticks"]] == ["S1", "S3", "S4"]
     assert len(spec["reference_lines"]) == 2
@@ -316,6 +361,54 @@ def test_render_distribution_png_honors_resolved_render_spec_for_title_and_scatt
     assert moved_title_pixels > 180
     assert moved_title_pixels > left_title_pixels
     assert upper_plot_pixels > lower_plot_pixels
+
+
+def test_render_distribution_png_honors_resolved_title_rect_alignment():
+    payload = {
+        "type": "distribution",
+        "series": [[], []],
+        "labels": ["A", "B"],
+        "title": "Original Distribution",
+        "render_mode": "scatter",
+        "x_values": [0.0, 1.0],
+        "y_values": [1.0, 1.2],
+        "x_domain": {"min": 0.0, "max": 1.0},
+        "canvas": {"width_px": 900, "height_px": 450, "dpi": 150},
+    }
+    payload["resolved_render_spec"] = {
+        "title": {
+            "text": "Centered By Rect",
+            "anchor": {"x": 0.10, "y": 0.98},
+            "font": {"size": 12.0, "weight": "normal"},
+            "color": "#000000",
+            "ha": "center",
+            "va": "baseline",
+            "rect": {"x": 0.38, "y": 0.88, "width": 0.24, "height": 0.05},
+        },
+        "plot_area": {"x": 0.14, "y": 0.18, "width": 0.62, "height": 0.56},
+        "axes": {
+            "x_limits": {"min": 0.0, "max": 1.0},
+            "y_limits": {"min": 0.0, "max": 10.0},
+            "x_ticks": [{"value": 0.0, "label": "A"}, {"value": 1.0, "label": "B"}],
+            "y_ticks": [{"value": 0.0, "label": "0"}, {"value": 5.0, "label": "5"}, {"value": 10.0, "label": "10"}],
+            "x_label": "Group",
+            "y_label": "Measurement",
+            "grid_axis": "y",
+            "rotation": 0,
+        },
+        "render_mode": "scatter",
+        "reference_lines": [],
+        "reference_bands": [],
+        "scatter_points": [],
+    }
+
+    image = plt.imread(BytesIO(render_distribution_png(payload)), format="png")
+
+    centered_title_pixels = _non_white_pixels(image, y0=0.04, y1=0.16, x0=0.34, x1=0.66)
+    left_title_pixels = _non_white_pixels(image, y0=0.04, y1=0.16, x0=0.00, x1=0.18)
+
+    assert centered_title_pixels > 180
+    assert centered_title_pixels > left_title_pixels
 
 
 def test_render_iqr_png_honors_resolved_render_spec_box_statistics():
@@ -474,3 +567,23 @@ def test_render_trend_png_honors_resolved_render_spec_points_and_limit_lines():
     assert moved_title_pixels > 140
     assert moved_title_pixels > left_title_pixels
     assert upper_plot_pixels > lower_plot_pixels
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "max_mean_abs_diff"),
+    [
+        ("distribution_scatter", 0.03),
+        ("distribution_violin", 0.04),
+        ("iqr", 0.03),
+    ],
+)
+def test_planner_built_resolved_specs_match_checked_in_parity_references(fixture_name: str, max_mean_abs_diff: float):
+    payload = _fixture_payload(fixture_name)
+    if fixture_name.startswith("distribution_"):
+        payload["resolved_render_spec"] = build_resolved_distribution_spec(payload)
+        native_image = _decode_png_bytes(render_distribution_png(payload))
+    else:
+        payload["resolved_render_spec"] = build_resolved_iqr_spec(payload)
+        native_image = _decode_png_bytes(render_iqr_png(payload))
+
+    assert _mean_absolute_image_difference(native_image, _fixture_reference_image(fixture_name)) <= max_mean_abs_diff

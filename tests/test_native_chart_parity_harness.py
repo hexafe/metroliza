@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 import numpy as np
-import pytest
 from unittest import mock
 
 from modules.chart_render_spec import (

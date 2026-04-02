@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Generate deterministic chart parity fixtures for native-vs-matplotlib rollout.
 
 Output structure (under tests/fixtures/chart_parity by default):

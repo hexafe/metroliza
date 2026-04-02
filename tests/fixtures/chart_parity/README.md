@@ -1,6 +1,6 @@
 # Chart Parity Fixtures
 
-This fixture set captures deterministic chart parity inputs and references for:
+This fixture set captures deterministic parity inputs and references for:
 
 - `histogram`
 - `distribution_scatter`
@@ -11,9 +11,14 @@ This fixture set captures deterministic chart parity inputs and references for:
 Each fixture directory contains:
 
 - `payload.json`: chart payload input.
-- `planner_spec.json`: spec built from `modules/chart_render_spec.py`.
+- `planner_spec.json`: checked-in resolved spec built from the live planner in `modules/chart_render_spec.py`.
 - `matplotlib_reference.png`: canonical matplotlib image artifact.
-- `matplotlib_oracle_geometry.json`: finalized matplotlib geometry extraction (present for distribution/IQR/trend).
+- `matplotlib_oracle_geometry.json`: finalized matplotlib geometry extraction when that oracle payload is still retained for runtime/reference use.
+
+Current runtime/parity split:
+
+- Histogram, distribution, and IQR build their resolved specs directly from the planner helpers and compare those live planner outputs against `planner_spec.json`.
+- Trend still retains a checked-in matplotlib-oracle geometry payload for runtime parity while also keeping `planner_spec.json` under fixture control.
 
 ## Regeneration
 
