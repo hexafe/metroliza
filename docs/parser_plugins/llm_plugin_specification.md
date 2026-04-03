@@ -34,6 +34,19 @@ The generated plugin must:
 - implement `parse_to_v2(self) -> ParseResultV2`
 - implement `to_legacy_blocks(parse_result_v2)`
 
+## Runtime selection model
+
+The parser factory evaluates a report in this order:
+
+1. Infer the source format from the file suffix.
+2. Load built-in and external parser plugins.
+3. Keep only plugins whose manifest `supported_formats` includes that format.
+4. Ask each remaining plugin to `probe(...)` with a `ProbeContext`.
+5. Accept only plugins whose probe says `can_parse=True` and whose confidence is high enough for the active selection mode.
+6. Choose the winner by confidence, then manifest `priority`, then `plugin_id`.
+
+This means `probe(...)` must be cheap, deterministic, and specific enough to distinguish the intended template family from generic format-level parsers.
+
 ## Required behavior
 
 ### `manifest`
@@ -43,6 +56,13 @@ The manifest must preserve the requested:
 - `plugin_id`
 - `display_name`
 - `supported_formats`
+
+It should also set the supporting fields deliberately:
+
+- `supported_locales` for locale coverage and review.
+- `template_ids` for template-family identifiers.
+- `priority` as a tie-breaker when confidence is equal.
+- `capabilities` for structured metadata such as OCR requirements.
 
 It must not invent new registry mechanisms or change how Metroliza discovers plugins.
 
@@ -104,8 +124,10 @@ The generated plugin must:
 
 - import the generated parser class
 - instantiate it against a sample file
+- exercise `probe(...)` for the same sample
 - assert the result is `ParseResultV2` when parsing is implemented
 - assert the `plugin_id` matches the requested value
+- use the workspace `expected_results_template.csv` as the correctness reference for manual review or semantic validation
 
 ## Installation target
 
@@ -120,7 +142,7 @@ Metroliza will auto-discover that file and include it in parser factory resoluti
 A generated parser plugin is ready only when all are true:
 
 - validation passes via `scripts/validate_parser_plugins.py`
-- manually checked expected values match the parsed result
+- the parsed result matches the manually verified values in `expected_results_template.csv`
 - the plugin file is installed in `~/.metroliza/parser_plugins/`
 - Metroliza selects the plugin for the intended supplier report format
 - rollout approval follows the parser plugin runbook

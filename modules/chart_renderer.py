@@ -281,9 +281,9 @@ def _runtime_rollout_chart_kinds() -> set[str]:
         return set(_NATIVE_CHART_KINDS)
 
     raw_value = os.getenv(_ROLLOUT_CHARTS_ENV_VAR, "").strip().lower()
-    if raw_value in {"1", "true", "yes", "on", "all", "*"}:
+    if raw_value in {"", "1", "true", "yes", "on", "all", "*"}:
         return set(_NATIVE_CHART_KINDS)
-    if not raw_value:
+    if raw_value in {"0", "false", "no", "off", "none"}:
         return set()
 
     enabled: set[str] = set()
@@ -411,8 +411,10 @@ def _resolve_native_backend_with_policy(*, chart_kind: str, backend_available: b
 def resolve_chart_renderer_backend() -> ResolvedBackend:
     """Resolve the primary chart renderer backend policy for histogram exports.
 
-    Native rendering is held behind an explicit rollout gate; the default
-    policy keeps export rendering on matplotlib.
+    Native rendering is preferred by default when the native backend is
+    available. Operators can still narrow or disable rollout explicitly via
+    ``METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS`` or force matplotlib via
+    ``METROLIZA_CHART_RENDERER_BACKEND=matplotlib``.
     """
     backend = _runtime_backend_choice()
     return _resolve_native_backend_with_policy(

@@ -125,6 +125,117 @@ class DemoExternalParser(BaseReportParser, BaseReportParserPlugin):
     assert result == 0
 
 
+def test_validate_parser_plugins_script_accepts_expected_results_csv(tmp_path):
+    module = _load_script_module("validate_parser_plugins.py")
+    plugin_file = tmp_path / "demo_semantic_plugin.py"
+    plugin_file.write_text(
+        """
+from modules.base_report_parser import BaseReportParser
+from modules.parser_plugin_contracts import (
+    BaseReportParserPlugin,
+    MeasurementBlockV2,
+    MeasurementV2,
+    ParseMetaV2,
+    ParseResultV2,
+    PluginManifest,
+    ProbeResult,
+    ReportInfoV2,
+)
+
+
+class DemoSemanticParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id="demo_semantic_script",
+        display_name="Demo Semantic Script",
+        version="1.0.0",
+        supported_formats=("pdf",),
+    )
+
+    @classmethod
+    def probe(cls, _input_ref, _context):
+        return ProbeResult(plugin_id="demo_semantic_script", can_parse=True, confidence=90)
+
+    def open_report(self):
+        self.raw_text = ["ok"]
+
+    def split_text_to_blocks(self):
+        self.blocks_text = []
+
+    def parse_to_v2(self):
+        return ParseResultV2(
+            meta=ParseMetaV2(
+                source_file="sample_report_01.pdf",
+                source_format="pdf",
+                plugin_id="demo_semantic_script",
+                plugin_version="1.0.0",
+                template_id="default",
+                parse_timestamp="2026-01-01T00:00:00Z",
+                locale_detected=None,
+                confidence=90,
+            ),
+            report=ReportInfoV2(
+                reference="REF123",
+                report_date="2026-01-05",
+                sample_number="0001",
+                file_name="sample_report_01.pdf",
+                file_path=".",
+            ),
+            blocks=(
+                MeasurementBlockV2(
+                    header_raw=("MAIN FEATURE",),
+                    header_normalized="MAIN FEATURE",
+                    dimensions=(
+                        MeasurementV2(
+                            axis_code="X",
+                            nominal=10.0,
+                            tol_plus=0.1,
+                            tol_minus=-0.1,
+                            bonus=None,
+                            measured=10.02,
+                            deviation=0.02,
+                            out_of_tolerance=0.0,
+                        ),
+                    ),
+                    block_index=0,
+                ),
+            ),
+        )
+
+    @staticmethod
+    def to_legacy_blocks(_parse_result_v2):
+        return []
+""",
+        encoding="utf-8",
+    )
+    sample_file = tmp_path / "sample_report_01.pdf"
+    sample_file.write_text("placeholder\n", encoding="utf-8")
+    expected_results = tmp_path / "expected_results_template.csv"
+    expected_results.write_text(
+        "sample_file,reference,report_date,sample_number,block_index,header_normalized,axis_code,nominal,tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance\n"
+        "sample_report_01.pdf,REF123,2026-01-05,0001,0,MAIN FEATURE,X,10.0,0.1,-0.1,,10.02,0.02,0\n",
+        encoding="utf-8",
+    )
+
+    factory_module, snapshot = _snapshot_factory_state()
+    try:
+        result = module.main(
+            [
+                "--paths",
+                str(plugin_file),
+                "--plugin-id",
+                "demo_semantic_script",
+                "--sample-input",
+                str(sample_file),
+                "--expected-results",
+                str(expected_results),
+            ]
+        )
+    finally:
+        _restore_factory_state(factory_module, snapshot)
+
+    assert result == 0
+
+
 def test_build_parser_plugin_repair_prompt_script_writes_artifact_for_failed_validation(tmp_path):
     module = _load_script_module("build_parser_plugin_repair_prompt.py")
     plugin_file = tmp_path / "bad_external_plugin.py"
@@ -180,3 +291,119 @@ class BadExternalParser(BaseReportParser, BaseReportParserPlugin):
     assert result == 1
     assert output_path.exists()
     assert "probe_returns_probe_result" in output_path.read_text(encoding="utf-8")
+
+
+def test_build_parser_plugin_repair_prompt_script_includes_semantic_mismatch_checks(tmp_path):
+    module = _load_script_module("build_parser_plugin_repair_prompt.py")
+    plugin_file = tmp_path / "semantic_mismatch_plugin.py"
+    plugin_file.write_text(
+        """
+from modules.base_report_parser import BaseReportParser
+from modules.parser_plugin_contracts import (
+    BaseReportParserPlugin,
+    MeasurementBlockV2,
+    MeasurementV2,
+    ParseMetaV2,
+    ParseResultV2,
+    PluginManifest,
+    ProbeResult,
+    ReportInfoV2,
+)
+
+
+class SemanticMismatchParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id="semantic_mismatch_script",
+        display_name="Semantic Mismatch Script",
+        version="1.0.0",
+        supported_formats=("pdf",),
+    )
+
+    @classmethod
+    def probe(cls, _input_ref, _context):
+        return ProbeResult(plugin_id="semantic_mismatch_script", can_parse=True, confidence=90)
+
+    def open_report(self):
+        self.raw_text = ["ok"]
+
+    def split_text_to_blocks(self):
+        self.blocks_text = []
+
+    def parse_to_v2(self):
+        return ParseResultV2(
+            meta=ParseMetaV2(
+                source_file="sample_report_01.pdf",
+                source_format="pdf",
+                plugin_id="semantic_mismatch_script",
+                plugin_version="1.0.0",
+                template_id="default",
+                parse_timestamp="2026-01-01T00:00:00Z",
+                locale_detected=None,
+                confidence=90,
+            ),
+            report=ReportInfoV2(
+                reference="REF123",
+                report_date="2026-01-05",
+                sample_number="0001",
+                file_name="sample_report_01.pdf",
+                file_path=".",
+            ),
+            blocks=(
+                MeasurementBlockV2(
+                    header_raw=("MAIN FEATURE",),
+                    header_normalized="MAIN FEATURE",
+                    dimensions=(
+                        MeasurementV2(
+                            axis_code="X",
+                            nominal=10.0,
+                            tol_plus=0.1,
+                            tol_minus=-0.1,
+                            bonus=None,
+                            measured=10.5,
+                            deviation=0.5,
+                            out_of_tolerance=1.0,
+                        ),
+                    ),
+                    block_index=0,
+                ),
+            ),
+        )
+
+    @staticmethod
+    def to_legacy_blocks(_parse_result_v2):
+        return []
+""",
+        encoding="utf-8",
+    )
+    sample_file = tmp_path / "sample_report_01.pdf"
+    sample_file.write_text("placeholder\n", encoding="utf-8")
+    expected_results = tmp_path / "expected_results_template.csv"
+    expected_results.write_text(
+        "sample_file,reference,report_date,sample_number,block_index,header_normalized,axis_code,nominal,tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance\n"
+        "sample_report_01.pdf,REF123,2026-01-05,0001,0,MAIN FEATURE,X,10.0,0.1,-0.1,,10.02,0.02,0\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "repair_prompt.md"
+
+    factory_module, snapshot = _snapshot_factory_state()
+    try:
+        result = module.main(
+            [
+                "--paths",
+                str(plugin_file),
+                "--plugin-id",
+                "semantic_mismatch_script",
+                "--sample-input",
+                str(sample_file),
+                "--expected-results",
+                str(expected_results),
+                "--output",
+                str(output_path),
+            ]
+        )
+    finally:
+        _restore_factory_state(factory_module, snapshot)
+
+    assert result == 1
+    assert output_path.exists()
+    assert "expected_results_" in output_path.read_text(encoding="utf-8")

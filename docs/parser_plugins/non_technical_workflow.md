@@ -60,7 +60,7 @@ Paste the returned file contents back into:
 Run:
 
 ```bash
-python scripts/validate_parser_plugins.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf
+python scripts/validate_parser_plugins.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf --expected-results expected_results_template.csv
 ```
 
 Replace `sample_report_01.pdf` with one real sample from your workspace.
@@ -70,13 +70,14 @@ Validation should confirm that the plugin:
 - follows the required Metroliza contract
 - returns a valid `ParseResultV2`
 - keeps the requested plugin identity
+- matches the manually verified values in `expected_results_template.csv`
 
 ## Step 6: Repair if validation fails
 
 Run:
 
 ```bash
-python scripts/build_parser_plugin_repair_prompt.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf --output artifacts/repair_prompt.md
+python scripts/build_parser_plugin_repair_prompt.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf --expected-results expected_results_template.csv --output artifacts/repair_prompt.md
 ```
 
 Then upload `artifacts/repair_prompt.md` to the LLM, ask for a corrected version, paste the corrected files back into the workspace, and validate again.
@@ -98,8 +99,15 @@ After restart, Metroliza automatically scans `~/.metroliza/parser_plugins/`.
 When you load a report:
 
 - Metroliza identifies the source format
-- the parser factory asks matching plugins to `probe(...)`
-- the best matching plugin is selected automatically
+- the parser factory asks only plugins whose manifest supports that format to `probe(...)`
+- the best matching plugin is selected automatically by confidence, then priority, then plugin id
+- the selected parser should be the one that wins for the specific sample you are using, not just any parser for the same file type
+
+If you need to confirm why a specific file selected a parser, run:
+
+```bash
+python scripts/explain_parser_resolution.py samples/sample_report_01.pdf --paths generated_plugin.py
+```
 
 You do not need to edit Metroliza source code to register the new parser.
 
@@ -117,4 +125,4 @@ You do not need to edit Metroliza source code to register the new parser.
 - If the wrong parser is selected, improve the generated `probe(...)` logic so it uses stronger template markers.
 - If dates or decimals are wrong, update `supplier_intake.md` with explicit locale examples and regenerate.
 - If the report family has multiple visible layouts, prepare one workspace per template family.
-- If validation passes but the business values are wrong, add those mismatches to the repair prompt and regenerate.
+- If validation passes but the business values are wrong, add those mismatches to `expected_results_template.csv`, then add them to the repair prompt and regenerate.

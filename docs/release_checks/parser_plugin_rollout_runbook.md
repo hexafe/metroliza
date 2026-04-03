@@ -16,8 +16,10 @@ Use this checklist on parser plugin PRs before merge:
 - [ ] Workspace and sample pack were prepared with `python scripts/create_parser_plugin_workspace.py ...` or an equivalent documented packet.
 - [ ] Plugin manifest versioning decision is documented (`patch`/`minor`/`major`).
 - [ ] `python scripts/validate_parser_plugins.py` output is attached.
+- [ ] `expected_results_template.csv` or an equivalent fixture comparison summary is attached.
 - [ ] If validation failed during development, repair-loop artifact (`scripts/build_parser_plugin_repair_prompt.py`) is attached or linked.
 - [ ] Fixture deltas are reviewed by a human approver.
+- [ ] Resolver diagnostics for the representative sample show the intended plugin winning for the intended report.
 - [ ] Rollback strategy is noted (disable via feature flag and/or revert registry change).
 
 ## Staged rollout checklist
@@ -46,7 +48,7 @@ Metroliza auto-discovers plugins from that folder on the next process start.
 
 1. Disable plugin runtime flag or template override.
 2. Revert plugin registration/package to last known-good version.
-3. Re-run validation gate on restored snapshot.
+3. Re-run validation gate on restored snapshot and confirm resolver diagnostics still select the expected parser.
 4. Publish incident note with impact, mitigation, and follow-up owner.
 
 ## Legacy deprecation rubric

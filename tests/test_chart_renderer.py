@@ -49,6 +49,7 @@ def _attach_histogram_resolved_spec(payload):
 
 def test_resolve_backend_defaults_to_matplotlib_when_native_unavailable(monkeypatch):
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_BACKEND", raising=False)
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
     with mock.patch("modules.chart_renderer._native_render_histogram_png", None):
         assert resolve_chart_renderer_backend() == "matplotlib"
 
@@ -62,27 +63,38 @@ def test_resolve_backend_native_warns_and_falls_back_when_extension_missing(monk
     assert "METROLIZA_CHART_RENDERER_BACKEND=native" in str(warn.call_args[0][0])
 
 
-def test_native_backend_rollout_gate_is_disabled_by_default():
-    assert native_chart_renderer_rollout_enabled() is False
-    assert native_chart_renderer_rollout_enabled_for("histogram") is False
-    assert native_chart_renderer_rollout_enabled_for("distribution") is False
-    assert native_chart_renderer_rollout_enabled_for("iqr") is False
-    assert native_chart_renderer_rollout_enabled_for("trend") is False
+def test_native_backend_rollout_gate_is_enabled_for_all_chart_kinds_by_default(monkeypatch):
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
+    assert native_chart_renderer_rollout_enabled() is True
+    assert native_chart_renderer_rollout_enabled_for("histogram") is True
+    assert native_chart_renderer_rollout_enabled_for("distribution") is True
+    assert native_chart_renderer_rollout_enabled_for("iqr") is True
+    assert native_chart_renderer_rollout_enabled_for("trend") is True
 
 
-def test_resolve_backend_auto_uses_matplotlib_even_when_extension_available(monkeypatch):
+def test_native_backend_rollout_gate_treats_empty_env_as_all_chart_kinds(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", "")
+    assert native_chart_renderer_rollout_enabled() is True
+    assert native_chart_renderer_rollout_enabled_for("histogram") is True
+    assert native_chart_renderer_rollout_enabled_for("distribution") is True
+    assert native_chart_renderer_rollout_enabled_for("iqr") is True
+    assert native_chart_renderer_rollout_enabled_for("trend") is True
+
+
+def test_resolve_backend_auto_prefers_native_when_extension_available(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
-        assert resolve_chart_renderer_backend() == "matplotlib"
+        assert resolve_chart_renderer_backend() == "native"
 
 
-def test_resolve_backend_native_warns_and_falls_back_even_when_extension_available(monkeypatch):
+def test_resolve_backend_native_uses_native_when_extension_available(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
         with mock.patch("warnings.warn") as warn:
-            assert resolve_chart_renderer_backend() == "matplotlib"
-    warn.assert_called_once()
-    assert "disabled by rollout policy" in str(warn.call_args[0][0])
+            assert resolve_chart_renderer_backend() == "native"
+    warn.assert_not_called()
 
 
 def test_native_chart_backend_available_requires_histogram_symbol_only():
@@ -98,11 +110,14 @@ def test_native_chart_backend_available_requires_histogram_symbol_only():
 
 def test_resolve_distribution_backend_falls_back_when_distribution_symbol_is_missing(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
     with (
         mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
         mock.patch("modules.chart_renderer._native_render_distribution_png", None),
+        mock.patch("modules.chart_renderer._native_render_iqr_png", None),
+        mock.patch("modules.chart_renderer._native_render_trend_png", None),
     ):
-        assert resolve_chart_renderer_backend() == "matplotlib"
+        assert resolve_chart_renderer_backend() == "native"
         assert resolve_distribution_renderer_backend() == "matplotlib"
         assert resolve_iqr_renderer_backend() == "matplotlib"
         assert resolve_trend_renderer_backend() == "matplotlib"
@@ -112,19 +127,40 @@ def test_resolve_distribution_backend_falls_back_when_distribution_symbol_is_mis
 
 def test_build_chart_renderer_native_env_falls_back_to_matplotlib_when_extension_missing(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
-    with mock.patch("modules.chart_renderer._native_render_histogram_png", None):
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
+    with (
+        mock.patch("modules.chart_renderer._native_render_histogram_png", None),
+        mock.patch("modules.chart_renderer._native_render_distribution_png", None),
+        mock.patch("modules.chart_renderer._native_render_iqr_png", None),
+        mock.patch("modules.chart_renderer._native_render_trend_png", None),
+    ):
         renderer = build_chart_renderer()
     assert isinstance(renderer, MatplotlibChartRenderer)
 
 
-def test_build_chart_renderer_keeps_matplotlib_even_when_native_capability_is_present(monkeypatch):
+def test_build_chart_renderer_uses_native_when_native_capability_is_present(monkeypatch):
     monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
     with mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"):
         with mock.patch("warnings.warn") as warn:
             renderer = build_chart_renderer()
-    assert isinstance(renderer, MatplotlibChartRenderer)
-    assert warn.called
-    assert "disabled by rollout policy" in str(warn.call_args[0][0])
+    assert isinstance(renderer, NativeChartRenderer)
+    assert warn.call_count == 0
+
+
+def test_build_chart_renderer_prefers_native_when_distribution_backend_is_available_by_default(monkeypatch):
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_BACKEND", raising=False)
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
+    with (
+        mock.patch("modules.chart_renderer._native_render_histogram_png", None),
+        mock.patch("modules.chart_renderer._native_render_distribution_png", lambda payload: b"png"),
+        mock.patch("modules.chart_renderer._native_render_iqr_png", None),
+        mock.patch("modules.chart_renderer._native_render_trend_png", None),
+    ):
+        renderer = build_chart_renderer()
+        assert resolve_chart_renderer_backend() == "matplotlib"
+        assert resolve_distribution_renderer_backend() == "native"
+    assert isinstance(renderer, NativeChartRenderer)
 
 
 def test_build_chart_renderer_matplotlib(monkeypatch):
@@ -507,6 +543,13 @@ def test_backend_diagnostics_exposes_per_chart_rollout_state(monkeypatch):
     assert summary["distribution_effective_backend"] == "native"
     assert summary["iqr_effective_backend"] == "matplotlib"
     assert summary["trend_effective_backend"] == "native"
+
+
+def test_resolve_distribution_backend_auto_prefers_native_when_extension_available(monkeypatch):
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_BACKEND", raising=False)
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
+    with mock.patch("modules.chart_renderer._native_render_distribution_png", lambda payload: b"png"):
+        assert resolve_distribution_renderer_backend() == "native"
 
 
 def test_native_distribution_renderer_validates_payload_contract():

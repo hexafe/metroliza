@@ -447,8 +447,9 @@ def test_trend_parity_harness_tracks_metadata_and_coarse_image_parity():
     )
 
 
-def test_backend_policy_stays_matplotlib_even_when_native_capability_is_ready(monkeypatch):
-    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "native")
+def test_backend_policy_defaults_to_native_when_native_capability_is_ready(monkeypatch):
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_BACKEND", raising=False)
+    monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
     with (
         mock.patch("modules.chart_renderer._native_render_histogram_png", lambda payload: b"png"),
         mock.patch("modules.chart_renderer._native_render_distribution_png", lambda payload: b"png"),
@@ -457,16 +458,15 @@ def test_backend_policy_stays_matplotlib_even_when_native_capability_is_ready(mo
         mock.patch("warnings.warn") as warn,
     ):
         assert native_full_chart_backend_available() is True
-        assert native_chart_renderer_rollout_enabled() is False
-        assert native_chart_renderer_rollout_enabled_for("histogram") is False
-        assert resolve_chart_renderer_backend() == "matplotlib"
-        assert resolve_distribution_renderer_backend() == "matplotlib"
-        assert resolve_histogram_renderer_backend() == "matplotlib"
-        assert resolve_iqr_renderer_backend() == "matplotlib"
-        assert resolve_trend_renderer_backend() == "matplotlib"
-        assert isinstance(build_chart_renderer(), MatplotlibChartRenderer)
-    assert warn.called
-    assert "disabled by rollout policy" in str(warn.call_args[0][0])
+        assert native_chart_renderer_rollout_enabled() is True
+        assert native_chart_renderer_rollout_enabled_for("histogram") is True
+        assert resolve_chart_renderer_backend() == "native"
+        assert resolve_distribution_renderer_backend() == "native"
+        assert resolve_histogram_renderer_backend() == "native"
+        assert resolve_iqr_renderer_backend() == "native"
+        assert resolve_trend_renderer_backend() == "native"
+        assert type(build_chart_renderer()).__name__ == "NativeChartRenderer"
+    assert warn.call_count == 0
 
 
 def test_backend_policy_enables_selected_chart_types_with_rollout_allowlist(monkeypatch):

@@ -3,6 +3,7 @@
 Usage:
   python scripts/build_parser_plugin_repair_prompt.py --plugin-id cmm
   python scripts/build_parser_plugin_repair_prompt.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf
+  python scripts/build_parser_plugin_repair_prompt.py --paths generated_plugin.py --plugin-id supplier_alpha --sample-input samples/sample_report_01.pdf --expected-results expected_results_template.csv
 """
 
 from __future__ import annotations
@@ -56,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional sample report used for parse-to-V2 validation before generating the repair prompt",
     )
     parser.add_argument(
+        "--expected-results",
+        help="Optional CSV with expected rows for semantic comparison; requires --sample-input",
+    )
+    parser.add_argument(
         "--output",
         default="artifacts/parser_plugin_repair_prompt.md",
         help="Output markdown artifact path",
@@ -98,10 +103,14 @@ def main(argv: list[str] | None = None) -> int:
         sample_input_ref = "sample.pdf"
         parse_invoker = None
 
+    if args.expected_results and not args.sample_input:
+        parser.error("--expected-results requires --sample-input so semantic comparison can target one report")
+
     report = validate_plugin_contract(
         parser_cls,
         sample_input_ref=sample_input_ref,
         parse_invoker=parse_invoker,
+        expected_results_ref=args.expected_results,
     )
     if report.passed:
         print(f"Plugin '{args.plugin_id}' passed validation; no repair artifact created.")

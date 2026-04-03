@@ -32,9 +32,10 @@ export runtime when rollout/native availability allow them.
 `modules/chart_renderer.py` controls backend selection using `METROLIZA_CHART_RENDERER_BACKEND`
 and `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS`:
 
-- `auto` (default): use native chart rendering only for chart kinds that are
-  allowlisted in `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` and available from
-  this extension.
+- `auto` (default): prefer native chart rendering for chart kinds that are
+  enabled in `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` and available from this
+  extension. When the rollout env var is unset, all supported chart kinds are
+  enabled by default.
 - `native`: prefer native chart rendering for allowlisted chart kinds; when a
   chart kind is unavailable or not allowlisted, Python warns and falls back to
   matplotlib.

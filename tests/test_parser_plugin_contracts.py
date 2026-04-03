@@ -51,11 +51,16 @@ def test_llm_plugin_factory_scaffold_contains_required_entrypoints():
 
     assert "ParseResultV2" in scaffold.analysis_prompt_template
     assert "inside the existing parser-plugin contract" in scaffold.analysis_prompt_template
+    assert "Runtime selection notes" in scaffold.analysis_prompt_template
+    assert "Expected-results validation notes" in scaffold.analysis_prompt_template
     assert "open_report" in scaffold.plugin_template
     assert "split_text_to_blocks" in scaffold.plugin_template
     assert "parse_to_v2" in scaffold.plugin_template
     assert "to_legacy_blocks" in scaffold.plugin_template
-    assert "contract_conformance" in scaffold.test_template
+    assert "supported_locales" in scaffold.plugin_template
+    assert "priority" in scaffold.plugin_template
+    assert "probe_result = {{CLASS_NAME}}.probe" in scaffold.test_template
+    assert "legacy_blocks = parser.to_legacy_blocks(parse_result)" in scaffold.test_template
 
 
 def test_llm_plugin_workspace_bundle_contains_install_and_validation_guidance():

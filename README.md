@@ -60,8 +60,8 @@ Parity between native and Python backends is enforced through fixture-based test
 
 - `METROLIZA_CHART_RENDERER_BACKEND` accepts `auto` (default), `native`, or `matplotlib`.
 - Native chart rendering via `_metroliza_chart_native` is included when the native extension is built/installed in the packaging environment.
-- `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` accepts a comma-separated allowlist such as `histogram,distribution,iqr,trend`; only listed chart kinds may use the native backend.
-- In `auto`, the runtime export path prefers the native backend only for allowlisted chart kinds whose native extension symbols are available.
+- `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` accepts a comma-separated allowlist such as `histogram,distribution,iqr,trend`; when unset, all supported chart kinds are enabled for native rollout by default.
+- In `auto`, the runtime export path now prefers the native backend for enabled chart kinds whose native extension symbols are available.
 - If `native` is forced while the native module is unavailable, Metroliza warns and falls back to matplotlib rendering.
 - If `native` is forced for a chart kind that is not allowlisted for rollout, Metroliza warns and falls back to matplotlib rendering for that chart kind.
 - Runtime export rendering is split into three layers:
@@ -92,8 +92,8 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 ## Parser plugin resolver controls
 
 - End-user drop-in folder: Metroliza automatically discovers parser plugins placed in `~/.metroliza/parser_plugins/`.
-- Default selection accepts parser probes with confidence `>=1` and resolves ties by confidence, plugin priority, then plugin id.
-- Optional strict selection: set `PARSER_STRICT_MATCHING=true` to require confidence `>=80`.
+- Default selection is strict and accepts parser probes only with confidence `>=80`; ties are resolved by confidence, plugin priority, then plugin id.
+- To relax selection temporarily, set `PARSER_STRICT_MATCHING=false`.
 - Probe results are cached per plugin/path during process runtime to reduce repeated probe work in batch parses.
 - Advanced override: `PARSER_EXTERNAL_PLUGIN_PATHS` can point to extra plugin files or directories.
 - Active parser plugin onboarding docs live under [`docs/parser_plugins/README.md`](docs/parser_plugins/README.md).

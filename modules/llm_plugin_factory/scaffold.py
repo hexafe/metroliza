@@ -65,18 +65,21 @@ def build_plugin_scaffold() -> PluginScaffoldArtifacts:
             "- one or more sample reports\n"
             "- `expected_results_template.csv` filled with key values the business user can verify\n\n"
             "## Your job\n"
-            "1. Identify the report format and stable template cues.\n"
-            "2. Propose a safe `probe(...)` strategy.\n"
-            "3. Map source fields into `ParseResultV2`.\n"
-            "4. List locale assumptions: decimal separators, dates, units, language, header aliases.\n"
+            "1. Identify the report format, template family, and stable template cues.\n"
+            "2. Propose a safe `probe(...)` strategy that works with runtime selection.\n"
+            "3. Map source fields into `ParseResultV2` and the legacy row order.\n"
+            "4. Call out locale assumptions: decimal separators, dates, units, language, header aliases.\n"
             "5. Explain how to build `raw_text`, `blocks_text`, and final V2 measurement rows.\n"
-            "6. List ambiguities, risks, and any extra samples needed.\n\n"
+            "6. Explain how `expected_results_template.csv` should be used to confirm correctness.\n"
+            "7. List ambiguities, risks, and any extra samples needed.\n\n"
             "## Required output sections\n"
             "- Template summary\n"
             "- Manifest proposal\n"
+            "- Runtime selection notes\n"
             "- Probe strategy\n"
             "- Field mapping table\n"
             "- Parsing algorithm\n"
+            "- Expected-results validation notes\n"
             "- Ambiguities and fallback policy\n"
             "- Questions for the user\n"
         ),
@@ -92,6 +95,8 @@ def build_plugin_scaffold() -> PluginScaffoldArtifacts:
             "- Implement `probe`, `open_report`, `split_text_to_blocks`, `parse_to_v2`, and `to_legacy_blocks`.\n"
             "- Keep parsing deterministic.\n"
             "- Preserve the requested `plugin_id` and supported format.\n"
+            "- Set the manifest fields explicitly: `plugin_id`, `display_name`, `supported_formats`, `supported_locales`, `template_ids`, `priority`, and `capabilities`.\n"
+            "- Make `probe(...)` cheap and specific enough to participate in runtime selection without false positives.\n"
             "- Use `ParseResultV2` and nested dataclasses from `modules.parser_plugin_contracts`.\n"
             "- Use only stdlib plus imports already present in the approved scaffold.\n"
             "- Do not invent new runtime flags, registries, or base classes.\n\n"
@@ -128,14 +133,22 @@ def build_plugin_scaffold() -> PluginScaffoldArtifacts:
             "    )\n\n"
             "    @classmethod\n"
             "    def probe(cls, input_ref: str | Path, context: ProbeContext) -> ProbeResult:\n"
+            "        source_format = (context.source_format or \"\").lower()\n"
             "        path_text = str(input_ref).lower()\n"
-            "        if path_text.endswith(\".{{FILE_EXTENSION}}\"):\n"
+            "        if source_format and source_format not in cls.manifest.supported_formats:\n"
+            "            return ProbeResult(\n"
+            "                plugin_id=cls.manifest.plugin_id,\n"
+            "                can_parse=False,\n"
+            "                confidence=0,\n"
+            "                reasons=(\"unsupported_source_format\",),\n"
+            "            )\n"
+            "        if path_text.endswith(\".{{FILE_EXTENSION}}\") or source_format == \"{{SOURCE_FORMAT}}\":\n"
             "            return ProbeResult(\n"
             "                plugin_id=cls.manifest.plugin_id,\n"
             "                can_parse=True,\n"
-            "                confidence=70,\n"
+            "                confidence=85,\n"
             "                matched_template_id=\"default\",\n"
-            "                reasons=(\"file_extension\",),\n"
+            "                reasons=(\"source_format_match\", \"file_extension\"),\n"
             "            )\n"
             "        return ProbeResult(\n"
             "            plugin_id=cls.manifest.plugin_id,\n"
@@ -167,10 +180,10 @@ def build_plugin_scaffold() -> PluginScaffoldArtifacts:
             "                source_format=\"{{SOURCE_FORMAT}}\",\n"
             "                plugin_id=self.manifest.plugin_id,\n"
             "                plugin_version=self.manifest.version,\n"
-            "                template_id=\"default\",\n"
+            "                template_id=self.manifest.template_ids[0] if self.manifest.template_ids else None,\n"
             "                parse_timestamp=strftime(\"%Y-%m-%dT%H:%M:%SZ\"),\n"
             "                locale_detected=None,\n"
-            "                confidence=70,\n"
+            "                confidence=85,\n"
             "            ),\n"
             "            report=ReportInfoV2(\n"
             "                reference=self.reference,\n"
@@ -202,19 +215,26 @@ def build_plugin_scaffold() -> PluginScaffoldArtifacts:
             "        return legacy_blocks\n"
         ),
         test_template=(
-            "from modules.parser_plugin_contracts import ParseResultV2\n\n"
+            "from modules.parser_plugin_contracts import ParseResultV2, ProbeContext, infer_source_format\n"
             "from generated_plugin import {{CLASS_NAME}}\n\n\n"
             "def test_generated_plugin_contract_conformance(tmp_path):\n"
             "    sample_file = tmp_path / \"{{SAMPLE_FILE_NAME}}\"\n"
             "    sample_file.write_text(\"replace with a real sample during implementation\\n\", encoding=\"utf-8\")\n"
             "    parser = {{CLASS_NAME}}(str(sample_file), database=\":memory:\")\n"
-            "    try:\n"
-            "        parse_result = parser.parse_to_v2()\n"
-            "    except NotImplementedError:\n"
-            "        # Replace this stub branch once the plugin is implemented.\n"
-            "        return\n"
+            "    probe_result = {{CLASS_NAME}}.probe(sample_file, ProbeContext(source_path=str(sample_file), source_format=infer_source_format(sample_file)))\n"
+            "    assert probe_result.plugin_id == \"{{PLUGIN_ID}}\"\n"
+            "    assert 0 <= probe_result.confidence <= 100\n"
+            "    assert probe_result.can_parse is True\n"
+            "    parse_result = parser.parse_to_v2()\n"
             "    assert isinstance(parse_result, ParseResultV2)\n"
             "    assert parse_result.meta.plugin_id == \"{{PLUGIN_ID}}\"\n"
+            "    assert parse_result.meta.source_format == \"{{SOURCE_FORMAT}}\"\n"
+            "    assert parse_result.report.file_name == sample_file.name\n"
+            "    legacy_blocks = parser.to_legacy_blocks(parse_result)\n"
+            "    assert isinstance(legacy_blocks, list)\n"
+            "    if legacy_blocks:\n"
+            "        assert isinstance(legacy_blocks[0], list)\n"
+            "        assert len(legacy_blocks[0]) == 2\n"
         ),
     )
 
@@ -268,26 +288,40 @@ This folder is the complete working packet for one Metroliza parser plugin.
 8. Validate the generated plugin:
 
 ```bash
-python scripts/validate_parser_plugins.py --paths generated_plugin.py --plugin-id {{PLUGIN_ID}} --sample-input samples/{{SAMPLE_FILE_NAME}}
+python scripts/validate_parser_plugins.py --paths generated_plugin.py --plugin-id {{PLUGIN_ID}} --sample-input samples/{{SAMPLE_FILE_NAME}} --expected-results expected_results_template.csv
 ```
 
 9. If validation fails, generate a repair prompt:
 
 ```bash
-python scripts/build_parser_plugin_repair_prompt.py --paths generated_plugin.py --plugin-id {{PLUGIN_ID}} --sample-input samples/{{SAMPLE_FILE_NAME}} --output artifacts/repair_prompt.md
+python scripts/build_parser_plugin_repair_prompt.py --paths generated_plugin.py --plugin-id {{PLUGIN_ID}} --sample-input samples/{{SAMPLE_FILE_NAME}} --expected-results expected_results_template.csv --output artifacts/repair_prompt.md
 ```
 
-10. Re-run the LLM using `artifacts/repair_prompt.md`, then validate again.
-11. After validation passes, install the parser by copying `generated_plugin.py` to `{{INSTALL_PATH}}`.
-12. Restart Metroliza and load a report from the new supplier. The parser factory will probe the file and select this plugin when it matches.
+10. Check resolver diagnostics before installation:
+
+```bash
+python scripts/explain_parser_resolution.py samples/{{SAMPLE_FILE_NAME}} --paths generated_plugin.py
+```
+
+11. Re-run the LLM using `artifacts/repair_prompt.md`, then validate again.
+12. After validation passes, install the parser by copying `generated_plugin.py` to `{{INSTALL_PATH}}`.
+13. Restart Metroliza and load a report from the new supplier. The parser factory will probe the file and select this plugin when it matches.
 
 ## Runtime loading
 - Metroliza automatically discovers parser plugins placed in `{{INSTALL_PATH}}`.
 - Advanced override: `PARSER_EXTERNAL_PLUGIN_PATHS` can still point to extra plugin files or folders.
 
+## How selection works
+- Metroliza infers the source format from the file suffix first.
+- The factory only asks plugins whose manifests declare that format in `supported_formats`.
+- Each candidate is probed with the source path and a probe context.
+- The winner is the highest-confidence parseable plugin, then the highest manifest `priority`, then `plugin_id`.
+- If confidence is too weak, the resolver can reject the report instead of guessing.
+
 ## Human approval checklist
 - Reference, date, and sample number are correct.
 - Key measurements match the expected results file.
+- The parser won for the intended sample when you checked resolver diagnostics.
 - Validation passes.
 - Warnings are understandable and acceptable.
 - Pilot rollout plan is prepared before broad activation.
@@ -344,10 +378,12 @@ Paste the LLM analysis here after Step 4.
     review_checklist = """# Review Checklist
 
 - Does the probe strategy look specific enough to avoid false matches?
+- Does the manifest document the correct `supported_formats`, `supported_locales`, `template_ids`, and `priority`?
 - Does the mapping table cover reference, report date, sample number, headers, and measurements?
 - Does the parser avoid new dependencies?
 - Does the parser keep deterministic behavior?
 - Are the warnings and ambiguities explained clearly?
+- Does the expected-results file cover the important fields the business user will review?
 """
 
     return {

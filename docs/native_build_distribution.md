@@ -108,13 +108,13 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 ### Chart renderer (`modules/chart_renderer.py`)
 
 - Backend selection is controlled by `METROLIZA_CHART_RENDERER_BACKEND` (`auto`/`native`/`matplotlib`).
-- Native rollout selection is controlled per chart kind by `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` (comma-separated allowlist such as `histogram,distribution,iqr,trend`).
+- Native rollout selection is controlled per chart kind by `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` (comma-separated allowlist such as `histogram,distribution,iqr,trend`); when unset, all supported chart kinds are enabled by default.
 - Native chart rendering is shipped when `_metroliza_chart_native` is available in the packaged build environment.
 - The current native module covers histogram, distribution, IQR, and trend summary charts through the `_metroliza_chart_native` extension surface.
 - The native chart path is a payload-driven non-matplotlib compositor intended for workbook/export rendering, not an HTML/interactive chart stack.
 - The optional HTML dashboard sidecar reuses the same export chart payloads and rendered PNGs, but it remains a separate Python-side export artifact rather than part of the native chart extension.
 - If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
-- `auto` uses native only when the extension is present and the chart kind is allowlisted for rollout; otherwise it defaults to matplotlib.
+- `auto` now prefers native for enabled chart kinds when the extension is present and otherwise falls back to matplotlib.
 - CI's native-artifacts job now runs `tests/test_native_chart_renderer_smoke.py` against the compiled wheel so histogram, distribution, IQR, and trend all prove native dispatch with planner-built resolved specs attached, and it also runs a focused export-runtime fast-path contract smoke for the extended summary-sheet charts.
 - In the export runtime, histogram, distribution, IQR, and trend now use planner-driven resolved specs on the native fast-path.
 - On Python `3.14`, local chart-renderer builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.

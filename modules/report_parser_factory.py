@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 import importlib.util
 import inspect
+import logging
 import os
 from pathlib import Path
 from typing import Callable, Type
@@ -62,9 +63,82 @@ _EXTERNAL_PLUGIN_CONFIG_SIGNATURE: tuple[tuple[str, ...], tuple[str, ...]] | Non
 _EXTERNAL_PLUGIN_ENTRY_POINTS: tuple[object, ...] | None = None
 _EXTERNAL_PLUGIN_MODULE_COUNTER = 0
 
+logger = logging.getLogger(__name__)
+
 
 def _as_file_path(file_path: str | Path) -> str:
     return str(file_path)
+
+
+def _coerce_string_tuple(values) -> tuple[str, ...]:
+    """Return a stable tuple of non-empty string values."""
+
+    if values is None:
+        return ()
+    if isinstance(values, tuple):
+        iterable = values
+    elif isinstance(values, (list, set, frozenset)):
+        iterable = tuple(values)
+    else:
+        iterable = (values,)
+
+    coerced: list[str] = []
+    for value in iterable:
+        text = str(value).strip()
+        if text:
+            coerced.append(text)
+    return tuple(coerced)
+
+
+def _clamp_confidence(confidence) -> int:
+    """Normalize confidence into the supported runtime range."""
+
+    try:
+        value = int(confidence)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(100, value))
+
+
+def _normalize_probe_result(
+    *,
+    plugin_id: str,
+    raw_result,
+    origin: str,
+    normalized_path: str,
+) -> ProbeResult:
+    """Normalize plugin probe output into a safe ProbeResult instance."""
+
+    if not isinstance(raw_result, ProbeResult):
+        logger.warning(
+            "Parser %s returned invalid probe output for %s: %r",
+            origin,
+            normalized_path,
+            type(raw_result).__name__,
+        )
+        return ProbeResult(
+            plugin_id=plugin_id,
+            can_parse=False,
+            confidence=0,
+            reasons=(f"{origin}_invalid_probe_result",),
+            warnings=(f"{origin} returned non-ProbeResult output",),
+        )
+
+    normalized_confidence = _clamp_confidence(raw_result.confidence)
+    warnings = list(_coerce_string_tuple(raw_result.warnings))
+    if normalized_confidence != raw_result.confidence:
+        warnings.append(f"confidence_clamped_from_{raw_result.confidence}_to_{normalized_confidence}")
+    if raw_result.plugin_id != plugin_id:
+        warnings.append(f"plugin_id_normalized_from_{raw_result.plugin_id}")
+
+    return ProbeResult(
+        plugin_id=plugin_id,
+        can_parse=bool(raw_result.can_parse),
+        confidence=normalized_confidence,
+        matched_template_id=raw_result.matched_template_id,
+        reasons=_coerce_string_tuple(raw_result.reasons),
+        warnings=tuple(warnings),
+    )
 
 
 def list_plugins() -> tuple[PluginManifest, ...]:
@@ -108,26 +182,36 @@ def _safe_probe(
     """Run detector/probe and normalize plugin id for compatibility."""
 
     detector = PARSER_DETECTORS.get(plugin_id)
-    if detector is not None:
-        result = detector(normalized_path)
-    else:
-        result = parser_cls.probe(normalized_path, probe_context)
+    probe_origin = "detector" if detector is not None else "probe"
 
-    if result.plugin_id != plugin_id:
+    try:
+        result = detector(normalized_path) if detector is not None else parser_cls.probe(normalized_path, probe_context)
+    except Exception as exc:  # pragma: no cover - defensive hardening
+        logger.warning(
+            "Parser %s failed for %s on %s: %s",
+            probe_origin,
+            plugin_id,
+            normalized_path,
+            exc,
+        )
         return ProbeResult(
             plugin_id=plugin_id,
-            can_parse=result.can_parse,
-            confidence=result.confidence,
-            matched_template_id=result.matched_template_id,
-            reasons=result.reasons,
-            warnings=result.warnings,
+            can_parse=False,
+            confidence=0,
+            reasons=(f"{probe_origin}_exception",),
+            warnings=(f"{parser_cls.__name__} {probe_origin} raised {exc.__class__.__name__}: {exc}",),
         )
 
-    return result
+    return _normalize_probe_result(
+        plugin_id=plugin_id,
+        raw_result=result,
+        origin=probe_origin,
+        normalized_path=normalized_path,
+    )
 
 
 def _strict_matching_enabled() -> bool:
-    value = os.getenv("PARSER_STRICT_MATCHING", "false").strip().lower()
+    value = os.getenv("PARSER_STRICT_MATCHING", "true").strip().lower()
     return value in {"1", "true", "yes", "on"}
 
 
@@ -398,7 +482,7 @@ def _default_cmm_detector(file_path: str) -> ProbeResult:
         return ProbeResult(
             plugin_id='cmm',
             can_parse=True,
-            confidence=100,
+            confidence=80,
             reasons=('pdf_extension',),
         )
     return ProbeResult(plugin_id='cmm', can_parse=False, confidence=0, reasons=('unsupported_extension',))
