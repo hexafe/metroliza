@@ -4582,11 +4582,22 @@ class ExportDataThread(QThread):
         )
 
     @classmethod
-    def _build_group_analysis_plot_description(cls, metric_row, plot_key, grouped_entries, spec_limits):
+    def _build_group_analysis_plot_description(
+        cls,
+        metric_row,
+        plot_key,
+        grouped_entries,
+        spec_limits,
+        *,
+        audience='worksheet',
+    ):
         """Return a concise workbook image description for Group Analysis plots."""
         metric_name = str((metric_row or {}).get('metric') or 'metric')
         plot_label = 'violin plot' if str(plot_key) == 'violin' else 'histogram'
-        capability_context = cls._build_group_analysis_capability_context(metric_row)
+        capability_context = cls._build_group_analysis_capability_context(
+            metric_row,
+            include_confidence_details=str(audience or '').strip().lower() != 'dashboard',
+        )
 
         group_parts = []
         for label, values in grouped_entries:
@@ -4616,7 +4627,7 @@ class ExportDataThread(QThread):
         return ' '.join(description_parts)
 
     @staticmethod
-    def _build_group_analysis_capability_context(metric_row):
+    def _build_group_analysis_capability_context(metric_row, *, include_confidence_details=True):
         """Return capability callout metadata for Group Analysis workbook plots."""
         metric_row = metric_row if isinstance(metric_row, dict) else {}
 
@@ -4723,7 +4734,7 @@ class ExportDataThread(QThread):
             callout_lines.append(group_summary_line)
             description = f"{description} Per-group capability values are shown separately for quick comparison and are labeled explicitly on the plot."
 
-        if ci_lower is not None and ci_upper is not None:
+        if include_confidence_details and ci_lower is not None and ci_upper is not None:
             callout_lines.append(f"95% CI {ci_lower:.3f} to {ci_upper:.3f}")
             if ci_lower < 1.0:
                 callout_lines.append('Lower CI < 1.000')
@@ -4739,7 +4750,7 @@ class ExportDataThread(QThread):
         }
 
     @classmethod
-    def _render_group_analysis_plot_asset(cls, metric_row, plot_key):
+    def _render_group_analysis_plot_asset(cls, metric_row, plot_key, *, audience='worksheet'):
         """Build an in-memory chart asset for Group Analysis worksheet insertion."""
         chart_payload = metric_row.get('chart_payload') if isinstance(metric_row, dict) else None
         if not isinstance(chart_payload, dict):
@@ -4768,12 +4779,16 @@ class ExportDataThread(QThread):
         ]
 
         spec_limits = chart_payload.get('spec_limits') or {}
-        capability_context = cls._build_group_analysis_capability_context(metric_row)
+        capability_context = cls._build_group_analysis_capability_context(
+            metric_row,
+            include_confidence_details=str(audience or '').strip().lower() != 'dashboard',
+        )
         description = cls._build_group_analysis_plot_description(
             metric_row,
             plot_key,
             filtered_entries,
             spec_limits,
+            audience=audience,
         )
         fig, ax = plt.subplots(figsize=(6.2, 3.2))
         try:
@@ -4942,7 +4957,7 @@ class ExportDataThread(QThread):
         finally:
             plt.close(fig)
 
-    def _build_group_analysis_plot_assets(self, payload, *, mode):
+    def _build_group_analysis_plot_assets(self, payload, *, mode, audience='worksheet'):
         """Prepare optional chart assets keyed by metric for worksheet insertion."""
         if str(mode or '').strip().lower() != 'standard':
             return {'metrics': {}}
@@ -4957,7 +4972,11 @@ class ExportDataThread(QThread):
             for plot_key in ('violin', 'histogram'):
                 plot_meta = eligibility.get(plot_key) or {}
                 if bool(plot_meta.get('eligible')):
-                    per_metric_assets[plot_key] = self._render_group_analysis_plot_asset(metric_row, plot_key)
+                    per_metric_assets[plot_key] = self._render_group_analysis_plot_asset(
+                        metric_row,
+                        plot_key,
+                        audience=audience,
+                    )
                 else:
                     per_metric_assets[plot_key] = {}
             metrics_assets[metric_name] = per_metric_assets
@@ -5011,9 +5030,13 @@ class ExportDataThread(QThread):
             short_message = str(skip_reason.get('message') or 'Group Analysis skipped.')
             self._write_group_analysis_message_sheet(group_worksheet, short_message)
         else:
-            plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode)
+            plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode, audience='worksheet')
             if self.generate_html_dashboard:
-                self._html_group_analysis_plot_assets = plot_assets
+                self._html_group_analysis_plot_assets = self._build_group_analysis_plot_assets(
+                    payload,
+                    mode=mode,
+                    audience='dashboard',
+                )
             write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
             if mode == 'standard':
                 plots_sheet_name = unique_sheet_name('Group Analysis Plots', used_sheet_names)

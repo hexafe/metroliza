@@ -1296,6 +1296,11 @@ def _normalize_group_analysis_manifest(
                         "fit_quality",
                         "flags",
                     ],
+                    hidden_columns=[
+                        "capability_ci",
+                        "lower_ci",
+                        "upper_ci",
+                    ],
                 ),
                 "pairwise_rows": _normalize_rows_table(
                     raw_metric.get("pairwise_rows"),
@@ -1348,8 +1353,27 @@ def _normalize_group_analysis_manifest(
     }
 
 
-def _normalize_rows_table(rows: Any, *, preferred_columns: list[str] | None = None) -> dict[str, Any]:
-    normalized_rows = [dict(row) for row in (rows or []) if isinstance(row, dict)]
+def _normalize_rows_table(
+    rows: Any,
+    *,
+    preferred_columns: list[str] | None = None,
+    hidden_columns: list[str] | None = None,
+) -> dict[str, Any]:
+    hidden_keys = {
+        str(column).strip().lower().replace(" ", "_")
+        for column in (hidden_columns or [])
+        if str(column).strip()
+    }
+    normalized_rows = [
+        {
+            key: value
+            for key, value in dict(row).items()
+            if str(key).strip().lower().replace(" ", "_") not in hidden_keys
+        }
+        for row in (rows or [])
+        if isinstance(row, dict)
+    ]
+    normalized_rows = [row for row in normalized_rows if row]
     if not normalized_rows:
         return {"columns": [], "rows": []}
 
@@ -2573,8 +2597,21 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
           }}
         }});
       }};
+      const clearPlotlyInteractionArtifacts = () => {{
+        document.querySelectorAll('.dragcover').forEach((overlay) => {{
+          overlay.remove();
+        }});
+        [document.body, document.documentElement].forEach((node) => {{
+          if (!node || !node.style) {{
+            return;
+          }}
+          node.style.removeProperty('cursor');
+          node.style.removeProperty('user-select');
+        }});
+      }};
       const clearLightboxPlotly = () => {{
         if (!lightboxPlotly) {{
+          clearPlotlyInteractionArtifacts();
           return;
         }}
         if (window.Plotly && lightboxPlotly.dataset.plotlyReady === '1') {{
@@ -2589,6 +2626,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         lightboxPlotly.removeAttribute('data-plotly-spec-dark');
         lightboxPlotly.removeAttribute('data-plotly-spec');
         lightboxPlotly.textContent = '';
+        clearPlotlyInteractionArtifacts();
       }};
       const resizeLightboxPlotly = () => {{
         if (!window.Plotly || !lightbox || !lightbox.open || lightbox.dataset.mode !== 'plotly' || !lightboxPlotly) {{
@@ -2610,6 +2648,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         if (!lightbox || !lightboxImage) {{
           return;
         }}
+        clearPlotlyInteractionArtifacts();
         clearLightboxPlotly();
         setLightboxMode('image');
         lightboxImage.setAttribute('src', source);
@@ -2621,6 +2660,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         if (!lightbox || !lightboxPlotly || !sourceContainer || !parsePlotlySpec(sourceContainer)) {{
           return false;
         }}
+        clearPlotlyInteractionArtifacts();
         copyPlotlySpecAttributes(sourceContainer, lightboxPlotly);
         lightboxImage.setAttribute('src', '');
         lightboxImage.setAttribute('alt', '');
@@ -2655,10 +2695,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
 
       if (!lightbox || !lightboxImage || !lightboxCaption || !closeButton) return;
 
-      const closeLightbox = () => {{
-        if (lightbox.open) {{
-          lightbox.close();
-        }}
+      const resetLightboxState = () => {{
         lightboxCaption.textContent = '';
         lightboxImage.setAttribute('src', '');
         lightboxImage.setAttribute('alt', '');
@@ -2666,16 +2703,20 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         setLightboxMode('image');
       }};
 
+      const closeLightbox = () => {{
+        clearPlotlyInteractionArtifacts();
+        if (lightbox.open) {{
+          lightbox.close();
+          return;
+        }}
+        resetLightboxState();
+      }};
+
       document.querySelectorAll('.chart-image-trigger').forEach((trigger) => {{
         trigger.addEventListener('click', () => {{
           const source = trigger.getAttribute('data-image-src') || '';
           const caption = trigger.getAttribute('data-image-caption') || '';
-          const chartCard = trigger.closest('.chart-card');
-          const plotlySource = chartCard ? chartCard.querySelector('.plotly-chart') : null;
           if (!source) return;
-          if (plotlySource && window.Plotly && openPlotlyLightbox(plotlySource, caption)) {{
-            return;
-          }}
           openImageLightbox(source, caption);
         }});
       }});
@@ -2693,6 +2734,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       }});
 
       closeButton.addEventListener('click', closeLightbox);
+      lightbox.addEventListener('close', resetLightboxState);
       lightbox.addEventListener('click', (event) => {{
         if (event.target === lightbox) closeLightbox();
       }});

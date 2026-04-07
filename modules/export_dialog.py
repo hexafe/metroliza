@@ -347,13 +347,13 @@ class ExportDialog(QDialog):
             )
             self.generate_html_dashboard_checkbox.setChecked(False)
             self.html_dashboard_note_label = QLabel(
-                "Creates a local `*_dashboard.html` file plus an asset folder with offline Plotly charts, light/dark theme switching, larger in-browser chart views, and workbook-matching PNG snapshots."
+                "Creates a local `*_dashboard.html` file plus an asset folder for browser-based review of the exported charts."
             )
             self.html_dashboard_note_label.setStyleSheet("color: #666;")
             self.html_dashboard_note_label.setWordWrap(True)
             self.html_dashboard_label.setToolTip(
-                "Generate an additional HTML dashboard sidecar that reuses the export chart payloads for interactive Plotly views.\n"
-                "Useful for browser-based review alongside the workbook, with a local Plotly runtime copied into the asset folder, an Auto/Light/Dark theme control, and larger interactive chart views in the saved page."
+                "Generate an additional HTML dashboard sidecar that reuses the export chart payloads.\n"
+                "Useful for browser-based review alongside the workbook, with larger interactive chart views in the saved page."
             )
             self.generate_html_dashboard_checkbox.setToolTip(self.html_dashboard_label.toolTip())
             self.html_dashboard_note_label.setToolTip(self.html_dashboard_label.toolTip())

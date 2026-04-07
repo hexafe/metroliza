@@ -757,6 +757,52 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         self.assertTrue(any('Capability: Marginal' in str(text) for text in annotation_texts))
         self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in annotation_texts))
 
+    def test_group_analysis_violin_dashboard_asset_omits_ci_callouts(self):
+        metric_row = {
+            'metric': 'M1',
+            'capability_allowed': True,
+            'capability': {
+                'cp': 1.10,
+                'cpk': 1.00,
+                'capability': 1.00,
+                'capability_type': 'Cpk',
+                'capability_ci': {'cp': {'lower': 0.9, 'upper': 1.3}, 'cpk': {'lower': 0.75, 'upper': 1.2}},
+                'status': 'ok',
+            },
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.01, 1.02, 1.03]},
+                    {'group': 'B', 'values': [1.00, 1.01, 1.02]},
+                ],
+                'spec_limits': {'lsl': 0.95, 'nominal': 1.00, 'usl': 1.05},
+            },
+        }
+
+        captured_axes = []
+        original_subplots = export_data_thread_module.plt.subplots
+
+        def _capture_subplots(*args, **kwargs):
+            fig, ax = original_subplots(*args, **kwargs)
+            captured_axes.append(ax)
+            return fig, ax
+
+        with (
+            patch.object(export_data_thread_module, '_HAS_SEABORN', False),
+            patch('modules.export_data_thread.plt.subplots', side_effect=_capture_subplots),
+        ):
+            result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'violin', audience='dashboard')
+
+        self.assertIn('image_data', result)
+        self.assertIn('description', result)
+        self.assertIn('Capability summary: marginal. Cp=1.100, Cpk=1.000.', result['description'])
+        self.assertNotIn('95% CI', result['description'])
+        self.assertNotIn('lower confidence bound', result['description'])
+        self.assertEqual(len(captured_axes), 1)
+        annotation_texts = [text.get_text() for text in captured_axes[0].texts]
+        self.assertTrue(any('Capability: Marginal' in str(text) for text in annotation_texts))
+        self.assertFalse(any('95% CI' in str(text) for text in annotation_texts))
+        self.assertFalse(any('Lower CI' in str(text) for text in annotation_texts))
+
     def test_group_analysis_histogram_keeps_vertical_spec_lines(self):
         metric_row = {
             'metric': 'M1',
@@ -798,6 +844,45 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         histogram_note_texts = [args[2] for args, _kwargs in ax.text.call_args_list if len(args) >= 3]
         self.assertTrue(any('Capability: Marginal' in str(text) for text in histogram_note_texts))
         self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in histogram_note_texts))
+
+    def test_group_analysis_histogram_dashboard_asset_omits_ci_callouts(self):
+        metric_row = {
+            'metric': 'M1',
+            'capability_allowed': True,
+            'capability': {
+                'cp': 1.10,
+                'cpk': 1.00,
+                'capability': 1.00,
+                'capability_type': 'Cpk',
+                'capability_ci': {'cp': {'lower': 0.9, 'upper': 1.3}, 'cpk': {'lower': 0.75, 'upper': 1.2}},
+                'status': 'ok',
+            },
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.01, 1.02, 1.03]},
+                    {'group': 'B', 'values': [1.00, 1.01, 1.02]},
+                ],
+                'spec_limits': {'lsl': 0.95, 'nominal': 1.00, 'usl': 1.05},
+            },
+        }
+
+        fig = MagicMock()
+        ax = MagicMock()
+        with (
+            patch('modules.export_data_thread.plt.subplots', return_value=(fig, ax)),
+            patch('modules.export_data_thread.plt.close'),
+        ):
+            result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram', audience='dashboard')
+
+        self.assertIn('image_data', result)
+        self.assertIn('description', result)
+        self.assertIn('Capability summary: marginal. Cp=1.100, Cpk=1.000.', result['description'])
+        self.assertNotIn('95% CI', result['description'])
+        self.assertNotIn('lower confidence bound', result['description'])
+        histogram_note_texts = [args[2] for args, _kwargs in ax.text.call_args_list if len(args) >= 3]
+        self.assertTrue(any('Capability: Marginal' in str(text) for text in histogram_note_texts))
+        self.assertFalse(any('95% CI' in str(text) for text in histogram_note_texts))
+        self.assertFalse(any('Lower CI' in str(text) for text in histogram_note_texts))
 
     def test_group_analysis_histogram_reuses_resolved_histogram_bin_strategy(self):
         metric_row = {
