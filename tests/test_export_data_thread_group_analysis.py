@@ -857,7 +857,13 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Descriptive stats', html_text)
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('plotly-chart', html_text)
+            self.assertIn('data-plotly-spec-dark=', html_text)
             self.assertIn(f'{Path(assets_path).name}/plotly-2.27.0.min.js', html_text)
+            self.assertIn('data-theme-choice="auto"', html_text)
+            self.assertIn('data-theme-choice="light"', html_text)
+            self.assertIn('data-theme-choice="dark"', html_text)
+            self.assertIn('chart-lightbox-plotly', html_text)
+            self.assertIn('plotly-expand-trigger', html_text)
             self.assertNotIn('No extended summary charts were generated.', html_text)
 
 

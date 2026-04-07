@@ -19,8 +19,17 @@ _PLOTLY_COLORWAY = [
     "#b2503c",
     "#6a5f85",
 ]
+_PLOTLY_DARK_COLORWAY = [
+    "#57b3b3",
+    "#ff9d5c",
+    "#7ca8ff",
+    "#9ccf56",
+    "#ff8c73",
+    "#b59cff",
+]
 _PLOTLY_JS_ASSET_DIRNAME = "html_dashboard_assets"
 _PLOTLY_JS_FILENAME = "plotly-2.27.0.min.js"
+_DASHBOARD_THEME_STORAGE_KEY = "metroliza-dashboard-theme"
 _PLOTLY_MODEBAR_REMOVE = [
     "lasso2d",
     "select2d",
@@ -47,6 +56,53 @@ def resolve_html_dashboard_assets_dir(html_path: str | Path) -> Path:
 
 def _resolve_bundled_plotly_js_path() -> Path:
     return Path(__file__).resolve().with_name(_PLOTLY_JS_ASSET_DIRNAME) / _PLOTLY_JS_FILENAME
+
+
+def _normalize_dashboard_theme(theme: str | None) -> str:
+    return "dark" if str(theme or "").strip().lower() == "dark" else "light"
+
+
+def _build_plotly_theme_tokens(theme: str) -> dict[str, Any]:
+    normalized_theme = _normalize_dashboard_theme(theme)
+    if normalized_theme == "dark":
+        return {
+            "colorway": list(_PLOTLY_DARK_COLORWAY),
+            "text": "#edf3fb",
+            "paper_bg": "rgba(0,0,0,0)",
+            "plot_bg": "rgba(10,17,27,0.96)",
+            "grid": "rgba(233,241,251,0.10)",
+            "zero": "rgba(233,241,251,0.14)",
+            "axis": "rgba(233,241,251,0.18)",
+            "legend_bg": "rgba(8,16,26,0.82)",
+            "legend_border": "rgba(233,241,251,0.10)",
+            "hover_bg": "#07111a",
+            "hover_text": "#f8fbff",
+            "annotation_bg": "rgba(8,16,26,0.88)",
+            "reference_limit": "#ffb454",
+            "reference_nominal": "#5fd6ba",
+            "mean_line": "#57b3b3",
+            "trend_marker": "#ff9d5c",
+            "bar_outline": "rgba(8,16,26,0.92)",
+        }
+    return {
+        "colorway": list(_PLOTLY_COLORWAY),
+        "text": "#162330",
+        "paper_bg": "rgba(255,255,255,0)",
+        "plot_bg": "rgba(255,255,255,0.88)",
+        "grid": "rgba(22,35,48,0.08)",
+        "zero": "rgba(22,35,48,0.12)",
+        "axis": "rgba(22,35,48,0.18)",
+        "legend_bg": "rgba(255,255,255,0.72)",
+        "legend_border": "rgba(22,35,48,0.08)",
+        "hover_bg": "#162330",
+        "hover_text": "#f8fafc",
+        "annotation_bg": "rgba(255,255,255,0.84)",
+        "reference_limit": "#B45309",
+        "reference_nominal": "#0F766E",
+        "mean_line": "#245a5a",
+        "trend_marker": "#d66e2f",
+        "bar_outline": "#ffffff",
+    }
 
 
 def summarize_dashboard_chart_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -223,7 +279,7 @@ def write_export_html_dashboard(
                     "image_path": f"{asset_directory.name}/{image_name}",
                     "payload_summary": summarize_dashboard_chart_payload(raw_chart.get("payload")),
                     "payload_details": extract_dashboard_chart_details(raw_chart.get("payload")),
-                    "plotly_spec": _build_plotly_chart_spec(
+                    "plotly_spec": _build_plotly_chart_spec_bundle(
                         raw_chart.get("payload"),
                         title=str(raw_chart.get("title") or raw_chart.get("chart_type") or "Chart"),
                     ),
@@ -474,27 +530,28 @@ def _resolve_plotly_histogram_bins(values: list[float], *, preferred: Any = None
     }
 
 
-def _build_plotly_base_layout(*, title: str, x_label: str, y_label: str) -> dict[str, Any]:
+def _build_plotly_base_layout(*, title: str, x_label: str, y_label: str, theme: str = "light") -> dict[str, Any]:
+    tokens = _build_plotly_theme_tokens(theme)
     return {
         "title": {"text": str(title or ""), "font": {"size": 18}},
-        "font": {"family": 'Aptos, "Segoe UI", "Helvetica Neue", sans-serif', "color": "#162330"},
-        "paper_bgcolor": "rgba(255,255,255,0)",
-        "plot_bgcolor": "rgba(255,255,255,0.88)",
-        "colorway": list(_PLOTLY_COLORWAY),
+        "font": {"family": 'Aptos, "Segoe UI", "Helvetica Neue", sans-serif', "color": tokens["text"]},
+        "paper_bgcolor": tokens["paper_bg"],
+        "plot_bgcolor": tokens["plot_bg"],
+        "colorway": list(tokens["colorway"]),
         "dragmode": "zoom",
         "margin": {"l": 56, "r": 24, "t": 58, "b": 56},
-        "hoverlabel": {"bgcolor": "#162330", "font": {"color": "#f8fafc"}},
+        "hoverlabel": {"bgcolor": tokens["hover_bg"], "font": {"color": tokens["hover_text"]}},
         "xaxis": {
             "title": {"text": str(x_label or "")},
-            "gridcolor": "rgba(22,35,48,0.08)",
-            "zerolinecolor": "rgba(22,35,48,0.12)",
-            "linecolor": "rgba(22,35,48,0.18)",
+            "gridcolor": tokens["grid"],
+            "zerolinecolor": tokens["zero"],
+            "linecolor": tokens["axis"],
         },
         "yaxis": {
             "title": {"text": str(y_label or "")},
-            "gridcolor": "rgba(22,35,48,0.08)",
-            "zerolinecolor": "rgba(22,35,48,0.12)",
-            "linecolor": "rgba(22,35,48,0.18)",
+            "gridcolor": tokens["grid"],
+            "zerolinecolor": tokens["zero"],
+            "linecolor": tokens["axis"],
         },
         "legend": {
             "orientation": "h",
@@ -502,8 +559,8 @@ def _build_plotly_base_layout(*, title: str, x_label: str, y_label: str) -> dict
             "y": 1.02,
             "xanchor": "left",
             "x": 0.0,
-            "bgcolor": "rgba(255,255,255,0.72)",
-            "bordercolor": "rgba(22,35,48,0.08)",
+            "bgcolor": tokens["legend_bg"],
+            "bordercolor": tokens["legend_border"],
             "borderwidth": 1,
         },
     }
@@ -518,13 +575,20 @@ def _build_plotly_config() -> dict[str, Any]:
     }
 
 
-def _build_vertical_reference_shapes(*, nominal: Any = None, lsl: Any = None, usl: Any = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_vertical_reference_shapes(
+    *,
+    nominal: Any = None,
+    lsl: Any = None,
+    usl: Any = None,
+    theme: str = "light",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    tokens = _build_plotly_theme_tokens(theme)
     shapes: list[dict[str, Any]] = []
     annotations: list[dict[str, Any]] = []
     for label, value, color, dash in (
-        ("LSL", lsl, "#B45309", "dash"),
-        ("Nominal", nominal, "#0F766E", "dot"),
-        ("USL", usl, "#B45309", "dash"),
+        ("LSL", lsl, tokens["reference_limit"], "dash"),
+        ("Nominal", nominal, tokens["reference_nominal"], "dot"),
+        ("USL", usl, tokens["reference_limit"], "dash"),
     ):
         numeric = _coerce_finite_float(value)
         if numeric is None:
@@ -550,19 +614,26 @@ def _build_vertical_reference_shapes(*, nominal: Any = None, lsl: Any = None, us
                 "text": f"{label}={numeric:.3f}",
                 "showarrow": False,
                 "font": {"size": 11, "color": color},
-                "bgcolor": "rgba(255,255,255,0.84)",
+                "bgcolor": tokens["annotation_bg"],
             }
         )
     return shapes, annotations
 
 
-def _build_horizontal_reference_shapes(*, nominal: Any = None, lsl: Any = None, usl: Any = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _build_horizontal_reference_shapes(
+    *,
+    nominal: Any = None,
+    lsl: Any = None,
+    usl: Any = None,
+    theme: str = "light",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    tokens = _build_plotly_theme_tokens(theme)
     shapes: list[dict[str, Any]] = []
     annotations: list[dict[str, Any]] = []
     for label, value, color, dash in (
-        ("LSL", lsl, "#B45309", "dash"),
-        ("Nominal", nominal, "#0F766E", "dot"),
-        ("USL", usl, "#B45309", "dash"),
+        ("LSL", lsl, tokens["reference_limit"], "dash"),
+        ("Nominal", nominal, tokens["reference_nominal"], "dot"),
+        ("USL", usl, tokens["reference_limit"], "dash"),
     ):
         numeric = _coerce_finite_float(value)
         if numeric is None:
@@ -589,7 +660,7 @@ def _build_horizontal_reference_shapes(*, nominal: Any = None, lsl: Any = None, 
                 "text": f"{label}={numeric:.3f}",
                 "showarrow": False,
                 "font": {"size": 11, "color": color},
-                "bgcolor": "rgba(255,255,255,0.84)",
+                "bgcolor": tokens["annotation_bg"],
             }
         )
     return shapes, annotations
@@ -610,10 +681,11 @@ def _apply_plotly_categorical_axis(layout: dict[str, Any], axis_key: str, axis_l
         axis["tickangle"] = -rotation
 
 
-def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str) -> dict[str, Any]:
+def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
     values = _coerce_finite_float_list(payload.get("values"))
     if not values:
         return {}
+    tokens = _build_plotly_theme_tokens(theme)
 
     limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
     lsl = limits.get("lsl", payload.get("lsl")) if isinstance(limits, dict) else payload.get("lsl")
@@ -627,8 +699,9 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str) -> dict
         title=title,
         x_label=str(((payload.get("style") or {}).get("axis_label_x") if isinstance(payload.get("style"), dict) else "") or "Measurement"),
         y_label=str(((payload.get("style") or {}).get("axis_label_y") if isinstance(payload.get("style"), dict) else "") or "Count"),
+        theme=theme,
     )
-    shapes, annotations = _build_vertical_reference_shapes(nominal=nominal, lsl=lsl, usl=usl)
+    shapes, annotations = _build_vertical_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
     if mean_value is not None:
         shapes.append(
             {
@@ -639,7 +712,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str) -> dict
                 "x1": mean_value,
                 "y0": 0,
                 "y1": 1,
-                "line": {"color": "#245a5a", "width": 2, "dash": "dashdot"},
+                "line": {"color": tokens["mean_line"], "width": 2, "dash": "dashdot"},
             }
         )
         annotations.append(
@@ -650,8 +723,8 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str) -> dict
                 "y": 1.10,
                 "text": f"Mean={mean_value:.3f}",
                 "showarrow": False,
-                "font": {"size": 11, "color": "#245a5a"},
-                "bgcolor": "rgba(255,255,255,0.84)",
+                "font": {"size": 11, "color": tokens["mean_line"]},
+                "bgcolor": tokens["annotation_bg"],
             }
         )
     layout["shapes"] = shapes
@@ -671,7 +744,7 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str) -> dict
                 "x": values,
                 "xbins": bins,
                 "bingroup": f"hist-{_slugify(title)[:40]}",
-                "marker": {"color": "#245a5a", "line": {"color": "#ffffff", "width": 1}},
+                "marker": {"color": tokens["colorway"][0], "line": {"color": tokens["bar_outline"], "width": 1}},
                 "opacity": 0.86,
                 "hovertemplate": "Measurement=%{x}<br>Count=%{y}<extra></extra>",
             }
@@ -681,8 +754,9 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str) -> dict
     }
 
 
-def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str) -> dict[str, Any]:
+def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
     render_mode = str(payload.get("render_mode") or "violin").strip().lower()
+    tokens = _build_plotly_theme_tokens(theme)
     limits = payload.get("limits") if isinstance(payload.get("limits"), dict) else {}
     lsl = limits.get("lsl", payload.get("lsl")) if isinstance(limits, dict) else payload.get("lsl")
     usl = limits.get("usl", payload.get("usl")) if isinstance(limits, dict) else payload.get("usl")
@@ -703,8 +777,9 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str) -> d
             title=title,
             x_label=str(payload.get("x_label") or "Sample"),
             y_label=str(payload.get("y_label") or "Measurement"),
+            theme=theme,
         )
-        shapes, annotations = _build_horizontal_reference_shapes(nominal=nominal, lsl=lsl, usl=usl)
+        shapes, annotations = _build_horizontal_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
         layout["shapes"] = shapes
         layout["annotations"] = annotations
         _apply_plotly_categorical_axis(
@@ -725,7 +800,7 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str) -> d
                     "x": x_values,
                     "y": y_values,
                     "customdata": point_labels,
-                    "marker": {"color": "#245a5a", "size": 8, "opacity": 0.82},
+                    "marker": {"color": tokens["colorway"][0], "size": 8, "opacity": 0.82},
                     "hovertemplate": "Point=%{customdata}<br>X=%{x}<br>Measurement=%{y}<extra></extra>",
                 }
             ],
@@ -763,8 +838,9 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str) -> d
         title=title,
         x_label=str(payload.get("x_label") or "Group"),
         y_label=str(payload.get("y_label") or "Measurement"),
+        theme=theme,
     )
-    shapes, annotations = _build_horizontal_reference_shapes(nominal=nominal, lsl=lsl, usl=usl)
+    shapes, annotations = _build_horizontal_reference_shapes(nominal=nominal, lsl=lsl, usl=usl, theme=theme)
     layout["shapes"] = shapes
     layout["annotations"] = annotations
     y_limits = payload.get("y_limits") if isinstance(payload.get("y_limits"), dict) else {}
@@ -779,7 +855,8 @@ def _build_plotly_distribution_spec(payload: dict[str, Any], *, title: str) -> d
     }
 
 
-def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str) -> dict[str, Any]:
+def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
+    tokens = _build_plotly_theme_tokens(theme)
     labels = [str(item) for item in (payload.get("labels") or [])]
     series_list = payload.get("series") or []
     traces = []
@@ -794,7 +871,7 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str) -> dict[str, 
                 "y": values,
                 "boxpoints": False,
                 "boxmean": True,
-                "marker": {"color": _PLOTLY_COLORWAY[(index - 1) % len(_PLOTLY_COLORWAY)]},
+                "marker": {"color": tokens["colorway"][(index - 1) % len(tokens["colorway"])]},
                 "hovertemplate": f"{label or f'Group {index}'}<br>Measurement=%{{y}}<extra></extra>",
             }
         )
@@ -805,11 +882,13 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str) -> dict[str, 
         title=title,
         x_label=str(payload.get("x_label") or "Group"),
         y_label=str(payload.get("y_label") or "Measurement"),
+        theme=theme,
     )
     shapes, annotations = _build_horizontal_reference_shapes(
         nominal=payload.get("nominal"),
         lsl=payload.get("lsl"),
         usl=payload.get("usl"),
+        theme=theme,
     )
     layout["shapes"] = shapes
     layout["annotations"] = annotations
@@ -830,7 +909,7 @@ def _build_plotly_iqr_spec(payload: dict[str, Any], *, title: str) -> dict[str, 
     }
 
 
-def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str) -> dict[str, Any]:
+def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str = "light") -> dict[str, Any]:
     points = _coerce_xy_points(
         payload.get("x_values"),
         payload.get("y_values"),
@@ -838,6 +917,7 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str) -> dict[str
     )
     if not points:
         return {}
+    tokens = _build_plotly_theme_tokens(theme)
     points.sort(key=lambda item: item[0])
     x_values = [point[0] for point in points]
     y_values = [point[1] for point in points]
@@ -846,6 +926,7 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str) -> dict[str
         title=title,
         x_label=str(payload.get("x_label") or "Sample"),
         y_label=str(payload.get("y_label") or "Measurement"),
+        theme=theme,
     )
     layout["hovermode"] = "x unified"
     shapes = []
@@ -863,7 +944,7 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str) -> dict[str
                 "x1": 1,
                 "y0": numeric_limit,
                 "y1": numeric_limit,
-                "line": {"color": "#B45309", "width": 2, "dash": "dash"},
+                "line": {"color": tokens["reference_limit"], "width": 2, "dash": "dash"},
             }
         )
         annotations.append(
@@ -875,8 +956,8 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str) -> dict[str
                 "xanchor": "right",
                 "text": f"Limit {index}={numeric_limit:.3f}",
                 "showarrow": False,
-                "font": {"size": 11, "color": "#B45309"},
-                "bgcolor": "rgba(255,255,255,0.84)",
+                "font": {"size": 11, "color": tokens["reference_limit"]},
+                "bgcolor": tokens["annotation_bg"],
             }
         )
     layout["shapes"] = shapes
@@ -904,8 +985,8 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str) -> dict[str
                 "x": x_values,
                 "y": y_values,
                 "customdata": sample_labels,
-                "line": {"color": "#245a5a", "width": 2},
-                "marker": {"size": 8, "color": "#d66e2f"},
+                "line": {"color": tokens["mean_line"], "width": 2},
+                "marker": {"size": 8, "color": tokens["trend_marker"]},
                 "hovertemplate": "Sample=%{customdata}<br>Measurement=%{y}<extra></extra>",
             }
         ],
@@ -918,9 +999,12 @@ def _build_group_analysis_plotly_spec(
     metric_name: str,
     plot_key: str,
     chart_payload: dict[str, Any] | None,
+    *,
+    theme: str = "light",
 ) -> dict[str, Any]:
     if not isinstance(chart_payload, dict):
         return {}
+    tokens = _build_plotly_theme_tokens(theme)
 
     groups = chart_payload.get("groups") or []
     normalized_groups = []
@@ -948,13 +1032,14 @@ def _build_group_analysis_plotly_spec(
             "y_label": "Measurement",
             "limits": dict(spec_limits),
         }
-        return _build_plotly_distribution_spec(payload, title=f"{metric_name} - Violin")
+        return _build_plotly_distribution_spec(payload, title=f"{metric_name} - Violin", theme=theme)
 
     if plot_key_normalized == "histogram":
         layout = _build_plotly_base_layout(
             title=f"{metric_name} - Histogram",
             x_label="Measurement",
             y_label="Count",
+            theme=theme,
         )
         layout["bargap"] = 0.04
         layout["hovermode"] = "x unified"
@@ -962,10 +1047,11 @@ def _build_group_analysis_plotly_spec(
             nominal=spec_limits.get("nominal"),
             lsl=spec_limits.get("lsl"),
             usl=spec_limits.get("usl"),
+            theme=theme,
         )
         for index, (label, values) in enumerate(normalized_groups, start=1):
             mean_value = float(sum(values) / len(values))
-            color = _PLOTLY_COLORWAY[(index - 1) % len(_PLOTLY_COLORWAY)]
+            color = tokens["colorway"][(index - 1) % len(tokens["colorway"])]
             shapes.append(
                 {
                     "type": "line",
@@ -987,7 +1073,7 @@ def _build_group_analysis_plotly_spec(
                     "text": f"{label} μ={mean_value:.3f}",
                     "showarrow": False,
                     "font": {"size": 11, "color": color},
-                    "bgcolor": "rgba(255,255,255,0.84)",
+                    "bgcolor": tokens["annotation_bg"],
                 }
             )
         layout["shapes"] = shapes
@@ -1002,8 +1088,8 @@ def _build_group_analysis_plotly_spec(
                     "xbins": bins,
                     "bingroup": f"group-hist-{_slugify(metric_name)[:32]}",
                     "marker": {
-                        "color": _PLOTLY_COLORWAY[(index - 1) % len(_PLOTLY_COLORWAY)],
-                        "line": {"color": "#ffffff", "width": 0.8},
+                        "color": tokens["colorway"][(index - 1) % len(tokens["colorway"])],
+                        "line": {"color": tokens["bar_outline"], "width": 0.8},
                     },
                     "opacity": 0.55,
                     "hovertemplate": f"{label}<br>Measurement=%{{x}}<br>Count=%{{y}}<extra></extra>",
@@ -1017,20 +1103,40 @@ def _build_group_analysis_plotly_spec(
     return {}
 
 
-def _build_plotly_chart_spec(payload: dict[str, Any] | None, *, title: str) -> dict[str, Any]:
+def _build_plotly_chart_spec(payload: dict[str, Any] | None, *, title: str, theme: str = "light") -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
 
     chart_type = str(payload.get("type") or "").strip().lower()
     if chart_type == "histogram":
-        return _build_plotly_histogram_spec(payload, title=title)
+        return _build_plotly_histogram_spec(payload, title=title, theme=theme)
     if chart_type == "distribution":
-        return _build_plotly_distribution_spec(payload, title=title)
+        return _build_plotly_distribution_spec(payload, title=title, theme=theme)
     if chart_type == "iqr":
-        return _build_plotly_iqr_spec(payload, title=title)
+        return _build_plotly_iqr_spec(payload, title=title, theme=theme)
     if chart_type == "trend":
-        return _build_plotly_trend_spec(payload, title=title)
+        return _build_plotly_trend_spec(payload, title=title, theme=theme)
     return {}
+
+
+def _build_plotly_chart_spec_bundle(payload: dict[str, Any] | None, *, title: str) -> dict[str, Any]:
+    light_spec = _build_plotly_chart_spec(payload, title=title, theme="light")
+    if not light_spec:
+        return {}
+    dark_spec = _build_plotly_chart_spec(payload, title=title, theme="dark")
+    return {"light": light_spec, "dark": dark_spec or light_spec}
+
+
+def _build_group_analysis_plotly_spec_bundle(
+    metric_name: str,
+    plot_key: str,
+    chart_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    light_spec = _build_group_analysis_plotly_spec(metric_name, plot_key, chart_payload, theme="light")
+    if not light_spec:
+        return {}
+    dark_spec = _build_group_analysis_plotly_spec(metric_name, plot_key, chart_payload, theme="dark")
+    return {"light": light_spec, "dark": dark_spec or light_spec}
 
 
 def _format_ci_interval(interval: Any, *, digits: int = 3) -> str:
@@ -1121,7 +1227,7 @@ def _normalize_group_analysis_manifest(
         for plot_key in ("violin", "histogram"):
             plot_asset = per_metric_assets.get(plot_key) if isinstance(per_metric_assets, dict) else {}
             image_buffer = plot_asset.get("image_data") if isinstance(plot_asset, dict) else None
-            plotly_spec = _build_group_analysis_plotly_spec(metric_name, plot_key, chart_payload)
+            plotly_spec = _build_group_analysis_plotly_spec_bundle(metric_name, plot_key, chart_payload)
             if image_buffer is None and not plotly_spec:
                 continue
             image_relative_path = ""
@@ -1342,6 +1448,27 @@ def _drop_plotly_specs(sections: list[dict[str, Any]], group_analysis: dict[str,
             chart.pop("plotly_spec", None)
 
 
+def _render_theme_switch() -> str:
+    options = (
+        ("auto", "Auto"),
+        ("light", "Light"),
+        ("dark", "Dark"),
+    )
+    buttons = "".join(
+        (
+            f'<button type="button" class="theme-option" data-theme-choice="{choice}" '
+            f'aria-pressed="false">{label}</button>'
+        )
+        for choice, label in options
+    )
+    return (
+        '<div class="theme-switch" role="group" aria-label="Dashboard theme">'
+        '<span class="theme-switch-label">Theme</span>'
+        f'<div class="theme-options">{buttons}</div>'
+        '</div>'
+    )
+
+
 def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     sections = manifest.get("sections") or []
     group_analysis = manifest.get("group_analysis") or {}
@@ -1364,6 +1491,15 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     manifest_json = html.escape(json.dumps(_build_debug_manifest(manifest), ensure_ascii=False, indent=2, sort_keys=True))
     nav_markup = f'<nav class="section-nav">{section_nav}</nav>' if section_nav else ""
     plotly_js_path = str(manifest.get("plotly_js_path") or "").strip()
+    theme_switch_markup = _render_theme_switch()
+    plotly_theme_tokens_json = json.dumps(
+        {
+            "light": _build_plotly_theme_tokens("light"),
+            "dark": _build_plotly_theme_tokens("dark"),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     plotly_script_tag = (
         f'  <script src="{html.escape(plotly_js_path)}" defer></script>\n'
         if plotly_js_path
@@ -1381,18 +1517,121 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>Metroliza Dashboard</title>
+  <script>
+    (() => {{
+      const storageKey = {json.dumps(_DASHBOARD_THEME_STORAGE_KEY)};
+      const allowedChoices = new Set(['auto', 'light', 'dark']);
+      let choice = 'auto';
+      try {{
+        const storedChoice = window.localStorage.getItem(storageKey) || 'auto';
+        if (allowedChoices.has(storedChoice)) {{
+          choice = storedChoice;
+        }}
+      }} catch (_error) {{
+        choice = 'auto';
+      }}
+      const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+      const resolvedTheme = choice === 'auto'
+        ? ((themeMedia && themeMedia.matches) ? 'dark' : 'light')
+        : choice;
+      document.documentElement.dataset.themeChoice = choice;
+      document.documentElement.dataset.theme = resolvedTheme;
+    }})();
+  </script>
 {plotly_script_tag}  <style>
     :root {{
+      color-scheme: light;
       --paper: #f5f1e8;
+      --paper-strong: #fbf8f2;
       --ink: #162330;
       --muted: #556270;
       --accent: #d66e2f;
-      --accent-soft: #f4c59c;
+      --accent-soft: rgba(214, 110, 47, 0.12);
+      --accent-border: rgba(214, 110, 47, 0.22);
       --teal: #245a5a;
+      --teal-soft: rgba(36, 90, 90, 0.10);
+      --teal-border: rgba(36, 90, 90, 0.18);
       --panel: rgba(255, 255, 255, 0.82);
+      --panel-strong: rgba(255, 255, 255, 0.92);
+      --card-bg: rgba(255,255,255,0.88);
+      --card-soft: rgba(255,255,255,0.70);
+      --detail-panel-bg: rgba(22, 35, 48, 0.035);
+      --detail-card-bg: rgba(255, 255, 255, 0.68);
+      --table-shell-bg: rgba(255,255,255,0.78);
+      --table-head-bg: rgba(22, 35, 48, 0.04);
+      --plot-shell-bg: rgba(255,255,255,0.92);
       --line: rgba(22, 35, 48, 0.12);
       --shadow: 0 18px 44px rgba(14, 23, 32, 0.12);
+      --hero-bg: linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,249,241,0.9));
+      --bg-left: rgba(214, 110, 47, 0.18);
+      --bg-right: rgba(36, 90, 90, 0.18);
+      --bg-base-top: #fbf8f2;
+      --bg-base-bottom: #f5f1e8;
+      --runtime-note-bg: rgba(214, 110, 47, 0.10);
+      --pre-bg: #121a22;
+      --pre-ink: #eef4f8;
+      --overlay-bg: rgba(10, 16, 24, 0.9);
+      --focus-ring: rgba(214, 110, 47, 0.45);
+      --plot-paper: rgba(255,255,255,0);
+      --plot-bg: rgba(255,255,255,0.88);
+      --plot-font: #162330;
+      --plot-grid: rgba(22,35,48,0.08);
+      --plot-zero: rgba(22,35,48,0.12);
+      --plot-axis: rgba(22,35,48,0.18);
+      --plot-legend-bg: rgba(255,255,255,0.72);
+      --plot-legend-border: rgba(22,35,48,0.08);
+      --plot-hover-bg: #162330;
+      --plot-hover-font: #f8fafc;
+      --plot-annotation-bg: rgba(255,255,255,0.84);
+      --plot-annotation-font: #162330;
+    }}
+    :root[data-theme="dark"] {{
+      color-scheme: dark;
+      --paper: #0f151b;
+      --paper-strong: #151d26;
+      --ink: #e6edf3;
+      --muted: #9aabbb;
+      --accent: #f19a5b;
+      --accent-soft: rgba(241, 154, 91, 0.16);
+      --accent-border: rgba(241, 154, 91, 0.28);
+      --teal: #79c6be;
+      --teal-soft: rgba(121, 198, 190, 0.16);
+      --teal-border: rgba(121, 198, 190, 0.26);
+      --panel: rgba(20, 27, 35, 0.86);
+      --panel-strong: rgba(21, 29, 38, 0.94);
+      --card-bg: rgba(21, 29, 38, 0.94);
+      --card-soft: rgba(25, 34, 44, 0.92);
+      --detail-panel-bg: rgba(255, 255, 255, 0.04);
+      --detail-card-bg: rgba(255, 255, 255, 0.03);
+      --table-shell-bg: rgba(17, 24, 32, 0.84);
+      --table-head-bg: rgba(255, 255, 255, 0.06);
+      --plot-shell-bg: rgba(18, 25, 33, 0.96);
+      --line: rgba(230, 237, 243, 0.12);
+      --shadow: 0 20px 52px rgba(0, 0, 0, 0.34);
+      --hero-bg: linear-gradient(135deg, rgba(24, 33, 43, 0.95), rgba(18, 25, 33, 0.95));
+      --bg-left: rgba(241, 154, 91, 0.12);
+      --bg-right: rgba(121, 198, 190, 0.12);
+      --bg-base-top: #111821;
+      --bg-base-bottom: #0b1117;
+      --runtime-note-bg: rgba(241, 154, 91, 0.12);
+      --pre-bg: #081018;
+      --pre-ink: #eef4f8;
+      --overlay-bg: rgba(4, 8, 12, 0.92);
+      --focus-ring: rgba(121, 198, 190, 0.45);
+      --plot-paper: rgba(0,0,0,0);
+      --plot-bg: rgba(20,27,35,0.96);
+      --plot-font: #e6edf3;
+      --plot-grid: rgba(230,237,243,0.10);
+      --plot-zero: rgba(230,237,243,0.16);
+      --plot-axis: rgba(230,237,243,0.22);
+      --plot-legend-bg: rgba(11,17,23,0.82);
+      --plot-legend-border: rgba(230,237,243,0.14);
+      --plot-hover-bg: #0b1117;
+      --plot-hover-font: #f5f8fb;
+      --plot-annotation-bg: rgba(11,17,23,0.88);
+      --plot-annotation-font: #e6edf3;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -1400,9 +1639,26 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       font-family: Aptos, "Segoe UI", "Helvetica Neue", sans-serif;
       color: var(--ink);
       background:
-        radial-gradient(circle at top left, rgba(214, 110, 47, 0.18), transparent 34%),
-        radial-gradient(circle at top right, rgba(36, 90, 90, 0.18), transparent 32%),
-        linear-gradient(180deg, #fbf8f2 0%, var(--paper) 100%);
+        radial-gradient(circle at top left, var(--bg-left), transparent 34%),
+        radial-gradient(circle at top right, var(--bg-right), transparent 32%),
+        linear-gradient(180deg, var(--bg-base-top) 0%, var(--bg-base-bottom) 100%);
+    }}
+    body,
+    .hero,
+    .metric-card,
+    .diagnostics,
+    .measurement-section,
+    .empty-state,
+    .chart-card,
+    .metric-block,
+    .detail-panel,
+    .detail-card,
+    .table-shell,
+    .plotly-chart,
+    .theme-switch,
+    .theme-options,
+    .theme-option {{
+      transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
     }}
     .shell {{
       width: min(1480px, calc(100vw - 32px));
@@ -1410,11 +1666,22 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       padding: 28px 0 52px;
     }}
     .hero {{
-      background: linear-gradient(135deg, rgba(255,255,255,0.92), rgba(255,249,241,0.9));
+      background: var(--hero-bg);
       border: 1px solid var(--line);
       border-radius: 28px;
       box-shadow: var(--shadow);
       padding: 28px 28px 22px;
+    }}
+    .hero-top {{
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }}
+    .hero-copy {{
+      min-width: min(100%, 620px);
+      flex: 1 1 620px;
     }}
     .eyebrow {{
       margin: 0 0 10px;
@@ -1435,13 +1702,62 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       color: var(--muted);
       line-height: 1.5;
     }}
+    .theme-switch {{
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+    }}
+    .theme-switch-label {{
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 700;
+    }}
+    .theme-options {{
+      display: inline-flex;
+      gap: 6px;
+      padding: 4px;
+      border-radius: 999px;
+      background: var(--detail-panel-bg);
+      border: 1px solid var(--line);
+    }}
+    .theme-option {{
+      appearance: none;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+    }}
+    .theme-option:hover {{
+      color: var(--ink);
+    }}
+    .theme-option[data-active="1"] {{
+      color: var(--ink);
+      background: var(--accent-soft);
+      border-color: var(--accent-border);
+    }}
+    .theme-option:focus-visible,
+    .lightbox-close:focus-visible {{
+      outline: 3px solid var(--focus-ring);
+      outline-offset: 2px;
+    }}
     .runtime-note {{
       margin: 14px 0 0;
       max-width: 780px;
       border-left: 4px solid var(--accent);
       padding: 10px 14px;
       border-radius: 12px;
-      background: rgba(214, 110, 47, 0.1);
+      background: var(--runtime-note-bg);
       color: var(--ink);
       line-height: 1.5;
     }}
@@ -1452,7 +1768,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       margin-top: 24px;
     }}
     .metric-card {{
-      background: var(--panel);
+      background: var(--panel-strong);
       border: 1px solid var(--line);
       border-radius: 20px;
       padding: 16px 18px;
@@ -1481,8 +1797,8 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     .section-chip {{
       text-decoration: none;
       color: var(--ink);
-      background: rgba(214, 110, 47, 0.12);
-      border: 1px solid rgba(214, 110, 47, 0.22);
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-border);
       border-radius: 999px;
       padding: 8px 12px;
       font-size: 13px;
@@ -1520,8 +1836,8 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     .pill {{
       border-radius: 999px;
       padding: 8px 12px;
-      background: rgba(36, 90, 90, 0.10);
-      border: 1px solid rgba(36, 90, 90, 0.18);
+      background: var(--teal-soft);
+      border: 1px solid var(--teal-border);
       color: var(--teal);
       font-size: 13px;
       font-weight: 600;
@@ -1549,7 +1865,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       margin-top: 20px;
     }}
     .chart-card {{
-      background: rgba(255,255,255,0.88);
+      background: var(--card-bg);
       border: 1px solid var(--line);
       border-radius: 20px;
       overflow: hidden;
@@ -1598,9 +1914,15 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       display: flex;
       justify-content: space-between;
       gap: 10px;
-      align-items: center;
+      align-items: flex-start;
       margin-bottom: 10px;
       flex-wrap: wrap;
+    }}
+    .plotly-shell-copy {{
+      display: grid;
+      gap: 6px;
+      min-width: min(100%, 420px);
+      flex: 1 1 420px;
     }}
     .plotly-kicker {{
       color: var(--teal);
@@ -1612,13 +1934,35 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     .plotly-shell-note {{
       color: var(--muted);
       font-size: 12px;
+      line-height: 1.45;
+    }}
+    .plotly-actions {{
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+    }}
+    .plotly-expand-trigger {{
+      appearance: none;
+      border: 1px solid var(--accent-border);
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--ink);
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+    }}
+    .plotly-expand-trigger:hover {{
+      border-color: var(--accent);
+      background: var(--accent-soft);
     }}
     .plotly-chart {{
       width: 100%;
       min-height: 360px;
       border: 1px solid var(--line);
       border-radius: 18px;
-      background: rgba(255,255,255,0.92);
+      background: var(--plot-shell-bg);
       overflow: hidden;
     }}
     .chart-fallback-shell {{
@@ -1637,7 +1981,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       height: auto;
       border-top: 1px solid var(--line);
       border-bottom: 1px solid var(--line);
-      background: #fff;
+      background: var(--paper-strong);
       margin-top: 14px;
     }}
     .chart-image-trigger {{
@@ -1650,10 +1994,6 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       cursor: zoom-in;
       text-align: left;
     }}
-    .chart-image-trigger:focus-visible {{
-      outline: 3px solid rgba(214, 110, 47, 0.45);
-      outline-offset: 2px;
-    }}
     .lightbox {{
       position: fixed;
       inset: 0;
@@ -1665,10 +2005,10 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       max-height: 100vh;
       width: 100vw;
       height: 100vh;
-      background: rgba(10, 16, 24, 0.9);
+      background: var(--overlay-bg);
     }}
     .lightbox::backdrop {{
-      background: rgba(10, 16, 24, 0.9);
+      background: var(--overlay-bg);
     }}
     .lightbox-shell {{
       position: relative;
@@ -1676,7 +2016,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       height: min(96vh, calc(100vh - 24px));
       margin: 12px auto;
       display: grid;
-      grid-template-rows: auto 1fr;
+      grid-template-rows: auto 1fr auto;
       gap: 8px;
     }}
     .lightbox-close {{
@@ -1689,22 +2029,50 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       font-weight: 600;
       cursor: pointer;
     }}
-    .lightbox-figure {{
+    .lightbox-body {{
+      min-height: 0;
+      display: grid;
+    }}
+    .lightbox-pane[hidden] {{
+      display: none !important;
+    }}
+    .lightbox-image-shell {{
       margin: 0;
       min-height: 0;
       display: grid;
       justify-items: center;
       align-content: center;
-      gap: 10px;
     }}
-    .lightbox-figure img {{
+    .lightbox-image-shell img {{
       width: auto;
       max-width: 100%;
-      max-height: calc(100vh - 132px);
+      max-height: calc(100vh - 188px);
       border-radius: 10px;
-      background: #fff;
+      background: var(--paper-strong);
     }}
-    .lightbox-figure figcaption {{
+    .lightbox-plotly-shell {{
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 10px;
+    }}
+    .lightbox-plotly-note {{
+      color: #f3f7fb;
+      font-size: 13px;
+      line-height: 1.45;
+      max-width: 840px;
+    }}
+    .lightbox-plotly-chart {{
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: var(--plot-shell-bg);
+      overflow: hidden;
+    }}
+    .lightbox-caption {{
+      margin: 0;
       color: #f3f7fb;
       font-size: 15px;
       text-align: center;
@@ -1716,7 +2084,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       padding: 16px 18px 0;
     }}
     .detail-panel {{
-      background: rgba(22, 35, 48, 0.035);
+      background: var(--detail-panel-bg);
       border: 1px solid var(--line);
       border-radius: 16px;
       padding: 12px 14px;
@@ -1734,8 +2102,8 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       gap: 10px;
     }}
     .detail-card {{
-      background: rgba(255, 255, 255, 0.68);
-      border: 1px solid rgba(22, 35, 48, 0.08);
+      background: var(--detail-card-bg);
+      border: 1px solid var(--line);
       border-radius: 14px;
       padding: 10px 12px;
       min-width: 0;
@@ -1779,7 +2147,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       font-size: 11px;
       text-transform: uppercase;
       letter-spacing: 0.10em;
-      background: rgba(22, 35, 48, 0.04);
+      background: var(--table-head-bg);
     }}
     .detail-list {{
       margin: 0;
@@ -1790,7 +2158,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       overflow-x: auto;
       border: 1px solid var(--line);
       border-radius: 16px;
-      background: rgba(255,255,255,0.78);
+      background: var(--table-shell-bg);
     }}
     .subsection-title {{
       margin: 20px 0 8px;
@@ -1803,7 +2171,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       margin-top: 20px;
     }}
     .metric-block {{
-      background: rgba(255,255,255,0.7);
+      background: var(--card-soft);
       border: 1px solid var(--line);
       border-radius: 20px;
       padding: 18px;
@@ -1824,8 +2192,8 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     }}
     pre {{
       margin: 12px 0 0;
-      background: #121a22;
-      color: #eef4f8;
+      background: var(--pre-bg);
+      color: var(--pre-ink);
       border-radius: 14px;
       padding: 14px;
       overflow: auto;
@@ -1842,15 +2210,22 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       .shell {{ width: min(100vw - 18px, 1480px); padding-top: 12px; }}
       .hero, .diagnostics, .measurement-section, .empty-state {{ padding: 18px; border-radius: 18px; }}
       .chart-grid {{ grid-template-columns: 1fr; }}
+      .theme-switch {{ width: 100%; justify-content: space-between; }}
+      .theme-options {{ flex-wrap: wrap; justify-content: flex-end; }}
     }}
   </style>
 </head>
 <body>
   <div class="shell">
     <header class="hero">
-      <p class="eyebrow">Metroliza Export Dashboard</p>
-      <h1>{html.escape(str(manifest.get("excel_file") or "Workbook export"))}</h1>
-      <p class="lede">Extended summary charts exported alongside the workbook. When interactive charts are available, the dashboard copies a local Plotly runtime into the asset folder so zoom, pan, and hover inspection work offline, while workbook-matching PNG snapshots stay available for parity checks against the exported sheet.</p>
+      <div class="hero-top">
+        <div class="hero-copy">
+          <p class="eyebrow">Metroliza Export Dashboard</p>
+          <h1>{html.escape(str(manifest.get("excel_file") or "Workbook export"))}</h1>
+          <p class="lede">Extended summary charts exported alongside the workbook. When interactive charts are available, the dashboard copies a local Plotly runtime into the asset folder so zoom, pan, and hover inspection work offline, while workbook-matching PNG snapshots stay available for parity checks against the exported sheet.</p>
+        </div>
+        {theme_switch_markup}
+      </div>
       {plotly_status_notice}
       {overview_cards}
       {nav_markup}
@@ -1866,48 +2241,303 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
   <dialog id="chart-lightbox" class="lightbox" aria-label="Enlarged chart">
     <div class="lightbox-shell">
       <button type="button" class="lightbox-close" id="chart-lightbox-close">Close</button>
-      <figure class="lightbox-figure">
-        <img id="chart-lightbox-image" src="" alt="">
-        <figcaption id="chart-lightbox-caption"></figcaption>
-      </figure>
+      <div class="lightbox-body">
+        <figure class="lightbox-image-shell lightbox-pane" id="chart-lightbox-image-shell">
+          <img id="chart-lightbox-image" src="" alt="">
+        </figure>
+        <div class="lightbox-plotly-shell lightbox-pane" id="chart-lightbox-plotly-shell" hidden>
+          <div class="lightbox-plotly-note">Interactive charts open in a larger Plotly canvas here so zoom, pan, hover, and export actions stay available in the enlarged view.</div>
+          <div id="chart-lightbox-plotly" class="lightbox-plotly-chart" aria-label="Enlarged interactive chart"></div>
+        </div>
+      </div>
+      <p id="chart-lightbox-caption" class="lightbox-caption"></p>
     </div>
   </dialog>
   <script>
     (() => {{
+      const themeStorageKey = {json.dumps(_DASHBOARD_THEME_STORAGE_KEY)};
+      const plotlyThemeTokens = {plotly_theme_tokens_json};
+      const allowedThemeChoices = new Set(['auto', 'light', 'dark']);
+      const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+      const sanitizeThemeChoice = (value) => (
+        allowedThemeChoices.has(value) ? value : 'auto'
+      );
+
+      const currentThemeChoice = () => sanitizeThemeChoice(
+        document.documentElement.dataset.themeChoice || 'auto'
+      );
+
+      const resolveTheme = (choice) => (
+        choice === 'auto'
+          ? ((themeMedia && themeMedia.matches) ? 'dark' : 'light')
+          : choice
+      );
+
+      const persistThemeChoice = (choice) => {{
+        try {{
+          window.localStorage.setItem(themeStorageKey, choice);
+        }} catch (_error) {{
+          // Ignore storage failures in locked-down browser contexts.
+        }}
+      }};
+
+      const readStoredThemeChoice = () => {{
+        try {{
+          return sanitizeThemeChoice(window.localStorage.getItem(themeStorageKey) || currentThemeChoice());
+        }} catch (_error) {{
+          return currentThemeChoice();
+        }}
+      }};
+
+      const readCssVar = (name, fallback) => {{
+        const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return value || fallback;
+      }};
+
+      const buildPlotlyTheme = () => ({{
+        ...plotlyThemeTokens[document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'],
+        paperBgcolor: readCssVar('--plot-paper', 'rgba(0,0,0,0)'),
+        plotBgcolor: readCssVar('--plot-bg', 'rgba(255,255,255,0.88)'),
+        fontColor: readCssVar('--plot-font', '#162330'),
+        gridColor: readCssVar('--plot-grid', 'rgba(22,35,48,0.08)'),
+        zeroLineColor: readCssVar('--plot-zero', 'rgba(22,35,48,0.12)'),
+        axisLineColor: readCssVar('--plot-axis', 'rgba(22,35,48,0.18)'),
+        legendBgcolor: readCssVar('--plot-legend-bg', 'rgba(255,255,255,0.72)'),
+        legendBorderColor: readCssVar('--plot-legend-border', 'rgba(22,35,48,0.08)'),
+        hoverBgcolor: readCssVar('--plot-hover-bg', '#162330'),
+        hoverFontColor: readCssVar('--plot-hover-font', '#f8fafc'),
+        annotationBgcolor: readCssVar('--plot-annotation-bg', 'rgba(255,255,255,0.84)'),
+        annotationFontColor: readCssVar('--plot-annotation-font', '#162330'),
+      }});
+
+      const buildPlotlyColorRemap = (theme) => {{
+        const colorway = Array.isArray(theme.colorway) ? theme.colorway : [];
+        return {{
+          '#245a5a': theme.mean_line,
+          '#d66e2f': theme.trend_marker,
+          '#476f95': colorway[2] || '#476f95',
+          '#7a8f3d': colorway[3] || '#7a8f3d',
+          '#b2503c': colorway[4] || '#b2503c',
+          '#6a5f85': colorway[5] || '#6a5f85',
+          '#b45309': theme.reference_limit,
+          '#0f766e': theme.reference_nominal,
+          '#162330': theme.fontColor,
+          '#ffffff': theme.bar_outline,
+        }};
+      }};
+
+      const remapPlotlyColor = (value, colorRemap) => {{
+        if (typeof value !== 'string') {{
+          return value;
+        }}
+        const normalized = value.trim().toLowerCase();
+        return colorRemap[normalized] || value;
+      }};
+
+      const remapPlotlyTrace = (trace, colorRemap) => {{
+        if (!trace || typeof trace !== 'object') {{
+          return trace;
+        }}
+
+        const nextTrace = Object.assign({{}}, trace);
+        if (nextTrace.line && typeof nextTrace.line === 'object') {{
+          nextTrace.line = Object.assign({{}}, nextTrace.line, {{
+            color: remapPlotlyColor(nextTrace.line.color, colorRemap),
+          }});
+        }}
+        if (nextTrace.marker && typeof nextTrace.marker === 'object') {{
+          nextTrace.marker = Object.assign({{}}, nextTrace.marker);
+          if (typeof nextTrace.marker.color === 'string') {{
+            nextTrace.marker.color = remapPlotlyColor(nextTrace.marker.color, colorRemap);
+          }}
+          if (nextTrace.marker.line && typeof nextTrace.marker.line === 'object') {{
+            nextTrace.marker.line = Object.assign({{}}, nextTrace.marker.line, {{
+              color: remapPlotlyColor(nextTrace.marker.line.color, colorRemap),
+            }});
+          }}
+        }}
+        if (typeof nextTrace.fillcolor === 'string') {{
+          nextTrace.fillcolor = remapPlotlyColor(nextTrace.fillcolor, colorRemap);
+        }}
+        return nextTrace;
+      }};
+
+      const applyThemeToPlotlySpec = (rawSpec) => {{
+        const spec = JSON.parse(JSON.stringify(rawSpec));
+        const layout = (spec.layout && typeof spec.layout === 'object') ? spec.layout : {{}};
+        const theme = buildPlotlyTheme();
+        const colorRemap = buildPlotlyColorRemap(theme);
+
+        layout.paper_bgcolor = theme.paperBgcolor;
+        layout.plot_bgcolor = theme.plotBgcolor;
+        layout.colorway = Array.isArray(theme.colorway) ? theme.colorway.slice() : layout.colorway;
+        layout.font = Object.assign({{}}, layout.font || {{}}, {{ color: theme.fontColor }});
+        layout.title = Object.assign({{}}, layout.title || {{}}, {{
+          font: Object.assign({{}}, ((layout.title || {{}}).font || {{}}), {{ color: theme.fontColor }}),
+        }});
+        layout.hoverlabel = Object.assign({{}}, layout.hoverlabel || {{}}, {{
+          bgcolor: theme.hoverBgcolor,
+          font: Object.assign({{}}, ((layout.hoverlabel || {{}}).font || {{}}), {{ color: theme.hoverFontColor }}),
+        }});
+        layout.legend = Object.assign({{}}, layout.legend || {{}}, {{
+          bgcolor: theme.legendBgcolor,
+          bordercolor: theme.legendBorderColor,
+          font: Object.assign({{}}, ((layout.legend || {{}}).font || {{}}), {{ color: theme.fontColor }}),
+        }});
+
+        ['xaxis', 'yaxis'].forEach((axisKey) => {{
+          const axis = layout[axisKey];
+          if (!axis || typeof axis !== 'object') {{
+            return;
+          }}
+          layout[axisKey] = Object.assign({{}}, axis, {{
+            gridcolor: theme.gridColor,
+            zerolinecolor: theme.zeroLineColor,
+            linecolor: theme.axisLineColor,
+            color: theme.fontColor,
+            title: Object.assign({{}}, axis.title || {{}}, {{
+              font: Object.assign({{}}, ((axis.title || {{}}).font || {{}}), {{ color: theme.fontColor }}),
+            }}),
+          }});
+        }});
+
+        if (Array.isArray(layout.annotations)) {{
+          layout.annotations = layout.annotations.map((annotation) => {{
+            if (!annotation || typeof annotation !== 'object') {{
+              return annotation;
+            }}
+            return Object.assign({{}}, annotation, {{
+              bgcolor: theme.annotationBgcolor,
+              font: Object.assign({{}}, annotation.font || {{}}, {{
+                color: remapPlotlyColor(
+                  (annotation.font && annotation.font.color) || theme.annotationFontColor,
+                  colorRemap,
+                ),
+              }}),
+            }});
+          }});
+        }}
+
+        if (Array.isArray(layout.shapes)) {{
+          layout.shapes = layout.shapes.map((shape) => {{
+            if (!shape || typeof shape !== 'object' || !shape.line || typeof shape.line !== 'object') {{
+              return shape;
+            }}
+            return Object.assign({{}}, shape, {{
+              line: Object.assign({{}}, shape.line, {{
+                color: remapPlotlyColor(shape.line.color, colorRemap),
+              }}),
+            }});
+          }});
+        }}
+
+        if (Array.isArray(spec.data)) {{
+          spec.data = spec.data.map((trace) => remapPlotlyTrace(trace, colorRemap));
+        }}
+        spec.layout = layout;
+        return spec;
+      }};
+
+      const parsePlotlySpec = (container) => {{
+        const currentTheme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+        const rawSpec = (
+          container.getAttribute(`data-plotly-spec-${{currentTheme}}`)
+          || container.getAttribute('data-plotly-spec-light')
+          || container.getAttribute('data-plotly-spec')
+          || ''
+        );
+        if (!rawSpec) {{
+          return null;
+        }}
+        try {{
+          const spec = JSON.parse(rawSpec);
+          return spec && Array.isArray(spec.data) && spec.layout ? spec : null;
+        }} catch (_error) {{
+          return null;
+        }}
+      }};
+
+      const renderPlotlyContainer = (container, {{ force = false }} = {{}}) => {{
+        if (!window.Plotly) {{
+          return false;
+        }}
+        const baseSpec = parsePlotlySpec(container);
+        if (!baseSpec) {{
+          return false;
+        }}
+        const spec = applyThemeToPlotlySpec(baseSpec);
+        const config = Object.assign({{ responsive: true }}, spec.config || {{}});
+        try {{
+          if (force && container.dataset.plotlyReady === '1') {{
+            window.Plotly.react(container, spec.data, spec.layout, config);
+          }} else if (container.dataset.plotlyReady !== '1') {{
+            window.Plotly.newPlot(container, spec.data, spec.layout, config);
+          }} else {{
+            return true;
+          }}
+          container.dataset.plotlyReady = '1';
+          return true;
+        }} catch (_error) {{
+          container.dataset.plotlyReady = 'error';
+          return false;
+        }}
+      }};
+
       const initializePlotlyCharts = () => {{
         if (!window.Plotly) {{
           return false;
         }}
-
+        let rendered = false;
         document.querySelectorAll('.plotly-chart').forEach((container) => {{
           if (container.dataset.plotlyReady === '1') {{
             return;
           }}
-          const rawSpec = container.getAttribute('data-plotly-spec') || '';
-          if (!rawSpec) {{
-            return;
-          }}
-          try {{
-            const spec = JSON.parse(rawSpec);
-            if (!spec || !Array.isArray(spec.data) || !spec.layout) {{
-              return;
-            }}
-            window.Plotly.newPlot(
-              container,
-              spec.data,
-              spec.layout,
-              Object.assign({{responsive: true}}, spec.config || {{}})
-            );
-            container.dataset.plotlyReady = '1';
-          }} catch (_error) {{
-            container.dataset.plotlyReady = 'error';
-          }}
+          rendered = renderPlotlyContainer(container) || rendered;
         }});
-        return true;
+        return rendered;
+      }};
+
+      const refreshPlotlyCharts = () => {{
+        if (!window.Plotly) {{
+          return;
+        }}
+        document.querySelectorAll('.plotly-chart[data-plotly-ready="1"]').forEach((container) => {{
+          renderPlotlyContainer(container, {{ force: true }});
+        }});
+      }};
+
+      const updateThemeControls = () => {{
+        const choice = currentThemeChoice();
+        document.querySelectorAll('.theme-option').forEach((button) => {{
+          const active = button.getAttribute('data-theme-choice') === choice;
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+          button.dataset.active = active ? '1' : '0';
+        }});
+      }};
+
+      const applyThemeChoice = (choice, {{ persist = false, rerender = true }} = {{}}) => {{
+        const normalizedChoice = sanitizeThemeChoice(choice);
+        document.documentElement.dataset.themeChoice = normalizedChoice;
+        document.documentElement.dataset.theme = resolveTheme(normalizedChoice);
+        if (persist) {{
+          persistThemeChoice(normalizedChoice);
+        }}
+        updateThemeControls();
+        if (rerender) {{
+          refreshPlotlyCharts();
+          if (lightbox && lightbox.open && lightbox.dataset.mode === 'plotly' && lightboxPlotly) {{
+            renderPlotlyContainer(lightboxPlotly, {{ force: true }});
+            scheduleLightboxPlotlyResize();
+          }}
+        }}
       }};
 
       const lightbox = document.getElementById('chart-lightbox');
+      const lightboxImageShell = document.getElementById('chart-lightbox-image-shell');
       const lightboxImage = document.getElementById('chart-lightbox-image');
+      const lightboxPlotlyShell = document.getElementById('chart-lightbox-plotly-shell');
+      const lightboxPlotly = document.getElementById('chart-lightbox-plotly');
       const lightboxCaption = document.getElementById('chart-lightbox-caption');
       const closeButton = document.getElementById('chart-lightbox-close');
       let plotlyAttempts = 0;
@@ -1918,25 +2548,147 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         plotlyAttempts += 1;
         window.setTimeout(tryInitPlotly, 250);
       }};
+      const setLightboxMode = (mode) => {{
+        const plotlyMode = mode === 'plotly';
+        if (lightbox) {{
+          lightbox.dataset.mode = plotlyMode ? 'plotly' : 'image';
+        }}
+        if (lightboxImageShell) {{
+          lightboxImageShell.hidden = plotlyMode;
+        }}
+        if (lightboxPlotlyShell) {{
+          lightboxPlotlyShell.hidden = !plotlyMode;
+        }}
+      }};
+      const copyPlotlySpecAttributes = (source, destination) => {{
+        if (!source || !destination) {{
+          return;
+        }}
+        ['data-plotly-spec-light', 'data-plotly-spec-dark', 'data-plotly-spec'].forEach((attribute) => {{
+          const value = source.getAttribute(attribute);
+          if (value) {{
+            destination.setAttribute(attribute, value);
+          }} else {{
+            destination.removeAttribute(attribute);
+          }}
+        }});
+      }};
+      const clearLightboxPlotly = () => {{
+        if (!lightboxPlotly) {{
+          return;
+        }}
+        if (window.Plotly && lightboxPlotly.dataset.plotlyReady === '1') {{
+          try {{
+            window.Plotly.purge(lightboxPlotly);
+          }} catch (_error) {{
+            // Ignore purge failures during teardown.
+          }}
+        }}
+        lightboxPlotly.dataset.plotlyReady = '0';
+        lightboxPlotly.removeAttribute('data-plotly-spec-light');
+        lightboxPlotly.removeAttribute('data-plotly-spec-dark');
+        lightboxPlotly.removeAttribute('data-plotly-spec');
+        lightboxPlotly.textContent = '';
+      }};
+      const resizeLightboxPlotly = () => {{
+        if (!window.Plotly || !lightbox || !lightbox.open || lightbox.dataset.mode !== 'plotly' || !lightboxPlotly) {{
+          return;
+        }}
+        try {{
+          window.Plotly.Plots.resize(lightboxPlotly);
+        }} catch (_error) {{
+          // Ignore resize failures when the dialog is transitioning.
+        }}
+      }};
+      const scheduleLightboxPlotlyResize = () => {{
+        window.requestAnimationFrame(() => {{
+          resizeLightboxPlotly();
+          window.setTimeout(resizeLightboxPlotly, 90);
+        }});
+      }};
+      const openImageLightbox = (source, caption) => {{
+        if (!lightbox || !lightboxImage) {{
+          return;
+        }}
+        clearLightboxPlotly();
+        setLightboxMode('image');
+        lightboxImage.setAttribute('src', source);
+        lightboxImage.setAttribute('alt', caption || 'Enlarged chart');
+        lightboxCaption.textContent = caption;
+        lightbox.showModal();
+      }};
+      const openPlotlyLightbox = (sourceContainer, caption) => {{
+        if (!lightbox || !lightboxPlotly || !sourceContainer || !parsePlotlySpec(sourceContainer)) {{
+          return false;
+        }}
+        copyPlotlySpecAttributes(sourceContainer, lightboxPlotly);
+        lightboxImage.setAttribute('src', '');
+        lightboxImage.setAttribute('alt', '');
+        setLightboxMode('plotly');
+        lightboxCaption.textContent = caption;
+        lightbox.showModal();
+        window.requestAnimationFrame(() => {{
+          renderPlotlyContainer(lightboxPlotly, {{ force: true }});
+          scheduleLightboxPlotlyResize();
+        }});
+        return true;
+      }};
+      applyThemeChoice(readStoredThemeChoice(), {{ rerender: false }});
+      document.querySelectorAll('.theme-option').forEach((button) => {{
+        button.addEventListener('click', () => {{
+          applyThemeChoice(button.getAttribute('data-theme-choice') || 'auto', {{ persist: true }});
+        }});
+      }});
+      if (themeMedia) {{
+        const onSystemThemeChange = () => {{
+          if (currentThemeChoice() === 'auto') {{
+            applyThemeChoice('auto');
+          }}
+        }};
+        if (typeof themeMedia.addEventListener === 'function') {{
+          themeMedia.addEventListener('change', onSystemThemeChange);
+        }} else if (typeof themeMedia.addListener === 'function') {{
+          themeMedia.addListener(onSystemThemeChange);
+        }}
+      }}
       tryInitPlotly();
 
-      if (!lightbox || !lightboxImage || !closeButton) return;
+      if (!lightbox || !lightboxImage || !lightboxCaption || !closeButton) return;
 
       const closeLightbox = () => {{
         if (lightbox.open) {{
           lightbox.close();
         }}
+        lightboxCaption.textContent = '';
+        lightboxImage.setAttribute('src', '');
+        lightboxImage.setAttribute('alt', '');
+        clearLightboxPlotly();
+        setLightboxMode('image');
       }};
 
       document.querySelectorAll('.chart-image-trigger').forEach((trigger) => {{
         trigger.addEventListener('click', () => {{
           const source = trigger.getAttribute('data-image-src') || '';
           const caption = trigger.getAttribute('data-image-caption') || '';
+          const chartCard = trigger.closest('.chart-card');
+          const plotlySource = chartCard ? chartCard.querySelector('.plotly-chart') : null;
           if (!source) return;
-          lightboxImage.setAttribute('src', source);
-          lightboxImage.setAttribute('alt', caption || 'Enlarged chart');
-          lightboxCaption.textContent = caption;
-          lightbox.showModal();
+          if (plotlySource && window.Plotly && openPlotlyLightbox(plotlySource, caption)) {{
+            return;
+          }}
+          openImageLightbox(source, caption);
+        }});
+      }});
+
+      document.querySelectorAll('.plotly-expand-trigger').forEach((trigger) => {{
+        trigger.addEventListener('click', () => {{
+          const plotlyShell = trigger.closest('.plotly-shell');
+          const plotlySource = plotlyShell ? plotlyShell.querySelector('.plotly-chart') : null;
+          const caption = trigger.getAttribute('data-image-caption') || '';
+          if (!plotlySource || !window.Plotly) {{
+            return;
+          }}
+          openPlotlyLightbox(plotlySource, caption);
         }});
       }});
 
@@ -1952,6 +2704,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         document.querySelectorAll('.plotly-chart[data-plotly-ready="1"]').forEach((container) => {{
           window.Plotly.Plots.resize(container);
         }});
+        scheduleLightboxPlotlyResize();
       }});
     }})();
   </script>
@@ -1997,7 +2750,8 @@ def _format_generated_card_value(generated_at: Any) -> str:
         return f'<span class="metric-value-line">{escaped}</span>'
 
     date_markup = html.escape(date_part.strip() or "n/a")
-    time_markup = html.escape(time_part.strip() or "n/a")
+    normalized_time_part = re.sub(r"(Z|[+-]\d{2}:\d{2})$", "", time_part.strip()).strip() or "n/a"
+    time_markup = html.escape(normalized_time_part)
     return (
         f'<span class="metric-value-line">{date_markup}</span>'
         f'<span class="metric-value-line">{time_markup}</span>'
@@ -2051,15 +2805,32 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
     if not isinstance(plotly_spec, dict) or not plotly_spec:
         return ""
 
-    spec_json = html.escape(json.dumps(plotly_spec, ensure_ascii=False, separators=(",", ":")))
+    light_spec = plotly_spec.get("light") if isinstance(plotly_spec.get("light"), dict) else None
+    dark_spec = plotly_spec.get("dark") if isinstance(plotly_spec.get("dark"), dict) else None
+    if light_spec is None and "data" in plotly_spec and "layout" in plotly_spec:
+        light_spec = plotly_spec
+        dark_spec = plotly_spec
+    if light_spec is None:
+        return ""
+    if dark_spec is None:
+        dark_spec = light_spec
+
+    spec_json_light = html.escape(json.dumps(light_spec, ensure_ascii=False, separators=(",", ":")))
+    spec_json_dark = html.escape(json.dumps(dark_spec, ensure_ascii=False, separators=(",", ":")))
     title = str(chart.get("title") or chart.get("chart_type") or "chart")
     return (
         '<div class="plotly-shell">'
         '<div class="plotly-shell-header">'
+        '<div class="plotly-shell-copy">'
         '<span class="plotly-kicker">Interactive Plotly view</span>'
-        '<span class="plotly-shell-note">Zoom, pan, and inspect points directly in the saved dashboard.</span>'
+        '<span class="plotly-shell-note">Zoom, pan, and inspect points directly in the saved dashboard. Theme-aware Plotly colors follow the current mode.</span>'
         '</div>'
-        f'<div class="plotly-chart" aria-label="Interactive chart: {html.escape(title)}" data-plotly-spec="{spec_json}"></div>'
+        '<div class="plotly-actions">'
+        f'<button type="button" class="plotly-expand-trigger" aria-label="Enlarge interactive chart: {html.escape(title)}" data-image-caption="{html.escape(title)}">Increase size</button>'
+        '</div>'
+        '</div>'
+        f'<div class="plotly-chart" aria-label="Interactive chart: {html.escape(title)}" '
+        f'data-plotly-spec-light="{spec_json_light}" data-plotly-spec-dark="{spec_json_dark}"></div>'
         '</div>'
     )
 

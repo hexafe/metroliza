@@ -263,10 +263,10 @@ class NativeChartRenderer(ChartRenderer):
 
 
 def _runtime_backend_choice() -> BackendChoice:
-    choice = os.getenv("METROLIZA_CHART_RENDERER_BACKEND", "auto").strip().lower()
+    choice = os.getenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib").strip().lower()
     if choice in {"auto", "native", "matplotlib"}:
         return choice
-    return "auto"
+    return "matplotlib"
 
 
 def _runtime_rollout_chart_kinds() -> set[str]:
@@ -411,10 +411,11 @@ def _resolve_native_backend_with_policy(*, chart_kind: str, backend_available: b
 def resolve_chart_renderer_backend() -> ResolvedBackend:
     """Resolve the primary chart renderer backend policy for histogram exports.
 
-    Native rendering is preferred by default when the native backend is
-    available. Operators can still narrow or disable rollout explicitly via
-    ``METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS`` or force matplotlib via
-    ``METROLIZA_CHART_RENDERER_BACKEND=matplotlib``.
+    Matplotlib is the current default while native parity is still being
+    stabilized. Operators can opt into native selection explicitly via
+    ``METROLIZA_CHART_RENDERER_BACKEND=auto`` or
+    ``METROLIZA_CHART_RENDERER_BACKEND=native`` and then narrow rollout with
+    ``METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS``.
     """
     backend = _runtime_backend_choice()
     return _resolve_native_backend_with_policy(

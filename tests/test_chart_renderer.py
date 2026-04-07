@@ -148,8 +148,8 @@ def test_build_chart_renderer_uses_native_when_native_capability_is_present(monk
     assert warn.call_count == 0
 
 
-def test_build_chart_renderer_prefers_native_when_distribution_backend_is_available_by_default(monkeypatch):
-    monkeypatch.delenv("METROLIZA_CHART_RENDERER_BACKEND", raising=False)
+def test_build_chart_renderer_uses_native_when_distribution_backend_is_available_in_auto_mode(monkeypatch):
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
     with (
         mock.patch("modules.chart_renderer._native_render_histogram_png", None),
@@ -546,7 +546,7 @@ def test_backend_diagnostics_exposes_per_chart_rollout_state(monkeypatch):
 
 
 def test_resolve_distribution_backend_auto_prefers_native_when_extension_available(monkeypatch):
-    monkeypatch.delenv("METROLIZA_CHART_RENDERER_BACKEND", raising=False)
+    monkeypatch.setenv("METROLIZA_CHART_RENDERER_BACKEND", "auto")
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
     with mock.patch("modules.chart_renderer._native_render_distribution_png", lambda payload: b"png"):
         assert resolve_distribution_renderer_backend() == "native"

@@ -45,7 +45,7 @@ Dependency files:
 4. Export Excel reports with summaries and plots.
 5. Optionally generate a Google Sheets version while always keeping a local `.xlsx` fallback.
    - OAuth uses the minimal Drive scope: `https://www.googleapis.com/auth/drive.file`.
-6. Optionally generate an HTML dashboard sidecar with offline Plotly interactions plus workbook-matching PNG snapshots.
+6. Optionally generate an HTML dashboard sidecar with offline Plotly interactions, an Auto/Light/Dark theme switch, and workbook-matching PNG snapshots.
 
 
 ## CMM parser backend policy
@@ -59,19 +59,20 @@ Parity between native and Python backends is enforced through fixture-based test
 
 ## Chart renderer backend policy
 
-- `METROLIZA_CHART_RENDERER_BACKEND` accepts `auto` (default), `native`, or `matplotlib`.
+- `METROLIZA_CHART_RENDERER_BACKEND` accepts `matplotlib` (default), `auto`, or `native`.
 - Native chart rendering via `_metroliza_chart_native` is included when the native extension is built/installed in the packaging environment.
-- `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` accepts a comma-separated allowlist such as `histogram,distribution,iqr,trend`; when unset, all supported chart kinds are enabled for native rollout by default.
-- In `auto`, the runtime export path now prefers the native backend for enabled chart kinds whose native extension symbols are available.
+- `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` accepts a comma-separated allowlist such as `histogram,distribution,iqr,trend`; when unset, all supported chart kinds are enabled whenever native mode is opted in via `auto` or `native`.
+- Matplotlib is the current default export path while native chart parity is still being tuned.
+- In `auto`, the runtime export path re-enables native selection for enabled chart kinds whose native extension symbols are available.
 - If `native` is forced while the native module is unavailable, Metroliza warns and falls back to matplotlib rendering.
 - If `native` is forced for a chart kind that is not allowlisted for rollout, Metroliza warns and falls back to matplotlib rendering for that chart kind.
 - Runtime export rendering is split into three layers:
   - `runtime` decides whether a chart kind may use the native backend.
   - `oracle` means the export path has already resolved matplotlib-derived geometry/spec data for parity-sensitive charts.
   - `fast-path` means the native compositor can render from that resolved payload without re-running matplotlib layout.
-- Histogram, distribution, IQR, and trend now use planner-driven native fast-path payloads in the export runtime whenever the chart kind is allowlisted and the native backend is available.
+- Histogram, distribution, IQR, and trend use planner-driven native fast-path payloads in the export runtime only when native mode is opted in, the chart kind is allowlisted, and the native backend is available.
 - The lower-level `_metroliza_chart_native` compositor entrypoints remain backward-compatible and can still synthesize fallback geometry/metadata for legacy payloads when called directly.
-- For deterministic rollback behavior, set `METROLIZA_CHART_RENDERER_BACKEND=matplotlib`.
+- For deterministic rollback behavior, either leave `METROLIZA_CHART_RENDERER_BACKEND` unset or set it explicitly to `matplotlib`.
 
 ## Additional native backend controls
 

@@ -19,7 +19,6 @@ from modules.chart_render_spec import (
     build_resolved_trend_spec,
 )
 from modules.chart_renderer import (
-    MatplotlibChartRenderer,
     build_chart_renderer,
     build_distribution_native_payload,
     native_full_chart_backend_available,
@@ -447,7 +446,7 @@ def test_trend_parity_harness_tracks_metadata_and_coarse_image_parity():
     )
 
 
-def test_backend_policy_defaults_to_native_when_native_capability_is_ready(monkeypatch):
+def test_backend_policy_defaults_to_matplotlib_until_native_is_opted_in(monkeypatch):
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_BACKEND", raising=False)
     monkeypatch.delenv("METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS", raising=False)
     with (
@@ -460,12 +459,12 @@ def test_backend_policy_defaults_to_native_when_native_capability_is_ready(monke
         assert native_full_chart_backend_available() is True
         assert native_chart_renderer_rollout_enabled() is True
         assert native_chart_renderer_rollout_enabled_for("histogram") is True
-        assert resolve_chart_renderer_backend() == "native"
-        assert resolve_distribution_renderer_backend() == "native"
-        assert resolve_histogram_renderer_backend() == "native"
-        assert resolve_iqr_renderer_backend() == "native"
-        assert resolve_trend_renderer_backend() == "native"
-        assert type(build_chart_renderer()).__name__ == "NativeChartRenderer"
+        assert resolve_chart_renderer_backend() == "matplotlib"
+        assert resolve_distribution_renderer_backend() == "matplotlib"
+        assert resolve_histogram_renderer_backend() == "matplotlib"
+        assert resolve_iqr_renderer_backend() == "matplotlib"
+        assert resolve_trend_renderer_backend() == "matplotlib"
+        assert type(build_chart_renderer()).__name__ == "MatplotlibChartRenderer"
     assert warn.call_count == 0
 
 
