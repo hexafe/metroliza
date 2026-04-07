@@ -59,13 +59,14 @@ def _collect_optional_runtime_assets(package_name: str) -> tuple[list[tuple[str,
 windows_runtime_binaries = _collect_windows_python_runtime_binaries()
 pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = _collect_optional_runtime_assets('pymupdf')
 fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets('fitz')
+html_dashboard_datas = [(str(ROOT_DIR / 'modules' / 'html_dashboard_assets' / 'plotly-2.27.0.min.js'), 'modules/html_dashboard_assets')]
 
 
 a = Analysis(
     [str(ROOT_DIR / 'metroliza.py')],
     pathex=[],
     binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries,
-    datas=pymupdf_datas + fitz_datas,
+    datas=html_dashboard_datas + pymupdf_datas + fitz_datas,
     hiddenimports=[
         '_metroliza_cmm_native',
         '_metroliza_chart_native',

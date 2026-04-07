@@ -58,7 +58,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
 from modules.export_data_thread import ExportDataThread  # noqa: E402
 import modules.export_data_thread as export_data_thread_module  # noqa: E402
-from modules.export_html_dashboard import resolve_html_dashboard_path  # noqa: E402
+from modules.export_html_dashboard import resolve_html_dashboard_assets_dir, resolve_html_dashboard_path  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 
 
@@ -847,13 +847,17 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             thread.run()
 
             html_path = resolve_html_dashboard_path(out_path)
+            assets_path = resolve_html_dashboard_assets_dir(html_path)
             self.assertTrue(Path(html_path).exists())
+            self.assertTrue(Path(assets_path, 'plotly-2.27.0.min.js').exists())
             html_text = Path(html_path).read_text(encoding='utf-8')
 
             self.assertIn('Group Analysis', html_text)
             self.assertIn('FEATURE_1', html_text)
             self.assertIn('Descriptive stats', html_text)
             self.assertIn('Pairwise comparisons', html_text)
+            self.assertIn('plotly-chart', html_text)
+            self.assertIn(f'{Path(assets_path).name}/plotly-2.27.0.min.js', html_text)
             self.assertNotIn('No extended summary charts were generated.', html_text)
 
 

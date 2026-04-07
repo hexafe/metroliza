@@ -107,6 +107,8 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert "'--include-module=modules.pdf_backend'" in script
     assert "'--include-package-data=pymupdf'" in script
     assert "'--include-package-data=fitz'" in script
+    assert "modules/html_dashboard_assets/plotly-2.27.0.min.js" in script
+    assert '--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=modules/html_dashboard_assets/plotly-2.27.0.min.js' in script
     assert "$commonArgs += '--include-package=pymupdf'" in script
     assert "$commonArgs += '--include-package=fitz'" in script
     assert "'pymupdf._mupdf'" in script
@@ -126,10 +128,18 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert 'def _collect_windows_python_runtime_binaries()' in spec
     assert "pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = _collect_optional_runtime_assets('pymupdf')" in spec
     assert "fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets('fitz')" in spec
+    assert "html_dashboard_datas = [(str(ROOT_DIR / 'modules' / 'html_dashboard_assets' / 'plotly-2.27.0.min.js'), 'modules/html_dashboard_assets')]" in spec
     assert "binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries" in spec
-    assert "datas=pymupdf_datas + fitz_datas" in spec
+    assert "datas=html_dashboard_datas + pymupdf_datas + fitz_datas" in spec
     assert "'modules.cmm_report_parser'" in spec
     assert "'modules.native_chart_compositor'" in spec
     assert "runtime_tmpdir=None" in spec
     assert 'exe = EXE(' in spec
     assert 'COLLECT(' not in spec
+
+
+def test_vendored_plotly_dashboard_asset_is_checked_in():
+    asset = Path('modules/html_dashboard_assets/plotly-2.27.0.min.js')
+
+    assert asset.exists()
+    assert asset.stat().st_size > 1_000_000

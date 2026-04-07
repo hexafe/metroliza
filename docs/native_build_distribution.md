@@ -112,7 +112,8 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 - Native chart rendering is shipped when `_metroliza_chart_native` is available in the packaged build environment.
 - The current native module covers histogram, distribution, IQR, and trend summary charts through the `_metroliza_chart_native` extension surface.
 - The native chart path is a payload-driven non-matplotlib compositor intended for workbook/export rendering, not an HTML/interactive chart stack.
-- The optional HTML dashboard sidecar reuses the same export chart payloads and rendered PNGs, but it remains a separate Python-side export artifact rather than part of the native chart extension.
+- The optional HTML dashboard sidecar remains a separate Python-side export artifact rather than part of the native chart extension.
+- The dashboard now copies a vendored `plotly-2.27.0.min.js` runtime into each exported `*_dashboard_assets/` folder, so interactive hover/zoom works offline and survives frozen Windows builds without a CDN dependency.
 - If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
 - `auto` now prefers native for enabled chart kinds when the extension is present and otherwise falls back to matplotlib.
 - CI's native-artifacts job now runs `tests/test_native_chart_renderer_smoke.py` against the compiled wheel so histogram, distribution, IQR, and trend all prove native dispatch with planner-built resolved specs attached, and it also runs a focused export-runtime fast-path contract smoke for the extended summary-sheet charts.
@@ -146,12 +147,14 @@ Runtime fallback from native execution errors in forced-`native` modes is intent
 - `hiddenimports=['_metroliza_cmm_native', '_metroliza_chart_native']`
 - Windows Python runtime DLL collection (`libffi`, `python3*.dll`, `vcruntime`, `msvcp`) so onefile startup does not depend on a fragile ambient interpreter layout
 - PyMuPDF/`fitz` data files, native libraries, and discovered submodules so packaged PDF parsing survives frozen builds
+- the vendored dashboard runtime asset at `modules/html_dashboard_assets/plotly-2.27.0.min.js` so HTML sidecars can copy a local Plotly bundle into the export folder
 
 Distribution audit status:
 
 - `pyinstaller packaging/metroliza_onefile.spec` produces a single-file artifact (`EXE(...)` with no `COLLECT(...)` stage), so it is configured as a onefile build rather than an onedir bundle.
 - default PyInstaller output filename follows release metadata: `metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>).exe`
 - The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
+- Exported HTML dashboards no longer rely on internet access: the packaged app copies the bundled Plotly runtime into the dashboard asset folder next to the PNG snapshots.
 - Confidence is still release-evidence based rather than absolute: the generated artifact must be smoke-launched on a clean target environment before calling it ready for non-technical users.
 
 Smoke checks after build:
@@ -188,6 +191,7 @@ PyInstaller is the closest current path to a turnkey single-file distribution fo
 - auto-adds `--include-module=_metroliza_chart_native` only when `_metroliza_chart_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
 - explicitly includes `modules.cmm_report_parser`, `modules.report_parser_factory`, and `modules.pdf_backend` because the rc1 parser/plugin refactor introduced dynamic paths that packagers may otherwise under-detect
+- explicitly includes `modules/html_dashboard_assets/plotly-2.27.0.min.js` as a data file so exported HTML dashboards can stay offline-capable in frozen builds
 - requires PyMuPDF to be importable in the build environment and fails closed by default when it is not available
 - always includes `pymupdf` / `fitz` package contents plus explicit PyMuPDF runtime submodules (`pymupdf._mupdf`, `pymupdf._extra`, `pymupdf.extra`, `pymupdf.mupdf`, table/utils helpers) so onefile builds do not silently omit parser internals
 - validates the generated Nuitka report for both backend presence and required PyMuPDF runtime module references so packaged PDF parsing cannot silently drop out of the artifact

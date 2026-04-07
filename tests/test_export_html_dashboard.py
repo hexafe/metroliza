@@ -2,8 +2,11 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 from modules.export_html_dashboard import (
+    _build_group_analysis_plotly_spec,
+    _build_plotly_chart_spec,
     _render_overview_cards,
     resolve_html_dashboard_assets_dir,
     resolve_html_dashboard_path,
@@ -123,6 +126,13 @@ class TestExportHtmlDashboard(unittest.TestCase):
                                 'violin': {'eligible': True, 'skip_reason': ''},
                                 'histogram': {'eligible': True, 'skip_reason': ''},
                             },
+                            'chart_payload': {
+                                'groups': [
+                                    {'group': 'A', 'values': [9.99, 10.01, 10.02, 10.02]},
+                                    {'group': 'B', 'values': [10.08, 10.11, 10.14, 10.16]},
+                                ],
+                                'spec_limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
+                            },
                             'descriptive_stats': [
                                 {'group': 'A', 'n': 4, 'mean': 10.01, 'std': 0.02, 'median': 10.01, 'iqr': 0.03, 'min': 9.99, 'max': 10.03, 'cp': 1.3, 'capability': 1.2, 'capability_type': 'Cpk', 'capability_ci': {'cp': None, 'cpk': {'lower': 0.21250516502733194, 'upper': 0.647494834972668}}, 'best_fit_model': 'norm', 'fit_quality': 'good', 'flags': 'none'},
                                 {'group': 'B', 'n': 4, 'mean': 10.12, 'std': 0.03, 'median': 10.12, 'iqr': 0.04, 'min': 10.08, 'max': 10.16, 'cp': 1.1, 'capability': 0.95, 'capability_type': 'Cpk', 'best_fit_model': 'lognorm', 'fit_quality': 'medium', 'flags': 'LOW N'},
@@ -171,6 +181,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('chart_renderer: status=native_available', html_text)
             self.assertIn('Group Analysis', html_text)
             self.assertIn('FEATURE_1', html_text)
+            self.assertIn('Interactive Plotly view', html_text)
+            self.assertIn('plotly-chart', html_text)
+            self.assertIn('report_dashboard_assets/plotly-2.27.0.min.js', html_text)
+            self.assertNotIn('cdn.plot.ly/plotly-2.27.0.min.js', html_text)
             self.assertIn('<a class="section-chip" href="#group-metric-001">FEATURE_1</a>', html_text)
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('Descriptive stats', html_text)
@@ -186,6 +200,86 @@ class TestExportHtmlDashboard(unittest.TestCase):
             asset_files = list(Path(result['html_dashboard_assets_path']).glob('*.png'))
             self.assertEqual(len(asset_files), 3)
             self.assertIn(b'png-bytes', {path.read_bytes() for path in asset_files})
+            plotly_asset = Path(result['html_dashboard_assets_path']) / 'plotly-2.27.0.min.js'
+            self.assertTrue(plotly_asset.exists())
+            self.assertGreater(plotly_asset.stat().st_size, 1_000_000)
+
+    def test_write_export_html_dashboard_falls_back_to_png_only_when_plotly_bundle_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_file = Path(tmpdir) / 'report.xlsx'
+            html_path = resolve_html_dashboard_path(excel_file)
+            assets_dir = resolve_html_dashboard_assets_dir(html_path)
+
+            with patch(
+                'modules.export_html_dashboard._resolve_bundled_plotly_js_path',
+                return_value=Path(tmpdir) / 'missing-plotly.min.js',
+            ):
+                write_export_html_dashboard(
+                    excel_file=excel_file,
+                    output_path=html_path,
+                    assets_dir=assets_dir,
+                    sections=[
+                        {
+                            'header': 'Diameter / X',
+                            'charts': [
+                                {
+                                    'chart_type': 'histogram',
+                                    'title': 'Diameter / X',
+                                    'backend': 'native',
+                                    'image_buffer': BytesIO(b'png-bytes'),
+                                    'payload': {
+                                        'type': 'histogram',
+                                        'values': [9.9, 10.0, 10.1],
+                                        'lsl': 9.8,
+                                        'usl': 10.2,
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                )
+
+            html_text = html_path.read_text(encoding='utf-8')
+            self.assertNotIn('<div class="plotly-shell">', html_text)
+            self.assertNotIn('data-plotly-spec=', html_text)
+            self.assertIn('Interactive Plotly views were unavailable in this export', html_text)
+            self.assertFalse((assets_dir / 'plotly-2.27.0.min.js').exists())
+
+    def test_group_analysis_histogram_plotly_spec_uses_shared_bins_for_overlay(self):
+        spec = _build_group_analysis_plotly_spec(
+            'FEATURE_1',
+            'histogram',
+            {
+                'groups': [
+                    {'group': 'A', 'values': [9.99, 10.01, 10.02, 10.03]},
+                    {'group': 'B', 'values': [10.08, 10.11, 10.14, 10.16]},
+                ],
+                'spec_limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
+            },
+        )
+
+        self.assertEqual(spec['layout']['barmode'], 'overlay')
+        self.assertEqual(spec['layout']['hovermode'], 'x unified')
+        self.assertEqual(len(spec['data']), 2)
+        self.assertEqual(spec['data'][0]['bingroup'], spec['data'][1]['bingroup'])
+        self.assertEqual(spec['data'][0]['xbins'], spec['data'][1]['xbins'])
+
+    def test_trend_plotly_spec_sorts_connected_points_by_x_value(self):
+        spec = _build_plotly_chart_spec(
+            {
+                'type': 'trend',
+                'x_values': [3, 1, 2],
+                'y_values': [30.0, 10.0, 20.0],
+                'labels': ['third', 'first', 'second'],
+                'horizontal_limits': [25.0],
+            },
+            title='Trend',
+        )
+
+        self.assertEqual(spec['layout']['hovermode'], 'x unified')
+        self.assertEqual(spec['data'][0]['x'], [1.0, 2.0, 3.0])
+        self.assertEqual(spec['data'][0]['y'], [10.0, 20.0, 30.0])
+        self.assertEqual(spec['data'][0]['customdata'], ['first', 'second', 'third'])
 
 
 if __name__ == '__main__':
