@@ -4,6 +4,8 @@ import os
 import sys
 import types
 
+import pytest
+
 
 custom_logger_stub = types.ModuleType("modules.custom_logger")
 
@@ -30,6 +32,7 @@ sys.modules.pop("modules.cmm_report_parser", None)
 factory_module = importlib.import_module("modules.report_parser_factory")
 base_module = importlib.import_module("modules.base_report_parser")
 contracts_module = importlib.import_module("modules.parser_plugin_contracts")
+parser_plugin_paths_module = importlib.import_module("modules.parser_plugin_paths")
 
 
 CMMReportParser = importlib.import_module("modules.cmm_report_parser").CMMReportParser
@@ -63,7 +66,7 @@ def _restore_real_cmm_registration():
     PARSER_DETECTORS["cmm"] = lambda path: ProbeResult(
         plugin_id="cmm",
         can_parse=infer_source_format(path) == "pdf",
-        confidence=100 if infer_source_format(path) == "pdf" else 0,
+        confidence=80 if infer_source_format(path) == "pdf" else 0,
     )
 
 
@@ -110,7 +113,7 @@ def test_register_parser_allows_runtime_extension(tmp_path):
             return ProbeResult(
                 plugin_id=cls.manifest.plugin_id,
                 can_parse=True,
-                confidence=50,
+                confidence=90,
             )
 
         def open_report(self):
@@ -338,7 +341,7 @@ def test_reregistering_parser_without_detector_clears_stale_detector(tmp_path):
         @classmethod
         def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
             cls.probe_calls += 1
-            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=73)
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=83)
 
         def open_report(self):
             self.raw_text = ["ok"]
@@ -378,7 +381,7 @@ def test_reregistering_parser_without_detector_clears_stale_detector(tmp_path):
         diagnostics = resolve_parser_with_diagnostics(tmp_path / "detector_swap.pdf")
 
         assert diagnostics.selected is not None
-        assert diagnostics.selected.confidence == 73
+        assert diagnostics.selected.confidence == 83
         assert diagnostics.selected.reasons == ()
         assert ReregisteredProbeParser.probe_calls == 1
     finally:
@@ -425,8 +428,7 @@ def test_strict_matching_rejects_low_confidence_candidate(tmp_path):
     original_cache = dict(PROBE_RESULT_CACHE)
     original_env = os.environ.get("PARSER_STRICT_MATCHING")
     try:
-        if "PARSER_STRICT_MATCHING" in os.environ:
-            del os.environ["PARSER_STRICT_MATCHING"]
+        os.environ["PARSER_STRICT_MATCHING"] = "false"
 
         _restore_real_cmm_registration()
         register_parser(LowConfidenceParser)
@@ -461,6 +463,65 @@ def test_strict_matching_rejects_low_confidence_candidate(tmp_path):
         PROBE_RESULT_CACHE.update(original_cache)
 
 
+def test_strict_matching_is_default_when_env_is_unset(tmp_path, monkeypatch):
+    class DefaultStrictLowConfidenceParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="default_strict_low_confidence",
+            display_name="Default Strict Low Confidence",
+            version="1.0.0",
+            supported_formats=("pdf",),
+            priority=1000,
+        )
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=40)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    try:
+        monkeypatch.delenv("PARSER_STRICT_MATCHING", raising=False)
+
+        _restore_real_cmm_registration()
+        register_parser(DefaultStrictLowConfidenceParser)
+        PARSER_MAP.pop("cmm", None)
+        PARSER_MANIFESTS.pop("cmm", None)
+        PARSER_DETECTORS.pop("cmm", None)
+        reset_probe_cache()
+
+        report_path = tmp_path / "strict_default_mode.pdf"
+        diagnostics = resolve_parser_with_diagnostics(report_path)
+
+        assert diagnostics.selected is None
+        assert diagnostics.rejected_reason == "no_plugin_above_confidence_threshold"
+        with pytest.raises(ValueError, match="Unsupported report format"):
+            get_parser(report_path, database=":memory:")
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
 def test_pdf_alias_assignment_updates_canonical_blocks_text():
     parser = CMMReportParser("REF01_2024-01-02_123.pdf", database=":memory:")
     parser.pdf_blocks_text = [[["Header"], [["X", 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]]]]
@@ -485,7 +546,7 @@ class DemoExternalParser(BaseReportParser, BaseReportParserPlugin):
 
     @classmethod
     def probe(cls, _input_ref, _context):
-        return ProbeResult(plugin_id=\"demo_external\", can_parse=True, confidence=77)
+        return ProbeResult(plugin_id=\"demo_external\", can_parse=True, confidence=87)
 
     def open_report(self):
         self.raw_text = [\"ok\"]
@@ -514,7 +575,73 @@ class DemoExternalParser(BaseReportParser, BaseReportParserPlugin):
         assert "demo_external" in result.loaded_plugin_ids
         diagnostics = resolve_parser_with_diagnostics(tmp_path / "external.pdf")
         assert diagnostics.selected is not None
+        assert diagnostics.selected.plugin_id == "demo_external"
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
+
+
+def test_resolver_handles_probe_exceptions_without_crashing(tmp_path):
+    plugin_file = tmp_path / "broken_probe_plugin.py"
+    plugin_file.write_text(
+        """
+from modules.base_report_parser import BaseReportParser
+from modules.parser_plugin_contracts import BaseReportParserPlugin, PluginManifest
+
+class BrokenProbeParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id="broken_probe",
+        display_name="Broken Probe",
+        version="1.0.0",
+        supported_formats=("pdf",),
+        priority=900,
+    )
+
+    @classmethod
+    def probe(cls, _input_ref, _context):
+        raise RuntimeError("probe exploded")
+
+    def open_report(self):
+        self.raw_text = ["ok"]
+
+    def split_text_to_blocks(self):
+        self.blocks_text = []
+
+    def parse_to_v2(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def to_legacy_blocks(_parse_result_v2):
+        return []
+""",
+        encoding="utf-8",
+    )
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    try:
+        _restore_real_cmm_registration()
+        load_external_plugins = factory_module.load_external_plugins
+        load_result = load_external_plugins(str(plugin_file))
+        assert "broken_probe" in load_result.loaded_plugin_ids
+
+        diagnostics = resolve_parser_with_diagnostics(tmp_path / "broken_probe_report.pdf")
+        broken_candidate = next(candidate for candidate in diagnostics.candidates_considered if candidate.plugin_id == "broken_probe")
+
+        assert diagnostics.selected is not None
         assert diagnostics.selected.plugin_id == "cmm"
+        assert broken_candidate.can_parse is False
+        assert broken_candidate.confidence == 0
+        assert "probe_exception" in broken_candidate.reasons
+        assert any("probe exploded" in warning for warning in broken_candidate.warnings)
     finally:
         PARSER_MAP.clear()
         PARSER_MAP.update(original_map)
@@ -532,6 +659,87 @@ def test_load_external_plugins_reports_skipped_paths_for_missing_input(tmp_path)
 
     result = load_external_plugins(missing_path)
     assert missing_path in result.skipped_paths
+
+
+def test_resolver_loads_plugins_from_default_drop_in_directory(monkeypatch, tmp_path):
+    plugin_dir = tmp_path / "parser_plugins"
+    plugin_dir.mkdir()
+    plugin_file = plugin_dir / "dropin_supplier.py"
+    plugin_file.write_text(
+        """
+from modules.base_report_parser import BaseReportParser
+from modules.parser_plugin_contracts import BaseReportParserPlugin, PluginManifest, ProbeResult
+
+class DropInSupplierParser(BaseReportParser, BaseReportParserPlugin):
+    manifest = PluginManifest(
+        plugin_id="dropin_supplier",
+        display_name="Drop-In Supplier",
+        version="1.0.0",
+        supported_formats=("pdf",),
+        priority=1000,
+    )
+
+    @classmethod
+    def probe(cls, _input_ref, _context):
+        return ProbeResult(plugin_id="dropin_supplier", can_parse=True, confidence=101)
+
+    def open_report(self):
+        self.raw_text = ["ok"]
+
+    def split_text_to_blocks(self):
+        self.blocks_text = []
+
+    def parse_to_v2(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def to_legacy_blocks(_parse_result_v2):
+        return []
+"""
+    )
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    original_cache = dict(PROBE_RESULT_CACHE)
+    original_loaded = factory_module._EXTERNAL_PLUGINS_LOADED
+    original_signature = factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    original_entry_points = factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS
+    original_env = os.environ.get("PARSER_EXTERNAL_PLUGIN_PATHS")
+    try:
+        monkeypatch.setattr(
+            parser_plugin_paths_module,
+            "configured_external_plugin_path_entries",
+            lambda raw_paths=None, include_default_dir=True, home=None: (str(plugin_dir),),
+        )
+        os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+        factory_module._EXTERNAL_PLUGINS_LOADED = False
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = None
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = None
+        reset_probe_cache()
+        _restore_real_cmm_registration()
+
+        diagnostics = resolve_parser_with_diagnostics(tmp_path / "dropin_report.pdf")
+
+        assert diagnostics.selected is not None
+        assert diagnostics.selected.plugin_id == "dropin_supplier"
+        assert "dropin_supplier" in PARSER_MAP
+    finally:
+        if original_env is None:
+            os.environ.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+        else:
+            os.environ["PARSER_EXTERNAL_PLUGIN_PATHS"] = original_env
+        factory_module._EXTERNAL_PLUGINS_LOADED = original_loaded
+        factory_module._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
+        factory_module._EXTERNAL_PLUGIN_ENTRY_POINTS = original_entry_points
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+        PROBE_RESULT_CACHE.clear()
+        PROBE_RESULT_CACHE.update(original_cache)
 
 
 def test_resolver_reloads_external_plugins_when_path_config_changes(tmp_path):

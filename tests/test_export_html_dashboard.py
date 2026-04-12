@@ -2,8 +2,12 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 from modules.export_html_dashboard import (
+    _build_group_analysis_plotly_spec,
+    _build_plotly_chart_spec,
+    _build_plotly_chart_spec_bundle,
     _render_overview_cards,
     resolve_html_dashboard_assets_dir,
     resolve_html_dashboard_path,
@@ -26,7 +30,8 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
         self.assertIn('metric-value-line', html_markup)
         self.assertIn('2026-03-29', html_markup)
-        self.assertIn('18:09:38+02:00', html_markup)
+        self.assertIn('18:09:38', html_markup)
+        self.assertNotIn('18:09:38+02:00', html_markup)
         self.assertNotIn('2026-03-29T18:09:38+02:00', html_markup)
 
     def test_resolve_dashboard_paths_follow_workbook_stem(self):
@@ -123,6 +128,13 @@ class TestExportHtmlDashboard(unittest.TestCase):
                                 'violin': {'eligible': True, 'skip_reason': ''},
                                 'histogram': {'eligible': True, 'skip_reason': ''},
                             },
+                            'chart_payload': {
+                                'groups': [
+                                    {'group': 'A', 'values': [9.99, 10.01, 10.02, 10.02]},
+                                    {'group': 'B', 'values': [10.08, 10.11, 10.14, 10.16]},
+                                ],
+                                'spec_limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
+                            },
                             'descriptive_stats': [
                                 {'group': 'A', 'n': 4, 'mean': 10.01, 'std': 0.02, 'median': 10.01, 'iqr': 0.03, 'min': 9.99, 'max': 10.03, 'cp': 1.3, 'capability': 1.2, 'capability_type': 'Cpk', 'capability_ci': {'cp': None, 'cpk': {'lower': 0.21250516502733194, 'upper': 0.647494834972668}}, 'best_fit_model': 'norm', 'fit_quality': 'good', 'flags': 'none'},
                                 {'group': 'B', 'n': 4, 'mean': 10.12, 'std': 0.03, 'median': 10.12, 'iqr': 0.04, 'min': 10.08, 'max': 10.16, 'cp': 1.1, 'capability': 0.95, 'capability_type': 'Cpk', 'best_fit_model': 'lognorm', 'fit_quality': 'medium', 'flags': 'LOW N'},
@@ -171,21 +183,144 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('chart_renderer: status=native_available', html_text)
             self.assertIn('Group Analysis', html_text)
             self.assertIn('FEATURE_1', html_text)
+            self.assertIn('Interactive Plotly view', html_text)
+            self.assertIn('plotly-chart', html_text)
+            self.assertIn('theme-switch', html_text)
+            self.assertIn('report_dashboard_assets/plotly-2.27.0.min.js', html_text)
+            self.assertNotIn('cdn.plot.ly/plotly-2.27.0.min.js', html_text)
+            self.assertIn('data-theme-choice="auto"', html_text)
+            self.assertIn('data-theme-choice="light"', html_text)
+            self.assertIn('data-theme-choice="dark"', html_text)
+            self.assertIn('metroliza-dashboard-theme', html_text)
+            self.assertIn('prefers-color-scheme: dark', html_text)
+            self.assertIn('window.Plotly.react', html_text)
+            self.assertIn('plotly-expand-trigger', html_text)
+            self.assertIn('Increase size', html_text)
+            self.assertIn('Enlarge interactive chart: Diameter / X', html_text)
             self.assertIn('<a class="section-chip" href="#group-metric-001">FEATURE_1</a>', html_text)
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('Descriptive stats', html_text)
-            self.assertIn('Capability CI', html_text)
-            self.assertIn('Cpk: 95% CI 0.213 to 0.647', html_text)
+            self.assertNotIn('Capability CI', html_text)
+            self.assertNotIn('Cpk: 95% CI 0.213 to 0.647', html_text)
             self.assertIn('<th>Cpk</th>', html_text)
             self.assertIn('chart-lightbox', html_text)
+            self.assertIn('chart-lightbox-plotly', html_text)
+            self.assertIn("const lightboxPlotly = document.getElementById('chart-lightbox-plotly');", html_text)
+            self.assertIn('renderPlotlyContainer(lightboxPlotly', html_text)
+            self.assertIn('window.Plotly.purge(lightboxPlotly)', html_text)
+            self.assertIn('window.Plotly.Plots.resize(lightboxPlotly)', html_text)
+            self.assertIn("document.querySelectorAll('.dragcover').forEach((overlay) => {", html_text)
+            self.assertIn("lightbox.addEventListener('close', resetLightboxState);", html_text)
             self.assertIn('chart-image-trigger', html_text)
             self.assertIn('Enlarge chart: Diameter / X', html_text)
+            self.assertIn("document.querySelectorAll('.chart-image-trigger').forEach((trigger) => {", html_text)
+            self.assertIn('openImageLightbox(source, caption);', html_text)
+            self.assertNotIn("const plotlySource = chartCard ? chartCard.querySelector('.plotly-chart') : null;", html_text)
+            self.assertNotIn('if (plotlySource && window.Plotly && openPlotlyLightbox(plotlySource, caption)) {', html_text)
             self.assertNotIn('Capability type', html_text)
             self.assertNotIn('"cp": null', html_text)
 
             asset_files = list(Path(result['html_dashboard_assets_path']).glob('*.png'))
             self.assertEqual(len(asset_files), 3)
             self.assertIn(b'png-bytes', {path.read_bytes() for path in asset_files})
+            plotly_asset = Path(result['html_dashboard_assets_path']) / 'plotly-2.27.0.min.js'
+            self.assertTrue(plotly_asset.exists())
+            self.assertGreater(plotly_asset.stat().st_size, 1_000_000)
+
+    def test_write_export_html_dashboard_falls_back_to_png_only_when_plotly_bundle_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            excel_file = Path(tmpdir) / 'report.xlsx'
+            html_path = resolve_html_dashboard_path(excel_file)
+            assets_dir = resolve_html_dashboard_assets_dir(html_path)
+
+            with patch(
+                'modules.export_html_dashboard._resolve_bundled_plotly_js_path',
+                return_value=Path(tmpdir) / 'missing-plotly.min.js',
+            ):
+                write_export_html_dashboard(
+                    excel_file=excel_file,
+                    output_path=html_path,
+                    assets_dir=assets_dir,
+                    sections=[
+                        {
+                            'header': 'Diameter / X',
+                            'charts': [
+                                {
+                                    'chart_type': 'histogram',
+                                    'title': 'Diameter / X',
+                                    'backend': 'native',
+                                    'image_buffer': BytesIO(b'png-bytes'),
+                                    'payload': {
+                                        'type': 'histogram',
+                                        'values': [9.9, 10.0, 10.1],
+                                        'lsl': 9.8,
+                                        'usl': 10.2,
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                )
+
+            html_text = html_path.read_text(encoding='utf-8')
+            self.assertNotIn('<div class="plotly-shell">', html_text)
+            self.assertNotIn('class="plotly-expand-trigger"', html_text)
+            self.assertNotIn('data-plotly-spec-light=', html_text)
+            self.assertNotIn('data-plotly-spec-dark=', html_text)
+            self.assertIn('Interactive Plotly views were unavailable in this export', html_text)
+            self.assertFalse((assets_dir / 'plotly-2.27.0.min.js').exists())
+
+    def test_plotly_chart_spec_bundle_exposes_light_and_dark_variants(self):
+        bundle = _build_plotly_chart_spec_bundle(
+            {
+                'type': 'histogram',
+                'values': [9.9, 10.0, 10.1, 10.2],
+                'limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
+            },
+            title='Diameter / X',
+        )
+
+        self.assertIn('light', bundle)
+        self.assertIn('dark', bundle)
+        self.assertEqual(bundle['light']['layout']['font']['color'], '#162330')
+        self.assertEqual(bundle['dark']['layout']['font']['color'], '#edf3fb')
+        self.assertNotEqual(bundle['light']['layout']['colorway'], bundle['dark']['layout']['colorway'])
+
+    def test_group_analysis_histogram_plotly_spec_uses_shared_bins_for_overlay(self):
+        spec = _build_group_analysis_plotly_spec(
+            'FEATURE_1',
+            'histogram',
+            {
+                'groups': [
+                    {'group': 'A', 'values': [9.99, 10.01, 10.02, 10.03]},
+                    {'group': 'B', 'values': [10.08, 10.11, 10.14, 10.16]},
+                ],
+                'spec_limits': {'lsl': 9.8, 'nominal': 10.0, 'usl': 10.2},
+            },
+        )
+
+        self.assertEqual(spec['layout']['barmode'], 'overlay')
+        self.assertEqual(spec['layout']['hovermode'], 'x unified')
+        self.assertEqual(len(spec['data']), 2)
+        self.assertEqual(spec['data'][0]['bingroup'], spec['data'][1]['bingroup'])
+        self.assertEqual(spec['data'][0]['xbins'], spec['data'][1]['xbins'])
+
+    def test_trend_plotly_spec_sorts_connected_points_by_x_value(self):
+        spec = _build_plotly_chart_spec(
+            {
+                'type': 'trend',
+                'x_values': [3, 1, 2],
+                'y_values': [30.0, 10.0, 20.0],
+                'labels': ['third', 'first', 'second'],
+                'horizontal_limits': [25.0],
+            },
+            title='Trend',
+        )
+
+        self.assertEqual(spec['layout']['hovermode'], 'x unified')
+        self.assertEqual(spec['data'][0]['x'], [1.0, 2.0, 3.0])
+        self.assertEqual(spec['data'][0]['y'], [10.0, 20.0, 30.0])
+        self.assertEqual(spec['data'][0]['customdata'], ['first', 'second', 'third'])
 
 
 if __name__ == '__main__':

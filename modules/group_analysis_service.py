@@ -23,6 +23,7 @@ from modules.characteristic_alias_service import resolve_characteristic_aliases_
 from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.export_grouping_utils import normalize_group_labels
 from modules.distribution_shape_analysis import compute_distribution_difference, resolve_distribution_fit_policy
+from modules.hexafe_groupstats_adapter import analyze_group_metric
 from modules.stats_utils import compute_capability_confidence_intervals, safe_process_capability
 
 _SKIP_REASON_MESSAGES = {
@@ -368,6 +369,20 @@ def classify_metric_spec_status(metric_rows_df, spec_columns):
     if pd.DataFrame({'lsl': lsl_series, 'usl': usl_series}).drop_duplicates().shape[0] > 1:
         return 'LIMIT_MISMATCH', canonical_spec
     return 'EXACT_MATCH', canonical_spec
+
+
+def _build_metric_spec_records(metric_rows_df, spec_columns):
+    """Build explicit per-row spec records for package-backed analysis."""
+    spec_records = []
+    for _, row in metric_rows_df.iterrows():
+        spec_records.append(
+            normalize_spec_limits(
+                row[spec_columns['lsl']] if spec_columns.get('lsl') else None,
+                row[spec_columns['nominal']] if spec_columns.get('nominal') else None,
+                row[spec_columns['usl']] if spec_columns.get('usl') else None,
+            )
+        )
+    return spec_records
 
 
 def _resolve_analysis_policy(spec_status, analysis_level):
@@ -785,7 +800,24 @@ def build_pairwise_rows(
         alpha=alpha,
         correction_method=correction_method,
     )
+    return _build_pairwise_rows_from_source_rows(
+        metric_identity,
+        grouped_values,
+        raw_rows,
+        pairwise_eligible=pairwise_eligible,
+        spec_status=spec_status,
+    )
 
+
+def _build_pairwise_rows_from_source_rows(
+    metric_identity,
+    grouped_values,
+    raw_rows,
+    *,
+    pairwise_eligible=True,
+    spec_status='EXACT_MATCH',
+):
+    """Apply Metroliza worksheet-facing pairwise enrichments to source rows."""
     means = {
         group_name: float(np.mean(np.asarray(values, dtype=float)))
         for group_name, values in grouped_values.items()
@@ -803,8 +835,8 @@ def build_pairwise_rows(
     for row in raw_rows:
         group_a = row.get('group_a')
         group_b = row.get('group_b')
-        delta_mean = None
-        if group_a in means and group_b in means:
+        delta_mean = _round_display_value(row.get('delta_mean'), precision=3)
+        if delta_mean is None and group_a in means and group_b in means:
             delta_mean = _round_display_value(means[group_a] - means[group_b], precision=3)
 
         adj_p = row.get('adjusted_p_value')
@@ -847,8 +879,6 @@ def build_pairwise_rows(
             }
         )
     return output
-
-
 def build_comparability_summary(spec_status, analysis_policy):
     """Build comparability/spec summary block for metric section rendering."""
     status = _normalize_spec_status_key(spec_status)
@@ -1349,7 +1379,17 @@ def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eli
     }
 
 
-def _partition_metric_analysis_inputs(metric_rows_df, *, metric_identity, effective_scope, reference_column, spec_columns, analysis_level):
+def _partition_metric_analysis_inputs(
+    metric_rows_df,
+    *,
+    metric_identity,
+    effective_scope,
+    reference_column,
+    spec_columns,
+    analysis_level,
+    alpha,
+    correction_method,
+):
     reference_value = None
     if effective_scope == 'multi_reference' and reference_column is not None and reference_column in metric_rows_df.columns:
         reference_candidates = metric_rows_df[reference_column].dropna().astype(str).str.strip()
@@ -1360,8 +1400,16 @@ def _partition_metric_analysis_inputs(metric_rows_df, *, metric_identity, effect
         for group_name, group_df in metric_rows_df.groupby('GROUP', sort=True)
     }
     populated_groups = [name for name, values in grouped_values.items() if np.isfinite(values).sum() > 0]
-    spec_status, spec_payload = classify_metric_spec_status(metric_rows_df, spec_columns)
-    policy = _resolve_analysis_policy(spec_status, analysis_level)
+    package_analysis = analyze_group_metric(
+        metric_identity,
+        grouped_values,
+        spec_records=_build_metric_spec_records(metric_rows_df, spec_columns),
+        alpha=alpha,
+        correction_method=correction_method,
+    )
+    spec_status = package_analysis['spec_status']
+    spec_payload = package_analysis['spec_payload']
+    policy = dict(package_analysis['analysis_policy'])
     return {
         'metric': metric_identity,
         'reference': reference_value,
@@ -1370,19 +1418,22 @@ def _partition_metric_analysis_inputs(metric_rows_df, *, metric_identity, effect
         'spec_status': spec_status,
         'spec_payload': spec_payload,
         'analysis_policy': policy,
+        'package_analysis': package_analysis,
     }
 
 
 def _build_metric_descriptive_stage(*, metric_partition):
+    descriptive_stats = [dict(row) for row in metric_partition['package_analysis']['descriptive_stats']]
+    metric_flags = _build_metric_level_flags(
+        [row.get('n', 0) for row in descriptive_stats],
+        spec_status=metric_partition['spec_status'],
+    )
+    for row in descriptive_stats:
+        row['flags'] = _build_group_flags(row, metric_flags)
+
     grouped_values = metric_partition['grouped_values']
     spec_payload = metric_partition['spec_payload']
     policy = metric_partition['analysis_policy']
-    descriptive_stats = build_group_descriptive_rows(
-        grouped_values,
-        spec_payload=spec_payload,
-        allow_capability=policy['allow_capability'],
-        spec_status=metric_partition['spec_status'],
-    )
     all_metric_values = np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
     capability = (
         compute_capability_payload(all_metric_values, spec_payload)
@@ -1406,11 +1457,11 @@ def _build_metric_descriptive_stage(*, metric_partition):
 def _build_metric_pairwise_stage(*, metric_partition, alpha, correction_method):
     policy = metric_partition['analysis_policy']
     pairwise_rows = (
-        build_pairwise_rows(
+        _build_pairwise_rows_from_source_rows(
             metric_partition['metric'],
             metric_partition['grouped_values'],
-            alpha=alpha,
-            correction_method=correction_method,
+            metric_partition['package_analysis']['pairwise_rows'],
+            pairwise_eligible=policy['allow_pairwise'],
             spec_status=metric_partition['spec_status'],
         )
         if policy['allow_pairwise']
@@ -1481,6 +1532,14 @@ def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_st
         'capability_allowed': restriction_fields['capability_allowed'],
         'analysis_restriction_label': restriction_fields['analysis_restriction_label'],
         'capability': descriptive_stage['capability'],
+        'backend_used': metric_partition['package_analysis']['backend_used'],
+        'selection_detail': metric_partition['package_analysis']['selection_detail'],
+        'posthoc_family': metric_partition['package_analysis']['posthoc_family'],
+        'posthoc_method_name': metric_partition['package_analysis']['posthoc_method_name'],
+        'pairwise_strategy': metric_partition['package_analysis']['pairwise_strategy'],
+        'posthoc_strategy': metric_partition['package_analysis']['posthoc_strategy'],
+        'capability_strategy': metric_partition['package_analysis']['capability_strategy'],
+        'warnings': metric_partition['package_analysis']['warnings'],
         'comparability_summary': comparability_summary,
         'plot_eligibility': plot_eligibility,
         'chart_payload': _build_metric_chart_payload(
@@ -1615,6 +1674,8 @@ def build_group_analysis_payload(
             reference_column=reference_column,
             spec_columns=spec_columns,
             analysis_level=analysis_level,
+            alpha=alpha,
+            correction_method=correction_method,
         )
         if len(metric_partition['populated_groups']) < 2:
             skipped_metrics.append({'metric': metric_identity, 'reason': 'insufficient_groups', 'group_count': len(metric_partition['populated_groups'])})

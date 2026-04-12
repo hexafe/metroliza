@@ -1,10 +1,13 @@
-# Group Analysis TODO
+# Group Analysis TODO (Archived)
 
 ## Metadata
 - **Owner:** Data Export & Analysis Team
-- **Status:** Active (draft)
-- **Scope:** Track concrete engineering and documentation tasks required to deliver Group Analysis.
-- **Exit criteria:** All TODO items are completed, canceled, or deferred with explicit rationale and linked follow-up.
+- **Status:** Archived / historical snapshot
+- **Scope:** Preserved task list from the completed Group Analysis cycle.
+- **Exit criteria:** Retained as archive context only; not an active TODO list.
+
+## Archive note
+This file is preserved as a historical snapshot. The unchecked items below reflect drafting-time state and should not be treated as current open work.
 
 ## TODO
 - [ ] Confirm detailed requirements and acceptance criteria for Group Analysis.

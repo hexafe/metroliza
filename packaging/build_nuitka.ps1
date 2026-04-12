@@ -15,6 +15,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$repoRoot = Split-Path -Parent $PSScriptRoot
 
 $isWindowsHost = $env:OS -eq "Windows_NT"
 $isMacOSHost = $false
@@ -599,6 +600,9 @@ $tokenExcludePatterns = @(
 foreach ($pattern in $tokenExcludePatterns) {
     $commonArgs += "--noinclude-data-files=$pattern"
 }
+
+$resolvedPlotlyDashboardAsset = Resolve-Path -LiteralPath (Join-Path $repoRoot 'modules/html_dashboard_assets/plotly-2.27.0.min.js')
+$commonArgs += "--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=modules/html_dashboard_assets/plotly-2.27.0.min.js"
 
 if ($CredentialsPath) {
     $resolvedCredentialsPath = Resolve-Path -LiteralPath $CredentialsPath -ErrorAction SilentlyContinue

@@ -18,7 +18,7 @@ The following checks must pass on every PR and branch push.
 | Lint and static validation | `static-checks` | Python compile check, Ruff lint, release metadata consistency check, and repository/diff JSON secret scan. |
 | Metadata checks | `static-checks` | `scripts/sync_release_metadata.py --check` is enforced in this job. |
 | Full pytest suite + coverage visibility | `unit-tests` | Runs `python -m pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml` for the full Python test suite and publishes coverage outputs. |
-| Native artifact build + smoke/parity checks | `native-artifacts` | Builds all native wheels, installs them, runs import/smoke checks for each native module plus explicit fallback checks, and executes native parser parity tests. |
+| Native artifact build + smoke/parity checks | `native-artifacts` | Builds all native wheels, installs them, runs import/smoke checks for each native module plus explicit fallback checks, executes native chart planner/parity smoke checks, runs an export-runtime fast-path contract smoke for extended summary charts, and runs native parser parity tests. |
 | CMM parser perf guardrail + trend gate | `cmm-parser-perf-gate` | Runs `scripts/benchmark_paths.py` for `cmm_parser_backend_compare` with fixed synthetic workload, enforces native speed/usage guardrails, and compares measured medians to checked-in baseline via `scripts/benchmark_trend_compare.py`. |
 
 
@@ -111,3 +111,4 @@ Use this quick checklist when opening or reviewing PRs:
 When a PR touches parser plugin contracts/registry/plugins, also complete the governance checklist in:
 
 - [`docs/release_checks/parser_plugin_rollout_runbook.md`](./release_checks/parser_plugin_rollout_runbook.md)
+- [`docs/parser_plugins/README.md`](./parser_plugins/README.md)

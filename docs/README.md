@@ -20,10 +20,12 @@ This directory contains active operational, maintenance, and end-user documentat
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
+- `parser_plugins/README.md` — active hub for parser plugin generation, validation, installation, and rollout docs.
+- `parser_plugins/llm_plugin_specification.md` — exact contract for LLM-generated Metroliza parser plugins.
+- `parser_plugins/non_technical_workflow.md` — non-technical step-by-step workflow for adding a new supplier report parser.
 - Grouping dialog color policy uses shared semantic tokens from `modules/ui_theme_tokens.py` (base row background, selected-row colors, default group color, and generated group palette) so dialogs stay visually consistent across light/dark themes.
-- `roadmaps/2026_03_rc2_stabilization_execution.md` — **primary active execution tracker** for current RC2 refactor/stabilization sequencing.
-- `roadmaps/exporter_audit_2026_03.md` — focused exporter-path audit with remaining refactor recommendations and priority backlog.
-- `feature/group-analysis/README.md` — **sole active implementation-cycle workspace** for the Group Analysis export surface; start here for current planning/execution docs (`implementation_plan.md`, `todo.md`, `checklist.md`).
+- `roadmaps/2026_03_rc2_stabilization_execution.md` — RC2 stabilization closeout/reference tracker for the completed parity-first slice.
+- `roadmaps/exporter_audit_2026_03.md` — focused exporter-path follow-up audit with the remaining structural refactor backlog.
 - `group_analysis/README.md` — historical index with links back to the active user-manual location and retained design notes.
 
 ## Active end-user manual area
@@ -34,7 +36,12 @@ The `docs/group_analysis/` folder is retained for historical/design context. The
 
 ## Historical and superseded planning context
 
-- `feature/group-comparison-xlsx/` — **legacy/superseded** planning workspace retained only for historical reference after consolidation into Group Analysis.
+- `archive/2026/feature-group-analysis/` — historical Group Analysis implementation-cycle workspace archived after feature completion.
+- `archive/2026/feature-group-comparison-xlsx/` — historical pre-consolidation Group Comparison XLSX planning workspace.
+- `archive/2026/feature-nuitka-parser-audit/` — archived packaged-parser audit workspace after packaging/CI hardening landed.
+- `archive/2026/feature-parser-plugin-factory/` — archived intermediate quickstart/status docs superseded by the active parser plugin documentation set.
+- `archive/2026/native_plot_matplotlib_parity_2026_03.md` — archived native chart parity audit/execution plan after rollout-ready closeout.
+- `archive/2026/performance_boost_audit_2026_03.md` — archived performance audit/implementation plan after the measured fixes landed.
 - `roadmaps/2026_03_rc1_test_ci_execution_tracker.md` — superseded RC1 execution context (reference-only; no longer the active operational tracker).
 - `roadmaps/test_ci_audit_execution.md` — superseded by the RC1 tracker above and retained only for historical planning context.
 

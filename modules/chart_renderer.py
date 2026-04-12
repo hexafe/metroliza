@@ -25,6 +25,9 @@ import numpy as np
 
 BackendChoice = Literal["auto", "native", "matplotlib"]
 ResolvedBackend = Literal["native", "matplotlib"]
+NATIVE_CHART_RENDERER_ROLLOUT_ENABLED = False
+_NATIVE_CHART_KINDS = {"histogram", "distribution", "iqr", "trend"}
+_ROLLOUT_CHARTS_ENV_VAR = "METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS"
 
 try:
     from _metroliza_chart_native import render_histogram_png as _native_render_histogram_png  # type: ignore
@@ -118,62 +121,141 @@ class NativeChartRenderer(ChartRenderer):
     def __init__(self, *, fallback_renderer: ChartRenderer | None = None):
         self._fallback = fallback_renderer or MatplotlibChartRenderer()
 
+    def _render_matplotlib_fallback(
+        self,
+        *,
+        fallback_fig: Any | None,
+        mode: str,
+        chart_type: str,
+        reason: str,
+    ) -> ChartRenderResult:
+        if fallback_fig is None:
+            raise RuntimeError(reason)
+        fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type=chart_type)
+        return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
+
     def render_figure_png(self, fig: Any, *, mode: str = "workbook", chart_type: str | None = None) -> ChartRenderResult:
         return self._fallback.render_figure_png(fig, mode=mode, chart_type=chart_type)
 
     def render_histogram_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
-        if _native_render_histogram_png is None:
-            if fallback_fig is None:
-                raise RuntimeError("Native chart renderer unavailable and no matplotlib fallback figure provided.")
-            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="histogram")
-            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
-
         _validate_histogram_native_payload(payload)
+        if _native_render_histogram_png is None:
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="histogram",
+                reason="Native chart renderer unavailable and no matplotlib fallback figure provided.",
+            )
+        if not native_chart_renderer_rollout_enabled_for("histogram"):
+            _warn_native_backend_disabled(chart_kind="histogram")
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="histogram",
+                reason="Native histogram rendering is disabled by rollout policy and no matplotlib fallback figure provided.",
+            )
+        if _histogram_payload_requires_matplotlib_fallback(payload):
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="histogram",
+                reason="Native histogram rendering requires finalized matplotlib geometry or a matplotlib fallback figure.",
+            )
         png_bytes = _native_render_histogram_png(payload)
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native chart renderer returned non-bytes payload.")
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
 
     def render_distribution_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
-        if _native_render_distribution_png is None:
-            if fallback_fig is None:
-                raise RuntimeError("Native distribution renderer unavailable and no matplotlib fallback figure provided.")
-            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="distribution")
-            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
-
         _validate_distribution_native_payload(payload)
+        if _native_render_distribution_png is None:
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="distribution",
+                reason="Native distribution renderer unavailable and no matplotlib fallback figure provided.",
+            )
+        if not native_chart_renderer_rollout_enabled_for("distribution"):
+            _warn_native_backend_disabled(chart_kind="distribution")
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="distribution",
+                reason="Native distribution rendering is disabled by rollout policy and no matplotlib fallback figure provided.",
+            )
+        if _distribution_payload_requires_matplotlib_fallback(payload):
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="distribution",
+                reason="Native distribution rendering requires finalized matplotlib geometry or a matplotlib fallback figure.",
+            )
         try:
             png_bytes = _native_render_distribution_png(payload)
         except Exception:
-            if fallback_fig is None:
-                raise
-            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="distribution")
-            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="distribution",
+                reason="Native distribution rendering failed and no matplotlib fallback figure provided.",
+            )
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native distribution renderer returned non-bytes payload.")
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
 
     def render_iqr_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
-        if _native_render_iqr_png is None:
-            if fallback_fig is None:
-                raise RuntimeError("Native IQR renderer unavailable and no matplotlib fallback figure provided.")
-            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="iqr")
-            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
-
         _validate_iqr_native_payload(payload)
+        if _native_render_iqr_png is None:
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="iqr",
+                reason="Native IQR renderer unavailable and no matplotlib fallback figure provided.",
+            )
+        if not native_chart_renderer_rollout_enabled_for("iqr"):
+            _warn_native_backend_disabled(chart_kind="iqr")
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="iqr",
+                reason="Native IQR rendering is disabled by rollout policy and no matplotlib fallback figure provided.",
+            )
+        if _iqr_payload_requires_matplotlib_fallback(payload):
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="iqr",
+                reason="Native IQR rendering requires finalized matplotlib geometry or a matplotlib fallback figure.",
+            )
         png_bytes = _native_render_iqr_png(payload)
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native IQR renderer returned non-bytes payload.")
         return ChartRenderResult(png_bytes=bytes(png_bytes), backend="native")
 
     def render_trend_png(self, payload: dict[str, Any], *, fallback_fig: Any | None = None, mode: str = "workbook") -> ChartRenderResult:
-        if _native_render_trend_png is None:
-            if fallback_fig is None:
-                raise RuntimeError("Native trend renderer unavailable and no matplotlib fallback figure provided.")
-            fallback_result = self._fallback.render_figure_png(fallback_fig, mode=mode, chart_type="trend")
-            return ChartRenderResult(png_bytes=fallback_result.png_bytes, backend=fallback_result.backend)
-
         _validate_trend_native_payload(payload)
+        if _native_render_trend_png is None:
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="trend",
+                reason="Native trend renderer unavailable and no matplotlib fallback figure provided.",
+            )
+        if not native_chart_renderer_rollout_enabled_for("trend"):
+            _warn_native_backend_disabled(chart_kind="trend")
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="trend",
+                reason="Native trend rendering is disabled by rollout policy and no matplotlib fallback figure provided.",
+            )
+        if _trend_payload_requires_matplotlib_fallback(payload):
+            return self._render_matplotlib_fallback(
+                fallback_fig=fallback_fig,
+                mode=mode,
+                chart_type="trend",
+                reason="Native trend rendering requires finalized matplotlib geometry or a matplotlib fallback figure.",
+            )
         png_bytes = _native_render_trend_png(payload)
         if not isinstance(png_bytes, (bytes, bytearray)):
             raise RuntimeError("Native trend renderer returned non-bytes payload.")
@@ -181,10 +263,60 @@ class NativeChartRenderer(ChartRenderer):
 
 
 def _runtime_backend_choice() -> BackendChoice:
-    choice = os.getenv("METROLIZA_CHART_RENDERER_BACKEND", "auto").strip().lower()
+    choice = os.getenv("METROLIZA_CHART_RENDERER_BACKEND", "matplotlib").strip().lower()
     if choice in {"auto", "native", "matplotlib"}:
         return choice
-    return "auto"
+    return "matplotlib"
+
+
+def _runtime_rollout_chart_kinds() -> set[str]:
+    """Return the chart kinds enabled for native rollout at runtime.
+
+    The environment variable accepts a comma-separated allowlist. Legacy tests
+    and migration scripts can also toggle the module-level boolean as a coarse
+    all-charts override.
+    """
+
+    if bool(NATIVE_CHART_RENDERER_ROLLOUT_ENABLED):
+        return set(_NATIVE_CHART_KINDS)
+
+    raw_value = os.getenv(_ROLLOUT_CHARTS_ENV_VAR, "").strip().lower()
+    if raw_value in {"", "1", "true", "yes", "on", "all", "*"}:
+        return set(_NATIVE_CHART_KINDS)
+    if raw_value in {"0", "false", "no", "off", "none"}:
+        return set()
+
+    enabled: set[str] = set()
+    for token in raw_value.replace(";", ",").split(","):
+        chart_kind = token.strip()
+        if chart_kind in _NATIVE_CHART_KINDS:
+            enabled.add(chart_kind)
+    return enabled
+
+
+def _normalize_chart_kind(chart_kind: str | None) -> str | None:
+    if chart_kind is None:
+        return None
+    normalized = str(chart_kind).strip().lower()
+    return normalized if normalized in _NATIVE_CHART_KINDS else None
+
+
+def _native_backend_available_for_chart(chart_kind: str) -> bool:
+    if chart_kind == "histogram":
+        return native_histogram_backend_available()
+    if chart_kind == "distribution":
+        return native_distribution_backend_available()
+    if chart_kind == "iqr":
+        return native_iqr_backend_available()
+    if chart_kind == "trend":
+        return native_trend_backend_available()
+    return False
+
+
+def native_any_chart_backend_available() -> bool:
+    """Return whether at least one modeled chart kind has a native backend."""
+
+    return any(_native_backend_available_for_chart(chart_kind) for chart_kind in _NATIVE_CHART_KINDS)
 
 
 def native_chart_backend_available() -> bool:
@@ -228,44 +360,120 @@ def native_trend_backend_available() -> bool:
     return _native_render_trend_png is not None
 
 
-def resolve_chart_renderer_backend() -> ResolvedBackend:
-    """Resolve the primary chart renderer backend policy for histogram exports.
+def native_chart_renderer_rollout_enabled() -> bool:
+    """Return whether the native chart backend is allowed past the rollout gate.
 
-    Native rendering is temporarily disabled for export stability; all chart
-    rendering paths currently resolve to matplotlib.
+    Without `chart_kind`, this reports whether any chart kind is enabled for
+    native rollout.
     """
-    backend = _runtime_backend_choice()
+
+    return bool(_runtime_rollout_chart_kinds())
+
+
+def native_chart_renderer_rollout_enabled_for(chart_kind: str) -> bool:
+    """Return whether native rollout is enabled for the given chart kind."""
+
+    normalized = _normalize_chart_kind(chart_kind)
+    if normalized is None:
+        return False
+    return normalized in _runtime_rollout_chart_kinds()
+
+
+def _warn_native_backend_disabled(*, chart_kind: str) -> None:
+    warnings.warn(
+        f"METROLIZA_CHART_RENDERER_BACKEND=native requested for {chart_kind} charts, but native chart rendering is disabled by rollout policy; falling back to matplotlib backend.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
+
+def _resolve_native_backend_with_policy(*, chart_kind: str, backend_available: bool, backend: BackendChoice) -> ResolvedBackend:
+    rollout_enabled = native_chart_renderer_rollout_enabled_for(chart_kind)
     if backend == "matplotlib":
         return "matplotlib"
     if backend == "native":
-        warnings.warn(
-            "METROLIZA_CHART_RENDERER_BACKEND=native requested but native chart rendering is temporarily disabled; falling back to matplotlib backend.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+        if not rollout_enabled:
+            _warn_native_backend_disabled(chart_kind=chart_kind)
+            return "matplotlib"
+        if not backend_available:
+            warnings.warn(
+                f"METROLIZA_CHART_RENDERER_BACKEND=native requested for {chart_kind} charts, but the native renderer is unavailable; falling back to matplotlib backend.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return "matplotlib"
+        return "native"
+    if rollout_enabled and backend_available:
+        return "native"
     return "matplotlib"
+
+
+def resolve_chart_renderer_backend() -> ResolvedBackend:
+    """Resolve the primary chart renderer backend policy for histogram exports.
+
+    Matplotlib is the current default while native parity is still being
+    stabilized. Operators can opt into native selection explicitly via
+    ``METROLIZA_CHART_RENDERER_BACKEND=auto`` or
+    ``METROLIZA_CHART_RENDERER_BACKEND=native`` and then narrow rollout with
+    ``METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS``.
+    """
+    backend = _runtime_backend_choice()
+    return _resolve_native_backend_with_policy(
+        chart_kind="histogram",
+        backend_available=native_histogram_backend_available(),
+        backend=backend,
+    )
+
+
+def resolve_histogram_renderer_backend() -> ResolvedBackend:
+    """Resolve the effective backend for histogram chart rendering."""
+
+    return resolve_chart_renderer_backend()
 
 
 def resolve_distribution_renderer_backend() -> ResolvedBackend:
     """Resolve the effective backend for distribution chart rendering."""
 
     backend = _runtime_backend_choice()
-    if backend == "matplotlib":
-        return "matplotlib"
-    if backend == "native":
-        warnings.warn(
-            "METROLIZA_CHART_RENDERER_BACKEND=native requested but native chart rendering is temporarily disabled; falling back to matplotlib backend.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-    return "matplotlib"
+    return _resolve_native_backend_with_policy(
+        chart_kind="distribution",
+        backend_available=native_distribution_backend_available(),
+        backend=backend,
+    )
+
+
+def resolve_iqr_renderer_backend() -> ResolvedBackend:
+    """Resolve the effective backend for IQR chart rendering."""
+
+    backend = _runtime_backend_choice()
+    return _resolve_native_backend_with_policy(
+        chart_kind="iqr",
+        backend_available=native_iqr_backend_available(),
+        backend=backend,
+    )
+
+
+def resolve_trend_renderer_backend() -> ResolvedBackend:
+    """Resolve the effective backend for trend chart rendering."""
+
+    backend = _runtime_backend_choice()
+    return _resolve_native_backend_with_policy(
+        chart_kind="trend",
+        backend_available=native_trend_backend_available(),
+        backend=backend,
+    )
 
 
 def build_chart_renderer() -> ChartRenderer:
     """Build the configured chart renderer implementation."""
-    resolved = resolve_chart_renderer_backend()
-    if resolved == "native":
+    backend_choice = _runtime_backend_choice()
+    enabled_chart_kinds = _runtime_rollout_chart_kinds()
+    if backend_choice != "matplotlib" and any(
+        _native_backend_available_for_chart(chart_kind) for chart_kind in enabled_chart_kinds
+    ):
         return NativeChartRenderer()
+    if backend_choice == "native" and not enabled_chart_kinds:
+        _warn_native_backend_disabled(chart_kind="all")
     return MatplotlibChartRenderer()
 
 
@@ -416,6 +624,122 @@ def _validate_distribution_native_payload(payload: dict[str, Any]) -> None:
         raise RuntimeError("Native distribution payload `title` must be a string.")
 
 
+def _resolved_rect_complete(rect: Any) -> bool:
+    return (
+        isinstance(rect, dict)
+        and all(isinstance(rect.get(key), (int, float)) for key in ("x", "y", "width", "height"))
+    )
+
+
+def _resolved_axes_complete(axes: Any) -> bool:
+    return (
+        isinstance(axes, dict)
+        and isinstance(axes.get("x_limits"), dict)
+        and isinstance(axes.get("y_limits"), dict)
+        and isinstance(axes.get("x_ticks"), list)
+        and isinstance(axes.get("y_ticks"), list)
+    )
+
+
+def _distribution_payload_requires_matplotlib_fallback(payload: dict[str, Any]) -> bool:
+    resolved = payload.get("resolved_render_spec")
+    if not isinstance(resolved, dict):
+        return True
+    plot_area = resolved.get("plot_area")
+    if not _resolved_rect_complete(plot_area):
+        plot_area = resolved.get("plot_rect")
+    if not _resolved_rect_complete(plot_area):
+        return True
+    if not isinstance(resolved.get("title"), dict):
+        return True
+    if not _resolved_axes_complete(resolved.get("axes")):
+        return True
+    if "legend" not in resolved:
+        return True
+    if not isinstance(resolved.get("reference_lines"), list):
+        return True
+    if not isinstance(resolved.get("reference_bands"), list):
+        return True
+
+    render_mode = str(resolved.get("render_mode") or payload.get("render_mode") or "violin").strip().lower()
+    if render_mode == "scatter":
+        return not (
+            isinstance(resolved.get("scatter_points"), list)
+            and isinstance(resolved.get("annotations"), dict)
+            and isinstance(resolved.get("violin_bodies"), list)
+        )
+    has_violin_geometry = (
+        isinstance(resolved.get("violin_bodies"), list)
+        and len(resolved.get("violin_bodies") or []) > 0
+    ) or isinstance(resolved.get("violin_groups"), list)
+    return not (
+        has_violin_geometry
+        and isinstance(resolved.get("annotations"), dict)
+        and isinstance(resolved.get("scatter_points"), list)
+    )
+
+
+def _iqr_payload_requires_matplotlib_fallback(payload: dict[str, Any]) -> bool:
+    resolved = payload.get("resolved_render_spec")
+    if not isinstance(resolved, dict):
+        return True
+    plot_area = resolved.get("plot_area")
+    if not _resolved_rect_complete(plot_area):
+        plot_area = resolved.get("plot_rect")
+    if not _resolved_rect_complete(plot_area):
+        return True
+    if not isinstance(resolved.get("title"), dict):
+        return True
+    if not _resolved_axes_complete(resolved.get("axes")):
+        return True
+    if "legend" not in resolved:
+        return True
+    if not isinstance(resolved.get("reference_lines"), list):
+        return True
+    if not isinstance(resolved.get("reference_bands"), list):
+        return True
+    boxes = resolved.get("boxes")
+    if boxes is None:
+        boxes = resolved.get("boxplots")
+    return not isinstance(boxes, list)
+
+
+def _trend_payload_requires_matplotlib_fallback(payload: dict[str, Any]) -> bool:
+    resolved = payload.get("resolved_render_spec")
+    if not isinstance(resolved, dict):
+        return True
+    plot_area = resolved.get("plot_area")
+    if not _resolved_rect_complete(plot_area):
+        plot_area = resolved.get("plot_rect")
+    if not _resolved_rect_complete(plot_area):
+        return True
+    if not isinstance(resolved.get("title"), dict):
+        return True
+    if not _resolved_axes_complete(resolved.get("axes")):
+        return True
+    if not isinstance(resolved.get("reference_lines"), list):
+        return True
+    return not isinstance(resolved.get("points"), list)
+
+
+def _histogram_payload_requires_matplotlib_fallback(payload: dict[str, Any]) -> bool:
+    resolved = payload.get("resolved_render_spec")
+    if not isinstance(resolved, dict):
+        return True
+    plot_area = resolved.get("plot_area")
+    if not _resolved_rect_complete(plot_area):
+        plot_area = resolved.get("plot_rect")
+    if not _resolved_rect_complete(plot_area):
+        return True
+    if not isinstance(resolved.get("title"), dict):
+        return True
+    if not _resolved_axes_complete(resolved.get("axes")):
+        return True
+    if not isinstance(resolved.get("bars"), list):
+        return True
+    return not isinstance(resolved.get("annotations"), list)
+
+
 def _validate_iqr_native_payload(payload: dict[str, Any]) -> None:
     if not isinstance(payload, dict):
         raise RuntimeError("Native IQR payload must be a mapping.")
@@ -452,7 +776,7 @@ def _validate_trend_native_payload(payload: dict[str, Any]) -> None:
 
 def _histogram_visual_metadata_requires_matplotlib_fallback(payload: dict[str, Any]) -> bool:
     """Compatibility shim kept for tests and old callers."""
-    return False
+    return _histogram_payload_requires_matplotlib_fallback(payload)
 
 
 def benchmark_histogram_render_runtime(renderer: ChartRenderer, payload: dict[str, Any], *, iterations: int = 3) -> dict[str, float]:

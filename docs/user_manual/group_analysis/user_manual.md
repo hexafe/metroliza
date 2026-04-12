@@ -142,6 +142,14 @@ Depending on the export level, a metric block may include:
 
 The goal is to let you stay in one place while reading one metric from summary to conclusion.
 
+## Optional HTML dashboard view
+
+If you enable the optional **HTML dashboard** during export, Metroliza also saves a browser-friendly view of the charts.
+
+For **Group Analysis** plots in that dashboard, the plot callouts are intentionally simplified for faster non-technical review. In practical terms, the dashboard focuses on the main capability/status message and does not repeat extra confidence-interval callouts on those plots.
+
+Use the dashboard when you want a quick visual review. Use the workbook when you need the fuller worksheet detail.
+
 ## Column guide
 
 Exact column placement can vary a little by export level, but the meaning stays the same.

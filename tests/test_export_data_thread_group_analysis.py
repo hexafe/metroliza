@@ -5,6 +5,9 @@ import tempfile
 import types
 import unittest
 import zipfile
+import inspect
+import copy
+import base64
 import xml.etree.ElementTree as ET
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +16,7 @@ import pandas as pd
 from pathlib import Path
 
 from modules.db import execute_with_retry  # noqa: E402
+from modules.chart_render_spec import build_resolved_distribution_spec, build_resolved_iqr_spec, build_resolved_trend_spec  # noqa: E402
 
 
 qtcore_stub = sys.modules.get('PyQt6.QtCore') or types.ModuleType('PyQt6.QtCore')
@@ -54,7 +58,7 @@ custom_logger_stub.CustomLogger = _DummyLogger
 sys.modules.setdefault('modules.custom_logger', custom_logger_stub)
 from modules.export_data_thread import ExportDataThread  # noqa: E402
 import modules.export_data_thread as export_data_thread_module  # noqa: E402
-from modules.export_html_dashboard import resolve_html_dashboard_path  # noqa: E402
+from modules.export_html_dashboard import resolve_html_dashboard_assets_dir, resolve_html_dashboard_path  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 
 
@@ -339,19 +343,107 @@ def _seed_grouped_measurements(db_path):
 
 
 class TestExportDataThreadGroupAnalysis(unittest.TestCase):
-    def _run_export(self, temp_dir, *, level):
+    def _run_export(self, temp_dir, *, level, generate_summary_sheet=False):
         db_path = str(Path(temp_dir) / 'metroliza.sqlite')
         out_path = str(Path(temp_dir) / f'export_{level}.xlsx')
         grouping_df = _seed_grouped_measurements(db_path)
 
         request = ExportRequest(
             paths=AppPaths(db_file=db_path, excel_file=out_path),
-            options=ExportOptions(generate_summary_sheet=False, group_analysis_level=level),
+            options=ExportOptions(generate_summary_sheet=generate_summary_sheet, group_analysis_level=level),
             grouping_df=grouping_df,
         )
         thread = ExportDataThread(request)
         self.assertTrue(thread.get_export_backend().run(thread))
         return out_path
+
+    def test_summary_sheet_extended_charts_keep_native_fast_paths_for_distribution_iqr_and_trend(self):
+        module_source = inspect.getsource(export_data_thread_module)
+
+        self.assertIn('distribution_backend_native', module_source)
+        self.assertIn('iqr_backend_native', module_source)
+        self.assertIn('trend_backend_native', module_source)
+        self.assertIn('build_resolved_distribution_spec', module_source)
+        self.assertIn('build_resolved_iqr_spec', module_source)
+        self.assertIn('build_resolved_trend_spec', module_source)
+
+        self.assertIn('extract_distribution_geometry(', module_source)
+        self.assertIn('extract_iqr_geometry(', module_source)
+        self.assertNotIn('extract_trend_geometry(', module_source)
+
+        self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='distribution'")
+        self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='iqr'")
+        self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='trend'")
+
+    def test_summary_sheet_extended_charts_runtime_native_fast_path_contract_is_behavioral(self):
+        # Valid 1x1 PNG used to bypass renderer internals while testing branch behavior.
+        tiny_png_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a1cAAAAASUVORK5CYII="
+        )
+        save_calls = []
+
+        def _fake_save_summary_chart(self, fig, *, chart_type=None, native_payload=None, mode='workbook'):
+            del mode
+            save_calls.append(
+                {
+                    'chart_type': chart_type,
+                    'fig': fig,
+                    'native_payload': copy.deepcopy(native_payload) if isinstance(native_payload, dict) else native_payload,
+                }
+            )
+            return types.SimpleNamespace(png_bytes=tiny_png_bytes, backend='native')
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch.object(export_data_thread_module, 'resolve_distribution_renderer_backend', return_value='native'),
+            patch.object(export_data_thread_module, 'resolve_iqr_renderer_backend', return_value='native'),
+            patch.object(export_data_thread_module, 'resolve_trend_renderer_backend', return_value='native'),
+            patch.object(
+                ExportDataThread,
+                '_summary_chart_required',
+                new=lambda _thread, chart_name: chart_name in {'distribution', 'iqr', 'trend'},
+            ),
+            patch.object(ExportDataThread, '_save_summary_chart', new=_fake_save_summary_chart),
+        ):
+            self._run_export(temp_dir, level='off', generate_summary_sheet=True)
+
+        def _first_call(chart_type):
+            for call in save_calls:
+                if call.get('chart_type') == chart_type:
+                    return call
+            raise AssertionError(f"Missing _save_summary_chart call for {chart_type}")
+
+        distribution_call = _first_call('distribution')
+        iqr_call = _first_call('iqr')
+        trend_call = _first_call('trend')
+
+        self.assertIsNone(distribution_call['fig'])
+        self.assertIsNone(iqr_call['fig'])
+        self.assertIsNone(trend_call['fig'])
+
+        distribution_payload = distribution_call['native_payload']
+        self.assertIsInstance(distribution_payload, dict)
+        distribution_spec = distribution_payload.get('resolved_render_spec')
+        self.assertIsInstance(distribution_spec, dict)
+        distribution_payload_input = copy.deepcopy(distribution_payload)
+        distribution_payload_input.pop('resolved_render_spec', None)
+        self.assertEqual(build_resolved_distribution_spec(distribution_payload_input), distribution_spec)
+
+        iqr_payload = iqr_call['native_payload']
+        self.assertIsInstance(iqr_payload, dict)
+        iqr_spec = iqr_payload.get('resolved_render_spec')
+        self.assertIsInstance(iqr_spec, dict)
+        iqr_payload_input = copy.deepcopy(iqr_payload)
+        iqr_payload_input.pop('resolved_render_spec', None)
+        self.assertEqual(build_resolved_iqr_spec(iqr_payload_input), iqr_spec)
+
+        trend_payload = trend_call['native_payload']
+        self.assertIsInstance(trend_payload, dict)
+        trend_spec = trend_payload.get('resolved_render_spec')
+        self.assertIsInstance(trend_spec, dict)
+        trend_payload_input = copy.deepcopy(trend_payload)
+        trend_payload_input.pop('resolved_render_spec', None)
+        self.assertEqual(build_resolved_trend_spec(trend_payload_input), trend_spec)
 
     def test_off_mode_emits_no_group_analysis_sheets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -665,6 +757,52 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         self.assertTrue(any('Capability: Marginal' in str(text) for text in annotation_texts))
         self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in annotation_texts))
 
+    def test_group_analysis_violin_dashboard_asset_omits_ci_callouts(self):
+        metric_row = {
+            'metric': 'M1',
+            'capability_allowed': True,
+            'capability': {
+                'cp': 1.10,
+                'cpk': 1.00,
+                'capability': 1.00,
+                'capability_type': 'Cpk',
+                'capability_ci': {'cp': {'lower': 0.9, 'upper': 1.3}, 'cpk': {'lower': 0.75, 'upper': 1.2}},
+                'status': 'ok',
+            },
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.01, 1.02, 1.03]},
+                    {'group': 'B', 'values': [1.00, 1.01, 1.02]},
+                ],
+                'spec_limits': {'lsl': 0.95, 'nominal': 1.00, 'usl': 1.05},
+            },
+        }
+
+        captured_axes = []
+        original_subplots = export_data_thread_module.plt.subplots
+
+        def _capture_subplots(*args, **kwargs):
+            fig, ax = original_subplots(*args, **kwargs)
+            captured_axes.append(ax)
+            return fig, ax
+
+        with (
+            patch.object(export_data_thread_module, '_HAS_SEABORN', False),
+            patch('modules.export_data_thread.plt.subplots', side_effect=_capture_subplots),
+        ):
+            result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'violin', audience='dashboard')
+
+        self.assertIn('image_data', result)
+        self.assertIn('description', result)
+        self.assertIn('Capability summary: marginal. Cp=1.100, Cpk=1.000.', result['description'])
+        self.assertNotIn('95% CI', result['description'])
+        self.assertNotIn('lower confidence bound', result['description'])
+        self.assertEqual(len(captured_axes), 1)
+        annotation_texts = [text.get_text() for text in captured_axes[0].texts]
+        self.assertTrue(any('Capability: Marginal' in str(text) for text in annotation_texts))
+        self.assertFalse(any('95% CI' in str(text) for text in annotation_texts))
+        self.assertFalse(any('Lower CI' in str(text) for text in annotation_texts))
+
     def test_group_analysis_histogram_keeps_vertical_spec_lines(self):
         metric_row = {
             'metric': 'M1',
@@ -707,6 +845,74 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         self.assertTrue(any('Capability: Marginal' in str(text) for text in histogram_note_texts))
         self.assertTrue(any('95% CI 0.750 to 1.200' in str(text) for text in histogram_note_texts))
 
+    def test_group_analysis_histogram_dashboard_asset_omits_ci_callouts(self):
+        metric_row = {
+            'metric': 'M1',
+            'capability_allowed': True,
+            'capability': {
+                'cp': 1.10,
+                'cpk': 1.00,
+                'capability': 1.00,
+                'capability_type': 'Cpk',
+                'capability_ci': {'cp': {'lower': 0.9, 'upper': 1.3}, 'cpk': {'lower': 0.75, 'upper': 1.2}},
+                'status': 'ok',
+            },
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [1.01, 1.02, 1.03]},
+                    {'group': 'B', 'values': [1.00, 1.01, 1.02]},
+                ],
+                'spec_limits': {'lsl': 0.95, 'nominal': 1.00, 'usl': 1.05},
+            },
+        }
+
+        fig = MagicMock()
+        ax = MagicMock()
+        with (
+            patch('modules.export_data_thread.plt.subplots', return_value=(fig, ax)),
+            patch('modules.export_data_thread.plt.close'),
+        ):
+            result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram', audience='dashboard')
+
+        self.assertIn('image_data', result)
+        self.assertIn('description', result)
+        self.assertIn('Capability summary: marginal. Cp=1.100, Cpk=1.000.', result['description'])
+        self.assertNotIn('95% CI', result['description'])
+        self.assertNotIn('lower confidence bound', result['description'])
+        histogram_note_texts = [args[2] for args, _kwargs in ax.text.call_args_list if len(args) >= 3]
+        self.assertTrue(any('Capability: Marginal' in str(text) for text in histogram_note_texts))
+        self.assertFalse(any('95% CI' in str(text) for text in histogram_note_texts))
+        self.assertFalse(any('Lower CI' in str(text) for text in histogram_note_texts))
+
+    def test_group_analysis_histogram_reuses_resolved_histogram_bin_strategy(self):
+        metric_row = {
+            'metric': 'M1',
+            'chart_payload': {
+                'groups': [
+                    {'group': 'A', 'values': [0.95, 1.00, 1.05, 1.08]},
+                    {'group': 'B', 'values': [0.98, 1.01, 1.02, 1.06]},
+                ],
+                'spec_limits': {},
+            },
+        }
+
+        fig = MagicMock()
+        ax = MagicMock()
+        with (
+            patch('modules.export_data_thread.plt.subplots', return_value=(fig, ax)),
+            patch('modules.export_data_thread.plt.close'),
+            patch('modules.export_data_thread.resolve_histogram_bin_count', return_value={'bin_count': 7, 'method': 'fd', 'sample_size': 8}) as resolve_bins,
+            patch('modules.export_data_thread.np.histogram_bin_edges', return_value=[0.95, 0.97, 0.99, 1.01, 1.03, 1.05, 1.07, 1.08]) as histogram_bin_edges,
+        ):
+            result = ExportDataThread._render_group_analysis_plot_asset(metric_row, 'histogram')
+
+        self.assertIn('image_data', result)
+        resolve_bins.assert_called_once()
+        histogram_values = resolve_bins.call_args.args[0]
+        self.assertEqual(histogram_values.shape, (8,))
+        histogram_bin_edges.assert_called_once()
+        self.assertEqual(histogram_bin_edges.call_args.kwargs['bins'], 7)
+
     def test_standard_mode_html_dashboard_includes_group_analysis_data(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
@@ -726,13 +932,23 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             thread.run()
 
             html_path = resolve_html_dashboard_path(out_path)
+            assets_path = resolve_html_dashboard_assets_dir(html_path)
             self.assertTrue(Path(html_path).exists())
+            self.assertTrue(Path(assets_path, 'plotly-2.27.0.min.js').exists())
             html_text = Path(html_path).read_text(encoding='utf-8')
 
             self.assertIn('Group Analysis', html_text)
             self.assertIn('FEATURE_1', html_text)
             self.assertIn('Descriptive stats', html_text)
             self.assertIn('Pairwise comparisons', html_text)
+            self.assertIn('plotly-chart', html_text)
+            self.assertIn('data-plotly-spec-dark=', html_text)
+            self.assertIn(f'{Path(assets_path).name}/plotly-2.27.0.min.js', html_text)
+            self.assertIn('data-theme-choice="auto"', html_text)
+            self.assertIn('data-theme-choice="light"', html_text)
+            self.assertIn('data-theme-choice="dark"', html_text)
+            self.assertIn('chart-lightbox-plotly', html_text)
+            self.assertIn('plotly-expand-trigger', html_text)
             self.assertNotIn('No extended summary charts were generated.', html_text)
 
 

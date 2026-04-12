@@ -9,9 +9,9 @@ This roadmap defines a **staged planning package** for implementing:
 This package is intentionally documentation-only and is designed to be executed **after** core plugin architecture implementation starts.
 
 ## Status
-- **Current status:** Planning package prepared; major portions of Pass 1–3 are now implemented in code.
-- **Execution status:** Active implementation with partial Pass 4 baseline in place (LLM scaffold exists), while Pass 4/5 operationalization remains open.
-- **Owner handoff point:** Use each pass checklist as the execution backlog for remaining implementation and rollout hardening.
+- **Current status:** The parser plugin runtime, LLM workspace scaffold, validation/repair CLI, auto-discovery drop-in folder, and non-technical onboarding flow are implemented.
+- **Execution status:** Active user-facing guidance now lives under [`../../parser_plugins/README.md`](../../parser_plugins/README.md). This roadmap remains as design/reference history.
+- **Owner handoff point:** Use the active parser-plugin docs for operations; use the pass documents here only for historical design context or future architecture extensions.
 
 ## Scope assumptions
 - Suppliers can use diverse regional conventions (decimal separators, date formats, locale-specific labels, multilingual content).
@@ -19,13 +19,14 @@ This package is intentionally documentation-only and is designed to be executed 
 - Legacy parser behavior remains supported during migration.
 
 ## Pass index
+- [Active parser plugin docs](../../parser_plugins/README.md)
 - [Data structure decision record](./data_structure_decision_record.md)
 - [Pass 1 — Foundations and interfaces](./pass_01_foundations_and_interfaces.md)
 - [Pass 2 — V2 schema and compatibility adapters](./pass_02_v2_schema_and_adapters.md)
 - [Pass 3 — Plugin registry, detection, and orchestration](./pass_03_registry_and_detection.md)
 - [Pass 4 — LLM-assisted plugin factory](./pass_04_llm_plugin_factory.md)
 - [Pass 5 — Validation, rollout, and governance](./pass_05_validation_rollout_governance.md)
-- [Quick start — Non-technical parser plugin creation](./plugin_creation_quickstart_non_technical.md)
+- [Archived quickstart/status docs](../../archive/2026/feature-parser-plugin-factory/README.md)
 
 ## Deliverables expected from this roadmap
 - A stable parser plugin interface contract.

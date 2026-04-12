@@ -1,0 +1,54 @@
+{
+  "canvas": {
+    "dpi": 150,
+    "height_px": 540,
+    "width_px": 960
+  },
+  "labels": [
+    "Alpha",
+    "Beta"
+  ],
+  "layout": {
+    "bottom_margin": 0.22,
+    "display_labels": [
+      "Alpha",
+      "Beta"
+    ],
+    "display_positions": [
+      0.0,
+      1.0
+    ],
+    "rotation": 0
+  },
+  "lsl": 0.9,
+  "render_mode": "scatter",
+  "series": [
+    [
+      1.0,
+      1.08,
+      1.12
+    ],
+    [
+      1.34,
+      1.43,
+      1.52
+    ]
+  ],
+  "title": "Distribution Parity Scatter",
+  "type": "distribution",
+  "usl": 1.8,
+  "x_domain": {
+    "max": 1.0,
+    "min": 0.0
+  },
+  "x_label": "Group",
+  "x_values": [
+    0.2,
+    0.8
+  ],
+  "y_label": "Measurement",
+  "y_values": [
+    1.05,
+    1.41
+  ]
+}

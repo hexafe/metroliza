@@ -32,6 +32,8 @@ class TestExportDialogLayout(unittest.TestCase):
                     "size_hint_height": widget.sizeHint().height(),
                     "actual_height": widget.height(),
                 }
+            payload["html_dashboard_note_text"] = dialog.html_dashboard_note_label.text()
+            payload["html_dashboard_tooltip"] = dialog.html_dashboard_label.toolTip()
 
             print(json.dumps(payload, sort_keys=True))
             dialog.close()
@@ -77,6 +79,10 @@ class TestExportDialogLayout(unittest.TestCase):
             widget_info = payload[name]
             self.assertGreaterEqual(widget_info["minimum_height"], expected_minimums[name])
             self.assertGreaterEqual(widget_info["actual_height"], widget_info["minimum_height"])
+        self.assertNotIn("light/dark theme", payload["html_dashboard_note_text"])
+        self.assertNotIn("PNG snapshots", payload["html_dashboard_note_text"])
+        self.assertNotIn("Plotly runtime", payload["html_dashboard_tooltip"])
+        self.assertNotIn("Auto/Light/Dark theme", payload["html_dashboard_tooltip"])
 
 
 if __name__ == "__main__":

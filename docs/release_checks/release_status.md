@@ -1,6 +1,6 @@
 # Release Status (Active Operations)
 
-This is the active operational status for release freeze, open testing, and final release readiness.
+This is the active operational status hub for release freeze, open testing, and final release readiness.
 Use this page first for current state, and use archived plans only for historical context.
 
 Status timestamp is tracked in git history for this file.
@@ -9,19 +9,17 @@ Status timestamp is tracked in git history for this file.
 
 Release/window metadata is defined in `VersionDate.py` and synchronized into user-facing docs with `python scripts/sync_release_metadata.py` (or validated with `--check`).
 
-## Active build identity (single source for this status snapshot)
+## Active release line
 
-- Branch: `work`
-- Commit SHA: `410ab06184cc6f799b217c27eedb3605f61a930d` *(snapshot commit for the status evidence below)*
-- Artifact/build ID: `2026.03rc1-build260317-410ab06`
-- Release line metadata (canonical): `RELEASE_VERSION=2026.03rc1`, `VERSION_DATE=260317`
+- Release line metadata (canonical): `RELEASE_VERSION=2026.03rc3`, `VERSION_DATE=260329`
+- Build/evidence branch, commit SHA, and artifact/build ID must be refreshed in the linked evidence docs whenever smoke evidence changes; do not rely on stale branch-local snapshot values in this file.
 
 | Track | Status | Notes | Primary doc |
 |---|---|---|---|
-| Freeze | Pre-freeze checks in progress | Implementation-item triage is complete, but broader freeze scope confirmation and owner assignment gates remain open. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
-| Open testing | Blocked (No-Go) | Do not promote this build to open testing: latest smoke evidence for build `2026.03-build260305-84a2302` is **FAIL** at credential preflight (`SmokeConfigError` missing local-only `credentials.json`). | [`google_conversion_smoke.md`](./google_conversion_smoke.md), [`open_testing_runbook.md`](./open_testing_runbook.md) |
-| Release candidate readiness | Blocked pending smoke rerun | Current RC decision is **No-Go** for build `2026.03-build260305-84a2302`; provide valid sandbox OAuth bootstrap files and rerun smoke, or cut a superseding build identity and re-evidence. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
-| Google conversion smoke gate | Evidence complete, status FAIL | Evidence package is up to date for build `260305` (command, log path, and build identity captured), but gate remains release-blocking until PASS. | [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
+| Freeze | In progress | Use the RC checklist and implementation triage to record current blockers, owner assignments, and sign-offs for the active build identity. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`implementation_item_triage.md`](./implementation_item_triage.md) |
+| Open testing | Status tracked in linked evidence docs | Read the latest go/no-go state from the current smoke log and runbook evidence package, not from older branch snapshots. | [`google_conversion_smoke.md`](./google_conversion_smoke.md), [`open_testing_runbook.md`](./open_testing_runbook.md) |
+| Release candidate readiness | Status tracked in linked checklist and smoke evidence | The current RC decision must be based on the latest checklist state plus the current smoke evidence bundle. | [`release_candidate_checklist.md`](./release_candidate_checklist.md), [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
+| Google conversion smoke gate | Status tracked in smoke log | The latest PASS/FAIL result, command, and build identity belong in the smoke log for the current release line. | [`google_conversion_smoke.md`](./google_conversion_smoke.md) |
 
 ## Operating notes
 
@@ -30,10 +28,10 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
   - **Release-blocking manual evidence gates** are defined in [`release_candidate_checklist.md`](./release_candidate_checklist.md) and must be complete for RC Go decisions.
   - Optional/manual workflow-dispatch lanes (`packaging-smoke`, `google-conversion-smoke`) are non-blocking for normal PR CI but may be linked as release confidence evidence when executed.
 - Active release operations are governed by documents under `docs/release_checks/`.
-- Snapshot IDs in runbooks/log evidence may differ from current `VersionDate.py` metadata when they represent earlier captured smoke runs; this is expected if the snapshot date/build context is explicitly documented.
-- Latest local QA/docs audit on this snapshot: `pytest -q` passed (`827 passed, 20 skipped`), and focused docs/policy hygiene checks passed (`tests/test_docs_markdown_links.py`, `tests/test_ci_policy_sync.py`, `tests/test_requirements_hygiene.py`, `tests/test_public_docstrings.py`).
-- Active operational execution tracker: [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md) (RC2 parity-first structural risk reduction, not rewrite scope).
-- During RC2, only small behavior-preserving, test-backed stabilization slices should move forward; larger decomposition/architecture moves remain deferred per triage.
+- Current QA counts, exact commit SHAs, and artifact identifiers should be recorded in the linked evidence docs and CI runs when status changes; counts from older revisions of this file are historical only.
+- Latest local QA/docs audit on the current branch state: `pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml` passed (`1103 passed, 19 skipped, 57 subtests passed`, total coverage `83%`), targeted native chart/docs checks passed (`60 passed` across chart parity/spec/smoke and docs-policy suites), and hygiene checks passed (`ruff check .`, `git diff --check`).
+- Active export-path follow-up docs: [`../roadmaps/exporter_audit_2026_03.md`](../roadmaps/exporter_audit_2026_03.md) for remaining structural backlog, plus [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md) as the RC2 closeout/reference tracker.
+- During RC2 closeout, only small behavior-preserving, test-backed stabilization slices should move forward; larger decomposition/architecture moves remain deferred per triage.
 - Superseded planning docs are references only and should not be used as the operational status tracker (`../roadmaps/2026_03_rc1_test_ci_execution_tracker.md`, `../roadmaps/test_ci_audit_execution.md`).
 - If status changes, update this page first, then update linked runbooks/checklists as needed.
 

@@ -1,4 +1,7 @@
-# Performance Boost Audit (2026-03-28)
+# Performance Boost Audit (2026-03-28, Archived)
+
+> Historical context note: archived on 2026-04-02 after the audited fixes landed.
+> For current operational guidance, use [`../../../README.md`](../../../README.md), [`../../native_build_distribution.md`](../../native_build_distribution.md), and [`../../ci-policy.md`](../../ci-policy.md).
 
 ## Goal
 Audit the `performance-boost` branch for measurable runtime bottlenecks, write an implementation plan anchored to benchmark evidence, and land the highest-value fixes immediately.
@@ -34,7 +37,7 @@ Root cause:
 - The Python fallback recalculated effect sizes in a Python loop for every bootstrap replicate.
 
 Fix landed:
-- Added vectorized percentile-CI fallbacks for `cohen_d`, `eta_squared`, and `omega_squared` in [`modules/comparison_stats.py`](../../modules/comparison_stats.py).
+- Added vectorized percentile-CI fallbacks for `cohen_d`, `eta_squared`, and `omega_squared` in [`modules/comparison_stats.py`](../../../modules/comparison_stats.py).
 
 Impact:
 - About `11.4x` faster on the benchmarked CI scenario without changing public behavior.
@@ -84,9 +87,9 @@ Root cause:
 - Bilateral fitting always evaluated `johnsonsu`, even on large near-normal samples where the benchmark fixture almost always selected `norm` and only rarely selected `skewnorm`.
 
 Fix landed:
-- Skip batch candidate precompute when native batch metrics are unavailable in [`modules/distribution_fit_service.py`](../../modules/distribution_fit_service.py).
-- Added adaptive bilateral candidate pruning so near-normal samples skip `johnsonsu` while heavy-tail/skewed samples still keep it in the candidate pool in [`modules/distribution_fit_service.py`](../../modules/distribution_fit_service.py).
-- Added regression coverage in [`tests/test_distribution_fit_service.py`](../../tests/test_distribution_fit_service.py).
+- Skip batch candidate precompute when native batch metrics are unavailable in [`modules/distribution_fit_service.py`](../../../modules/distribution_fit_service.py).
+- Added adaptive bilateral candidate pruning so near-normal samples skip `johnsonsu` while heavy-tail/skewed samples still keep it in the candidate pool in [`modules/distribution_fit_service.py`](../../../modules/distribution_fit_service.py).
+- Added regression coverage in [`tests/test_distribution_fit_service.py`](../../../tests/test_distribution_fit_service.py).
 
 Impact:
 - Removed the `auto`-mode regression, restored batch mode to parity, and then pushed it beyond parity in this no-native environment.
@@ -132,9 +135,9 @@ Interpretation:
 - Native fit ranking parity is exact at the model/rank level; numeric metric drift remains small but tolerance-based for `skewnorm` and `johnsonsu`, and it does not change model selection on the audited fixtures.
 
 Fix landed:
-- Added native batch fit-parameter estimation for `norm`, `skewnorm`, `halfnorm`, `foldnorm`, `gamma`, `weibull_min`, `lognorm`, and `johnsonsu` in [`modules/native/distribution_fit_ad/src/lib.rs`](../../modules/native/distribution_fit_ad/src/lib.rs).
-- Wired the Python bridge to expose `compute_candidate_fit_params_batch(...)` and merge unresolved candidates back through Python fallback in [`modules/distribution_fit_candidate_native.py`](../../modules/distribution_fit_candidate_native.py).
-- Added parity coverage for mixed native/Python fit fallback in [`tests/test_distribution_fit_native_parity.py`](../../tests/test_distribution_fit_native_parity.py).
+- Added native batch fit-parameter estimation for `norm`, `skewnorm`, `halfnorm`, `foldnorm`, `gamma`, `weibull_min`, `lognorm`, and `johnsonsu` in [`modules/native/distribution_fit_ad/src/lib.rs`](../../../modules/native/distribution_fit_ad/src/lib.rs).
+- Wired the Python bridge to expose `compute_candidate_fit_params_batch(...)` and merge unresolved candidates back through Python fallback in [`modules/distribution_fit_candidate_native.py`](../../../modules/distribution_fit_candidate_native.py).
+- Added parity coverage for mixed native/Python fit fallback in [`tests/test_distribution_fit_native_parity.py`](../../../tests/test_distribution_fit_native_parity.py).
 
 ### 3. Group-stats mixed-type coercion had regressed below the legacy path
 Command:
@@ -157,7 +160,7 @@ Interpretation:
 - The “optimized” fallback path was slower because it paid for object-array materialization plus a Python indexed write loop.
 
 Fix landed:
-- Added ndarray fast paths and replaced the mixed-value fallback with a faster list-comprehension conversion path in [`modules/group_stats_native.py`](../../modules/group_stats_native.py).
+- Added ndarray fast paths and replaced the mixed-value fallback with a faster list-comprehension conversion path in [`modules/group_stats_native.py`](../../../modules/group_stats_native.py).
 
 Impact:
 - The Python fallback is now about `2x` faster than the benchmark’s legacy baseline on the same mixed-type workload.
@@ -193,14 +196,16 @@ Interpretation:
 - The old native chart path accelerated only the stripped histogram surface and deliberately refused the rich worksheet histogram/dashboard layout.
 - The new native path wins decisively on the actual export workload where matplotlib had to compose titles, axes, legends, annotation bands, and the right-side histogram panel.
 - The remaining stripped-histogram gap is now small enough that it is no longer the dominant chart concern on this branch.
+- For the covered charts, the current runtime split is now more precise: histogram, distribution, and IQR are native fast-paths when rollout/native availability allow them, while trend still uses matplotlib as an oracle pass before native rendering.
+- That means the remaining export bottleneck is no longer the compositor alone; the next export budget is concentrated in worksheet writes, image insertion density, and the remaining trend oracle path.
 
 Fix landed:
-- Added a payload-driven native chart compositor in [`modules/native_chart_compositor.py`](../../modules/native_chart_compositor.py).
-- Extended the native chart module bridge in [`lib.rs`](../../modules/native/chart_renderer/src/lib.rs) and [`Cargo.toml`](../../modules/native/chart_renderer/Cargo.toml).
-- Enabled native export for histogram, distribution, IQR, and trend summary charts in [`modules/export_data_thread.py`](../../modules/export_data_thread.py).
-- Updated renderer contracts and validation in [`modules/chart_renderer.py`](../../modules/chart_renderer.py).
-- Added an optional HTML dashboard sidecar that reuses the same rendered summary charts and chart payload metadata in [`modules/export_html_dashboard.py`](../../modules/export_html_dashboard.py).
-- Added a compact histogram fast-encode path so stripped render-budget payloads no longer pay workbook-grade PNG compression in [`modules/native_chart_compositor.py`](../../modules/native_chart_compositor.py).
+- Added a payload-driven native chart compositor in [`modules/native_chart_compositor.py`](../../../modules/native_chart_compositor.py).
+- Extended the native chart module bridge in [`lib.rs`](../../../modules/native/chart_renderer/src/lib.rs) and [`Cargo.toml`](../../../modules/native/chart_renderer/Cargo.toml).
+- Enabled a native-capable export path for histogram, distribution, IQR, and trend summary charts in [`modules/export_data_thread.py`](../../../modules/export_data_thread.py), with runtime rollout now gated per chart kind in [`modules/chart_renderer.py`](../../../modules/chart_renderer.py).
+- Updated renderer contracts and validation in [`modules/chart_renderer.py`](../../../modules/chart_renderer.py).
+- Added an optional HTML dashboard sidecar that reuses the same rendered summary charts and chart payload metadata in [`modules/export_html_dashboard.py`](../../../modules/export_html_dashboard.py).
+- Added a compact histogram fast-encode path so stripped render-budget payloads no longer pay workbook-grade PNG compression in [`modules/native_chart_compositor.py`](../../../modules/native_chart_compositor.py).
 
 ## Remaining bottlenecks
 
@@ -213,6 +218,16 @@ From the focused export benchmark:
 Implication:
 - The existing export-path cleanup is not wrong, but it is no longer the obvious compute bottleneck.
 - The remaining export budget is now more likely in workbook write density, large-sheet image counts, and any future HTML/dashboard interactivity layers than in chart composition or distribution-fit parameter estimation for the covered plots.
+
+### P2. Trend fast-path is still only a candidate
+
+Trend is the only covered chart that remains a plausible next native-fast-path candidate without changing the oracle contract elsewhere. It should only be pursued if it can:
+
+- reuse the existing finalized geometry contract from the matplotlib oracle pass,
+- preserve the current parity gate thresholds, and
+- show a measurable end-to-end export improvement, not just a compositor-only improvement.
+
+Until then, treat the chart runtime as parity-first rather than fully matplotlib-free.
 
 Build caveat:
 - On Python `3.14`, `PyO3 0.21` still needed `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` for the local wheel build to proceed.
@@ -231,9 +246,10 @@ Build caveat:
 2. Reduce candidate-fit volume before optimization starts where repeated groups still appear.
    - Add low-risk candidate pruning heuristics based on support mode and simple shape stats.
    - Consider caching fitted params by `(distribution, measurement_fingerprint)` when repeated export flows revisit identical groups.
-3. Convert the local native build recipe into a repo-supported workflow for Python `3.14+`.
+3. Evaluate a trend-only native fast-path implementation only if the export benchmark shows a meaningful win and the parity fixtures remain green.
+4. Convert the local native build recipe into a repo-supported workflow for Python `3.14+`.
    - Either upgrade `PyO3` or codify the forward-compat build flag where appropriate.
-4. Add an interactive layer on top of the new HTML dashboard/export sidecar.
+5. Add an interactive layer on top of the new HTML dashboard/export sidecar.
    - Keep `xlsx` as the portable static artifact and the current HTML dashboard as the dependency-free browser artifact.
    - Reuse the same payloads for future Plotly/interactive HTML output instead of re-deriving chart semantics.
 
@@ -248,27 +264,27 @@ Build caveat:
    - a clear statement of whether the gain depends on native extensions being present.
 
 ## Implemented files
-- [`modules/comparison_stats.py`](../../modules/comparison_stats.py)
-- [`modules/chart_renderer.py`](../../modules/chart_renderer.py)
-- [`modules/distribution_fit_service.py`](../../modules/distribution_fit_service.py)
-- [`modules/distribution_fit_candidate_native.py`](../../modules/distribution_fit_candidate_native.py)
-- [`modules/export_dialog.py`](../../modules/export_dialog.py)
-- [`modules/export_dialog_service.py`](../../modules/export_dialog_service.py)
-- [`modules/export_data_thread.py`](../../modules/export_data_thread.py)
-- [`modules/export_html_dashboard.py`](../../modules/export_html_dashboard.py)
-- [`modules/group_stats_native.py`](../../modules/group_stats_native.py)
-- [`modules/native/distribution_fit_ad/src/lib.rs`](../../modules/native/distribution_fit_ad/src/lib.rs)
-- [`tests/test_distribution_fit_native_parity.py`](../../tests/test_distribution_fit_native_parity.py)
-- [`modules/contracts.py`](../../modules/contracts.py)
-- [`modules/native/chart_renderer/Cargo.toml`](../../modules/native/chart_renderer/Cargo.toml)
-- [`modules/native/chart_renderer/src/lib.rs`](../../modules/native/chart_renderer/src/lib.rs)
-- [`modules/native_chart_compositor.py`](../../modules/native_chart_compositor.py)
-- [`tests/test_chart_renderer.py`](../../tests/test_chart_renderer.py)
-- [`tests/test_contracts.py`](../../tests/test_contracts.py)
-- [`tests/test_thread_flow_helpers.py`](../../tests/test_thread_flow_helpers.py)
-- [`tests/test_export_html_dashboard.py`](../../tests/test_export_html_dashboard.py)
-- [`tests/test_export_presets.py`](../../tests/test_export_presets.py)
-- [`tests/test_distribution_fit_service.py`](../../tests/test_distribution_fit_service.py)
+- [`modules/comparison_stats.py`](../../../modules/comparison_stats.py)
+- [`modules/chart_renderer.py`](../../../modules/chart_renderer.py)
+- [`modules/distribution_fit_service.py`](../../../modules/distribution_fit_service.py)
+- [`modules/distribution_fit_candidate_native.py`](../../../modules/distribution_fit_candidate_native.py)
+- [`modules/export_dialog.py`](../../../modules/export_dialog.py)
+- [`modules/export_dialog_service.py`](../../../modules/export_dialog_service.py)
+- [`modules/export_data_thread.py`](../../../modules/export_data_thread.py)
+- [`modules/export_html_dashboard.py`](../../../modules/export_html_dashboard.py)
+- [`modules/group_stats_native.py`](../../../modules/group_stats_native.py)
+- [`modules/native/distribution_fit_ad/src/lib.rs`](../../../modules/native/distribution_fit_ad/src/lib.rs)
+- [`tests/test_distribution_fit_native_parity.py`](../../../tests/test_distribution_fit_native_parity.py)
+- [`modules/contracts.py`](../../../modules/contracts.py)
+- [`modules/native/chart_renderer/Cargo.toml`](../../../modules/native/chart_renderer/Cargo.toml)
+- [`modules/native/chart_renderer/src/lib.rs`](../../../modules/native/chart_renderer/src/lib.rs)
+- [`modules/native_chart_compositor.py`](../../../modules/native_chart_compositor.py)
+- [`tests/test_chart_renderer.py`](../../../tests/test_chart_renderer.py)
+- [`tests/test_contracts.py`](../../../tests/test_contracts.py)
+- [`tests/test_thread_flow_helpers.py`](../../../tests/test_thread_flow_helpers.py)
+- [`tests/test_export_html_dashboard.py`](../../../tests/test_export_html_dashboard.py)
+- [`tests/test_export_presets.py`](../../../tests/test_export_presets.py)
+- [`tests/test_distribution_fit_service.py`](../../../tests/test_distribution_fit_service.py)
 
 ## Validation
 - `PYTHONPATH=. pytest tests/test_group_stats_tests.py tests/test_distribution_fit_service.py tests/test_comparison_stats.py -q`

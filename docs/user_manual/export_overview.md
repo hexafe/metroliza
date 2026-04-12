@@ -120,6 +120,22 @@ This means:
 
 This option is optional. The local Excel workbook remains the base output.
 
+### HTML dashboard
+
+You can optionally check:
+
+**Also create HTML dashboard sidecar for extended summary charts**
+
+This adds a local `*_dashboard.html` file and a matching asset folder next to the exported workbook.
+
+Use it when you want:
+
+- a browser view of the exported charts,
+- larger click-to-enlarge chart viewing, and
+- a simpler way to review results without opening Excel first.
+
+This option does not replace the workbook. It adds an extra review file alongside it.
+
 ### Chart type
 
 Available chart types are:

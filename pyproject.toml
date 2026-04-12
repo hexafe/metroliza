@@ -5,6 +5,7 @@ include = ["*.py", "*.pyi", "**/pyproject.toml"]
 exclude = [
   ".git",
   ".venv",
+  "artifacts",
   "__pycache__",
   "build",
   "dist",

@@ -107,13 +107,18 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 
 ### Chart renderer (`modules/chart_renderer.py`)
 
-- Backend selection is controlled by `METROLIZA_CHART_RENDERER_BACKEND` (`auto`/`native`/`matplotlib`).
+- Backend selection is controlled by `METROLIZA_CHART_RENDERER_BACKEND` (`matplotlib`/`auto`/`native`).
+- Native rollout selection is controlled per chart kind by `METROLIZA_CHART_RENDERER_ROLLOUT_CHARTS` (comma-separated allowlist such as `histogram,distribution,iqr,trend`); when unset, all supported chart kinds are enabled whenever `auto` or `native` is selected.
 - Native chart rendering is shipped when `_metroliza_chart_native` is available in the packaged build environment.
 - The current native module covers histogram, distribution, IQR, and trend summary charts through the `_metroliza_chart_native` extension surface.
 - The native chart path is a payload-driven non-matplotlib compositor intended for workbook/export rendering, not an HTML/interactive chart stack.
-- The optional HTML dashboard sidecar reuses the same export chart payloads and rendered PNGs, but it remains a separate Python-side export artifact rather than part of the native chart extension.
+- The optional HTML dashboard sidecar remains a separate Python-side export artifact rather than part of the native chart extension.
+- The dashboard now copies a vendored `plotly-2.27.0.min.js` runtime into each exported `*_dashboard_assets/` folder, so interactive hover/zoom works offline and survives frozen Windows builds without a CDN dependency; the saved page also ships an Auto/Light/Dark theme control.
 - If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
-- `auto` uses native only when the extension is present; otherwise it defaults to matplotlib.
+- Matplotlib is the current default while native chart parity is being tuned.
+- `auto` re-enables native selection for enabled chart kinds when the extension is present and otherwise falls back to matplotlib.
+- CI's native-artifacts job now runs `tests/test_native_chart_renderer_smoke.py` against the compiled wheel so histogram, distribution, IQR, and trend all prove native dispatch with planner-built resolved specs attached, and it also runs a focused export-runtime fast-path contract smoke for the extended summary-sheet charts.
+- In the export runtime, histogram, distribution, IQR, and trend use planner-driven resolved specs on the native fast-path only when native mode is opted in and the chart kind is enabled for rollout.
 - On Python `3.14`, local chart-renderer builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
 
 ### Distribution fit (`modules/distribution_fit_native.py`)
@@ -143,12 +148,14 @@ Runtime fallback from native execution errors in forced-`native` modes is intent
 - `hiddenimports=['_metroliza_cmm_native', '_metroliza_chart_native']`
 - Windows Python runtime DLL collection (`libffi`, `python3*.dll`, `vcruntime`, `msvcp`) so onefile startup does not depend on a fragile ambient interpreter layout
 - PyMuPDF/`fitz` data files, native libraries, and discovered submodules so packaged PDF parsing survives frozen builds
+- the vendored dashboard runtime asset at `modules/html_dashboard_assets/plotly-2.27.0.min.js` so HTML sidecars can copy a local Plotly bundle into the export folder
 
 Distribution audit status:
 
 - `pyinstaller packaging/metroliza_onefile.spec` produces a single-file artifact (`EXE(...)` with no `COLLECT(...)` stage), so it is configured as a onefile build rather than an onedir bundle.
 - default PyInstaller output filename follows release metadata: `metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>).exe`
 - The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
+- Exported HTML dashboards no longer rely on internet access: the packaged app copies the bundled Plotly runtime into the dashboard asset folder next to the PNG snapshots.
 - Confidence is still release-evidence based rather than absolute: the generated artifact must be smoke-launched on a clean target environment before calling it ready for non-technical users.
 
 Smoke checks after build:
@@ -185,6 +192,7 @@ PyInstaller is the closest current path to a turnkey single-file distribution fo
 - auto-adds `--include-module=_metroliza_chart_native` only when `_metroliza_chart_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
 - explicitly includes `modules.cmm_report_parser`, `modules.report_parser_factory`, and `modules.pdf_backend` because the rc1 parser/plugin refactor introduced dynamic paths that packagers may otherwise under-detect
+- explicitly includes `modules/html_dashboard_assets/plotly-2.27.0.min.js` as a data file so exported HTML dashboards can stay offline-capable in frozen builds
 - requires PyMuPDF to be importable in the build environment and fails closed by default when it is not available
 - always includes `pymupdf` / `fitz` package contents plus explicit PyMuPDF runtime submodules (`pymupdf._mupdf`, `pymupdf._extra`, `pymupdf.extra`, `pymupdf.mupdf`, table/utils helpers) so onefile builds do not silently omit parser internals
 - validates the generated Nuitka report for both backend presence and required PyMuPDF runtime module references so packaged PDF parsing cannot silently drop out of the artifact
@@ -232,4 +240,9 @@ The native-artifacts CI job must validate all of the following:
    - CMM parser path continues in Python when not forced to native,
    - comparison/distribution wrappers return `None` in availability-driven fallback mode,
    - group-stats coercion returns Python-coerced `float64`/`NaN` output.
-5. parser parity tests pass when native backend is available.
+5. native chart planner parity smoke passes against the checked-in chart fixtures:
+   - live planner builders match `tests/fixtures/chart_parity/*/planner_spec.json`,
+   - native chart rendering stays within the configured image-diff thresholds against the checked-in matplotlib references,
+   - the compiled-wheel smoke covers histogram, distribution scatter, distribution violin, IQR, and trend dispatch,
+   - the export runtime fast-path contract is smoke-validated for the extended summary-sheet chart path.
+6. parser parity tests pass when native backend is available.

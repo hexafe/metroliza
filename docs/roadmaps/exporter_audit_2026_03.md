@@ -3,6 +3,11 @@
 ## Goal
 Assess whether export-path refactoring is still needed after the recent RC2 stabilization slices, and identify the next highest-value follow-up work.
 
+## Status after closeout
+- The RC2-safe seam work and parity evidence capture listed in this audit are complete.
+- Remaining exporter work is structural follow-up, not a cut-short implementation slice on the current branch.
+- Treat the sequence below as Phase-B planning guidance for `2026.04+`, not an RC2 must-finish checklist.
+
 ## Constraints
 - Preserve release confidence and behavior parity.
 - Prefer small, reversible seams over broad architecture rewrites.
@@ -10,9 +15,9 @@ Assess whether export-path refactoring is still needed after the recent RC2 stab
 
 ## Key findings
 1. **Refactoring is still needed in the exporter path.**
-   - `modules/export_data_thread.py` remains very large (~3.5k LOC) and still concentrates orchestration, plotting, worksheet population, and result handling responsibilities.
-2. **Recent seams reduced risk, but did not finish decomposition.**
-   - Existing helper seams (`export_query_service`, `export_sheet_writer`, `export_chart_writer`, `export_google_result_utils`, `export_logging_service`) are useful and already in use.
+   - `modules/export_data_thread.py` remains very large (~6.2k LOC) and still concentrates orchestration, plotting, worksheet population, and result handling responsibilities.
+2. **Recent seams reduced risk and completed summary-chart fast-path rollout, but did not finish decomposition.**
+   - Existing helper seams (`export_query_service`, `export_sheet_writer`, `export_chart_writer`, `export_google_result_utils`, `export_logging_service`) are useful and already in use, and histogram/distribution/IQR/trend now all use planner-driven native fast-path payloads in the export runtime when allowed.
 3. **High-complexity method hotspots remain inside `ExportDataThread`.**
    - Largest methods still indicate “mixed concerns” hotspots (worksheet fill/write flow, group-analysis rendering/annotation, and top-level run path).
 4. **Execution roadmap already reflects this status.**
@@ -62,3 +67,7 @@ These are the best next extraction targets because they combine control flow + f
 
 ## Extraction parity evidence log
 - 2026-03-14: `pytest tests/test_export_summary_composition_service.py tests/test_export_group_analysis_annotation_service.py tests/test_export_plot_helpers.py tests/test_thread_flow_helpers.py`
+
+## 2026-04 follow-up note
+- Summary-chart native fast-path rollout is complete for histogram, distribution, IQR, and trend.
+- Remaining exporter work should be treated as structural Phase B follow-up, not as unfinished parity/runtime rollout work.
