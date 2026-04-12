@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         print(_format_candidate(report_parser_factory, candidate))
 
     if diagnostics.selected is None:
-        print(f"Selected: none")
+        print("Selected: none")
         print(f"Rejected reason: {diagnostics.rejected_reason or 'unknown'}")
         return 1
 
