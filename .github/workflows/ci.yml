@@ -52,7 +52,7 @@ jobs:
             --plugin-id ci_smoke
 
       - name: Ruff lint (full repository)
-        run: ruff check .
+        run: python -m ruff check .
 
       - name: Release metadata consistency
         run: python scripts/sync_release_metadata.py --check
