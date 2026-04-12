@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 
@@ -40,6 +41,21 @@ class RequirementsHygieneTests(unittest.TestCase):
             any(entry.lower().startswith('google-api-python-client') for entry in runtime_entries),
             'google-api-python-client should not be in requirements.txt without runtime imports',
         )
+
+    def test_runtime_requirements_pin_hexafe_groupstats_to_public_git_source(self):
+        runtime_entries = self._runtime_requirements()
+        matches = [entry for entry in runtime_entries if entry.lower().startswith('hexafe-groupstats[pandas] @ ')]
+
+        self.assertEqual(matches, [
+            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@v0.1.0rc1'
+        ])
+
+    def test_runtime_requirements_do_not_rely_on_local_hexafe_groupstats_path(self):
+        runtime_text = pathlib.Path('requirements.txt').read_text(encoding='utf-8')
+
+        self.assertNotIn('git+ssh://git@github.com/hexafe/hexafe-groupstats.git', runtime_text)
+        self.assertNotIn('../hexafe-groupstats', runtime_text)
+        self.assertNotRegex(runtime_text, re.compile(r'(^|\s)-e\s+.+hexafe-groupstats', re.MULTILINE))
 
 
 if __name__ == '__main__':

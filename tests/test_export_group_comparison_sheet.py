@@ -766,6 +766,24 @@ class TestExportGroupComparisonSheet(unittest.TestCase):
         self.assertNotEqual(pairwise_by_pair[('A', 'B')]['effect size'], pairwise_by_pair[('A', 'C')]['effect size'])
         self.assertNotEqual(pairwise_by_pair[('A', 'B')]['effect size'], pairwise_by_pair[('B', 'C')]['effect size'])
 
+    def test_prepare_payload_uses_package_posthoc_test_names_for_multi_group_parametric_case(self):
+        grouped_df = pd.DataFrame(
+            {
+                'HEADER - AX': ['M1'] * 15,
+                'MEAS': [
+                    0.0, 0.1, -0.1, 0.0, 0.05,
+                    0.2, 0.3, 0.25, 0.35, 0.3,
+                    1.4, 1.5, 1.45, 1.55, 1.6,
+                ],
+                'GROUP': ['A'] * 5 + ['B'] * 5 + ['C'] * 5,
+            }
+        )
+
+        payload = prepare_group_comparison_payload(grouped_df)
+
+        self.assertEqual({row['test used'] for row in payload['pairwise_rows']}, {'Tukey HSD'})
+        self.assertEqual(payload['overall_test_rows'][0]['Selected test'], 'ANOVA')
+
     def test_effect_matrix_title_and_notes_follow_actual_effect_type_metadata(self):
         non_parametric_df = pd.DataFrame(
             {

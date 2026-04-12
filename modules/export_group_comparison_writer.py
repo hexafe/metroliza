@@ -16,16 +16,15 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from modules.characteristic_alias_service import resolve_characteristic_alias
-from modules.comparison_stats import (
-    ComparisonStatsConfig,
-    _describe_correction_policy,
-    _describe_pairwise_strategy,
-    _format_correction_method,
-    compute_metric_pairwise_stats,
+from hexafe_groupstats import AnalysisConfig, analyze_metric
+from hexafe_groupstats.core.corrections import (
+    describe_correction_policy as _describe_correction_policy,
+    format_correction_method as _format_correction_method,
 )
+from hexafe_groupstats.core.pairwise import describe_pairwise_strategy as _describe_pairwise_strategy
+
+from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.distribution_shape_analysis import compute_distribution_difference
-from modules.group_stats_tests import select_group_stat_test
 
 
 SECTION_GAP = 2
@@ -461,6 +460,52 @@ def _resolve_metric_aliases_for_comparison(working: pd.DataFrame, *, alias_db_pa
     return resolved_metric
 
 
+def _normalize_correction_method(correction_method: str) -> str:
+    return str(correction_method or 'holm').strip().lower().replace('-', '_')
+
+
+def _build_legacy_assumption_payload(result) -> tuple[dict[str, object], dict[str, object]]:
+    assumption_rows = {
+        'normality': {
+            row.group: {
+                'p_value': row.p_value,
+                'status': row.status,
+                'passed': row.passed,
+            }
+            for row in result.assumptions.normality
+        },
+        'variance_homogeneity': {
+            'test': result.assumptions.variance_homogeneity.test,
+            'p_value': result.assumptions.variance_homogeneity.p_value,
+            'status': result.assumptions.variance_homogeneity.status,
+        },
+    }
+    assumption_outcomes = {
+        'normality': result.assumptions.normality_outcome,
+        'variance_homogeneity': result.assumptions.variance_outcome,
+        'selection_mode': result.assumptions.selection_mode.value,
+        'selection_detail': result.assumptions.selection_detail,
+    }
+    return assumption_rows, assumption_outcomes
+
+
+def _build_metric_analysis_result(metric_key: str, group_series: dict[str, list[float]], correction_method: str):
+    normalized_correction_method = _normalize_correction_method(correction_method)
+    return analyze_metric(
+        metric_key,
+        group_series,
+        config=AnalysisConfig(correction_method=normalized_correction_method),
+    )
+
+
+def _build_legacy_post_hoc_strategy(result, correction_method: str) -> str:
+    return _describe_pairwise_strategy(
+        non_parametric=result.assumptions.selection_mode.value == 'non_parametric',
+        equal_var=result.assumptions.variance_outcome == 'passed',
+        correction_method=correction_method,
+    )
+
+
 def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correction_method='holm'):
     """Prepare metadata, summary rows, pairwise rows, matrices, and insights.
 
@@ -514,46 +559,32 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
             group_name: group_values['MEAS'].tolist()
             for group_name, group_values in metric_frame.groupby('GROUP', sort=False)
         }
-
-        selector_result = select_group_stat_test(
-            labels=list(group_series.keys()),
-            grouped_values=list(group_series.values()),
-        )
-        selected_test = selector_result.get('test_name') or 'N/A'
-        is_non_parametric = selected_test in {'Mann-Whitney U', 'Kruskal-Wallis'}
-        variance_test = selector_result.get('assumptions', {}).get('variance_homogeneity', {}).get('test') or 'Brown-Forsythe'
-        variance_status = selector_result.get('assumptions', {}).get('variance_homogeneity', {}).get('status')
-        post_hoc_strategy = _describe_pairwise_strategy(
-            non_parametric=is_non_parametric,
-            equal_var=variance_status == 'passed',
-            correction_method=correction_method,
-        )
+        result = _build_metric_analysis_result(metric_key, group_series, correction_method)
+        assumptions, assumption_outcomes = _build_legacy_assumption_payload(result)
+        selected_test = result.omnibus.test_name or 'N/A'
+        variance_test = assumptions.get('variance_homogeneity', {}).get('test') or 'Brown-Forsythe'
+        post_hoc_strategy = _build_legacy_post_hoc_strategy(result, correction_method)
         overall_test_rows.append(
             {
                 'Metric': metric_key,
                 'Selected test': selected_test,
                 'omnibus test name': selected_test,
-                'p-value': selector_result.get('p_value'),
-                'Sample sizes': ', '.join(f"{key}:{value}" for key, value in selector_result.get('sample_sizes', {}).items()),
+                'p-value': result.omnibus.p_value,
+                'Sample sizes': ', '.join(f"{group.label}:{group.sample_size}" for group in result.preprocess),
                 'normality check used': 'Shapiro-Wilk',
                 'variance test used': variance_test,
                 'omnibus test used': selected_test,
-                'assumption outcomes': selector_result.get('assumption_outcomes', {}),
+                'assumption outcomes': assumption_outcomes,
                 'post-hoc strategy': post_hoc_strategy,
                 'correction method': correction_method,
                 'correction policy': correction_policy,
-                'Assumptions / warnings': '; '.join(selector_result.get('warnings', [])) or 'None',
+                'Assumptions / warnings': '; '.join(result.warnings) or 'None',
             }
         )
 
-        comparison_rows = compute_metric_pairwise_stats(
-            metric_key,
-            group_series,
-            config=ComparisonStatsConfig(alpha=0.05, correction_method=correction_method),
-        )
-        for item in comparison_rows:
-            group_a = item['group_a']
-            group_b = item['group_b']
+        for item in result.pairwise_results:
+            group_a = item.group_a
+            group_b = item.group_b
             sample_left = group_series[group_a]
             sample_right = group_series[group_b]
             mean_delta = float(pd.Series(sample_left).mean() - pd.Series(sample_right).mean())
@@ -562,32 +593,35 @@ def prepare_group_comparison_payload(grouped_df, *, alias_db_path=None, correcti
                     'Metric': metric_key,
                     'Group A': group_a,
                     'Group B': group_b,
-                    'test used': item.get('test_used'),
-                    'pairwise test name': item.get('pairwise_test_name', item.get('test_used')),
-                    'p-value': item.get('p_value'),
-                    'adjusted p-value': item.get('adjusted_p_value'),
-                    'effect size': item.get('effect_size'),
-                    'effect type': item.get('effect_type'),
-                    'pairwise_effect_type': item.get('pairwise_effect_type', item.get('effect_type')),
-                    'effect size ci': item.get('effect_size_ci'),
-                    'omnibus effect size': item.get('omnibus_effect_size'),
-                    'omnibus effect type': item.get('omnibus_effect_type'),
-                    'omnibus_effect_type': item.get('omnibus_effect_type'),
-                    'effect types': item.get('effect_types'),
-                    'omnibus effect size ci': item.get('omnibus_effect_size_ci'),
-                    'significant': item.get('significant'),
+                    'test used': item.test_name,
+                    'pairwise test name': item.test_name,
+                    'p-value': item.p_value,
+                    'adjusted p-value': item.adjusted_p_value,
+                    'effect size': item.effect_size,
+                    'effect type': item.effect_type,
+                    'pairwise_effect_type': item.effect_type,
+                    'effect size ci': item.effect_size_ci,
+                    'omnibus effect size': result.omnibus.effect_size,
+                    'omnibus effect type': result.omnibus.effect_type,
+                    'omnibus_effect_type': result.omnibus.effect_type,
+                    'effect types': {
+                        'pairwise': item.effect_type,
+                        'omnibus': result.omnibus.effect_type,
+                    },
+                    'omnibus effect size ci': result.omnibus.effect_size_ci,
+                    'significant': item.significant,
                     'n(A)': len(sample_left),
                     'n(B)': len(sample_right),
                     'Mean Δ (A-B)': mean_delta,
-                    'normality check used': item.get('normality_check_used'),
-                    'variance test used': item.get('variance_test_used'),
-                    'omnibus test used': item.get('omnibus_test_used'),
-                    'omnibus test name': item.get('omnibus_test_name', item.get('omnibus_test_used')),
-                    'assumption outcomes': item.get('assumption_outcomes'),
-                    'selection detail': item.get('selection_detail'),
-                    'post-hoc strategy': item.get('post_hoc_strategy'),
-                    'correction method': item.get('correction_method'),
-                    'correction policy': item.get('correction_policy', correction_policy),
+                    'normality check used': 'Shapiro-Wilk',
+                    'variance test used': variance_test,
+                    'omnibus test used': selected_test,
+                    'omnibus test name': selected_test,
+                    'assumption outcomes': assumption_outcomes,
+                    'selection detail': result.assumptions.selection_detail,
+                    'post-hoc strategy': post_hoc_strategy,
+                    'correction method': correction_method,
+                    'correction policy': correction_policy,
                 }
             )
 

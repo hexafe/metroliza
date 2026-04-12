@@ -918,8 +918,8 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(insights[2], 'Shape signal: Clear shape mismatch across groups.')
 
     @patch('modules.group_analysis_service.compute_distribution_difference')
-    @patch('modules.group_analysis_service.compute_pairwise_rows')
-    def test_shape_only_metrics_surface_caution_status_takeaway_and_action(self, mock_compute_pairwise_rows, mock_distribution_difference):
+    @patch('modules.group_analysis_service.analyze_group_metric')
+    def test_shape_only_metrics_surface_caution_status_takeaway_and_action(self, mock_analyze_group_metric, mock_distribution_difference):
         grouped_df = pd.DataFrame(
             {
                 'REFERENCE': ['R1'] * 8,
@@ -931,7 +931,19 @@ class TestGroupAnalysisService(unittest.TestCase):
                 'USL': [11.0] * 8,
             }
         )
-        mock_compute_pairwise_rows.return_value = []
+        from modules.hexafe_groupstats_adapter import analyze_group_metric as real_analyze_group_metric
+
+        mock_analyze_group_metric.return_value = {
+            **real_analyze_group_metric(
+                'M1',
+                {
+                    'A': [10.0, 10.1, 10.2, 10.0],
+                    'B': [9.9, 10.0, 10.1, 9.9],
+                },
+                spec_records=[{'lsl': 9.0, 'nominal': 10.0, 'usl': 11.0}] * 8,
+            ),
+            'pairwise_rows': [],
+        }
         mock_distribution_difference.return_value = {
             'profile_rows': [],
             'pairwise_rows': [],
