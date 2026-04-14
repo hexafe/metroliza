@@ -102,13 +102,13 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 
 ## Group Analysis
 
-Excel exports now present grouped statistical results in a single canonical **Group Analysis** worksheet.
+Excel exports now present grouped statistical results in a canonical **Group Analysis** worksheet. In **Standard** mode, the workbook also adds a separate **Group Analysis Plots** sheet.
 
 For a plain-English guide to the exported Group Analysis worksheet, see [`docs/user_manual/group_analysis/user_manual.md`](docs/user_manual/group_analysis/user_manual.md). Printable companion: [`docs/user_manual/group_analysis/user_manual.pdf`](docs/user_manual/group_analysis/user_manual.pdf).
 
 ### What is on the sheet
 
-The worksheet is designed to be read top-to-bottom on one sheet instead of making users jump between separate comparison and chart tabs:
+The worksheet is designed to be read top-to-bottom on one main sheet so users can review conclusions first and only open extra visual detail when needed:
 
 - **Title and context at the top** so users can confirm they are reading the grouped analysis output.
 - A **compact summary** near the top that shows status, effective scope, metric count, and any short export warning.
@@ -116,17 +116,19 @@ The worksheet is designed to be read top-to-bottom on one sheet instead of makin
 - Repeated **per-metric blocks** so each metric keeps its descriptive statistics, significance results, effect-size context, and nearby notes together.
 - **Pairwise comparison tables** inside each metric block so users can compare one group against another without leaving the sheet.
 - Short **interpretation and action notes** in plain language to explain what changed, what is statistically meaningful, and what to review next.
-- **Plots on the same sheet** when the selected export level supports them, so the visual distribution view stays next to the numeric results it explains.
+- A separate **Group Analysis Plots** sheet in **Standard** mode so the main results sheet stays cleaner while the visual detail remains one click away.
 - A **light visual style**: no user-facing freeze panes, hidden gridlines, selective borders, and explicit widths/heights tuned for readability.
 
 ### Light vs Standard
 
-Both export levels use the same single-sheet Group Analysis layout, but they differ in how much supporting detail is shown:
+Both export levels use the same core Group Analysis reading order, but they differ in how much supporting detail is shown:
 
 - **Light** is the faster, more compact read. Start here when you want the worksheet title, the summary, the key per-metric comparison blocks, and concise interpretation notes without extra visual density.
-- **Standard** keeps the same reading order but adds more on-sheet support, especially the plot area and other detail that helps users inspect how the distributions differ.
+- **Standard** keeps the same reading order and adds a separate plots sheet plus extra detail that helps users inspect how the distributions differ.
 
 A simple rule for users: **read the top summary first, then move into the metric block for the measurement you care about, and only then use the pairwise table and plot for deeper inspection**.
+
+Metroliza chooses the comparison method automatically based on the data, so most users should focus on the final label, adjusted p-value, effect size, and caution notes before worrying about the test name.
 
 ### How to read pairwise results
 
@@ -201,11 +203,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.03rc3(260329)`): Exports are faster and easier to review, with an updated Group Analysis sheet and optional HTML dashboard output when selected.
+Current release highlight (`2026.04rc1(260414)`): Group Analysis exports are easier to review, with clearer guidance and a cleaner Standard-mode workbook layout.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.03rc3(260329)`)
+### Changelog highlights (release `2026.04rc1(260414)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

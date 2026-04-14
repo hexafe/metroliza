@@ -20,11 +20,9 @@ import numpy as np
 import pandas as pd
 
 from modules.characteristic_alias_service import resolve_characteristic_aliases_bulk
-from modules.comparison_stats import ComparisonStatsConfig, compute_metric_pairwise_stats
 from modules.export_grouping_utils import normalize_group_labels
 from modules.distribution_shape_analysis import compute_distribution_difference, resolve_distribution_fit_policy
 from modules.hexafe_groupstats_adapter import analyze_group_metric
-from modules.stats_utils import compute_capability_confidence_intervals, safe_process_capability
 
 _SKIP_REASON_MESSAGES = {
     'forced_single_reference_scope_mismatch': (
@@ -956,14 +954,19 @@ def build_metric_insights(metric_row):
 
 def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correction_method='holm'):
     """Build pairwise comparison rows for a single metric."""
-    config = ComparisonStatsConfig(alpha=alpha, correction_method=correction_method)
-    pairwise_rows = compute_metric_pairwise_stats(metric_identity, grouped_values, config=config)
+    package_analysis = analyze_group_metric(
+        metric_identity,
+        grouped_values,
+        spec_records=[],
+        alpha=alpha,
+        correction_method=correction_method,
+    )
     output = []
     group_count = len(grouped_values)
-    for row in pairwise_rows:
+    for row in package_analysis.get('pairwise_rows', []):
         output.append(
             {
-                'metric': metric_identity,
+                'metric': row.get('metric') or metric_identity,
                 'group_a': row.get('group_a'),
                 'group_b': row.get('group_b'),
                 'p_value': row.get('p_value'),
@@ -979,6 +982,7 @@ def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correc
 
 def compute_capability_payload(values, spec_payload):
     """Compute capability payload in a deterministic and nullable structure."""
+    from modules.stats_utils import compute_capability_confidence_intervals, safe_process_capability
 
     def _not_applicable_payload(*, status, sigma=None, mean_value=None, capability_mode=None):
         return {
@@ -1431,23 +1435,7 @@ def _build_metric_descriptive_stage(*, metric_partition):
     for row in descriptive_stats:
         row['flags'] = _build_group_flags(row, metric_flags)
 
-    grouped_values = metric_partition['grouped_values']
-    spec_payload = metric_partition['spec_payload']
-    policy = metric_partition['analysis_policy']
-    all_metric_values = np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
-    capability = (
-        compute_capability_payload(all_metric_values, spec_payload)
-        if policy['allow_capability']
-        else {
-            'cp': None,
-            'capability': None,
-            'capability_type': None,
-            'cpk': None,
-            'status': 'not_applicable',
-            'sigma': float(np.std(all_metric_values, ddof=1)) if all_metric_values.size > 1 else 0.0,
-            'mean': float(np.mean(all_metric_values)) if all_metric_values.size else None,
-        }
-    )
+    capability = dict(metric_partition['package_analysis']['capability'])
     return {
         'descriptive_stats': descriptive_stats,
         'capability': capability,

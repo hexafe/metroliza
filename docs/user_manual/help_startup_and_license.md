@@ -39,6 +39,6 @@ Use it when you need a quick version check or project reference.
 
 The **Release notes** dialog is also available from the main window menu.
 
-It shows the current release notes inside the app.
+It shows short, non-technical release notes inside the app, plus a brief archive of earlier versions.
 
 Use it when you want to review what changed in the current version without leaving the application.

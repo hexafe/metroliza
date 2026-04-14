@@ -100,6 +100,7 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
 
     assert "$modeLabel = if ($FastDev) { 'standalone (faster dev build)' } else { 'onefile (release-like build)' }" in script
     assert "'--include-package=modules'" in script
+    assert "'--include-package=hexafe_groupstats'" in script
     assert "'--include-module=modules.cmm_report_parser'" in script
     assert "'--include-module=_metroliza_cmm_native'" in script
     assert "'--include-module=_metroliza_chart_native'" in script

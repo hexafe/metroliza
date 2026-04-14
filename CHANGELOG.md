@@ -1,6 +1,13 @@
 # Changelog (for end users)
 
-## 2026.03rc3(260329) — current version
+## 2026.04rc1(260414) — current version
+- Group Analysis exports are easier to review during routine checks.
+- Standard exports now place grouped-analysis plots on a separate `Group Analysis Plots` sheet so the main results sheet stays cleaner.
+- Grouped comparison and capability summaries are shown more consistently across the workbook.
+- When a capability confidence interval cannot be shown from a small sample, the worksheet now says so clearly.
+- Group Analysis help text and in-app release notes were refreshed for faster non-technical reading.
+
+## 2026.03rc3(260329)
 - Faster export/report generation.
 - Export setup usability improved, with fewer layout/clipping issues at common window sizes.
 - Saved export presets load more reliably for repeat export workflows.
