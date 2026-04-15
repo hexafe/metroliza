@@ -4,6 +4,8 @@
 
 The **Data grouping** dialog lets you assign exported parts into named groups.
 
+Open it from the Export dialog by clicking **Edit...** next to **Grouping**.
+
 Use grouping when you want to:
 
 - compare named groups in the export,
@@ -131,7 +133,7 @@ When you click **Use grouping**:
 - Export stores the current grouping data,
 - the Export dialog marks grouping as applied.
 
-Important behavior: if grouping is applied while Group Analysis level was **Off**, Export automatically switches it on so grouped analysis can be included.
+Important behavior: if grouping is applied while **Group analysis** was **Off**, Export automatically switches it to **Standard** so grouped analysis can be included.
 
 ### Do not use grouping
 

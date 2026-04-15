@@ -4,6 +4,8 @@
 
 The **Data filtering** dialog lets you narrow which rows the Export workflow will use.
 
+Open it from the Export dialog by clicking **Edit...** next to **Filters**.
+
 It filters across four dimensions:
 
 - **AX**,
@@ -99,7 +101,7 @@ If you want to revise filters, reopen the dialog, change the selections, and cli
 
 ### Example 1: Export only one reference
 
-1. Open **Filter** from Export.
+1. In Export, click **Edit...** next to **Filters**.
 2. In **REFERENCE**, choose the reference you want.
 3. Leave other lists on **SELECT ALL** if you do not want extra restrictions.
 4. Click **Apply filters**.

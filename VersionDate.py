@@ -1,19 +1,24 @@
-RELEASE_VERSION = "2026.04rc1"
-VERSION_DATE = "260414"
+RELEASE_VERSION = "2026.04rc2"
+VERSION_DATE = "260415"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Group Analysis exports are easier to review, with clearer guidance and a cleaner Standard-mode workbook layout."
+    "Export setup is more compact on smaller laptops, with shorter rows, a collapsed advanced section, and clearer in-dialog actions."
 )
 
 release_notes = f"""
     <br><b>Current version {VERSION_LABEL}:</b><br>
+    - Export setup is more compact on smaller laptops and keeps the main choices visible in one window<br>
+    - Database, Excel, filter, and grouping rows fit more cleanly, even when file paths are long<br>
+    - Advanced export settings are collapsed by default, so routine exports need less scrolling<br>
+    - Filters and grouping use clearer in-dialog actions, and dependent options only appear when they apply<br>
+
+    <br><b>Archive:</b><br>
+
+    <br><b>Version 2026.04rc1 (build 260414):</b><br>
     - Group Analysis exports are easier to review during routine checks<br>
     - Standard exports now keep plots on a separate Group Analysis Plots sheet so the main results sheet stays cleaner<br>
     - Grouped comparison and capability summaries are shown more consistently across the workbook<br>
     - When a capability confidence interval cannot be shown from a small sample, the worksheet now says so more clearly<br>
-    - Help pages and in-app release notes were refreshed for faster non-technical reading<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.03rc3 (build 260329):</b><br>
     - Faster export/report generation<br>

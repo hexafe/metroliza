@@ -11,7 +11,7 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 
 ## Active release line
 
-- Release line metadata (canonical): `RELEASE_VERSION=2026.04rc1`, `VERSION_DATE=260414`
+- Release line metadata (canonical): `RELEASE_VERSION=2026.04rc2`, `VERSION_DATE=260415`
 - Build/evidence branch, commit SHA, and artifact/build ID must be refreshed in the linked evidence docs whenever smoke evidence changes; do not rely on stale branch-local snapshot values in this file.
 
 | Track | Status | Notes | Primary doc |
