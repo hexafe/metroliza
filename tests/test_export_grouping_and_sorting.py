@@ -65,9 +65,8 @@ class TestExportSortingAndGrouping(unittest.TestCase):
     def test_prepare_grouping_dataframe_keeps_group_color_column(self):
         grouping_df = pd.DataFrame(
             {
+                'REPORT_ID': [1],
                 'REFERENCE': ['R1'],
-                'FILELOC': ['/a'],
-                'FILENAME': ['one.pdf'],
                 'DATE': ['2024-01-01'],
                 'SAMPLE_NUMBER': ['1'],
                 'GROUP': ['G1'],
@@ -84,9 +83,8 @@ class TestExportSortingAndGrouping(unittest.TestCase):
     def test_apply_group_assignments_uses_ungrouped_fallback_by_default(self):
         header_group = pd.DataFrame(
             {
+                'REPORT_ID': [1],
                 'REFERENCE': ['R1'],
-                'FILELOC': ['/a'],
-                'FILENAME': ['one.pdf'],
                 'DATE': ['2024-01-01'],
                 'SAMPLE_NUMBER': ['1'],
                 'MEAS': [1.0],
@@ -94,11 +92,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         )
         grouping_df = pd.DataFrame(
             {
-                'REFERENCE': ['R1'],
-                'FILELOC': ['/a'],
-                'FILENAME': ['one.pdf'],
-                'DATE': ['2024-01-01'],
-                'SAMPLE_NUMBER': ['1'],
+                'REPORT_ID': [1],
                 'GROUP': [None],
             }
         )
@@ -114,9 +108,8 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
         header_group = pd.DataFrame(
             {
+                'REPORT_ID': [1],
                 'REFERENCE': ['R1'],
-                'FILELOC': ['/a'],
-                'FILENAME': ['one.pdf'],
                 'DATE': ['2024-01-01'],
                 'SAMPLE_NUMBER': ['1'],
                 'MEAS': [1.0],
@@ -124,11 +117,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         )
         grouping_df = pd.DataFrame(
             {
-                'REFERENCE': ['R1'],
-                'FILELOC': ['/a'],
-                'FILENAME': ['one.pdf'],
-                'DATE': ['2024-01-01'],
-                'SAMPLE_NUMBER': ['1'],
+                'REPORT_ID': [1],
                 'GROUP': ['   '],
             }
         )
@@ -147,9 +136,8 @@ class TestExportSortingAndGrouping(unittest.TestCase):
     def test_apply_group_assignments_returns_contract_metadata(self):
         header_group = pd.DataFrame(
             {
+                'REPORT_ID': [1],
                 'REFERENCE': ['R1'],
-                'FILELOC': ['/a'],
-                'FILENAME': ['one.pdf'],
                 'DATE': ['2024-01-01'],
                 'SAMPLE_NUMBER': ['1'],
                 'MEAS': [1.0],
@@ -157,11 +145,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         )
         grouping_df = pd.DataFrame(
             {
-                'REFERENCE': ['R1'],
-                'FILELOC': ['/a'],
-                'FILENAME': ['one.pdf'],
-                'DATE': ['2024-01-01'],
-                'SAMPLE_NUMBER': ['1'],
+                'REPORT_ID': [1],
                 'GROUP': ['G1'],
                 'GROUP_COLOR': ['#FDE2E4'],
             }
@@ -216,15 +200,14 @@ class TestExportSortingAndGrouping(unittest.TestCase):
 
         self.assertEqual(sorted_group['SAMPLE_NUMBER'].tolist(), ['3', '1', '2'])
 
-    def test_prepare_grouping_df_adds_group_key_for_composite_identity(self):
+    def test_prepare_grouping_df_adds_group_key_for_report_id_identity(self):
         thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
         thread.df_for_grouping = pd.DataFrame(
             {
-                'REFERENCE': ['R1', 'R1'],
-                'FILELOC': ['/a', '/b'],
-                'FILENAME': ['x.pdf', 'y.pdf'],
-                'DATE': ['2024-01-01', '2024-01-01'],
-                'SAMPLE_NUMBER': ['001', '001'],
+                'REPORT_ID': [10, 10],
+                'REFERENCE': ['R1', 'R2'],
+                'DATE': ['2024-01-01', '2024-01-02'],
+                'SAMPLE_NUMBER': ['001', '999'],
                 'GROUP': ['A', 'B'],
             }
         )
@@ -233,7 +216,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
 
         self.assertIn('GROUP_KEY', grouping_df.columns)
         self.assertEqual(len(grouping_df), 2)
-        self.assertNotEqual(grouping_df['GROUP_KEY'].iloc[0], grouping_df['GROUP_KEY'].iloc[1])
+        self.assertEqual(grouping_df['GROUP_KEY'].iloc[0], grouping_df['GROUP_KEY'].iloc[1])
 
     def test_resolve_group_merge_keys_prefers_group_key_then_report_id(self):
         header_with_group_key = pd.DataFrame({'GROUP_KEY': ['abc'], 'REFERENCE': ['R1']})
@@ -253,28 +236,21 @@ class TestExportSortingAndGrouping(unittest.TestCase):
 
         self.assertEqual(keys, ['REPORT_ID'])
 
-    def test_resolve_group_merge_keys_skips_blank_report_id_and_uses_composite(self):
+    def test_resolve_group_merge_keys_skips_blank_report_id_and_returns_none(self):
         header_group = pd.DataFrame({
             'REPORT_ID': [np.nan],
             'REFERENCE': ['R1'],
-            'FILELOC': ['/a'],
-            'FILENAME': ['one.pdf'],
             'DATE': ['2024-01-01'],
             'SAMPLE_NUMBER': ['1'],
         })
         grouping_df = pd.DataFrame({
             'REPORT_ID': [None],
-            'REFERENCE': ['R1'],
-            'FILELOC': ['/a'],
-            'FILENAME': ['one.pdf'],
-            'DATE': ['2024-01-01'],
-            'SAMPLE_NUMBER': ['1'],
             'GROUP': ['A'],
         })
 
         keys = ExportDataThread._resolve_group_merge_keys(header_group, grouping_df)
 
-        self.assertEqual(keys, ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER'])
+        self.assertIsNone(keys)
 
     def test_build_violin_payload_drops_nan_and_empty_groups(self):
         header_group = pd.DataFrame(
@@ -367,9 +343,8 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         )
         thread.df_for_grouping = pd.DataFrame(
             {
+                'REPORT_ID': [1],
                 'REFERENCE': ['R1'],
-                'FILELOC': ['/a'],
-                'FILENAME': ['x.pdf'],
                 'DATE': ['2024-01-01'],
                 'SAMPLE_NUMBER': ['1'],
                 'GROUP': ['A'],
@@ -387,9 +362,8 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         thread = ExportDataThread(export_request=ExportRequest(paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions()))
         header_group = pd.DataFrame(
             {
+                'REPORT_ID': [1],
                 'REFERENCE': ['R1'],
-                'FILELOC': ['/a'],
-                'FILENAME': ['one.pdf'],
                 'DATE': ['2024-01-01'],
                 'SAMPLE_NUMBER': ['1'],
                 'MEAS': [1.0],
@@ -397,11 +371,7 @@ class TestExportSortingAndGrouping(unittest.TestCase):
         )
         grouping_df = pd.DataFrame(
             {
-                'REFERENCE': ['R1', 'R1'],
-                'FILELOC': ['/a', '/a'],
-                'FILENAME': ['one.pdf', 'one.pdf'],
-                'DATE': ['2024-01-01', '2024-01-01'],
-                'SAMPLE_NUMBER': ['1', '1'],
+                'REPORT_ID': [1, 1],
                 'GROUP': ['OLD_GROUP', 'NEW_GROUP'],
             }
         )

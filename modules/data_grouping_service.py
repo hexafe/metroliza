@@ -3,6 +3,10 @@
 import hashlib
 import json
 
+import pandas as pd
+
+from modules.report_query_service import build_grouping_query as _build_grouping_query
+
 
 def _normalize_filter_query(filter_query):
     """Return a subquery-safe filter query string or an empty string."""
@@ -15,17 +19,7 @@ def _normalize_filter_query(filter_query):
 
 def build_grouping_query(filter_query):
     """Build the grouping dataset query, optionally wrapping a caller filter query."""
-    default_query = "SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS"
-    normalized_filter_query = _normalize_filter_query(filter_query)
-    if not normalized_filter_query:
-        return default_query
-
-    return f"""
-            SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER
-            FROM (
-                {normalized_filter_query}
-            ) AS FILTERED_DATA
-        """
+    return _build_grouping_query(_normalize_filter_query(filter_query))
 
 
 def load_grouping_dataframe(read_sql_dataframe, db_file, filter_query):
@@ -35,9 +29,12 @@ def load_grouping_dataframe(read_sql_dataframe, db_file, filter_query):
 
 
 def compute_group_key_for_df(df):
-    """Return a stable SHA1 key per row based on grouping identity columns."""
-    key_columns = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
-    normalized_values = df[key_columns].fillna('').astype(str)
+    """Return a stable SHA1 key per row based on the canonical report identity."""
+    if 'REPORT_ID' not in df.columns and 'report_id' not in df.columns:
+        raise ValueError("REPORT_ID is required to compute a grouping key.")
+
+    report_id_column = 'REPORT_ID' if 'REPORT_ID' in df.columns else 'report_id'
+    normalized_values = df[[report_id_column]].fillna('').astype(str)
     raw_key = normalized_values.apply(
         lambda row: json.dumps(list(row), ensure_ascii=False, separators=(',', ':')),
         axis=1,

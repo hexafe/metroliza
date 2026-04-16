@@ -13,7 +13,8 @@ from modules.data_grouping_service import (
 def test_build_grouping_query_defaults_without_filter():
     query = build_grouping_query(None)
 
-    assert 'FROM REPORTS' in query
+    assert 'FROM vw_grouping_reports' in query
+    assert 'report_id AS REPORT_ID' in query
 
 
 def test_load_grouping_dataframe_delegates_to_reader():
@@ -22,33 +23,36 @@ def test_load_grouping_dataframe_delegates_to_reader():
     def _reader(db_file, query):
         calls['db_file'] = db_file
         calls['query'] = query
-        return pd.DataFrame({'REFERENCE': []})
+        return pd.DataFrame({'REPORT_ID': []})
 
     frame = load_grouping_dataframe(_reader, 'db.sqlite', 'SELECT * FROM REPORTS WHERE 1=1')
 
     assert isinstance(frame, pd.DataFrame)
     assert calls['db_file'] == 'db.sqlite'
-    assert 'FILTERED_DATA' in calls['query']
+    assert 'filtered_data' in calls['query']
 
 
 def test_build_grouping_query_strips_trailing_semicolons_from_filter_query():
     connection = sqlite3.connect(':memory:')
     connection.execute(
-        'CREATE TABLE REPORTS (REFERENCE text, FILELOC text, FILENAME text, DATE text, SAMPLE_NUMBER text)'
+        'CREATE TABLE vw_grouping_reports (report_id integer, reference text, report_date text, sample_number text, part_name text, revision text, template_variant text, has_nok integer, nok_count integer, file_name text)'
     )
 
-    query = build_grouping_query('SELECT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS;  ')
+    query = build_grouping_query(
+        'SELECT report_id, reference, report_date, sample_number, part_name, revision, template_variant, has_nok, nok_count, file_name '
+        'FROM vw_grouping_reports;  '
+    )
     rows = connection.execute(query).fetchall()
 
     assert rows == []
-    assert 'FROM REPORTS;' not in query
+    assert 'FROM vw_grouping_reports;' not in query
 
 
 
 def test_compute_group_key_for_df_is_stable():
     df = pd.DataFrame([
-        {'REFERENCE': 'R1', 'FILELOC': 'a', 'FILENAME': 'f1', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
-        {'REFERENCE': 'R1', 'FILELOC': 'a', 'FILENAME': 'f1', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
+        {'REPORT_ID': 1, 'REFERENCE': 'R1', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
+        {'REPORT_ID': 1, 'REFERENCE': 'R2', 'DATE': '2024-01-02', 'SAMPLE_NUMBER': '99'},
     ])
 
     keys = compute_group_key_for_df(df)
@@ -58,8 +62,8 @@ def test_compute_group_key_for_df_is_stable():
 
 def test_compute_group_key_for_df_avoids_delimiter_collisions():
     df = pd.DataFrame([
-        {'REFERENCE': 'A|B', 'FILELOC': 'C', 'FILENAME': 'D', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
-        {'REFERENCE': 'A', 'FILELOC': 'B|C', 'FILENAME': 'D', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
+        {'REPORT_ID': 1, 'REFERENCE': 'A|B', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
+        {'REPORT_ID': 2, 'REFERENCE': 'A', 'DATE': '2024-01-01', 'SAMPLE_NUMBER': '1'},
     ])
 
     keys = compute_group_key_for_df(df)

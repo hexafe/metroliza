@@ -3,8 +3,27 @@ import hashlib
 import pandas as pd
 
 
-_GROUP_KEY_COMPONENTS = ['REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER']
-_GROUPING_OPTIONAL_COLUMNS = ['REPORT_ID', 'REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER', 'GROUP_COLOR']
+_GROUP_KEY_COMPONENTS = ['REPORT_ID']
+_GROUPING_OPTIONAL_COLUMNS = ['REPORT_ID', 'GROUP_COLOR']
+
+
+def _resolve_column_name(df, column_name):
+    if column_name in df.columns:
+        return column_name
+
+    lowered = {str(column).lower(): column for column in df.columns}
+    return lowered.get(column_name.lower())
+
+
+def _normalize_grouping_columns(df):
+    rename_map = {}
+    for canonical_name in ('REPORT_ID', 'GROUP', 'GROUP_COLOR'):
+        resolved_name = _resolve_column_name(df, canonical_name)
+        if resolved_name is not None and resolved_name != canonical_name:
+            rename_map[resolved_name] = canonical_name
+    if not rename_map:
+        return df
+    return df.rename(columns=rename_map)
 
 
 def normalize_group_labels(series, *, missing_label='UNGROUPED', normalize_blank=False):
@@ -25,12 +44,14 @@ def normalize_group_labels(series, *, missing_label='UNGROUPED', normalize_blank
 
 
 def add_group_key(df):
-    """Return a copy of ``df`` with a deterministic ``GROUP_KEY`` identity column when possible."""
-    if not all(column in df.columns for column in _GROUP_KEY_COMPONENTS):
+    """Return a copy of ``df`` with a deterministic ``GROUP_KEY`` report identity."""
+    normalized_df = _normalize_grouping_columns(df)
+    report_id_column = _resolve_column_name(normalized_df, 'REPORT_ID')
+    if report_id_column is None:
         return df
 
-    keyed_df = df.copy()
-    raw_key = keyed_df[_GROUP_KEY_COMPONENTS].fillna('').astype(str).agg('|'.join, axis=1)
+    keyed_df = normalized_df.copy()
+    raw_key = keyed_df[[report_id_column]].fillna('').astype(str).agg('|'.join, axis=1)
     keyed_df['GROUP_KEY'] = raw_key.apply(lambda value: hashlib.sha1(value.encode('utf-8')).hexdigest())
     return keyed_df
 
@@ -40,11 +61,12 @@ def prepare_grouping_dataframe(grouping_df):
     if not isinstance(grouping_df, pd.DataFrame) or grouping_df.empty:
         return None
 
-    if 'GROUP' not in grouping_df.columns:
+    normalized_df = _normalize_grouping_columns(grouping_df)
+    if 'GROUP' not in normalized_df.columns:
         return None
 
-    available_cols = [column for column in _GROUPING_OPTIONAL_COLUMNS if column in grouping_df.columns]
-    prepared = grouping_df[available_cols + ['GROUP']].copy()
+    available_cols = [column for column in _GROUPING_OPTIONAL_COLUMNS if column in normalized_df.columns]
+    prepared = normalized_df[available_cols + ['GROUP']].copy()
     return add_group_key(prepared)
 
 
@@ -53,7 +75,13 @@ def keys_have_usable_values(df, keys):
     if df.empty:
         return False
 
-    required = [key for key in keys if key in df.columns]
+    required = []
+    for key in keys:
+        resolved = _resolve_column_name(df, key)
+        if resolved is None:
+            return False
+        required.append(resolved)
+
     if len(required) != len(keys):
         return False
 
@@ -71,13 +99,6 @@ def resolve_group_merge_keys(header_group, grouping_df):
 
     if keys_have_usable_values(header_group, ['REPORT_ID']) and keys_have_usable_values(grouping_df, ['REPORT_ID']):
         return ['REPORT_ID']
-
-    if keys_have_usable_values(header_group, _GROUP_KEY_COMPONENTS) and keys_have_usable_values(grouping_df, _GROUP_KEY_COMPONENTS):
-        return list(_GROUP_KEY_COMPONENTS)
-
-    fallback_key = ['REFERENCE', 'SAMPLE_NUMBER']
-    if keys_have_usable_values(header_group, fallback_key) and keys_have_usable_values(grouping_df, fallback_key):
-        return fallback_key
 
     return None
 

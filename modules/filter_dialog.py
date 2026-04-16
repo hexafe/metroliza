@@ -3,6 +3,10 @@ from modules.db import execute_with_retry
 from modules.list_selection_utils import ListSelectionUtils
 from modules import ui_theme_tokens
 from modules.help_menu import attach_help_menu_to_layout
+from modules.report_query_service import (
+    build_distinct_value_query as _build_distinct_value_query,
+    build_measurement_filter_query as _build_measurement_filter_query,
+)
 from PyQt6.QtCore import QDate, Qt
 import PyQt6.QtWidgets as QtWidgets
 from PyQt6.QtWidgets import(
@@ -15,6 +19,14 @@ from PyQt6.QtWidgets import(
     QListWidgetItem,
     QPushButton,
 )
+
+
+def build_measurement_filter_query(**kwargs):
+    return _build_measurement_filter_query(**kwargs)
+
+
+def build_distinct_value_query(column_name, *, source_view="vw_measurement_export", filter_query=None):
+    return _build_distinct_value_query(column_name, source_view=source_view, filter_query=filter_query)
 
 
 class FilterDialog(QDialog):
@@ -67,10 +79,32 @@ class FilterDialog(QDialog):
             self.header_list.setSelectionMode(self._multi_selection_mode())
             self.all_headers_list = QListWidget()
             self.all_headers_list.setSelectionMode(self._multi_selection_mode())
+
+            self.part_name_label = QLabel("PART NAME:")
+            self.part_name_list = QListWidget()
+            self.part_name_list.setSelectionMode(self._multi_selection_mode())
+
+            self.revision_label = QLabel("REVISION:")
+            self.revision_list = QListWidget()
+            self.revision_list.setSelectionMode(self._multi_selection_mode())
+
+            self.template_variant_label = QLabel("TEMPLATE VARIANT:")
+            self.template_variant_list = QListWidget()
+            self.template_variant_list.setSelectionMode(self._multi_selection_mode())
+
+            self.sample_number_label = QLabel("SAMPLE NUMBER:")
+            self.sample_number_list = QListWidget()
+            self.sample_number_list.setSelectionMode(self._multi_selection_mode())
             
             self.selected_headers_label = QLabel("SELECTED HEADERS:")
             self.selected_headers_list = QListWidget()
             self.selected_headers_list.setSelectionMode(self._multi_selection_mode())
+
+            self.has_nok_button = QPushButton("HAS NOK ONLY")
+            if hasattr(self.has_nok_button, "setCheckable"):
+                self.has_nok_button.setCheckable(True)
+            if hasattr(self.has_nok_button, "setChecked"):
+                self.has_nok_button.setChecked(False)
 
             self.date_from_label = QLabel("MEASUREMENT DATE FROM:")
             self.date_from_calendar = QDateEdit(calendarPopup=True)
@@ -89,6 +123,10 @@ class FilterDialog(QDialog):
             self.reference_list.addItem("SELECT ALL")
             self.header_list.addItem("SELECT ALL")
             self.all_headers_list.addItem("SELECT ALL")
+            self.part_name_list.addItem("SELECT ALL")
+            self.revision_list.addItem("SELECT ALL")
+            self.template_variant_list.addItem("SELECT ALL")
+            self.sample_number_list.addItem("SELECT ALL")
 
             # Create separate QLineEdit widgets for searching in each list widget
             self.ax_search_input = QLineEdit()
@@ -97,6 +135,14 @@ class FilterDialog(QDialog):
             self.reference_search_input.setPlaceholderText("Search REFERENCE...")
             self.header_search_input = QLineEdit()
             self.header_search_input.setPlaceholderText("Search HEADER...")
+            self.part_name_search_input = QLineEdit()
+            self.part_name_search_input.setPlaceholderText("Search PART NAME...")
+            self.revision_search_input = QLineEdit()
+            self.revision_search_input.setPlaceholderText("Search REVISION...")
+            self.template_variant_search_input = QLineEdit()
+            self.template_variant_search_input.setPlaceholderText("Search TEMPLATE VARIANT...")
+            self.sample_number_search_input = QLineEdit()
+            self.sample_number_search_input.setPlaceholderText("Search SAMPLE NUMBER...")
 
             # Create a button to apply the filters
             self.apply_button = QPushButton("Apply filters")
@@ -125,8 +171,25 @@ class FilterDialog(QDialog):
             self.layout.addWidget(self.header_search_input, 1, 2)
             self.layout.addWidget(self.header_list, 2, 2)
 
-            self.layout.addWidget(self.selected_headers_label, 0, 3)
-            self.layout.addWidget(self.selected_headers_list, 2, 3)
+            self.layout.addWidget(self.part_name_label, 0, 3)
+            self.layout.addWidget(self.part_name_search_input, 1, 3)
+            self.layout.addWidget(self.part_name_list, 2, 3)
+
+            self.layout.addWidget(self.revision_label, 0, 4)
+            self.layout.addWidget(self.revision_search_input, 1, 4)
+            self.layout.addWidget(self.revision_list, 2, 4)
+
+            self.layout.addWidget(self.template_variant_label, 0, 5)
+            self.layout.addWidget(self.template_variant_search_input, 1, 5)
+            self.layout.addWidget(self.template_variant_list, 2, 5)
+
+            self.layout.addWidget(self.sample_number_label, 0, 6)
+            self.layout.addWidget(self.sample_number_search_input, 1, 6)
+            self.layout.addWidget(self.sample_number_list, 2, 6)
+
+            self.layout.addWidget(self.selected_headers_label, 0, 7)
+            self.layout.addWidget(self.selected_headers_list, 2, 7)
+            self.layout.addWidget(self.has_nok_button, 1, 7)
 
             self.layout.addWidget(self.date_from_label, 3, 0)
             self.layout.addWidget(self.date_from_calendar, 3, 1)
@@ -134,17 +197,17 @@ class FilterDialog(QDialog):
             self.layout.addWidget(self.date_to_label, 4, 0)
             self.layout.addWidget(self.date_to_calendar, 4, 1)
 
+            self.layout.addWidget(self.select_beginning_button, 3, 2)
+            self.layout.addWidget(self.select_today_button, 4, 2)
+            self.layout.addWidget(self.apply_button, 6, 0, 1, 8)
+
             for row in range(self.layout.rowCount()):
                 for column in range(self.layout.columnCount()):
                     item = self.layout.itemAtPosition(row, column)
                     if item is not None:
                         widget = item.widget()
-                        if widget is not None:
-                            widget.setFixedWidth(150) if column == 0 else widget.setFixedWidth(150)
-
-            self.layout.addWidget(self.select_beginning_button, 3, 2)
-            self.layout.addWidget(self.select_today_button, 4, 2)
-            self.layout.addWidget(self.apply_button, 6, 0, 1, 3)
+                        if widget is not None and hasattr(widget, "setFixedWidth"):
+                            widget.setFixedWidth(150)
 
             self.show()
         except Exception as e:
@@ -155,6 +218,10 @@ class FilterDialog(QDialog):
             self.ax_search_input.textChanged.connect(lambda: self.search_list_widgets(self.ax_list, self.ax_search_input.text()))
             self.header_search_input.textChanged.connect(lambda: self.search_list_widgets(self.header_list, self.header_search_input.text()))
             self.reference_search_input.textChanged.connect(lambda: self.search_list_widgets(self.reference_list, self.reference_search_input.text()))
+            self.part_name_search_input.textChanged.connect(lambda: self.search_list_widgets(self.part_name_list, self.part_name_search_input.text()))
+            self.revision_search_input.textChanged.connect(lambda: self.search_list_widgets(self.revision_list, self.revision_search_input.text()))
+            self.template_variant_search_input.textChanged.connect(lambda: self.search_list_widgets(self.template_variant_list, self.template_variant_search_input.text()))
+            self.sample_number_search_input.textChanged.connect(lambda: self.search_list_widgets(self.sample_number_list, self.sample_number_search_input.text()))
             
             # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
             self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
@@ -162,6 +229,10 @@ class FilterDialog(QDialog):
             self._connect_shift_range_for_list(self.ax_list)
             self._connect_shift_range_for_list(self.reference_list)
             self._connect_shift_range_for_list(self.header_list)
+            self._connect_shift_range_for_list(self.part_name_list)
+            self._connect_shift_range_for_list(self.revision_list)
+            self._connect_shift_range_for_list(self.template_variant_list)
+            self._connect_shift_range_for_list(self.sample_number_list)
             self._connect_shift_range_for_list(self.selected_headers_list)
 
             self.select_today_button.clicked.connect(self.select_today_as_date_to)
@@ -177,6 +248,10 @@ class FilterDialog(QDialog):
             getattr(self, 'ax_list', None),
             getattr(self, 'reference_list', None),
             getattr(self, 'header_list', None),
+            getattr(self, 'part_name_list', None),
+            getattr(self, 'revision_list', None),
+            getattr(self, 'template_variant_list', None),
+            getattr(self, 'sample_number_list', None),
             getattr(self, 'selected_headers_list', None),
         ):
             if list_widget is None or not hasattr(list_widget, 'setStyleSheet'):
@@ -240,26 +315,27 @@ class FilterDialog(QDialog):
 
     def populate_list_widgets(self):
         try:
-            ax_values = execute_with_retry(self.db_file, "SELECT DISTINCT AX FROM MEASUREMENTS;")
-            for value in ax_values:
-                item = QListWidgetItem(value[0])
-                self.ax_list.addItem(item)
-
-            header_values = execute_with_retry(self.db_file, "SELECT DISTINCT HEADER FROM MEASUREMENTS;")
-            for value in header_values:
-                header_item = QListWidgetItem(value[0])
-                all_headers_item = QListWidgetItem(value[0])
-                self.header_list.addItem(header_item)
-                self.all_headers_list.addItem(all_headers_item)
-
-            reference_values = execute_with_retry(self.db_file, "SELECT DISTINCT REFERENCE FROM REPORTS;")
-            for value in reference_values:
-                item = QListWidgetItem(value[0])
-                self.reference_list.addItem(item)
+            self._populate_distinct_values(self.ax_list, "AX")
+            self._populate_distinct_values(self.header_list, "HEADER")
+            self._populate_distinct_values(self.all_headers_list, "HEADER")
+            self._populate_distinct_values(self.reference_list, "REFERENCE", source_view="vw_report_overview")
+            self._populate_distinct_values(self.part_name_list, "PART_NAME", source_view="vw_report_overview")
+            self._populate_distinct_values(self.revision_list, "REVISION", source_view="vw_report_overview")
+            self._populate_distinct_values(self.template_variant_list, "TEMPLATE_VARIANT", source_view="vw_report_overview")
+            self._populate_distinct_values(self.sample_number_list, "SAMPLE_NUMBER", source_view="vw_report_overview")
 
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _populate_distinct_values(self, list_widget, column_name, *, source_view="vw_measurement_export", filter_query=None):
+        query = build_distinct_value_query(column_name, source_view=source_view, filter_query=filter_query)
+        values = execute_with_retry(self.db_file, query)
+        list_widget.clear()
+        list_widget.addItem("SELECT ALL")
+        for value in values:
+            item = QListWidgetItem(value[0])
+            list_widget.addItem(item)
 
     def search_list_widgets(self, list_widget, search_text):
         try:
@@ -273,16 +349,8 @@ class FilterDialog(QDialog):
             self.header_list.clear()
 
             if selected_references and "SELECT ALL" not in selected_references:
-                reference_values = "','".join(selected_references)
-                query = f"""
-                    SELECT DISTINCT HEADER FROM MEASUREMENTS 
-                    JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID 
-                    WHERE REFERENCE IN (SELECT REFERENCE FROM REPORTS WHERE REFERENCE IN ('{reference_values}'));
-                    """
-                header_values = execute_with_retry(self.db_file, query)
-                for value in header_values:
-                    item = QListWidgetItem(value[0])
-                    self.header_list.addItem(item)
+                filter_query = build_measurement_filter_query(reference_values=selected_references)
+                self._populate_distinct_values(self.header_list, "HEADER", filter_query=filter_query)
             else:
                 for row in range(self.all_headers_list.count()):
                     item = self.all_headers_list.item(row)
@@ -329,37 +397,26 @@ class FilterDialog(QDialog):
             ax_selected_items = [item.text() for item in self.ax_list.selectedItems()]
             header_selected_items = [item.text() for item in self.header_list.selectedItems()]
             reference_selected_items = [item.text() for item in self.reference_list.selectedItems()]
+            part_name_selected_items = [item.text() for item in self.part_name_list.selectedItems()]
+            revision_selected_items = [item.text() for item in self.revision_list.selectedItems()]
+            template_variant_selected_items = [item.text() for item in self.template_variant_list.selectedItems()]
+            sample_number_selected_items = [item.text() for item in self.sample_number_list.selectedItems()]
+            has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)())
             date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
             date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
 
-            # Construct the filter query based on the selected values
-            query = """
-                SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
-                    MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
-                    MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE, 
-                    REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER 
-                FROM MEASUREMENTS
-                JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
-                WHERE 1=1
-                """
-
-            if ax_selected_items and "SELECT ALL" not in ax_selected_items:
-                ax_values = "','".join(ax_selected_items)
-                query += f" AND MEASUREMENTS.AX IN ('{ax_values}')"
-
-            if header_selected_items and "SELECT ALL" not in header_selected_items:
-                header_values = "','".join(header_selected_items)
-                query += f" AND MEASUREMENTS.HEADER IN ('{header_values}')"
-
-            if reference_selected_items and "SELECT ALL" not in reference_selected_items:
-                reference_values = "','".join(reference_selected_items)
-                query += f" AND REPORTS.REFERENCE IN ('{reference_values}')"
-
-            if date_from:
-                query += f" AND REPORTS.DATE >= '{date_from}'"
-
-            if date_to:
-                query += f" AND REPORTS.DATE <= '{date_to}'"
+            query = build_measurement_filter_query(
+                ax_values=[] if "SELECT ALL" in ax_selected_items else ax_selected_items,
+                header_values=[] if "SELECT ALL" in header_selected_items else header_selected_items,
+                reference_values=[] if "SELECT ALL" in reference_selected_items else reference_selected_items,
+                part_name_values=[] if "SELECT ALL" in part_name_selected_items else part_name_selected_items,
+                revision_values=[] if "SELECT ALL" in revision_selected_items else revision_selected_items,
+                template_variant_values=[] if "SELECT ALL" in template_variant_selected_items else template_variant_selected_items,
+                sample_number_values=[] if "SELECT ALL" in sample_number_selected_items else sample_number_selected_items,
+                has_nok_only=has_nok_only,
+                date_from=date_from,
+                date_to=date_to,
+            )
 
             self.filter_query = query
             self.parent().set_filter_query(self.filter_query)

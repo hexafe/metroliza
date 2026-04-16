@@ -138,21 +138,25 @@ def _install_qt_stubs():
     qtwidgets.QMessageBox = _FakeWidget
     qtwidgets.QAbstractItemView = types.SimpleNamespace(SelectionMode=types.SimpleNamespace(MultiSelection=2))
 
+    qtgui = types.ModuleType("PyQt6.QtGui")
+
     pyqt6 = types.ModuleType("PyQt6")
     pyqt6.QtWidgets = qtwidgets
+    pyqt6.QtGui = qtgui
 
-    return pyqt6, qtcore, qtwidgets
+    return pyqt6, qtcore, qtwidgets, qtgui
 
 
 class TestFilterDialogDeleteKey(unittest.TestCase):
     def test_delete_key_unselects_headers_and_refreshes_selected_headers_list(self):
-        pyqt6, qtcore, qtwidgets = _install_qt_stubs()
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
         with patch.dict(
             sys.modules,
             {
                 "PyQt6": pyqt6,
                 "PyQt6.QtCore": qtcore,
                 "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
             },
             clear=False,
         ):

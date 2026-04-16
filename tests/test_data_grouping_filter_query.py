@@ -75,14 +75,15 @@ from modules.data_grouping import DataGrouping  # noqa: E402
 class TestDataGroupingFilterQuery(unittest.TestCase):
     def test_build_grouping_query_uses_default_without_filter(self):
         query = DataGrouping._build_grouping_query(None)
-        self.assertIn('FROM REPORTS', query)
+        self.assertIn('FROM vw_grouping_reports', query)
+        self.assertIn('report_id AS REPORT_ID', query)
 
     def test_build_grouping_query_wraps_filter_query(self):
-        filter_query = 'SELECT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM X WHERE 1=1'
+        filter_query = 'SELECT report_id, reference, report_date, sample_number FROM vw_grouping_reports WHERE 1=1'
         query = DataGrouping._build_grouping_query(filter_query)
         self.assertIn('FROM (', query)
         self.assertIn(filter_query, query)
-        self.assertIn('SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER', query)
+        self.assertIn('SELECT DISTINCT report_id AS REPORT_ID, reference AS REFERENCE', query)
 
 
 class TestDataGroupingPartDisplayLabel(unittest.TestCase):
