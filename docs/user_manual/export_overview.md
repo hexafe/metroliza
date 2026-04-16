@@ -4,7 +4,7 @@
 
 Use **Export** to create the main Metroliza **Excel file** from a Metroliza **database file**.
 
-This is the main reporting step after [Parsing](parsing.md). It can also use optional filtering and optional grouping before the export runs.
+This is the main reporting step after [Parsing](parsing.md). It can also use optional filtering, optional grouping, and a preset before the export runs.
 
 If you are new to the app, think of Export like this:
 
@@ -12,7 +12,8 @@ If you are new to the app, think of Export like this:
 - choose the output **.xlsx file**,
 - optionally filter the data,
 - optionally group the data,
-- choose the report profile,
+- choose the export preset,
+- choose the output options,
 - run the export.
 
 ## Before you start
@@ -29,7 +30,7 @@ Optional preparation steps:
 - [Export filtering](export_filtering.md) if you only want part of the database in the export,
 - [Export grouping](export_grouping.md) if you want grouped analysis/reporting.
 
-## Source / target files
+## Files
 
 ### Select a database file
 
@@ -45,7 +46,9 @@ In practical terms, when you change the database:
 
 This helps prevent accidentally reusing filters or groups from a different database.
 
-### Select an excel file
+The dialog keeps the selected database in a compact read-only field so long file paths do not stretch the window.
+
+### Select an Excel file
 
 Choose where the output **.xlsx file** should be saved.
 
@@ -53,13 +56,15 @@ The **Export** button stays disabled until an output Excel file is selected.
 
 Even if you also use Google Sheets export, the local **.xlsx file** is still required and is always kept.
 
-## Data scope
+The selected output path is shown in the dialog in a compact field with the full path available on hover.
 
-This section controls which data is included before the workbook is built.
+## Data
+
+This section controls which data is included before the workbook is built. In the Export dialog, the status rows show whether each step is **Applied** or **Not applied**.
 
 ### Select filters (optional)
 
-Click **Filter** to open the dedicated filtering dialog.
+Click **Edit...** next to **Filters** to open the dedicated filtering dialog.
 
 Use this when you want to limit the export by:
 
@@ -72,21 +77,21 @@ See [Export filtering](export_filtering.md) for details.
 
 ### Group data (optional)
 
-Click **Group** to open the grouping dialog.
+Click **Edit...** next to **Grouping** to open the grouping dialog.
 
 Use this when you want to assign parts into named groups for grouped reporting and the **Group Analysis worksheet**.
 
 See [Export grouping](export_grouping.md) for details.
 
-Important behavior: if grouping is applied, the Export dialog automatically turns **Group analysis level** on if it was previously **Off**.
+Important behavior: if grouping is applied, the Export dialog automatically switches **Group analysis** to **Standard** if it was previously **Off**.
 
-## Report profile
+## Output
 
-This section controls the overall export style.
+This section controls the overall export style and optional sidecar outputs.
 
 ### Export preset
 
-The preset changes several other export option fields for you.
+The preset is shown first in the dialog and changes several other export option fields for you.
 
 Available presets are:
 
@@ -107,11 +112,9 @@ This is better when you want a more analysis-heavy workbook.
 
 Because presets update other fields in the dialog, do not be surprised if chart-related settings change when you switch presets.
 
-### Google Sheets export
+### Google Sheets version
 
-You can optionally check:
-
-**Also create Google Sheets version (Excel file is always kept locally)**
+You can optionally check **Google Sheets version**.
 
 This means:
 
@@ -122,9 +125,7 @@ This option is optional. The local Excel workbook remains the base output.
 
 ### HTML dashboard
 
-You can optionally check:
-
-**Also create HTML dashboard sidecar for extended summary charts**
+You can optionally check **HTML dashboard**.
 
 This adds a local `*_dashboard.html` file and a matching asset folder next to the exported workbook.
 
@@ -147,7 +148,7 @@ Use **Line** when you want charts that keep the sample number sequence visible.
 
 Use **Scatter** when you want points shown in a simpler sequential order.
 
-### Sort measurements by
+### Sort by
 
 You can sort by:
 
@@ -156,7 +157,7 @@ You can sort by:
 
 Choose the option that best matches how you want to read the workbook.
 
-## Group analysis options
+## Group analysis
 
 This section controls whether the exported workbook includes the **Group Analysis worksheet**.
 
@@ -188,7 +189,7 @@ Available scopes are:
 - **Single-reference**
 - **Multi-reference**
 
-This setting is enabled only when **Group analysis level** is not **Off**.
+This setting appears only when **Group analysis** is not **Off**.
 
 A simple way to think about scope:
 
@@ -196,7 +197,7 @@ A simple way to think about scope:
 - **Single-reference** is for exports that should be treated as one-reference analysis.
 - **Multi-reference** is for exports that should be treated as multi-reference analysis.
 
-There is a dependency between level and scope:
+There is a dependency between the level and scope:
 
 - if level is **Off**, scope is effectively inactive,
 - if level is **Light** or **Standard**, scope becomes available.
@@ -205,7 +206,7 @@ For help reading the finished worksheet, see [Group Analysis worksheet manual](g
 
 ## Advanced options
 
-These settings fine-tune chart behavior.
+These settings fine-tune chart behavior. They are collapsed by default in the Export dialog, so you only open them when you need them.
 
 ### Min samplesize to generate violin plot instead of scatter
 
@@ -235,11 +236,12 @@ This can help reduce clutter when you mainly want to focus on results that need 
 
 1. Select the **database file**.
 2. Select the output **Excel file**.
-3. Optionally open **Filter**.
-4. Optionally open **Group**.
-5. Choose the preset and other report options.
-6. Choose Group Analysis options if needed.
-7. Click **Export**.
+3. Optionally click **Edit...** next to **Filters**.
+4. Optionally click **Edit...** next to **Grouping**.
+5. Choose the preset and output options.
+6. Choose **Group analysis** settings if needed.
+7. Expand **Show advanced options** if needed.
+8. Click **Export**.
 
 While export runs, Metroliza shows a progress dialog with:
 

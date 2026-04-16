@@ -1,6 +1,19 @@
 # Changelog (for end users)
 
-## 2026.03rc3(260329) — current version
+## 2026.04rc2(260415) — current version
+- Export setup is more compact on smaller laptops and keeps the main choices visible in one window.
+- Database, Excel, filter, and grouping rows fit more cleanly, even when file paths are long.
+- Advanced export settings are collapsed by default, so routine exports need less scrolling.
+- Filters and grouping use clearer in-dialog actions, and dependent options only appear when they apply.
+
+## 2026.04rc1(260414)
+- Group Analysis exports are easier to review during routine checks.
+- Standard exports now place grouped-analysis plots on a separate `Group Analysis Plots` sheet so the main results sheet stays cleaner.
+- Grouped comparison and capability summaries are shown more consistently across the workbook.
+- When a capability confidence interval cannot be shown from a small sample, the worksheet now says so clearly.
+- Group Analysis help text and in-app release notes were refreshed for faster non-technical reading.
+
+## 2026.03rc3(260329)
 - Faster export/report generation.
 - Export setup usability improved, with fewer layout/clipping issues at common window sizes.
 - Saved export presets load more reliably for repeat export workflows.

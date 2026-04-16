@@ -17,7 +17,7 @@ You open the Group Analysis worksheet because you want to answer practical quest
 - Is the gap large enough to matter in practice?
 - Are any groups drifting toward a specification limit?
 
-The worksheet helps you answer those questions without making you jump between multiple tabs.
+The worksheet helps you answer those questions from one main results sheet, with a separate plots sheet in Standard mode when you want the extra visual detail.
 
 ## What the sheet is for
 
@@ -43,7 +43,7 @@ If you only have a minute, use this order:
 3. In the pairwise area, read the **adjusted p-value** first.
 4. Then read the **effect size** and **Delta mean**.
 5. Check the **spec status** and any caution note.
-6. If a plot is shown, use it as a visual confirmation.
+6. If a plot is available, use it as a visual confirmation.
 
 That quick sequence usually tells you:
 
@@ -138,7 +138,7 @@ Depending on the export level, a metric block may include:
 - distribution-shape or distance context,
 - specification-related context such as capability and spec status,
 - caution notes, and
-- an on-sheet plot in the Standard export.
+- a linked plot on the separate **Group Analysis Plots** sheet in the Standard export.
 
 The goal is to let you stay in one place while reading one metric from summary to conclusion.
 
@@ -297,7 +297,7 @@ The analysis level tells you how much detail the export includes.
 In plain terms:
 
 - a lighter level is meant for faster reading and lower visual density,
-- a fuller level includes more supporting detail such as on-sheet plots and extra interpretation context.
+- a fuller level includes more supporting detail such as a separate plots sheet and extra interpretation context.
 
 The reading order stays the same either way.
 

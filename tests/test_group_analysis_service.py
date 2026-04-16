@@ -315,6 +315,43 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(rows[0]['difference'], 'NO')
         self.assertEqual(rows[0]['comment'], 'DESCRIPTIVE ONLY')
 
+    @patch('modules.group_analysis_service.analyze_group_metric')
+    def test_build_pairwise_rows_uses_adapter_backed_pairwise_source(self, mock_analyze_group_metric):
+        grouped_values = {
+            'A': [10.0, 10.1, 10.2, 10.3, 10.4],
+            'B': [9.7, 9.8, 9.9, 10.0, 10.1],
+        }
+        mock_analyze_group_metric.return_value = {
+            'pairwise_rows': [
+                {
+                    'metric': 'M1',
+                    'group_a': 'A',
+                    'group_b': 'B',
+                    'p_value': 0.01,
+                    'adjusted_p_value': 0.01234,
+                    'effect_size': 0.81234,
+                    'test_used': 'Student t-test',
+                    'significant': True,
+                    'delta_mean': 0.3004,
+                }
+            ]
+        }
+
+        rows = build_pairwise_rows('M1', grouped_values, pairwise_eligible=True)
+
+        mock_analyze_group_metric.assert_called_once_with(
+            'M1',
+            grouped_values,
+            spec_records=[],
+            alpha=0.05,
+            correction_method='holm',
+        )
+        self.assertEqual(rows[0]['difference'], 'YES')
+        self.assertEqual(rows[0]['comment'], 'DIFFERENCE')
+        self.assertEqual(rows[0]['adjusted_p_value'], 0.0123)
+        self.assertEqual(rows[0]['effect_size'], 0.812)
+        self.assertEqual(rows[0]['delta_mean'], 0.3)
+        self.assertEqual(rows[0]['test_used'], 'Student t-test')
 
     def test_build_group_flags_use_spec_threshold_vocabulary(self):
         grouped_df = pd.DataFrame(
@@ -584,6 +621,102 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertIsNone(payload['cp'])
         self.assertIsNone(payload['capability'])
         self.assertIsNone(payload['cpk'])
+
+    def test_build_payload_uses_adapter_capability_payload_without_legacy_recompute(self):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 10,
+                'HEADER - AX': ['M1'] * 10,
+                'GROUP': ['A'] * 5 + ['B'] * 5,
+                'MEAS': [10.0, 10.1, 10.2, 10.3, 10.4, 9.7, 9.8, 9.9, 10.0, 10.1],
+                'LSL': [9.0] * 10,
+                'NOMINAL': [10.0] * 10,
+                'USL': [11.0] * 10,
+            }
+        )
+        expected_capability = {
+            'cp': 2.582,
+            'capability': 1.936,
+            'capability_type': 'Cpk',
+            'cpk': 1.936,
+            'capability_ci': {'cp': None, 'cpk': None},
+            'status': 'ok',
+            'sigma': 0.129,
+            'mean': 9.75,
+            'capability_mode': 'bilateral',
+        }
+        package_analysis = {
+            'spec_status': 'EXACT_MATCH',
+            'spec_payload': {'lsl': 9.0, 'nominal': 10.0, 'usl': 11.0},
+            'analysis_policy': {'include_metric': True, 'allow_pairwise': True, 'allow_capability': True},
+            'descriptive_stats': [
+                {
+                    'group': 'A',
+                    'n': 5,
+                    'mean': 10.2,
+                    'std': 0.158,
+                    'median': 10.2,
+                    'iqr': 0.2,
+                    'min': 10.0,
+                    'max': 10.4,
+                    'cp': 2.582,
+                    'capability': 2.066,
+                    'capability_type': 'Cpk',
+                    'capability_ci': {'cp': None, 'cpk': None},
+                },
+                {
+                    'group': 'B',
+                    'n': 5,
+                    'mean': 9.9,
+                    'std': 0.158,
+                    'median': 9.9,
+                    'iqr': 0.2,
+                    'min': 9.7,
+                    'max': 10.1,
+                    'cp': 2.582,
+                    'capability': 1.936,
+                    'capability_type': 'Cpk',
+                    'capability_ci': {'cp': None, 'cpk': None},
+                },
+            ],
+            'pairwise_rows': [
+                {
+                    'metric': 'M1',
+                    'group_a': 'A',
+                    'group_b': 'B',
+                    'p_value': 0.01,
+                    'adjusted_p_value': 0.01234,
+                    'effect_size': 0.81234,
+                    'test_used': 'Student t-test',
+                    'significant': True,
+                    'delta_mean': 0.3,
+                }
+            ],
+            'capability': expected_capability,
+            'backend_used': 'python',
+            'selection_detail': 'detail',
+            'posthoc_family': 'parametric',
+            'posthoc_method_name': 'Tukey HSD',
+            'pairwise_strategy': 'tukey_hsd',
+            'posthoc_strategy': 'tukey_hsd',
+            'capability_strategy': 'per_group_minimum',
+            'warnings': [],
+        }
+
+        with patch('modules.group_analysis_service.analyze_group_metric', return_value=package_analysis), patch(
+            'modules.group_analysis_service.compute_distribution_difference',
+            return_value={'profile_rows': [], 'pairwise_rows': [], 'omnibus_row': None},
+        ), patch(
+            'modules.group_analysis_service.compute_capability_payload',
+            side_effect=AssertionError('legacy capability helper should not run for active payload assembly'),
+        ):
+            payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['capability'], expected_capability)
+        self.assertEqual(metric['capability']['mean'], 9.75)
+        self.assertEqual(metric['pairwise_strategy'], 'tukey_hsd')
+        self.assertEqual(metric['posthoc_method_name'], 'Tukey HSD')
 
     def test_build_payload_includes_descriptive_pairwise_and_diagnostics(self):
         grouped_df = pd.DataFrame(

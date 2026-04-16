@@ -24,6 +24,7 @@ from modules.export_preset_utils import (
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import(
+    QApplication,
     QDialog,
     QFileDialog,
     QGridLayout,
@@ -36,6 +37,9 @@ from PyQt6.QtWidgets import(
     QCheckBox,
     QHBoxLayout,
     QWidget,
+    QScrollArea,
+    QSizePolicy,
+    QToolButton,
 )
 import html
 import inspect
@@ -257,55 +261,47 @@ class ExportDialog(QDialog):
     def init_widgets(self):
         try:
             """Initialize the widgets"""
-            self.select_db_label = QLabel("Select a database file:")
+            self.select_db_label = QLabel("Database file:")
             self.select_db_button = QPushButton("Browse")
             self.select_db_button.clicked.connect(self.select_db_file)
-            self.select_db_label.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
-            self.select_db_button.setToolTip("Use this button to select the database from which the results will be exported to an Excel file")
+            self.select_db_label.setToolTip("Select the database used as the source for this export.")
+            self.select_db_button.setToolTip(self.select_db_label.toolTip())
 
-            self.select_filter_label = QLabel("Select filters (optional): not applied")
-            self.filter_button = QPushButton("Filter")
+            self.select_filter_label = QLabel("Not applied")
+            self.select_filter_label.setToolTip("Optional export filters for AX, reference, header, or date range.")
+            self.filter_button = QPushButton("Edit...")
             self.filter_button.clicked.connect(self.open_filter_window)
-            self.filter_button.setToolTip("Use this button to filter data from the database")
+            self.filter_button.setToolTip("Edit the optional export filters.")
             
-            self.select_group_label = QLabel("Group data (optional): not applied")
-            self.group_button = QPushButton("Group")
+            self.select_group_label = QLabel("Not applied")
+            self.select_group_label.setToolTip("Optional group assignments for grouped export workflows.")
+            self.group_button = QPushButton("Edit...")
             self.group_button.clicked.connect(self.open_grouping_window)
-            self.group_button.setToolTip("Use this button to group data")
+            self.group_button.setToolTip("Edit the optional grouping assignments.")
 
-            self.select_excel_label = QLabel("Select an excel file:")
+            self.select_excel_label = QLabel("Excel file:")
             self.select_excel_button = QPushButton("Browse")
             self.select_excel_button.clicked.connect(self.select_excel_file)
-            self.select_excel_label.setToolTip("Use this button to select the Excel file to which the data will be saved")
-            self.select_excel_button.setToolTip("Use this button to select the Excel file to which the data will be saved")
+            self.select_excel_label.setToolTip("Choose where the exported workbook will be written.")
+            self.select_excel_button.setToolTip(self.select_excel_label.toolTip())
 
             self.export_button = QPushButton("Export")
             self.export_button.setDisabled(True)
             self.export_button.clicked.connect(self.show_loading_screen)
             self.export_button.setToolTip("Start exporting")
+            self.export_button.setDefault(True)
 
-            self.spacer = QLabel(" ")
+            self.close_button = QPushButton("Close")
+            self.close_button.clicked.connect(self.close)
+            self.close_button.setToolTip("Close the export window without starting an export.")
 
-            if self.db_file:
-                self.database_text_label = QLabel(self.db_file)
-                self.select_excel_button.setEnabled(True)
-                self.group_button.setEnabled(True)
-                self.filter_button.setEnabled(True)
-            else:
-                self.database_text_label = QLabel("None selected")
-                self.filter_button.setDisabled(True)
-                self.group_button.setDisabled(True)
-                self.select_excel_button.setDisabled(True)
+            self.database_text_label = self._build_path_field(self.db_file)
+            self.excel_file_text_label = self._build_path_field(self.excel_file)
+            self._set_path_field_value(self.database_text_label, self.db_file)
+            self._set_path_field_value(self.excel_file_text_label, self.excel_file)
 
-            if self.excel_file:
-                self.excel_file_text_label = QLabel(self.excel_file)
-                self.export_button.setEnabled(True)
-            else:
-                self.excel_file_text_label = QLabel("None selected")
-                self.export_button.setEnabled(False)
-                
             # Export preset selector
-            self.preset_label = QLabel("Export preset:")
+            self.preset_label = QLabel("Preset:")
             self.preset_combobox = QComboBox()
             for preset_id in get_export_preset_ids():
                 self.preset_combobox.addItem(get_export_preset_label(preset_id))
@@ -318,45 +314,26 @@ class ExportDialog(QDialog):
             )
             self.preset_combobox.setToolTip(self.preset_label.toolTip())
 
-            self.export_target_label = QLabel("Google Sheets export:")
-            self.include_google_sheets_checkbox = QCheckBox(
-                "Also create Google Sheets version (Excel file is always kept locally)"
-            )
+            self.export_target_label = QLabel("Optional outputs:")
+            self.include_google_sheets_checkbox = QCheckBox("Google Sheets version")
             self.include_google_sheets_checkbox.setChecked(False)
-            self.google_sheets_note_label = QLabel(
-                "Note: A local .xlsx is always created. Google Sheets conversion is optional and may look slightly different from Excel."
+            google_tooltip = (
+                "Keep the local .xlsx workbook and also try to upload and convert it "
+                "to Google Sheets."
             )
-            self.google_sheets_note_label.setStyleSheet("color: #666;")
-            self.google_sheets_note_label.setWordWrap(True)
-            self.export_target_label.setToolTip(
-                "Excel (.xlsx) is always generated.\n"
-                "Enable this option to also upload and convert the workbook to Google Sheets."
-            )
-            self.include_google_sheets_checkbox.setToolTip(
-                "Excel (.xlsx) is always generated.\n"
-                "Enable this option to also upload and convert the workbook to Google Sheets."
-            )
-            self.google_sheets_note_label.setToolTip(
-                "Excel (.xlsx) is always generated locally.\n"
-                "Google Sheets conversion can have minor fidelity differences."
-            )
+            self.export_target_label.setToolTip(google_tooltip)
+            self.include_google_sheets_checkbox.setToolTip(google_tooltip)
+            self.google_sheets_info_button = self._build_info_button(google_tooltip)
 
-            self.html_dashboard_label = QLabel("HTML dashboard:")
-            self.generate_html_dashboard_checkbox = QCheckBox(
-                "Also create HTML dashboard sidecar for extended summary charts"
-            )
+            self.html_dashboard_label = QLabel("")
+            self.generate_html_dashboard_checkbox = QCheckBox("HTML dashboard")
             self.generate_html_dashboard_checkbox.setChecked(False)
-            self.html_dashboard_note_label = QLabel(
-                "Creates a local `*_dashboard.html` file plus an asset folder for browser-based review of the exported charts."
+            html_dashboard_tooltip = (
+                "Create a local HTML sidecar for browser-based chart review next to the workbook."
             )
-            self.html_dashboard_note_label.setStyleSheet("color: #666;")
-            self.html_dashboard_note_label.setWordWrap(True)
-            self.html_dashboard_label.setToolTip(
-                "Generate an additional HTML dashboard sidecar that reuses the export chart payloads.\n"
-                "Useful for browser-based review alongside the workbook, with larger interactive chart views in the saved page."
-            )
-            self.generate_html_dashboard_checkbox.setToolTip(self.html_dashboard_label.toolTip())
-            self.html_dashboard_note_label.setToolTip(self.html_dashboard_label.toolTip())
+            self.html_dashboard_label.setToolTip(html_dashboard_tooltip)
+            self.generate_html_dashboard_checkbox.setToolTip(html_dashboard_tooltip)
+            self.html_dashboard_info_button = self._build_info_button(html_dashboard_tooltip)
 
             # Add dropdown list for chart type
             self.export_type_label = QLabel("Chart type:")
@@ -376,7 +353,7 @@ class ExportDialog(QDialog):
             )
             
             # Add dropdown list for chart type
-            self.sort_measurements_label = QLabel("Sort measurements by:")
+            self.sort_measurements_label = QLabel("Sort by:")
             self.sort_measurements_combobox = QComboBox()
             self.sort_measurements_combobox.addItem("Date")
             self.sort_measurements_combobox.addItem("Sample #")
@@ -384,20 +361,7 @@ class ExportDialog(QDialog):
             self.sort_measurements_label.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
             self.sort_measurements_combobox.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
 
-            # The report profile section is tight enough on some styles that the wrapped notes and
-            # the final combobox clip by a few pixels. Give those controls a small vertical buffer
-            # and enforce conservative floors so style-dependent size hints do not regress layout.
-            self.google_sheets_note_label.setMinimumHeight(
-                max(self.google_sheets_note_label.sizeHint().height() + 4, 30)
-            )
-            self.html_dashboard_note_label.setMinimumHeight(
-                max(self.html_dashboard_note_label.sizeHint().height() + 4, 24)
-            )
-            self.sort_measurements_combobox.setMinimumHeight(
-                max(self.sort_measurements_combobox.sizeHint().height() + 4, 22)
-            )
-
-            self.group_analysis_level_label = QLabel("Group analysis level:")
+            self.group_analysis_level_label = QLabel("Group analysis:")
             self.group_analysis_level_combobox = QComboBox()
             self.group_analysis_level_combobox.addItem("Off")
             self.group_analysis_level_combobox.addItem("Light")
@@ -411,7 +375,7 @@ class ExportDialog(QDialog):
             self.group_analysis_level_combobox.setToolTip(self.group_analysis_level_label.toolTip())
             self.group_analysis_level_combobox.currentTextChanged.connect(lambda _: self._update_group_analysis_scope_enabled_state())
 
-            self.group_analysis_scope_label = QLabel("Group analysis scope:")
+            self.group_analysis_scope_label = QLabel("Scope:")
             self.group_analysis_scope_combobox = QComboBox()
             self.group_analysis_scope_combobox.addItem("Auto")
             self.group_analysis_scope_combobox.addItem("Single-reference")
@@ -422,10 +386,9 @@ class ExportDialog(QDialog):
                 "Single-reference and Multi-reference enforce the corresponding scope check for that worksheet."
             )
             self.group_analysis_scope_combobox.setToolTip(self.group_analysis_scope_label.toolTip())
-            self._update_group_analysis_scope_enabled_state()
             
             # Add textbox to set min samplesize for violin plot
-            self.violin_plot_min_samplesize_label = QLabel("Min samplesize to generate violin plot instead of scatter: ")
+            self.violin_plot_min_samplesize_label = QLabel("Violin min n:")
             self.violin_plot_min_samplesize = QLineEdit()
             self.violin_plot_min_samplesize.setPlaceholderText('Min: 2, Default: 6')
             self.violin_plot_min_samplesize_label.setToolTip(
@@ -434,9 +397,10 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setToolTip(
                 "Minimum sample count before violin plots are used in Extended plots."
             )
+            self.violin_plot_min_samplesize.setMaximumWidth(96)
             
             # Add textbox to set scale for y-axis
-            self.summary_plot_scale_label = QLabel("Increase the limits on the y-axis by as many times: ")
+            self.summary_plot_scale_label = QLabel("Y-limit x:")
             self.summary_plot_scale = QLineEdit()
             self.summary_plot_scale.setPlaceholderText('Default: 0')
             self.summary_plot_scale_label.setToolTip(
@@ -445,6 +409,7 @@ class ExportDialog(QDialog):
             self.summary_plot_scale.setToolTip(
                 "Scale factor for expanding summary-plot y-axis limits in Extended plots; 0 keeps automatic limits."
             )
+            self.summary_plot_scale.setMaximumWidth(96)
             
             # Connect textChanged signal to validate_input function
             self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
@@ -456,13 +421,25 @@ class ExportDialog(QDialog):
             self.hide_ok_results_checkbox.setToolTip("When enabled, only OK results will be visible (columns with OK results will be hidden, not deleted)")
             
             self.advanced_options_container = QWidget()
-            advanced_options_layout = QVBoxLayout(self.advanced_options_container)
+            advanced_options_layout = QGridLayout(self.advanced_options_container)
             advanced_options_layout.setContentsMargins(0, 0, 0, 0)
-            advanced_options_layout.addWidget(self.violin_plot_min_samplesize_label)
-            advanced_options_layout.addWidget(self.violin_plot_min_samplesize)
-            advanced_options_layout.addWidget(self.summary_plot_scale_label)
-            advanced_options_layout.addWidget(self.summary_plot_scale)
-            advanced_options_layout.addWidget(self.hide_ok_results_checkbox)
+            advanced_options_layout.setHorizontalSpacing(12)
+            advanced_options_layout.setVerticalSpacing(6)
+            advanced_options_layout.addWidget(self.violin_plot_min_samplesize_label, 0, 0)
+            advanced_options_layout.addWidget(self.violin_plot_min_samplesize, 0, 1)
+            advanced_options_layout.addWidget(self.summary_plot_scale_label, 0, 2)
+            advanced_options_layout.addWidget(self.summary_plot_scale, 0, 3)
+            advanced_options_layout.addWidget(self.hide_ok_results_checkbox, 1, 0, 1, 4)
+            self.advanced_options_container.setVisible(False)
+
+            self.advanced_toggle_button = QPushButton("Show advanced options")
+            self.advanced_toggle_button.setCheckable(True)
+            self.advanced_toggle_button.toggled.connect(self._toggle_advanced_options)
+            self.advanced_toggle_button.setToolTip("Show or hide the rarely needed advanced export options.")
+
+            self._set_compact_row_label_widths()
+            self._update_group_analysis_scope_enabled_state()
+            self._update_export_button_enabled_state()
 
             self.apply_selected_preset()
         except Exception as e:
@@ -472,102 +449,207 @@ class ExportDialog(QDialog):
         try:
             """Initialize the layout"""
             self.layout = QVBoxLayout()
-            self.layout.setSpacing(10)
+            self.layout.setContentsMargins(8, 8, 8, 8)
+            self.layout.setSpacing(8)
             attach_help_menu_to_layout(
                 self.layout,
                 self,
                 [("Export overview manual", 'export_overview'), ("Filtering manual", 'export_filtering'), ("Grouping manual", 'export_grouping')],
             )
 
-            def build_section_widget(title, content_layout):
-                section_widget = QWidget()
-                section_layout = QVBoxLayout(section_widget)
-                section_layout.setContentsMargins(0, 0, 0, 0)
-                section_layout.setSpacing(4)
+            self.content_widget = QWidget()
+            content_layout = QGridLayout(self.content_widget)
+            content_layout.setContentsMargins(4, 4, 4, 4)
+            content_layout.setHorizontalSpacing(12)
+            content_layout.setVerticalSpacing(8)
+            content_layout.setColumnStretch(1, 1)
+            content_layout.setColumnStretch(3, 1)
 
-                section_title = QLabel(title)
-                section_title.setStyleSheet("font-weight: bold;")
-                section_layout.addWidget(section_title)
+            row = 0
+            content_layout.addWidget(self.preset_label, row, 0)
+            content_layout.addWidget(self.preset_combobox, row, 1, 1, 3)
 
-                content_widget = QWidget()
-                content_widget.setLayout(content_layout)
-                section_layout.addWidget(content_widget)
-                return section_widget
+            row += 1
+            content_layout.addWidget(self.select_db_label, row, 0)
+            content_layout.addWidget(self.database_text_label, row, 1, 1, 2)
+            content_layout.addWidget(self.select_db_button, row, 3)
 
-            source_target_layout = QGridLayout()
-            source_target_layout.setContentsMargins(0, 0, 0, 0)
-            source_target_layout.addWidget(self.select_db_label, 0, 0)
-            source_target_layout.addWidget(self.database_text_label, 1, 0)
-            source_target_layout.addWidget(self.select_db_button, 2, 0)
-            source_target_layout.addWidget(self.select_excel_label, 3, 0)
-            source_target_layout.addWidget(self.excel_file_text_label, 4, 0)
-            source_target_layout.addWidget(self.select_excel_button, 5, 0)
+            row += 1
+            content_layout.addWidget(self.select_excel_label, row, 0)
+            content_layout.addWidget(self.excel_file_text_label, row, 1, 1, 2)
+            content_layout.addWidget(self.select_excel_button, row, 3)
 
-            data_scope_layout = QGridLayout()
-            data_scope_layout.setContentsMargins(0, 0, 0, 0)
-            data_scope_layout.addWidget(self.select_filter_label, 0, 0)
-            data_scope_layout.addWidget(self.filter_button, 1, 0)
-            data_scope_layout.addWidget(self.select_group_label, 2, 0)
-            data_scope_layout.addWidget(self.group_button, 3, 0)
+            row += 1
+            content_layout.addWidget(self._build_separator(), row, 0, 1, 4)
 
-            report_profile_layout = QGridLayout()
-            report_profile_layout.setContentsMargins(0, 0, 0, 0)
-            report_profile_layout.addWidget(self.preset_label, 0, 0)
-            preset_selector_layout = QHBoxLayout()
-            preset_selector_layout.setContentsMargins(0, 0, 0, 0)
-            preset_selector_layout.addWidget(self.preset_combobox)
-            report_profile_layout.addLayout(preset_selector_layout, 0, 1)
+            row += 1
+            content_layout.addWidget(QLabel("Filters:"), row, 0)
+            content_layout.addWidget(self.select_filter_label, row, 1, 1, 2)
+            content_layout.addWidget(self.filter_button, row, 3)
 
-            report_profile_layout.addWidget(self.export_target_label, 2, 0)
-            report_profile_layout.addWidget(self.include_google_sheets_checkbox, 2, 1)
-            report_profile_layout.addWidget(self.google_sheets_note_label, 3, 1)
+            row += 1
+            content_layout.addWidget(QLabel("Grouping:"), row, 0)
+            content_layout.addWidget(self.select_group_label, row, 1, 1, 2)
+            content_layout.addWidget(self.group_button, row, 3)
 
-            report_profile_layout.addWidget(self.html_dashboard_label, 4, 0)
-            report_profile_layout.addWidget(self.generate_html_dashboard_checkbox, 4, 1)
-            report_profile_layout.addWidget(self.html_dashboard_note_label, 5, 1)
+            row += 1
+            content_layout.addWidget(self._build_separator(), row, 0, 1, 4)
 
-            report_profile_layout.addWidget(self.export_type_label, 6, 0)
-            report_profile_layout.addWidget(self.export_type_combobox, 6, 1)
+            row += 1
+            content_layout.addWidget(self.export_type_label, row, 0)
+            content_layout.addWidget(self.export_type_combobox, row, 1)
+            content_layout.addWidget(self.sort_measurements_label, row, 2)
+            content_layout.addWidget(self.sort_measurements_combobox, row, 3)
 
-            report_profile_layout.addWidget(self.sort_measurements_label, 7, 0)
-            report_profile_layout.addWidget(self.sort_measurements_combobox, 7, 1)
+            row += 1
+            content_layout.addWidget(self.group_analysis_level_label, row, 0)
+            content_layout.addWidget(self.group_analysis_level_combobox, row, 1)
+            content_layout.addWidget(self.group_analysis_scope_label, row, 2)
+            content_layout.addWidget(self.group_analysis_scope_combobox, row, 3)
 
-            group_analysis_layout = QGridLayout()
-            group_analysis_layout.setContentsMargins(0, 0, 0, 0)
-            group_analysis_layout.addWidget(self.group_analysis_level_label, 0, 0)
-            group_analysis_layout.addWidget(self.group_analysis_level_combobox, 0, 1)
-            group_analysis_layout.addWidget(self.group_analysis_scope_label, 1, 0)
-            group_analysis_layout.addWidget(self.group_analysis_scope_combobox, 1, 1)
+            row += 1
+            content_layout.addWidget(self._build_separator(), row, 0, 1, 4)
 
-            action_layout = QVBoxLayout()
-            action_layout.setContentsMargins(0, 0, 0, 0)
-            action_layout.addWidget(self.export_button)
+            row += 1
+            content_layout.addWidget(self.export_target_label, row, 0)
+            optional_outputs_widget = QWidget()
+            optional_outputs_layout = QHBoxLayout(optional_outputs_widget)
+            optional_outputs_layout.setContentsMargins(0, 0, 0, 0)
+            optional_outputs_layout.setSpacing(12)
+            optional_outputs_layout.addWidget(self.include_google_sheets_checkbox)
+            optional_outputs_layout.addWidget(self.google_sheets_info_button)
+            optional_outputs_layout.addSpacing(8)
+            optional_outputs_layout.addWidget(self.generate_html_dashboard_checkbox)
+            optional_outputs_layout.addWidget(self.html_dashboard_info_button)
+            optional_outputs_layout.addStretch(1)
+            content_layout.addWidget(optional_outputs_widget, row, 1, 1, 3)
 
-            self.layout.addWidget(build_section_widget("Source / target files", source_target_layout))
-            self.layout.addWidget(build_section_widget("Data scope", data_scope_layout))
-            self.layout.addWidget(build_section_widget("Report profile", report_profile_layout))
-            self.layout.addWidget(build_section_widget("Group analysis", group_analysis_layout))
-            self.layout.addWidget(build_section_widget("Advanced options", self.advanced_options_container.layout()))
-            self.layout.addWidget(build_section_widget("Primary action", action_layout))
+            row += 1
+            content_layout.addWidget(self.advanced_toggle_button, row, 0, 1, 4)
+
+            row += 1
+            content_layout.addWidget(self.advanced_options_container, row, 0, 1, 4)
+            content_layout.setRowStretch(row + 1, 1)
+
+            self.content_scroll_area = QScrollArea()
+            self.content_scroll_area.setWidgetResizable(True)
+            self.content_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.content_scroll_area.setWidget(self.content_widget)
+            self.content_scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self.layout.addWidget(self.content_scroll_area, 1)
+
+            footer_layout = QHBoxLayout()
+            footer_layout.setContentsMargins(0, 0, 0, 0)
+            footer_layout.addStretch(1)
+            footer_layout.addWidget(self.close_button)
+            footer_layout.addWidget(self.export_button)
+            self.layout.addLayout(footer_layout)
 
             self.setLayout(self.layout)
+            self._apply_window_size_constraints()
 
+            self.setTabOrder(self.preset_combobox, self.select_db_button)
             self.setTabOrder(self.select_db_button, self.select_excel_button)
             self.setTabOrder(self.select_excel_button, self.filter_button)
             self.setTabOrder(self.filter_button, self.group_button)
-            self.setTabOrder(self.group_button, self.preset_combobox)
-            self.setTabOrder(self.preset_combobox, self.include_google_sheets_checkbox)
-            self.setTabOrder(self.include_google_sheets_checkbox, self.generate_html_dashboard_checkbox)
-            self.setTabOrder(self.generate_html_dashboard_checkbox, self.export_type_combobox)
+            self.setTabOrder(self.group_button, self.export_type_combobox)
             self.setTabOrder(self.export_type_combobox, self.sort_measurements_combobox)
             self.setTabOrder(self.sort_measurements_combobox, self.group_analysis_level_combobox)
             self.setTabOrder(self.group_analysis_level_combobox, self.group_analysis_scope_combobox)
-            self.setTabOrder(self.group_analysis_scope_combobox, self.violin_plot_min_samplesize)
+            self.setTabOrder(self.group_analysis_scope_combobox, self.include_google_sheets_checkbox)
+            self.setTabOrder(self.include_google_sheets_checkbox, self.generate_html_dashboard_checkbox)
+            self.setTabOrder(self.generate_html_dashboard_checkbox, self.advanced_toggle_button)
+            self.setTabOrder(self.advanced_toggle_button, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
             self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
-            self.setTabOrder(self.hide_ok_results_checkbox, self.export_button)
+            self.setTabOrder(self.hide_ok_results_checkbox, self.close_button)
+            self.setTabOrder(self.close_button, self.export_button)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _build_path_field(self, value):
+        field = QLineEdit()
+        field.setReadOnly(True)
+        field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._set_path_field_value(field, value)
+        return field
+
+    def _set_path_field_value(self, field, value, *, empty_text="None selected"):
+        text = str(value or "").strip()
+        if hasattr(field, "setText"):
+            field.setText(text if text else empty_text)
+        if hasattr(field, "setToolTip"):
+            field.setToolTip(text if text else "")
+        if text and hasattr(field, "setCursorPosition"):
+            field.setCursorPosition(0)
+
+    def _build_info_button(self, tooltip_text):
+        button = QToolButton()
+        button.setText("?")
+        button.setAutoRaise(True)
+        button.setToolTip(tooltip_text)
+        if hasattr(Qt, "FocusPolicy"):
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        if hasattr(button, "setFixedSize"):
+            button.setFixedSize(20, 20)
+        return button
+
+    def _build_separator(self):
+        separator = QLabel("")
+        separator.setStyleSheet("border-top: 1px solid #d7d7d7;")
+        separator.setMinimumHeight(1)
+        return separator
+
+    def _set_compact_row_label_widths(self):
+        for label in (
+            self.preset_label,
+            self.select_db_label,
+            self.select_excel_label,
+            self.export_type_label,
+            self.sort_measurements_label,
+            self.group_analysis_level_label,
+            self.group_analysis_scope_label,
+            self.export_target_label,
+            self.violin_plot_min_samplesize_label,
+            self.summary_plot_scale_label,
+        ):
+            label.setMinimumWidth(120)
+
+    def _toggle_advanced_options(self, expanded):
+        self.advanced_options_container.setVisible(bool(expanded))
+        self.advanced_toggle_button.setText("Hide advanced options" if expanded else "Show advanced options")
+        self._apply_window_size_constraints()
+
+    def _available_geometry(self):
+        screen = self.screen() if hasattr(self, "screen") else None
+        if screen is None:
+            app = QApplication.instance()
+            screen = app.primaryScreen() if app is not None and hasattr(app, "primaryScreen") else None
+        if screen is None or not hasattr(screen, "availableGeometry"):
+            return None
+        return screen.availableGeometry()
+
+    def _apply_window_size_constraints(self):
+        available_geometry = self._available_geometry()
+        if available_geometry is None:
+            return
+        max_width = max(520, available_geometry.width() - 40)
+        max_height = max(420, available_geometry.height() - 40)
+        self.setMaximumSize(max_width, max_height)
+        size_hint = self.sizeHint()
+        self.resize(min(size_hint.width(), max_width), min(size_hint.height(), max_height))
+
+    def _update_export_button_enabled_state(self):
+        if not hasattr(self, "export_button"):
+            return
+        self.export_button.setEnabled(bool(str(self.db_file or "").strip()) and bool(str(self.excel_file or "").strip()))
+
+    def _show_database_required_warning(self, action_name):
+        QMessageBox.information(
+            self,
+            "Database required",
+            f"Select a database file before you {action_name}.",
+        )
 
     def validate_violin_plot_min_samplesize_input(self):
         try:
@@ -617,7 +699,9 @@ class ExportDialog(QDialog):
                     filename += ".db"
                 logger.info("Selected database file: %s", filename)
                 self._update_database_context(filename)
-                self.parent().set_db_file(filename)
+                parent = self.parent() if hasattr(self, "parent") else None
+                if parent is not None and hasattr(parent, "set_db_file"):
+                    parent.set_db_file(filename)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -633,15 +717,13 @@ class ExportDialog(QDialog):
 
     def _update_database_context(self, db_file):
         self.db_file = db_file
-        self.database_text_label.setText(db_file)
-        self.select_excel_button.setEnabled(True)
-        self.filter_button.setEnabled(True)
-        self.group_button.setEnabled(True)
+        self._set_path_field_value(self.database_text_label, db_file)
 
         self.filter_query = DEFAULT_FILTER_QUERY
         self.df_for_grouping = None
-        self.select_filter_label.setText("Select filters (optional): not applied")
+        self.select_filter_label.setText("Not applied")
         self.set_grouping_applied(False)
+        self._update_export_button_enabled_state()
 
         self._discard_child_dialog('filter_window')
         self._discard_child_dialog('grouping_window')
@@ -649,6 +731,9 @@ class ExportDialog(QDialog):
     def open_filter_window(self):
         """Open or focus the filter dialog while keeping a single dialog instance."""
         try:
+            if not str(self.db_file or "").strip():
+                self._show_database_required_warning("edit filters")
+                return
             # Check if export dialog is already open or visible
             if not self.filter_window:
                 # Create a new export dialog if not already existing or visible
@@ -665,6 +750,9 @@ class ExportDialog(QDialog):
     def open_grouping_window(self):
         """Open/focus the grouping dialog and refresh data for reused instances."""
         try:
+            if not str(self.db_file or "").strip():
+                self._show_database_required_warning("edit grouping")
+                return
             # Check if grouping dialog is already open or visible
             if not self.grouping_window:
                 # Create a new grouping dialog if not already existing or visible
@@ -701,7 +789,7 @@ class ExportDialog(QDialog):
     def set_filter_applied(self):
         try:
             # Update filter label in export window
-            self.select_filter_label.setText("Select filters (optional): applied")
+            self.select_filter_label.setText("Applied")
         except Exception as e:
             self.log_and_exit(e)
     
@@ -709,13 +797,13 @@ class ExportDialog(QDialog):
         try:
             # Update filter label in export window
             if applied:
-                self.select_group_label.setText("Group data (optional): applied")
+                self.select_group_label.setText("Applied")
                 if hasattr(self, "group_analysis_level_combobox"):
                     current = self.group_analysis_level_combobox.currentText().strip().lower()
                     if current == "off":
                         self.group_analysis_level_combobox.setCurrentText("Standard")
             else:
-                self.select_group_label.setText("Group data (optional): not applied")
+                self.select_group_label.setText("Not applied")
                 if hasattr(self, "group_analysis_level_combobox"):
                     self.group_analysis_level_combobox.setCurrentText("Off")
         except Exception as e:
@@ -725,11 +813,13 @@ class ExportDialog(QDialog):
         """Prompt for an output workbook path and avoid immediate name collisions."""
         try:
             """Open a file dialog to select an excel file"""
-            default_name = self.db_file[:-3]
-            if not default_name.endswith(".xlsx"):
-                default_name += ".xlsx"
-
-            file_path = Path(default_name)
+            if str(self.db_file or "").strip():
+                default_name = self.db_file[:-3]
+                if not default_name.endswith(".xlsx"):
+                    default_name += ".xlsx"
+                file_path = Path(default_name)
+            else:
+                file_path = Path.home() / "export.xlsx"
             base_name = file_path.stem
             suffix = file_path.suffix
             directory = file_path.parent
@@ -746,8 +836,8 @@ class ExportDialog(QDialog):
                 file_path = Path(filename)
                 logger.info("Selected export Excel file: %s", file_path)
                 self.excel_file = file_path
-                self.excel_file_text_label.setText(str(file_path))
-                self.export_button.setEnabled(True)
+                self._set_path_field_value(self.excel_file_text_label, file_path)
+                self._update_export_button_enabled_state()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -911,6 +1001,9 @@ class ExportDialog(QDialog):
         level = self._selected_group_analysis_level()
         enabled = level != "off"
         if hasattr(self, "group_analysis_scope_combobox"):
+            self.group_analysis_scope_combobox.setVisible(enabled)
             self.group_analysis_scope_combobox.setEnabled(enabled)
         if hasattr(self, "group_analysis_scope_label"):
+            self.group_analysis_scope_label.setVisible(enabled)
             self.group_analysis_scope_label.setEnabled(enabled)
+        self._apply_window_size_constraints()

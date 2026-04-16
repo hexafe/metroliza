@@ -52,6 +52,16 @@ def initialize_logging() -> logging.Logger:
     return logging.getLogger(__name__)
 
 
+def get_or_create_qapplication():
+    """Return the active QApplication, creating it when startup has not done so yet."""
+    from PyQt6.QtWidgets import QApplication
+
+    existing_app = QApplication.instance()
+    if existing_app is not None:
+        return existing_app
+    return QApplication(sys.argv)
+
+
 def log_and_exit(exception: Exception) -> None:
     """Handles logging exceptions using CustomLogger."""
     from modules.custom_logger import CustomLogger
@@ -61,11 +71,10 @@ def log_and_exit(exception: Exception) -> None:
 
 def run_startup_smoke_mode(logger: logging.Logger) -> int:
     """Run startup smoke mode and return process exit code."""
-    from PyQt6.QtWidgets import QApplication
     from modules.license_key_manager import LicenseKeyManager
 
     logger.info("Startup smoke mode enabled (%s): beginning non-interactive init", STARTUP_SMOKE_ENV)
-    app = QApplication(sys.argv)
+    app = get_or_create_qapplication()
     _ = LicenseKeyManager.generate_hardware_id()
     app.processEvents()
     logger.info("Startup smoke mode completed successfully; exiting without showing UI")
@@ -89,11 +98,12 @@ def run_pdf_parser_smoke_mode(logger: logging.Logger, fixture_path: str, expecte
 
 def launch_ui(config: StartupConfig) -> int:
     """Launch UI after optional license checks and return process exit code."""
-    from PyQt6.QtWidgets import QApplication
+    # Some packaged/Windows import paths touch UI modules eagerly, so make sure
+    # QApplication exists before importing the main window dependency graph.
+    app = get_or_create_qapplication()
     from modules.license_key_manager import LicenseKeyManager
     from modules.main_window import MainWindow
 
-    app = QApplication(sys.argv)
     hardware_id = LicenseKeyManager.generate_hardware_id()
     license_result = validate_license_bootstrap(config.license_verification_enabled)
 

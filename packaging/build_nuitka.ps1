@@ -537,6 +537,7 @@ $commonArgs = @(
     "--windows-console-mode=$consoleMode",
     '--enable-plugin=pyqt6',
     '--include-package=modules',
+    '--include-package=hexafe_groupstats',
     '--include-module=modules.cmm_report_parser',
     '--include-module=modules.report_parser_factory',
     '--include-module=modules.pdf_backend',

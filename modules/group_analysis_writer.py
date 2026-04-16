@@ -1038,7 +1038,12 @@ def _format_distribution_note(entry):
 
 def _format_descriptive_ci(entry):
     capability_ci = ((entry.get('capability_ci') or {}).get('cpk') if isinstance(entry.get('capability_ci'), dict) else None)
-    return _format_ci_interval(capability_ci, digits=3)
+    ci_text = _format_ci_interval(capability_ci, digits=3)
+    if ci_text:
+        return ci_text
+    if str(entry.get('capability_type') or '').strip():
+        return '95% CI unavailable'
+    return ''
 
 
 def _format_descriptive_fit_model(entry):

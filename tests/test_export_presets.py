@@ -10,6 +10,7 @@ from modules.export_preset_utils import (
     EXPORT_PRESET_FAST_DIAGNOSTICS,
     EXPORT_PRESET_FULL_REPORT,
     build_export_options_for_preset,
+    get_export_preset_id_for_label,
     load_export_dialog_config,
     migrate_export_dialog_config,
     save_export_dialog_config,
@@ -157,9 +158,10 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
 
         qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
         for name in [
-            'QDialog', 'QFileDialog', 'QGridLayout', 'QLabel', 'QLineEdit',
+            'QApplication', 'QDialog', 'QFileDialog', 'QGridLayout', 'QLabel', 'QLineEdit',
             'QMessageBox', 'QProgressBar', 'QPushButton', 'QVBoxLayout',
-            'QComboBox', 'QCheckBox', 'QHBoxLayout', 'QWidget',
+            'QComboBox', 'QCheckBox', 'QHBoxLayout', 'QWidget', 'QScrollArea',
+            'QSizePolicy', 'QToolButton',
         ]:
             setattr(qtwidgets_stub, name, object)
         sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
@@ -222,6 +224,69 @@ class TestExportPresetFlowIntegration(unittest.TestCase):
         self.assertEqual(full_payload.preset, EXPORT_PRESET_FULL_REPORT)
         self.assertFalse(fast_payload.generate_summary_sheet)
         self.assertTrue(full_payload.generate_summary_sheet)
+
+
+class TestExportDialogPresetApplication(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_apply_selected_preset_updates_only_preset_owned_controls(self):
+        from modules.export_dialog import ExportDialog
+
+        class _FakeCombo:
+            def __init__(self, value):
+                self._value = value
+
+            def currentText(self):
+                return self._value
+
+            def setCurrentText(self, value):
+                self._value = value
+
+        class _FakeLineEdit:
+            def __init__(self, value=""):
+                self._value = value
+
+            def text(self):
+                return self._value
+
+            def setText(self, value):
+                self._value = value
+
+        class _FakeCheckbox:
+            def __init__(self, checked):
+                self._checked = checked
+
+            def isChecked(self):
+                return self._checked
+
+            def setChecked(self, checked):
+                self._checked = checked
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.preset_combobox = _FakeCombo("Extended plots")
+        dialog.export_type_combobox = _FakeCombo("Scatter")
+        dialog.sort_measurements_combobox = _FakeCombo("Sample #")
+        dialog.violin_plot_min_samplesize = _FakeLineEdit("99")
+        dialog.summary_plot_scale = _FakeLineEdit("42")
+        dialog.hide_ok_results_checkbox = _FakeCheckbox(True)
+        dialog.include_google_sheets_checkbox = _FakeCheckbox(False)
+        dialog.group_analysis_level_combobox = _FakeCombo("Off")
+        dialog.group_analysis_scope_combobox = _FakeCombo("Auto")
+        dialog._save_dialog_config = lambda: None
+
+        dialog.apply_selected_preset()
+
+        self.assertEqual(dialog.export_type_combobox.currentText(), "Line")
+        self.assertEqual(dialog.sort_measurements_combobox.currentText(), "Date")
+        self.assertEqual(dialog.violin_plot_min_samplesize.text(), "6")
+        self.assertEqual(dialog.summary_plot_scale.text(), "0")
+        self.assertFalse(dialog.hide_ok_results_checkbox.isChecked())
+        self.assertEqual(get_export_preset_id_for_label(dialog.preset_combobox.currentText()), EXPORT_PRESET_FULL_REPORT)
+        self.assertEqual(dialog._selected_group_analysis_level(), "off")
+        self.assertEqual(dialog._selected_group_analysis_scope(), "auto")
+        self.assertFalse(dialog.include_google_sheets_checkbox.isChecked())
 
 
 class TestExportCompletionMessaging(unittest.TestCase):
@@ -883,7 +948,7 @@ class TestExportDialogDatabaseSwitchContext(unittest.TestCase):
         self.assertEqual(dialog.database_text_label.value, '/tmp/next.db')
         self.assertEqual(dialog.filter_query, DEFAULT_FILTER_QUERY)
         self.assertIsNone(dialog.df_for_grouping)
-        self.assertEqual(dialog.select_filter_label.value, 'Select filters (optional): not applied')
+        self.assertEqual(dialog.select_filter_label.value, 'Not applied')
         self.assertFalse(dialog._grouping_applied)
         self.assertIsNone(dialog.filter_window)
         self.assertIsNone(dialog.grouping_window)
@@ -920,7 +985,7 @@ class TestExportDialogGroupingAnalysisDefaults(unittest.TestCase):
 
         dialog.set_grouping_applied(True)
 
-        self.assertEqual(dialog.select_group_label.value, 'Group data (optional): applied')
+        self.assertEqual(dialog.select_group_label.value, 'Applied')
         self.assertEqual(dialog.group_analysis_level_combobox.currentText(), 'Standard')
 
     def test_grouping_applied_keeps_non_off_level(self):
@@ -977,7 +1042,7 @@ class TestExportDialogGroupingAnalysisDefaults(unittest.TestCase):
 
         dialog.set_grouping_applied(False)
 
-        self.assertEqual(dialog.select_group_label.value, 'Group data (optional): not applied')
+        self.assertEqual(dialog.select_group_label.value, 'Not applied')
         self.assertEqual(dialog.group_analysis_level_combobox.currentText(), 'Off')
 
 

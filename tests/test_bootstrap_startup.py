@@ -7,6 +7,76 @@ from modules.license_bootstrap import validate_license_bootstrap
 
 
 class TestBootstrapStartup(unittest.TestCase):
+    def test_launch_ui_creates_qapplication_before_importing_main_window(self):
+        call_order = []
+        app_state = {"created": False}
+
+        class FakeApplication:
+            @staticmethod
+            def instance():
+                return None
+
+            def __init__(self, argv):
+                app_state["created"] = True
+                call_order.append("qapplication_created")
+
+            def exec(self):
+                call_order.append("app_exec")
+                return 0
+
+        class FakeMainWindow:
+            def __init__(self, version_label, days_until_expiration):
+                call_order.append("main_window_init")
+
+            def show(self):
+                call_order.append("main_window_show")
+
+        fake_qtwidgets = types.SimpleNamespace(QApplication=FakeApplication)
+        fake_license_manager = types.SimpleNamespace(generate_hardware_id=lambda: "hwid")
+        fake_license_module = types.SimpleNamespace(LicenseKeyManager=fake_license_manager)
+        fake_main_window_module = types.SimpleNamespace(MainWindow=FakeMainWindow)
+        real_import = __import__
+
+        def tracked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "PyQt6.QtWidgets":
+                call_order.append("import_qtwidgets")
+                return fake_qtwidgets
+            if name == "modules.license_key_manager":
+                call_order.append("import_license_manager")
+                return fake_license_module
+            if name == "modules.main_window":
+                call_order.append("import_main_window")
+                self.assertTrue(app_state["created"])
+                return fake_main_window_module
+            return real_import(name, globals, locals, fromlist, level)
+
+        config = metroliza.StartupConfig(
+            startup_smoke_mode=False,
+            pdf_parser_smoke_fixture=None,
+            pdf_parser_smoke_expected_text=None,
+            license_verification_enabled=False,
+        )
+
+        with patch("builtins.__import__", side_effect=tracked_import), patch(
+            "metroliza.validate_license_bootstrap",
+            return_value=types.SimpleNamespace(is_valid=True, days_until_expiration=7),
+        ):
+            result = metroliza.launch_ui(config)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            call_order,
+            [
+                "import_qtwidgets",
+                "qapplication_created",
+                "import_license_manager",
+                "import_main_window",
+                "main_window_init",
+                "main_window_show",
+                "app_exec",
+            ],
+        )
+
     def test_load_startup_config_defaults_to_license_verification_disabled(self):
         with patch.dict("os.environ", {}, clear=True):
             config = metroliza.load_startup_config()

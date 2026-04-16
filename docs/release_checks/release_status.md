@@ -11,7 +11,7 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 
 ## Active release line
 
-- Release line metadata (canonical): `RELEASE_VERSION=2026.03rc3`, `VERSION_DATE=260329`
+- Release line metadata (canonical): `RELEASE_VERSION=2026.04rc2`, `VERSION_DATE=260415`
 - Build/evidence branch, commit SHA, and artifact/build ID must be refreshed in the linked evidence docs whenever smoke evidence changes; do not rely on stale branch-local snapshot values in this file.
 
 | Track | Status | Notes | Primary doc |
@@ -30,8 +30,8 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 - Active release operations are governed by documents under `docs/release_checks/`.
 - Current QA counts, exact commit SHAs, and artifact identifiers should be recorded in the linked evidence docs and CI runs when status changes; counts from older revisions of this file are historical only.
 - Latest local QA/docs audit on the current branch state: `pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml` passed (`1103 passed, 19 skipped, 57 subtests passed`, total coverage `83%`), targeted native chart/docs checks passed (`60 passed` across chart parity/spec/smoke and docs-policy suites), and hygiene checks passed (`ruff check .`, `git diff --check`).
-- Active export-path follow-up docs: [`../roadmaps/exporter_audit_2026_03.md`](../roadmaps/exporter_audit_2026_03.md) for remaining structural backlog, plus [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md) as the RC2 closeout/reference tracker.
-- During RC2 closeout, only small behavior-preserving, test-backed stabilization slices should move forward; larger decomposition/architecture moves remain deferred per triage.
+- Active export-path follow-up docs: [`../roadmaps/exporter_audit_2026_03.md`](../roadmaps/exporter_audit_2026_03.md) for remaining structural backlog, plus [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md) as historical stabilization context.
+- During the current RC stabilization window, only small behavior-preserving, test-backed slices should move forward; larger decomposition/architecture moves remain deferred per triage.
 - Superseded planning docs are references only and should not be used as the operational status tracker (`../roadmaps/2026_03_rc1_test_ci_execution_tracker.md`, `../roadmaps/test_ci_audit_execution.md`).
 - If status changes, update this page first, then update linked runbooks/checklists as needed.
 
