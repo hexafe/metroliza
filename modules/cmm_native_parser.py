@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 import time
+from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, NamedTuple
 
 from modules.cmm_schema import ensure_cmm_report_schema
 from modules.cmm_parsing import parse_raw_lines_to_blocks
 from modules.db import run_transaction_with_retry
+from modules.report_repository import ReportRepository, compute_sha256
 from modules.runtime_backend_policy import should_prefer_python_backend_in_auto_mode
 
 try:
@@ -214,17 +215,26 @@ def resolve_cmm_parser_backend(use_native: bool = False) -> ResolvedBackend:
 
 def resolve_cmm_persistence_backend(use_native: bool = False) -> ResolvedBackend:
     """Resolve which persistence backend should be used."""
+    # The native DB writer targets the legacy REPORTS/MEASUREMENTS schema. The
+    # report metadata redesign keeps native parsing available but routes
+    # persistence through the Python repository until the native writer is
+    # updated for the new schema.
+    return "python"
+
+
+def resolve_cmm_normalization_backend(use_native: bool = False) -> ResolvedBackend:
+    """Resolve measurement-row normalization backend without selecting DB writer."""
     backend = _runtime_persistence_backend_choice()
 
     if backend == "python":
         return "python"
 
     if backend == "native" or use_native:
-        if _native_persist_measurement_rows is None or _native_normalize_measurement_rows is None:
-            raise RuntimeError("Native CMM persistence backend requested but unavailable")
+        if _native_normalize_measurement_rows is None:
+            raise RuntimeError("Native measurement row normalization requested but unavailable")
         return "native"
 
-    if _native_persist_measurement_rows is not None and _native_normalize_measurement_rows is not None:
+    if _native_normalize_measurement_rows is not None:
         return "native"
     return "python"
 
@@ -313,7 +323,7 @@ def normalize_measurement_rows(
     use_native: bool = False,
 ) -> list[tuple[Any, ...]]:
     """Normalize parsed blocks into flat rows using selected backend."""
-    backend = resolve_cmm_persistence_backend(use_native=use_native)
+    backend = resolve_cmm_normalization_backend(use_native=use_native)
     _record_backend_selection("normalize", backend)
     started = time.perf_counter()
     if backend == "native":
@@ -350,38 +360,89 @@ def persist_measurement_rows_python(database: str, rows: list[tuple[Any, ...]]) 
 
     first = rows[0]
     report_identity = (first[9], first[10], first[11], first[12], first[13])
+    reference, fileloc, filename, report_date, sample_number = report_identity
+    source_path = Path(str(fileloc or "")) / str(filename or "unknown.pdf")
+    if source_path.is_file():
+        source_hash = compute_sha256(source_path)
+    else:
+        import hashlib
 
-    def _insert(cursor):
+        source_hash = hashlib.sha256("|".join(str(part) for part in report_identity).encode("utf-8")).hexdigest()
+
+    repository = ReportRepository(database)
+    repository.ensure_schema()
+
+    def _exists(cursor):
         cursor.execute(
-            'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
-            report_identity,
+            """
+            SELECT pr.id
+            FROM source_files sf
+            JOIN parsed_reports pr ON pr.source_file_id = sf.id
+            WHERE sf.sha256 = ?
+            """,
+            (source_hash,),
         )
-        count_rows = cursor.fetchall()
-        count = count_rows[0][0] if count_rows else 0
-        if count > 0:
-            return False
+        return cursor.fetchone() is not None
 
-        cursor.execute(
-            'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-            report_identity,
+    already_exists = run_transaction_with_retry(database, _exists, retries=4, retry_delay_s=1)
+    measurements = []
+    for row_order, row in enumerate(rows, start=1):
+        outtol = row[7]
+        try:
+            outtol_value = float(outtol)
+        except (TypeError, ValueError):
+            outtol_value = None
+        is_nok = bool(outtol_value is not None and outtol_value > 0)
+        measurements.append(
+            {
+                "row_order": row_order,
+                "header": row[8],
+                "section_name": row[8],
+                "feature_label": row[8],
+                "characteristic_name": str(row[0] or ""),
+                "characteristic_family": "other",
+                "description": row[8],
+                "ax": row[0],
+                "nominal": row[1],
+                "tol_plus": row[2],
+                "tol_minus": row[3],
+                "bonus": row[4],
+                "meas": row[5],
+                "dev": row[6],
+                "outtol": row[7],
+                "is_nok": is_nok,
+                "status_code": "nok" if is_nok else "ok",
+            }
         )
-        report_id = cursor.lastrowid
-        cursor.executemany(
-            'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (
-                (None, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], report_id)
-                for r in rows
-            ),
-        )
-        return True
 
-    try:
-        return run_transaction_with_retry(database, _insert, retries=4, retry_delay_s=1)
-    except sqlite3.OperationalError as exc:
-        if "no such table" not in str(exc).lower():
-            raise
-        ensure_cmm_report_schema(database, retries=4, retry_delay_s=1)
-        return run_transaction_with_retry(database, _insert, retries=4, retry_delay_s=1)
+    nok_count = sum(1 for measurement in measurements if measurement["is_nok"])
+    repository.persist_parsed_report(
+        source_path=source_path,
+        source_sha256=source_hash,
+        parser_id="cmm_pdf_header_box",
+        parser_version="1.0.0",
+        template_family="cmm_pdf_header_box",
+        template_variant=None,
+        parse_status="parsed",
+        metadata={
+            "reference": reference,
+            "reference_raw": reference,
+            "report_date": report_date,
+            "sample_number": sample_number,
+            "sample_number_kind": "unknown",
+        },
+        candidates=(),
+        warnings=(),
+        measurements=measurements,
+        metadata_version="report_metadata_v1",
+        metadata_profile_id="cmm_pdf_header_box",
+        metadata_profile_version="1",
+        measurement_count=len(measurements),
+        has_nok=nok_count > 0,
+        nok_count=nok_count,
+        identity_hash=source_hash,
+    )
+    return not already_exists
 
 
 def persist_measurement_rows_with_backend_and_telemetry(
@@ -426,4 +487,4 @@ def native_backend_available() -> bool:
 
 
 def native_persistence_backend_available() -> bool:
-    return _native_normalize_measurement_rows is not None and _native_persist_measurement_rows is not None
+    return False

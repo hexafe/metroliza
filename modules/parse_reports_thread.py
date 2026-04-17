@@ -3,7 +3,6 @@
 import inspect
 import logging
 import os
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -14,12 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import shutil
-from modules.report_fingerprint import build_parser_fingerprint
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.cmm_schema import ensure_cmm_report_schema
 from modules.db import execute_with_retry, sqlite_connection_scope
 from modules.log_context import build_parse_log_extra, get_operation_logger
 from modules.progress_status import build_three_line_status
+from modules.report_repository import compute_sha256
 
 
 @dataclass(frozen=True)
@@ -39,24 +38,14 @@ def build_report_fingerprints_from_rows(rows, should_cancel=lambda: False):
         if should_cancel():
             break
 
-        report_id, reference, fileloc, filename, date_value, sample_number = row
-        if report_id is not None:
-            add_fingerprint(f"id:{report_id}")
-            continue
-
-        add_fingerprint(
-            "|".join(
-                str(part)
-                for part in (
-                    reference or '',
-                    fileloc or '',
-                    filename or '',
-                    date_value or '',
-                    sample_number or '',
-                )
-            )
-        )
+        sha256_value = row[0] if not isinstance(row, dict) else row.get('sha256')
+        if sha256_value:
+            add_fingerprint(f"sha256:{sha256_value}")
     return report_fingerprints
+
+
+def build_source_file_fingerprint(report_path):
+    return f"sha256:{compute_sha256(report_path)}"
 
 
 def parse_new_reports(
@@ -93,20 +82,27 @@ def parse_new_reports(
             for report in report_paths:
                 if should_cancel():
                     break
+                fingerprint = build_source_file_fingerprint(report)
+                if fingerprint in report_fingerprints:
+                    parsed_files += 1
+                    if on_progress:
+                        on_progress(parsed_files, total_files)
+                    continue
                 enqueued_at = time.perf_counter()
-                futures.append(executor.submit(_stage1_worker, report, enqueued_at))
+                futures.append((fingerprint, executor.submit(_stage1_worker, report, enqueued_at)))
 
-            for future in as_completed(futures):
+            future_by_fingerprint = {future: fingerprint for fingerprint, future in futures}
+            for future in as_completed(future_by_fingerprint):
                 if should_cancel():
                     break
 
                 report_parse_start = time.perf_counter()
+                fingerprint = future_by_fingerprint[future]
                 parser, stage1_completed_at = future.result()
                 stage_timings = getattr(parser, "stage_timings_s", None)
                 if isinstance(stage_timings, dict):
                     stage_timings["stage2_queue_wait_s"] = max(0.0, time.perf_counter() - stage1_completed_at)
 
-                fingerprint = build_parser_fingerprint(parser)
                 if fingerprint not in report_fingerprints:
                     persist_report(parser)
                     report_fingerprints.add(fingerprint)
@@ -120,7 +116,7 @@ def parse_new_reports(
                 if on_progress:
                     on_progress(parsed_files, total_files)
 
-            for future in futures:
+            for _, future in futures:
                 if not future.done():
                     future.cancel()
 
@@ -131,11 +127,13 @@ def parse_new_reports(
             break
 
         report_parse_start = time.perf_counter()
-        parser = parser_factory(report)
-        fingerprint = build_parser_fingerprint(parser)
+        fingerprint = build_source_file_fingerprint(report)
         if fingerprint not in report_fingerprints:
+            parser = parser_factory(report)
             persist_report(parser)
             report_fingerprints.add(fingerprint)
+        else:
+            parser = None
         parsed_files += 1
         parse_duration_s = time.perf_counter() - report_parse_start
 
@@ -175,37 +173,6 @@ class ParseReportsThread(QThread):
         self.parsing_canceled = False
         self._extracted_archive_dir = None
         self._last_emitted_progress = -1
-        self._report_lookup_candidates = {
-            'filenames': set(),
-            'reference_dates': set(),
-        }
-
-    @staticmethod
-    def _build_filename_lookup_candidates(report_paths):
-        filenames = set()
-        reference_dates = set()
-        date_pattern = r"\d{4}[- _/\.]\d{1,2}[- _/\.]\d{1,2}"
-        reference_pattern = r"([A-Z][A-Za-z0-9]{4}\d{1,5}(_\d{3})?)|(\d{2}[A-Za-z][._-]?\d{3}[._-]?\d{3})|(216\d{5})"
-
-        for report_path in report_paths:
-            filename = Path(report_path).name
-            filenames.add(filename)
-
-            date_match = re.findall(date_pattern, filename)
-            date_value = date_match[-1] if date_match else None
-            if date_value is not None:
-                date_value = date_value.replace('.', '-').replace('_', '-').replace('/', '-')
-
-            reference_match = re.match(reference_pattern, filename)
-            reference_value = reference_match.group(0) if reference_match else None
-
-            if reference_value and date_value:
-                reference_dates.add((reference_value, date_value))
-
-        return {
-            'filenames': filenames,
-            'reference_dates': reference_dates,
-        }
 
     @staticmethod
     def _batched_values(values, batch_size):
@@ -304,7 +271,6 @@ class ParseReportsThread(QThread):
                 if path.is_file() and path.stat().st_size:
                     pdf_files.append(path)
 
-            self._report_lookup_candidates = self._build_filename_lookup_candidates(pdf_files)
             self._emit_stage_progress('discover_reports', 1.0)
             logger.info(
                 "Parse discovery finished",
@@ -338,7 +304,7 @@ class ParseReportsThread(QThread):
 
             table_exists = execute_with_retry(
                 self.db_file,
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='REPORTS'",
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_files'",
                 connection=connection,
                 retries=5,
                 retry_delay_s=1,
@@ -348,80 +314,18 @@ class ParseReportsThread(QThread):
                 self._emit_stage_progress('load_existing_reports', 1.0)
                 return report_fingerprints
 
-            matched_rows_by_id = {}
-            filename_batches = list(
-                self._batched_values(
-                    self._report_lookup_candidates.get('filenames', set()),
-                    self.LOOKUP_BATCH_SIZE,
-                )
+            rows = execute_with_retry(
+                self.db_file,
+                "SELECT sha256 FROM source_files WHERE is_active = 1",
+                connection=connection,
+                retries=5,
+                retry_delay_s=1,
             )
-            reference_date_batches = list(
-                self._batched_values(
-                    self._report_lookup_candidates.get('reference_dates', set()),
-                    self.LOOKUP_BATCH_SIZE,
-                )
-            )
-            total_batches = max(1, len(filename_batches) + len(reference_date_batches))
-            completed_batches = 0
-
-            for filename_batch in filename_batches:
-                if self.parsing_canceled:
-                    break
-
-                placeholders = ",".join("?" for _ in filename_batch)
-                rows = execute_with_retry(
-                    self.db_file,
-                    (
-                        "SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER "
-                        f"FROM REPORTS WHERE FILENAME IN ({placeholders})"
-                    ),
-                    tuple(filename_batch),
-                    connection=connection,
-                    retries=5,
-                    retry_delay_s=1,
-                )
-                for row in rows:
-                    matched_rows_by_id[row[0] if row[0] is not None else row] = row
-
-                completed_batches += 1
-                self._emit_stage_progress('load_existing_reports', completed_batches / total_batches)
-
-            for reference_date_batch in reference_date_batches:
-                if self.parsing_canceled:
-                    break
-
-                conditions = " OR ".join("(REFERENCE = ? AND DATE = ?)" for _ in reference_date_batch)
-                params = tuple(
-                    value
-                    for reference_value, date_value in reference_date_batch
-                    for value in (reference_value, date_value)
-                )
-                rows = execute_with_retry(
-                    self.db_file,
-                    (
-                        "SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER "
-                        f"FROM REPORTS WHERE {conditions}"
-                    ),
-                    params,
-                    connection=connection,
-                    retries=5,
-                    retry_delay_s=1,
-                )
-                for row in rows:
-                    matched_rows_by_id[row[0] if row[0] is not None else row] = row
-
-                completed_batches += 1
-                self._emit_stage_progress('load_existing_reports', completed_batches / total_batches)
-
             report_fingerprints.update(
-                build_report_fingerprints_from_rows(
-                    matched_rows_by_id.values(),
-                    should_cancel=lambda: self.parsing_canceled,
-                )
+                build_report_fingerprints_from_rows(rows, should_cancel=lambda: self.parsing_canceled)
             )
             self._emit_stage_progress('load_existing_reports', 1.0)
 
-            # Return report fingerprints from fallback path
             return report_fingerprints
         except Exception as e:
             self.log_and_exit(e)

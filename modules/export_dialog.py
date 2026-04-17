@@ -51,18 +51,11 @@ import sys
 from pathlib import Path
 from modules.worker_progress_dialog import create_worker_progress_dialog
 from modules.help_menu import attach_help_menu_to_layout
+from modules.report_query_service import build_measurement_export_query
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
-DEFAULT_FILTER_QUERY = """
-                SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
-                    MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
-                    MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
-                    REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
-                FROM MEASUREMENTS
-                JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
-                WHERE 1=1
-                """
+DEFAULT_FILTER_QUERY = build_measurement_export_query()
 
 
 def format_message_with_clickable_links(message):

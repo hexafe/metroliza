@@ -18,6 +18,7 @@ for name in [
 ]:
     setattr(qtwidgets_stub, name, type(name, (), {}))
 sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
+sys.modules['PyQt6.QtGui'] = types.ModuleType('PyQt6.QtGui')
 
 custom_logger_stub = types.ModuleType('modules.custom_logger')
 custom_logger_stub.CustomLogger = type('CustomLogger', (), {'__init__': lambda self, *args, **kwargs: None})
@@ -64,15 +65,15 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
         statements = ModifyDB.build_update_statements(
             None,
             table,
-            'REPORTS',
-            'REFERENCE',
+            'report_metadata',
+            'reference',
         )
 
         self.assertEqual(
             statements,
             [
-                ('UPDATE REPORTS SET REFERENCE = ? WHERE REFERENCE = ?', ('B2', 'B')),
-                ('UPDATE REPORTS SET REFERENCE = ? WHERE REFERENCE = ?', ('C2', 'C')),
+                ('UPDATE report_metadata SET reference = ? WHERE reference = ?', ('B2', 'B')),
+                ('UPDATE report_metadata SET reference = ? WHERE reference = ?', ('C2', 'C')),
             ],
         )
 

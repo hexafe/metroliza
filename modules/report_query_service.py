@@ -46,7 +46,40 @@ def _build_in_clause(column_name, values):
     if not cleaned_values:
         return None
 
-    return f'"{column_name}" IN ({", ".join(cleaned_values)})'
+    return f'{column_name} IN ({", ".join(cleaned_values)})'
+
+
+_MEASUREMENT_EXPORT_SELECT_FROM_VIEW = (
+    "report_id AS REPORT_ID, reference AS REFERENCE, report_date AS DATE, "
+    "report_time AS TIME, part_name AS PART_NAME, revision AS REVISION, "
+    "sample_number AS SAMPLE_NUMBER, sample_number_kind AS SAMPLE_NUMBER_KIND, "
+    "stats_count_raw AS STATS_COUNT_RAW, stats_count_int AS STATS_COUNT_INT, "
+    "operator_name AS OPERATOR_NAME, directory_path AS FILELOC, file_name AS FILENAME, "
+    "absolute_path AS ABSOLUTE_PATH, parser_id AS PARSER_ID, template_family AS TEMPLATE_FAMILY, "
+    "template_variant AS TEMPLATE_VARIANT, header AS HEADER, section_name AS SECTION_NAME, "
+    "feature_label AS FEATURE_LABEL, characteristic_name AS CHARACTERISTIC_NAME, "
+    "characteristic_family AS CHARACTERISTIC_FAMILY, description AS DESCRIPTION, "
+    "ax AS AX, nominal AS NOM, tol_plus AS \"+TOL\", tol_minus AS \"-TOL\", "
+    "bonus AS BONUS, meas AS MEAS, dev AS DEV, outtol AS OUTTOL, is_nok AS IS_NOK, "
+    "status_code AS STATUS_CODE, page_number AS PAGE_NUMBER, row_order AS ROW_ORDER, "
+    "has_nok AS HAS_NOK, nok_count AS NOK_COUNT"
+)
+
+_MEASUREMENT_EXPORT_SELECT_FROM_SCOPE = (
+    '"REPORT_ID" AS REPORT_ID, "REFERENCE" AS REFERENCE, "DATE" AS DATE, '
+    '"TIME" AS TIME, "PART_NAME" AS PART_NAME, "REVISION" AS REVISION, '
+    '"SAMPLE_NUMBER" AS SAMPLE_NUMBER, "SAMPLE_NUMBER_KIND" AS SAMPLE_NUMBER_KIND, '
+    '"STATS_COUNT_RAW" AS STATS_COUNT_RAW, "STATS_COUNT_INT" AS STATS_COUNT_INT, '
+    '"OPERATOR_NAME" AS OPERATOR_NAME, "FILELOC" AS FILELOC, "FILENAME" AS FILENAME, '
+    '"ABSOLUTE_PATH" AS ABSOLUTE_PATH, "PARSER_ID" AS PARSER_ID, "TEMPLATE_FAMILY" AS TEMPLATE_FAMILY, '
+    '"TEMPLATE_VARIANT" AS TEMPLATE_VARIANT, "HEADER" AS HEADER, "SECTION_NAME" AS SECTION_NAME, '
+    '"FEATURE_LABEL" AS FEATURE_LABEL, "CHARACTERISTIC_NAME" AS CHARACTERISTIC_NAME, '
+    '"CHARACTERISTIC_FAMILY" AS CHARACTERISTIC_FAMILY, "DESCRIPTION" AS DESCRIPTION, '
+    '"AX" AS AX, "NOM" AS NOM, "+TOL" AS "+TOL", "-TOL" AS "-TOL", '
+    '"BONUS" AS BONUS, "MEAS" AS MEAS, "DEV" AS DEV, "OUTTOL" AS OUTTOL, "IS_NOK" AS IS_NOK, '
+    '"STATUS_CODE" AS STATUS_CODE, "PAGE_NUMBER" AS PAGE_NUMBER, "ROW_ORDER" AS ROW_ORDER, '
+    '"HAS_NOK" AS HAS_NOK, "NOK_COUNT" AS NOK_COUNT'
+)
 
 
 def build_report_overview_query(filter_query=None):
@@ -61,33 +94,45 @@ def build_report_overview_query(filter_query=None):
 
 
 def build_grouping_query(filter_query=None):
+    normalized_filter_query = _normalize_sql_query(filter_query)
+    if normalized_filter_query:
+        return f"""
+        SELECT DISTINCT
+            "REPORT_ID" AS REPORT_ID,
+            "REFERENCE" AS REFERENCE,
+            "DATE" AS DATE,
+            "SAMPLE_NUMBER" AS SAMPLE_NUMBER,
+            "PART_NAME" AS PART_NAME,
+            "REVISION" AS REVISION,
+            "TEMPLATE_VARIANT" AS TEMPLATE_VARIANT,
+            "HAS_NOK" AS HAS_NOK,
+            "NOK_COUNT" AS NOK_COUNT,
+            "FILENAME" AS FILENAME
+        FROM (
+            {normalized_filter_query}
+        ) AS filtered_data
+    """
+
     select_clause = (
-        "DISTINCT "
-        "report_id AS REPORT_ID, reference AS REFERENCE, report_date AS DATE, "
+        "DISTINCT report_id AS REPORT_ID, reference AS REFERENCE, report_date AS DATE, "
         "sample_number AS SAMPLE_NUMBER, part_name AS PART_NAME, revision AS REVISION, "
         "template_variant AS TEMPLATE_VARIANT, has_nok AS HAS_NOK, nok_count AS NOK_COUNT, "
         "file_name AS FILENAME"
     )
-    return _build_select_from_view(select_clause, _GROUPING_REPORT_VIEW, filter_query)
+    return _build_select_from_view(select_clause, _GROUPING_REPORT_VIEW)
 
 
 def build_measurement_export_query(filter_query=None):
-    select_clause = (
-        "report_id AS REPORT_ID, reference AS REFERENCE, report_date AS DATE, "
-        "report_time AS TIME, part_name AS PART_NAME, revision AS REVISION, "
-        "sample_number AS SAMPLE_NUMBER, sample_number_kind AS SAMPLE_NUMBER_KIND, "
-        "stats_count_raw AS STATS_COUNT_RAW, stats_count_int AS STATS_COUNT_INT, "
-        "operator_name AS OPERATOR_NAME, file_name AS FILENAME, absolute_path AS ABSOLUTE_PATH, "
-        "parser_id AS PARSER_ID, template_family AS TEMPLATE_FAMILY, "
-        "template_variant AS TEMPLATE_VARIANT, header AS HEADER, section_name AS SECTION_NAME, "
-        "feature_label AS FEATURE_LABEL, characteristic_name AS CHARACTERISTIC_NAME, "
-        "characteristic_family AS CHARACTERISTIC_FAMILY, description AS DESCRIPTION, "
-        "ax AS AX, nominal AS NOM, tol_plus AS \"+TOL\", tol_minus AS \"-TOL\", "
-        "bonus AS BONUS, meas AS MEAS, dev AS DEV, outtol AS OUTTOL, is_nok AS IS_NOK, "
-        "status_code AS STATUS_CODE, page_number AS PAGE_NUMBER, row_order AS ROW_ORDER, "
-        "has_nok AS HAS_NOK"
-    )
-    return _build_select_from_view(select_clause, _MEASUREMENT_EXPORT_VIEW, filter_query)
+    normalized_filter_query = _normalize_sql_query(filter_query)
+    if normalized_filter_query:
+        return f"""
+        SELECT {_MEASUREMENT_EXPORT_SELECT_FROM_SCOPE}
+        FROM (
+            {normalized_filter_query}
+        ) AS filtered_data
+    """
+
+    return _build_select_from_view(_MEASUREMENT_EXPORT_SELECT_FROM_VIEW, _MEASUREMENT_EXPORT_VIEW)
 
 
 def build_measurement_filter_query(
@@ -103,42 +148,27 @@ def build_measurement_filter_query(
     date_from=None,
     date_to=None,
 ):
-    select_clause = (
-        "report_id AS REPORT_ID, reference AS REFERENCE, report_date AS DATE, "
-        "report_time AS TIME, part_name AS PART_NAME, revision AS REVISION, "
-        "sample_number AS SAMPLE_NUMBER, sample_number_kind AS SAMPLE_NUMBER_KIND, "
-        "stats_count_raw AS STATS_COUNT_RAW, stats_count_int AS STATS_COUNT_INT, "
-        "operator_name AS OPERATOR_NAME, file_name AS FILENAME, absolute_path AS ABSOLUTE_PATH, "
-        "parser_id AS PARSER_ID, template_family AS TEMPLATE_FAMILY, "
-        "template_variant AS TEMPLATE_VARIANT, header AS HEADER, section_name AS SECTION_NAME, "
-        "feature_label AS FEATURE_LABEL, characteristic_name AS CHARACTERISTIC_NAME, "
-        "characteristic_family AS CHARACTERISTIC_FAMILY, description AS DESCRIPTION, "
-        "ax AS AX, nominal AS NOM, tol_plus AS \"+TOL\", tol_minus AS \"-TOL\", "
-        "bonus AS BONUS, meas AS MEAS, dev AS DEV, outtol AS OUTTOL, is_nok AS IS_NOK, "
-        "status_code AS STATUS_CODE, page_number AS PAGE_NUMBER, row_order AS ROW_ORDER, "
-        "has_nok AS HAS_NOK"
-    )
-    query = f"SELECT {select_clause} FROM {_MEASUREMENT_EXPORT_VIEW} WHERE 1=1"
+    query = f"SELECT {_MEASUREMENT_EXPORT_SELECT_FROM_VIEW} FROM {_MEASUREMENT_EXPORT_VIEW} WHERE 1=1"
 
     for column_name, values in (
-        ("AX", ax_values),
-        ("HEADER", header_values),
-        ("REFERENCE", reference_values),
-        ("PART_NAME", part_name_values),
-        ("REVISION", revision_values),
-        ("TEMPLATE_VARIANT", template_variant_values),
-        ("SAMPLE_NUMBER", sample_number_values),
+        ("ax", ax_values),
+        ("header", header_values),
+        ("reference", reference_values),
+        ("part_name", part_name_values),
+        ("revision", revision_values),
+        ("template_variant", template_variant_values),
+        ("sample_number", sample_number_values),
     ):
         clause = _build_in_clause(column_name, values)
         if clause is not None:
             query += f" AND {clause}"
 
     if has_nok_only:
-        query += " AND HAS_NOK = 1"
+        query += " AND has_nok = 1"
     if date_from:
-        query += f" AND DATE >= '{_escape_sql_literal(date_from)}'"
+        query += f" AND report_date >= '{_escape_sql_literal(date_from)}'"
     if date_to:
-        query += f" AND DATE <= '{_escape_sql_literal(date_to)}'"
+        query += f" AND report_date <= '{_escape_sql_literal(date_to)}'"
 
     return query
 

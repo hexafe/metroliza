@@ -64,30 +64,19 @@ class TestStatsUtilities(unittest.TestCase):
 
 
 class TestParseDedupeFingerprint(unittest.TestCase):
-    def test_fingerprint_distinguishes_same_filename_different_directories(self):
-        parser_a = SimpleNamespace(
-            pdf_reference="REF1",
-            pdf_file_path="/tmp/a",
-            pdf_file_name="same.pdf",
-            pdf_date="2024-01-01",
-            pdf_sample_number="001",
-        )
-        parser_b = SimpleNamespace(
-            pdf_reference="REF1",
-            pdf_file_path="/tmp/b",
-            pdf_file_name="same.pdf",
-            pdf_date="2024-01-01",
-            pdf_sample_number="001",
-        )
+    def test_fingerprint_uses_source_hash_when_available(self):
+        parser_a = SimpleNamespace(source_sha256="aaa")
+        parser_b = SimpleNamespace(source_sha256="bbb")
 
         fingerprint_a = build_parser_fingerprint(parser_a)
         fingerprint_b = build_parser_fingerprint(parser_b)
 
         self.assertNotEqual(fingerprint_a, fingerprint_b)
+        self.assertEqual(fingerprint_a, "sha256:aaa")
 
     def test_db_identity_preferred_when_available(self):
         fingerprint = build_report_fingerprint({"ID": 42, "FILENAME": "x.pdf"})
-        self.assertEqual(fingerprint, "id:42")
+        self.assertEqual(fingerprint, "report_id:42")
 
 
 @unittest.skipIf(importlib.util.find_spec("cryptography") is None, "cryptography dependency not installed")

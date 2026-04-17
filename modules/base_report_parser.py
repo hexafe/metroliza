@@ -3,10 +3,23 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 import re
 
 import pandas
+
+
+@dataclass(frozen=True)
+class SourceDescriptor:
+    """Neutral filesystem descriptor for one parser input."""
+
+    source_path: str
+    absolute_path: str
+    directory_path: str
+    file_name: str
+    file_extension: str
+    source_format: str
 
 
 class BaseReportParser(ABC):
@@ -15,16 +28,30 @@ class BaseReportParser(ABC):
     def __init__(self, file_path: str, database: str, connection=None):
         report_path = Path(file_path)
 
+        self._source_path = str(report_path.absolute())
         self._file_path = str(report_path.absolute().parent)
         self._file_name = report_path.name
-        self._date = self.get_date_from_filename()
-        self._reference = self.get_reference_from_filename()
-        self._sample_number = self.get_sample_number_from_file()
+        self._date = None
+        self._reference = None
+        self._sample_number = None
+        self._canonical_metadata = None
         self._raw_text = []
         self._blocks_text = []
         self.df = pandas.DataFrame()
         self.database = database
         self.connection = connection
+
+    @property
+    def source_path(self):
+        return self._source_path
+
+    @property
+    def canonical_metadata(self):
+        return self._canonical_metadata
+
+    @canonical_metadata.setter
+    def canonical_metadata(self, value):
+        self._canonical_metadata = value
 
     @property
     def file_path(self):
@@ -44,6 +71,8 @@ class BaseReportParser(ABC):
 
     @property
     def date(self):
+        if self._canonical_metadata is not None:
+            return getattr(self._canonical_metadata, 'report_date', self._date)
         return self._date
 
     @date.setter
@@ -52,6 +81,8 @@ class BaseReportParser(ABC):
 
     @property
     def reference(self):
+        if self._canonical_metadata is not None:
+            return getattr(self._canonical_metadata, 'reference', self._reference)
         return self._reference
 
     @reference.setter
@@ -60,6 +91,8 @@ class BaseReportParser(ABC):
 
     @property
     def sample_number(self):
+        if self._canonical_metadata is not None:
+            return getattr(self._canonical_metadata, 'sample_number', self._sample_number)
         return self._sample_number
 
     @sample_number.setter
@@ -155,7 +188,46 @@ class BaseReportParser(ABC):
     def get_reference_from_filename(self):
         reference_pattern = r"([A-Z][A-Za-z0-9]{4}\d{1,5}(_\d{3})?)|(\d{2}[A-Za-z][._-]?\d{3}[._-]?\d{3})|(216\d{5})"
         reference_match = re.match(reference_pattern, self.file_name)
-        return reference_match.group(0) if reference_match else "REF"
+        return reference_match.group(0) if reference_match else None
+
+    def build_source_descriptor(self):
+        """Build a neutral descriptor without finalizing semantic metadata."""
+
+        absolute_path = Path(self.source_path)
+        suffix = absolute_path.suffix.lower()
+        return SourceDescriptor(
+            source_path=str(absolute_path),
+            absolute_path=str(absolute_path),
+            directory_path=str(absolute_path.parent),
+            file_name=absolute_path.name,
+            file_extension=suffix,
+            source_format=suffix.lstrip('.') or 'unknown',
+        )
+
+    def detect_template_family(self):
+        """Return parser-specific template family information."""
+
+        raise NotImplementedError("Parser-specific template detection must be implemented by subclasses.")
+
+    def extract_metadata(self):
+        """Extract canonical report metadata after source content is available."""
+
+        raise NotImplementedError("Parser-specific metadata extraction must be implemented by subclasses.")
+
+    def parse_measurements(self):
+        """Parse report measurements into the flat persistence payload."""
+
+        raise NotImplementedError("Parser-specific measurement parsing must be implemented by subclasses.")
+
+    def build_report_identity_hash(self):
+        """Build a stable semantic report identity hash."""
+
+        raise NotImplementedError("Parser-specific identity hashing must be implemented by subclasses.")
+
+    def persist_report(self):
+        """Persist parser output using the report repository."""
+
+        raise NotImplementedError("Parser-specific persistence must be implemented by subclasses.")
 
     @abstractmethod
     def open_report(self):

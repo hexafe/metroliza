@@ -11,9 +11,6 @@ import pandas as pd
 
 from pathlib import Path
 
-from modules.db import execute_with_retry  # noqa: E402
-
-
 # Stubs for optional GUI/parser dependencies pulled in by thread modules.
 qtcore_stub = types.ModuleType('PyQt6.QtCore')
 
@@ -60,6 +57,9 @@ sys.modules['modules.cmm_report_parser'] = cmm_parser_stub
 from modules.export_data_thread import ExportDataThread, build_export_dataframe, execute_export_query  # noqa: E402
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 from modules.parse_reports_thread import parse_new_reports  # noqa: E402
+from modules.report_query_service import build_measurement_export_query  # noqa: E402
+from modules.report_repository import ReportRepository  # noqa: E402
+from modules.report_schema import ensure_report_schema  # noqa: E402
 
 
 def _xlsx_sheet_names(xlsx_path):
@@ -139,51 +139,122 @@ def _xlsx_sheet_xml(xlsx_path, target_sheet_name):
     raise AssertionError(f"Worksheet '{target_sheet_name}' not found in workbook: {xlsx_path}")
 
 
+def _seed_measurement_report(
+    db_path,
+    *,
+    reference='REF-1',
+    directory_path='/fake/reports',
+    file_name='part_1.pdf',
+    report_date='2024-01-01',
+    sample_number='1',
+    ax='X',
+    nominal=10.0,
+    tol_plus=0.5,
+    tol_minus=-0.5,
+    bonus=0.0,
+    meas=10.1,
+    dev=0.1,
+    outtol=0,
+    header='FEATURE_1',
+):
+    ensure_report_schema(db_path)
+    repository = ReportRepository(db_path)
+    return repository.persist_parsed_report(
+        source_path=str(Path(directory_path) / file_name),
+        parser_id='cmm',
+        parser_version='test',
+        template_family='cmm_pdf_header_box',
+        template_variant='test',
+        parse_status='parsed',
+        metadata={
+            'reference': reference,
+            'reference_raw': reference,
+            'report_date': report_date,
+            'sample_number': sample_number,
+            'sample_number_kind': 'explicit_sample_number',
+            'metadata_json': {'test_fixture': True},
+        },
+        candidates=(),
+        warnings=(),
+        measurements=(
+            {
+                'row_order': 1,
+                'header': header,
+                'section_name': header,
+                'feature_label': header,
+                'characteristic_name': ax,
+                'characteristic_family': 'LOC',
+                'description': header,
+                'ax': ax,
+                'nominal': nominal,
+                'tol_plus': tol_plus,
+                'tol_minus': tol_minus,
+                'bonus': bonus,
+                'meas': meas,
+                'dev': dev,
+                'outtol': outtol,
+                'is_nok': bool(outtol),
+                'status_code': 'nok' if outtol else 'ok',
+            },
+        ),
+        metadata_version='report_metadata_v1',
+        page_count=1,
+        measurement_count=1,
+        has_nok=bool(outtol),
+        nok_count=1 if outtol else 0,
+        metadata_confidence=1.0,
+    )
+
+
+def _grouping_df_from_rows(rows, *, reference='REF-1'):
+    return pd.DataFrame(
+        [
+            {
+                'REPORT_ID': report_id,
+                'REFERENCE': reference,
+                'FILELOC': '/fake/reports',
+                'FILENAME': filename,
+                'DATE': report_date,
+                'SAMPLE_NUMBER': sample_number,
+                'GROUP': group,
+            }
+            for report_id, filename, report_date, sample_number, group, _meas, _dev in rows
+        ]
+    )
+
+
 
 class _FakeParser:
     def __init__(self, report_name: str):
+        report_path = Path(report_name)
         self.FILE_PATH = report_name
         self.pdf_reference = 'REF-1'
-        self.pdf_file_path = '/fake/reports'
-        self.pdf_file_name = report_name
+        self.pdf_file_path = str(report_path.parent)
+        self.pdf_file_name = report_path.name
         self.pdf_date = '2024-01-01'
-        self.pdf_sample_number = report_name.split('.')[0].split('_')[-1]
+        self.pdf_sample_number = report_path.stem.split('_')[-1]
 
 
 class TestPhase4ParseToExportHappyPath(unittest.TestCase):
     def test_parse_to_db_to_export_happy_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-            )
+            report_paths = [Path(temp_dir) / 'part_1.pdf', Path(temp_dir) / 'part_2.pdf']
+            for report_path in report_paths:
+                report_path.write_bytes(f'%PDF-1.4\n% {report_path.name}\n'.encode('ascii'))
 
             def persist_report(parser):
-                execute_with_retry(
+                _seed_measurement_report(
                     db_path,
-                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                    (
-                        parser.pdf_reference,
-                        parser.pdf_file_path,
-                        parser.pdf_file_name,
-                        parser.pdf_date,
-                        parser.pdf_sample_number,
-                    ),
-                )
-                report_id = execute_with_retry(db_path, 'SELECT MAX(ID) FROM REPORTS')[0][0]
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (report_id, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
+                    reference=parser.pdf_reference,
+                    directory_path=parser.pdf_file_path,
+                    file_name=parser.pdf_file_name,
+                    report_date=parser.pdf_date,
+                    sample_number=parser.pdf_sample_number,
                 )
 
             parse_result = parse_new_reports(
-                report_paths=['part_1.pdf', 'part_2.pdf'],
+                report_paths=[str(report_path) for report_path in report_paths],
                 report_fingerprints=set(),
                 parser_factory=_FakeParser,
                 persist_report=persist_report,
@@ -191,38 +262,15 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             self.assertEqual(parse_result.total_files, 2)
             self.assertEqual(parse_result.parsed_files, 2)
 
-            export_query = '''
-                SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
-                    MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
-                    MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
-                    REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
-                FROM MEASUREMENTS
-                JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
-                ORDER BY REPORTS.ID
-            '''
+            export_query = f'{build_measurement_export_query()} ORDER BY REPORT_ID'
 
             rows, columns = execute_export_query(db_path, export_query)
             export_df = build_export_dataframe(rows, columns)
 
             self.assertEqual(len(export_df), 2)
             self.assertEqual(
-                list(export_df.columns),
-                [
-                    'AX',
-                    'NOM',
-                    '+TOL',
-                    '-TOL',
-                    'BONUS',
-                    'MEAS',
-                    'DEV',
-                    'OUTTOL',
-                    'HEADER',
-                    'REFERENCE',
-                    'FILELOC',
-                    'FILENAME',
-                    'DATE',
-                    'SAMPLE_NUMBER',
-                ],
+                ['REPORT_ID', 'AX', 'NOM', '+TOL', '-TOL', 'BONUS', 'MEAS', 'DEV', 'OUTTOL', 'HEADER', 'REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER'],
+                [column for column in ['REPORT_ID', 'AX', 'NOM', '+TOL', '-TOL', 'BONUS', 'MEAS', 'DEV', 'OUTTOL', 'HEADER', 'REFERENCE', 'FILELOC', 'FILENAME', 'DATE', 'SAMPLE_NUMBER'] if column in export_df.columns],
             )
             self.assertEqual(export_df['SAMPLE_NUMBER'].tolist(), ['1', '2'])
             self.assertEqual(export_df['MEAS'].tolist(), [10.1, 10.1])
@@ -232,24 +280,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
 
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
-            )
+            _seed_measurement_report(db_path)
 
             request = ExportRequest(
                 paths=AppPaths(db_file=db_path, excel_file=out_path),
@@ -282,36 +313,8 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
 
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-            )
-
-            execute_with_retry(
-                db_path,
-                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                ('REF-1', '/fake/reports', 'part_2.pdf', '2024-01-02', '2'),
-            )
-
-            execute_with_retry(
-                db_path,
-                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (2, 'X', 10.0, 0.5, -0.5, 0.0, 10.2, 0.2, 0, 'FEATURE_1'),
-            )
+            _seed_measurement_report(db_path, file_name='part_1.pdf', report_date='2024-01-01', sample_number='1', meas=10.1, dev=0.1)
+            _seed_measurement_report(db_path, file_name='part_2.pdf', report_date='2024-01-02', sample_number='2', meas=10.2, dev=0.2)
 
             request = ExportRequest(
                 paths=AppPaths(db_file=db_path, excel_file=out_path),
@@ -350,30 +353,27 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
 
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-            )
-
             rows = [
                 (1, 'REF-1', 'part_1.pdf', '2024-01-01', '1', 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
                 (2, 'REF-1', 'part_2.pdf', '2024-01-02', '2', 'X', 10.0, 0.5, -0.5, 0.0, 10.7, 0.7, 1, 'FEATURE_1'),
                 (3, 'REF-1', 'part_3.pdf', '2024-01-03', '3', 'X', 10.0, 0.5, -0.5, 0.0, 9.2, -0.8, 1, 'FEATURE_1'),
             ]
             for report_id, reference, filename, report_date, sample_number, ax, nom, plus_tol, minus_tol, bonus, meas, dev, outtol, header in rows:
-                execute_with_retry(
+                _seed_measurement_report(
                     db_path,
-                    'INSERT INTO REPORTS (ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?, ?)',
-                    (report_id, reference, '/fake/reports', filename, report_date, sample_number),
-                )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (report_id, ax, nom, plus_tol, minus_tol, bonus, meas, dev, outtol, header),
+                    reference=reference,
+                    file_name=filename,
+                    report_date=report_date,
+                    sample_number=sample_number,
+                    ax=ax,
+                    nominal=nom,
+                    tol_plus=plus_tol,
+                    tol_minus=minus_tol,
+                    bonus=bonus,
+                    meas=meas,
+                    dev=dev,
+                    outtol=outtol,
+                    header=header,
                 )
 
             request = ExportRequest(
@@ -420,24 +420,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
 
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
-            )
+            _seed_measurement_report(db_path)
 
             request = ExportRequest(
                 paths=AppPaths(db_file=db_path, excel_file=out_path),
@@ -458,14 +441,6 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 db_path = str(Path(temp_dir) / 'metroliza.sqlite')
                 out_path = str(Path(temp_dir) / f'export_{level}.xlsx')
 
-                execute_with_retry(
-                    db_path,
-                    'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-                )
-                execute_with_retry(
-                    db_path,
-                    'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-                )
                 report_rows = [
                     (1, 'part_1.pdf', '2024-01-01', '1', 'A', 10.10, 0.10),
                     (2, 'part_2.pdf', '2024-01-02', '2', 'A', 10.12, 0.12),
@@ -474,31 +449,19 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                     (5, 'part_5.pdf', '2024-01-05', '5', 'B', 10.39, 0.39),
                     (6, 'part_6.pdf', '2024-01-06', '6', 'B', 10.41, 0.41),
                 ]
-                for report_id, filename, report_date, sample_number, _group, meas, dev in report_rows:
-                    execute_with_retry(
+                seeded_report_rows = []
+                for _report_id, filename, report_date, sample_number, group, meas, dev in report_rows:
+                    report_id = _seed_measurement_report(
                         db_path,
-                        'INSERT INTO REPORTS (ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?, ?)',
-                        (report_id, 'REF-1', '/fake/reports', filename, report_date, sample_number),
+                        file_name=filename,
+                        report_date=report_date,
+                        sample_number=sample_number,
+                        meas=meas,
+                        dev=dev,
                     )
-                    execute_with_retry(
-                        db_path,
-                        'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (report_id, 'X', 10.0, 0.5, -0.5, 0.0, meas, dev, 0, 'FEATURE_1'),
-                    )
+                    seeded_report_rows.append((report_id, filename, report_date, sample_number, group, meas, dev))
 
-                grouping_df = pd.DataFrame(
-                    [
-                        {
-                            'REFERENCE': 'REF-1',
-                            'FILELOC': '/fake/reports',
-                            'FILENAME': filename,
-                            'DATE': report_date,
-                            'SAMPLE_NUMBER': sample_number,
-                            'GROUP': group,
-                        }
-                        for _report_id, filename, report_date, sample_number, group, _meas, _dev in report_rows
-                    ]
-                )
+                grouping_df = _grouping_df_from_rows(seeded_report_rows)
                 request = ExportRequest(
                     paths=AppPaths(db_file=db_path, excel_file=out_path),
                     options=ExportOptions(generate_summary_sheet=False, group_analysis_level=level),
@@ -544,25 +507,15 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 db_path = str(Path(temp_dir) / 'metroliza.sqlite')
                 out_path = str(Path(temp_dir) / 'export.xlsx')
 
-                execute_with_retry(
-                    db_path,
-                    'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-                )
-                execute_with_retry(
-                    db_path,
-                    'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-                )
-
                 for index, (reference, filename, sample_number) in enumerate(scenario['references'], start=1):
-                    execute_with_retry(
+                    _seed_measurement_report(
                         db_path,
-                        'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                        (reference, '/fake/reports', filename, f'2024-01-0{index}', sample_number),
-                    )
-                    execute_with_retry(
-                        db_path,
-                        'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (index, 'X', 10.0, 0.5, -0.5, 0.0, 10.0 + (0.1 * index), 0.1 * index, 0, 'FEATURE_1'),
+                        reference=reference,
+                        file_name=filename,
+                        report_date=f'2024-01-0{index}',
+                        sample_number=sample_number,
+                        meas=10.0 + (0.1 * index),
+                        dev=0.1 * index,
                     )
 
                 request = ExportRequest(
@@ -595,24 +548,7 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
 
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
-            )
-            execute_with_retry(
-                db_path,
-                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
-            )
+            _seed_measurement_report(db_path)
 
             request = ExportRequest(
                 paths=AppPaths(db_file=db_path, excel_file=out_path),
@@ -648,15 +584,6 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
 
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-            )
-
             rows = [
                 (1, 'part_1.pdf', '2024-01-01', '1', 'A', 10.10, 0.10),
                 (2, 'part_2.pdf', '2024-01-02', '2', 'A', 10.12, 0.12),
@@ -665,31 +592,19 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 (5, 'part_5.pdf', '2024-01-05', '5', 'B', 10.39, 0.39),
                 (6, 'part_6.pdf', '2024-01-06', '6', 'B', 10.41, 0.41),
             ]
-            for report_id, filename, report_date, sample_number, _group, meas, dev in rows:
-                execute_with_retry(
+            seeded_rows = []
+            for _report_id, filename, report_date, sample_number, group, meas, dev in rows:
+                report_id = _seed_measurement_report(
                     db_path,
-                    'INSERT INTO REPORTS (ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?, ?)',
-                    (report_id, 'REF-1', '/fake/reports', filename, report_date, sample_number),
+                    file_name=filename,
+                    report_date=report_date,
+                    sample_number=sample_number,
+                    meas=meas,
+                    dev=dev,
                 )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (report_id, 'X', 10.0, 0.5, -0.5, 0.0, meas, dev, 0, 'FEATURE_1'),
-                )
+                seeded_rows.append((report_id, filename, report_date, sample_number, group, meas, dev))
 
-            grouping_df = pd.DataFrame(
-                [
-                    {
-                        'REFERENCE': 'REF-1',
-                        'FILELOC': '/fake/reports',
-                        'FILENAME': filename,
-                        'DATE': report_date,
-                        'SAMPLE_NUMBER': sample_number,
-                        'GROUP': group,
-                    }
-                    for _report_id, filename, report_date, sample_number, group, _meas, _dev in rows
-                ]
-            )
+            grouping_df = _grouping_df_from_rows(seeded_rows)
             request = ExportRequest(
                 paths=AppPaths(db_file=db_path, excel_file=out_path),
                 options=ExportOptions(generate_summary_sheet=False, group_analysis_level='light'),
@@ -722,34 +637,8 @@ class TestPhase4ParseToExportHappyPath(unittest.TestCase):
                 db_path = str(Path(temp_dir) / 'metroliza.sqlite')
                 out_path = str(Path(temp_dir) / 'export.xlsx')
 
-                execute_with_retry(
-                    db_path,
-                    'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-                )
-                execute_with_retry(
-                    db_path,
-                    'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-                )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                    ('REF-1', '/fake/reports', 'part_1.pdf', '2024-01-01', '1'),
-                )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                    ('REF-1', '/fake/reports', 'part_2.pdf', '2024-01-02', '2'),
-                )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (1, 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
-                )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (2, 'X', 10.0, 0.5, -0.5, 0.0, 10.2, 0.2, 0, 'FEATURE_1'),
-                )
+                _seed_measurement_report(db_path, file_name='part_1.pdf', report_date='2024-01-01', sample_number='1', meas=10.1, dev=0.1)
+                _seed_measurement_report(db_path, file_name='part_2.pdf', report_date='2024-01-02', sample_number='2', meas=10.2, dev=0.2)
 
                 request = ExportRequest(
                     paths=AppPaths(db_file=db_path, excel_file=out_path),

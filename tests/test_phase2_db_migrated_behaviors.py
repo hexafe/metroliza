@@ -72,8 +72,8 @@ class TestPhase2DbMigratedBehaviors(unittest.TestCase):
             parser.to_sqlite()
             parser.to_sqlite()
 
-            reports_count = execute_with_retry(db_path, 'SELECT COUNT(*) FROM REPORTS')[0][0]
-            measurements_count = execute_with_retry(db_path, 'SELECT COUNT(*) FROM MEASUREMENTS')[0][0]
+            reports_count = execute_with_retry(db_path, 'SELECT COUNT(*) FROM parsed_reports')[0][0]
+            measurements_count = execute_with_retry(db_path, 'SELECT COUNT(*) FROM report_measurements')[0][0]
 
             self.assertEqual(reports_count, 1)
             self.assertEqual(measurements_count, 1)
@@ -88,7 +88,21 @@ class TestPhase2DbMigratedBehaviors(unittest.TestCase):
                 tables = {
                     row[0]
                     for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('REPORTS', 'MEASUREMENTS', 'CHARACTERISTIC_ALIASES')"
+                        """
+                        SELECT name
+                        FROM sqlite_master
+                        WHERE type='table'
+                          AND name IN (
+                              'source_files',
+                              'source_file_locations',
+                              'parsed_reports',
+                              'report_metadata',
+                              'report_metadata_candidates',
+                              'report_metadata_warnings',
+                              'report_measurements',
+                              'CHARACTERISTIC_ALIASES'
+                          )
+                        """
                     ).fetchall()
                 }
                 indexes = {
@@ -98,9 +112,21 @@ class TestPhase2DbMigratedBehaviors(unittest.TestCase):
                     ).fetchall()
                 }
 
-            self.assertEqual(tables, {'REPORTS', 'MEASUREMENTS', 'CHARACTERISTIC_ALIASES'})
-            self.assertIn('idx_reports_identity', indexes)
-            self.assertIn('idx_measurements_report_header_ax', indexes)
+            self.assertEqual(
+                tables,
+                {
+                    'source_files',
+                    'source_file_locations',
+                    'parsed_reports',
+                    'report_metadata',
+                    'report_metadata_candidates',
+                    'report_metadata_warnings',
+                    'report_measurements',
+                    'CHARACTERISTIC_ALIASES',
+                },
+            )
+            self.assertIn('idx_source_files_sha256', indexes)
+            self.assertIn('idx_report_measurements_report_header_ax', indexes)
 
     def test_cmm_to_sqlite_insert_behavior_unchanged_after_bootstrap(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -126,11 +152,17 @@ class TestPhase2DbMigratedBehaviors(unittest.TestCase):
 
             report_row = execute_with_retry(
                 db_path,
-                'SELECT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS',
+                """
+                SELECT reference, directory_path, file_name, report_date, sample_number
+                FROM vw_report_overview
+                """,
             )
             measurement_row = execute_with_retry(
                 db_path,
-                'SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER FROM MEASUREMENTS',
+                """
+                SELECT ax, nominal, tol_plus, tol_minus, bonus, meas, dev, outtol, header
+                FROM report_measurements
+                """,
             )
 
             self.assertEqual(report_row, [('REF02', '/tmp/reports', 'REF02_2024-01-03_321.pdf', '2024-01-03', '321')])

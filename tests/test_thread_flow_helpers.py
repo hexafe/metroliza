@@ -77,14 +77,18 @@ from modules.export_logging_service import (  # noqa: E402
     log_export_stage,
     log_google_issue,
 )
-from modules.parse_reports_thread import build_report_fingerprints_from_rows, parse_new_reports  # noqa: E402
+from modules.parse_reports_thread import (  # noqa: E402
+    build_report_fingerprints_from_rows,
+    build_source_file_fingerprint,
+    parse_new_reports,
+)
 
 
 class TestParseHelpers(unittest.TestCase):
     def test_build_report_fingerprints_stops_on_cancel(self):
         rows = [
-            (1, 'R1', '/a', 'one.pdf', '2024-01-01', '1'),
-            (2, 'R2', '/b', 'two.pdf', '2024-01-02', '2'),
+            ('sha-one',),
+            ('sha-two',),
         ]
         calls = {'count': 0}
 
@@ -96,16 +100,15 @@ class TestParseHelpers(unittest.TestCase):
         self.assertEqual(len(fingerprints), 1)
 
 
-    def test_build_report_fingerprints_matches_id_and_composite_behavior(self):
+    def test_build_report_fingerprints_uses_source_hashes(self):
         rows = [
-            (5, 'R1', '/a', 'one.pdf', '2024-01-01', '1'),
-            (None, 'R2', '/b', 'two.pdf', '2024-01-02', '2'),
+            ('sha-one',),
+            {'sha256': 'sha-two'},
         ]
 
         fingerprints = build_report_fingerprints_from_rows(rows)
 
-        self.assertIn('id:5', fingerprints)
-        self.assertIn('R2|/b|two.pdf|2024-01-02|2', fingerprints)
+        self.assertEqual(fingerprints, {'sha256:sha-one', 'sha256:sha-two'})
 
 
     def test_get_list_of_reports_supports_zip_source(self):
@@ -161,16 +164,12 @@ class TestParseHelpers(unittest.TestCase):
 
 
 
-    def test_get_report_fingerprints_uses_selective_batches_and_preserves_semantics(self):
+    def test_get_report_fingerprints_loads_source_hashes(self):
         from modules.parse_reports_thread import ParseReportsThread
         from modules.contracts import ParseRequest
         import modules.parse_reports_thread as parse_thread_module
 
         thread = ParseReportsThread(ParseRequest(source_directory='.', db_file='test.db'))
-        thread._report_lookup_candidates = {
-            'filenames': {'one.pdf', 'other.pdf'},
-            'reference_dates': {('REF-A', '2024-01-01')},
-        }
 
         original_execute = parse_thread_module.execute_with_retry
         calls = []
@@ -180,15 +179,8 @@ class TestParseHelpers(unittest.TestCase):
             calls.append((query, params))
             if "sqlite_master" in query:
                 return [(1,)]
-            if "FROM REPORTS WHERE FILENAME IN" in query:
-                return [
-                    (7, 'REF-A', '/tmp', 'one.pdf', '2024-01-01', '1'),
-                    (None, 'REF-B', '/tmp', 'other.pdf', '2024-01-03', '2'),
-                ]
-            if "FROM REPORTS WHERE (REFERENCE = ? AND DATE = ?)" in query:
-                return [
-                    (None, 'REF-A', '/tmp', 'one.pdf', '2024-01-01', '1'),
-                ]
+            if "SELECT sha256 FROM source_files" in query:
+                return [('sha-one',), ('sha-two',)]
             raise AssertionError(f"Unexpected query: {query}")
 
         parse_thread_module.execute_with_retry = _fake_execute
@@ -197,14 +189,10 @@ class TestParseHelpers(unittest.TestCase):
         finally:
             parse_thread_module.execute_with_retry = original_execute
 
-        self.assertIn('id:7', fingerprints)
-        self.assertIn('REF-B|/tmp|other.pdf|2024-01-03|2', fingerprints)
-        self.assertIn('REF-A|/tmp|one.pdf|2024-01-01|1', fingerprints)
+        self.assertEqual(fingerprints, {'sha256:sha-one', 'sha256:sha-two'})
 
         self.assertTrue(any('sqlite_master' in query for query, _ in calls))
-        self.assertTrue(any('FROM REPORTS WHERE FILENAME IN' in query for query, _ in calls))
-        self.assertTrue(any('FROM REPORTS WHERE (REFERENCE = ? AND DATE = ?)' in query for query, _ in calls))
-        self.assertFalse(any(query.strip() == 'SELECT ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER FROM REPORTS' for query, _ in calls))
+        self.assertTrue(any('SELECT sha256 FROM source_files' in query for query, _ in calls))
 
 
     def test_get_report_fingerprints_stops_loading_batches_on_cancel(self):
@@ -213,22 +201,18 @@ class TestParseHelpers(unittest.TestCase):
         import modules.parse_reports_thread as parse_thread_module
 
         thread = ParseReportsThread(ParseRequest(source_directory='.', db_file='test.db'))
-        thread._report_lookup_candidates = {
-            'filenames': {'one.pdf', 'two.pdf', 'three.pdf'},
-            'reference_dates': set(),
-        }
         thread.LOOKUP_BATCH_SIZE = 1
 
         original_execute = parse_thread_module.execute_with_retry
-        query_calls = {'batch_queries': 0}
+        query_calls = {'source_hash_queries': 0}
 
         def _fake_execute(_db, query, params=None, **_kwargs):
             if 'sqlite_master' in query:
                 return [(1,)]
-            if 'FROM REPORTS WHERE FILENAME IN' in query:
-                query_calls['batch_queries'] += 1
+            if 'SELECT sha256 FROM source_files' in query:
+                query_calls['source_hash_queries'] += 1
                 thread.parsing_canceled = True
-                return [(None, 'REF-X', '/tmp', params[0], '2024-01-01', '1')]
+                return [('sha-one',)]
             return []
 
         parse_thread_module.execute_with_retry = _fake_execute
@@ -237,7 +221,7 @@ class TestParseHelpers(unittest.TestCase):
         finally:
             parse_thread_module.execute_with_retry = original_execute
 
-        self.assertEqual(query_calls['batch_queries'], 1)
+        self.assertEqual(query_calls['source_hash_queries'], 1)
         self.assertEqual(len(fingerprints), 0)
 
     def test_parse_new_reports_skips_existing_and_honors_cancel(self):
@@ -250,30 +234,37 @@ class TestParseHelpers(unittest.TestCase):
                 self.pdf_date = '2024-01-01'
                 self.pdf_sample_number = '1'
 
-        persisted = []
-        existing = set()
-        reports = ['a.pdf', 'b.pdf', 'c.pdf']
-        calls = {'count': 0}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = []
+            for name in ('a.pdf', 'b.pdf', 'c.pdf'):
+                path = os.path.join(tmpdir, name)
+                with open(path, 'wb') as report_file:
+                    report_file.write(name.encode('utf-8'))
+                reports.append(path)
 
-        def should_cancel():
-            calls['count'] += 1
-            return calls['count'] > 2
+            persisted = []
+            existing = set()
+            calls = {'count': 0}
 
-        progress_updates = []
+            def should_cancel():
+                calls['count'] += 1
+                return calls['count'] > 2
 
-        result = parse_new_reports(
-            reports,
-            existing,
-            parser_factory=DummyParser,
-            persist_report=lambda parser: persisted.append(parser.FILE_PATH),
-            should_cancel=should_cancel,
-            on_progress=lambda parsed, total: progress_updates.append((parsed, total)),
-        )
+            progress_updates = []
 
-        self.assertEqual(result.total_files, 3)
-        self.assertEqual(result.parsed_files, 2)
-        self.assertEqual(persisted, ['a.pdf', 'b.pdf'])
-        self.assertEqual(progress_updates, [(1, 3), (2, 3)])
+            result = parse_new_reports(
+                reports,
+                existing,
+                parser_factory=DummyParser,
+                persist_report=lambda parser: persisted.append(os.path.basename(parser.FILE_PATH)),
+                should_cancel=should_cancel,
+                on_progress=lambda parsed, total: progress_updates.append((parsed, total)),
+            )
+
+            self.assertEqual(result.total_files, 3)
+            self.assertEqual(result.parsed_files, 2)
+            self.assertEqual(persisted, ['a.pdf', 'b.pdf'])
+            self.assertEqual(progress_updates, [(1, 3), (2, 3)])
 
     def test_parse_new_reports_two_stage_duplicate_detection(self):
         class DummyParser:
@@ -289,18 +280,26 @@ class TestParseHelpers(unittest.TestCase):
             def prepare_for_two_stage_pipeline(self):
                 return None
 
-        persisted = []
-        result = parse_new_reports(
-            ['a.pdf', 'b.pdf'],
-            {'R|/tmp|b.pdf|2024-01-01|1'},
-            parser_factory=DummyParser,
-            persist_report=lambda parser: persisted.append(parser.FILE_PATH),
-            enable_two_stage_pipeline=True,
-            worker_count=2,
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = []
+            for name in ('a.pdf', 'b.pdf'):
+                path = os.path.join(tmpdir, name)
+                with open(path, 'wb') as report_file:
+                    report_file.write(name.encode('utf-8'))
+                reports.append(path)
 
-        self.assertEqual(result.parsed_files, 2)
-        self.assertEqual(persisted, ['a.pdf'])
+            persisted = []
+            result = parse_new_reports(
+                reports,
+                {build_source_file_fingerprint(reports[1])},
+                parser_factory=DummyParser,
+                persist_report=lambda parser: persisted.append(os.path.basename(parser.FILE_PATH)),
+                enable_two_stage_pipeline=True,
+                worker_count=2,
+            )
+
+            self.assertEqual(result.parsed_files, 2)
+            self.assertEqual(persisted, ['a.pdf'])
 
     def test_parse_new_reports_two_stage_honors_cancel(self):
         class DummyParser:
@@ -322,19 +321,27 @@ class TestParseHelpers(unittest.TestCase):
             checks['count'] += 1
             return checks['count'] > 2
 
-        persisted = []
-        result = parse_new_reports(
-            ['a.pdf', 'b.pdf', 'c.pdf'],
-            set(),
-            parser_factory=DummyParser,
-            persist_report=lambda parser: persisted.append(parser.FILE_PATH),
-            should_cancel=should_cancel,
-            enable_two_stage_pipeline=True,
-            worker_count=2,
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = []
+            for name in ('a.pdf', 'b.pdf', 'c.pdf'):
+                path = os.path.join(tmpdir, name)
+                with open(path, 'wb') as report_file:
+                    report_file.write(name.encode('utf-8'))
+                reports.append(path)
 
-        self.assertLessEqual(result.parsed_files, 2)
-        self.assertEqual(len(persisted), result.parsed_files)
+            persisted = []
+            result = parse_new_reports(
+                reports,
+                set(),
+                parser_factory=DummyParser,
+                persist_report=lambda parser: persisted.append(os.path.basename(parser.FILE_PATH)),
+                should_cancel=should_cancel,
+                enable_two_stage_pipeline=True,
+                worker_count=2,
+            )
+
+            self.assertLessEqual(result.parsed_files, 2)
+            self.assertEqual(len(persisted), result.parsed_files)
 
     def test_parse_new_reports_two_stage_deterministic_end_state_matches_sequential(self):
         class DummyParser:
@@ -350,29 +357,36 @@ class TestParseHelpers(unittest.TestCase):
             def prepare_for_two_stage_pipeline(self):
                 return None
 
-        reports = ['a.pdf', 'b.pdf', 'c.pdf']
-        persisted_sequential = []
-        fingerprints_sequential = set()
-        parse_new_reports(
-            reports,
-            fingerprints_sequential,
-            parser_factory=DummyParser,
-            persist_report=lambda parser: persisted_sequential.append(parser.FILE_PATH),
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = []
+            for name in ('a.pdf', 'b.pdf', 'c.pdf'):
+                path = os.path.join(tmpdir, name)
+                with open(path, 'wb') as report_file:
+                    report_file.write(name.encode('utf-8'))
+                reports.append(path)
 
-        persisted_two_stage = []
-        fingerprints_two_stage = set()
-        parse_new_reports(
-            reports,
-            fingerprints_two_stage,
-            parser_factory=DummyParser,
-            persist_report=lambda parser: persisted_two_stage.append(parser.FILE_PATH),
-            enable_two_stage_pipeline=True,
-            worker_count=2,
-        )
+            persisted_sequential = []
+            fingerprints_sequential = set()
+            parse_new_reports(
+                reports,
+                fingerprints_sequential,
+                parser_factory=DummyParser,
+                persist_report=lambda parser: persisted_sequential.append(os.path.basename(parser.FILE_PATH)),
+            )
 
-        self.assertEqual(set(persisted_two_stage), set(persisted_sequential))
-        self.assertEqual(fingerprints_two_stage, fingerprints_sequential)
+            persisted_two_stage = []
+            fingerprints_two_stage = set()
+            parse_new_reports(
+                reports,
+                fingerprints_two_stage,
+                parser_factory=DummyParser,
+                persist_report=lambda parser: persisted_two_stage.append(os.path.basename(parser.FILE_PATH)),
+                enable_two_stage_pipeline=True,
+                worker_count=2,
+            )
+
+            self.assertEqual(set(persisted_two_stage), set(persisted_sequential))
+            self.assertEqual(fingerprints_two_stage, fingerprints_sequential)
 
     def test_parse_label_includes_multiline_progress_details(self):
         from modules.parse_reports_thread import ParseReportsThread

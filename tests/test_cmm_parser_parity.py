@@ -500,13 +500,17 @@ def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
 
     rows = execute_with_retry(
         db_path,
-        'SELECT AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL FROM MEASUREMENTS ORDER BY AX',
+        """
+        SELECT ax, nominal, tol_plus, tol_minus, bonus, meas, dev, outtol
+        FROM report_measurements
+        ORDER BY ax
+        """,
     )
 
     assert rows == [
-        ("D1", 10.0, 0.2, -0.2, 0.0, 10.03, "", ""),
-        ("D2", 20.0, 0.2, -0.2, 0.0, 20.01, "", ""),
-        ("D3", 30.0, 0.2, -0.2, 0.0, 29.98, "", ""),
+        ("D1", 10.0, 0.2, -0.2, 0.0, 10.03, None, None),
+        ("D2", 20.0, 0.2, -0.2, 0.0, 20.01, None, None),
+        ("D3", 30.0, 0.2, -0.2, 0.0, 29.98, None, None),
     ]
 
 
@@ -556,19 +560,16 @@ def _assert_tp_pipeline_roundtrip(parsed_blocks, tmp_path):
 
     measurement_rows = execute_with_retry(
         db_path,
-        'SELECT NOM, "+TOL", BONUS, MEAS, DEV, OUTTOL FROM MEASUREMENTS WHERE AX = "TP"',
+        'SELECT nominal, tol_plus, bonus, meas, dev, outtol FROM report_measurements WHERE ax = "TP"',
     )
     assert measurement_rows == [(0.0, 0.2, 0.0, 0.344, 0.344, 0.144)]
 
     with sqlite3.connect(db_path) as conn:
         export_rows = conn.execute(
             """
-            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
-                MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
-                MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
-                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
-            FROM MEASUREMENTS
-            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
+            SELECT ax, nominal, tol_plus, tol_minus, bonus, meas, dev, outtol, header,
+                   reference, directory_path, file_name, report_date, sample_number
+            FROM vw_measurement_export
             WHERE 1=1
             """
         ).fetchall()
@@ -766,8 +767,8 @@ def test_measurement_row_persistence_duplicate_detection_python_backend(tmp_path
     assert persist_measurement_rows_python(py_db, rows) is False
 
     with sqlite3.connect(py_db) as conn:
-        report_count = conn.execute("SELECT COUNT(*) FROM REPORTS").fetchone()
-        measurement_count = conn.execute("SELECT COUNT(*) FROM MEASUREMENTS").fetchone()
+        report_count = conn.execute("SELECT COUNT(*) FROM parsed_reports").fetchone()
+        measurement_count = conn.execute("SELECT COUNT(*) FROM report_measurements").fetchone()
 
     assert report_count == (1,)
     assert measurement_count == (1,)
@@ -781,8 +782,8 @@ def test_large_row_persistence_python_backend(tmp_path, large_measurement_rows):
     assert persist_measurement_rows_python(py_db, large_measurement_rows) is False
 
     with sqlite3.connect(py_db) as conn:
-        report_count = conn.execute("SELECT COUNT(*) FROM REPORTS").fetchone()
-        measurement_count = conn.execute("SELECT COUNT(*) FROM MEASUREMENTS").fetchone()
+        report_count = conn.execute("SELECT COUNT(*) FROM parsed_reports").fetchone()
+        measurement_count = conn.execute("SELECT COUNT(*) FROM report_measurements").fetchone()
 
     assert report_count == (1,)
     assert measurement_count == (len(large_measurement_rows),)

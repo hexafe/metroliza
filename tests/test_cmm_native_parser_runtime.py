@@ -251,7 +251,7 @@ def test_parse_blocks_with_backend_keeps_tp_non_tp_mixed_semantic_token_parity(m
     assert native == python
 
 
-def test_native_persistence_preinitialized_db_benchmark(monkeypatch, tmp_path):
+def test_native_persistence_routes_to_python_repository(monkeypatch, tmp_path):
     monkeypatch.setenv("METROLIZA_CMM_PERSIST_BACKEND", "native")
     parser = importlib.reload(cmm_native_parser)
     parser.reset_backend_telemetry()
@@ -261,19 +261,9 @@ def test_native_persistence_preinitialized_db_benchmark(monkeypatch, tmp_path):
         ("X", 10.0, 0.2, -0.2, 0.0, 10.1, 0.1, 0.0, "HEADER", "REF", "/tmp", "f.pdf", "2024-01-01", "001"),
     ]
 
-    ensure_calls = {"count": 0}
-
-    def _slow_ensure_schema(database, **kwargs):
-        assert database == db_path
-        ensure_calls["count"] += 1
-        time.sleep(0.01)
-
     def _fake_native_persist(database, normalized_rows):
-        assert database == db_path
-        assert normalized_rows == rows
-        return True
+        raise AssertionError("Native persistence should not be used by the metadata schema")
 
-    monkeypatch.setattr(parser, "ensure_cmm_report_schema", _slow_ensure_schema)
     monkeypatch.setattr(parser, "_native_persist_measurement_rows", _fake_native_persist)
     monkeypatch.setattr(parser, "_native_normalize_measurement_rows", lambda *args, **kwargs: rows)
 
@@ -284,8 +274,6 @@ def test_native_persistence_preinitialized_db_benchmark(monkeypatch, tmp_path):
             db_path, rows, use_native=True
         )
         durations.append(time.perf_counter() - started)
-        assert result.backend == "native"
-        assert result.inserted is True
+        assert result.backend == "python"
 
-    assert ensure_calls["count"] in {0, 1}
     assert all(duration >= 0 for duration in durations)

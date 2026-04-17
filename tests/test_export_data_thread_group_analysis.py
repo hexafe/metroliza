@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import tempfile
+import sqlite3
 import types
 import unittest
 import zipfile
@@ -15,8 +16,8 @@ import pandas as pd
 
 from pathlib import Path
 
-from modules.db import execute_with_retry  # noqa: E402
 from modules.chart_render_spec import build_resolved_distribution_spec, build_resolved_iqr_spec, build_resolved_trend_spec  # noqa: E402
+from modules.report_repository import ReportRepository  # noqa: E402
 
 
 qtcore_stub = sys.modules.get('PyQt6.QtCore') or types.ModuleType('PyQt6.QtCore')
@@ -298,15 +299,7 @@ def _row_heights(sheet_xml):
 
 
 def _seed_grouped_measurements(db_path):
-    execute_with_retry(
-        db_path,
-        'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-    )
-    execute_with_retry(
-        db_path,
-        'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-    )
-
+    repository = ReportRepository(db_path)
     rows = [
         (1, 'part_1.pdf', '2024-01-01', '1', 'A', 10.10, 0.10),
         (2, 'part_2.pdf', '2024-01-02', '2', 'A', 10.12, 0.12),
@@ -315,31 +308,80 @@ def _seed_grouped_measurements(db_path):
         (5, 'part_5.pdf', '2024-01-05', '5', 'B', 10.39, 0.39),
         (6, 'part_6.pdf', '2024-01-06', '6', 'B', 10.41, 0.41),
     ]
+    persisted_rows = []
     for report_id, filename, report_date, sample_number, _group, meas, dev in rows:
-        execute_with_retry(
-            db_path,
-            'INSERT INTO REPORTS (ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?, ?)',
-            (report_id, 'REF-1', '/fake/reports', filename, report_date, sample_number),
-        )
-        execute_with_retry(
-            db_path,
-            'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (report_id, 'X', 10.0, 0.5, -0.5, 0.0, meas, dev, 0, 'FEATURE_1'),
+        source_path = Path(db_path).with_name(filename)
+        source_path.write_bytes(f'report-content-{report_id}'.encode('utf-8'))
+        persisted_rows.append(
+            {
+                'REPORT_ID': repository.persist_parsed_report(
+                    source_path=source_path,
+                    parser_id='cmm',
+                    parser_version='1.0',
+                    template_family='cmm_pdf_header_box',
+                    template_variant='cmm_pdf_header_box_serial_variant',
+                    parse_status='parsed',
+                    metadata={
+                        'reference': 'REF-1',
+                        'reference_raw': 'REF-1',
+                        'report_date': report_date,
+                        'report_time': None,
+                        'part_name': None,
+                        'revision': None,
+                        'sample_number': sample_number,
+                        'sample_number_kind': 'stats_count',
+                        'stats_count_raw': sample_number,
+                        'stats_count_int': int(sample_number),
+                        'operator_name': None,
+                        'comment': None,
+                    },
+                    candidates=[],
+                    warnings=[],
+                    measurements=[
+                        {
+                            'page_number': 1,
+                            'row_order': 1,
+                            'header': 'FEATURE_1',
+                            'section_name': 'FEATURE_1',
+                            'feature_label': 'FEATURE_1',
+                            'characteristic_name': 'FEATURE_1',
+                            'characteristic_family': 'FEATURE_1',
+                            'description': 'Feature 1',
+                            'ax': 'X',
+                            'nominal': 10.0,
+                            'tol_plus': 0.5,
+                            'tol_minus': -0.5,
+                            'bonus': 0.0,
+                            'meas': meas,
+                            'dev': dev,
+                            'outtol': 0,
+                            'is_nok': False,
+                            'status_code': 'ok',
+                        }
+                    ],
+                    metadata_version='report_metadata_v1',
+                    metadata_profile_id='cmm_pdf_header_box',
+                    metadata_profile_version='1',
+                    page_count=1,
+                    measurement_count=1,
+                    has_nok=False,
+                    nok_count=0,
+                    metadata_confidence=1.0,
+                    identity_hash=f'identity-{report_id}',
+                ),
+                'GROUP': _group,
+            }
         )
 
-    return pd.DataFrame(
-        [
-            {
-                'REFERENCE': 'REF-1',
-                'FILELOC': '/fake/reports',
-                'FILENAME': filename,
-                'DATE': report_date,
-                'SAMPLE_NUMBER': sample_number,
-                'GROUP': group,
-            }
-            for _report_id, filename, report_date, sample_number, group, _meas, _dev in rows
-        ]
-    )
+    with sqlite3.connect(db_path) as conn:
+        overview_df = pd.read_sql_query(
+            'SELECT report_id AS REPORT_ID, reference AS REFERENCE, report_date AS DATE, sample_number AS SAMPLE_NUMBER '
+            'FROM vw_report_overview ORDER BY report_id',
+            conn,
+        )
+
+    overview_df['GROUP'] = [row['GROUP'] for row in persisted_rows]
+    return overview_df[['REPORT_ID', 'REFERENCE', 'DATE', 'SAMPLE_NUMBER', 'GROUP']]
 
 
 class TestExportDataThreadGroupAnalysis(unittest.TestCase):

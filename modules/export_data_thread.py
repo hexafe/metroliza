@@ -102,6 +102,7 @@ from modules.export_query_service import (
     fetch_sql_measurement_summaries,
     load_measurement_export_partition_dataframe,
 )
+from modules.report_query_service import build_measurement_export_query
 from modules.export_grouping_utils import (
     add_group_key as _add_group_key,
     apply_group_assignments as _apply_group_assignments,
@@ -3240,15 +3241,7 @@ class ExportDataThread(QThread):
         self.db_file = validated_request.paths.db_file
         self.excel_file = validated_request.paths.excel_file
 
-        default_filter_query = """
-            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL", 
-                MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS, 
-                MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE, 
-                REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER 
-            FROM MEASUREMENTS
-            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
-            WHERE 1=1
-            """
+        default_filter_query = build_measurement_export_query()
         self.filter_query = validated_request.filter_query or default_filter_query
         self.df_for_grouping = validated_request.grouping_df
         self.selected_export_type = validated_request.options.export_type

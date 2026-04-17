@@ -10,6 +10,7 @@ from modules.export_query_service import (
     fetch_partition_header_counts,
     fetch_sql_measurement_summaries,
 )
+from modules.report_query_service import build_measurement_export_query
 
 
 class TestExportQueryService(unittest.TestCase):
@@ -64,7 +65,7 @@ class TestExportQueryService(unittest.TestCase):
         previous_reader = service._read_sql_query
         try:
             service._read_sql_query = fake_read_sql_query
-            counts = fetch_partition_header_counts('db.sqlite', 'SELECT * FROM REPORTS')
+            counts = fetch_partition_header_counts('db.sqlite', 'SELECT * FROM vw_measurement_export')
         finally:
             service._read_sql_query = previous_reader
 
@@ -97,7 +98,7 @@ class TestExportQueryService(unittest.TestCase):
         previous_reader = service._read_sql_query
         try:
             service._read_sql_query = fake_read_sql_query
-            summaries = fetch_sql_measurement_summaries('db.sqlite', 'SELECT * FROM REPORTS', reference='REF_A')
+            summaries = fetch_sql_measurement_summaries('db.sqlite', 'SELECT * FROM vw_measurement_export', reference='REF_A')
         finally:
             service._read_sql_query = previous_reader
 
@@ -108,6 +109,12 @@ class TestExportQueryService(unittest.TestCase):
             summaries[('REF_A', 'H1', 'AX1')]['sample_size'],
             3,
         )
+
+    def test_build_measurement_export_query_keeps_workbook_alias_columns(self):
+        query = build_measurement_export_query()
+
+        self.assertIn('directory_path AS FILELOC', query)
+        self.assertIn('file_name AS FILENAME', query)
 
 
 if __name__ == '__main__':

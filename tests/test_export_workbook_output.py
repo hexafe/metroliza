@@ -12,7 +12,8 @@ from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
-from modules.db import execute_with_retry  # noqa: E402
+from modules.report_repository import ReportRepository  # noqa: E402
+from modules.report_schema import ensure_report_schema  # noqa: E402
 
 
 NS_MAIN = {'x': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
@@ -109,14 +110,11 @@ class TestExportWorkbookOutput(unittest.TestCase):
             db_path = str(Path(temp_dir) / 'metroliza.sqlite')
             out_path = str(Path(temp_dir) / 'export.xlsx')
 
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-            )
-            execute_with_retry(
-                db_path,
-                'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-            )
+            ensure_report_schema(db_path)
+            repository = ReportRepository(db_path)
+
+            source_dir = Path(temp_dir) / 'reports'
+            source_dir.mkdir()
 
             rows = [
                 (1, 'REF-1', 'part_1.pdf', '2024-01-01', '1', 'X', 10.0, 0.5, -0.5, 0.0, 10.1, 0.1, 0, 'FEATURE_1'),
@@ -124,15 +122,61 @@ class TestExportWorkbookOutput(unittest.TestCase):
                 (3, 'REF-1', 'part_3.pdf', '2024-01-03', '3', 'X', 10.0, 0.5, -0.5, 0.0, 9.2, -0.8, 1, 'FEATURE_1'),
             ]
             for report_id, reference, filename, report_date, sample_number, ax, nom, plus_tol, minus_tol, bonus, meas, dev, outtol, header in rows:
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO REPORTS (ID, REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?, ?)',
-                    (report_id, reference, '/fake/reports', filename, report_date, sample_number),
-                )
-                execute_with_retry(
-                    db_path,
-                    'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (report_id, ax, nom, plus_tol, minus_tol, bonus, meas, dev, outtol, header),
+                source_path = source_dir / filename
+                source_path.write_bytes(f'report-content-{report_id}'.encode('utf-8'))
+                repository.persist_parsed_report(
+                    source_path=source_path,
+                    parser_id='cmm',
+                    parser_version='1.0',
+                    template_family='cmm_pdf_header_box',
+                    template_variant='cmm_pdf_header_box_serial_variant',
+                    parse_status='parsed_with_warnings',
+                    metadata={
+                        'reference': reference,
+                        'reference_raw': reference,
+                        'report_date': report_date,
+                        'part_name': 'Part',
+                        'revision': 'A',
+                        'sample_number': sample_number,
+                        'sample_number_kind': 'explicit_sample_number',
+                        'stats_count_raw': sample_number,
+                        'stats_count_int': int(sample_number),
+                        'operator_name': 'Operator',
+                        'comment': None,
+                    },
+                    measurements=[
+                        {
+                            'page_number': 1,
+                            'row_order': 1,
+                            'header': header,
+                            'section_name': header,
+                            'feature_label': header,
+                            'characteristic_name': 'LOC',
+                            'characteristic_family': 'LOC',
+                            'description': 'Feature 1 LOC',
+                            'ax': ax,
+                            'nominal': nom,
+                            'tol_plus': plus_tol,
+                            'tol_minus': minus_tol,
+                            'bonus': bonus,
+                            'meas': meas,
+                            'dev': dev,
+                            'outtol': outtol,
+                            'is_nok': bool(outtol),
+                            'status_code': 'nok' if outtol else 'ok',
+                        }
+                    ],
+                    candidates=[],
+                    warnings=[],
+                    metadata_version='report_metadata_v1',
+                    metadata_profile_id='cmm_pdf_header_box',
+                    metadata_profile_version='1',
+                    page_count=1,
+                    measurement_count=1,
+                    has_nok=bool(outtol),
+                    nok_count=1 if outtol else 0,
+                    metadata_confidence=0.9,
+                    identity_hash=f'identity-{report_id}',
                 )
 
             request = ExportRequest(

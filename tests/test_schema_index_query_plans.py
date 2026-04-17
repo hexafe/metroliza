@@ -62,29 +62,52 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
 
     def _create_schema_without_indexes(self, conn: sqlite3.Connection) -> None:
         conn.execute(
-            '''CREATE TABLE REPORTS (
-                ID INTEGER PRIMARY KEY,
-                REFERENCE TEXT,
-                FILELOC TEXT,
-                FILENAME TEXT,
-                DATE TEXT,
-                SAMPLE_NUMBER TEXT
+            '''CREATE TABLE source_files (
+                id INTEGER PRIMARY KEY,
+                sha256 TEXT,
+                file_size_bytes INTEGER,
+                source_format TEXT,
+                discovered_at TEXT,
+                ingested_at TEXT,
+                is_active INTEGER
             )'''
         )
         conn.execute(
-            '''CREATE TABLE MEASUREMENTS (
-                ID INTEGER PRIMARY KEY,
-                AX TEXT,
-                NOM REAL,
-                "+TOL" REAL,
-                "-TOL" REAL,
-                BONUS REAL,
-                MEAS REAL,
-                DEV REAL,
-                OUTTOL REAL,
-                HEADER TEXT,
-                REPORT_ID INTEGER,
-                FOREIGN KEY (REPORT_ID) REFERENCES REPORTS(ID)
+            '''CREATE TABLE parsed_reports (
+                id INTEGER PRIMARY KEY,
+                source_file_id INTEGER,
+                parser_id TEXT,
+                template_family TEXT,
+                template_variant TEXT,
+                parse_status TEXT,
+                measurement_count INTEGER,
+                has_nok INTEGER,
+                nok_count INTEGER,
+                identity_hash TEXT
+            )'''
+        )
+        conn.execute(
+            '''CREATE TABLE report_metadata (
+                report_id INTEGER PRIMARY KEY,
+                reference TEXT,
+                report_date TEXT,
+                sample_number TEXT
+            )'''
+        )
+        conn.execute(
+            '''CREATE TABLE report_measurements (
+                id INTEGER PRIMARY KEY,
+                report_id INTEGER,
+                header TEXT,
+                ax TEXT,
+                meas REAL,
+                nominal REAL,
+                tol_plus REAL,
+                tol_minus REAL,
+                bonus REAL,
+                dev REAL,
+                outtol REAL,
+                FOREIGN KEY (report_id) REFERENCES parsed_reports(id)
             )'''
         )
 
@@ -93,19 +116,46 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
             reference = 'REF_A' if i % 2 == 0 else 'REF_B'
             sample_number = f'{i:03d}'
             day = (i % 28) + 1
-            filename = f'{reference}_2024-02-{day:02d}_{sample_number}.pdf'
             conn.execute(
-                'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                (reference, '/tmp/reports', filename, f'2024-02-{day:02d}', sample_number),
+                """
+                INSERT INTO source_files (sha256, source_format, discovered_at, is_active)
+                VALUES (?, 'pdf', '2024-01-01T00:00:00Z', 1)
+                """,
+                (f'sha-{i}',),
+            )
+            source_file_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO parsed_reports (
+                    source_file_id, parser_id, template_family, parse_status,
+                    measurement_count, has_nok, nok_count, identity_hash
+                )
+                VALUES (?, 'parser', 'template', 'parsed', 2, 0, 0, ?)
+                """,
+                (source_file_id, f'identity-{i}'),
             )
             report_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
             conn.execute(
-                'INSERT INTO MEASUREMENTS (AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER, REPORT_ID) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                ('AX-001', 10.0, 0.1, -0.1, 0.0, 10.01, 0.01, 0.0, 'FEATURE A', report_id),
+                'INSERT INTO report_metadata (report_id, reference, report_date, sample_number) VALUES (?, ?, ?, ?)',
+                (report_id, reference, f'2024-02-{day:02d}', sample_number),
             )
             conn.execute(
-                'INSERT INTO MEASUREMENTS (AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER, REPORT_ID) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                ('AX-002', 20.0, 0.1, -0.1, 0.0, 20.01, 0.01, 0.0, 'FEATURE A', report_id),
+                """
+                INSERT INTO report_measurements (
+                    report_id, ax, nominal, tol_plus, tol_minus, bonus, meas, dev, outtol, header
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (report_id, 'AX-001', 10.0, 0.1, -0.1, 0.0, 10.01, 0.01, 0.0, 'FEATURE A'),
+            )
+            conn.execute(
+                """
+                INSERT INTO report_measurements (
+                    report_id, ax, nominal, tol_plus, tol_minus, bonus, meas, dev, outtol, header
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (report_id, 'AX-002', 20.0, 0.1, -0.1, 0.0, 20.01, 0.01, 0.0, 'FEATURE A'),
             )
         conn.commit()
 
@@ -125,43 +175,55 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 }
 
             expected_index_names = {
-                'idx_reports_reference',
-                'idx_reports_filename',
-                'idx_reports_date',
-                'idx_reports_sample_number',
-                'idx_reports_identity',
-                'idx_measurements_report_id',
-                'idx_measurements_report_header_ax',
-                'idx_measurements_header',
-                'idx_measurements_ax',
+                'idx_source_files_sha256',
+                'idx_source_file_locations_name',
+                'idx_source_file_locations_directory',
+                'idx_source_file_locations_source_active',
+                'idx_parsed_reports_parser_template',
+                'idx_parsed_reports_identity_hash',
+                'idx_parsed_reports_status',
+                'idx_report_metadata_reference',
+                'idx_report_metadata_report_date',
+                'idx_report_metadata_sample_number',
+                'idx_report_metadata_part_name',
+                'idx_report_metadata_revision',
+                'idx_report_metadata_stats_count_int',
+                'idx_report_metadata_candidates_report_field',
+                'idx_report_metadata_candidates_rule',
+                'idx_report_metadata_warnings_report',
+                'idx_report_metadata_warnings_code',
+                'idx_report_measurements_report',
+                'idx_report_measurements_report_header_ax',
+                'idx_report_measurements_header',
+                'idx_report_measurements_ax',
+                'idx_report_measurements_status',
+                'idx_report_measurements_family',
             }
             self.assertEqual(actual_index_names, expected_index_names)
 
     def test_query_plans_use_indexes_for_filter_and_grouping_patterns(self):
         filter_join_query = """
-            SELECT MEASUREMENTS.AX, MEASUREMENTS.HEADER, REPORTS.REFERENCE, REPORTS.DATE
-            FROM MEASUREMENTS
-            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
-            WHERE REPORTS.REFERENCE IN ('REF_A')
-              AND REPORTS.DATE >= '2024-02-10'
-              AND REPORTS.DATE <= '2024-02-20'
-              AND MEASUREMENTS.HEADER IN ('FEATURE A')
-              AND MEASUREMENTS.AX IN ('AX-001')
+            SELECT meas.ax, meas.header, meta.reference, meta.report_date
+            FROM report_measurements meas
+            JOIN report_metadata meta ON meta.report_id = meas.report_id
+            WHERE meta.reference IN ('REF_A')
+              AND meta.report_date >= '2024-02-10'
+              AND meta.report_date <= '2024-02-20'
+              AND meas.header IN ('FEATURE A')
+              AND meas.ax IN ('AX-001')
         """
         group_dialog_query = (
-            'SELECT DISTINCT REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER '
-            'FROM REPORTS WHERE REFERENCE = "REF_A" ORDER BY DATE'
+            'SELECT DISTINCT reference, report_date, sample_number '
+            'FROM report_metadata WHERE reference = "REF_A" ORDER BY report_date'
         )
         duplicate_guard_query = (
-            "SELECT COUNT(*) FROM REPORTS "
-            "WHERE REFERENCE='REF_A' AND FILELOC='/tmp/reports' AND "
-            "FILENAME='REF_A_2024-02-10_010.pdf' AND DATE='2024-02-10' AND SAMPLE_NUMBER='010'"
+            "SELECT COUNT(*) FROM parsed_reports WHERE identity_hash='identity-10'"
         )
         measurement_summary_query = """
-            SELECT REPORT_ID, HEADER, AX, COUNT(MEAS)
-            FROM MEASUREMENTS
-            WHERE REPORT_ID IN (1, 2, 3, 4, 5)
-            GROUP BY REPORT_ID, HEADER, AX
+            SELECT report_id, header, ax, COUNT(meas)
+            FROM report_measurements
+            WHERE report_id IN (1, 2, 3, 4, 5)
+            GROUP BY report_id, header, ax
         """
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -188,17 +250,20 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 indexed_duplicate_plan = self._explain(conn, duplicate_guard_query)
                 indexed_summary_plan = self._explain(conn, measurement_summary_query)
 
-        self.assertIn('SCAN MEASUREMENTS', no_index_filter_plan)
-        self.assertIn('idx_measurements_ax', indexed_filter_plan)
+        self.assertIn('SCAN meas', no_index_filter_plan)
+        self.assertTrue(
+            'idx_report_measurements_ax' in indexed_filter_plan
+            or 'idx_report_metadata_reference' in indexed_filter_plan
+        )
 
         self.assertIn('USE TEMP B-TREE FOR DISTINCT', no_index_group_plan)
-        self.assertIn('idx_reports_identity', indexed_group_plan)
+        self.assertIn('idx_report_metadata_reference', indexed_group_plan)
 
-        self.assertIn('SCAN REPORTS', no_index_duplicate_plan)
-        self.assertIn('idx_reports_identity', indexed_duplicate_plan)
+        self.assertIn('SCAN parsed_reports', no_index_duplicate_plan)
+        self.assertIn('idx_parsed_reports_identity_hash', indexed_duplicate_plan)
 
-        self.assertIn('SCAN MEASUREMENTS', no_index_summary_plan)
-        self.assertIn('idx_measurements_report_header_ax', indexed_summary_plan)
+        self.assertIn('SCAN report_measurements', no_index_summary_plan)
+        self.assertIn('idx_report_measurements_report_header_ax', indexed_summary_plan)
 
 
 if __name__ == '__main__':

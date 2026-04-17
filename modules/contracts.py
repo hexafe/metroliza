@@ -106,20 +106,15 @@ class ExportOptions:
 
 @dataclass(frozen=True)
 class GroupingAssignment:
-    """Logical grouping assignment keyed by identity or composite optional fields.
+    """Logical grouping assignment keyed by canonical report identity.
 
     Attributes:
         group: Required target group label.
-        report_id: Optional primary identity key.
-        reference: Optional composite-key component.
-        fileloc: Optional composite-key component.
-        filename: Optional composite-key component.
-        date: Optional composite-key component.
-        sample_number: Optional composite-key component.
+        report_id: Required canonical report identity key when persisted.
 
     Usage notes:
-        ``report_id`` can be used as an alternate key. If omitted, the composite
-        optional fields are expected to be used together as a full alternate key.
+        ``report_id`` is the only supported grouping identity in the report
+        metadata schema.
     """
 
     group: str
@@ -396,9 +391,7 @@ def validate_grouping_df(df: pd.DataFrame | None) -> pd.DataFrame | None:
 
     Args:
         df: Optional DataFrame of grouping assignments. Non-empty frames must
-            include ``GROUP`` plus either ``REPORT_ID`` or the full composite key
-            columns ``REFERENCE``, ``FILELOC``, ``FILENAME``, ``DATE``, and
-            ``SAMPLE_NUMBER``.
+            include ``GROUP`` plus ``REPORT_ID``.
 
     Returns:
         pd.DataFrame | None: ``None`` when input is ``None``; the original empty
@@ -426,14 +419,7 @@ def validate_grouping_df(df: pd.DataFrame | None) -> pd.DataFrame | None:
     if "GROUP" not in df.columns:
         raise ValueError("Grouping DataFrame must include a GROUP column.")
 
-    has_identity = "REPORT_ID" in df.columns
-    composite_key_cols = {"REFERENCE", "FILELOC", "FILENAME", "DATE", "SAMPLE_NUMBER"}
-    has_composite = composite_key_cols.issubset(df.columns)
-
-    if not (has_identity or has_composite):
-        raise ValueError(
-            "Grouping DataFrame must include REPORT_ID or the full composite key: "
-            "REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER."
-        )
+    if "REPORT_ID" not in df.columns:
+        raise ValueError("Grouping DataFrame must include REPORT_ID.")
 
     return df.copy()

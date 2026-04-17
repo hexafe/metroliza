@@ -3,8 +3,6 @@
 import hashlib
 import json
 
-import pandas as pd
-
 from modules.report_query_service import build_grouping_query as _build_grouping_query
 
 

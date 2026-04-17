@@ -79,11 +79,16 @@ class TestDataGroupingFilterQuery(unittest.TestCase):
         self.assertIn('report_id AS REPORT_ID', query)
 
     def test_build_grouping_query_wraps_filter_query(self):
-        filter_query = 'SELECT report_id, reference, report_date, sample_number FROM vw_grouping_reports WHERE 1=1'
+        filter_query = (
+            'SELECT report_id AS REPORT_ID, reference AS REFERENCE, report_date AS DATE, '
+            'sample_number AS SAMPLE_NUMBER, part_name AS PART_NAME, revision AS REVISION, '
+            'template_variant AS TEMPLATE_VARIANT, has_nok AS HAS_NOK, nok_count AS NOK_COUNT, '
+            'file_name AS FILENAME FROM vw_grouping_reports WHERE 1=1'
+        )
         query = DataGrouping._build_grouping_query(filter_query)
         self.assertIn('FROM (', query)
         self.assertIn(filter_query, query)
-        self.assertIn('SELECT DISTINCT report_id AS REPORT_ID, reference AS REFERENCE', query)
+        self.assertIn('"REPORT_ID" AS REPORT_ID', query)
 
 
 class TestDataGroupingPartDisplayLabel(unittest.TestCase):

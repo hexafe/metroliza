@@ -38,7 +38,7 @@ def test_cmm_parse_to_v2_and_back_to_legacy_roundtrip_shape():
     parse_result = parser.parse_to_v2()
 
     assert parse_result.meta.plugin_id == "cmm"
-    assert parse_result.report.reference == parser.reference
+    assert parse_result.report.reference == (parser.reference or "")
     assert len(parse_result.blocks) == 1
     assert parse_result.blocks[0].dimensions[0].axis_code == "X"
 

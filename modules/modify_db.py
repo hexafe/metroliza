@@ -24,7 +24,7 @@ QItemSelectionModel = getattr(QtCore, "QItemSelectionModel", None)
 
 
 class ModifyDB(QDialog):
-    """Provide table-based editing for key text fields in REPORTS/MEASUREMENTS.
+    """Provide table-based editing for selected report metadata fields.
 
     The dialog loads distinct values from the database, lets users update them
     in-place, and commits all detected changes in one transaction.
@@ -263,19 +263,19 @@ class ModifyDB(QDialog):
 
             reference_values, _ = execute_select_with_columns(
                 self.db_file,
-                "SELECT DISTINCT REFERENCE FROM REPORTS;",
+                "SELECT DISTINCT reference FROM report_metadata WHERE reference IS NOT NULL ORDER BY reference;",
             )
             self.populate_table(self.reference_table, reference_values)
 
             part_number_values, _ = execute_select_with_columns(
                 self.db_file,
-                "SELECT DISTINCT SAMPLE_NUMBER FROM REPORTS;",
+                "SELECT DISTINCT sample_number FROM report_metadata WHERE sample_number IS NOT NULL ORDER BY sample_number;",
             )
             self.populate_table(self.part_number_table, part_number_values)
 
             header_values, _ = execute_select_with_columns(
                 self.db_file,
-                "SELECT DISTINCT HEADER FROM MEASUREMENTS;",
+                "SELECT DISTINCT header FROM report_measurements WHERE header IS NOT NULL ORDER BY header;",
             )
             self.populate_table(self.header_table, header_values)
         except Exception as e:
@@ -348,9 +348,9 @@ class ModifyDB(QDialog):
         """Apply collected UPDATE statements in a single retried transaction."""
         try:
             statements = []
-            statements.extend(self.build_update_statements(self.reference_table, "REPORTS", "REFERENCE"))
-            statements.extend(self.build_update_statements(self.part_number_table, "REPORTS", "SAMPLE_NUMBER"))
-            statements.extend(self.build_update_statements(self.header_table, "MEASUREMENTS", "HEADER"))
+            statements.extend(self.build_update_statements(self.reference_table, "report_metadata", "reference"))
+            statements.extend(self.build_update_statements(self.part_number_table, "report_metadata", "sample_number"))
+            statements.extend(self.build_update_statements(self.header_table, "report_measurements", "header"))
 
             if not statements:
                 QMessageBox.information(self, "No changes", "No changes were detected.")

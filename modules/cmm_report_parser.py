@@ -1,26 +1,29 @@
-"""Parse CMM report files and persist normalized measurements to SQLite.
-
-The parser consumes raw report text, derives metadata from filenames, and writes
-rows used by downstream grouping and export workflows.
-"""
+"""Parse CMM report files and persist report metadata plus flat measurements."""
 
 import logging
-import os
+from dataclasses import replace
 from pathlib import Path
 from time import perf_counter
 from time import strftime
 
 from modules.custom_logger import CustomLogger
-from modules.cmm_schema import ensure_cmm_report_schema
 from modules.cmm_native_parser import (
-    normalize_measurement_rows,
     parse_blocks_with_backend_and_telemetry,
-    persist_measurement_rows_with_backend_and_telemetry,
 )
 from modules.pdf_backend import require_pdf_backend, resolve_pdf_backend_module_name
 from modules.cmm_parsing import add_tolerances_to_blocks
 from modules.base_report_parser import BaseReportParser
-from modules.db import execute_with_retry, run_transaction_with_retry
+from modules.report_identity import build_report_identity_hash
+from modules.report_metadata_extractor import extract_report_metadata
+from modules.report_metadata_models import MetadataExtractionContext
+from modules.report_metadata_normalizers import (
+    normalize_reference,
+    normalize_report_date,
+    normalize_sample_number,
+)
+from modules.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
+from modules.report_repository import ReportRepository
+from modules.report_schema import ensure_report_schema
 from modules.parser_plugin_contracts import (
     BaseReportParserPlugin,
     MeasurementBlockV2,
@@ -89,6 +92,12 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self.persistence_backend_used = "unknown"
         self.stage_timings_s: dict[str, float] = {}
         self._prepared_measurement_rows = None
+        self._metadata_selection_result = None
+        self._metadata_identity_hash = None
+        self._page_count = None
+        self._first_page_width = None
+        self._first_page_height = None
+        self._first_page_header_items = []
 
     def open_database_and_check_filename(self):
         """Handle `open_database_and_check_filename` for `CMMReportParser`.
@@ -103,56 +112,111 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         """
 
         try:
-            ensure_cmm_report_schema(
+            ensure_report_schema(
                 self.database,
                 connection=self.connection,
                 retries=4,
                 retry_delay_s=1,
             )
 
-            """
-            Checks if the opened file is already present in the database and performs appropriate actions.
-            If the 'REPORTS' table does not exist in the database, it creates the table and imports the data.
-            If the file is not present in the 'REPORTS' table, it imports the data.
-            If the file already exists in the 'REPORTS' table, it skips the file.
-            """
-            def open_split_to_sql():
-                # Helper function to open, split, and import data to the SQLite database
-                self.open_report()
-                self.split_text_to_blocks()
-                self.to_sqlite()
-
-            # Check if 'REPORTS' table exists
-            table_exists = execute_with_retry(
-                self.database,
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='REPORTS'",
-                connection=self.connection,
-            )
-
-            if not table_exists:
-                logger.info("REPORTS table does not exist; creating schema and importing report data.")
-                open_split_to_sql()
-                return
-
-            # Check if the file already exists in the 'REPORTS' table
-            count_rows = execute_with_retry(
-                self.database,
-                'SELECT COUNT(*) FROM REPORTS WHERE FILENAME = ?',
-                (self.file_name,),
-                connection=self.connection,
-            )
-            count = count_rows[0][0] if count_rows else 0
-
-            if count == 0:
-                # File does not exist in the 'REPORTS' table, import the data
-                open_split_to_sql()
-            else:
-                logger.info("Report '%s' already exists in the database; skipping.", self.file_name)
+            self.open_report()
+            self.split_text_to_blocks()
+            self.add_tolerances()
+            self.extract_metadata()
+            self.to_sqlite()
         except Exception as e:
             self.log_and_exit(e)
 
     def _require_pdf_backend(self):
         return _load_pdf_backend()
+
+    @staticmethod
+    def _resolve_page_count(pdf_report) -> int | None:
+        try:
+            return len(pdf_report)
+        except TypeError:
+            return None
+
+    @staticmethod
+    def _page_size(page) -> tuple[float | None, float | None]:
+        rect = getattr(page, "rect", None)
+        width = getattr(rect, "width", None)
+        height = getattr(rect, "height", None)
+        return width, height
+
+    @staticmethod
+    def _profile_label_aliases() -> tuple[str, ...]:
+        labels: set[str] = set()
+        for aliases in DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.label_aliases.values():
+            labels.update(alias.upper().rstrip(":") for alias in aliases)
+        return tuple(sorted(labels, key=len, reverse=True))
+
+    @classmethod
+    def _build_header_items_from_lines(cls, lines, *, page_height=None):
+        """Build selector-friendly label/value header items from page text lines."""
+
+        header_items = []
+        aliases = cls._profile_label_aliases()
+        row_height = 8.0
+        for row_index, line in enumerate(lines):
+            raw_line = str(line or "").strip()
+            if not raw_line:
+                continue
+
+            normalized_line = raw_line.upper()
+            matches = []
+            for alias in aliases:
+                start = normalized_line.find(alias)
+                if start < 0:
+                    continue
+                end = start + len(alias)
+                matches.append((start, end, alias))
+
+            selected_matches = []
+            occupied_ranges: list[tuple[int, int]] = []
+            for start, end, alias in sorted(matches, key=lambda match: (match[0], -(match[1] - match[0]))):
+                if any(start < used_end and end > used_start for used_start, used_end in occupied_ranges):
+                    continue
+                selected_matches.append((start, end, alias))
+                occupied_ranges.append((start, end))
+
+            selected_matches.sort(key=lambda match: match[0])
+            if not selected_matches:
+                continue
+
+            y0 = 8.0 + (row_index * row_height)
+            if page_height is not None and y0 > float(page_height) * DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.header_band_fraction:
+                continue
+
+            for match_index, (start, end, alias) in enumerate(selected_matches):
+                next_start = selected_matches[match_index + 1][0] if match_index + 1 < len(selected_matches) else len(raw_line)
+                raw_value = raw_line[end:next_start].strip(" :-\t")
+                x0 = float(start)
+                header_items.append(
+                    {
+                        "text": alias,
+                        "x0": x0,
+                        "y0": y0,
+                        "x1": float(end),
+                        "y1": y0 + 5.0,
+                        "page_number": 1,
+                        "region_name": "page1_header_band",
+                    }
+                )
+                if raw_value:
+                    header_items.append(
+                        {
+                            "text": raw_value,
+                            "x0": float(end + 1),
+                            "y0": y0,
+                            "x1": float(next_start),
+                            "y1": y0 + 5.0,
+                            "page_number": 1,
+                            "region_name": "page1_header_band",
+                        }
+                    )
+
+        return header_items
 
     def open_report(self):
         """Handle `cmm_open` for `CMMReportParser`.
@@ -174,10 +238,22 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             pdf_backend = self._require_pdf_backend()
             pdf_path = Path(self.file_path) / self.file_name
             with pdf_backend.open(str(pdf_path)) as pdf_report:
+                self._page_count = self._resolve_page_count(pdf_report)
+                page_counter = 0
                 for page in pdf_report:
+                    page_counter += 1
+                    if page_counter == 1:
+                        self._first_page_width, self._first_page_height = self._page_size(page)
                     page_text = page.get_text().splitlines()
+                    if page_counter == 1:
+                        self._first_page_header_items = self._build_header_items_from_lines(
+                            page_text,
+                            page_height=self._first_page_height,
+                        )
                     for line in page_text:
                         self.raw_text.append(line)
+                if self._page_count is None:
+                    self._page_count = page_counter
         except Exception as e:
             self.log_and_exit(e)
 
@@ -289,6 +365,10 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         if not self.blocks_text:
             self.split_text_to_blocks()
             self.add_tolerances()
+        if self._metadata_selection_result is None:
+            self.extract_metadata()
+
+        metadata = self._metadata_selection_result.metadata
 
         blocks_v2: list[MeasurementBlockV2] = []
         for block_index, block in enumerate(self.blocks_text):
@@ -331,15 +411,15 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 source_format="pdf",
                 plugin_id=self.manifest.plugin_id,
                 plugin_version=self.manifest.version,
-                template_id="default",
+                template_id=metadata.template_family,
                 parse_timestamp=strftime("%Y-%m-%dT%H:%M:%SZ"),
                 locale_detected=None,
-                confidence=100,
+                confidence=int(round(metadata.metadata_confidence * 100)),
             ),
             report=ReportInfoV2(
-                reference=self.reference,
-                report_date=self.date,
-                sample_number=self.sample_number,
+                reference=metadata.reference or "",
+                report_date=metadata.report_date or "",
+                sample_number=metadata.sample_number or "",
                 file_name=self.file_name,
                 file_path=self.file_path,
             ),
@@ -387,6 +467,171 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         except Exception as e:
             self.log_and_exit(e)
 
+    def extract_metadata(self):
+        """Extract canonical metadata using the configured report metadata profile."""
+
+        context = MetadataExtractionContext(
+            source_file_id=None,
+            parser_id=DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.parser_id,
+            source_path=self.source_path,
+            file_name=self.file_name,
+            source_format="pdf",
+            page_count=self._page_count,
+            first_page_width=self._first_page_width,
+            first_page_height=self._first_page_height,
+        )
+        self._metadata_selection_result = extract_report_metadata(
+            context,
+            header_items=self._first_page_header_items,
+            filename=self.file_name,
+        )
+        self._metadata_selection_result = self._apply_legacy_metadata_fallbacks(self._metadata_selection_result)
+        self.canonical_metadata = self._metadata_selection_result.metadata
+        self._metadata_identity_hash = build_report_identity_hash(self.canonical_metadata)
+        return self._metadata_selection_result
+
+    def _apply_legacy_metadata_fallbacks(self, selection_result):
+        """Preserve direct parser-state metadata for non-PDF/synthetic callers."""
+
+        metadata = selection_result.metadata
+        fallback_values = {
+            "reference": normalize_reference(self._reference),
+            "report_date": normalize_report_date(self._date) or self._date,
+            "sample_number": normalize_sample_number(self._sample_number),
+        }
+        replacement_values = {}
+        fallback_fields = {}
+
+        for field_name, fallback_value in fallback_values.items():
+            if getattr(metadata, field_name) or not fallback_value:
+                continue
+            replacement_values[field_name] = fallback_value
+            fallback_fields[field_name] = "legacy_parser_state"
+
+        if "reference" in replacement_values and not metadata.reference_raw:
+            replacement_values["reference_raw"] = self._reference
+
+        if "sample_number" in replacement_values and metadata.sample_number_kind in (None, "unknown"):
+            replacement_values["sample_number_kind"] = "unknown"
+
+        if not replacement_values:
+            return selection_result
+
+        metadata_json = dict(metadata.metadata_json or {})
+        field_sources = dict(metadata_json.get("field_sources") or {})
+        field_sources.update(fallback_fields)
+        metadata_json["field_sources"] = field_sources
+        metadata_json["legacy_fallback_fields"] = tuple(sorted(fallback_fields))
+        replacement_values["metadata_json"] = metadata_json
+
+        return replace(selection_result, metadata=replace(metadata, **replacement_values))
+
+    def detect_template_family(self):
+        """Return the current template family and variant if metadata is available."""
+
+        if self._metadata_selection_result is None:
+            self.extract_metadata()
+        metadata = self._metadata_selection_result.metadata
+        return metadata.template_family, metadata.template_variant
+
+    @staticmethod
+    def _normalize_header(block_header) -> str:
+        parts: list[str] = []
+        for item in block_header:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, (list, tuple)):
+                parts.extend(str(nested) for nested in item if isinstance(nested, str))
+        return ", ".join(value.strip() for value in parts if str(value).strip()).replace('"', '')
+
+    @staticmethod
+    def _coerce_number(value):
+        if value in ("", None):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _status_from_outtol(outtol_value) -> tuple[bool, str]:
+        outtol = CMMReportParser._coerce_number(outtol_value)
+        if outtol is None:
+            return False, "unknown"
+        if outtol > 0:
+            return True, "nok"
+        return False, "ok"
+
+    @staticmethod
+    def _characteristic_family(axis_code) -> str:
+        normalized = str(axis_code or "").upper()
+        if normalized in {"X", "Y", "Z", "TP"}:
+            return "LOC"
+        if normalized in {"D", "D1", "D2", "D3", "D4", "M"}:
+            return "DIST"
+        if normalized == "RN":
+            return "RNOUT"
+        if normalized == "DF":
+            return "FLAT"
+        if normalized == "PR":
+            return "PROF"
+        if normalized == "PA":
+            return "PARL"
+        return "other"
+
+    def parse_measurements(self):
+        """Convert parsed measurement blocks into flat report measurement rows."""
+
+        measurement_rows = []
+        row_order = 0
+        for block in self.blocks_text:
+            header = self._normalize_header(block[0]) if len(block) > 0 else ""
+            section_name = header or None
+            feature_label = header or None
+            for row in block[1] if len(block) > 1 else ():
+                if not row:
+                    continue
+                padded = list(row) + [""] * max(0, 8 - len(row))
+                row_order += 1
+                is_nok, status_code = self._status_from_outtol(padded[7])
+                characteristic_family = self._characteristic_family(padded[0])
+                measurement_rows.append(
+                    {
+                        "page_number": None,
+                        "row_order": row_order,
+                        "header": header,
+                        "section_name": section_name,
+                        "feature_label": feature_label,
+                        "characteristic_name": characteristic_family,
+                        "characteristic_family": characteristic_family,
+                        "description": header,
+                        "ax": str(padded[0]) if padded[0] is not None else "",
+                        "nominal": self._coerce_number(padded[1]),
+                        "tol_plus": self._coerce_number(padded[2]),
+                        "tol_minus": self._coerce_number(padded[3]),
+                        "bonus": self._coerce_number(padded[4]),
+                        "meas": self._coerce_number(padded[5]),
+                        "dev": self._coerce_number(padded[6]),
+                        "outtol": self._coerce_number(padded[7]),
+                        "is_nok": is_nok,
+                        "status_code": status_code,
+                        "raw_measurement_json": {
+                            "tokens": [str(value) for value in row],
+                            "header": header,
+                        },
+                    }
+                )
+        self._prepared_measurement_rows = measurement_rows
+        return measurement_rows
+
+    def build_report_identity_hash(self):
+        """Build a semantic identity hash from selected canonical metadata."""
+
+        if self._metadata_selection_result is None:
+            self.extract_metadata()
+        self._metadata_identity_hash = build_report_identity_hash(self._metadata_selection_result.metadata)
+        return self._metadata_identity_hash
+
     def to_sqlite(self):
         """Handle `to_sqlite` for `CMMReportParser`.
 
@@ -400,10 +645,6 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         """
 
         try:
-            """
-            Creates tables (if necessary) and inserts measurements and reports data into an SQLite database.
-            """
-            # Check if there are measurements data
             if not any(lst[1] for lst in self.blocks_text):
                 logger.warning(
                     "Report '%s' has no measurements data; skipping database insertion.",
@@ -411,76 +652,49 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 )
                 return
 
-            use_native_persistence = os.getenv("METROLIZA_CMM_NATIVE_PERSISTENCE", "0").strip() in {"1", "true", "yes", "on"}
+            if self._metadata_selection_result is None:
+                self.extract_metadata()
 
             normalize_start = perf_counter()
-            normalized_rows = self._normalized_rows_for_persistence(use_native=use_native_persistence)
+            measurement_rows = self._normalized_rows_for_persistence()
             self.stage_timings_s["normalize_runtime"] = perf_counter() - normalize_start
 
+            nok_count = sum(1 for row in measurement_rows if row.get("is_nok"))
+            measurement_count = len(measurement_rows)
+            metadata = self._metadata_selection_result.metadata
+            warnings = metadata.warnings
+            identity_hash = self._metadata_identity_hash or self.build_report_identity_hash()
+
             db_write_start = perf_counter()
-
-            def insert_report(transaction_cursor):
-                transaction_cursor.execute(
-                    'SELECT COUNT(*) FROM REPORTS WHERE REFERENCE = ? AND FILELOC = ? AND FILENAME = ? AND DATE = ? AND SAMPLE_NUMBER = ?',
-                    (self.reference, self.file_path, self.file_name, self.date, self.sample_number),
-                )
-                count_rows = transaction_cursor.fetchall()
-                count = count_rows[0][0] if count_rows else 0
-
-                if count > 0:
-                    return False
-
-                transaction_cursor.execute(
-                    'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-                    (self.reference, self.file_path, self.file_name, self.date, self.sample_number),
-                )
-                report_id = transaction_cursor.lastrowid
-
-                transaction_cursor.executemany(
-                    'INSERT INTO MEASUREMENTS VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    [
-                        (
-                            None,
-                            row[0],
-                            row[1],
-                            row[2],
-                            row[3],
-                            row[4],
-                            row[5],
-                            row[6],
-                            row[7],
-                            row[8],
-                            report_id,
-                        )
-                        for row in normalized_rows
-                    ],
-                )
-
-                return True
-
-            if self.connection is None:
-                persist_result = persist_measurement_rows_with_backend_and_telemetry(
-                    self.database,
-                    normalized_rows,
-                    use_native=use_native_persistence,
-                )
-                self.persistence_backend_used = persist_result.backend
-                was_inserted = persist_result.inserted
-            else:
-                was_inserted = run_transaction_with_retry(
-                    self.database,
-                    insert_report,
-                    connection=self.connection,
-                    retries=4,
-                    retry_delay_s=1,
-                )
-                self.persistence_backend_used = "python"
+            repository = ReportRepository(self.database, connection=self.connection)
+            repository.persist_parsed_report(
+                source_path=Path(self.file_path) / self.file_name,
+                parser_id=metadata.parser_id,
+                parser_version=self.manifest.version,
+                template_family=metadata.template_family,
+                template_variant=metadata.template_variant,
+                parse_status="parsed_with_warnings" if warnings else "parsed",
+                metadata=metadata,
+                candidates=self._metadata_selection_result.candidates,
+                warnings=warnings,
+                measurements=measurement_rows,
+                metadata_version="report_metadata_v1",
+                metadata_profile_id=DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.template_family,
+                metadata_profile_version="1",
+                page_count=self._page_count or metadata.page_count,
+                measurement_count=measurement_count,
+                has_nok=nok_count > 0,
+                nok_count=nok_count,
+                metadata_confidence=metadata.metadata_confidence,
+                identity_hash=identity_hash,
+                raw_report_json={
+                    "parse_backend": self.parse_backend_used,
+                    "measurement_blocks": len(self.blocks_text),
+                },
+            )
+            self.persistence_backend_used = "python"
             self.stage_timings_s["db_write_runtime"] = perf_counter() - db_write_start
-            if was_inserted:
-                logger.info("Report '%s' measurements inserted into the database.", self.file_name)
-                return
-
-            logger.info("Report '%s' already exists in the database.", self.file_name)
+            logger.info("Report '%s' measurements inserted into the database.", self.file_name)
             return
         except Exception as e:
             self.log_and_exit(e)
@@ -489,15 +703,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         if self._prepared_measurement_rows is not None:
             return self._prepared_measurement_rows
 
-        return normalize_measurement_rows(
-            self.blocks_text,
-            reference=self.reference,
-            fileloc=self.file_path,
-            filename=self.file_name,
-            date=self.date,
-            sample_number=self.sample_number,
-            use_native=use_native,
-        )
+        return self.parse_measurements()
 
     def prepare_for_two_stage_pipeline(self):
         """Prepare parser state and normalized rows for deferred single-writer persistence.
@@ -512,17 +718,10 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             self.split_text_to_blocks()
             self.add_tolerances()
 
-        use_native_persistence = os.getenv("METROLIZA_CMM_NATIVE_PERSISTENCE", "0").strip() in {"1", "true", "yes", "on"}
         normalize_start = perf_counter()
-        self._prepared_measurement_rows = normalize_measurement_rows(
-            self.blocks_text,
-            reference=self.reference,
-            fileloc=self.file_path,
-            filename=self.file_name,
-            date=self.date,
-            sample_number=self.sample_number,
-            use_native=use_native_persistence,
-        )
+        if self._metadata_selection_result is None:
+            self.extract_metadata()
+        self._prepared_measurement_rows = self.parse_measurements()
         self.stage_timings_s["normalize_runtime"] = perf_counter() - normalize_start
         self.stage_timings_s["prepare_pipeline_runtime"] = perf_counter() - prepare_start
 
