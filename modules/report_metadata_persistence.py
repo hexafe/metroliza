@@ -76,6 +76,26 @@ class ReportMetadataPersistence:
     def replace_measurements(self, report_id: int, measurements: Iterable[Any]) -> None:
         return self._repository.replace_measurements(report_id, measurements)
 
+    def update_report_metadata_fields(
+        self,
+        report_id: int,
+        fields: dict[str, Any],
+        *,
+        source: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        return self._repository.update_report_metadata_fields(report_id, fields, source=source, reason=reason)
+
+    def update_measurement_fields(
+        self,
+        measurement_id: int,
+        fields: dict[str, Any],
+        *,
+        source: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        return self._repository.update_measurement_fields(measurement_id, fields, source=source, reason=reason)
+
     def persist_semantic_duplicate_warnings(self, report_id: int, identity_hash: str | None) -> int:
         return self._repository.persist_semantic_duplicate_warnings(report_id, identity_hash)
 

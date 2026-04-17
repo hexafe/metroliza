@@ -61,6 +61,11 @@ class TestExportHtmlDashboard(unittest.TestCase):
                         'grouping_applied': True,
                         'sample_size': 8,
                         'limits': {'nominal': 10.0, 'lsl': 9.8, 'usl': 10.2},
+                        'metadata_rows': [
+                            {'label': 'Part', 'value': 'Carrier Plate'},
+                            {'label': 'Revision', 'value': 'B'},
+                            {'label': 'Operator', 'value': 'M. Nowak'},
+                        ],
                         'summary_rows': [('Mean', '10.01'), ('Cpk', '1.42')],
                         'charts': [
                             {
@@ -177,6 +182,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
             html_text = Path(result['html_dashboard_path']).read_text(encoding='utf-8')
             self.assertIn('Diameter / X', html_text)
             self.assertIn('Extended histogram', html_text)
+            self.assertIn('Report metadata', html_text)
+            self.assertIn('Carrier Plate', html_text)
+            self.assertIn('M. Nowak', html_text)
             self.assertNotIn(
                 '<img src="report_dashboard_assets/section_001_diameter-x_histogram_01.png" alt="Diameter / X"><div class="detail-grid">',
                 html_text,

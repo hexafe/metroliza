@@ -94,12 +94,38 @@ class TestDataGroupingFilterQuery(unittest.TestCase):
 class TestDataGroupingPartDisplayLabel(unittest.TestCase):
     def test_part_display_label_accepts_namedtuple_row(self):
         dialog = DataGrouping.__new__(DataGrouping)
-        Row = namedtuple('Row', ['SAMPLE_NUMBER', 'DATE', 'FILENAME'])
-        row = Row(SAMPLE_NUMBER=42, DATE='2024-01-15', FILENAME='part.csv')
+        Row = namedtuple(
+            'Row',
+            [
+                'SAMPLE_NUMBER',
+                'DATE',
+                'PART_NAME',
+                'REVISION',
+                'TEMPLATE_VARIANT',
+                'STATUS_CODE',
+                'NOK_COUNT',
+                'OPERATOR_NAME',
+                'FILENAME',
+            ],
+        )
+        row = Row(
+            SAMPLE_NUMBER=42,
+            DATE='2024-01-15',
+            PART_NAME='Front Plate',
+            REVISION='B',
+            TEMPLATE_VARIANT='Header Box',
+            STATUS_CODE='nok',
+            NOK_COUNT=3,
+            OPERATOR_NAME='Jane Doe',
+            FILENAME='part.csv',
+        )
 
         label = dialog._part_display_label(row)
 
-        self.assertEqual(label, '42 | 2024-01-15 | part.csv')
+        self.assertEqual(
+            label,
+            '42 | 2024-01-15 | Part: Front Plate | Rev: B | Variant: Header Box | Status: NOK (3) | Op: Jane Doe | File: part.csv',
+        )
 
     def test_part_display_label_handles_missing_values(self):
         dialog = DataGrouping.__new__(DataGrouping)
@@ -107,7 +133,7 @@ class TestDataGroupingPartDisplayLabel(unittest.TestCase):
 
         label = dialog._part_display_label(row)
 
-        self.assertEqual(label, '7 |  | ')
+        self.assertEqual(label, '7')
 
 
 class TestDataGroupingColorAssignments(unittest.TestCase):

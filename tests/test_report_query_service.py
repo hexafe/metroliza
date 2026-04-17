@@ -38,6 +38,7 @@ def test_build_measurement_export_query_uses_denormalized_view():
     query = build_measurement_export_query()
 
     assert "FROM vw_measurement_export" in query
+    assert "measurement_id AS MEASUREMENT_ID" in query
     assert "header AS HEADER" in query
     assert "ax AS AX" in query
     assert 'tol_plus AS "+TOL"' in query
@@ -59,6 +60,7 @@ def test_build_measurement_filter_query_includes_report_level_filters():
     )
 
     assert "FROM vw_measurement_export" in query
+    assert "measurement_id AS MEASUREMENT_ID" in query
     assert "ax IN ('AX1')" in query
     assert "header IN ('HEAD1')" in query
     assert "reference IN ('REF1')" in query

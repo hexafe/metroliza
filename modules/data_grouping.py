@@ -434,20 +434,98 @@ class DataGrouping(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+    @staticmethod
+    def _display_text(value):
+        if value is None:
+            return ""
+
+        try:
+            if pd.isna(value):
+                return ""
+        except TypeError:
+            pass
+
+        text = str(value).strip()
+        if text in {"", "None", "<NA>"}:
+            return ""
+        return text
+
+    @staticmethod
+    def _truthy_text(value):
+        text = DataGrouping._display_text(value)
+        if not text:
+            return False
+        return text.lower() not in {"0", "false", "no", "none"}
+
+    def _status_display_text(self, row):
+        def _field_value(field_name):
+            if hasattr(row, field_name):
+                return getattr(row, field_name)
+            try:
+                return row[field_name]
+            except (AttributeError, KeyError, TypeError):
+                return None
+
+        status_code = self._display_text(_field_value('STATUS_CODE'))
+        has_nok = _field_value('HAS_NOK')
+        nok_count = self._display_text(_field_value('NOK_COUNT'))
+
+        if status_code:
+            status_text = status_code.upper()
+        elif has_nok is not None and self._display_text(has_nok) != "":
+            status_text = "NOK" if self._truthy_text(has_nok) else "OK"
+        elif nok_count and nok_count not in {"0", "0.0"}:
+            status_text = "NOK"
+        else:
+            status_text = ""
+
+        if status_text and nok_count and nok_count not in {"0", "0.0"}:
+            return f"{status_text} ({nok_count})"
+        return status_text
+
     def _part_display_label(self, row):
         def _field_value(field_name):
             if hasattr(row, field_name):
                 return getattr(row, field_name)
-            return row[field_name]
+            try:
+                return row[field_name]
+            except (AttributeError, KeyError, TypeError):
+                return None
 
-        sample_number = _field_value('SAMPLE_NUMBER')
-        date_value = _field_value('DATE')
-        filename_value = _field_value('FILENAME')
+        tokens = []
+        sample_number = self._display_text(_field_value('SAMPLE_NUMBER'))
+        if sample_number:
+            tokens.append(sample_number)
 
-        sample = str(sample_number)
-        date = str(date_value) if pd.notna(date_value) else ''
-        filename = str(filename_value) if pd.notna(filename_value) else ''
-        return f"{sample} | {date} | {filename}"
+        date_value = self._display_text(_field_value('DATE'))
+        if date_value:
+            tokens.append(date_value)
+
+        part_name = self._display_text(_field_value('PART_NAME'))
+        if part_name:
+            tokens.append(f"Part: {part_name}")
+
+        revision = self._display_text(_field_value('REVISION'))
+        if revision:
+            tokens.append(f"Rev: {revision}")
+
+        template_variant = self._display_text(_field_value('TEMPLATE_VARIANT'))
+        if template_variant:
+            tokens.append(f"Variant: {template_variant}")
+
+        status_text = self._status_display_text(row)
+        if status_text:
+            tokens.append(f"Status: {status_text}")
+
+        operator_name = self._display_text(_field_value('OPERATOR_NAME'))
+        if operator_name:
+            tokens.append(f"Op: {operator_name}")
+
+        filename = self._display_text(_field_value('FILENAME'))
+        if filename:
+            tokens.append(f"File: {filename}")
+
+        return " | ".join(tokens)
 
     def _populate_part_list(self, selected_reference=None):
         rows_df = self.df if not selected_reference else self.df[self.df['REFERENCE'] == selected_reference]

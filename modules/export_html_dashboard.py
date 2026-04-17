@@ -300,6 +300,7 @@ def write_export_html_dashboard(
                 "sample_size": int(raw_section.get("sample_size") or 0),
                 "limits": _normalize_limits(raw_section.get("limits")),
                 "summary_rows": _normalize_summary_rows(raw_section.get("summary_rows")),
+                "metadata_rows": _normalize_summary_rows(raw_section.get("metadata_rows")),
                 "charts": charts,
             }
         )
@@ -2829,6 +2830,14 @@ def _render_section(section: dict[str, Any]) -> str:
     if section.get("axis"):
         pills.append(f"Axis: {section['axis']}")
     pill_markup = "".join(f'<span class="pill">{html.escape(str(pill))}</span>' for pill in pills)
+    metadata_rows = section.get("metadata_rows") or []
+    metadata_panel = ""
+    if metadata_rows:
+        metadata_panel = (
+            '<div class="detail-grid section-detail-grid">'
+            f'{_render_detail_panel("Report metadata", _render_detail_cards(metadata_rows))}'
+            '</div>'
+        )
     summary_rows = section.get("summary_rows") or []
     summary_table = ""
     if summary_rows:
@@ -2843,6 +2852,7 @@ def _render_section(section: dict[str, Any]) -> str:
         f'<div class="section-top"><div><h2>{html.escape(section.get("header") or section["id"])}</h2>'
         f'<div class="section-meta">{html.escape(section.get("subtitle") or "Extended summary output")}</div></div>'
         f'<div class="pill-row">{pill_markup}</div></div>'
+        f'{metadata_panel}'
         f'{summary_table}'
         f'<div class="chart-grid">{chart_blocks}</div>'
         f'</section>'

@@ -32,6 +32,16 @@ This pane lists the available parts/rows for the selected reference.
 
 Rows are shown with identifying details so you can tell items apart.
 
+The label now includes more report metadata when it is available, such as:
+
+- sample number and date,
+- part name,
+- revision,
+- template variant,
+- status or NOK count,
+- operator name, and
+- file name.
+
 You can multi-select parts here.
 
 Double-clicking a part is a shortcut into group creation.
@@ -148,6 +158,8 @@ Grouping matters because it changes how the export can compare data.
 In practical terms, grouping lets the workbook compare named groups rather than treating everything as one undivided population.
 
 This is especially important for the **Group Analysis worksheet**.
+
+The grouping dialog still keys rows by `report_id`; the richer labels are only for display.
 
 For help reading that worksheet after export, see [Group Analysis worksheet manual](group_analysis/user_manual.md).
 

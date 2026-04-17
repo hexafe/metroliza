@@ -29,6 +29,28 @@ def build_distinct_value_query(column_name, *, source_view="vw_measurement_expor
     return _build_distinct_value_query(column_name, source_view=source_view, filter_query=filter_query)
 
 
+def _normalize_filter_values(values):
+    normalized_values = []
+    for value in values or ():
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            normalized_values.append(text)
+    return normalized_values
+
+
+def _build_in_clause(column_name, values):
+    normalized_values = _normalize_filter_values(values)
+    if not normalized_values:
+        return None
+
+    escaped_values = []
+    for value in normalized_values:
+        escaped_values.append("'" + value.replace("'", "''") + "'")
+    return f"{column_name} IN ({', '.join(escaped_values)})"
+
+
 class FilterDialog(QDialog):
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
@@ -95,6 +117,30 @@ class FilterDialog(QDialog):
             self.sample_number_label = QLabel("SAMPLE NUMBER:")
             self.sample_number_list = QListWidget()
             self.sample_number_list.setSelectionMode(self._multi_selection_mode())
+
+            self.operator_name_label = QLabel("OPERATOR NAME:")
+            self.operator_name_list = QListWidget()
+            self.operator_name_list.setSelectionMode(self._multi_selection_mode())
+
+            self.sample_number_kind_label = QLabel("SAMPLE NUMBER KIND:")
+            self.sample_number_kind_list = QListWidget()
+            self.sample_number_kind_list.setSelectionMode(self._multi_selection_mode())
+
+            self.status_code_label = QLabel("STATUS CODE:")
+            self.status_code_list = QListWidget()
+            self.status_code_list.setSelectionMode(self._multi_selection_mode())
+
+            self.filename_label = QLabel("FILENAME:")
+            self.filename_list = QListWidget()
+            self.filename_list.setSelectionMode(self._multi_selection_mode())
+
+            self.parser_id_label = QLabel("PARSER ID:")
+            self.parser_id_list = QListWidget()
+            self.parser_id_list.setSelectionMode(self._multi_selection_mode())
+
+            self.template_family_label = QLabel("TEMPLATE FAMILY:")
+            self.template_family_list = QListWidget()
+            self.template_family_list.setSelectionMode(self._multi_selection_mode())
             
             self.selected_headers_label = QLabel("SELECTED HEADERS:")
             self.selected_headers_list = QListWidget()
@@ -127,6 +173,12 @@ class FilterDialog(QDialog):
             self.revision_list.addItem("SELECT ALL")
             self.template_variant_list.addItem("SELECT ALL")
             self.sample_number_list.addItem("SELECT ALL")
+            self.operator_name_list.addItem("SELECT ALL")
+            self.sample_number_kind_list.addItem("SELECT ALL")
+            self.status_code_list.addItem("SELECT ALL")
+            self.filename_list.addItem("SELECT ALL")
+            self.parser_id_list.addItem("SELECT ALL")
+            self.template_family_list.addItem("SELECT ALL")
 
             # Create separate QLineEdit widgets for searching in each list widget
             self.ax_search_input = QLineEdit()
@@ -143,6 +195,18 @@ class FilterDialog(QDialog):
             self.template_variant_search_input.setPlaceholderText("Search TEMPLATE VARIANT...")
             self.sample_number_search_input = QLineEdit()
             self.sample_number_search_input.setPlaceholderText("Search SAMPLE NUMBER...")
+            self.operator_name_search_input = QLineEdit()
+            self.operator_name_search_input.setPlaceholderText("Search OPERATOR NAME...")
+            self.sample_number_kind_search_input = QLineEdit()
+            self.sample_number_kind_search_input.setPlaceholderText("Search SAMPLE NUMBER KIND...")
+            self.status_code_search_input = QLineEdit()
+            self.status_code_search_input.setPlaceholderText("Search STATUS CODE...")
+            self.filename_search_input = QLineEdit()
+            self.filename_search_input.setPlaceholderText("Search FILENAME...")
+            self.parser_id_search_input = QLineEdit()
+            self.parser_id_search_input.setPlaceholderText("Search PARSER ID...")
+            self.template_family_search_input = QLineEdit()
+            self.template_family_search_input.setPlaceholderText("Search TEMPLATE FAMILY...")
 
             # Create a button to apply the filters
             self.apply_button = QPushButton("Apply filters")
@@ -187,9 +251,33 @@ class FilterDialog(QDialog):
             self.layout.addWidget(self.sample_number_search_input, 1, 6)
             self.layout.addWidget(self.sample_number_list, 2, 6)
 
-            self.layout.addWidget(self.selected_headers_label, 0, 7)
-            self.layout.addWidget(self.selected_headers_list, 2, 7)
-            self.layout.addWidget(self.has_nok_button, 1, 7)
+            self.layout.addWidget(self.operator_name_label, 0, 7)
+            self.layout.addWidget(self.operator_name_search_input, 1, 7)
+            self.layout.addWidget(self.operator_name_list, 2, 7)
+
+            self.layout.addWidget(self.sample_number_kind_label, 0, 8)
+            self.layout.addWidget(self.sample_number_kind_search_input, 1, 8)
+            self.layout.addWidget(self.sample_number_kind_list, 2, 8)
+
+            self.layout.addWidget(self.status_code_label, 0, 9)
+            self.layout.addWidget(self.status_code_search_input, 1, 9)
+            self.layout.addWidget(self.status_code_list, 2, 9)
+
+            self.layout.addWidget(self.filename_label, 0, 10)
+            self.layout.addWidget(self.filename_search_input, 1, 10)
+            self.layout.addWidget(self.filename_list, 2, 10)
+
+            self.layout.addWidget(self.parser_id_label, 0, 11)
+            self.layout.addWidget(self.parser_id_search_input, 1, 11)
+            self.layout.addWidget(self.parser_id_list, 2, 11)
+
+            self.layout.addWidget(self.template_family_label, 0, 12)
+            self.layout.addWidget(self.template_family_search_input, 1, 12)
+            self.layout.addWidget(self.template_family_list, 2, 12)
+
+            self.layout.addWidget(self.selected_headers_label, 0, 13)
+            self.layout.addWidget(self.selected_headers_list, 2, 13)
+            self.layout.addWidget(self.has_nok_button, 1, 13)
 
             self.layout.addWidget(self.date_from_label, 3, 0)
             self.layout.addWidget(self.date_from_calendar, 3, 1)
@@ -199,7 +287,7 @@ class FilterDialog(QDialog):
 
             self.layout.addWidget(self.select_beginning_button, 3, 2)
             self.layout.addWidget(self.select_today_button, 4, 2)
-            self.layout.addWidget(self.apply_button, 6, 0, 1, 8)
+            self.layout.addWidget(self.apply_button, 6, 0, 1, 14)
 
             for row in range(self.layout.rowCount()):
                 for column in range(self.layout.columnCount()):
@@ -222,9 +310,16 @@ class FilterDialog(QDialog):
             self.revision_search_input.textChanged.connect(lambda: self.search_list_widgets(self.revision_list, self.revision_search_input.text()))
             self.template_variant_search_input.textChanged.connect(lambda: self.search_list_widgets(self.template_variant_list, self.template_variant_search_input.text()))
             self.sample_number_search_input.textChanged.connect(lambda: self.search_list_widgets(self.sample_number_list, self.sample_number_search_input.text()))
+            self.operator_name_search_input.textChanged.connect(lambda: self.search_list_widgets(self.operator_name_list, self.operator_name_search_input.text()))
+            self.sample_number_kind_search_input.textChanged.connect(lambda: self.search_list_widgets(self.sample_number_kind_list, self.sample_number_kind_search_input.text()))
+            self.status_code_search_input.textChanged.connect(lambda: self.search_list_widgets(self.status_code_list, self.status_code_search_input.text()))
+            self.filename_search_input.textChanged.connect(lambda: self.search_list_widgets(self.filename_list, self.filename_search_input.text()))
+            self.parser_id_search_input.textChanged.connect(lambda: self.search_list_widgets(self.parser_id_list, self.parser_id_search_input.text()))
+            self.template_family_search_input.textChanged.connect(lambda: self.search_list_widgets(self.template_family_list, self.template_family_search_input.text()))
             
             # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
             self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
+            self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
 
             self._connect_shift_range_for_list(self.ax_list)
             self._connect_shift_range_for_list(self.reference_list)
@@ -233,6 +328,12 @@ class FilterDialog(QDialog):
             self._connect_shift_range_for_list(self.revision_list)
             self._connect_shift_range_for_list(self.template_variant_list)
             self._connect_shift_range_for_list(self.sample_number_list)
+            self._connect_shift_range_for_list(self.operator_name_list)
+            self._connect_shift_range_for_list(self.sample_number_kind_list)
+            self._connect_shift_range_for_list(self.status_code_list)
+            self._connect_shift_range_for_list(self.filename_list)
+            self._connect_shift_range_for_list(self.parser_id_list)
+            self._connect_shift_range_for_list(self.template_family_list)
             self._connect_shift_range_for_list(self.selected_headers_list)
 
             self.select_today_button.clicked.connect(self.select_today_as_date_to)
@@ -252,6 +353,12 @@ class FilterDialog(QDialog):
             getattr(self, 'revision_list', None),
             getattr(self, 'template_variant_list', None),
             getattr(self, 'sample_number_list', None),
+            getattr(self, 'operator_name_list', None),
+            getattr(self, 'sample_number_kind_list', None),
+            getattr(self, 'status_code_list', None),
+            getattr(self, 'filename_list', None),
+            getattr(self, 'parser_id_list', None),
+            getattr(self, 'template_family_list', None),
             getattr(self, 'selected_headers_list', None),
         ):
             if list_widget is None or not hasattr(list_widget, 'setStyleSheet'):
@@ -315,16 +422,21 @@ class FilterDialog(QDialog):
 
     def populate_list_widgets(self):
         try:
-            self._populate_distinct_values(self.ax_list, "AX")
-            self._populate_distinct_values(self.header_list, "HEADER")
-            self._populate_distinct_values(self.all_headers_list, "HEADER")
-            self._populate_distinct_values(self.reference_list, "REFERENCE", source_view="vw_report_overview")
-            self._populate_distinct_values(self.part_name_list, "PART_NAME", source_view="vw_report_overview")
-            self._populate_distinct_values(self.revision_list, "REVISION", source_view="vw_report_overview")
-            self._populate_distinct_values(self.template_variant_list, "TEMPLATE_VARIANT", source_view="vw_report_overview")
-            self._populate_distinct_values(self.sample_number_list, "SAMPLE_NUMBER", source_view="vw_report_overview")
-
-            self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
+            current_filter_query = self.filter_query
+            self._populate_distinct_values(self.ax_list, "AX", filter_query=current_filter_query)
+            self._populate_distinct_values(self.header_list, "HEADER", filter_query=current_filter_query)
+            self._populate_distinct_values(self.all_headers_list, "HEADER", filter_query=current_filter_query)
+            self._populate_distinct_values(self.reference_list, "REFERENCE", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._populate_distinct_values(self.part_name_list, "PART_NAME", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._populate_distinct_values(self.revision_list, "REVISION", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._populate_distinct_values(self.template_variant_list, "TEMPLATE_VARIANT", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._populate_distinct_values(self.sample_number_list, "SAMPLE_NUMBER", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._populate_distinct_values(self.operator_name_list, "OPERATOR_NAME", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._populate_distinct_values(self.sample_number_kind_list, "SAMPLE_NUMBER_KIND", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._populate_distinct_values(self.status_code_list, "STATUS_CODE", filter_query=current_filter_query)
+            self._populate_distinct_values(self.filename_list, "FILENAME", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._populate_distinct_values(self.parser_id_list, "PARSER_ID", source_view="vw_report_overview", filter_query=current_filter_query)
+            self._populate_distinct_values(self.template_family_list, "TEMPLATE_FAMILY", source_view="vw_report_overview", filter_query=current_filter_query)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -347,6 +459,7 @@ class FilterDialog(QDialog):
         try:
             selected_references = [item.text() for item in self.reference_list.selectedItems()]
             self.header_list.clear()
+            self.selected_headers_list.clear()
 
             if selected_references and "SELECT ALL" not in selected_references:
                 filter_query = build_measurement_filter_query(reference_values=selected_references)
@@ -401,6 +514,12 @@ class FilterDialog(QDialog):
             revision_selected_items = [item.text() for item in self.revision_list.selectedItems()]
             template_variant_selected_items = [item.text() for item in self.template_variant_list.selectedItems()]
             sample_number_selected_items = [item.text() for item in self.sample_number_list.selectedItems()]
+            operator_name_selected_items = [item.text() for item in self.operator_name_list.selectedItems()]
+            sample_number_kind_selected_items = [item.text() for item in self.sample_number_kind_list.selectedItems()]
+            status_code_selected_items = [item.text() for item in self.status_code_list.selectedItems()]
+            filename_selected_items = [item.text() for item in self.filename_list.selectedItems()]
+            parser_id_selected_items = [item.text() for item in self.parser_id_list.selectedItems()]
+            template_family_selected_items = [item.text() for item in self.template_family_list.selectedItems()]
             has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)())
             date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
             date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
@@ -417,6 +536,17 @@ class FilterDialog(QDialog):
                 date_from=date_from,
                 date_to=date_to,
             )
+            for column_name, selected_items in (
+                ("operator_name", operator_name_selected_items),
+                ("sample_number_kind", sample_number_kind_selected_items),
+                ("status_code", status_code_selected_items),
+                ("file_name", filename_selected_items),
+                ("parser_id", parser_id_selected_items),
+                ("template_family", template_family_selected_items),
+            ):
+                clause = _build_in_clause(column_name, [] if "SELECT ALL" in selected_items else selected_items)
+                if clause is not None:
+                    query += f" AND {clause}"
 
             self.filter_query = query
             self.parent().set_filter_query(self.filter_query)

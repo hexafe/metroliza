@@ -70,7 +70,13 @@ Use this when you want to limit the export by:
 
 - **AX**,
 - **REFERENCE**,
-- **HEADER**, and/or
+- **HEADER**,
+- part/revision/template metadata,
+- sample number and sample number kind,
+- operator,
+- status code,
+- filename,
+- parser/template family, and/or
 - measurement date range.
 
 See [Export filtering](export_filtering.md) for details.
@@ -134,6 +140,8 @@ Use it when you want:
 - a browser view of the exported charts,
 - larger click-to-enlarge chart viewing, and
 - a simpler way to review results without opening Excel first.
+
+Extended summary sections include compact report metadata when available, such as part, revision, template, operator, date range, sample count, and source file context.
 
 This option does not replace the workbook. It adds an extra review file alongside it.
 

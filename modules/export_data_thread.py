@@ -376,6 +376,126 @@ def build_measurement_export_dataframe(df):
     return _build_measurement_export_dataframe(df)
 
 
+def _is_blank_metadata_value(value):
+    if value is None:
+        return True
+    try:
+        if pd.isna(value):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip() == ''
+
+
+def _unique_metadata_values(frame, column_name):
+    if frame is None or column_name not in getattr(frame, 'columns', ()):
+        return []
+
+    values = []
+    seen = set()
+    for raw_value in frame[column_name].tolist():
+        if _is_blank_metadata_value(raw_value):
+            continue
+        value = str(raw_value).strip()
+        if value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    return values
+
+
+def _format_unique_metadata_values(frame, column_name, *, max_values=3):
+    values = _unique_metadata_values(frame, column_name)
+    if not values:
+        return ''
+    visible_values = values[:max_values]
+    suffix = f" +{len(values) - max_values} more" if len(values) > max_values else ''
+    return ', '.join(visible_values) + suffix
+
+
+def _format_date_metadata_range(frame):
+    if frame is None or 'DATE' not in getattr(frame, 'columns', ()):
+        return ''
+
+    date_values = pd.to_datetime(frame['DATE'], errors='coerce').dropna()
+    if not date_values.empty:
+        first_date = date_values.min().date().isoformat()
+        last_date = date_values.max().date().isoformat()
+        return first_date if first_date == last_date else f'{first_date} to {last_date}'
+
+    return _format_unique_metadata_values(frame, 'DATE')
+
+
+def build_dashboard_report_metadata(header_group):
+    """Return compact report context rows for workbook/dashboard summary output."""
+    rows = []
+
+    if header_group is None or getattr(header_group, 'empty', True):
+        return rows
+
+    report_ids = _unique_metadata_values(header_group, 'REPORT_ID')
+    if report_ids:
+        rows.append({'label': 'Reports', 'value': str(len(report_ids))})
+
+    sample_numbers = _unique_metadata_values(header_group, 'SAMPLE_NUMBER')
+    if sample_numbers:
+        rows.append({'label': 'Samples', 'value': str(len(sample_numbers))})
+
+    date_range = _format_date_metadata_range(header_group)
+    if date_range:
+        rows.append({'label': 'Date range', 'value': date_range})
+
+    for label, column_name in (
+        ('Part', 'PART_NAME'),
+        ('Revision', 'REVISION'),
+        ('Template', 'TEMPLATE_VARIANT'),
+        ('Template family', 'TEMPLATE_FAMILY'),
+        ('Operator', 'OPERATOR_NAME'),
+        ('Sample kind', 'SAMPLE_NUMBER_KIND'),
+        ('Comment', 'COMMENT'),
+    ):
+        value = _format_unique_metadata_values(header_group, column_name)
+        if value:
+            rows.append({'label': label, 'value': value})
+
+    filenames = _unique_metadata_values(header_group, 'FILENAME')
+    if filenames:
+        file_value = filenames[0] if len(filenames) == 1 else f'{len(filenames)} files'
+        rows.append({'label': 'Source files', 'value': file_value})
+
+    return rows
+
+
+def _truncate_metadata_subtitle_value(value, *, max_length=34):
+    text = str(value or '').strip()
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 3].rstrip() + '...'
+
+
+def build_summary_panel_metadata_subtitle(panel_subtitle, metadata_rows):
+    """Append high-signal report metadata to the compact summary-sheet subtitle."""
+    base_text = str(panel_subtitle or '').strip()
+    row_by_label = {
+        str(row.get('label') or '').strip(): str(row.get('value') or '').strip()
+        for row in (metadata_rows or [])
+        if isinstance(row, dict)
+    }
+    segments = []
+    for label in ('Part', 'Revision', 'Template', 'Operator'):
+        value = row_by_label.get(label)
+        if value:
+            display_label = 'Rev' if label == 'Revision' else label
+            segments.append(f'{display_label}: {_truncate_metadata_subtitle_value(value)}')
+        if len(segments) >= 3:
+            break
+
+    metadata_text = ' • '.join(segments)
+    if base_text and metadata_text:
+        return f'{base_text} • {metadata_text}'
+    return base_text or metadata_text
+
+
 # Chart wrappers preserve existing call signatures used throughout this file and
 # by tests, while centralizing chart-spec logic in `export_chart_writer`.
 def build_sheet_series_range(sheet_name, first_row, last_row, column_index):
@@ -3354,6 +3474,7 @@ class ExportDataThread(QThread):
         grouping_applied,
         sample_size,
         limits,
+        metadata_rows=None,
     ):
         if not self.generate_html_dashboard:
             return None
@@ -3366,6 +3487,7 @@ class ExportDataThread(QThread):
             'sample_size': int(sample_size or 0),
             'limits': dict(limits or {}),
             'summary_rows': [],
+            'metadata_rows': list(metadata_rows or []),
             'charts': [],
         }
         self._html_dashboard_sections.append(section)
@@ -5279,7 +5401,11 @@ class ExportDataThread(QThread):
             summary_table_composition = chart_payloads['composition']
             capability_badge = summary_table_composition['capability_badge']
             histogram_row_badges = summary_table_composition['histogram_row_badges']
-            panel_subtitle = summary_table_composition['panel_subtitle']
+            dashboard_metadata_rows = build_dashboard_report_metadata(header_group)
+            panel_subtitle = build_summary_panel_metadata_subtitle(
+                summary_table_composition['panel_subtitle'],
+                dashboard_metadata_rows,
+            )
             dashboard_section = self._begin_html_dashboard_section(
                 header=header,
                 subtitle=panel_subtitle,
@@ -5292,6 +5418,7 @@ class ExportDataThread(QThread):
                     'lsl': LSL,
                     'usl': USL,
                 },
+                metadata_rows=dashboard_metadata_rows,
             )
             distribution_labels = chart_payloads['distribution']['labels']
             distribution_values = chart_payloads['distribution']['values']

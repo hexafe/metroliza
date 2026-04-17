@@ -11,10 +11,62 @@ import os
 from typing import Any, Iterable
 
 from modules.db import run_transaction_with_retry
+from modules.report_identity import build_report_identity_hash
+from modules.report_metadata_models import CanonicalReportMetadata
 from modules.report_schema import ensure_report_schema
 
 
 SEMANTIC_DUPLICATE_WARNING_CODE = "semantic_duplicate_identity_hash_detected"
+REPORT_METADATA_EDITABLE_FIELDS = frozenset(
+    {
+        "reference",
+        "report_date",
+        "report_time",
+        "part_name",
+        "revision",
+        "sample_number",
+        "operator_name",
+        "comment",
+        "stats_count_raw",
+        "stats_count_int",
+    }
+)
+REPORT_IDENTITY_FIELDS = frozenset(
+    {
+        "reference",
+        "report_date",
+        "report_time",
+        "part_name",
+        "revision",
+        "sample_number",
+    }
+)
+MEASUREMENT_EDITABLE_FIELDS = frozenset(
+    {
+        "header",
+        "section_name",
+        "feature_label",
+        "characteristic_name",
+        "characteristic_family",
+        "description",
+        "ax",
+        "nominal",
+        "tol_plus",
+        "tol_minus",
+        "bonus",
+        "meas",
+        "dev",
+        "outtol",
+        "page_number",
+        "row_order",
+        "status_code",
+        "is_nok",
+        "raw_measurement_json",
+    }
+)
+MEASUREMENT_FLOAT_FIELDS = frozenset({"nominal", "tol_plus", "tol_minus", "bonus", "meas", "dev", "outtol"})
+MEASUREMENT_INT_FIELDS = frozenset({"page_number", "row_order"})
+MEASUREMENT_STATUS_CODES = frozenset({"ok", "nok", "unknown"})
 
 
 @dataclass(frozen=True)
@@ -109,6 +161,38 @@ def _coerce_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _from_json(value: Any) -> Any:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    decoded = _from_json(value)
+    return dict(decoded) if isinstance(decoded, dict) else {}
+
+
+def _manual_source(source: str | None) -> str:
+    return str(source).strip() if source and str(source).strip() else "manual"
+
+
+def _coerce_status_code(value: Any) -> str:
+    status_code = str(value).strip().lower() if value is not None else ""
+    if status_code not in MEASUREMENT_STATUS_CODES:
+        raise ValueError(f"status_code must be one of {sorted(MEASUREMENT_STATUS_CODES)}")
+    return status_code
+
+
+def _status_from_outtol(outtol: float | None) -> tuple[int, str]:
+    is_nok = bool(outtol is not None and outtol > 0)
+    return _coerce_bool_int(is_nok), "nok" if is_nok else "ok"
 
 
 class ReportRepository:
@@ -584,62 +668,366 @@ class ReportRepository:
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
 
+    def update_report_metadata_fields(
+        self,
+        report_id: int,
+        fields: dict[str, Any],
+        *,
+        source: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Update selected report metadata fields and refresh identity-derived warnings."""
+
+        if not fields:
+            return
+        unknown_fields = set(fields) - REPORT_METADATA_EDITABLE_FIELDS
+        if unknown_fields:
+            raise ValueError(f"Unsupported report metadata fields: {sorted(unknown_fields)}")
+
+        normalized_fields = dict(fields)
+        if "stats_count_int" in normalized_fields:
+            normalized_fields["stats_count_int"] = _coerce_int(normalized_fields["stats_count_int"])
+        elif "stats_count_raw" in normalized_fields:
+            normalized_fields["stats_count_int"] = _coerce_int(normalized_fields["stats_count_raw"])
+
+        now = utc_timestamp()
+        source_value = _manual_source(source)
+        identity_changed = bool(REPORT_IDENTITY_FIELDS.intersection(normalized_fields))
+
+        def _update(cursor) -> None:
+            cursor.execute(
+                """
+                SELECT
+                    pr.id,
+                    pr.parser_id,
+                    pr.template_family,
+                    pr.template_variant,
+                    pr.metadata_confidence,
+                    pr.page_count,
+                    pr.identity_hash,
+                    rm.report_id AS metadata_report_id,
+                    rm.reference,
+                    rm.reference_raw,
+                    rm.report_date,
+                    rm.report_time,
+                    rm.part_name,
+                    rm.revision,
+                    rm.sample_number,
+                    rm.sample_number_kind,
+                    rm.stats_count_raw,
+                    rm.stats_count_int,
+                    rm.operator_name,
+                    rm.comment,
+                    rm.metadata_json
+                FROM parsed_reports pr
+                LEFT JOIN report_metadata rm ON rm.report_id = pr.id
+                WHERE pr.id = ?
+                """,
+                (int(report_id),),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ValueError(f"Report {report_id} does not exist")
+
+            columns = [description[0] for description in cursor.description]
+            report = dict(zip(columns, row))
+            if report["metadata_report_id"] is None:
+                raise ValueError(f"Report {report_id} has no metadata row to update")
+            metadata_json = _json_object(report.get("metadata_json"))
+            field_sources = dict(metadata_json.get("field_sources") or {})
+            manual_overrides = dict(metadata_json.get("manual_overrides") or {})
+            for field_name, value in normalized_fields.items():
+                metadata_json[field_name] = value
+                field_sources[field_name] = source_value
+                override_record = {
+                    "value": value,
+                    "source": source_value,
+                    "updated_at": now,
+                }
+                if reason:
+                    override_record["reason"] = reason
+                manual_overrides[field_name] = override_record
+                report[field_name] = value
+            metadata_json["field_sources"] = field_sources
+            metadata_json["manual_overrides"] = manual_overrides
+
+            assignments = [f"{field_name} = ?" for field_name in normalized_fields]
+            assignments.append("metadata_json = ?")
+            params = [normalized_fields[field_name] for field_name in normalized_fields]
+            params.append(_to_json(metadata_json))
+            params.append(int(report_id))
+            cursor.execute(
+                f"""
+                UPDATE report_metadata
+                SET {", ".join(assignments)}
+                WHERE report_id = ?
+                """,
+                tuple(params),
+            )
+
+            new_identity_hash = report["identity_hash"]
+            if identity_changed:
+                metadata = CanonicalReportMetadata(
+                    parser_id=report["parser_id"],
+                    template_family=report["template_family"],
+                    template_variant=report["template_variant"],
+                    metadata_confidence=report["metadata_confidence"] or 0.0,
+                    reference=report.get("reference"),
+                    reference_raw=report.get("reference_raw"),
+                    report_date=report.get("report_date"),
+                    report_time=report.get("report_time"),
+                    part_name=report.get("part_name"),
+                    revision=report.get("revision"),
+                    sample_number=report.get("sample_number"),
+                    sample_number_kind=report.get("sample_number_kind"),
+                    stats_count_raw=report.get("stats_count_raw"),
+                    stats_count_int=report.get("stats_count_int"),
+                    operator_name=report.get("operator_name"),
+                    comment=report.get("comment"),
+                    page_count=report.get("page_count"),
+                    metadata_json=metadata_json,
+                    warnings=(),
+                )
+                new_identity_hash = build_report_identity_hash(metadata)
+                cursor.execute(
+                    """
+                    UPDATE parsed_reports
+                    SET identity_hash = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (new_identity_hash, now, int(report_id)),
+                )
+                cursor.execute(
+                    """
+                    DELETE FROM report_metadata_warnings
+                    WHERE report_id = ?
+                      AND code = ?
+                    """,
+                    (int(report_id), SEMANTIC_DUPLICATE_WARNING_CODE),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE parsed_reports SET updated_at = ? WHERE id = ?",
+                    (now, int(report_id)),
+                )
+
+            if identity_changed and new_identity_hash:
+                self._persist_semantic_duplicate_warnings(cursor, int(report_id), new_identity_hash)
+
+        run_transaction_with_retry(self.database, _update, connection=self.connection)
+
+    def update_measurement_fields(
+        self,
+        measurement_id: int,
+        fields: dict[str, Any],
+        *,
+        source: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Update selected measurement fields and keep status/raw JSON coherent."""
+
+        if not fields:
+            return
+        unknown_fields = set(fields) - MEASUREMENT_EDITABLE_FIELDS
+        if unknown_fields:
+            raise ValueError(f"Unsupported measurement fields: {sorted(unknown_fields)}")
+
+        normalized_fields = dict(fields)
+        for field_name in MEASUREMENT_FLOAT_FIELDS.intersection(normalized_fields):
+            normalized_fields[field_name] = _coerce_float(normalized_fields[field_name])
+        for field_name in MEASUREMENT_INT_FIELDS.intersection(normalized_fields):
+            normalized_fields[field_name] = _coerce_int(normalized_fields[field_name])
+        if "row_order" in normalized_fields and normalized_fields["row_order"] is None:
+            raise ValueError("row_order must be an integer")
+        if "is_nok" in normalized_fields:
+            normalized_fields["is_nok"] = _coerce_bool_int(normalized_fields["is_nok"])
+        if "status_code" in normalized_fields:
+            normalized_fields["status_code"] = _coerce_status_code(normalized_fields["status_code"])
+
+        now = utc_timestamp()
+        source_value = _manual_source(source)
+
+        def _update(cursor) -> None:
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    report_id,
+                    page_number,
+                    row_order,
+                    header,
+                    section_name,
+                    feature_label,
+                    characteristic_name,
+                    characteristic_family,
+                    description,
+                    ax,
+                    nominal,
+                    tol_plus,
+                    tol_minus,
+                    bonus,
+                    meas,
+                    dev,
+                    outtol,
+                    is_nok,
+                    status_code,
+                    raw_measurement_json
+                FROM report_measurements
+                WHERE id = ?
+                """,
+                (int(measurement_id),),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ValueError(f"Measurement {measurement_id} does not exist")
+
+            columns = [description[0] for description in cursor.description]
+            measurement = dict(zip(columns, row))
+            old_header = measurement.get("header")
+            update_values = dict(normalized_fields)
+
+            if "header" in update_values:
+                new_header = update_values["header"]
+                for dependent_field in ("section_name", "feature_label", "description"):
+                    if dependent_field in update_values:
+                        continue
+                    current_value = measurement.get(dependent_field)
+                    if current_value in (None, "", old_header):
+                        update_values[dependent_field] = new_header
+
+            if "status_code" in update_values:
+                update_values["is_nok"] = 1 if update_values["status_code"] == "nok" else 0
+            elif "is_nok" in update_values:
+                update_values["status_code"] = "nok" if update_values["is_nok"] else "ok"
+            elif "outtol" in update_values:
+                is_nok, status_code = _status_from_outtol(update_values["outtol"])
+                update_values["is_nok"] = is_nok
+                update_values["status_code"] = status_code
+
+            if "raw_measurement_json" in update_values:
+                raw_measurement_json = update_values.pop("raw_measurement_json")
+                raw_json = _json_object(raw_measurement_json)
+            else:
+                raw_json = _json_object(measurement.get("raw_measurement_json"))
+                if "header" in update_values:
+                    raw_json["header"] = update_values["header"]
+                manual_overrides = dict(raw_json.get("manual_overrides") or {})
+                for field_name, value in update_values.items():
+                    if field_name in raw_json or field_name == "header":
+                        raw_json[field_name] = value
+                    override_record = {
+                        "value": value,
+                        "source": source_value,
+                        "updated_at": now,
+                    }
+                    if reason:
+                        override_record["reason"] = reason
+                    manual_overrides[field_name] = override_record
+                raw_json["manual_overrides"] = manual_overrides
+
+            update_values["raw_measurement_json"] = _to_json(raw_json)
+            assignments = [f"{field_name} = ?" for field_name in update_values]
+            params = [update_values[field_name] for field_name in update_values]
+            params.append(int(measurement_id))
+            cursor.execute(
+                f"""
+                UPDATE report_measurements
+                SET {", ".join(assignments)}
+                WHERE id = ?
+                """,
+                tuple(params),
+            )
+
+            cursor.execute(
+                """
+                SELECT COUNT(*), COALESCE(SUM(is_nok), 0)
+                FROM report_measurements
+                WHERE report_id = ?
+                """,
+                (int(measurement["report_id"]),),
+            )
+            measurement_count, nok_count = cursor.fetchone()
+            cursor.execute(
+                """
+                UPDATE parsed_reports
+                SET measurement_count = ?,
+                    has_nok = ?,
+                    nok_count = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    int(measurement_count),
+                    _coerce_bool_int(int(nok_count) > 0),
+                    int(nok_count),
+                    now,
+                    int(measurement["report_id"]),
+                ),
+            )
+
+        run_transaction_with_retry(self.database, _update, connection=self.connection)
+
+    def _persist_semantic_duplicate_warnings(self, cursor, report_id: int, identity_hash: str | None) -> int:
+        if not identity_hash:
+            return 0
+
+        created_at = utc_timestamp()
+        cursor.execute(
+            """
+            SELECT other.id
+            FROM parsed_reports current
+            JOIN parsed_reports other
+              ON other.identity_hash = current.identity_hash
+             AND other.id <> current.id
+             AND other.source_file_id <> current.source_file_id
+            WHERE current.id = ?
+              AND current.identity_hash = ?
+            """,
+            (int(report_id), identity_hash),
+        )
+        duplicate_ids = [int(row[0]) for row in cursor.fetchall()]
+        if not duplicate_ids:
+            return 0
+
+        cursor.execute(
+            """
+            DELETE FROM report_metadata_warnings
+            WHERE report_id = ?
+              AND code = ?
+            """,
+            (int(report_id), SEMANTIC_DUPLICATE_WARNING_CODE),
+        )
+        cursor.execute(
+            """
+            INSERT INTO report_metadata_warnings (
+                report_id,
+                code,
+                field_name,
+                severity,
+                message,
+                details_json,
+                created_at
+            )
+            VALUES (?, ?, NULL, 'warning', ?, ?, ?)
+            """,
+            (
+                int(report_id),
+                SEMANTIC_DUPLICATE_WARNING_CODE,
+                "Semantic report identity matches another parsed report.",
+                _to_json({"identity_hash": identity_hash, "duplicate_report_ids": duplicate_ids}),
+                created_at,
+            ),
+        )
+        return len(duplicate_ids)
+
     def persist_semantic_duplicate_warnings(self, report_id: int, identity_hash: str | None) -> int:
         """Persist duplicate semantic identity warnings for same-hash reports."""
 
         if not identity_hash:
             return 0
 
-        created_at = utc_timestamp()
-
         def _persist(cursor) -> int:
-            cursor.execute(
-                """
-                SELECT other.id
-                FROM parsed_reports current
-                JOIN parsed_reports other
-                  ON other.identity_hash = current.identity_hash
-                 AND other.id <> current.id
-                 AND other.source_file_id <> current.source_file_id
-                WHERE current.id = ?
-                  AND current.identity_hash = ?
-                """,
-                (int(report_id), identity_hash),
-            )
-            duplicate_ids = [int(row[0]) for row in cursor.fetchall()]
-            if not duplicate_ids:
-                return 0
-
-            cursor.execute(
-                """
-                DELETE FROM report_metadata_warnings
-                WHERE report_id = ?
-                  AND code = ?
-                """,
-                (int(report_id), SEMANTIC_DUPLICATE_WARNING_CODE),
-            )
-            cursor.execute(
-                """
-                INSERT INTO report_metadata_warnings (
-                    report_id,
-                    code,
-                    field_name,
-                    severity,
-                    message,
-                    details_json,
-                    created_at
-                )
-                VALUES (?, ?, NULL, 'warning', ?, ?, ?)
-                """,
-                (
-                    int(report_id),
-                    SEMANTIC_DUPLICATE_WARNING_CODE,
-                    "Semantic report identity matches another parsed report.",
-                    _to_json({"identity_hash": identity_hash, "duplicate_report_ids": duplicate_ids}),
-                    created_at,
-                ),
-            )
-            return len(duplicate_ids)
+            return self._persist_semantic_duplicate_warnings(cursor, int(report_id), identity_hash)
 
         return run_transaction_with_retry(self.database, _persist, connection=self.connection)
 

@@ -2,13 +2,23 @@
 
 ## What this tool changes
 
-Use **Modify database** when you want to edit stored text values that are already inside a Metroliza **database file**.
+Use **Modify database** when you want to edit stored metadata values that are already inside a Metroliza **database file**.
 
-This tool is for cleanup and normalization of saved values such as:
+This tool supports two kinds of cleanup:
+
+- normalizing repeated text values across the database, and
+- correcting individual report or measurement records.
+
+Use it for saved values such as:
 
 - **REFERENCE**,
 - **SAMPLE NUMBER**, and
-- **HEADER**.
+- **HEADER**,
+- report date/time,
+- part name and revision,
+- operator and comment fields,
+- measurement characteristics, and
+- measurement values/tolerances/status.
 
 These edits change the stored values in the database itself. They are not temporary display-only changes.
 
@@ -18,27 +28,82 @@ You must select a **database file** before you can apply changes.
 
 If the dialog was opened from the main window with a database already selected, it may already be filled in. If not, use **Select DB file**.
 
-## Table-by-table explanation
+## Tabs
 
-The dialog shows three editable tables side by side.
+The dialog has three tabs.
 
-### REFERENCE
+### Normalize values
+
+This tab keeps the original global cleanup workflow.
+
+It shows three editable tables side by side:
+
+#### REFERENCE
 
 This table shows the distinct **REFERENCE** values stored in the database.
 
 Use it when reference names need to be corrected or standardized.
 
-### SAMPLE NUMBER
+#### SAMPLE NUMBER
 
 This table shows the distinct **SAMPLE NUMBER** values stored in the database.
 
 Use it when part or sample identifiers need cleanup.
 
-### HEADER
+#### HEADER
 
 This table shows the distinct **HEADER** values stored in the database.
 
 Use it when measurement headers need to be renamed or standardized.
+
+Because this tab edits distinct values, a change applies everywhere that old value appears.
+
+### Report records
+
+This tab edits one report row at a time.
+
+Editable fields include:
+
+- **REFERENCE**,
+- **DATE**,
+- **TIME**,
+- **PART_NAME**,
+- **REVISION**,
+- **SAMPLE_NUMBER**,
+- **OPERATOR_NAME**, and
+- **COMMENT**.
+
+Read-only context columns such as **REPORT_ID**, **FILENAME**, and **TEMPLATE_VARIANT** help identify the row.
+
+Changing report identity fields such as reference, date, time, part name, revision, or sample number also refreshes the report identity hash used for duplicate detection.
+
+### Measurement rows
+
+This tab edits one measurement row at a time.
+
+Editable fields include:
+
+- **HEADER**,
+- **SECTION_NAME**,
+- **FEATURE_LABEL**,
+- **CHARACTERISTIC_NAME**,
+- **CHARACTERISTIC_FAMILY**,
+- **DESCRIPTION**,
+- **AX**,
+- **NOM**,
+- **+TOL**,
+- **-TOL**,
+- **BONUS**,
+- **MEAS**,
+- **DEV**,
+- **OUTTOL**, and
+- **STATUS_CODE**.
+
+Read-only **MEASUREMENT_ID** and **REPORT_ID** columns identify the measurement and its report.
+
+Changing **OUTTOL** or **STATUS_CODE** refreshes the stored NOK/status summary for the owning report.
+
+The report and measurement tabs also include a search field above the table.
 
 ## How editing works
 
@@ -46,7 +111,7 @@ Values are edited **in place**.
 
 That means you click directly in a table cell and change the text there. You do not open a separate editor for normal one-by-one edits.
 
-The tool supports row selection in all three tables.
+The tool supports row selection in the visible table.
 
 ## How to rename one value
 
@@ -82,9 +147,11 @@ If you have multiple rows selected in one table:
 4. Type the new value.
 5. Confirm.
 
-The selected rows in that table are updated to the same new value.
+The selected rows in that normalization table are updated to the same new value.
 
 This is useful when several old labels should all become one standardized label.
+
+Bulk rename is intended for the **Normalize values** tab. Use direct cell edits for report and measurement record corrections.
 
 ## Applying changes safely
 
@@ -94,9 +161,9 @@ This is useful when several old labels should all become one standardized label.
 
 Instead, it:
 
-1. collects the changes you made across all three tables,
+1. collects the changes you made across the normalization and record tabs,
 2. shows a confirmation dialog listing the pending modifications, and
-3. writes the changes in one batch if you confirm.
+3. writes the changes if you confirm.
 
 This makes it easier to review the full set of edits before saving them.
 
@@ -110,7 +177,7 @@ If you have typed edits but have not clicked **Apply changes**, those edits are 
 
 ### This updates stored values in the database
 
-Be careful with broad renames. Once applied, these changes affect the stored data that later exports will use.
+Be careful with broad renames and record edits. Once applied, these changes affect the stored data that later exports, filtering, grouping, workbook output, and HTML dashboard output will use.
 
 ### Use this for cleanup, not for temporary filtering
 

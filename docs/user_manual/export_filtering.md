@@ -6,11 +6,21 @@ The **Data filtering** dialog lets you narrow which rows the Export workflow wil
 
 Open it from the Export dialog by clicking **Edit...** next to **Filters**.
 
-It filters across four dimensions:
+It filters across the main report and measurement metadata dimensions:
 
 - **AX**,
 - **REFERENCE**,
 - **HEADER**, and
+- **PART NAME**,
+- **REVISION**,
+- **TEMPLATE VARIANT**,
+- **SAMPLE NUMBER**,
+- **OPERATOR NAME**,
+- **SAMPLE NUMBER KIND**,
+- **STATUS CODE**,
+- **FILENAME**,
+- **PARSER ID**,
+- **TEMPLATE FAMILY**, and
 - measurement date range.
 
 Filtering changes the scope of the export. It does not permanently edit the database.
@@ -53,6 +63,36 @@ The **SELECTED HEADERS** list mirrors the headers currently selected in the **HE
 This is a convenience view. It helps you confirm the active header selection in one place.
 
 It is especially useful when the header list is long.
+
+### PART NAME, REVISION, TEMPLATE VARIANT, SAMPLE NUMBER
+
+These lists narrow the export to specific report metadata values.
+
+Use them when you want to focus on a particular part definition or sample grouping.
+
+Each list includes **SELECT ALL**.
+
+### OPERATOR NAME
+
+Use **OPERATOR NAME** to limit export to reports associated with a specific operator.
+
+This is useful when the source data includes per-report operator metadata.
+
+### SAMPLE NUMBER KIND
+
+Use **SAMPLE NUMBER KIND** to narrow export to the sample number classification stored with the report metadata.
+
+### STATUS CODE
+
+Use **STATUS CODE** to filter by the measurement status stored in the export rows, such as `ok`, `nok`, or `unknown`.
+
+### FILENAME
+
+Use **FILENAME** to limit export to one or more source file names.
+
+### PARSER ID and TEMPLATE FAMILY
+
+Use **PARSER ID** and **TEMPLATE FAMILY** when you need to isolate reports extracted by a particular parser or template family.
 
 ## How REFERENCE affects HEADER choices
 

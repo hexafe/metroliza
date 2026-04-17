@@ -48,7 +48,9 @@ from modules.export_summary_utils import normalize_plot_axis_values  # noqa: E40
 from modules.export_data_thread import (  # noqa: E402
     ExportDataThread,
     all_measurements_within_limits,
+    build_dashboard_report_metadata,
     build_sheet_series_range,
+    build_summary_panel_metadata_subtitle,
     build_summary_sheet_position_plan,
     build_histogram_table_data,
     build_histogram_table_render_data,
@@ -72,6 +74,46 @@ class TestExportThreadLabelHelpers(unittest.TestCase):
         result = build_sparse_unique_labels(labels)
 
         self.assertEqual(result, ['A', 'B', '', 'C', ''])
+
+    def test_build_dashboard_report_metadata_summarizes_rich_report_context(self):
+        import pandas as pd
+
+        header_group = pd.DataFrame(
+            {
+                'REPORT_ID': [10, 10, 11],
+                'SAMPLE_NUMBER': ['1', '2', '3'],
+                'DATE': ['2024-01-01', '2024-01-03', '2024-01-02'],
+                'PART_NAME': ['Carrier Plate', 'Carrier Plate', 'Carrier Plate'],
+                'REVISION': ['B', 'B', 'B'],
+                'TEMPLATE_VARIANT': ['cmm-v2', 'cmm-v2', 'cmm-v2'],
+                'OPERATOR_NAME': ['M. Nowak', 'M. Nowak', 'A. Kowalski'],
+                'SAMPLE_NUMBER_KIND': ['parsed', 'parsed', 'parsed'],
+                'FILENAME': ['a.pdf', 'a.pdf', 'b.pdf'],
+            }
+        )
+
+        rows = build_dashboard_report_metadata(header_group)
+        by_label = {row['label']: row['value'] for row in rows}
+
+        self.assertEqual(by_label['Reports'], '2')
+        self.assertEqual(by_label['Samples'], '3')
+        self.assertEqual(by_label['Date range'], '2024-01-01 to 2024-01-03')
+        self.assertEqual(by_label['Part'], 'Carrier Plate')
+        self.assertEqual(by_label['Operator'], 'M. Nowak, A. Kowalski')
+        self.assertEqual(by_label['Source files'], '2 files')
+
+    def test_build_summary_panel_metadata_subtitle_adds_compact_context(self):
+        subtitle = build_summary_panel_metadata_subtitle(
+            'n=12 • NOK=8.3%',
+            [
+                {'label': 'Part', 'value': 'Carrier Plate'},
+                {'label': 'Revision', 'value': 'B'},
+                {'label': 'Template', 'value': 'cmm-v2'},
+                {'label': 'Operator', 'value': 'M. Nowak'},
+            ],
+        )
+
+        self.assertEqual(subtitle, 'n=12 • NOK=8.3% • Part: Carrier Plate • Rev: B • Template: cmm-v2')
 
 
 

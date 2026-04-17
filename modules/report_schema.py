@@ -218,6 +218,7 @@ SCHEMA_VIEW_STATEMENTS = (
     """CREATE VIEW IF NOT EXISTS vw_measurement_export AS
         SELECT
             pr.id AS report_id,
+            meas.id AS measurement_id,
             rm.reference AS reference,
             rm.report_date AS report_date,
             rm.report_time AS report_time,
@@ -291,6 +292,8 @@ SCHEMA_VIEW_STATEMENTS = (
         )""",
 )
 
+SCHEMA_VIEW_NAMES = ("vw_report_overview", "vw_measurement_export", "vw_grouping_reports")
+
 
 def ensure_report_schema(database: str, *, connection=None, retries: int = 4, retry_delay_s: float = 1) -> None:
     """Ensure report ingestion tables, indexes, views, and schema metadata exist."""
@@ -301,6 +304,8 @@ def ensure_report_schema(database: str, *, connection=None, retries: int = 4, re
         ensure_characteristic_alias_table(cursor)
         for statement in SCHEMA_INDEX_STATEMENTS:
             cursor.execute(statement)
+        for view_name in SCHEMA_VIEW_NAMES:
+            cursor.execute(f"DROP VIEW IF EXISTS {view_name}")
         for statement in SCHEMA_VIEW_STATEMENTS:
             cursor.execute(statement)
         cursor.execute(
