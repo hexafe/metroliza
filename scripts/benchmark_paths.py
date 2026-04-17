@@ -134,16 +134,11 @@ def _create_pdf_fixture_dir(base_dir: Path, count: int) -> Path:
 
 
 def _create_export_db_fixture(db_path: Path, *, report_count: int, headers_per_report: int) -> dict[str, int]:
-    from modules.db import execute_with_retry
+    from modules.report_repository import ReportRepository
+    from modules.report_schema import ensure_report_schema
 
-    execute_with_retry(
-        str(db_path),
-        'CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REFERENCE TEXT, FILELOC TEXT, FILENAME TEXT, DATE TEXT, SAMPLE_NUMBER TEXT)',
-    )
-    execute_with_retry(
-        str(db_path),
-        'CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY AUTOINCREMENT, REPORT_ID INTEGER, AX TEXT, NOM REAL, "+TOL" REAL, "-TOL" REAL, BONUS REAL, MEAS REAL, DEV REAL, OUTTOL INTEGER, HEADER TEXT)',
-    )
+    ensure_report_schema(str(db_path))
+    repository = ReportRepository(str(db_path))
 
     rng = np.random.default_rng(42)
     total_measurement_rows = 0
@@ -151,30 +146,65 @@ def _create_export_db_fixture(db_path: Path, *, report_count: int, headers_per_r
     for report_index in range(1, report_count + 1):
         reference = f"REF-{((report_index - 1) % 4) + 1}"
         sample_number = str(report_index)
-        execute_with_retry(
-            str(db_path),
-            'INSERT INTO REPORTS (REFERENCE, FILELOC, FILENAME, DATE, SAMPLE_NUMBER) VALUES (?, ?, ?, ?, ?)',
-            (
-                reference,
-                '/fixtures/reports',
-                f'{reference}_2024-01-{(report_index % 28) + 1:02d}_{sample_number}.pdf',
-                f'2024-01-{(report_index % 28) + 1:02d}',
-                sample_number,
-            ),
-        )
-        report_id = execute_with_retry(str(db_path), 'SELECT MAX(ID) FROM REPORTS')[0][0]
+        report_date = f'2024-01-{(report_index % 28) + 1:02d}'
+        file_name = f'{reference}_{report_date}_{sample_number}.pdf'
+        measurements = []
 
         for header_idx in range(1, headers_per_report + 1):
             nominal = 10.0 + (header_idx * 0.1)
             measurement = float(nominal + rng.normal(0.0, 0.12))
             dev = measurement - nominal
             outtol = int(abs(dev) > 0.5)
-            execute_with_retry(
-                str(db_path),
-                'INSERT INTO MEASUREMENTS (REPORT_ID, AX, NOM, "+TOL", "-TOL", BONUS, MEAS, DEV, OUTTOL, HEADER) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (report_id, 'X', nominal, 0.5, -0.5, 0.0, measurement, dev, outtol, f'FEATURE_{header_idx:02d}'),
+            header = f'FEATURE_{header_idx:02d}'
+            measurements.append(
+                {
+                    'row_order': header_idx,
+                    'header': header,
+                    'section_name': header,
+                    'feature_label': header,
+                    'characteristic_name': 'LOC',
+                    'characteristic_family': 'LOC',
+                    'description': header,
+                    'ax': 'X',
+                    'nominal': nominal,
+                    'tol_plus': 0.5,
+                    'tol_minus': -0.5,
+                    'bonus': 0.0,
+                    'meas': measurement,
+                    'dev': dev,
+                    'outtol': outtol,
+                    'is_nok': bool(outtol),
+                    'status_code': 'nok' if outtol else 'ok',
+                }
             )
             total_measurement_rows += 1
+
+        repository.persist_parsed_report(
+            source_path=Path('/fixtures/reports') / file_name,
+            parser_id='benchmark',
+            parser_version='benchmark',
+            template_family='cmm_pdf_header_box',
+            template_variant='benchmark',
+            parse_status='parsed',
+            metadata={
+                'reference': reference,
+                'reference_raw': reference,
+                'report_date': report_date,
+                'sample_number': sample_number,
+                'sample_number_kind': 'explicit_sample_number',
+                'metadata_json': {'benchmark_fixture': True},
+            },
+            candidates=(),
+            warnings=(),
+            measurements=measurements,
+            metadata_version='report_metadata_v1',
+            page_count=1,
+            measurement_count=len(measurements),
+            has_nok=any(row['is_nok'] for row in measurements),
+            nok_count=sum(1 for row in measurements if row['is_nok']),
+            metadata_confidence=1.0,
+            identity_hash=f'benchmark:{reference}:{sample_number}',
+        )
 
     return {
         'reports': report_count,
@@ -485,6 +515,7 @@ def benchmark_export_write_vs_shape_path(temp_dir: Path, report_count: int, head
     import xlsxwriter
     from modules.db import read_sql_dataframe
     from modules.export_query_service import build_measurement_export_dataframe
+    from modules.report_query_service import build_measurement_export_query
     from modules.export_sheet_writer import (
         build_measurement_write_bundle_cached,
         create_measurement_formats,
@@ -497,15 +528,7 @@ def benchmark_export_write_vs_shape_path(temp_dir: Path, report_count: int, head
     loaded_df = build_measurement_export_dataframe(
         read_sql_dataframe(
             str(db_path),
-            """
-            SELECT MEASUREMENTS.AX, MEASUREMENTS.NOM, MEASUREMENTS."+TOL",
-                   MEASUREMENTS."-TOL", MEASUREMENTS.BONUS, MEASUREMENTS.MEAS,
-                   MEASUREMENTS.DEV, MEASUREMENTS.OUTTOL, MEASUREMENTS.HEADER, REPORTS.REFERENCE,
-                   REPORTS.FILELOC, REPORTS.FILENAME, REPORTS.DATE, REPORTS.SAMPLE_NUMBER
-            FROM MEASUREMENTS
-            JOIN REPORTS ON MEASUREMENTS.REPORT_ID = REPORTS.ID
-            WHERE 1=1
-            """,
+            build_measurement_export_query(),
         )
     )
     grouped = list(loaded_df.groupby(['REFERENCE', 'HEADER - AX'], sort=False))
