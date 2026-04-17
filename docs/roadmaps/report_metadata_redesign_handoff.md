@@ -138,6 +138,18 @@ python -m ruff check .
 
 Result: `All checks passed!`.
 
+```bash
+python scripts/benchmark_trend_compare.py --baseline docs/perf_baseline_snapshot.json --runs <synthetic pdf_parse_path 0.064474s payload> --scenarios pdf_parse_path --max-median-regression-pct 12 --min-median-regression-s 0.100 --output-json /tmp/metroliza-pdf-trend-floor.json
+```
+
+Result: `pdf_parse_path` passed with the CI-observed `0.057444s` absolute regression preserved in the trend output and treated as below the shared non-blocking benchmark job's `0.100s` noise floor.
+
+```bash
+python -m pytest tests/test_ci_policy_sync.py tests/test_benchmark_paths.py -q
+```
+
+Result: `12 passed`.
+
 ## Storage And Identity Summary
 
 The implementation now has three storage layers:
