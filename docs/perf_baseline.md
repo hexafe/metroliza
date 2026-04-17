@@ -49,7 +49,7 @@ These values are pinned in CI and should only change with a dedicated baseline-g
 ## 2) Distribution fit batch path (`scripts/benchmark_distribution_fit_batch.py`)
 
 - Scenario key: `distribution_fit_batch_compare`
-- Purpose: legacy per-group distribution-fit vs batch ndarray flow parity/performance.
+- Purpose: per-group distribution-fit vs batch ndarray flow parity/performance.
 - Fixture sizes:
   - `--metrics 40`
   - `--groups 6`

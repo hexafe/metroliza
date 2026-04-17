@@ -65,7 +65,7 @@ Request/option contracts live in `modules/contracts.py`.
 - Use **`snake_case.py`** for all new Python modules under `modules/`.
 - Prefer importing from snake_case module names in new and touched code.
 - CamelCase module filenames are no longer supported; use snake_case paths exclusively.
-- See [`docs/module_naming_migration.md`](docs/module_naming_migration.md) for the staged migration map and compatibility plan.
+- The completed migration closeout is archived at [`docs/archive/2026/module_naming_migration.md`](docs/archive/2026/module_naming_migration.md).
 
 ## Coding guidance
 

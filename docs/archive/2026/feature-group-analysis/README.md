@@ -27,7 +27,7 @@ Group Analysis is the single active grouped statistical export surface.
 This directory is **archived**. It is not an active planning workspace.
 
 For active end-user guidance, use [`../../../user_manual/group_analysis/README.md`](../../../user_manual/group_analysis/README.md).
-For historical Group Analysis indexing and retained design notes, use [`../../../group_analysis/README.md`](../../../group_analysis/README.md).
+For historical Group Analysis indexing and retained design notes, use [`group_analysis_legacy_index.md`](group_analysis_legacy_index.md).
 The archived pre-consolidation Group Comparison XLSX workspace lives at `docs/archive/2026/feature-group-comparison-xlsx/`.
 
 ## Documents

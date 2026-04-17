@@ -1,5 +1,7 @@
 # Group Comparison Toolkit Extraction
 
+> Archived after Metroliza adopted the standalone `hexafe-groupstats` package through `modules/hexafe_groupstats_adapter.py` and pinned `hexafe-groupstats[pandas]` in `requirements.txt`. Retained as historical extraction rationale.
+
 ## Goal
 
 Make the current Group Analysis logic reusable outside Metroliza so the same comparison engine can be applied to:

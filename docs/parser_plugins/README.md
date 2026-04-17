@@ -51,4 +51,4 @@ python scripts/explain_parser_resolution.py samples/sample_report_01.pdf --paths
 
 ## Historical design context
 
-The planning/design package that led to this workflow remains under [`../roadmaps/plugin_architecture_llm_factory/README.md`](../roadmaps/plugin_architecture_llm_factory/README.md). Superseded intermediate quickstart/status docs are archived under [`../archive/2026/feature-parser-plugin-factory/README.md`](../archive/2026/feature-parser-plugin-factory/README.md).
+Archived parser-plugin design notes and superseded quickstart/status docs are under [`../archive/2026/feature-parser-plugin-factory/README.md`](../archive/2026/feature-parser-plugin-factory/README.md).

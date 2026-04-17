@@ -11,7 +11,7 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
 
 ## Active release line
 
-- Release line metadata (canonical): `RELEASE_VERSION=2026.04rc2`, `VERSION_DATE=260415`
+- Release line metadata is canonical in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, and `CURRENT_RELEASE_HIGHLIGHT`).
 - Build/evidence branch, commit SHA, and artifact/build ID must be refreshed in the linked evidence docs whenever smoke evidence changes; do not rely on stale branch-local snapshot values in this file.
 
 | Track | Status | Notes | Primary doc |
@@ -29,10 +29,10 @@ Release/window metadata is defined in `VersionDate.py` and synchronized into use
   - Optional/manual workflow-dispatch lanes (`packaging-smoke`, `google-conversion-smoke`) are non-blocking for normal PR CI but may be linked as release confidence evidence when executed.
 - Active release operations are governed by documents under `docs/release_checks/`.
 - Current QA counts, exact commit SHAs, and artifact identifiers should be recorded in the linked evidence docs and CI runs when status changes; counts from older revisions of this file are historical only.
-- Latest local QA/docs audit on the current branch state: `pytest tests -q --cov=. --cov-report=term --cov-report=xml:coverage.xml` passed (`1103 passed, 19 skipped, 57 subtests passed`, total coverage `83%`), targeted native chart/docs checks passed (`60 passed` across chart parity/spec/smoke and docs-policy suites), and hygiene checks passed (`ruff check .`, `git diff --check`).
-- Active export-path follow-up docs: [`../roadmaps/exporter_audit_2026_03.md`](../roadmaps/exporter_audit_2026_03.md) for remaining structural backlog, plus [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md) as historical stabilization context.
+- Latest QA evidence belongs in the linked CI runs, smoke logs, and checklist entries for the build under review; do not carry branch-local test counts in this status hub.
+- Active export-path follow-up docs: [`../roadmaps/exporter_audit_2026_03.md`](../roadmaps/exporter_audit_2026_03.md) for remaining structural backlog, plus [`../roadmaps/2026_03_rc2_stabilization_execution.md`](../roadmaps/2026_03_rc2_stabilization_execution.md) as the RC2 closeout/reference tracker.
 - During the current RC stabilization window, only small behavior-preserving, test-backed slices should move forward; larger decomposition/architecture moves remain deferred per triage.
-- Superseded planning docs are references only and should not be used as the operational status tracker (`../roadmaps/2026_03_rc1_test_ci_execution_tracker.md`, `../roadmaps/test_ci_audit_execution.md`).
+- Superseded planning docs are archived references only and should not be used as operational status trackers.
 - If status changes, update this page first, then update linked runbooks/checklists as needed.
 
 ## Historical context (archive)

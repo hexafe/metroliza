@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from modules.export_summary_utils import resolve_histogram_bin_count
+
 
 _PLOTLY_COLORWAY = [
     "#245a5a",
@@ -501,13 +503,15 @@ def _resolve_plotly_histogram_bin_count(values: list[float], *, preferred: Any =
     preferred_count = int(preferred or 0) if _coerce_finite_float(preferred) is not None else 0
     if preferred_count > 0:
         return preferred_count
-    sample_count = len(values)
-    if sample_count <= 1:
-        return 1
-    return max(6, min(24, int(round(math.sqrt(sample_count)))))
+    binning = resolve_histogram_bin_count(values)
+    return max(1, int(binning.get("bin_count") or 1))
 
 
-def _resolve_plotly_histogram_bins(values: list[float], *, preferred: Any = None) -> dict[str, float]:
+def _resolve_plotly_histogram_bins(
+    values: list[float],
+    *,
+    preferred: Any = None,
+) -> dict[str, float]:
     if not values:
         return {}
 
@@ -735,7 +739,10 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     if x_min is not None and x_max is not None and x_min < x_max:
         layout["xaxis"]["range"] = [x_min, x_max]
     layout["bargap"] = 0.04
-    bins = _resolve_plotly_histogram_bins(values, preferred=payload.get("bin_count"))
+    bins = _resolve_plotly_histogram_bins(
+        values,
+        preferred=payload.get("bin_count"),
+    )
 
     return {
         "data": [

@@ -28,8 +28,8 @@ Primary architecture observations guiding this plan:
   - `modules/export_grouping_utils.py`
 - Release process references under `docs/release_checks/` should remain the operational gate for RC confidence.
 - Roadmap and naming/policy references must be treated as design constraints and compatibility guides:
-  - `docs/roadmaps/plugin_architecture_llm_factory/README.md`
-  - `docs/module_naming_migration.md`
+  - `docs/archive/2026/feature-parser-plugin-factory/plugin_architecture_llm_factory/README.md`
+  - `docs/archive/2026/module_naming_migration.md`
   - `docs/documentation_policy.md`
 
 ## 4. Refactor objectives
@@ -47,7 +47,7 @@ Primary architecture observations guiding this plan:
 
 ### Phase B — Deferred `2026.04+` structural work
 - Broader responsibility redistribution across export pipeline modules.
-- Module boundary cleanup informed by `docs/module_naming_migration.md`.
+- Module boundary cleanup informed by the archived migration closeout in `docs/archive/2026/module_naming_migration.md` and the active naming policy in `CONTRIBUTING.md`.
 - Additional architecture hardening that is too risky for rc2.
 
 ### Phase C — Future plugin runtime platform
@@ -76,8 +76,8 @@ Primary architecture observations guiding this plan:
 | EX-002 | Move conversion decision matrix into helper seam | done | Phase A | Reduces branching complexity in thread execution loop | `modules/export_data_thread.py`, `modules/export_google_result_utils.py` | Unit tests for conversion routing and parity snapshots | `docs/release_checks/` | Merged via stage/metadata helper seam (`build_google_stage_message`, `build_google_conversion_metadata`, `build_google_fallback_metadata`) with thread flow coverage. |
 | EX-003 | Isolate dialog non-UI completion validation helper | done | Phase A | De-couple non-UI logic from `export_dialog` UI flow without UX change | `modules/export_dialog.py`, `modules/export_dialog_service.py` | Dialog validation unit tests + smoke export flow | `docs/documentation_policy.md` conformance check | Merged via `export_dialog_service` request-validation and completion-message helpers while keeping UI wiring in `export_dialog`. |
 | EX-008 | Extract export logging context and issue formatting helpers | done | Phase A | Keep `ExportDataThread` orchestration-focused by moving stateless logging payload logic into a dedicated helper module | `modules/export_data_thread.py`, `modules/export_logging_service.py`, `tests/test_thread_flow_helpers.py` | Focused helper regression tests + existing export/query tests | `docs/release_checks/` entries touching export parity expectations | Merged in a narrow slice with thread method signatures preserved as delegating wrappers; rollback point is reverting `modules/export_logging_service.py` wiring only. |
-| EX-004 | Introduce export orchestration façade for structural migration | deferred | Phase B | Needed for larger architecture cleanup but higher rc2 risk | `modules/export_data_thread.py`, new façade module(s) | Integration tests across full export variants | `docs/module_naming_migration.md` alignment | Deferred to `2026.04+` for risk control |
-| EX-005 | Define plugin runtime adapter contract draft | deferred | Phase C | Unblocks long-term plugin path after structural cleanup | `docs/roadmaps/plugin_architecture_llm_factory/README.md` and related modules | Contract tests (future) | Roadmap review with maintainers | Deferred until Phase C starts |
+| EX-004 | Introduce export orchestration façade for structural migration | deferred | Phase B | Needed for larger architecture cleanup but higher rc2 risk | `modules/export_data_thread.py`, new façade module(s) | Integration tests across full export variants | Active naming policy in `CONTRIBUTING.md` | Deferred to `2026.04+` for risk control |
+| EX-005 | Define plugin runtime adapter contract draft | deferred | Phase C | Unblocks long-term plugin path after structural cleanup | Active parser plugin docs and archived plugin architecture notes | Contract tests (future) | Roadmap review with maintainers | Deferred until Phase C starts |
 | EX-006 | Draft LLM parser factory bridge interface | deferred | Phase D | Sequenced after plugin contract stabilization | parser-factory interface files (future) | Safety/fallback tests (future) | Roadmap + policy review | Deferred pending Phase C outputs |
 | EX-007 | Specify warranty/statistics export telemetry contract | deferred | Phase E | Depends on stable extension/runtime interfaces | telemetry interface files (future), export writer seams | Contract and data-shape tests (future) | release + documentation policy review | Deferred pending Phases C/D |
 
@@ -115,8 +115,8 @@ Primary architecture observations guiding this plan:
 - This file is the operational execution source; update it first when plan state changes.
 - Keep TODO statuses synchronized with actual merged code state (`todo`/`in_progress`/`done`/`deferred`).
 - Any release procedure impact requires same-change review of relevant files in `docs/release_checks/`.
-- Naming or module boundary changes must be checked against `docs/module_naming_migration.md`.
-- Any roadmap-affecting decision must cross-reference `docs/roadmaps/plugin_architecture_llm_factory/README.md`.
+- Naming or module boundary changes must follow `CONTRIBUTING.md`; the completed migration closeout is archived at `docs/archive/2026/module_naming_migration.md`.
+- Parser-plugin roadmap-affecting decisions must cross-reference the active parser plugin docs and archived plugin architecture notes.
 - All documentation edits must respect `docs/documentation_policy.md`.
 
 ### Mandatory completed-step checklist template

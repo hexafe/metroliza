@@ -13,6 +13,7 @@ from modules.export_html_dashboard import (
     resolve_html_dashboard_path,
     write_export_html_dashboard,
 )
+from modules.export_summary_utils import resolve_histogram_bin_count
 
 
 class TestExportHtmlDashboard(unittest.TestCase):
@@ -287,6 +288,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertNotEqual(bundle['light']['layout']['colorway'], bundle['dark']['layout']['colorway'])
 
     def test_group_analysis_histogram_plotly_spec_uses_shared_bins_for_overlay(self):
+        all_values = [9.99, 10.01, 10.02, 10.03, 10.08, 10.11, 10.14, 10.16]
         spec = _build_group_analysis_plotly_spec(
             'FEATURE_1',
             'histogram',
@@ -304,6 +306,27 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(len(spec['data']), 2)
         self.assertEqual(spec['data'][0]['bingroup'], spec['data'][1]['bingroup'])
         self.assertEqual(spec['data'][0]['xbins'], spec['data'][1]['xbins'])
+        expected_bin_count = resolve_histogram_bin_count(all_values)['bin_count']
+        expected_bin_width = (max(all_values) - min(all_values)) / expected_bin_count
+        self.assertAlmostEqual(spec['data'][0]['xbins']['size'], expected_bin_width)
+
+    def test_summary_histogram_plotly_spec_uses_matplotlib_bin_range(self):
+        values = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0]
+        spec = _build_plotly_chart_spec(
+            {
+                'type': 'histogram',
+                'values': values,
+                'bin_count': 5,
+                'x_view': {'min': -5.0, 'max': 15.0},
+            },
+            title='Summary Histogram',
+        )
+
+        bins = spec['data'][0]['xbins']
+        self.assertEqual(bins['start'], min(values))
+        self.assertEqual(bins['end'], max(values))
+        self.assertEqual(bins['size'], 2.0)
+        self.assertEqual(spec['layout']['xaxis']['range'], [-5.0, 15.0])
 
     def test_trend_plotly_spec_sorts_connected_points_by_x_value(self):
         spec = _build_plotly_chart_spec(

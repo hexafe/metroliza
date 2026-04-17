@@ -1,6 +1,6 @@
 # Test/CI Audit and Execution Tracker (`release/2026.03-rc1`)
 
-> Superseded by `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md` for active RC1 execution tracking.
+> Superseded by `2026_03_rc1_test_ci_execution_tracker.md` and archived after the RC1 test/CI workstream closed.
 
 ## 1) Purpose
 Create and run a low-risk, iterative workstream that improves release confidence for `release/2026.03-rc1` by strengthening test guardrails, CI signal quality, coverage visibility, and release/testing documentation alignment.

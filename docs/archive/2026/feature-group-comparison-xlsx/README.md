@@ -9,7 +9,7 @@
 ## Status
 This workspace is **not active**.
 
-Its content has been superseded by the canonical Group Analysis documentation in [`../../../group_analysis/README.md`](../../../group_analysis/README.md) and the active end-user manual in [`../../../user_manual/group_analysis/README.md`](../../../user_manual/group_analysis/README.md).
+Its content has been superseded by the active end-user manual in [`../../../user_manual/group_analysis/README.md`](../../../user_manual/group_analysis/README.md).
 
 The current product contract is explicit: normal grouped exports create only the user-facing `Group Analysis` worksheet. A separate `Group Comparison` sheet is legacy/internal history only.
 

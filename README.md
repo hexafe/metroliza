@@ -195,7 +195,6 @@ Examples of metric availability by spec type:
 - Release highlights: [`CHANGELOG.md`](CHANGELOG.md)
 - Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - Docs policy and lifecycle: [`docs/documentation_policy.md`](docs/documentation_policy.md)
-- Group-comparison toolkit extraction note: [`docs/roadmaps/group_comparison_toolkit_extraction.md`](docs/roadmaps/group_comparison_toolkit_extraction.md)
 - Release runbooks/checklists: [`docs/release_checks/`](docs/release_checks/)
 - Google conversion smoke runbook: [`docs/google_conversion_smoke_runbook.md`](docs/google_conversion_smoke_runbook.md)
 - Parser plugin generation and onboarding: [`docs/parser_plugins/README.md`](docs/parser_plugins/README.md)

@@ -113,13 +113,12 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 - The current native module covers histogram, distribution, IQR, and trend summary charts through the `_metroliza_chart_native` extension surface.
 - The native chart path is a payload-driven non-matplotlib compositor intended for workbook/export rendering, not an HTML/interactive chart stack.
 - The optional HTML dashboard sidecar remains a separate Python-side export artifact rather than part of the native chart extension.
-- The dashboard now copies a vendored `plotly-2.27.0.min.js` runtime into each exported `*_dashboard_assets/` folder, so interactive hover/zoom works offline and survives frozen Windows builds without a CDN dependency; the saved page also ships an Auto/Light/Dark theme control.
+- The dashboard copies a vendored Plotly runtime into each exported `*_dashboard_assets/` folder, so interactive hover/zoom works offline and survives frozen Windows builds without a CDN dependency; the saved page also ships an Auto/Light/Dark theme control.
 - If `METROLIZA_CHART_RENDERER_BACKEND=native` is set while `_metroliza_chart_native` is unavailable, runtime emits a warning and falls back to matplotlib.
 - Matplotlib is the current default while native chart parity is being tuned.
 - `auto` re-enables native selection for enabled chart kinds when the extension is present and otherwise falls back to matplotlib.
 - CI's native-artifacts job now runs `tests/test_native_chart_renderer_smoke.py` against the compiled wheel so histogram, distribution, IQR, and trend all prove native dispatch with planner-built resolved specs attached, and it also runs a focused export-runtime fast-path contract smoke for the extended summary-sheet charts.
 - In the export runtime, histogram, distribution, IQR, and trend use planner-driven resolved specs on the native fast-path only when native mode is opted in and the chart kind is enabled for rollout.
-- On Python `3.14`, local chart-renderer builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
 
 ### Distribution fit (`modules/distribution_fit_native.py`)
 
@@ -130,7 +129,6 @@ Persistence selection is controlled by `METROLIZA_CMM_PERSIST_BACKEND` with the 
 - `_metroliza_distribution_fit_native` now exports native candidate metric kernels and native batch fit-parameter estimation.
 - The current native fit batch covers the full current candidate pool: `norm`, `skewnorm`, `halfnorm`, `foldnorm`, `gamma`, `weibull_min`, `lognorm`, and `johnsonsu`.
 - Backend diagnostics expose both `metrics_available` and `fit_available` for the distribution-fit candidate bridge.
-- On Python `3.14`, local distribution-fit builds currently use `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1`.
 
 ### Group stats coercion (`modules/group_stats_native.py`)
 
@@ -192,7 +190,7 @@ PyInstaller is the closest current path to a turnkey single-file distribution fo
 - auto-adds `--include-module=_metroliza_chart_native` only when `_metroliza_chart_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
 - explicitly includes `modules.cmm_report_parser`, `modules.report_parser_factory`, and `modules.pdf_backend` because the rc1 parser/plugin refactor introduced dynamic paths that packagers may otherwise under-detect
-- explicitly includes `modules/html_dashboard_assets/plotly-2.27.0.min.js` as a data file so exported HTML dashboards can stay offline-capable in frozen builds
+- explicitly includes the vendored Plotly runtime as a data file so exported HTML dashboards can stay offline-capable in frozen builds
 - requires PyMuPDF to be importable in the build environment and fails closed by default when it is not available
 - always includes `pymupdf` / `fitz` package contents plus explicit PyMuPDF runtime submodules (`pymupdf._mupdf`, `pymupdf._extra`, `pymupdf.extra`, `pymupdf.mupdf`, table/utils helpers) so onefile builds do not silently omit parser internals
 - validates the generated Nuitka report for both backend presence and required PyMuPDF runtime module references so packaged PDF parsing cannot silently drop out of the artifact

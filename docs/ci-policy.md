@@ -29,7 +29,7 @@ The following checks must pass on every PR and branch push.
   - machine-readable artifact via `coverage.xml` (`--cov-report=xml:coverage.xml`)
 - The same job also publishes a **non-blocking coverage threshold status** in the CI job summary by comparing observed line coverage from `coverage.xml` to `COVERAGE_WARNING_THRESHOLD`.
 - Current staged rollout keeps threshold checks **non-blocking**; a warning is emitted when coverage is below the warning threshold.
-- Threshold governance criteria (observation window, evidence sources, owner, decision date, and acceptance criteria) are tracked in the RC1 execution tracker: `docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md` under **"TCI-007 governance criteria and staged threshold rollout"**.
+- Coverage threshold governance remains staged: coverage stays advisory until a release owner records a dated go/no-go decision with evidence from routine CI runs.
 - Reviewers can inspect coverage evidence in:
   - the `unit-tests` job log (terminal summary),
   - the CI step summary section **"Coverage threshold status (non-blocking)"**, and

@@ -23,27 +23,29 @@ This directory contains active operational, maintenance, and end-user documentat
 - `parser_plugins/README.md` — active hub for parser plugin generation, validation, installation, and rollout docs.
 - `parser_plugins/llm_plugin_specification.md` — exact contract for LLM-generated Metroliza parser plugins.
 - `parser_plugins/non_technical_workflow.md` — non-technical step-by-step workflow for adding a new supplier report parser.
-- Grouping dialog color policy uses shared semantic tokens from `modules/ui_theme_tokens.py` (base row background, selected-row colors, default group color, and generated group palette) so dialogs stay visually consistent across light/dark themes.
 - `roadmaps/2026_03_rc2_stabilization_execution.md` — RC2 stabilization closeout/reference tracker for the completed parity-first slice.
 - `roadmaps/exporter_audit_2026_03.md` — focused exporter-path follow-up audit with the remaining structural refactor backlog.
-- `group_analysis/README.md` — historical index with links back to the active user-manual location and retained design notes.
+- `roadmaps/rust_acceleration_scope.md` — native-acceleration scope and promotion-gate decision record.
 
 ## Active end-user manual area
 
 Use `docs/user_manual/` as the canonical home for active end-user guides.
 
-The `docs/group_analysis/` folder is retained for historical/design context. The active Group Analysis worksheet manual now lives under `docs/user_manual/group_analysis/`.
+The legacy `docs/group_analysis/user_manual.md` path is retained only as a redirect stub. The active Group Analysis worksheet manual now lives under `docs/user_manual/group_analysis/`, and historical design notes live under `docs/archive/2026/feature-group-analysis/`.
 
 ## Historical and superseded planning context
 
 - `archive/2026/feature-group-analysis/` — historical Group Analysis implementation-cycle workspace archived after feature completion.
 - `archive/2026/feature-group-comparison-xlsx/` — historical pre-consolidation Group Comparison XLSX planning workspace.
+- `archive/2026/feature-groupstats-integration/` — historical standalone `hexafe-groupstats` extraction/integration notes after package adoption.
 - `archive/2026/feature-nuitka-parser-audit/` — archived packaged-parser audit workspace after packaging/CI hardening landed.
 - `archive/2026/feature-parser-plugin-factory/` — archived intermediate quickstart/status docs superseded by the active parser plugin documentation set.
+- `archive/2026/feature-report-metadata-redesign/` — archived report metadata redesign audit/handoff after implementation landed.
+- `archive/2026/test-ci-audit/` — archived RC1 test/CI audit and execution trackers.
+- `archive/2026/module_naming_migration.md` — archived module naming migration closeout; active naming rules live in `CONTRIBUTING.md`.
 - `archive/2026/native_plot_matplotlib_parity_2026_03.md` — archived native chart parity audit/execution plan after rollout-ready closeout.
+- `archive/2026/parser_audit_2026_03.md` — archived parser performance/plugin audit after implementation closeout.
 - `archive/2026/performance_boost_audit_2026_03.md` — archived performance audit/implementation plan after the measured fixes landed.
-- `roadmaps/2026_03_rc1_test_ci_execution_tracker.md` — superseded RC1 execution context (reference-only; no longer the active operational tracker).
-- `roadmaps/test_ci_audit_execution.md` — superseded by the RC1 tracker above and retained only for historical planning context.
 
 ## Module boundary notes (export/grouping dialogs)
 
@@ -53,6 +55,8 @@ The `docs/group_analysis/` folder is retained for historical/design context. The
   - `modules/export_row_aggregation_utils.py` for row/group aggregation computations.
 - `modules/csv_summary_dialog.py` keeps dialog/UI concerns and delegates worker-side export logic to `modules/csv_summary_worker.py`.
 - `modules/data_grouping.py` keeps widget/event orchestration and delegates data/query mutations to `modules/data_grouping_service.py`.
+- Grouping dialog colors use shared semantic tokens from `modules/ui_theme_tokens.py` so dialogs stay visually consistent across light/dark themes.
+- Group Analysis statistical computation is bridged through `modules/hexafe_groupstats_adapter.py`; workbook, dashboard, export orchestration, and UI remain Metroliza-owned.
 
 ### Active release-check docs (`docs/release_checks/`)
 

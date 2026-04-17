@@ -2,15 +2,15 @@
 
 Last updated: 2026-04-17 07:17 Europe/Warsaw
 
+> Archived after the report metadata redesign landed on `codex/report-metadata-redesign`. Retained as implementation evidence, not as an active handoff.
+
 Roadmap link: [report_metadata_redesign_audit_plan.md](report_metadata_redesign_audit_plan.md)
 
 ## Current Branch State
 
 - Working branch: `codex/report-metadata-redesign`
 - Last known base commit before this continuation: `860659f Refactor report queries to view-backed helpers`
-- The report metadata redesign implementation has been completed locally on this branch and is ready for commit/push after validation.
-- Known unrelated untracked files present before this handoff: `.codex` and `docs/roadmaps/hexafe_groupstats_integration_codex_note.md`.
-- The implementation roadmap file `docs/roadmaps/report_metadata_redesign_audit_plan.md` is part of this worktree.
+- The report metadata redesign implementation was completed, validated, pushed, and checked in CI.
 
 ## What Has Been Implemented
 

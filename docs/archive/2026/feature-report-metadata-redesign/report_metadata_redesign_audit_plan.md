@@ -2,6 +2,8 @@
 
 Branch: `codex/report-metadata-redesign-audit`
 
+> Archived after the report metadata redesign implementation landed. Retained as historical audit context.
+
 Implementation handoff: [report_metadata_redesign_handoff.md](report_metadata_redesign_handoff.md)
 
 ## Audit Summary

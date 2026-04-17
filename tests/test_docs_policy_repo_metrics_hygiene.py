@@ -5,8 +5,6 @@ from pathlib import Path
 
 
 DOC_PATHS = [
-    Path('docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md'),
-    Path('docs/roadmaps/test_ci_audit_execution.md'),
     Path('docs/release_checks/release_candidate_checklist.md'),
     Path('docs/release_checks/release_status.md'),
     Path('docs/release_checks/open_testing_runbook.md'),

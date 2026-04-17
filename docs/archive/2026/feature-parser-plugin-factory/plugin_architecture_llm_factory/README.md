@@ -10,7 +10,7 @@ This package is intentionally documentation-only and is designed to be executed 
 
 ## Status
 - **Current status:** The parser plugin runtime, LLM workspace scaffold, validation/repair CLI, auto-discovery drop-in folder, and non-technical onboarding flow are implemented.
-- **Execution status:** Active user-facing guidance now lives under [`../../parser_plugins/README.md`](../../parser_plugins/README.md). This roadmap remains as design/reference history.
+- **Execution status:** Active user-facing guidance now lives under [`../../../../parser_plugins/README.md`](../../../../parser_plugins/README.md). This roadmap remains as design/reference history.
 - **Owner handoff point:** Use the active parser-plugin docs for operations; use the pass documents here only for historical design context or future architecture extensions.
 
 ## Scope assumptions
@@ -19,14 +19,14 @@ This package is intentionally documentation-only and is designed to be executed 
 - Legacy parser behavior remains supported during migration.
 
 ## Pass index
-- [Active parser plugin docs](../../parser_plugins/README.md)
+- [Active parser plugin docs](../../../../parser_plugins/README.md)
 - [Data structure decision record](./data_structure_decision_record.md)
 - [Pass 1 — Foundations and interfaces](./pass_01_foundations_and_interfaces.md)
 - [Pass 2 — V2 schema and compatibility adapters](./pass_02_v2_schema_and_adapters.md)
 - [Pass 3 — Plugin registry, detection, and orchestration](./pass_03_registry_and_detection.md)
 - [Pass 4 — LLM-assisted plugin factory](./pass_04_llm_plugin_factory.md)
 - [Pass 5 — Validation, rollout, and governance](./pass_05_validation_rollout_governance.md)
-- [Archived quickstart/status docs](../../archive/2026/feature-parser-plugin-factory/README.md)
+- [Archived quickstart/status docs](../README.md)
 
 ## Deliverables expected from this roadmap
 - A stable parser plugin interface contract.

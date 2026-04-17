@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from VersionDate import RELEASE_VERSION, VERSION_DATE
-
-
 CI_WORKFLOW_PATH = Path('.github/workflows/ci.yml')
 CI_POLICY_PATH = Path('docs/ci-policy.md')
 NATIVE_BUILD_DISTRIBUTION_PATH = Path('docs/native_build_distribution.md')
@@ -49,14 +46,13 @@ def test_ci_workflow_emits_non_blocking_coverage_threshold_status() -> None:
     assert 'This does not fail CI in the current staged policy.' in workflow
 
 
-def test_tracker_defines_threshold_decision_owner_date_and_acceptance_criteria() -> None:
-    tracker = Path('docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md').read_text(encoding='utf-8')
+def test_ci_policy_keeps_coverage_threshold_governance_self_contained() -> None:
+    ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
 
-    assert 'TCI-007 governance criteria and staged threshold rollout' in tracker
-    assert 'Decision owner:' in tracker
-    assert '**Decision date:** **2026-03-29**' in tracker
-    assert 'Acceptance criteria for stage-3 (blocking fail-under) adoption' in tracker
-    assert 'At least **14 calendar days** of routine CI runs' in tracker
+    assert 'Coverage threshold staged policy' in ci_policy
+    assert 'Coverage threshold governance remains staged' in ci_policy
+    assert 'release owner records a dated go/no-go decision' in ci_policy
+    assert 'docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md' not in ci_policy
 
 def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
@@ -134,4 +130,7 @@ def test_release_status_and_runbook_keep_gate_semantics_aligned() -> None:
 def test_release_status_keeps_current_release_line_metadata() -> None:
     release_status = RELEASE_STATUS_PATH.read_text(encoding='utf-8')
 
-    assert f'`RELEASE_VERSION={RELEASE_VERSION}`, `VERSION_DATE={VERSION_DATE}`' in release_status
+    assert 'Release line metadata is canonical in `VersionDate.py`' in release_status
+    assert '`RELEASE_VERSION`' in release_status
+    assert '`VERSION_DATE`' in release_status
+    assert '`CURRENT_RELEASE_HIGHLIGHT`' in release_status
