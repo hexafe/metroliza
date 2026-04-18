@@ -148,6 +148,8 @@ If you enable the optional **HTML dashboard** during export, Metroliza also save
 
 For **Group Analysis** plots in that dashboard, the plot callouts are intentionally simplified for faster non-technical review. In practical terms, the dashboard focuses on the main capability/status message and does not repeat extra confidence-interval callouts on those plots.
 
+Each grouped metric includes a return button back to the Group Analysis jump list, so you can move through grouped metrics without scrolling back manually.
+
 Use the dashboard when you want a quick visual review. Use the workbook when you need the fuller worksheet detail.
 
 ## Column guide

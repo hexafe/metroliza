@@ -141,7 +141,11 @@ Use it when you want:
 - larger click-to-enlarge chart viewing, and
 - a simpler way to review results without opening Excel first.
 
-Extended summary sections include compact report metadata when available, such as part, revision, template, operator, date range, sample count, and source file context.
+Extended summary sections include a report metadata panel when available. It can show report count, sample count, date range, part, revision, template variant, template family, operator, sample kind, comment, and source file context.
+
+Use the metric jump buttons at the top of the dashboard to move between measurements. Each metric section includes a return button back to that jump list.
+
+Interactive Plotly histograms use the same bin range as the workbook/native histogram snapshots. Plotly scatter and trend views show points only, without connecting lines between samples.
 
 This option does not replace the workbook. It adds an extra review file alongside it.
 

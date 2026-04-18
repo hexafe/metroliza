@@ -64,7 +64,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
                         'metadata_rows': [
                             {'label': 'Part', 'value': 'Carrier Plate'},
                             {'label': 'Revision', 'value': 'B'},
+                            {'label': 'Template family', 'value': 'metrology-v2'},
                             {'label': 'Operator', 'value': 'M. Nowak'},
+                            {'label': 'Sample kind', 'value': 'production'},
+                            {'label': 'Comment', 'value': 'night shift audit'},
                         ],
                         'summary_rows': [('Mean', '10.01'), ('Cpk', '1.42')],
                         'charts': [
@@ -184,7 +187,10 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('Extended histogram', html_text)
             self.assertIn('Report metadata', html_text)
             self.assertIn('Carrier Plate', html_text)
+            self.assertIn('metrology-v2', html_text)
             self.assertIn('M. Nowak', html_text)
+            self.assertIn('production', html_text)
+            self.assertIn('night shift audit', html_text)
             self.assertNotIn(
                 '<img src="report_dashboard_assets/section_001_diameter-x_histogram_01.png" alt="Diameter / X"><div class="detail-grid">',
                 html_text,
@@ -206,6 +212,17 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('plotly-expand-trigger', html_text)
             self.assertIn('Increase size', html_text)
             self.assertIn('Enlarge interactive chart: Diameter / X', html_text)
+            self.assertIn('<header class="hero" id="dashboard-start">', html_text)
+            self.assertIn(
+                '<a class="section-chip section-chip--back" href="#dashboard-start" role="button">'
+                'Back to dashboard start</a>',
+                html_text,
+            )
+            self.assertIn(
+                '<a class="section-chip section-chip--back" href="#group-analysis" role="button">'
+                'Back to Group Analysis</a>',
+                html_text,
+            )
             self.assertIn('<a class="section-chip" href="#group-metric-001">FEATURE_1</a>', html_text)
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('Descriptive stats', html_text)
@@ -331,12 +348,12 @@ class TestExportHtmlDashboard(unittest.TestCase):
         )
 
         bins = spec['data'][0]['xbins']
-        self.assertEqual(bins['start'], min(values))
-        self.assertEqual(bins['end'], max(values))
-        self.assertEqual(bins['size'], 2.0)
+        self.assertEqual(bins['start'], -5.0)
+        self.assertEqual(bins['end'], 15.0)
+        self.assertEqual(bins['size'], 4.0)
         self.assertEqual(spec['layout']['xaxis']['range'], [-5.0, 15.0])
 
-    def test_trend_plotly_spec_sorts_connected_points_by_x_value(self):
+    def test_trend_plotly_spec_sorts_points_and_renders_markers_only(self):
         spec = _build_plotly_chart_spec(
             {
                 'type': 'trend',
@@ -352,6 +369,8 @@ class TestExportHtmlDashboard(unittest.TestCase):
         self.assertEqual(spec['data'][0]['x'], [1.0, 2.0, 3.0])
         self.assertEqual(spec['data'][0]['y'], [10.0, 20.0, 30.0])
         self.assertEqual(spec['data'][0]['customdata'], ['first', 'second', 'third'])
+        self.assertEqual(spec['data'][0]['mode'], 'markers')
+        self.assertNotIn('line', spec['data'][0])
 
 
 if __name__ == '__main__':

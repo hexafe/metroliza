@@ -512,12 +512,20 @@ def _resolve_plotly_histogram_bins(
     values: list[float],
     *,
     preferred: Any = None,
+    x_min: Any = None,
+    x_max: Any = None,
 ) -> dict[str, float]:
     if not values:
         return {}
 
-    minimum = min(values)
-    maximum = max(values)
+    range_min = _coerce_finite_float(x_min)
+    range_max = _coerce_finite_float(x_max)
+    if range_min is not None and range_max is not None and range_min < range_max:
+        minimum = range_min
+        maximum = range_max
+    else:
+        minimum = min(values)
+        maximum = max(values)
     if math.isclose(minimum, maximum, rel_tol=1e-9, abs_tol=1e-9):
         padding = max(abs(minimum) * 0.01, 0.5)
         minimum -= padding
@@ -743,6 +751,8 @@ def _build_plotly_histogram_spec(payload: dict[str, Any], *, title: str, theme: 
     bins = _resolve_plotly_histogram_bins(
         values,
         preferred=payload.get("bin_count"),
+        x_min=x_min,
+        x_max=x_max,
     )
 
     return {
@@ -989,11 +999,10 @@ def _build_plotly_trend_spec(payload: dict[str, Any], *, title: str, theme: str 
         "data": [
             {
                 "type": "scatter",
-                "mode": "lines+markers",
+                "mode": "markers",
                 "x": x_values,
                 "y": y_values,
                 "customdata": sample_labels,
-                "line": {"color": tokens["mean_line"], "width": 2},
                 "marker": {"size": 8, "color": tokens["trend_marker"]},
                 "hovertemplate": "Sample=%{customdata}<br>Measurement=%{y}<extra></extra>",
             }
@@ -1779,6 +1788,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       border-color: var(--accent-border);
     }}
     .theme-option:focus-visible,
+    .section-chip:focus-visible,
     .lightbox-close:focus-visible {{
       outline: 3px solid var(--focus-ring);
       outline-offset: 2px;
@@ -1836,6 +1846,11 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       font-size: 13px;
       font-weight: 600;
     }}
+    .section-chip--back {{
+      background: var(--teal-soft);
+      border-color: var(--teal-border);
+      color: var(--teal);
+    }}
     .diagnostics, .measurement-section, .empty-state {{
       margin-top: 18px;
       background: var(--panel);
@@ -1859,6 +1874,12 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       color: var(--muted);
       margin-top: 8px;
       line-height: 1.5;
+    }}
+    .section-actions {{
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
     }}
     .pill-row {{
       display: flex;
@@ -2244,12 +2265,13 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       .chart-grid {{ grid-template-columns: 1fr; }}
       .theme-switch {{ width: 100%; justify-content: space-between; }}
       .theme-options {{ flex-wrap: wrap; justify-content: flex-end; }}
+      .section-actions {{ align-items: flex-start; }}
     }}
   </style>
 </head>
 <body>
   <div class="shell">
-    <header class="hero">
+    <header class="hero" id="dashboard-start">
       <div class="hero-top">
         <div class="hero-copy">
           <p class="eyebrow">Metroliza Export Dashboard</p>
@@ -2830,6 +2852,10 @@ def _render_section(section: dict[str, Any]) -> str:
     if section.get("axis"):
         pills.append(f"Axis: {section['axis']}")
     pill_markup = "".join(f'<span class="pill">{html.escape(str(pill))}</span>' for pill in pills)
+    back_button = (
+        '<a class="section-chip section-chip--back" href="#dashboard-start" role="button">'
+        'Back to dashboard start</a>'
+    )
     metadata_rows = section.get("metadata_rows") or []
     metadata_panel = ""
     if metadata_rows:
@@ -2851,7 +2877,7 @@ def _render_section(section: dict[str, Any]) -> str:
         f'<section id="{html.escape(section["id"])}" class="measurement-section">'
         f'<div class="section-top"><div><h2>{html.escape(section.get("header") or section["id"])}</h2>'
         f'<div class="section-meta">{html.escape(section.get("subtitle") or "Extended summary output")}</div></div>'
-        f'<div class="pill-row">{pill_markup}</div></div>'
+        f'<div class="section-actions"><div class="pill-row">{pill_markup}</div>{back_button}</div></div>'
         f'{metadata_panel}'
         f'{summary_table}'
         f'<div class="chart-grid">{chart_blocks}</div>'
@@ -3118,6 +3144,10 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
     if metric.get("reference"):
         pills.append(f"Reference: {metric['reference']}")
     pill_markup = "".join(f'<span class="pill">{html.escape(item)}</span>' for item in pills)
+    back_button = (
+        '<a class="section-chip section-chip--back" href="#group-analysis" role="button">'
+        'Back to Group Analysis</a>'
+    )
 
     subsections = []
     if summary_rows:
@@ -3144,7 +3174,7 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
     return (
         f'<article id="{html.escape(metric.get("id") or "")}" class="metric-block">'
         f'<div class="section-top"><div><h3>{html.escape(str(metric.get("metric") or "Metric"))}</h3></div>'
-        f'<div class="pill-row">{pill_markup}</div></div>'
+        f'<div class="section-actions"><div class="pill-row">{pill_markup}</div>{back_button}</div></div>'
         f'{"".join(subsections)}'
         f'{plot_markup}'
         '</article>'
