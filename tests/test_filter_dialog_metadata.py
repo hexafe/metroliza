@@ -106,11 +106,17 @@ def _install_qt_stubs():
     qtwidgets.QDialog = _FakeDialog
     qtwidgets.QDateEdit = _FakeWidget
     qtwidgets.QGridLayout = _FakeWidget
+    qtwidgets.QGroupBox = _FakeWidget
+    qtwidgets.QHBoxLayout = _FakeWidget
     qtwidgets.QLabel = _FakeWidget
     qtwidgets.QLineEdit = _FakeWidget
     qtwidgets.QListWidget = _FakeListWidget
     qtwidgets.QListWidgetItem = _FakeItem
+    qtwidgets.QMessageBox = _FakeWidget
     qtwidgets.QPushButton = _FakeWidget
+    qtwidgets.QScrollArea = _FakeWidget
+    qtwidgets.QVBoxLayout = _FakeWidget
+    qtwidgets.QWidget = _FakeWidget
     qtwidgets.QAbstractItemView = types.SimpleNamespace(SelectionMode=types.SimpleNamespace(MultiSelection=2))
 
     qtgui = types.ModuleType("PyQt6.QtGui")
@@ -237,12 +243,11 @@ class TestFilterDialogMetadata(unittest.TestCase):
 
             build_calls = {}
 
+            real_build_measurement_filter_query = module.build_measurement_filter_query
+
             def fake_build_measurement_filter_query(**kwargs):
                 build_calls.update(kwargs)
-                query = "SELECT * FROM vw_measurement_export WHERE 1=1"
-                if kwargs.get("has_nok_only"):
-                    query += " AND has_nok = 1"
-                return query
+                return real_build_measurement_filter_query(**kwargs)
 
             with patch.object(module, "build_measurement_filter_query", side_effect=fake_build_measurement_filter_query):
                 dialog.apply_filters()
@@ -256,6 +261,64 @@ class TestFilterDialogMetadata(unittest.TestCase):
             self.assertIn("template_family IN ('cmm_pdf_header_box')", parent.filter_query)
             self.assertIn("has_nok = 1", parent.filter_query)
             self.assertNotIn("status_code IN", parent.filter_query)
+
+    def test_filter_sections_group_metadata_without_single_horizontal_row(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = types.ModuleType("modules.db")
+        fake_db.execute_with_retry = lambda *_args, **_kwargs: []
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            module = self._load_module()
+            sections = module.FilterDialog._build_filter_sections()
+
+        section_names = [name for name, _fields in sections]
+        flattened_fields = [field for _name, fields in sections for field in fields]
+
+        self.assertEqual(section_names, ["Measurement", "Report metadata", "Source"])
+        self.assertIn(("operator_name_label", "operator_name_search_input", "operator_name_list"), flattened_fields)
+        self.assertIn(("template_family_label", "template_family_search_input", "template_family_list"), flattened_fields)
+        self.assertIn(("selected_headers_label", None, "selected_headers_list"), flattened_fields)
+
+    def test_ensure_schema_ready_refreshes_views_for_selected_database(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = types.ModuleType("modules.db")
+        fake_db.execute_with_retry = lambda *_args, **_kwargs: []
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            module = self._load_module()
+            dialog = module.FilterDialog.__new__(module.FilterDialog)
+            dialog.db_file = "reports.db"
+
+            with patch.object(module, "ensure_report_schema") as ensure_report_schema:
+                dialog._ensure_schema_ready()
+
+            ensure_report_schema.assert_called_once_with("reports.db")
+
+            dialog.db_file = ""
+            with patch.object(module, "ensure_report_schema") as ensure_report_schema:
+                dialog._ensure_schema_ready()
+
+            ensure_report_schema.assert_not_called()
 
     def test_reference_selection_change_clears_selected_headers(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()

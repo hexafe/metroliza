@@ -201,6 +201,7 @@ def test_report_schema_exposes_expected_view_columns(tmp_path):
         "stats_count_int",
         "operator_name",
     ]
+    assert "measurement_id" not in overview_columns
     assert grouping_columns == [
         "report_id",
         "reference",
@@ -213,6 +214,19 @@ def test_report_schema_exposes_expected_view_columns(tmp_path):
         "nok_count",
         "file_name",
     ]
+
+
+def test_report_schema_refreshes_stale_measurement_export_view(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE VIEW vw_measurement_export AS SELECT 1 AS report_id")
+
+    ensure_report_schema(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        export_columns = _columns(conn, "vw_measurement_export")
+
+    assert "measurement_id" in export_columns
 
 
 def test_repository_dedupes_source_files_by_sha256_and_keeps_locations(tmp_path):

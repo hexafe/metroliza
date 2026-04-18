@@ -1,18 +1,24 @@
-RELEASE_VERSION = "2026.04rc2"
-VERSION_DATE = "260415"
+RELEASE_VERSION = "2026.04rc3"
+VERSION_DATE = "260418"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Export setup is more compact on smaller laptops, with shorter rows, a collapsed advanced section, and clearer in-dialog actions."
+    "Filtering now uses grouped scrollable sections and refreshes metadata views before loading filter choices."
 )
 
 release_notes = f"""
     <br><b>Current version {VERSION_LABEL}:</b><br>
+    - Filtering is grouped into Measurement, Report metadata, and Source sections so the dialog fits laptop screens<br>
+    - Filter choices refresh report metadata views before loading, preventing stale-view measurement ID errors<br>
+    - Report-scoped filters are translated safely back to measurement export rows when export data is loaded<br>
+    - Filter layout and metadata-query regressions now have focused test coverage<br>
+
+    <br><b>Archive:</b><br>
+
+    <br><b>Version 2026.04rc2 (build 260415):</b><br>
     - Export setup is more compact on smaller laptops and keeps the main choices visible in one window<br>
     - Database, Excel, filter, and grouping rows fit more cleanly, even when file paths are long<br>
     - Advanced export settings are collapsed by default, so routine exports need less scrolling<br>
     - Filters and grouping use clearer in-dialog actions, and dependent options only appear when they apply<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.04rc1 (build 260414):</b><br>
     - Group Analysis exports are easier to review during routine checks<br>

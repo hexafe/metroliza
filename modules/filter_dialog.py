@@ -29,6 +29,12 @@ def build_distinct_value_query(column_name, *, source_view="vw_measurement_expor
     return _build_distinct_value_query(column_name, source_view=source_view, filter_query=filter_query)
 
 
+def ensure_report_schema(database):
+    from modules.report_schema import ensure_report_schema as _ensure_report_schema
+
+    return _ensure_report_schema(database)
+
+
 def _normalize_filter_values(values):
     normalized_values = []
     for value in values or ():
@@ -52,6 +58,38 @@ def _build_in_clause(column_name, values):
 
 
 class FilterDialog(QDialog):
+    FILTER_SECTIONS = (
+        (
+            "Measurement",
+            (
+                ("ax_label", "ax_search_input", "ax_list"),
+                ("reference_label", "reference_search_input", "reference_list"),
+                ("header_label", "header_search_input", "header_list"),
+                ("selected_headers_label", None, "selected_headers_list"),
+                ("status_code_label", "status_code_search_input", "status_code_list"),
+            ),
+        ),
+        (
+            "Report metadata",
+            (
+                ("part_name_label", "part_name_search_input", "part_name_list"),
+                ("revision_label", "revision_search_input", "revision_list"),
+                ("template_variant_label", "template_variant_search_input", "template_variant_list"),
+                ("sample_number_label", "sample_number_search_input", "sample_number_list"),
+                ("operator_name_label", "operator_name_search_input", "operator_name_list"),
+                ("sample_number_kind_label", "sample_number_kind_search_input", "sample_number_kind_list"),
+            ),
+        ),
+        (
+            "Source",
+            (
+                ("filename_label", "filename_search_input", "filename_list"),
+                ("parser_id_label", "parser_id_search_input", "parser_id_list"),
+                ("template_family_label", "template_family_search_input", "template_family_list"),
+            ),
+        ),
+    )
+
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
         
@@ -68,12 +106,25 @@ class FilterDialog(QDialog):
 
         self._list_selection_utils = ListSelectionUtils()
 
+        try:
+            self._ensure_schema_ready()
+        except Exception as e:
+            self.log_and_exit(e)
+
         self.setup_ui()
 
     @staticmethod
     def _multi_selection_mode():
         selection_mode_enum = getattr(getattr(QtWidgets, "QAbstractItemView", None), "SelectionMode", None)
         return getattr(selection_mode_enum, "MultiSelection", 2)
+
+    @classmethod
+    def _build_filter_sections(cls):
+        return cls.FILTER_SECTIONS
+
+    def _ensure_schema_ready(self):
+        if str(self.db_file or "").strip():
+            ensure_report_schema(self.db_file)
 
     def setup_ui(self):
         try:
@@ -221,85 +272,112 @@ class FilterDialog(QDialog):
 
     def arrange_layout(self):
         try:
-            self.layout = QGridLayout(self)
+            self.layout = QtWidgets.QVBoxLayout(self)
             attach_help_menu_to_layout(self.layout, self, [("Filtering manual", 'export_filtering')])
-            self.layout.addWidget(self.ax_label, 0, 0)
-            self.layout.addWidget(self.ax_search_input, 1, 0)
-            self.layout.addWidget(self.ax_list, 2, 0)
+            self.layout.setContentsMargins(10, 10, 10, 10)
+            self.layout.setSpacing(8)
 
-            self.layout.addWidget(self.reference_label, 0, 1)
-            self.layout.addWidget(self.reference_search_input, 1, 1)
-            self.layout.addWidget(self.reference_list, 2, 1)
+            self.filter_scroll_area = QtWidgets.QScrollArea()
+            self.filter_scroll_area.setWidgetResizable(True)
+            self.filter_scroll_content = QtWidgets.QWidget()
+            self.filter_scroll_layout = QtWidgets.QVBoxLayout(self.filter_scroll_content)
+            self.filter_scroll_layout.setContentsMargins(0, 0, 0, 0)
+            self.filter_scroll_layout.setSpacing(8)
 
-            self.layout.addWidget(self.header_label, 0, 2)
-            self.layout.addWidget(self.header_search_input, 1, 2)
-            self.layout.addWidget(self.header_list, 2, 2)
+            for title, field_specs in self._build_filter_sections():
+                group = QtWidgets.QGroupBox(title)
+                group_layout = QGridLayout(group)
+                group_layout.setContentsMargins(8, 8, 8, 8)
+                group_layout.setHorizontalSpacing(8)
+                group_layout.setVerticalSpacing(8)
+                self._add_filter_group(group_layout, field_specs, max_columns=3)
+                self.filter_scroll_layout.addWidget(group)
 
-            self.layout.addWidget(self.part_name_label, 0, 3)
-            self.layout.addWidget(self.part_name_search_input, 1, 3)
-            self.layout.addWidget(self.part_name_list, 2, 3)
-
-            self.layout.addWidget(self.revision_label, 0, 4)
-            self.layout.addWidget(self.revision_search_input, 1, 4)
-            self.layout.addWidget(self.revision_list, 2, 4)
-
-            self.layout.addWidget(self.template_variant_label, 0, 5)
-            self.layout.addWidget(self.template_variant_search_input, 1, 5)
-            self.layout.addWidget(self.template_variant_list, 2, 5)
-
-            self.layout.addWidget(self.sample_number_label, 0, 6)
-            self.layout.addWidget(self.sample_number_search_input, 1, 6)
-            self.layout.addWidget(self.sample_number_list, 2, 6)
-
-            self.layout.addWidget(self.operator_name_label, 0, 7)
-            self.layout.addWidget(self.operator_name_search_input, 1, 7)
-            self.layout.addWidget(self.operator_name_list, 2, 7)
-
-            self.layout.addWidget(self.sample_number_kind_label, 0, 8)
-            self.layout.addWidget(self.sample_number_kind_search_input, 1, 8)
-            self.layout.addWidget(self.sample_number_kind_list, 2, 8)
-
-            self.layout.addWidget(self.status_code_label, 0, 9)
-            self.layout.addWidget(self.status_code_search_input, 1, 9)
-            self.layout.addWidget(self.status_code_list, 2, 9)
-
-            self.layout.addWidget(self.filename_label, 0, 10)
-            self.layout.addWidget(self.filename_search_input, 1, 10)
-            self.layout.addWidget(self.filename_list, 2, 10)
-
-            self.layout.addWidget(self.parser_id_label, 0, 11)
-            self.layout.addWidget(self.parser_id_search_input, 1, 11)
-            self.layout.addWidget(self.parser_id_list, 2, 11)
-
-            self.layout.addWidget(self.template_family_label, 0, 12)
-            self.layout.addWidget(self.template_family_search_input, 1, 12)
-            self.layout.addWidget(self.template_family_list, 2, 12)
-
-            self.layout.addWidget(self.selected_headers_label, 0, 13)
-            self.layout.addWidget(self.selected_headers_list, 2, 13)
-            self.layout.addWidget(self.has_nok_button, 1, 13)
-
-            self.layout.addWidget(self.date_from_label, 3, 0)
-            self.layout.addWidget(self.date_from_calendar, 3, 1)
-
-            self.layout.addWidget(self.date_to_label, 4, 0)
-            self.layout.addWidget(self.date_to_calendar, 4, 1)
-
-            self.layout.addWidget(self.select_beginning_button, 3, 2)
-            self.layout.addWidget(self.select_today_button, 4, 2)
-            self.layout.addWidget(self.apply_button, 6, 0, 1, 14)
-
-            for row in range(self.layout.rowCount()):
-                for column in range(self.layout.columnCount()):
-                    item = self.layout.itemAtPosition(row, column)
-                    if item is not None:
-                        widget = item.widget()
-                        if widget is not None and hasattr(widget, "setFixedWidth"):
-                            widget.setFixedWidth(150)
-
-            self.show()
+            self.filter_scroll_layout.addStretch(1)
+            self.filter_scroll_area.setWidget(self.filter_scroll_content)
+            self.layout.addWidget(self.filter_scroll_area, 1)
+            self._add_filter_footer(self.layout)
+            self._apply_window_size_constraints()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _add_filter_group(self, group_layout, field_specs, *, max_columns=3):
+        for index, (label_attr, search_attr, list_attr) in enumerate(field_specs):
+            row = index // max_columns
+            column = index % max_columns
+            field_widget = QtWidgets.QWidget()
+            field_layout = QtWidgets.QVBoxLayout(field_widget)
+            field_layout.setContentsMargins(0, 0, 0, 0)
+            field_layout.setSpacing(4)
+
+            field_layout.addWidget(getattr(self, label_attr))
+            if search_attr is not None:
+                search_widget = getattr(self, search_attr)
+                self._set_widget_size_policy(search_widget, min_width=150)
+                field_layout.addWidget(search_widget)
+
+            list_widget = getattr(self, list_attr)
+            self._set_widget_size_policy(list_widget, min_width=150, min_height=110, expands_vertically=True)
+            field_layout.addWidget(list_widget, 1)
+            group_layout.addWidget(field_widget, row, column)
+
+        for column in range(max_columns):
+            group_layout.setColumnStretch(column, 1)
+
+    def _add_filter_footer(self, parent_layout):
+        footer_widget = QtWidgets.QWidget()
+        footer_layout = QGridLayout(footer_widget)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setHorizontalSpacing(8)
+        footer_layout.setVerticalSpacing(6)
+
+        footer_layout.addWidget(self.date_from_label, 0, 0)
+        footer_layout.addWidget(self.date_from_calendar, 0, 1)
+        footer_layout.addWidget(self.select_beginning_button, 0, 2)
+        footer_layout.addWidget(self.has_nok_button, 0, 3)
+        footer_layout.addWidget(self.date_to_label, 1, 0)
+        footer_layout.addWidget(self.date_to_calendar, 1, 1)
+        footer_layout.addWidget(self.select_today_button, 1, 2)
+
+        action_layout = QtWidgets.QHBoxLayout()
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.addStretch(1)
+        action_layout.addWidget(self.apply_button)
+        footer_layout.addLayout(action_layout, 1, 3)
+        footer_layout.setColumnStretch(3, 1)
+        parent_layout.addWidget(footer_widget)
+
+    def _set_widget_size_policy(self, widget, *, min_width=None, min_height=None, expands_vertically=False):
+        if min_width is not None and hasattr(widget, "setMinimumWidth"):
+            widget.setMinimumWidth(min_width)
+        if min_height is not None and hasattr(widget, "setMinimumHeight"):
+            widget.setMinimumHeight(min_height)
+
+        size_policy_class = getattr(QtWidgets, "QSizePolicy", None)
+        policy_enum = getattr(size_policy_class, "Policy", None)
+        if size_policy_class is None or policy_enum is None or not hasattr(widget, "setSizePolicy"):
+            return
+
+        horizontal_policy = getattr(policy_enum, "Expanding", None)
+        vertical_policy = getattr(policy_enum, "Expanding" if expands_vertically else "Preferred", None)
+        if horizontal_policy is not None and vertical_policy is not None:
+            widget.setSizePolicy(horizontal_policy, vertical_policy)
+
+    def _apply_window_size_constraints(self):
+        default_width = 980
+        default_height = 720
+        app = QtWidgets.QApplication.instance() if hasattr(QtWidgets, "QApplication") else None
+        screen = app.primaryScreen() if app is not None and hasattr(app, "primaryScreen") else None
+        available = screen.availableGeometry() if screen is not None and hasattr(screen, "availableGeometry") else None
+        if available is None:
+            self.resize(default_width, default_height)
+            return
+
+        width = min(max(default_width, int(available.width() * 0.78)), int(available.width() * 0.96))
+        height = min(max(default_height, int(available.height() * 0.78)), int(available.height() * 0.92))
+        if hasattr(self, "setMaximumSize"):
+            self.setMaximumSize(available.width(), available.height())
+        self.resize(width, height)
             
     def connect_signals(self):
         try:
@@ -532,21 +610,16 @@ class FilterDialog(QDialog):
                 revision_values=[] if "SELECT ALL" in revision_selected_items else revision_selected_items,
                 template_variant_values=[] if "SELECT ALL" in template_variant_selected_items else template_variant_selected_items,
                 sample_number_values=[] if "SELECT ALL" in sample_number_selected_items else sample_number_selected_items,
+                operator_name_values=[] if "SELECT ALL" in operator_name_selected_items else operator_name_selected_items,
+                sample_number_kind_values=[] if "SELECT ALL" in sample_number_kind_selected_items else sample_number_kind_selected_items,
+                status_code_values=[] if "SELECT ALL" in status_code_selected_items else status_code_selected_items,
+                filename_values=[] if "SELECT ALL" in filename_selected_items else filename_selected_items,
+                parser_id_values=[] if "SELECT ALL" in parser_id_selected_items else parser_id_selected_items,
+                template_family_values=[] if "SELECT ALL" in template_family_selected_items else template_family_selected_items,
                 has_nok_only=has_nok_only,
                 date_from=date_from,
                 date_to=date_to,
             )
-            for column_name, selected_items in (
-                ("operator_name", operator_name_selected_items),
-                ("sample_number_kind", sample_number_kind_selected_items),
-                ("status_code", status_code_selected_items),
-                ("file_name", filename_selected_items),
-                ("parser_id", parser_id_selected_items),
-                ("template_family", template_family_selected_items),
-            ):
-                clause = _build_in_clause(column_name, [] if "SELECT ALL" in selected_items else selected_items)
-                if clause is not None:
-                    query += f" AND {clause}"
 
             self.filter_query = query
             self.parent().set_filter_query(self.filter_query)

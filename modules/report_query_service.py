@@ -16,6 +16,11 @@ def _normalize_sql_query(query):
     return normalized.rstrip(";").rstrip()
 
 
+def _is_export_scoped_query(query):
+    normalized = _normalize_sql_query(query).lower()
+    return "vw_measurement_export" in normalized or "measurement_id" in normalized
+
+
 def _escape_sql_literal(value):
     return str(value).replace("'", "''")
 
@@ -125,6 +130,18 @@ def build_grouping_query(filter_query=None):
 def build_measurement_export_query(filter_query=None):
     normalized_filter_query = _normalize_sql_query(filter_query)
     if normalized_filter_query:
+        if not _is_export_scoped_query(normalized_filter_query):
+            return f"""
+        SELECT {_MEASUREMENT_EXPORT_SELECT_FROM_VIEW}
+        FROM {_MEASUREMENT_EXPORT_VIEW}
+        WHERE report_id IN (
+            SELECT "REPORT_ID"
+            FROM (
+                {normalized_filter_query}
+            ) AS report_scope
+        )
+    """
+
         return f"""
         SELECT {_MEASUREMENT_EXPORT_SELECT_FROM_SCOPE}
         FROM (
@@ -144,6 +161,12 @@ def build_measurement_filter_query(
     revision_values=(),
     template_variant_values=(),
     sample_number_values=(),
+    operator_name_values=(),
+    sample_number_kind_values=(),
+    status_code_values=(),
+    filename_values=(),
+    parser_id_values=(),
+    template_family_values=(),
     has_nok_only=False,
     date_from=None,
     date_to=None,
@@ -158,6 +181,12 @@ def build_measurement_filter_query(
         ("revision", revision_values),
         ("template_variant", template_variant_values),
         ("sample_number", sample_number_values),
+        ("operator_name", operator_name_values),
+        ("sample_number_kind", sample_number_kind_values),
+        ("status_code", status_code_values),
+        ("file_name", filename_values),
+        ("parser_id", parser_id_values),
+        ("template_family", template_family_values),
     ):
         clause = _build_in_clause(column_name, values)
         if clause is not None:
@@ -176,7 +205,10 @@ def build_measurement_filter_query(
 def build_distinct_value_query(column_name, *, source_view=_MEASUREMENT_EXPORT_VIEW, filter_query=None):
     normalized_filter_query = _normalize_sql_query(filter_query)
     if normalized_filter_query:
-        source = f"({normalized_filter_query}) AS filtered_data"
+        if source_view == _MEASUREMENT_EXPORT_VIEW and not _is_export_scoped_query(normalized_filter_query):
+            source = f"({build_measurement_export_query(normalized_filter_query)}) AS filtered_data"
+        else:
+            source = f"({normalized_filter_query}) AS filtered_data"
     else:
         source = source_view
 

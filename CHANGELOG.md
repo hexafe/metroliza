@@ -1,6 +1,12 @@
 # Changelog (for end users)
 
-## 2026.04rc2(260415) — current version
+## 2026.04rc3(260418) — current version
+- Filtering is now grouped into Measurement, Report metadata, and Source sections so the dialog fits laptop screens.
+- Filter choices refresh report metadata views before loading, preventing stale-view measurement ID errors.
+- Report-scoped filters are translated safely back to measurement export rows when export data is loaded.
+- Filter layout and metadata-query regressions now have focused test coverage.
+
+## 2026.04rc2(260415)
 - Export setup is more compact on smaller laptops and keeps the main choices visible in one window.
 - Database, Excel, filter, and grouping rows fit more cleanly, even when file paths are long.
 - Advanced export settings are collapsed by default, so routine exports need less scrolling.
