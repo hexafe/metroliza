@@ -42,7 +42,7 @@ class TestFilterDialogLayout(unittest.TestCase):
 
         return json.loads(result.stdout.strip().splitlines()[-1])
 
-    def test_default_layout_fits_screen_and_uses_scroll_sections(self):
+    def test_default_layout_fits_screen_and_uses_tabs(self):
         payload = self._run_probe(
             """
             import json
@@ -61,8 +61,10 @@ class TestFilterDialogLayout(unittest.TestCase):
             print(json.dumps({
                 "dialog_size": [dialog.width(), dialog.height()],
                 "available": [available.width(), available.height()],
-                "has_scroll_area": hasattr(dialog, "filter_scroll_area"),
+                "has_filter_tabs": hasattr(dialog, "filter_tabs"),
                 "sections": sections,
+                "tab_count": dialog.filter_tabs.count(),
+                "tab_titles": [dialog.filter_tabs.tabText(index) for index in range(dialog.filter_tabs.count())],
                 "max_section_fields": max(len(fields) for _name, fields in dialog._build_filter_sections()),
             }, sort_keys=True))
             dialog.close()
@@ -72,8 +74,12 @@ class TestFilterDialogLayout(unittest.TestCase):
 
         self.assertLessEqual(payload["dialog_size"][0], payload["available"][0])
         self.assertLessEqual(payload["dialog_size"][1], payload["available"][1])
-        self.assertTrue(payload["has_scroll_area"])
+        self.assertLessEqual(payload["dialog_size"][0], 820)
+        self.assertLessEqual(payload["dialog_size"][1], 620)
+        self.assertTrue(payload["has_filter_tabs"])
         self.assertEqual(payload["sections"], ["Measurement", "Report metadata", "Source"])
+        self.assertEqual(payload["tab_count"], 3)
+        self.assertEqual(payload["tab_titles"], ["Measurement", "Report metadata", "Source"])
         self.assertGreater(payload["max_section_fields"], 3)
 
 

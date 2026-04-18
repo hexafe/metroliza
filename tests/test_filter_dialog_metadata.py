@@ -115,6 +115,7 @@ def _install_qt_stubs():
     qtwidgets.QMessageBox = _FakeWidget
     qtwidgets.QPushButton = _FakeWidget
     qtwidgets.QScrollArea = _FakeWidget
+    qtwidgets.QTabWidget = _FakeWidget
     qtwidgets.QVBoxLayout = _FakeWidget
     qtwidgets.QWidget = _FakeWidget
     qtwidgets.QAbstractItemView = types.SimpleNamespace(SelectionMode=types.SimpleNamespace(MultiSelection=2))

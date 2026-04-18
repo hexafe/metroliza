@@ -277,29 +277,33 @@ class FilterDialog(QDialog):
             self.layout.setContentsMargins(10, 10, 10, 10)
             self.layout.setSpacing(8)
 
-            self.filter_scroll_area = QtWidgets.QScrollArea()
-            self.filter_scroll_area.setWidgetResizable(True)
-            self.filter_scroll_content = QtWidgets.QWidget()
-            self.filter_scroll_layout = QtWidgets.QVBoxLayout(self.filter_scroll_content)
-            self.filter_scroll_layout.setContentsMargins(0, 0, 0, 0)
-            self.filter_scroll_layout.setSpacing(8)
-
-            for title, field_specs in self._build_filter_sections():
-                group = QtWidgets.QGroupBox(title)
-                group_layout = QGridLayout(group)
-                group_layout.setContentsMargins(8, 8, 8, 8)
-                group_layout.setHorizontalSpacing(8)
-                group_layout.setVerticalSpacing(8)
-                self._add_filter_group(group_layout, field_specs, max_columns=3)
-                self.filter_scroll_layout.addWidget(group)
-
-            self.filter_scroll_layout.addStretch(1)
-            self.filter_scroll_area.setWidget(self.filter_scroll_content)
-            self.layout.addWidget(self.filter_scroll_area, 1)
+            self._add_filter_tabs(self.layout)
             self._add_filter_footer(self.layout)
             self._apply_window_size_constraints()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _add_filter_tabs(self, parent_layout):
+        self.filter_tabs = QtWidgets.QTabWidget()
+        for title, field_specs in self._build_filter_sections():
+            tab_page = QtWidgets.QWidget()
+            tab_layout = QtWidgets.QVBoxLayout(tab_page)
+            tab_layout.setContentsMargins(0, 0, 0, 0)
+
+            scroll_area = QtWidgets.QScrollArea()
+            scroll_area.setWidgetResizable(True)
+            scroll_content = QtWidgets.QWidget()
+            section_layout = QGridLayout(scroll_content)
+            section_layout.setContentsMargins(8, 8, 8, 8)
+            section_layout.setHorizontalSpacing(8)
+            section_layout.setVerticalSpacing(8)
+            self._add_filter_group(section_layout, field_specs, max_columns=3)
+            scroll_area.setWidget(scroll_content)
+            tab_layout.addWidget(scroll_area)
+
+            self.filter_tabs.addTab(tab_page, title)
+
+        parent_layout.addWidget(self.filter_tabs, 1)
 
     def _add_filter_group(self, group_layout, field_specs, *, max_columns=3):
         for index, (label_attr, search_attr, list_attr) in enumerate(field_specs):
@@ -364,8 +368,8 @@ class FilterDialog(QDialog):
             widget.setSizePolicy(horizontal_policy, vertical_policy)
 
     def _apply_window_size_constraints(self):
-        default_width = 980
-        default_height = 720
+        default_width = 760
+        default_height = 560
         app = QtWidgets.QApplication.instance() if hasattr(QtWidgets, "QApplication") else None
         screen = app.primaryScreen() if app is not None and hasattr(app, "primaryScreen") else None
         available = screen.availableGeometry() if screen is not None and hasattr(screen, "availableGeometry") else None
@@ -373,8 +377,8 @@ class FilterDialog(QDialog):
             self.resize(default_width, default_height)
             return
 
-        width = min(max(default_width, int(available.width() * 0.78)), int(available.width() * 0.96))
-        height = min(max(default_height, int(available.height() * 0.78)), int(available.height() * 0.92))
+        width = min(default_width, int(available.width() * 0.96))
+        height = min(default_height, int(available.height() * 0.9))
         if hasattr(self, "setMaximumSize"):
             self.setMaximumSize(available.width(), available.height())
         self.resize(width, height)

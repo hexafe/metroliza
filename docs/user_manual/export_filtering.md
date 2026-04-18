@@ -6,11 +6,11 @@ The **Data filtering** dialog lets you narrow which rows the Export workflow wil
 
 Open it from the Export dialog by clicking **Edit...** next to **Filters**.
 
-The dialog groups filters into scrollable sections so the available choices stay readable on smaller screens:
+The dialog uses tabs so the available choices stay readable on smaller screens:
 
-- **Measurement**: AX, REFERENCE, HEADER, SELECTED HEADERS, and STATUS CODE.
-- **Report metadata**: PART NAME, REVISION, TEMPLATE VARIANT, SAMPLE NUMBER, OPERATOR NAME, and SAMPLE NUMBER KIND.
-- **Source**: FILENAME, PARSER ID, and TEMPLATE FAMILY.
+- **Measurement** tab: AX, REFERENCE, HEADER, SELECTED HEADERS, and STATUS CODE.
+- **Report metadata** tab: PART NAME, REVISION, TEMPLATE VARIANT, SAMPLE NUMBER, OPERATOR NAME, and SAMPLE NUMBER KIND.
+- **Source** tab: FILENAME, PARSER ID, and TEMPLATE FAMILY.
 - The date range and **HAS NOK ONLY** controls stay at the bottom with the apply action.
 
 It filters across the main report and measurement metadata dimensions:
@@ -36,7 +36,7 @@ Filtering changes the scope of the export. It does not permanently edit the data
 
 The dialog has search boxes and selection lists for the main filtering dimensions.
 
-The lists are arranged in sections, not in one long horizontal row. If the window is short, scroll within the filter area and use the bottom controls to set date or NOK-only filters.
+The lists are arranged in tabs, not in one long horizontal row. Switch tabs to move between measurement fields, report metadata, and source-file filters while keeping the date, NOK-only, and apply controls visible.
 
 ### AX
 

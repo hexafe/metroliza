@@ -1,18 +1,24 @@
-RELEASE_VERSION = "2026.04rc3"
+RELEASE_VERSION = "2026.04rc4"
 VERSION_DATE = "260418"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Filtering now uses grouped scrollable sections and refreshes metadata views before loading filter choices."
+    "Filtering now uses tabs for Measurement, Report metadata, and Source while refreshing metadata views before loading filter choices."
 )
 
 release_notes = f"""
     <br><b>Current version {VERSION_LABEL}:</b><br>
-    - Filtering is grouped into Measurement, Report metadata, and Source sections so the dialog fits laptop screens<br>
+    - Filtering now uses tabs for Measurement, Report metadata, and Source so the dialog stays compact<br>
     - Filter choices refresh report metadata views before loading, preventing stale-view measurement ID errors<br>
     - Report-scoped filters are translated safely back to measurement export rows when export data is loaded<br>
     - Filter layout and metadata-query regressions now have focused test coverage<br>
 
     <br><b>Archive:</b><br>
+
+    <br><b>Version 2026.04rc3 (build 260418):</b><br>
+    - Filtering is grouped into Measurement, Report metadata, and Source sections so the dialog fits laptop screens<br>
+    - Filter choices refresh report metadata views before loading, preventing stale-view measurement ID errors<br>
+    - Report-scoped filters are translated safely back to measurement export rows when export data is loaded<br>
+    - Filter layout and metadata-query regressions now have focused test coverage<br>
 
     <br><b>Version 2026.04rc2 (build 260415):</b><br>
     - Export setup is more compact on smaller laptops and keeps the main choices visible in one window<br>
