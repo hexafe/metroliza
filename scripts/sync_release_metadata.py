@@ -21,6 +21,7 @@ class ReleaseMetadata:
     release_version: str
     build: str
     version_label: str
+    public_version_label: str
     highlight: str
 
 
@@ -47,10 +48,12 @@ def load_metadata() -> ReleaseMetadata:
         names = ", ".join(missing)
         raise RuntimeError(f"VersionDate.py missing required release fields: {names}")
 
+    public_release_version = re.sub(r"rc\d+$", "", str(module.RELEASE_VERSION))
     return ReleaseMetadata(
         release_version=str(module.RELEASE_VERSION),
         build=str(module.VERSION_DATE),
         version_label=f"{module.RELEASE_VERSION}({module.VERSION_DATE})",
+        public_version_label=f"{public_release_version} (build {module.VERSION_DATE})",
         highlight=str(module.CURRENT_RELEASE_HIGHLIGHT).strip(),
     )
 
@@ -67,13 +70,13 @@ def sync_readme(meta: ReleaseMetadata, apply: bool) -> UpdateResult:
     updated = _replace_one(
         text,
         r"^Current release highlight \(`[^`]+`(?:, build `\d+`)?\): .*$",
-        f"Current release highlight (`{meta.version_label}`): {meta.highlight}",
+        f"Current release highlight (`{meta.public_version_label}`): {meta.highlight}",
         README_PATH,
     )
     updated = _replace_one(
         updated,
         r"^### Changelog highlights \(release `[^`]+`(?:, build `\d+`)?\)$",
-        f"### Changelog highlights (release `{meta.version_label}`)",
+        f"### Changelog highlights (release `{meta.public_version_label}`)",
         README_PATH,
     )
 
@@ -88,7 +91,7 @@ def sync_changelog(meta: ReleaseMetadata, apply: bool) -> UpdateResult:
     updated = _replace_one(
         text,
         r"^## .+ — current version$",
-        f"## {meta.version_label} — current version",
+        f"## {meta.public_version_label} — current version",
         CHANGELOG_PATH,
     )
 

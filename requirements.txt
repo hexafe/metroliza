@@ -1,7 +1,7 @@
 # Runtime dependencies for running Metroliza.
 cryptography>=46.0.5
 google-auth-oauthlib>=1.2.0
-hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@v0.1.0rc1
+hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@10788c87b31da7856b269f9ebe0740efa4b1fff1
 matplotlib>=3.8.1
 numpy>=1.24.3
 pandas>=2.0.1

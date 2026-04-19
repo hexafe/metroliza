@@ -172,6 +172,26 @@ def _pairwise_rows(result, grouped_values: Mapping[str, Sequence[Any]]) -> list[
     return rows
 
 
+def _structured_insight_payloads(result) -> list[dict[str, Any]]:
+    payloads = []
+    for row in getattr(result, 'structured_insights', ()) or ():
+        payloads.append(
+            {
+                'headline': str(getattr(row, 'headline', '') or '').strip(),
+                'why': str(getattr(row, 'why', '') or '').strip(),
+                'first_action': str(getattr(row, 'first_action', '') or '').strip(),
+                'confidence_or_caution': [
+                    str(item)
+                    for item in (getattr(row, 'confidence_or_caution', ()) or ())
+                    if str(item).strip()
+                ],
+                'priority_score': getattr(row, 'priority_score', None),
+                'status_class': str(getattr(row, 'status_class', '') or '').strip(),
+            }
+        )
+    return [row for row in payloads if row.get('headline') or row.get('why') or row.get('first_action')]
+
+
 def _metric_capability_payload(result, grouped_values: Mapping[str, Sequence[Any]], spec_payload: Mapping[str, Any]) -> dict[str, Any]:
     all_values = (
         np.concatenate([np.asarray(values, dtype=float) for values in grouped_values.values()])
@@ -245,6 +265,8 @@ def analyze_group_metric(
         ),
     )
     spec_payload = normalized_spec_records[0] if normalized_spec_records else {'lsl': None, 'nominal': None, 'usl': None}
+    structured_insights = _structured_insight_payloads(result)
+    legacy_insights = [str(item) for item in (getattr(result, 'insights', ()) or ()) if str(item).strip()]
     return {
         'result': result,
         'spec_status': result.spec_status.value,
@@ -260,6 +282,9 @@ def analyze_group_metric(
         'pairwise_strategy': result.diagnostics.pairwise_strategy,
         'posthoc_strategy': result.diagnostics.posthoc_strategy,
         'capability_strategy': result.diagnostics.capability_strategy,
+        'structured_insights': structured_insights,
+        'primary_insight': structured_insights[0] if structured_insights else {},
+        'insights': legacy_insights,
         'warnings': list(result.warnings),
     }
 

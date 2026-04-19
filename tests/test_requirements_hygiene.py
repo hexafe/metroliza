@@ -47,7 +47,7 @@ class RequirementsHygieneTests(unittest.TestCase):
         matches = [entry for entry in runtime_entries if entry.lower().startswith('hexafe-groupstats[pandas] @ ')]
 
         self.assertEqual(matches, [
-            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@v0.1.0rc1'
+            'hexafe-groupstats[pandas] @ git+https://github.com/hexafe/hexafe-groupstats.git@10788c87b31da7856b269f9ebe0740efa4b1fff1'
         ])
 
     def test_runtime_requirements_do_not_rely_on_local_hexafe_groupstats_path(self):

@@ -1282,7 +1282,6 @@ def _normalize_group_analysis_manifest(
                 ("Restrictions", raw_metric.get("analysis_restriction_label")),
                 ("Takeaway", raw_metric.get("metric_takeaway")),
                 ("Recommended action", raw_metric.get("recommended_action")),
-                ("Diagnostics", raw_metric.get("diagnostics_comment")),
                 ("Flags", raw_metric.get("metric_flags")),
             ]
         )
@@ -1527,9 +1526,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
             '<p>Enable Extended plots or HTML dashboard export for chart-backed dashboard content.</p></section>'
         )
     group_analysis_block = _render_group_analysis(group_analysis)
-    diagnostics_block = _render_diagnostics(manifest.get("backend_diagnostics_lines") or [])
     overview_cards = _render_overview_cards(manifest)
-    manifest_json = html.escape(json.dumps(_build_debug_manifest(manifest), ensure_ascii=False, indent=2, sort_keys=True))
     nav_markup = f'<nav class="section-nav">{section_nav}</nav>' if section_nav else ""
     plotly_js_path = str(manifest.get("plotly_js_path") or "").strip()
     theme_switch_markup = _render_theme_switch()
@@ -1549,8 +1546,8 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     plotly_status_notice = ""
     if str(manifest.get("plotly_runtime_status") or "") == "snapshot_only":
         plotly_status_notice = (
-            '<p class="runtime-note">Interactive Plotly views were unavailable in this export, '
-            'so the dashboard is showing workbook-matching PNG snapshots only.</p>'
+            '<p class="runtime-note">Interactive charts are unavailable in this export. '
+            'Workbook-matching PNG snapshots are shown instead.</p>'
         )
 
     return f"""<!doctype html>
@@ -1687,7 +1684,6 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     body,
     .hero,
     .metric-card,
-    .diagnostics,
     .measurement-section,
     .empty-state,
     .chart-card,
@@ -1851,7 +1847,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       border-color: var(--teal-border);
       color: var(--teal);
     }}
-    .diagnostics, .measurement-section, .empty-state {{
+    .measurement-section, .empty-state {{
       margin-top: 18px;
       background: var(--panel);
       border: 1px solid var(--line);
@@ -1937,16 +1933,6 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       text-transform: uppercase;
       letter-spacing: 0.12em;
       font-weight: 700;
-    }}
-    .backend-badge {{
-      border-radius: 999px;
-      padding: 5px 10px;
-      font-size: 11px;
-      color: #fff;
-      background: var(--teal);
-    }}
-    .backend-badge.backend-badge--matplotlib {{
-      background: var(--accent);
     }}
     .chart-card h3 {{
       margin: 12px 0 0;
@@ -2261,7 +2247,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
     }}
     @media (max-width: 780px) {{
       .shell {{ width: min(100vw - 18px, 1480px); padding-top: 12px; }}
-      .hero, .diagnostics, .measurement-section, .empty-state {{ padding: 18px; border-radius: 18px; }}
+      .hero, .measurement-section, .empty-state {{ padding: 18px; border-radius: 18px; }}
       .chart-grid {{ grid-template-columns: 1fr; }}
       .theme-switch {{ width: 100%; justify-content: space-between; }}
       .theme-options {{ flex-wrap: wrap; justify-content: flex-end; }}
@@ -2276,7 +2262,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
         <div class="hero-copy">
           <p class="eyebrow">Metroliza Export Dashboard</p>
           <h1>{html.escape(str(manifest.get("excel_file") or "Workbook export"))}</h1>
-          <p class="lede">Extended summary charts exported alongside the workbook. When interactive charts are available, the dashboard copies a local Plotly runtime into the asset folder so zoom, pan, and hover inspection work offline, while workbook-matching PNG snapshots stay available for parity checks against the exported sheet.</p>
+          <p class="lede">Extended summary charts exported alongside the workbook. Use the interactive view to inspect results, or compare against the workbook-matching PNG snapshot shown with each chart.</p>
         </div>
         {theme_switch_markup}
       </div>
@@ -2284,13 +2270,8 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
       {overview_cards}
       {nav_markup}
     </header>
-    {diagnostics_block}
     {section_blocks}
     {group_analysis_block}
-    <details class="diagnostics">
-      <summary>Embedded dashboard manifest</summary>
-      <pre>{manifest_json}</pre>
-    </details>
   </div>
   <dialog id="chart-lightbox" class="lightbox" aria-label="Enlarged chart">
     <div class="lightbox-shell">
@@ -2300,7 +2281,7 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
           <img id="chart-lightbox-image" src="" alt="">
         </figure>
         <div class="lightbox-plotly-shell lightbox-pane" id="chart-lightbox-plotly-shell" hidden>
-          <div class="lightbox-plotly-note">Interactive charts open in a larger Plotly canvas here so zoom, pan, hover, and export actions stay available in the enlarged view.</div>
+          <div class="lightbox-plotly-note">Interactive chart view</div>
           <div id="chart-lightbox-plotly" class="lightbox-plotly-chart" aria-label="Enlarged interactive chart"></div>
         </div>
       </div>
@@ -2786,17 +2767,11 @@ def _render_dashboard_html(manifest: dict[str, Any]) -> str:
 
 
 def _render_overview_cards(manifest: dict[str, Any]) -> str:
-    summary = manifest.get("chart_observability_summary") or {}
     group_analysis = manifest.get("group_analysis") or {}
-    backend_counts = ((summary.get("chart_backend_distribution") or {}).get("counts") or {})
-    native_count = int(backend_counts.get("native", 0))
-    matplotlib_count = int(backend_counts.get("matplotlib", 0))
     cards = [
         ("Generated", _format_generated_card_value(manifest.get("generated_at")), True),
         ("Sections", str(manifest.get("section_count") or 0), False),
         ("Charts", str(manifest.get("chart_count") or 0), False),
-        ("Native renders", str(native_count), False),
-        ("Matplotlib renders", str(matplotlib_count), False),
     ]
     metrics = group_analysis.get("metrics") or []
     if metrics:
@@ -2908,7 +2883,7 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
         '<div class="plotly-shell-header">'
         '<div class="plotly-shell-copy">'
         '<span class="plotly-kicker">Interactive Plotly view</span>'
-        '<span class="plotly-shell-note">Zoom, pan, and inspect points directly in the saved dashboard. Theme-aware Plotly colors follow the current mode.</span>'
+        '<span class="plotly-shell-note">Inspect the chart directly in the saved dashboard.</span>'
         '</div>'
         '<div class="plotly-actions">'
         f'<button type="button" class="plotly-expand-trigger" aria-label="Enlarge interactive chart: {html.escape(title)}" data-image-caption="{html.escape(title)}">Increase size</button>'
@@ -2927,7 +2902,7 @@ def _render_chart_snapshot(chart: dict[str, Any], *, interactive_available: bool
 
     title = str(chart.get("title") or chart.get("chart_type") or "chart")
     fallback_note = (
-        '<p class="chart-fallback-note">Workbook snapshot PNG kept for parity with the exported sheet.</p>'
+        '<p class="chart-fallback-note">Workbook-matching PNG snapshot.</p>'
         if interactive_available
         else ""
     )
@@ -2947,13 +2922,6 @@ def _render_chart_snapshot(chart: dict[str, Any], *, interactive_available: bool
 
 
 def _render_chart_card(chart: dict[str, Any]) -> str:
-    backend = str(chart.get("backend") or "")
-    backend_class = "backend-badge backend-badge--native" if backend == "native" else "backend-badge backend-badge--matplotlib"
-    payload_metadata = {
-        "summary": chart.get("payload_summary") or {},
-        "details": chart.get("payload_details") or {},
-    }
-    payload_json = html.escape(json.dumps(payload_metadata, ensure_ascii=False, indent=2, sort_keys=True))
     note_markup = (
         f'<p class="chart-note">{html.escape(chart["note"])}</p>'
         if str(chart.get("note") or "").strip()
@@ -2965,25 +2933,16 @@ def _render_chart_card(chart: dict[str, Any]) -> str:
         detail_markup = _render_chart_payload_details(chart.get("payload_details") or {})
     plotly_markup = _render_plotly_shell(chart)
     snapshot_markup = _render_chart_snapshot(chart, interactive_available=bool(plotly_markup))
-    details_toggle = (
-        '<details><summary>Chart metadata</summary>'
-        f'<pre>{payload_json}</pre>'
-        '</details>'
-        if payload_metadata["summary"] or payload_metadata["details"]
-        else ""
-    )
     return (
         '<article class="chart-card">'
         '<header>'
-        f'<div class="chart-meta-row"><span>{html.escape(str(chart.get("chart_type") or "chart"))}</span>'
-        f'<span class="{backend_class}">{html.escape(backend or "unknown")}</span></div>'
+        f'<div class="chart-meta-row"><span>{html.escape(str(chart.get("chart_type") or "chart"))}</span></div>'
         f'<h3>{html.escape(str(chart.get("title") or ""))}</h3>'
         f'{note_markup}'
         '</header>'
         f'{plotly_markup}'
         f'{snapshot_markup}'
         f'{detail_markup}'
-        f'{details_toggle}'
         '</article>'
     )
 
@@ -3137,7 +3096,6 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
     pairwise_rows = metric.get("pairwise_rows") or {}
     distribution_difference = metric.get("distribution_difference") or []
     distribution_pairwise_rows = metric.get("distribution_pairwise_rows") or {}
-    plot_eligibility = metric.get("plot_eligibility") or []
     plots = metric.get("plots") or []
 
     pills = [f"Groups: {int(metric.get('group_count') or 0)}"]
@@ -3154,16 +3112,16 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
         subsections.append('<div class="subsection-title">Metric summary</div>' + _render_summary_table(summary_rows))
     if insights:
         subsections.append('<div class="subsection-title">Key insights</div>' + _render_text_list(insights))
-    if plot_eligibility:
-        subsections.append('<div class="subsection-title">Plot eligibility</div>' + _render_summary_table(plot_eligibility))
+
+    raw_table_sections = []
     if descriptive_stats.get("rows"):
-        subsections.append('<div class="subsection-title">Descriptive stats</div>' + _render_data_table(descriptive_stats))
+        raw_table_sections.append('<div class="subsection-title">Descriptive stats</div>' + _render_data_table(descriptive_stats))
     if pairwise_rows.get("rows"):
-        subsections.append('<div class="subsection-title">Pairwise comparisons</div>' + _render_data_table(pairwise_rows))
+        raw_table_sections.append('<div class="subsection-title">Pairwise comparisons</div>' + _render_data_table(pairwise_rows))
     if distribution_difference:
-        subsections.append('<div class="subsection-title">Distribution difference</div>' + _render_summary_table(distribution_difference))
+        raw_table_sections.append('<div class="subsection-title">Distribution difference</div>' + _render_summary_table(distribution_difference))
     if distribution_pairwise_rows.get("rows"):
-        subsections.append('<div class="subsection-title">Distribution pairwise rows</div>' + _render_data_table(distribution_pairwise_rows))
+        raw_table_sections.append('<div class="subsection-title">Distribution pairwise rows</div>' + _render_data_table(distribution_pairwise_rows))
 
     plot_markup = ""
     if plots:
@@ -3171,12 +3129,22 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
             _render_chart_card(chart) for chart in plots
         ) + "</div>"
 
+    raw_tables_markup = ""
+    if raw_table_sections:
+        raw_tables_markup = (
+            '<details class="metric-details">'
+            '<summary>Detailed tables</summary>'
+            f'{"".join(raw_table_sections)}'
+            '</details>'
+        )
+
     return (
         f'<article id="{html.escape(metric.get("id") or "")}" class="metric-block">'
         f'<div class="section-top"><div><h3>{html.escape(str(metric.get("metric") or "Metric"))}</h3></div>'
         f'<div class="section-actions"><div class="pill-row">{pill_markup}</div>{back_button}</div></div>'
         f'{"".join(subsections)}'
         f'{plot_markup}'
+        f'{raw_tables_markup}'
         '</article>'
     )
 

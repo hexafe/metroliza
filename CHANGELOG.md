@@ -1,19 +1,11 @@
 # Changelog (for end users)
 
-## 2026.04rc5(260418) — current version
+## 2026.04 (build 260418) — current version
 - HTML dashboard histograms now use the same bin range as the workbook/native histogram snapshots.
 - Plotly scatter and trend views show points only, without connecting lines between samples.
 - Metric sections include return buttons back to the dashboard jump list, and grouped metrics return to Group Analysis.
 - Dashboard documentation now describes the richer report metadata panel shown beside summary charts.
-
-## 2026.04rc4(260418)
-- Filtering now uses tabs for Measurement, Report metadata, and Source so the dialog stays compact.
-- Filter choices refresh report metadata views before loading, preventing stale-view measurement ID errors.
-- Report-scoped filters are translated safely back to measurement export rows when export data is loaded.
-- Filter layout and metadata-query regressions now have focused test coverage.
-
-## 2026.04rc3(260418)
-- Filtering is now grouped into Measurement, Report metadata, and Source sections so the dialog fits laptop screens.
+- Filtering now uses tabs and grouped sections for Measurement, Report metadata, and Source so the dialog stays compact and fits laptop screens.
 - Filter choices refresh report metadata views before loading, preventing stale-view measurement ID errors.
 - Report-scoped filters are translated safely back to measurement export rows when export data is loaded.
 - Filter layout and metadata-query regressions now have focused test coverage.

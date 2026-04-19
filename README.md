@@ -202,11 +202,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.04rc5(260418)`): HTML dashboards now match workbook histogram bin ranges, keep scatter plots as points, and add metric return controls.
+Current release highlight (`2026.04 (build 260418)`): HTML dashboards now match workbook histogram bin ranges, keep scatter plots as points, and add metric return controls.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.04rc5(260418)`)
+### Changelog highlights (release `2026.04 (build 260418)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

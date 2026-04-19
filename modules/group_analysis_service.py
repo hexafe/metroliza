@@ -952,6 +952,69 @@ def build_metric_insights(metric_row):
     return insight_lines[:3]
 
 
+def _engine_primary_insight(package_analysis):
+    """Return the engine-owned primary insight payload when the package exposes it."""
+    primary = package_analysis.get('primary_insight') if isinstance(package_analysis, dict) else {}
+    if isinstance(primary, dict) and any(str(primary.get(key) or '').strip() for key in ('headline', 'why', 'first_action')):
+        return dict(primary)
+
+    structured = package_analysis.get('structured_insights') if isinstance(package_analysis, dict) else []
+    if isinstance(structured, list) and structured:
+        first = structured[0]
+        if isinstance(first, dict):
+            return dict(first)
+    return {}
+
+
+def _engine_insight_lines(package_analysis):
+    primary = _engine_primary_insight(package_analysis)
+    if primary:
+        lines = [
+            str(primary.get('headline') or '').strip(),
+            str(primary.get('why') or '').strip(),
+            str(primary.get('first_action') or '').strip(),
+        ]
+        cautions = [
+            str(item).strip()
+            for item in (primary.get('confidence_or_caution') or [])
+            if str(item).strip()
+        ]
+        if cautions:
+            lines.append('Caution: ' + '; '.join(cautions))
+        return [line for line in lines if line][:4]
+
+    return [
+        str(item)
+        for item in ((package_analysis or {}).get('insights') or [])
+        if str(item).strip()
+    ][:4]
+
+
+def _engine_status_to_index_status(primary_insight):
+    status_class = str((primary_insight or {}).get('status_class') or '').strip().lower()
+    if status_class in {'meaningful_difference', 'meaningful_omnibus_difference'}:
+        return 'DIFFERENCE'
+    if status_class in {'no_actionable_difference', 'capable_confident'}:
+        return 'NO DIFFERENCE'
+    if status_class:
+        return 'USE CAUTION'
+    return ''
+
+
+def _engine_metric_takeaway(primary_insight):
+    if not primary_insight:
+        return ''
+    headline = str(primary_insight.get('headline') or '').strip()
+    why = str(primary_insight.get('why') or '').strip()
+    if headline and why:
+        return f'{headline.capitalize()}. {why}'
+    return headline or why
+
+
+def _engine_recommended_action(primary_insight):
+    return str((primary_insight or {}).get('first_action') or '').strip()
+
+
 def compute_pairwise_rows(metric_identity, grouped_values, *, alpha=0.05, correction_method='holm'):
     """Build pairwise comparison rows for a single metric."""
     package_analysis = analyze_group_metric(
@@ -1503,6 +1566,12 @@ def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_st
         diagnostics_comment = (
             f"{diagnostics_comment} Histogram omitted: {_plot_skip_reason_message(histogram_meta.get('skip_reason'))}."
         )
+    package_analysis = metric_partition['package_analysis']
+    primary_insight = _engine_primary_insight(package_analysis)
+    engine_insights = _engine_insight_lines(package_analysis)
+    engine_index_status = _engine_status_to_index_status(primary_insight)
+    engine_takeaway = _engine_metric_takeaway(primary_insight)
+    engine_action = _engine_recommended_action(primary_insight)
 
     metric_payload = {
         'metric': metric_partition['metric'],
@@ -1528,6 +1597,8 @@ def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_st
         'posthoc_strategy': metric_partition['package_analysis']['posthoc_strategy'],
         'capability_strategy': metric_partition['package_analysis']['capability_strategy'],
         'warnings': metric_partition['package_analysis']['warnings'],
+        'structured_insights': metric_partition['package_analysis'].get('structured_insights', []),
+        'primary_insight': primary_insight,
         'comparability_summary': comparability_summary,
         'plot_eligibility': plot_eligibility,
         'chart_payload': _build_metric_chart_payload(
@@ -1537,25 +1608,25 @@ def _assemble_metric_payload(*, metric_partition, descriptive_stage, pairwise_st
         'diagnostics_comment': diagnostics_comment,
         'metric_flags': metric_level_flags,
         'metric_note': _distribution_metric_note(distribution_omnibus),
-        'recommended_action': _recommended_metric_action(
+        'recommended_action': engine_action or _recommended_metric_action(
             pairwise_rows=pairwise_rows,
             distribution_difference=distribution_omnibus,
             analysis_policy=policy,
         ),
     }
-    metric_payload['index_status'] = _metric_index_status(
+    metric_payload['index_status'] = engine_index_status or _metric_index_status(
         pairwise_rows=pairwise_rows,
         diagnostics_comment=diagnostics_comment,
         distribution_difference=distribution_omnibus,
     )
     if not policy.get('allow_pairwise') and metric_payload['index_status'] == 'NO DIFFERENCE':
         metric_payload['index_status'] = 'USE CAUTION'
-    metric_payload['metric_takeaway'] = _metric_takeaway(
+    metric_payload['metric_takeaway'] = engine_takeaway or _metric_takeaway(
         pairwise_rows=pairwise_rows,
         diagnostics_comment=diagnostics_comment,
         distribution_difference=distribution_omnibus,
     )
-    metric_payload['insights'] = build_metric_insights(metric_payload)
+    metric_payload['insights'] = engine_insights or build_metric_insights(metric_payload)
     return metric_payload
 
 

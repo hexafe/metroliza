@@ -1076,6 +1076,9 @@ class TestGroupAnalysisService(unittest.TestCase):
                 spec_records=[{'lsl': 9.0, 'nominal': 10.0, 'usl': 11.0}] * 8,
             ),
             'pairwise_rows': [],
+            'structured_insights': [],
+            'primary_insight': {},
+            'insights': [],
         }
         mock_distribution_difference.return_value = {
             'profile_rows': [],
@@ -1104,6 +1107,57 @@ class TestGroupAnalysisService(unittest.TestCase):
             'Clear shape mismatch across groups. Review spread and consistency by group.',
         )
         self.assertEqual(metric['insights'][2], 'Shape signal: Clear shape mismatch across groups.')
+
+    @patch('modules.group_analysis_service.compute_distribution_difference')
+    @patch('modules.group_analysis_service.analyze_group_metric')
+    def test_build_payload_prefers_engine_structured_insight_fields(self, mock_analyze_group_metric, mock_distribution_difference):
+        grouped_df = pd.DataFrame(
+            {
+                'REFERENCE': ['R1'] * 8,
+                'HEADER - AX': ['M1'] * 8,
+                'GROUP': ['A'] * 4 + ['B'] * 4,
+                'MEAS': [10.0, 10.1, 10.2, 10.0, 9.9, 10.0, 10.1, 9.9],
+                'LSL': [9.0] * 8,
+                'NOMINAL': [10.0] * 8,
+                'USL': [11.0] * 8,
+            }
+        )
+        from modules.hexafe_groupstats_adapter import analyze_group_metric as real_analyze_group_metric
+
+        engine_insight = {
+            'headline': 'capability limited by centering',
+            'why': 'Spread is acceptable, but actual position is weak.',
+            'first_action': 'Check setup bias before changing tolerances.',
+            'confidence_or_caution': ['low_n', 'capability_ci_unavailable'],
+            'priority_score': 92.0,
+            'status_class': 'capability_centering_issue',
+        }
+        mock_analyze_group_metric.return_value = {
+            **real_analyze_group_metric(
+                'M1',
+                {
+                    'A': [10.0, 10.1, 10.2, 10.0],
+                    'B': [9.9, 10.0, 10.1, 9.9],
+                },
+                spec_records=[{'lsl': 9.0, 'nominal': 10.0, 'usl': 11.0}] * 8,
+            ),
+            'structured_insights': [engine_insight],
+            'primary_insight': engine_insight,
+            'insights': ['legacy line should not win'],
+        }
+        mock_distribution_difference.return_value = {'profile_rows': [], 'pairwise_rows': [], 'omnibus_row': {}}
+
+        payload = build_group_analysis_payload(grouped_df, requested_scope='auto', analysis_level='light')
+
+        metric = payload['metric_rows'][0]
+        self.assertEqual(metric['index_status'], 'USE CAUTION')
+        self.assertEqual(metric['recommended_action'], 'Check setup bias before changing tolerances.')
+        self.assertEqual(
+            metric['metric_takeaway'],
+            'Capability limited by centering. Spread is acceptable, but actual position is weak.',
+        )
+        self.assertEqual(metric['insights'][0], 'capability limited by centering')
+        self.assertIn('Caution: low_n; capability_ci_unavailable', metric['insights'])
 
     def test_build_group_analysis_payload_cache_hits_preserve_payload_parity(self):
         grouped_df = pd.DataFrame(
