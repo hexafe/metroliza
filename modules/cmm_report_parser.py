@@ -71,7 +71,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
     manifest = PluginManifest(
         plugin_id="cmm",
         display_name="CMM PDF Parser",
-        version="1.0.0",
+        version="1.1.0",
         supported_formats=("pdf",),
         supported_locales=("*",),
         template_ids=("default",),

@@ -1,5 +1,6 @@
 import logging
 import os
+import sqlite3
 import sys
 import tempfile
 import types
@@ -51,6 +52,8 @@ cmm_parser_stub = types.ModuleType('modules.cmm_report_parser')
 
 
 class _DummyCmmReportParser:
+    manifest = types.SimpleNamespace(version='1.1.0')
+
     def __init__(self, *args, **kwargs):
         pass
 
@@ -179,7 +182,7 @@ class TestParseHelpers(unittest.TestCase):
             calls.append((query, params))
             if "sqlite_master" in query:
                 return [(1,)]
-            if "SELECT sha256 FROM source_files" in query:
+            if "FROM source_files sf" in query:
                 return [('sha-one',), ('sha-two',)]
             raise AssertionError(f"Unexpected query: {query}")
 
@@ -192,7 +195,74 @@ class TestParseHelpers(unittest.TestCase):
         self.assertEqual(fingerprints, {'sha256:sha-one', 'sha256:sha-two'})
 
         self.assertTrue(any('sqlite_master' in query for query, _ in calls))
-        self.assertTrue(any('SELECT sha256 FROM source_files' in query for query, _ in calls))
+        self.assertTrue(any('FROM source_files sf' in query for query, _ in calls))
+
+
+    def test_get_report_fingerprints_excludes_stale_cmm_metadata_versions(self):
+        from modules.parse_reports_thread import ParseReportsThread
+        from modules.contracts import ParseRequest
+        from modules.report_schema import ensure_report_schema
+
+        def _insert_report(conn, *, sha256, parser_id, parser_version, metadata_json):
+            conn.execute(
+                """
+                INSERT INTO source_files (sha256, source_format, discovered_at, is_active)
+                VALUES (?, 'pdf', '2026-04-21T00:00:00Z', 1)
+                """,
+                (sha256,),
+            )
+            source_file_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO parsed_reports (
+                    source_file_id, parser_id, parser_version, template_family, parse_status,
+                    measurement_count, has_nok, nok_count, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 'cmm_pdf_header_box', 'parsed', 0, 0, 0,
+                        '2026-04-21T00:00:00Z', '2026-04-21T00:00:00Z')
+                """,
+                (source_file_id, parser_id, parser_version),
+            )
+            report_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO report_metadata (report_id, metadata_version, metadata_json)
+                VALUES (?, 'report_metadata_v1', ?)
+                """,
+                (report_id, metadata_json),
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, 'reports.sqlite')
+            ensure_report_schema(db_path)
+            with sqlite3.connect(db_path) as conn:
+                _insert_report(
+                    conn,
+                    sha256='sha-current',
+                    parser_id='cmm_pdf_header_box',
+                    parser_version='1.1.0',
+                    metadata_json='{"header_extraction_mode": "ocr"}',
+                )
+                _insert_report(
+                    conn,
+                    sha256='sha-old-parser',
+                    parser_id='cmm_pdf_header_box',
+                    parser_version='1.0.0',
+                    metadata_json='{"field_sources": {"reference": "filename_candidate"}}',
+                )
+                _insert_report(
+                    conn,
+                    sha256='sha-current-ocr-error',
+                    parser_id='cmm_pdf_header_box',
+                    parser_version='1.1.0',
+                    metadata_json='{"header_extraction_mode": "none", "header_ocr_error": "missing"}',
+                )
+
+            thread = ParseReportsThread(ParseRequest(source_directory='.', db_file=db_path))
+
+            fingerprints = thread.get_report_fingerprints_in_database()
+
+        self.assertEqual(fingerprints, {'sha256:sha-current'})
 
 
     def test_get_report_fingerprints_stops_loading_batches_on_cancel(self):
@@ -209,7 +279,7 @@ class TestParseHelpers(unittest.TestCase):
         def _fake_execute(_db, query, params=None, **_kwargs):
             if 'sqlite_master' in query:
                 return [(1,)]
-            if 'SELECT sha256 FROM source_files' in query:
+            if 'FROM source_files sf' in query:
                 query_calls['source_hash_queries'] += 1
                 thread.parsing_canceled = True
                 return [('sha-one',)]

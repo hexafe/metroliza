@@ -19,6 +19,8 @@ from modules.db import execute_with_retry, sqlite_connection_scope
 from modules.log_context import build_parse_log_extra, get_operation_logger
 from modules.progress_status import build_three_line_status
 from modules.report_repository import compute_sha256
+from modules.cmm_report_parser import CMMReportParser
+from modules.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 
 
 @dataclass(frozen=True)
@@ -147,6 +149,11 @@ def parse_new_reports(
 
 
 logger = get_operation_logger(logging.getLogger(__name__), "parse_reports")
+
+_CURRENT_CMM_METADATA_PARSER_ID = DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.parser_id
+_CURRENT_CMM_PARSER_VERSION = getattr(getattr(CMMReportParser, "manifest", None), "version", "1.1.0")
+_HEADER_EXTRACTION_DIAGNOSTIC_MARKER = '%"header_extraction_mode"%'
+_HEADER_OCR_ERROR_MARKER = '%"header_ocr_error"%'
 
 
 class ParseReportsThread(QThread):
@@ -316,7 +323,27 @@ class ParseReportsThread(QThread):
 
             rows = execute_with_retry(
                 self.db_file,
-                "SELECT sha256 FROM source_files WHERE is_active = 1",
+                """
+                SELECT sf.sha256
+                FROM source_files sf
+                JOIN parsed_reports pr ON pr.source_file_id = sf.id
+                LEFT JOIN report_metadata rm ON rm.report_id = pr.id
+                WHERE sf.is_active = 1
+                  AND (
+                    pr.parser_id <> ?
+                    OR (
+                      pr.parser_version = ?
+                      AND COALESCE(rm.metadata_json, '') LIKE ?
+                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                    )
+                  )
+                """,
+                params=(
+                    _CURRENT_CMM_METADATA_PARSER_ID,
+                    _CURRENT_CMM_PARSER_VERSION,
+                    _HEADER_EXTRACTION_DIAGNOSTIC_MARKER,
+                    _HEADER_OCR_ERROR_MARKER,
+                ),
                 connection=connection,
                 retries=5,
                 retry_delay_s=1,

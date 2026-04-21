@@ -1,7 +1,0 @@
-# No Python package is required for the PyMuPDF/Tesseract probe.
-#
-# The executable runtime must provide:
-# - tesseract executable on PATH
-# - tessdata directory discoverable by Tesseract or TESSDATA_PREFIX
-# - eng.traineddata
-# - pol.traineddata, preferred for Polish header dates

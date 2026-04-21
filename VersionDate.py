@@ -1,13 +1,14 @@
-RELEASE_VERSION = "2026.04rc6"
+RELEASE_VERSION = "2026.04rc7"
 VERSION_DATE = "260421"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Header OCR now ships with vendored RapidOCR models, packaged-runtime validation, and third-party notices."
+    "Re-running parsing now refreshes older CMM rows so packaged OCR metadata replaces filename-only records."
 )
 PUBLIC_VERSION_LABEL = "2026.04 (build 260421)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Re-running parsing on an existing database now refreshes older CMM report rows so newly available OCR header metadata is persisted instead of keeping filename-only values<br>
     - Header OCR now uses vendored RapidOCR model files for packaged builds, so the executable does not depend on runtime model downloads<br>
     - PyInstaller and Nuitka packaging now validate RapidOCR, ONNX Runtime, OpenCV, NumPy, and OCR model assets before release builds<br>
     - Third-party notices now document RapidOCR licensing and model attribution for commercial distribution packages<br>

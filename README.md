@@ -230,7 +230,7 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.04 (build 260421)`): Header OCR now ships with vendored RapidOCR models, packaged-runtime validation, and third-party notices.
+Current release highlight (`2026.04 (build 260421)`): Re-running parsing now refreshes older CMM rows so packaged OCR metadata replaces filename-only records.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 

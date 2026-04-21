@@ -59,7 +59,7 @@ def _restore_real_cmm_registration():
     PARSER_MANIFESTS["cmm"] = PluginManifest(
         plugin_id="cmm",
         display_name="CMM PDF Parser",
-        version="1.0.0",
+        version=CMMReportParser.manifest.version,
         supported_formats=("pdf",),
         priority=100,
     )
