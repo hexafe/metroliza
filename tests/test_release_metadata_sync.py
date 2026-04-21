@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.04 (build 260418)")
+        self.assertEqual(metadata.public_version_label, "2026.04 (build 260421)")
         self.assertTrue(metadata.highlight)
 
     def test_sync_readme_updates_public_labels(self):

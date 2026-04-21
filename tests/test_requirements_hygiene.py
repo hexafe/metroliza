@@ -19,6 +19,7 @@ class RequirementsHygieneTests(unittest.TestCase):
             pathlib.Path('requirements.txt'),
             pathlib.Path('requirements-dev.txt'),
             pathlib.Path('requirements-build.txt'),
+            pathlib.Path('requirements-ocr.txt'),
         ]:
             content = path.read_text(encoding='utf-8')
             self.assertNotIn('\r\n', content, f'{path} must use LF newlines')
@@ -34,6 +35,9 @@ class RequirementsHygieneTests(unittest.TestCase):
         self.assertIn('pytest', dev.lower())
         self.assertIn('-r requirements.txt', build)
         self.assertIn('pyinstaller', build.lower())
+        self.assertIn('rapidocr', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
+        self.assertIn('onnxruntime', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
+        self.assertIn('opencv-python', pathlib.Path('requirements-ocr.txt').read_text(encoding='utf-8').lower())
 
     def test_runtime_requirements_do_not_include_google_api_python_client(self):
         runtime_entries = self._runtime_requirements()

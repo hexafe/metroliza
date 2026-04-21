@@ -19,6 +19,11 @@ _POLISH_MONTH_RE = re.compile(
     r"[.\-/_\s]+(?P<year>\d{4})",
     re.IGNORECASE,
 )
+_POLISH_MONTH_FIRST_RE = re.compile(
+    r"(?P<month>stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|wrzesnia|września|pazdziernika|października|listopada|grudnia)"
+    r"[.\-/_\s]+(?P<day>\d{1,2})\s*,?\s*(?P<year>\d{4})",
+    re.IGNORECASE,
+)
 _TIME_RE = re.compile(
     r"^(?P<hour>\d{1,2})[.:/\-\s]+(?P<minute>\d{1,2})(?:[.:/\-\s]+(?P<second>\d{1,2}))?$"
 )
@@ -90,6 +95,16 @@ def normalize_report_date(value) -> str | None:
         )
 
     match = _POLISH_MONTH_RE.search(text)
+    if match:
+        month_text = match.group("month").lower()
+        month = int(_POLISH_MONTHS[month_text])
+        return _build_date(
+            int(match.group("year")),
+            month,
+            int(match.group("day")),
+        )
+
+    match = _POLISH_MONTH_FIRST_RE.search(text)
     if match:
         month_text = match.group("month").lower()
         month = int(_POLISH_MONTHS[month_text])

@@ -22,3 +22,6 @@ exclude = [
 # Optional test runner normalization for contributors/tools that use pytest.
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+  "integration: optional tests that require external runtimes, sample files, or packaged artifacts",
+]

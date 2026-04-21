@@ -1,6 +1,8 @@
 """Parse CMM report files and persist report metadata plus flat measurements."""
 
 import logging
+import os
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from time import perf_counter
@@ -13,6 +15,19 @@ from modules.cmm_native_parser import (
 from modules.pdf_backend import require_pdf_backend, resolve_pdf_backend_module_name
 from modules.cmm_parsing import add_tolerances_to_blocks
 from modules.base_report_parser import BaseReportParser
+from modules.header_ocr_backend import (
+    DEFAULT_HEADER_OCR_BACKEND,
+    RapidOcrLatinBackend,
+    RapidOcrLatinBackendConfig,
+    default_rapidocr_latin_model_paths,
+    missing_rapidocr_latin_model_paths,
+)
+from modules.header_ocr_corrections import (
+    canonicalize_header_label,
+    compact_token,
+    postprocess_header_ocr_items,
+)
+from modules.header_ocr_geometry import convert_ocr_records_to_header_items, select_header_crop
 from modules.report_identity import build_report_identity_hash
 from modules.report_metadata_extractor import extract_report_metadata
 from modules.report_metadata_models import MetadataExtractionContext
@@ -98,6 +113,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self._first_page_width = None
         self._first_page_height = None
         self._first_page_header_items = []
+        self._header_extraction_diagnostics = {
+            "header_extraction_mode": "none",
+            "header_word_count": 0,
+            "header_required_fields_found": 0,
+        }
 
     def open_database_and_check_filename(self):
         """Handle `open_database_and_check_filename` for `CMMReportParser`.
@@ -148,7 +168,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
     def _profile_label_aliases() -> tuple[str, ...]:
         labels: set[str] = set()
         for aliases in DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.label_aliases.values():
-            labels.update(alias.upper().rstrip(":") for alias in aliases)
+            for alias in aliases:
+                labels.add(alias.upper().rstrip(":"))
+                canonical = canonicalize_header_label(alias)
+                if canonical:
+                    labels.add(canonical.upper().rstrip(":"))
         return tuple(sorted(labels, key=len, reverse=True))
 
     @classmethod
@@ -218,6 +242,184 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
 
         return header_items
 
+    @staticmethod
+    def _bbox_tuple(bbox) -> tuple[float, float, float, float] | None:
+        if bbox is None:
+            return None
+        try:
+            return (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    @classmethod
+    def _header_region_bbox(cls, page) -> tuple[float, float, float, float] | None:
+        selection = cls._header_crop_selection(page)
+        return selection.bbox if selection is not None else None
+
+    @classmethod
+    def _header_crop_selection(cls, page):
+        width, height = cls._page_size(page)
+        if width is None or height is None:
+            return None
+
+        try:
+            return select_header_crop(
+                page,
+                header_band_fraction=DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.header_band_fraction,
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _word_in_bbox(word, bbox: tuple[float, float, float, float]) -> bool:
+        try:
+            x0, y0, x1, y1 = (float(word[0]), float(word[1]), float(word[2]), float(word[3]))
+        except (TypeError, ValueError, IndexError):
+            return False
+        center_x = (x0 + x1) / 2.0
+        center_y = (y0 + y1) / 2.0
+        return bbox[0] <= center_x <= bbox[2] and bbox[1] <= center_y <= bbox[3]
+
+    @classmethod
+    def _header_items_from_words(cls, page, bbox: tuple[float, float, float, float]):
+        try:
+            words = page.get_text("words")
+        except Exception:
+            return []
+
+        header_items = []
+        for word in words:
+            if not cls._word_in_bbox(word, bbox):
+                continue
+            text = str(word[4]).strip() if len(word) > 4 else ""
+            if not text:
+                continue
+            header_items.append(
+                {
+                    "text": text,
+                    "x0": float(word[0]),
+                    "y0": float(word[1]),
+                    "x1": float(word[2]),
+                    "y1": float(word[3]),
+                    "page_number": 1,
+                    "region_name": "page1_header_band_words",
+                }
+            )
+        return header_items
+
+    @classmethod
+    def _header_required_fields_found(cls, header_items) -> int:
+        if not header_items:
+            return 0
+        header_text = " ".join(str(item.get("text", "")) for item in header_items)
+        header_compact = compact_token(header_text)
+        found = set()
+        required_fields = ("part_name", "reference", "revision", "stats_count_raw", "operator_name", "comment")
+        for field_name in required_fields:
+            aliases = DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.label_aliases.get(field_name, ())
+            if any(compact_token(canonicalize_header_label(alias) or alias) in header_compact for alias in aliases):
+                found.add(field_name)
+        return len(found)
+
+    @classmethod
+    def _ocr_header_items_from_pixmap(
+        cls,
+        page,
+        bbox: tuple[float, float, float, float],
+        pdf_backend,
+    ) -> tuple[list[dict], str | None]:
+        backend_name = os.environ.get("METROLIZA_HEADER_OCR_BACKEND", DEFAULT_HEADER_OCR_BACKEND).strip().lower()
+        if backend_name in {"", "none", "off", "disabled"}:
+            return [], "header_ocr_disabled"
+        if backend_name != DEFAULT_HEADER_OCR_BACKEND:
+            return [], f"unsupported_header_ocr_backend:{backend_name}"
+
+        try:
+            zoom = float(os.environ.get("METROLIZA_HEADER_OCR_ZOOM", "4"))
+            matrix = pdf_backend.Matrix(zoom, zoom)
+            clip = pdf_backend.Rect(*bbox)
+            pixmap = page.get_pixmap(matrix=matrix, clip=clip, alpha=False)
+            model_paths = default_rapidocr_latin_model_paths(
+                os.environ.get("METROLIZA_HEADER_OCR_MODEL_DIR") or None
+            )
+            missing_model_paths = missing_rapidocr_latin_model_paths(model_paths)
+            if missing_model_paths:
+                missing_names = ", ".join(path.name for path in missing_model_paths)
+                return [], f"header_ocr_models_missing:{missing_names}"
+
+            backend = RapidOcrLatinBackend(RapidOcrLatinBackendConfig(model_paths=model_paths))
+            with tempfile.TemporaryDirectory(prefix="metroliza_header_ocr_") as temp_dir:
+                image_path = Path(temp_dir) / "header.png"
+                pixmap.save(str(image_path))
+                run = backend.recognize(image_path)
+
+            pixel_width = float(getattr(pixmap, "width", 0.0) or 0.0)
+            pixel_height = float(getattr(pixmap, "height", 0.0) or 0.0)
+            if pixel_width <= 0 or pixel_height <= 0:
+                return [], "ocr_pixmap_size_unavailable"
+
+            items = convert_ocr_records_to_header_items(
+                run.records,
+                crop_bbox=bbox,
+                crop_pixel_size=(pixel_width, pixel_height),
+                page_number=1,
+                region_name="page1_header_band_ocr",
+                source_name=DEFAULT_HEADER_OCR_BACKEND,
+            )
+            for item in items:
+                item["ocr_run_diagnostics"] = run.diagnostics
+            return postprocess_header_ocr_items(items), None
+        except Exception as exc:
+            return [], f"{type(exc).__name__}: {exc}"
+
+    @classmethod
+    def _extract_first_page_header_items(cls, page, pdf_backend) -> tuple[list[dict], dict]:
+        selection = cls._header_crop_selection(page)
+        if selection is None:
+            return [], {
+                "header_extraction_mode": "none",
+                "header_word_count": 0,
+                "header_required_fields_found": 0,
+            }
+        bbox = selection.bbox
+
+        word_items = postprocess_header_ocr_items(cls._header_items_from_words(page, bbox))
+        word_required_fields = cls._header_required_fields_found(word_items)
+        diagnostics = {
+            "header_extraction_mode": "words" if word_items else "none",
+            "header_word_count": len(word_items),
+            "header_required_fields_found": word_required_fields,
+            "header_region_bbox": tuple(round(value, 3) for value in bbox),
+            "header_region_source": selection.source,
+            "header_image_candidate_count": selection.candidate_count,
+            "header_crop_diagnostics": selection.diagnostics,
+        }
+
+        if word_required_fields >= 2:
+            return word_items, diagnostics
+
+        ocr_items, ocr_error = cls._ocr_header_items_from_pixmap(page, bbox, pdf_backend)
+        if ocr_items:
+            ocr_required_fields = cls._header_required_fields_found(ocr_items)
+            first_ocr_item = ocr_items[0]
+            diagnostics.update(
+                {
+                    "header_extraction_mode": "ocr",
+                    "header_word_count": len(ocr_items),
+                    "header_structured_word_count": len(word_items),
+                    "header_required_fields_found": ocr_required_fields,
+                    "header_ocr_engine": first_ocr_item.get("ocr_source")
+                    or first_ocr_item.get("source")
+                    or DEFAULT_HEADER_OCR_BACKEND,
+                    "header_ocr_model": DEFAULT_HEADER_OCR_BACKEND,
+                }
+            )
+            return ocr_items, diagnostics
+
+        if ocr_error:
+            diagnostics["header_ocr_error"] = ocr_error
+        return word_items, diagnostics
+
     def open_report(self):
         """Handle `cmm_open` for `CMMReportParser`.
 
@@ -246,9 +448,12 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                         self._first_page_width, self._first_page_height = self._page_size(page)
                     page_text = page.get_text().splitlines()
                     if page_counter == 1:
-                        self._first_page_header_items = self._build_header_items_from_lines(
-                            page_text,
-                            page_height=self._first_page_height,
+                        (
+                            self._first_page_header_items,
+                            self._header_extraction_diagnostics,
+                        ) = self._extract_first_page_header_items(
+                            page,
+                            pdf_backend,
                         )
                     for line in page_text:
                         self.raw_text.append(line)
@@ -486,9 +691,20 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             filename=self.file_name,
         )
         self._metadata_selection_result = self._apply_legacy_metadata_fallbacks(self._metadata_selection_result)
+        self._metadata_selection_result = self._apply_header_extraction_diagnostics(self._metadata_selection_result)
         self.canonical_metadata = self._metadata_selection_result.metadata
         self._metadata_identity_hash = build_report_identity_hash(self.canonical_metadata)
         return self._metadata_selection_result
+
+    def _apply_header_extraction_diagnostics(self, selection_result):
+        """Persist first-page header extraction diagnostics in canonical metadata JSON."""
+
+        if not self._header_extraction_diagnostics:
+            return selection_result
+        metadata = selection_result.metadata
+        metadata_json = dict(metadata.metadata_json or {})
+        metadata_json.update(self._header_extraction_diagnostics)
+        return replace(selection_result, metadata=replace(metadata, metadata_json=metadata_json))
 
     def _apply_legacy_metadata_fallbacks(self, selection_result):
         """Preserve direct parser-state metadata for non-PDF/synthetic callers."""

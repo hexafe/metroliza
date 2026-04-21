@@ -1,13 +1,16 @@
-RELEASE_VERSION = "2026.04rc5"
-VERSION_DATE = "260418"
+RELEASE_VERSION = "2026.04rc6"
+VERSION_DATE = "260421"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "HTML dashboards now match workbook histogram bin ranges, keep scatter plots as points, and add metric return controls."
+    "Header OCR now ships with vendored RapidOCR models, packaged-runtime validation, and third-party notices."
 )
-PUBLIC_VERSION_LABEL = "2026.04 (build 260418)"
+PUBLIC_VERSION_LABEL = "2026.04 (build 260421)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Header OCR now uses vendored RapidOCR model files for packaged builds, so the executable does not depend on runtime model downloads<br>
+    - PyInstaller and Nuitka packaging now validate RapidOCR, ONNX Runtime, OpenCV, NumPy, and OCR model assets before release builds<br>
+    - Third-party notices now document RapidOCR licensing and model attribution for commercial distribution packages<br>
     - HTML dashboard histograms now use the same bin range as the workbook/native histogram snapshots<br>
     - Plotly scatter and trend views show points only, without connecting lines between samples<br>
     - Metric sections include return buttons back to the dashboard jump list, and grouped metrics return to Group Analysis<br>

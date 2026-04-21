@@ -1,6 +1,9 @@
 # Changelog (for end users)
 
-## 2026.04 (build 260418) — current version
+## 2026.04 (build 260421) — current version
+- Header OCR packaging now includes vendored RapidOCR model files so packaged builds do not rely on runtime model downloads.
+- PyInstaller and Nuitka release paths now validate RapidOCR, ONNX Runtime, OpenCV, NumPy, OCR adapter modules, and model assets before producing release artifacts.
+- Packaged distributions now include third-party notices and preserve OCR package metadata where available, covering RapidOCR licensing and model attribution.
 - HTML dashboard histograms now use the same bin range as the workbook/native histogram snapshots.
 - Plotly scatter and trend views show points only, without connecting lines between samples.
 - Metric sections include return buttons back to the dashboard jump list, and grouped metrics return to Group Analysis.

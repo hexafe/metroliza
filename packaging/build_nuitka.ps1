@@ -7,6 +7,7 @@ param(
     [switch]$RequireNative,
     [switch]$EnableConsole,
     [switch]$AllowBrokenPdfParserBuild,
+    [switch]$AllowMissingHeaderOcrBuild,
     [ValidateSet('auto', 'gcc', 'clang')]
     [string]$CompilerStrategy = 'auto',
     [switch]$AutoInstallCompiler,
@@ -438,10 +439,12 @@ $nativeModeLabel = if ($RequireNative) { 'required' } else { 'optional' }
 $credentialsPathLabel = if ($CredentialsPath) { $CredentialsPath } else { '(disabled)' }
 $consoleMode = if ($EnableConsole) { 'force' } else { 'disable' }
 $pdfGateLabel = if ($AllowBrokenPdfParserBuild) { 'UNSAFE OVERRIDE ENABLED' } else { 'strict' }
+$headerOcrGateLabel = if ($AllowMissingHeaderOcrBuild) { 'UNSAFE OVERRIDE ENABLED' } else { 'strict' }
 
 Write-Host '[2/6] Build mode'
 Write-Host "      Native parser module: $nativeModeLabel"
 Write-Host "      PDF parser gate: $pdfGateLabel"
+Write-Host "      Header OCR gate: $headerOcrGateLabel"
 Write-Host "      Credentials bundle path: $credentialsPathLabel"
 Write-Host "      Windows console mode: $consoleMode"
 Write-Host "      Requested compiler strategy: $CompilerStrategy"
@@ -466,6 +469,12 @@ if ($LASTEXITCODE -eq 0) {
     $pdfBackendPackageAvailable = $true
 }
 
+$headerOcrPackageAvailable = $false
+python -c "import sys,pathlib;root=pathlib.Path.cwd();sys.path.insert(0, str(root));from scripts.validate_packaged_pdf_parser import require_header_ocr_available,validate_vendored_header_ocr_models;require_header_ocr_available(allow_missing=False);validate_vendored_header_ocr_models()" 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $headerOcrPackageAvailable = $true
+}
+
 if ($RequireNative -and -not $nativeModuleAvailable) {
     throw "Native module '_metroliza_cmm_native' is required but unavailable. Build/install it first: python -m maturin develop --manifest-path modules/native/cmm_parser/Cargo.toml"
 }
@@ -476,6 +485,14 @@ if (-not $pdfBackendPackageAvailable -and -not $AllowBrokenPdfParserBuild) {
 
 if ($AllowBrokenPdfParserBuild) {
     Write-Warning 'UNSAFE: continuing even though packaged PDF parsing may be broken. Do not use this switch for release artifacts.'
+}
+
+if (-not $headerOcrPackageAvailable -and -not $AllowMissingHeaderOcrBuild) {
+    throw 'RapidOCR header OCR is required for packaged builds. Install requirements-ocr.txt and run python scripts/fetch_rapidocr_models.py before invoking Nuitka, or pass -AllowMissingHeaderOcrBuild only for explicitly unsafe local diagnostics.'
+}
+
+if ($AllowMissingHeaderOcrBuild) {
+    Write-Warning 'UNSAFE: continuing even though packaged header OCR may be broken. Do not use this switch for release artifacts.'
 }
 
 # Section: compiler detection / selection
@@ -539,6 +556,9 @@ $commonArgs = @(
     '--include-package=modules',
     '--include-package=hexafe_groupstats',
     '--include-module=modules.cmm_report_parser',
+    '--include-module=modules.header_ocr_backend',
+    '--include-module=modules.header_ocr_geometry',
+    '--include-module=modules.header_ocr_corrections',
     '--include-module=modules.report_parser_factory',
     '--include-module=modules.pdf_backend',
     '--include-package-data=pymupdf',
@@ -592,6 +612,24 @@ if ($pdfBackendPackageAvailable) {
     }
 }
 
+if ($headerOcrPackageAvailable -or -not $AllowMissingHeaderOcrBuild) {
+    $headerOcrNuitkaArgs = @(
+        '--include-package=rapidocr',
+        '--include-package=onnxruntime',
+        '--include-package=cv2',
+        '--include-package=numpy',
+        '--include-package-data=rapidocr',
+        '--include-package-data=onnxruntime',
+        '--include-package-data=cv2',
+        '--include-package-data=numpy',
+        '--include-distribution-metadata=rapidocr',
+        '--include-distribution-metadata=onnxruntime',
+        '--include-distribution-metadata=opencv-python',
+        '--include-distribution-metadata=numpy'
+    )
+    $commonArgs += $headerOcrNuitkaArgs
+}
+
 $tokenExcludePatterns = @(
     'token.json',
     '*token.json',
@@ -604,6 +642,26 @@ foreach ($pattern in $tokenExcludePatterns) {
 
 $resolvedPlotlyDashboardAsset = Resolve-Path -LiteralPath (Join-Path $repoRoot 'modules/html_dashboard_assets/plotly-2.27.0.min.js')
 $commonArgs += "--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=modules/html_dashboard_assets/plotly-2.27.0.min.js"
+
+$resolvedThirdPartyNotices = Resolve-Path -LiteralPath (Join-Path $repoRoot 'THIRD_PARTY_NOTICES.md') -ErrorAction SilentlyContinue
+if ($resolvedThirdPartyNotices) {
+    $commonArgs += "--include-data-files=$($resolvedThirdPartyNotices.Path)=THIRD_PARTY_NOTICES.md"
+} else {
+    throw 'THIRD_PARTY_NOTICES.md is required for release packaging.'
+}
+
+$rapidOcrModelDir = Join-Path $repoRoot 'modules/ocr_models/rapidocr'
+$rapidOcrModelFiles = @(
+    'ch_PP-OCRv4_det_mobile.onnx',
+    'ch_ppocr_mobile_v2.0_cls_mobile.onnx',
+    'latin_PP-OCRv3_rec_mobile.onnx'
+)
+foreach ($modelFile in $rapidOcrModelFiles) {
+    $resolvedModelPath = Resolve-Path -LiteralPath (Join-Path $rapidOcrModelDir $modelFile) -ErrorAction SilentlyContinue
+    if ($resolvedModelPath) {
+        $commonArgs += "--include-data-files=$($resolvedModelPath.Path)=modules/ocr_models/rapidocr/$modelFile"
+    }
+}
 
 if ($CredentialsPath) {
     $resolvedCredentialsPath = Resolve-Path -LiteralPath $CredentialsPath -ErrorAction SilentlyContinue
@@ -630,6 +688,11 @@ Write-Host '[6/6] Validating packaged PDF parser dependencies'
 $validationArgs = @('scripts/validate_packaged_pdf_parser.py', '--report', 'nuitka-build-report.xml')
 if ($AllowBrokenPdfParserBuild) {
     $validationArgs += '--allow-broken-pdf-parser-build'
+}
+if ($AllowMissingHeaderOcrBuild) {
+    $validationArgs += '--allow-missing-header-ocr-build'
+} else {
+    $validationArgs += '--require-header-ocr'
 }
 Invoke-CheckedPythonCommand -Arguments $validationArgs -FailureMessage "Packaged PDF parser dependency validation failed. See 'nuitka-build-report.xml' details above."
 

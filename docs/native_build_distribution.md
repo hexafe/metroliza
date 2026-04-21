@@ -146,6 +146,12 @@ Runtime fallback from native execution errors in forced-`native` modes is intent
 - `hiddenimports=['_metroliza_cmm_native', '_metroliza_chart_native']`
 - Windows Python runtime DLL collection (`libffi`, `python3*.dll`, `vcruntime`, `msvcp`) so onefile startup does not depend on a fragile ambient interpreter layout
 - PyMuPDF/`fitz` data files, native libraries, and discovered submodules so packaged PDF parsing survives frozen builds
+- RapidOCR, ONNX Runtime, OpenCV, NumPy, OCR adapter modules, and vendored
+  `modules/ocr_models/rapidocr/*.onnx` model assets so packaged header OCR does not
+  depend on runtime downloads
+- root `THIRD_PARTY_NOTICES.md` plus OCR package distribution metadata where available,
+  so release artifacts retain the RapidOCR/ONNX/OpenCV/NumPy license and attribution
+  notice set
 - the vendored dashboard runtime asset at `modules/html_dashboard_assets/plotly-2.27.0.min.js` so HTML sidecars can copy a local Plotly bundle into the export folder
 
 Distribution audit status:
@@ -153,6 +159,12 @@ Distribution audit status:
 - `pyinstaller packaging/metroliza_onefile.spec` produces a single-file artifact (`EXE(...)` with no `COLLECT(...)` stage), so it is configured as a onefile build rather than an onedir bundle.
 - default PyInstaller output filename follows release metadata: `metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>).exe`
 - The spec explicitly preserves the known fragile runtime pieces for this app: optional native parser module, PyMuPDF backends, and Windows CPython runtime DLLs.
+- The root `build_windows_exe.ps1` wrapper installs `requirements-ocr.txt` and runs the
+  packaged-dependency validator with `--require-header-ocr` before building, so missing
+  RapidOCR dependencies or model files fail before a broken EXE is produced.
+- Commercial or external distributions must keep `THIRD_PARTY_NOTICES.md` with the
+  packaged artifact and retain the bundled package license/metadata files where the
+  packager preserves them.
 - Exported HTML dashboards no longer rely on internet access: the packaged app copies the bundled Plotly runtime into the dashboard asset folder next to the PNG snapshots.
 - Confidence is still release-evidence based rather than absolute: the generated artifact must be smoke-launched on a clean target environment before calling it ready for non-technical users.
 
@@ -189,11 +201,22 @@ PyInstaller is the closest current path to a turnkey single-file distribution fo
 - auto-adds `--include-module=_metroliza_cmm_native` only when `_metroliza_cmm_native` is importable
 - auto-adds `--include-module=_metroliza_chart_native` only when `_metroliza_chart_native` is importable
 - always includes the full `modules` package (`--include-package=modules`) so dynamic/compat imports are present in the executable
-- explicitly includes `modules.cmm_report_parser`, `modules.report_parser_factory`, and `modules.pdf_backend` because the rc1 parser/plugin refactor introduced dynamic paths that packagers may otherwise under-detect
+- explicitly includes `modules.cmm_report_parser`, the header OCR adapter modules,
+  `modules.report_parser_factory`, and `modules.pdf_backend` because the parser/plugin
+  refactor introduced dynamic paths that packagers may otherwise under-detect
+- requires RapidOCR/ONNX/OpenCV/NumPy and the three vendored RapidOCR ONNX files by
+  default; `-AllowMissingHeaderOcrBuild` exists only for unsafe local diagnostics and is
+  not acceptable for release artifacts
+- includes RapidOCR, ONNX Runtime, OpenCV, NumPy package data and the vendored OCR model
+  files in the Nuitka data set
+- includes RapidOCR, ONNX Runtime, OpenCV, and NumPy distribution metadata where
+  available, and bundles the root `THIRD_PARTY_NOTICES.md` notice file as release data
 - explicitly includes the vendored Plotly runtime as a data file so exported HTML dashboards can stay offline-capable in frozen builds
 - requires PyMuPDF to be importable in the build environment and fails closed by default when it is not available
 - always includes `pymupdf` / `fitz` package contents plus explicit PyMuPDF runtime submodules (`pymupdf._mupdf`, `pymupdf._extra`, `pymupdf.extra`, `pymupdf.mupdf`, table/utils helpers) so onefile builds do not silently omit parser internals
-- validates the generated Nuitka report for both backend presence and required PyMuPDF runtime module references so packaged PDF parsing cannot silently drop out of the artifact
+- validates the generated Nuitka report for PyMuPDF runtime modules and header OCR
+  modules/model data plus `THIRD_PARTY_NOTICES.md` so packaged PDF parsing, OCR, or the
+  OCR notice file cannot silently drop out of the artifact
 - defaults to pure-Python fallback packaging when native module is absent
 - supports `-EnableConsole` for troubleshooting startup failures by showing a Windows console with traceback
 - supports `-RequireNative` to fail fast if native module is missing
@@ -216,6 +239,8 @@ Smoke checks after build:
 ./packaging/build_nuitka.ps1 -AutoInstallCompiler
 # unsafe diagnostics-only override; never acceptable for release artifacts
 ./packaging/build_nuitka.ps1 -AllowBrokenPdfParserBuild
+# unsafe diagnostics-only override; never acceptable for release artifacts
+./packaging/build_nuitka.ps1 -AllowMissingHeaderOcrBuild
 ```
 
 If the extension is missing in the executable, parser code must still run in pure-Python mode. PDF parsing remains required for packaged builds, so `packaging/build_nuitka.ps1` still fails fast when PyMuPDF is not importable in the build environment and validates `nuitka-build-report.xml` after the build to confirm the packaged artifact still references PyMuPDF backends. On Windows, the script now auto-detects compiler health, prefers MSVC, and only applies `--msvc=latest` when MSVC is the selected path. If no healthy compiler is available, it either attempts an opt-in install flow or prints actionable guidance for Visual Studio 2022 Build Tools / Desktop development with C++ / MSVC toolset / Windows SDK. If the Nuitka compile step fails, the script throws immediately and does not continue to parser validation or misleading success output.

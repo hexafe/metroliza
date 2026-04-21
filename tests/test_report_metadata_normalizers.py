@@ -18,6 +18,9 @@ def test_normalize_reference_preserves_suffix_tokens():
 def test_normalize_report_date_supports_numeric_and_polish_months():
     assert normalize_report_date("2019.04.11") == "2019-04-11"
     assert normalize_report_date("11 kwietnia 2024") == "2024-04-11"
+    assert normalize_report_date("czerwca 20, 2018") == "2018-06-20"
+    assert normalize_report_date("czerwca 20 2018") == "2018-06-20"
+    assert normalize_report_date("pazdziernika 08, 2020") == "2020-10-08"
 
 
 def test_normalize_report_time_zero_pads_and_rejects_invalid_times():

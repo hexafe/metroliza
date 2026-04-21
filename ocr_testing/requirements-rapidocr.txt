@@ -1,0 +1,3 @@
+# Test-only OCR backend. Do not add to production requirements until the backend is chosen.
+rapidocr
+onnxruntime

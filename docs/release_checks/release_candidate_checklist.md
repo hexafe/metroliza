@@ -101,6 +101,7 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 - [ ] Pure-Python parser fallback works when native module is intentionally unavailable (`METROLIZA_CMM_PARSER_BACKEND=python`). *(Owner: QA)*
 - [ ] Basic startup flow works (open app, load a representative input, generate an export). *(Owner: QA)*
 - [ ] Produced artifacts are named/versioned as expected for RC distribution. *(Owner: Release manager)*
+- [ ] Third-party notices/license attribution are bundled or attached to release artifacts, including RapidOCR, ONNX Runtime, OpenCV, and NumPy. *(Owner: Release manager/QA)*
 
 - [ ] GitHub CI checks for the RC branch/PR are green before merge/tag. *(Owner: Release owner)*
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*

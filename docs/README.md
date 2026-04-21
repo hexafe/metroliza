@@ -20,6 +20,7 @@ This directory contains active operational, maintenance, and end-user documentat
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
+- `../THIRD_PARTY_NOTICES.md` — third-party license and notice inventory for packaged distributions.
 - `parser_plugins/README.md` — active hub for parser plugin generation, validation, installation, and rollout docs.
 - `parser_plugins/llm_plugin_specification.md` — exact contract for LLM-generated Metroliza parser plugins.
 - `parser_plugins/non_technical_workflow.md` — non-technical step-by-step workflow for adding a new supplier report parser.

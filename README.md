@@ -35,6 +35,33 @@ Dependency files:
 - `requirements.txt` - runtime
 - `requirements-dev.txt` - development/testing
 - `requirements-build.txt` - packaging
+- `requirements-ocr.txt` - packaged header OCR runtime
+
+## Build Windows EXE
+
+For a simple PyInstaller onefile build on Windows, run from the repo root:
+
+```powershell
+.\build_windows_exe.ps1
+```
+
+Or double-click/run:
+
+```bat
+build_windows_exe.bat
+```
+
+The script creates `.venv-build`, installs runtime, PyInstaller, and OCR dependencies,
+validates the vendored RapidOCR model files, builds `packaging/metroliza_onefile.spec`,
+bundles `THIRD_PARTY_NOTICES.md`, and prints the generated `dist\*.exe` path. Use `.\build_windows_exe.ps1 -Clean` to
+remove previous `build`/`dist` output first, or `.\build_windows_exe.ps1 -WithNative` to
+use the native-module packaging helper.
+
+If the OCR model files are missing, refresh them before building:
+
+```powershell
+python scripts/fetch_rapidocr_models.py
+```
 
 
 ## Core workflow
@@ -193,6 +220,7 @@ Examples of metric availability by spec type:
 ### Other repository docs
 
 - Release highlights: [`CHANGELOG.md`](CHANGELOG.md)
+- Third-party notices for packaged distributions: [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)
 - Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - Docs policy and lifecycle: [`docs/documentation_policy.md`](docs/documentation_policy.md)
 - Release runbooks/checklists: [`docs/release_checks/`](docs/release_checks/)
@@ -202,11 +230,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.04 (build 260418)`): HTML dashboards now match workbook histogram bin ranges, keep scatter plots as points, and add metric return controls.
+Current release highlight (`2026.04 (build 260421)`): Header OCR now ships with vendored RapidOCR models, packaged-runtime validation, and third-party notices.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.04 (build 260418)`)
+### Changelog highlights (release `2026.04 (build 260421)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
