@@ -17,6 +17,8 @@ exclude = [
 "modules/chart_renderer.py" = ["E402"]
 "modules/export_data_thread.py" = ["E402"]
 "scripts/benchmark_paths.py" = ["E402"]
+"scripts/fetch_rapidocr_models.py" = ["E402"]
+"ocr_testing/header_ocr_probe.py" = ["E402"]
 
 [tool.pytest.ini_options]
 # Optional test runner normalization for contributors/tools that use pytest.
