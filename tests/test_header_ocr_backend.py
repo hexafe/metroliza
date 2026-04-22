@@ -8,7 +8,7 @@ from enum import Enum
 import pytest
 
 
-def test_rapidocr_backend_is_lazy_and_normalizes_common_result_shapes(tmp_path):
+def test_rapidocr_backend_is_lazy_and_normalizes_common_result_shapes(tmp_path, monkeypatch):
     class _RapidocrGuardFinder:
         def find_spec(self, fullname, path=None, target=None):  # noqa: ANN001
             if fullname == "rapidocr":
@@ -39,24 +39,23 @@ def test_rapidocr_backend_is_lazy_and_normalizes_common_result_shapes(tmp_path):
 
     fake_module = types.ModuleType("rapidocr")
     fake_module.RapidOCR = FakeRapidOCR
-    sys.modules["rapidocr"] = fake_module
-    try:
-        config = backend_module.RapidOcrLatinBackendConfig(
-            model_paths=backend_module.RapidOcrLatinModelPaths(
-                det_model_path="det.onnx",
-                cls_model_path="cls.onnx",
-                rec_model_path="rec.onnx",
-                rec_keys_path="latin.txt",
-            )
+    monkeypatch.setitem(sys.modules, "onnxruntime", types.ModuleType("onnxruntime"))
+    monkeypatch.setitem(sys.modules, "rapidocr", fake_module)
+
+    config = backend_module.RapidOcrLatinBackendConfig(
+        model_paths=backend_module.RapidOcrLatinModelPaths(
+            det_model_path="det.onnx",
+            cls_model_path="cls.onnx",
+            rec_model_path="rec.onnx",
+            rec_keys_path="latin.txt",
         )
-        backend = backend_module.RapidOcrLatinBackend(config)
+    )
+    backend = backend_module.RapidOcrLatinBackend(config)
 
-        image_path = tmp_path / "header.png"
-        image_path.write_bytes(b"not-a-real-image")
+    image_path = tmp_path / "header.png"
+    image_path.write_bytes(b"not-a-real-image")
 
-        run = backend.recognize(image_path)
-    finally:
-        sys.modules.pop("rapidocr", None)
+    run = backend.recognize(image_path)
 
     assert calls["init_kwargs"]["params"]["Det.model_path"] == "det.onnx"
     assert calls["init_kwargs"]["params"]["Cls.model_path"] == "cls.onnx"
@@ -74,7 +73,7 @@ def test_rapidocr_backend_is_lazy_and_normalizes_common_result_shapes(tmp_path):
     assert run.diagnostics["raw_result_type"] == "SimpleNamespace"
 
 
-def test_rapidocr_backend_coerces_string_defaults_to_rapidocr_enums(tmp_path):
+def test_rapidocr_backend_coerces_string_defaults_to_rapidocr_enums(tmp_path, monkeypatch):
     backend_module = importlib.import_module("modules.header_ocr_backend")
     calls: dict[str, object] = {}
 
@@ -107,23 +106,22 @@ def test_rapidocr_backend_coerces_string_defaults_to_rapidocr_enums(tmp_path):
     fake_module.LangRec = LangRec
     fake_module.ModelType = ModelType
     fake_module.OCRVersion = OCRVersion
-    sys.modules["rapidocr"] = fake_module
-    try:
-        config = backend_module.RapidOcrLatinBackendConfig(
-            model_paths=backend_module.RapidOcrLatinModelPaths(
-                det_model_path="det.onnx",
-                cls_model_path="cls.onnx",
-                rec_model_path="rec.onnx",
-            )
+    monkeypatch.setitem(sys.modules, "onnxruntime", types.ModuleType("onnxruntime"))
+    monkeypatch.setitem(sys.modules, "rapidocr", fake_module)
+
+    config = backend_module.RapidOcrLatinBackendConfig(
+        model_paths=backend_module.RapidOcrLatinModelPaths(
+            det_model_path="det.onnx",
+            cls_model_path="cls.onnx",
+            rec_model_path="rec.onnx",
         )
-        backend = backend_module.RapidOcrLatinBackend(config)
+    )
+    backend = backend_module.RapidOcrLatinBackend(config)
 
-        image_path = tmp_path / "header.png"
-        image_path.write_bytes(b"not-a-real-image")
+    image_path = tmp_path / "header.png"
+    image_path.write_bytes(b"not-a-real-image")
 
-        backend.recognize(image_path)
-    finally:
-        sys.modules.pop("rapidocr", None)
+    backend.recognize(image_path)
 
     params = calls["params"]
     assert params["Det.engine_type"] is EngineType.ONNXRUNTIME
@@ -135,7 +133,7 @@ def test_rapidocr_backend_coerces_string_defaults_to_rapidocr_enums(tmp_path):
     assert params["Rec.ocr_version"] is OCRVersion.PPOCRV4
 
 
-def test_cached_rapidocr_backend_reuses_engine_within_thread(tmp_path):
+def test_cached_rapidocr_backend_reuses_engine_within_thread(tmp_path, monkeypatch):
     backend_module = importlib.import_module("modules.header_ocr_backend")
     backend_module.clear_cached_rapidocr_latin_backends()
     calls = {"init_count": 0}
@@ -149,7 +147,8 @@ def test_cached_rapidocr_backend_reuses_engine_within_thread(tmp_path):
 
     fake_module = types.ModuleType("rapidocr")
     fake_module.RapidOCR = FakeRapidOCR
-    sys.modules["rapidocr"] = fake_module
+    monkeypatch.setitem(sys.modules, "onnxruntime", types.ModuleType("onnxruntime"))
+    monkeypatch.setitem(sys.modules, "rapidocr", fake_module)
     try:
         config = backend_module.RapidOcrLatinBackendConfig(
             model_paths=backend_module.RapidOcrLatinModelPaths(
@@ -167,7 +166,6 @@ def test_cached_rapidocr_backend_reuses_engine_within_thread(tmp_path):
         backend_a.recognize(image_path)
         backend_b.recognize(image_path)
     finally:
-        sys.modules.pop("rapidocr", None)
         backend_module.clear_cached_rapidocr_latin_backends()
 
     assert backend_a is backend_b
