@@ -52,6 +52,29 @@ def test_windows_pyinstaller_build_validates_ocr_packaging_inputs():
     assert "--require-header-ocr" in script_text
 
 
+def test_windows_runtime_setup_and_diagnostic_scripts_cover_ocr_prerequisites():
+    setup_text = Path("setup_windows_runtime.ps1").read_text(encoding="utf-8")
+    diagnose_text = Path("diagnose_windows_ocr.ps1").read_text(encoding="utf-8")
+    runtime_diag_text = Path("scripts/windows_ocr_runtime_diagnostics.py").read_text(encoding="utf-8")
+
+    assert "requirements.txt" in setup_text
+    assert "requirements-ocr.txt" in setup_text
+    assert "vc_redist.x64.exe" in setup_text
+    assert "scripts/windows_ocr_runtime_diagnostics.py" in setup_text
+    assert "scripts/validate_packaged_pdf_parser.py" in setup_text
+    assert "--require-header-ocr" in setup_text
+
+    assert "scripts/windows_ocr_runtime_diagnostics.py" in diagnose_text
+    assert "--pdf" in diagnose_text
+    assert "--db-file" in diagnose_text
+    assert "--output" in diagnose_text
+
+    assert "onnxruntime_basic" in runtime_diag_text
+    assert "cv2_then_onnxruntime" in runtime_diag_text
+    assert "rapidocr_engine_load" in runtime_diag_text
+    assert "vc_redist_x64" in runtime_diag_text
+
+
 def test_onefile_spec_uses_release_metadata_pyinstaller_output_name():
     spec_text = Path("packaging/metroliza_onefile.spec").read_text(encoding="utf-8")
 

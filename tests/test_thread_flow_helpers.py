@@ -257,6 +257,20 @@ class TestParseHelpers(unittest.TestCase):
                     parser_version='1.1.0',
                     metadata_json='{"header_extraction_mode": "none", "header_ocr_error": "missing"}',
                 )
+                _insert_report(
+                    conn,
+                    sha256='sha-current-no-ocr-items',
+                    parser_id='cmm_pdf_header_box',
+                    parser_version='1.1.0',
+                    metadata_json='{"header_extraction_mode": "none"}',
+                )
+                _insert_report(
+                    conn,
+                    sha256='sha-current-filename-source',
+                    parser_id='cmm_pdf_header_box',
+                    parser_version='1.1.0',
+                    metadata_json='{"field_sources": {"reference": "filename_candidate"}, "header_extraction_mode": "ocr"}',
+                )
 
             thread = ParseReportsThread(ParseRequest(source_directory='.', db_file=db_path))
 

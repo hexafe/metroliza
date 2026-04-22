@@ -84,6 +84,22 @@ def test_require_header_ocr_available_reports_missing_dependency(monkeypatch):
         require_header_ocr_available()
 
 
+def test_require_header_ocr_available_reports_import_failure(monkeypatch):
+    class _FakeSpec:
+        origin = "fake"
+
+    def _fake_import(name):
+        if name == "onnxruntime":
+            raise ImportError("DLL load failed")
+        return types.SimpleNamespace()
+
+    monkeypatch.setattr(importlib.util, 'find_spec', lambda _name: _FakeSpec())
+    monkeypatch.setattr('scripts.validate_packaged_pdf_parser.importlib.import_module', _fake_import)
+
+    with pytest.raises(PackagingValidationError, match='import failed: onnxruntime'):
+        require_header_ocr_available()
+
+
 def test_validate_vendored_header_ocr_models_rejects_missing_assets(tmp_path):
     with pytest.raises(PackagingValidationError, match='Vendored RapidOCR model validation failed'):
         validate_vendored_header_ocr_models(tmp_path)

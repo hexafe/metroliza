@@ -50,8 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
 def _module_spec_summary(module_name: str) -> dict[str, Any]:
     spec = importlib.util.find_spec(module_name)
     if spec is None:
-        return {"available": False, "origin": None}
-    return {"available": True, "origin": spec.origin}
+        return {"available": False, "origin": None, "importable": False, "import_error": None}
+
+    summary = {"available": True, "origin": spec.origin, "importable": True, "import_error": None}
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        summary["importable"] = False
+        summary["import_error"] = f"{type(exc).__name__}: {exc}"
+    return summary
 
 
 def _json_loads_or_raw(value: str | None) -> Any:

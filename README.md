@@ -37,6 +37,38 @@ Dependency files:
 - `requirements-build.txt` - packaging
 - `requirements-ocr.txt` - packaged header OCR runtime
 
+## Windows Runtime Setup And OCR Diagnostics
+
+On Windows, header OCR needs Python packages plus native DLL prerequisites. The
+expected baseline is Windows x64, CPython x64, Microsoft Visual C++
+Redistributable 2015-2022 x64, and the packages/model files listed above.
+
+To create or refresh a local Windows runtime venv from the repo root:
+
+```powershell
+.\setup_windows_runtime.ps1 -Clean
+```
+
+The script creates `.venv`, installs `requirements.txt` and `requirements-ocr.txt`,
+checks for the VC++ Redistributable, validates the vendored RapidOCR model files,
+and runs isolated ONNX/OpenCV/RapidOCR smoke tests. If the VC++ Redistributable is
+missing, either install it from `https://aka.ms/vs/17/release/vc_redist.x64.exe`
+or rerun with `-InstallVcRedist`.
+
+To diagnose OCR for one PDF without relying on PowerShell output redirection:
+
+```powershell
+.\diagnose_windows_ocr.ps1 `
+  -PdfPath "C:\path\to\report.pdf" `
+  -DbFile "C:\path\to\reports.db" `
+  -OutputPath "$env:USERPROFILE\Desktop\ocr_diag.json"
+```
+
+The output JSON includes module specs, native import smoke tests, VC++ runtime
+registry status, RapidOCR model-file status, and the real parser metadata
+diagnostic. A healthy OCR metadata path reports `header_extraction_mode="ocr"`
+and `field_sources` such as `position_cell`, not `filename_candidate`.
+
 ## Build Windows EXE
 
 For a simple PyInstaller onefile build on Windows, run from the repo root:

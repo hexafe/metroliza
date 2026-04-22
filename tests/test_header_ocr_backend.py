@@ -133,3 +133,42 @@ def test_rapidocr_backend_coerces_string_defaults_to_rapidocr_enums(tmp_path):
     assert params["Cls.ocr_version"] is OCRVersion.PPOCRV4
     assert params["Rec.lang_type"] is LangRec.LATIN
     assert params["Rec.ocr_version"] is OCRVersion.PPOCRV4
+
+
+def test_cached_rapidocr_backend_reuses_engine_within_thread(tmp_path):
+    backend_module = importlib.import_module("modules.header_ocr_backend")
+    backend_module.clear_cached_rapidocr_latin_backends()
+    calls = {"init_count": 0}
+
+    class FakeRapidOCR:
+        def __init__(self, *args, **kwargs):
+            calls["init_count"] += 1
+
+        def __call__(self, image_path):
+            return types.SimpleNamespace(txts=[], scores=[], boxes=[])
+
+    fake_module = types.ModuleType("rapidocr")
+    fake_module.RapidOCR = FakeRapidOCR
+    sys.modules["rapidocr"] = fake_module
+    try:
+        config = backend_module.RapidOcrLatinBackendConfig(
+            model_paths=backend_module.RapidOcrLatinModelPaths(
+                det_model_path="det.onnx",
+                cls_model_path="cls.onnx",
+                rec_model_path="rec.onnx",
+            ),
+            params={"EngineConfig.onnxruntime.intra_op_num_threads": 1},
+        )
+        backend_a = backend_module.get_cached_rapidocr_latin_backend(config)
+        backend_b = backend_module.get_cached_rapidocr_latin_backend(config)
+
+        image_path = tmp_path / "header.png"
+        image_path.write_bytes(b"not-a-real-image")
+        backend_a.recognize(image_path)
+        backend_b.recognize(image_path)
+    finally:
+        sys.modules.pop("rapidocr", None)
+        backend_module.clear_cached_rapidocr_latin_backends()
+
+    assert backend_a is backend_b
+    assert calls["init_count"] == 1

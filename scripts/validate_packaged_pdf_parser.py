@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import importlib.util
 import sys
 import xml.etree.ElementTree as ET
@@ -89,14 +90,31 @@ def validate_nuitka_report_has_pdf_backend(report_path: str | Path) -> tuple[str
 
 
 def require_header_ocr_available(*, allow_missing: bool = False) -> tuple[str, ...]:
-    missing = tuple(name for name in REQUIRED_HEADER_OCR_MODULES if importlib.util.find_spec(name) is None)
-    if not missing:
+    missing = []
+    broken = []
+    for name in REQUIRED_HEADER_OCR_MODULES:
+        if importlib.util.find_spec(name) is None:
+            missing.append(name)
+            continue
+        try:
+            importlib.import_module(name)
+        except Exception as exc:
+            broken.append(f"{name} ({type(exc).__name__}: {exc})")
+
+    if not missing and not broken:
         return REQUIRED_HEADER_OCR_MODULES
     if allow_missing:
-        return tuple(name for name in REQUIRED_HEADER_OCR_MODULES if name not in missing)
+        return tuple(name for name in REQUIRED_HEADER_OCR_MODULES if name not in missing and not any(item.startswith(f"{name} ") for item in broken))
+
+    details = []
+    if missing:
+        details.append(f"missing: {', '.join(missing)}")
+    if broken:
+        details.append(f"import failed: {'; '.join(broken)}")
     raise PackagingValidationError(
-        "Header OCR dependencies are missing from the build environment: "
-        f"{', '.join(missing)}. Install them with `python -m pip install -r requirements-ocr.txt`."
+        "Header OCR dependencies are missing or not usable in the build environment: "
+        f"{'; '.join(details)}. Install them with `python -m pip install -r requirements-ocr.txt`; "
+        "on Windows also verify native DLL prerequisites such as the Microsoft Visual C++ Redistributable."
     )
 
 

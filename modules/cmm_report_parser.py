@@ -17,9 +17,9 @@ from modules.cmm_parsing import add_tolerances_to_blocks
 from modules.base_report_parser import BaseReportParser
 from modules.header_ocr_backend import (
     DEFAULT_HEADER_OCR_BACKEND,
-    RapidOcrLatinBackend,
     RapidOcrLatinBackendConfig,
     default_rapidocr_latin_model_paths,
+    get_cached_rapidocr_latin_backend,
     missing_rapidocr_latin_model_paths,
 )
 from modules.header_ocr_corrections import (
@@ -53,6 +53,8 @@ from modules.parser_plugin_contracts import (
 
 
 logger = logging.getLogger(__name__)
+HEADER_OCR_THREADS_ENV = "METROLIZA_HEADER_OCR_THREADS"
+DEFAULT_HEADER_OCR_MAX_THREADS = 4
 
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
@@ -321,6 +323,18 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 found.add(field_name)
         return len(found)
 
+    @staticmethod
+    def _header_ocr_thread_count() -> int:
+        cpu_count = os.cpu_count() or 1
+        raw_value = os.environ.get(HEADER_OCR_THREADS_ENV)
+        if raw_value is None or str(raw_value).strip() == "":
+            return max(1, min(DEFAULT_HEADER_OCR_MAX_THREADS, cpu_count - 1 if cpu_count > 1 else 1))
+        try:
+            requested = int(str(raw_value).strip())
+        except ValueError:
+            return max(1, min(DEFAULT_HEADER_OCR_MAX_THREADS, cpu_count - 1 if cpu_count > 1 else 1))
+        return max(1, min(cpu_count, requested))
+
     @classmethod
     def _ocr_header_items_from_pixmap(
         cls,
@@ -347,11 +361,25 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 missing_names = ", ".join(path.name for path in missing_model_paths)
                 return [], f"header_ocr_models_missing:{missing_names}"
 
-            backend = RapidOcrLatinBackend(RapidOcrLatinBackendConfig(model_paths=model_paths))
+            ocr_thread_count = cls._header_ocr_thread_count()
+            backend = get_cached_rapidocr_latin_backend(
+                RapidOcrLatinBackendConfig(
+                    model_paths=model_paths,
+                    params={
+                        "EngineConfig.onnxruntime.intra_op_num_threads": ocr_thread_count,
+                        "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+                    },
+                )
+            )
             with tempfile.TemporaryDirectory(prefix="metroliza_header_ocr_") as temp_dir:
                 image_path = Path(temp_dir) / "header.png"
                 pixmap.save(str(image_path))
+                ocr_start = perf_counter()
                 run = backend.recognize(image_path)
+                ocr_runtime_s = perf_counter() - ocr_start
+
+            if not run.records:
+                return [], "header_ocr_no_records"
 
             pixel_width = float(getattr(pixmap, "width", 0.0) or 0.0)
             pixel_height = float(getattr(pixmap, "height", 0.0) or 0.0)
@@ -366,8 +394,13 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 region_name="page1_header_band_ocr",
                 source_name=DEFAULT_HEADER_OCR_BACKEND,
             )
+            if not items:
+                return [], "header_ocr_no_header_items"
+            run_diagnostics = dict(run.diagnostics)
+            run_diagnostics["ocr_runtime_s"] = round(ocr_runtime_s, 4)
+            run_diagnostics["ocr_thread_count"] = ocr_thread_count
             for item in items:
-                item["ocr_run_diagnostics"] = run.diagnostics
+                item["ocr_run_diagnostics"] = run_diagnostics
             return postprocess_header_ocr_items(items), None
         except Exception as exc:
             return [], f"{type(exc).__name__}: {exc}"
@@ -402,6 +435,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         if ocr_items:
             ocr_required_fields = cls._header_required_fields_found(ocr_items)
             first_ocr_item = ocr_items[0]
+            ocr_run_diagnostics = first_ocr_item.get("ocr_run_diagnostics") or {}
             diagnostics.update(
                 {
                     "header_extraction_mode": "ocr",
@@ -412,6 +446,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                     or first_ocr_item.get("source")
                     or DEFAULT_HEADER_OCR_BACKEND,
                     "header_ocr_model": DEFAULT_HEADER_OCR_BACKEND,
+                    "header_ocr_runtime_s": ocr_run_diagnostics.get("ocr_runtime_s"),
+                    "header_ocr_thread_count": ocr_run_diagnostics.get("ocr_thread_count"),
                 }
             )
             return ocr_items, diagnostics

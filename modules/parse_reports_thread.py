@@ -153,7 +153,11 @@ logger = get_operation_logger(logging.getLogger(__name__), "parse_reports")
 _CURRENT_CMM_METADATA_PARSER_ID = DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.parser_id
 _CURRENT_CMM_PARSER_VERSION = getattr(getattr(CMMReportParser, "manifest", None), "version", "1.1.0")
 _HEADER_EXTRACTION_DIAGNOSTIC_MARKER = '%"header_extraction_mode"%'
+_HEADER_EXTRACTION_NONE_MARKER = '%"header_extraction_mode": "none"%'
 _HEADER_OCR_ERROR_MARKER = '%"header_ocr_error"%'
+_REFERENCE_FILENAME_MARKER = '%"reference": "filename_candidate"%'
+_REPORT_DATE_FILENAME_MARKER = '%"report_date": "filename_candidate"%'
+_STATS_COUNT_FILENAME_MARKER = '%"stats_count_raw": "filename_candidate"%'
 
 
 class ParseReportsThread(QThread):
@@ -335,6 +339,10 @@ class ParseReportsThread(QThread):
                       pr.parser_version = ?
                       AND COALESCE(rm.metadata_json, '') LIKE ?
                       AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
                     )
                   )
                 """,
@@ -342,7 +350,11 @@ class ParseReportsThread(QThread):
                     _CURRENT_CMM_METADATA_PARSER_ID,
                     _CURRENT_CMM_PARSER_VERSION,
                     _HEADER_EXTRACTION_DIAGNOSTIC_MARKER,
+                    _HEADER_EXTRACTION_NONE_MARKER,
                     _HEADER_OCR_ERROR_MARKER,
+                    _REFERENCE_FILENAME_MARKER,
+                    _REPORT_DATE_FILENAME_MARKER,
+                    _STATS_COUNT_FILENAME_MARKER,
                 ),
                 connection=connection,
                 retries=5,

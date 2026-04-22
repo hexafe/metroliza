@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import importlib
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -62,6 +63,7 @@ RAPIDOCR_ENUM_PARAM_TYPES = {
     "Rec.model_type": "ModelType",
     "Rec.ocr_version": "OCRVersion",
 }
+_THREAD_LOCAL_CACHE = threading.local()
 
 
 @dataclass(frozen=True)
@@ -402,6 +404,10 @@ class RapidOcrLatinBackend:
         if self._engine is not None:
             return self._engine
 
+        # On Windows, importing RapidOCR may load OpenCV before ONNX Runtime.
+        # Preloading ONNX Runtime first avoids native DLL load-order failures
+        # seen as ``onnxruntime_pybind11_state`` initialization errors.
+        importlib.import_module("onnxruntime")
         rapidocr_module = importlib.import_module("rapidocr")
         rapidocr_class = getattr(rapidocr_module, "RapidOCR", None)
         if rapidocr_class is None:
@@ -437,3 +443,47 @@ class RapidOcrLatinBackend:
             },
         )
         return run
+
+
+def _path_cache_key(path: str | Path | None) -> str | None:
+    if path is None:
+        return None
+    return str(Path(path).expanduser())
+
+
+def _params_cache_key(params: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((str(key), repr(value)) for key, value in params.items()))
+
+
+def _backend_cache_key(config: RapidOcrLatinBackendConfig) -> tuple[object, ...]:
+    paths = config.model_paths
+    return (
+        _path_cache_key(paths.det_model_path),
+        _path_cache_key(paths.cls_model_path),
+        _path_cache_key(paths.rec_model_path),
+        _path_cache_key(paths.rec_keys_path),
+        _params_cache_key(config.params),
+        config.source_name,
+    )
+
+
+def get_cached_rapidocr_latin_backend(config: RapidOcrLatinBackendConfig) -> RapidOcrLatinBackend:
+    """Return a per-thread cached RapidOCR backend for repeated report parsing."""
+
+    cache = getattr(_THREAD_LOCAL_CACHE, "rapidocr_latin_backends", None)
+    if cache is None:
+        cache = {}
+        _THREAD_LOCAL_CACHE.rapidocr_latin_backends = cache
+
+    key = _backend_cache_key(config)
+    backend = cache.get(key)
+    if backend is None:
+        backend = RapidOcrLatinBackend(config)
+        cache[key] = backend
+    return backend
+
+
+def clear_cached_rapidocr_latin_backends() -> None:
+    """Clear this thread's cached RapidOCR backends, primarily for tests."""
+
+    _THREAD_LOCAL_CACHE.rapidocr_latin_backends = {}
