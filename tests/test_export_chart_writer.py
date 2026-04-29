@@ -1,4 +1,3 @@
-import time
 import unittest
 
 from modules.export_chart_writer import (
@@ -222,35 +221,22 @@ class TestExportChartWriter(unittest.TestCase):
         self.assertEqual(range_specs['lsl_y'], '=Ref!$E22:E31')
         self.assertNotIn('limit_x', range_specs)
 
-    def test_debug_timing_cached_range_builder_path_runs(self):
-        iterations = 1500
+    def test_cached_range_builder_matches_uncached_output(self):
+        args = {
+            'sheet_name': 'Ref',
+            'first_data_row': 21,
+            'last_data_row': 30,
+            'x_column': 1,
+            'y_column': 2,
+        }
 
-        uncached_start = time.perf_counter()
-        for _ in range(iterations):
-            build_measurement_chart_range_specs(
-                sheet_name='Ref',
-                first_data_row=21,
-                last_data_row=30,
-                x_column=1,
-                y_column=2,
-            )
-        uncached_elapsed = time.perf_counter() - uncached_start
-
+        uncached = build_measurement_chart_range_specs(**args)
         cache = {}
-        cached_start = time.perf_counter()
-        for _ in range(iterations):
-            build_measurement_chart_range_specs(
-                sheet_name='Ref',
-                first_data_row=21,
-                last_data_row=30,
-                x_column=1,
-                y_column=2,
-                cache=cache,
-            )
-        cached_elapsed = time.perf_counter() - cached_start
+        cached_first = build_measurement_chart_range_specs(**args, cache=cache)
+        cached_second = build_measurement_chart_range_specs(**args, cache=cache)
 
-        self.assertGreater(uncached_elapsed, 0.0)
-        self.assertGreater(cached_elapsed, 0.0)
+        self.assertEqual(cached_first, uncached)
+        self.assertEqual(cached_second, uncached)
         self.assertEqual(len(cache.get('range_specs', {})), 1)
 
     def test_chart_format_policy_uses_default_anchor_and_hides_single_series_legend(self):

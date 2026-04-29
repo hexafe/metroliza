@@ -19,6 +19,12 @@ class ParseRequest:
     Attributes:
         source_directory: Input folder containing source files to parse.
         db_file: Output database path where parsed content is written.
+        metadata_parsing_mode: Metadata extraction depth. ``"light"`` skips OCR
+            fallback for faster ingestion; ``"complete"`` keeps OCR fallback for
+            stronger header metadata coverage.
+        run_background_metadata_enrichment: When true, a light parse can be
+            followed by a user-enabled complete metadata pass in the parser
+            thread without reparsing measurements.
 
     Usage notes:
         Pass to ``validate_parse_request`` before use so required string fields are
@@ -27,6 +33,8 @@ class ParseRequest:
 
     source_directory: str
     db_file: str
+    metadata_parsing_mode: str = "complete"
+    run_background_metadata_enrichment: bool = False
 
 
 @dataclass(frozen=True)
@@ -208,6 +216,14 @@ _GROUP_ANALYSIS_SCOPE_ALIASES = {
     "multi_reference": "multi_reference",
     "multi reference": "multi_reference",
 }
+_PARSE_METADATA_MODE_ALIASES = {
+    "light": "light",
+    "fast": "light",
+    "lite": "light",
+    "complete": "complete",
+    "full": "complete",
+    "standard": "complete",
+}
 
 
 def validate_paths(paths: AppPaths) -> AppPaths:
@@ -251,8 +267,7 @@ def validate_parse_request(request: ParseRequest) -> ParseRequest:
             required non-empty strings.
 
     Returns:
-        ParseRequest: The same request instance after validation; no fields are
-        copied or normalized.
+        ParseRequest: A request instance with normalized metadata parsing mode.
 
     Raises:
         ValueError: If ``request`` is not a ``ParseRequest`` instance or required
@@ -270,7 +285,22 @@ def validate_parse_request(request: ParseRequest) -> ParseRequest:
         raise ValueError("A source directory is required.")
 
     validate_paths(AppPaths(db_file=request.db_file))
-    return request
+
+    mode_value = getattr(request, "metadata_parsing_mode", ParseRequest.metadata_parsing_mode)
+    if not isinstance(mode_value, str):
+        raise ValueError("metadata_parsing_mode must be provided as a string.")
+    metadata_parsing_mode = _PARSE_METADATA_MODE_ALIASES.get(mode_value.strip().lower())
+    if metadata_parsing_mode is None:
+        raise ValueError(f"Unsupported metadata parsing mode '{mode_value}'.")
+    if not isinstance(request.run_background_metadata_enrichment, bool):
+        raise ValueError("run_background_metadata_enrichment must be a boolean.")
+
+    return ParseRequest(
+        source_directory=request.source_directory,
+        db_file=request.db_file,
+        metadata_parsing_mode=metadata_parsing_mode,
+        run_background_metadata_enrichment=request.run_background_metadata_enrichment,
+    )
 
 
 def validate_export_options(options: ExportOptions) -> ExportOptions:

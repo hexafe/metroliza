@@ -27,10 +27,12 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
     assert "copy_metadata" in spec_text
     assert "_collect_optional_runtime_assets('rapidocr')" in spec_text
     assert "_collect_optional_runtime_assets('onnxruntime')" in spec_text
+    assert "_collect_optional_runtime_assets('openvino')" in spec_text
     assert "_collect_optional_runtime_assets('cv2')" in spec_text
     assert "_collect_optional_runtime_assets('numpy')" in spec_text
     assert "_collect_optional_distribution_metadata('rapidocr')" in spec_text
     assert "_collect_optional_distribution_metadata('onnxruntime')" in spec_text
+    assert "_collect_optional_distribution_metadata('openvino')" in spec_text
     assert "_collect_optional_distribution_metadata('opencv-python')" in spec_text
     assert "_collect_optional_distribution_metadata('numpy')" in spec_text
     assert "_collect_optional_vendored_model_data()" in spec_text
@@ -40,6 +42,7 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
     assert "third_party_notice_datas" in spec_text
     assert "*rapidocr_hiddenimports" in spec_text
     assert "*onnxruntime_hiddenimports" in spec_text
+    assert "*openvino_hiddenimports" in spec_text
     assert "*cv2_hiddenimports" in spec_text
     assert "*numpy_hiddenimports" in spec_text
 
@@ -70,6 +73,7 @@ def test_windows_runtime_setup_and_diagnostic_scripts_cover_ocr_prerequisites():
     assert "--output" in diagnose_text
 
     assert "onnxruntime_basic" in runtime_diag_text
+    assert "openvino_basic" in runtime_diag_text
     assert "cv2_then_onnxruntime" in runtime_diag_text
     assert "rapidocr_engine_load" in runtime_diag_text
     assert "vc_redist_x64" in runtime_diag_text

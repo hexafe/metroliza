@@ -2,6 +2,7 @@ import base64
 from modules import base64_encoded_files
 from modules.export_dialog import ExportDialog
 from modules.parsing_dialog import ParsingDialog
+from modules.metadata_enrichment_thread import MetadataEnrichmentThread
 from modules.modify_db import ModifyDB
 from modules.about_window import AboutWindow
 from modules.release_notes_dialog import ReleaseNotesDialog
@@ -14,7 +15,9 @@ from PyQt6.QtCore import QByteArray
 from PyQt6.QtGui import QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
     QGridLayout,
+    QLabel,
     QMainWindow,
+    QProgressBar,
     QPushButton,
     QWidget,
 )
@@ -50,15 +53,21 @@ class MainWindow(QMainWindow):
         self.parsing_dialog = None
         self.modifydb_dialog = None
         self.export_dialog = None
+        self.metadata_enrichment_thread = None
+        self.metadata_enrichment_error_message = None
         self.directory = None
         self.db_file = None
 
         # Initialize and set up buttons with tooltips
         self.parse_button = QPushButton("Launch Parsing")
+        self.enrich_metadata_button = QPushButton("Enrich Metadata")
         self.modifydb_button = QPushButton("Launch Modify Database")
         self.export_button = QPushButton("Launch Export")
         self.csv_summary_button = QPushButton("CSV Summary")
         self.map_characteristics_button = QPushButton("Match Characteristic Names")
+        self.metadata_enrichment_status_label = QLabel("Metadata enrichment idle")
+        self.metadata_enrichment_progress_bar = QProgressBar()
+        self.cancel_metadata_enrichment_button = QPushButton("Cancel")
         self.setup_button_tooltips()
 
         # Set up menu items
@@ -86,10 +95,12 @@ class MainWindow(QMainWindow):
     def setup_button_tooltips(self):
         """Set up the tooltips for the buttons."""
         self.parse_button.setToolTip("Use Parsing module to get data from PDF reports into database for further export to Excel")
+        self.enrich_metadata_button.setToolTip("Run OCR metadata enrichment on reports already saved in the selected database")
         self.modifydb_button.setToolTip("Use Modify Database module to modify Reference, Part number or Header in database")
         self.export_button.setToolTip("Use Export module to filter, set and export data from database to Excel file")
         self.csv_summary_button.setToolTip("Use CSV module to automatically create charts from CSV data")
         self.map_characteristics_button.setToolTip("Tell the app which different characteristic names should be treated as the same characteristic.")
+        self.cancel_metadata_enrichment_button.setToolTip("Request metadata enrichment cancellation after the current report")
 
     def setup_menu_actions(self):
         """Set up the menu actions for the main window."""
@@ -97,22 +108,106 @@ class MainWindow(QMainWindow):
         self.about_button.triggered.connect(self.open_about_window)
         self.release_notes_action = QAction("Release notes", self)
         self.release_notes_action.triggered.connect(self.open_release_notes_dialog)
+        self.enrich_metadata_action = QAction("Enrich metadata", self)
+        self.enrich_metadata_action.triggered.connect(self.launch_metadata_enrichment)
         self.menuBar().addAction(self.about_button)
         self.menuBar().addAction(self.release_notes_action)
+        self.menuBar().addAction(self.enrich_metadata_action)
         build_help_menu(self, [("Main window manual", 'main_window')], menu_bar=self.menuBar())
 
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""
         self.layout.addWidget(self.parse_button, 0, 0)
-        self.layout.addWidget(self.modifydb_button, 1, 0)
-        self.layout.addWidget(self.export_button, 2, 0)
-        self.layout.addWidget(self.csv_summary_button, 3, 0)
-        self.layout.addWidget(self.map_characteristics_button, 4, 0)
+        self.layout.addWidget(self.enrich_metadata_button, 1, 0)
+        self.layout.addWidget(self.modifydb_button, 2, 0)
+        self.layout.addWidget(self.export_button, 3, 0)
+        self.layout.addWidget(self.csv_summary_button, 4, 0)
+        self.layout.addWidget(self.map_characteristics_button, 5, 0)
+        self.layout.addWidget(self.metadata_enrichment_status_label, 6, 0)
+        self.layout.addWidget(self.metadata_enrichment_progress_bar, 7, 0)
+        self.layout.addWidget(self.cancel_metadata_enrichment_button, 8, 0)
         self.parse_button.clicked.connect(self.launch_parsing_dialog)
+        self.enrich_metadata_button.clicked.connect(self.launch_metadata_enrichment)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
         self.csv_summary_button.clicked.connect(self.launch_csv_summary_dialog)
         self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
+        self.cancel_metadata_enrichment_button.clicked.connect(self.stop_metadata_enrichment)
+        self.metadata_enrichment_status_label.setVisible(False)
+        self.metadata_enrichment_progress_bar.setVisible(False)
+        self.cancel_metadata_enrichment_button.setVisible(False)
+
+    def is_metadata_enrichment_active(self):
+        return (
+            self.metadata_enrichment_thread is not None
+            and self.metadata_enrichment_thread.isRunning()
+        )
+
+    def launch_metadata_enrichment(self):
+        """Start modeless OCR metadata enrichment for the selected database."""
+        try:
+            if not self.db_file:
+                self.metadata_enrichment_status_label.setText("Select a database before enrichment")
+                self.metadata_enrichment_status_label.setVisible(True)
+                return
+            if self.is_metadata_enrichment_active():
+                self.metadata_enrichment_status_label.setText("Metadata enrichment already running")
+                self.metadata_enrichment_status_label.setVisible(True)
+                return
+
+            self.metadata_enrichment_thread = MetadataEnrichmentThread(self.db_file)
+            self.metadata_enrichment_error_message = None
+            self.metadata_enrichment_thread.update_label.connect(self.metadata_enrichment_status_label.setText)
+            self.metadata_enrichment_thread.update_progress.connect(self.metadata_enrichment_progress_bar.setValue)
+            self.metadata_enrichment_thread.error_occurred.connect(self.on_metadata_enrichment_error)
+            self.metadata_enrichment_thread.enrichment_finished.connect(self.on_metadata_enrichment_finished)
+
+            self.metadata_enrichment_status_label.setText("Metadata enrichment starting")
+            self.metadata_enrichment_status_label.setVisible(True)
+            self.metadata_enrichment_progress_bar.setValue(0)
+            self.metadata_enrichment_progress_bar.setVisible(True)
+            self.cancel_metadata_enrichment_button.setEnabled(True)
+            self.cancel_metadata_enrichment_button.setVisible(True)
+            self.enrich_metadata_button.setEnabled(False)
+            self.enrich_metadata_action.setEnabled(False)
+            self.metadata_enrichment_thread.start()
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def stop_metadata_enrichment(self):
+        try:
+            if self.metadata_enrichment_thread is not None and self.metadata_enrichment_thread.isRunning():
+                self.metadata_enrichment_thread.stop_enrichment()
+                self.cancel_metadata_enrichment_button.setEnabled(False)
+                self.metadata_enrichment_status_label.setText("Canceling metadata enrichment...")
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def on_metadata_enrichment_error(self, message):
+        self.metadata_enrichment_error_message = message
+        self.metadata_enrichment_status_label.setText(f"Metadata enrichment failed: {message}")
+
+    def on_metadata_enrichment_finished(self):
+        try:
+            self.enrich_metadata_button.setEnabled(True)
+            self.enrich_metadata_action.setEnabled(True)
+            self.cancel_metadata_enrichment_button.setEnabled(False)
+            self.cancel_metadata_enrichment_button.setVisible(False)
+            if self.metadata_enrichment_error_message:
+                self.metadata_enrichment_status_label.setText(
+                    f"Metadata enrichment failed: {self.metadata_enrichment_error_message}"
+                )
+                return
+            if self.metadata_enrichment_thread is None:
+                return
+            result = getattr(self.metadata_enrichment_thread, "result", None)
+            if result is not None:
+                self.metadata_enrichment_progress_bar.setValue(100)
+                self.metadata_enrichment_status_label.setText(
+                    f"Metadata enrichment complete: {result.enriched_files}/{result.total_files} reports updated"
+                )
+        except Exception as e:
+            self.log_and_exit(e)
 
     def launch_parsing_dialog(self):
         """Launch the parsing dialog and close the other dialogs if they are open."""

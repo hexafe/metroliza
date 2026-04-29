@@ -884,6 +884,109 @@ class TestExportDialogThreadStartupContract(unittest.TestCase):
         self.assertEqual(request.options.summary_plot_scale, 0)
         self.assertTrue(request.options.generate_html_dashboard)
 
+    def test_show_loading_screen_refreshes_enrichment_notice_before_worker_starts(self):
+        from modules.export_dialog import ExportDialog
+
+        class _Signal:
+            def connect(self, _slot):
+                return None
+
+        class _FakeThread:
+            def __init__(self, *args, **kwargs):
+                self.update_label = _Signal()
+                self.update_progress = _Signal()
+                self.error_occurred = _Signal()
+                self.finished = _Signal()
+                self.canceled = _Signal()
+
+            def start(self):
+                return None
+
+        class _FakeButton:
+            def setDisabled(self, _value):
+                return None
+
+        class _FakeDialog:
+            def show(self):
+                return None
+
+        class _FakeLabel:
+            def setText(self, _text):
+                return None
+
+        class _FakeBar:
+            def setValue(self, _value):
+                return None
+
+        class _FakeLineEdit:
+            def __init__(self, value):
+                self._value = value
+
+            def text(self):
+                return self._value
+
+            def setText(self, value):
+                self._value = value
+
+        class _FakeCombo:
+            def __init__(self, value):
+                self._value = value
+
+            def currentText(self):
+                return self._value
+
+        class _FakeCheckbox:
+            def __init__(self, checked):
+                self._checked = checked
+
+            def isChecked(self):
+                return self._checked
+
+        class _FakeNotice:
+            def __init__(self):
+                self.visible_states = []
+
+            def setVisible(self, value):
+                self.visible_states.append(bool(value))
+
+        class _FakeParent:
+            def is_metadata_enrichment_active(self):
+                return True
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.parent = lambda: _FakeParent()
+        dialog.metadata_enrichment_notice_label = _FakeNotice()
+        dialog.export_button = _FakeButton()
+        dialog.violin_plot_min_samplesize = _FakeLineEdit('6')
+        dialog.summary_plot_scale = _FakeLineEdit('0')
+        dialog.preset_combobox = _FakeCombo('Fast diagnostics')
+        dialog.export_type_combobox = _FakeCombo('Line')
+        dialog.sort_measurements_combobox = _FakeCombo('Sample #')
+        dialog.include_google_sheets_checkbox = _FakeCheckbox(False)
+        dialog.generate_html_dashboard_checkbox = _FakeCheckbox(False)
+        dialog.hide_ok_results_checkbox = _FakeCheckbox(False)
+        dialog.filter_query = 'SELECT 1'
+        dialog.df_for_grouping = None
+        dialog.db_file = 'input.db'
+        dialog.excel_file = Path('out.xlsx')
+        dialog.config = {}
+        dialog.config_path = Path('/tmp/nonexistent-export-config.json')
+        dialog.stop_exporting = lambda: None
+        dialog.on_export_error = lambda *_: None
+        dialog.on_export_finished = lambda: None
+        dialog.on_export_canceled = lambda: None
+
+        def _create_progress_dialog(*_args, **_kwargs):
+            self.assertEqual(dialog.metadata_enrichment_notice_label.visible_states, [True])
+            return _FakeDialog(), _FakeLabel(), _FakeBar(), object()
+
+        with patch('modules.export_dialog.create_worker_progress_dialog', side_effect=_create_progress_dialog), \
+             patch('modules.export_dialog.save_export_dialog_config'), \
+             patch('modules.export_dialog.ExportDataThread', _FakeThread):
+            dialog.show_loading_screen()
+
+        self.assertEqual(dialog.metadata_enrichment_notice_label.visible_states, [True])
+
 
 class TestExportDialogDatabaseSwitchContext(unittest.TestCase):
     @classmethod

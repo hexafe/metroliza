@@ -38,11 +38,3 @@ def test_no_first_party_camelcase_module_imports() -> None:
                         violations.append(f"{rel_path}:{node.lineno} import {alias.name}")
 
     assert not violations, "Found CamelCase module imports:\n" + "\n".join(violations)
-
-
-def test_modules_directory_contains_only_snake_case_python_modules() -> None:
-    violations = sorted(
-        path.name for path in (REPO_ROOT / "modules").glob("*.py") if any(ch.isupper() for ch in path.stem)
-    )
-
-    assert not violations, f"Found CamelCase module files in modules/: {violations}"

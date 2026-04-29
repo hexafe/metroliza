@@ -616,14 +616,17 @@ if ($headerOcrPackageAvailable -or -not $AllowMissingHeaderOcrBuild) {
     $headerOcrNuitkaArgs = @(
         '--include-package=rapidocr',
         '--include-package=onnxruntime',
+        '--include-package=openvino',
         '--include-package=cv2',
         '--include-package=numpy',
         '--include-package-data=rapidocr',
         '--include-package-data=onnxruntime',
+        '--include-package-data=openvino',
         '--include-package-data=cv2',
         '--include-package-data=numpy',
         '--include-distribution-metadata=rapidocr',
         '--include-distribution-metadata=onnxruntime',
+        '--include-distribution-metadata=openvino',
         '--include-distribution-metadata=opencv-python',
         '--include-distribution-metadata=numpy'
     )

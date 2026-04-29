@@ -1,4 +1,3 @@
-import time
 import unittest
 
 import pandas as pd
@@ -160,7 +159,7 @@ class TestExportSheetWriter(unittest.TestCase):
         self.assertIn('usl_column', cached['measurement_plan'])
         self.assertIn('lsl_column', cached['measurement_plan'])
 
-    def test_debug_timing_cached_header_plan_path_runs(self):
+    def test_cached_header_plan_matches_uncached_output(self):
         header_group = pd.DataFrame(
             {
                 'DATE': ['2024-01-01', '2024-01-02'],
@@ -172,20 +171,13 @@ class TestExportSheetWriter(unittest.TestCase):
             }
         )
 
-        iterations = 1200
-        uncached_start = time.perf_counter()
-        for _ in range(iterations):
-            build_measurement_header_block_plan(header_group, 0)
-        uncached_elapsed = time.perf_counter() - uncached_start
-
+        uncached = build_measurement_header_block_plan(header_group, 0)
         cache = {}
-        cached_start = time.perf_counter()
-        for _ in range(iterations):
-            build_measurement_header_block_plan(header_group, 0, cache=cache)
-        cached_elapsed = time.perf_counter() - cached_start
+        cached_first = build_measurement_header_block_plan(header_group, 0, cache=cache)
+        cached_second = build_measurement_header_block_plan(header_group, 0, cache=cache)
 
-        self.assertGreater(uncached_elapsed, 0.0)
-        self.assertGreater(cached_elapsed, 0.0)
+        self.assertEqual(cached_first, uncached)
+        self.assertEqual(cached_second, uncached)
         self.assertEqual(len(cache.get('measurement_block_templates', {})), 1)
 
     def test_header_plan_exposes_cached_limit_formulas(self):

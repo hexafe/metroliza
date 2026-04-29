@@ -84,10 +84,12 @@ fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets
 hexafe_groupstats_datas, hexafe_groupstats_binaries, hexafe_groupstats_hiddenimports = _collect_optional_runtime_assets('hexafe_groupstats')
 rapidocr_datas, rapidocr_binaries, rapidocr_hiddenimports = _collect_optional_runtime_assets('rapidocr')
 onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = _collect_optional_runtime_assets('onnxruntime')
+openvino_datas, openvino_binaries, openvino_hiddenimports = _collect_optional_runtime_assets('openvino')
 cv2_datas, cv2_binaries, cv2_hiddenimports = _collect_optional_runtime_assets('cv2')
 numpy_datas, numpy_binaries, numpy_hiddenimports = _collect_optional_runtime_assets('numpy')
 rapidocr_metadata_datas = _collect_optional_distribution_metadata('rapidocr')
 onnxruntime_metadata_datas = _collect_optional_distribution_metadata('onnxruntime')
+openvino_metadata_datas = _collect_optional_distribution_metadata('openvino')
 opencv_python_metadata_datas = _collect_optional_distribution_metadata('opencv-python')
 numpy_metadata_datas = _collect_optional_distribution_metadata('numpy')
 ocr_model_datas = _collect_optional_vendored_model_data()
@@ -98,8 +100,8 @@ third_party_notice_datas = [(str(ROOT_DIR / 'THIRD_PARTY_NOTICES.md'), '.')]
 a = Analysis(
     [str(ROOT_DIR / 'metroliza.py')],
     pathex=[],
-    binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries + hexafe_groupstats_binaries + rapidocr_binaries + onnxruntime_binaries + cv2_binaries + numpy_binaries,
-    datas=third_party_notice_datas + html_dashboard_datas + pymupdf_datas + fitz_datas + hexafe_groupstats_datas + rapidocr_datas + onnxruntime_datas + cv2_datas + numpy_datas + rapidocr_metadata_datas + onnxruntime_metadata_datas + opencv_python_metadata_datas + numpy_metadata_datas + ocr_model_datas,
+    binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries + hexafe_groupstats_binaries + rapidocr_binaries + onnxruntime_binaries + openvino_binaries + cv2_binaries + numpy_binaries,
+    datas=third_party_notice_datas + html_dashboard_datas + pymupdf_datas + fitz_datas + hexafe_groupstats_datas + rapidocr_datas + onnxruntime_datas + openvino_datas + cv2_datas + numpy_datas + rapidocr_metadata_datas + onnxruntime_metadata_datas + openvino_metadata_datas + opencv_python_metadata_datas + numpy_metadata_datas + ocr_model_datas,
     hiddenimports=[
         '_metroliza_cmm_native',
         '_metroliza_chart_native',
@@ -108,6 +110,7 @@ a = Analysis(
         'fitz',
         'rapidocr',
         'onnxruntime',
+        'openvino',
         'cv2',
         'numpy',
         'modules.cmm_report_parser',
@@ -120,6 +123,7 @@ a = Analysis(
         *fitz_hiddenimports,
         *rapidocr_hiddenimports,
         *onnxruntime_hiddenimports,
+        *openvino_hiddenimports,
         *cv2_hiddenimports,
         *numpy_hiddenimports,
     ],

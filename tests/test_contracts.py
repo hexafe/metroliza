@@ -20,6 +20,23 @@ class TestValidateParseRequest(unittest.TestCase):
         request = ParseRequest(source_directory='reports', db_file='test.db')
         validated = validate_parse_request(request)
         self.assertEqual(validated.source_directory, 'reports')
+        self.assertEqual(validated.metadata_parsing_mode, 'complete')
+        self.assertFalse(validated.run_background_metadata_enrichment)
+
+    def test_normalizes_metadata_parsing_mode_alias(self):
+        request = ParseRequest(source_directory='reports', db_file='test.db', metadata_parsing_mode='Fast')
+        validated = validate_parse_request(request)
+        self.assertEqual(validated.metadata_parsing_mode, 'light')
+
+    def test_accepts_background_metadata_enrichment_flag(self):
+        request = ParseRequest(
+            source_directory='reports',
+            db_file='test.db',
+            metadata_parsing_mode='light',
+            run_background_metadata_enrichment=True,
+        )
+        validated = validate_parse_request(request)
+        self.assertTrue(validated.run_background_metadata_enrichment)
 
     def test_rejects_empty_source_directory(self):
         with self.assertRaises(ValueError):
@@ -28,6 +45,22 @@ class TestValidateParseRequest(unittest.TestCase):
     def test_rejects_non_parse_request_input(self):
         with self.assertRaises(ValueError):
             validate_parse_request('reports')
+
+    def test_rejects_unknown_metadata_parsing_mode(self):
+        with self.assertRaises(ValueError):
+            validate_parse_request(
+                ParseRequest(source_directory='reports', db_file='test.db', metadata_parsing_mode='deep')
+            )
+
+    def test_rejects_non_boolean_background_metadata_enrichment_flag(self):
+        with self.assertRaises(ValueError):
+            validate_parse_request(
+                ParseRequest(
+                    source_directory='reports',
+                    db_file='test.db',
+                    run_background_metadata_enrichment='yes',
+                )
+            )
 
 
 class TestValidateExportOptions(unittest.TestCase):

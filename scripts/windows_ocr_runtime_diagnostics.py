@@ -95,6 +95,10 @@ def _build_smoke_tests() -> list[tuple[str, str]]:
             "import onnxruntime as ort; print(ort.__version__, ort.__file__, ort.get_available_providers())",
         ),
         (
+            "openvino_basic",
+            "import openvino as ov; core = ov.Core(); print(ov.__version__, core.available_devices)",
+        ),
+        (
             "cv2_then_onnxruntime",
             "import cv2; from onnxruntime import GraphOptimizationLevel, InferenceSession, SessionOptions; "
             "print('cv2_then_onnxruntime_ok')",
@@ -119,8 +123,24 @@ def _build_smoke_tests() -> list[tuple[str, str]]:
 def build_payload(pdf_path: Path | None = None, db_file: str | None = None) -> dict[str, Any]:
     from modules.header_ocr_backend import default_rapidocr_model_dir, missing_rapidocr_latin_model_paths
     from modules.header_ocr_backend import default_rapidocr_latin_model_paths
+    from modules.header_ocr_backend import rapidocr_latin_runtime_config_from_env
 
     model_paths = default_rapidocr_latin_model_paths(os.getenv("METROLIZA_HEADER_OCR_MODEL_DIR") or None)
+    try:
+        runtime_config = rapidocr_latin_runtime_config_from_env()
+        runtime_config_summary = {
+            "engine": runtime_config.engine,
+            "accelerator": runtime_config.accelerator,
+            "params": runtime_config.params,
+            "error": None,
+        }
+    except Exception as exc:
+        runtime_config_summary = {
+            "engine": None,
+            "accelerator": None,
+            "params": {},
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     payload: dict[str, Any] = {
         "environment": {
             "python_executable": sys.executable,
@@ -131,13 +151,28 @@ def build_payload(pdf_path: Path | None = None, db_file: str | None = None) -> d
             "path_head": os.environ.get("PATH", "").split(os.pathsep)[:12],
             "env": {
                 "METROLIZA_HEADER_OCR_BACKEND": os.getenv("METROLIZA_HEADER_OCR_BACKEND"),
+                "METROLIZA_HEADER_OCR_ENGINE": os.getenv("METROLIZA_HEADER_OCR_ENGINE"),
+                "METROLIZA_HEADER_OCR_ACCELERATOR": os.getenv("METROLIZA_HEADER_OCR_ACCELERATOR"),
+                "METROLIZA_HEADER_OCR_DEVICE_ID": os.getenv("METROLIZA_HEADER_OCR_DEVICE_ID"),
+                "METROLIZA_HEADER_OCR_CACHE_DIR": os.getenv("METROLIZA_HEADER_OCR_CACHE_DIR"),
                 "METROLIZA_HEADER_OCR_MODEL_DIR": os.getenv("METROLIZA_HEADER_OCR_MODEL_DIR"),
                 "METROLIZA_HEADER_OCR_ZOOM": os.getenv("METROLIZA_HEADER_OCR_ZOOM"),
                 "METROLIZA_HEADER_OCR_THREADS": os.getenv("METROLIZA_HEADER_OCR_THREADS"),
             },
+            "header_ocr_runtime_config": runtime_config_summary,
             "modules": {
                 name: _module_spec_summary(name)
-                for name in ("rapidocr", "onnxruntime", "cv2", "numpy", "fitz", "pymupdf")
+                for name in (
+                    "rapidocr",
+                    "onnxruntime",
+                    "onnxruntime_gpu",
+                    "openvino",
+                    "tensorrt",
+                    "cv2",
+                    "numpy",
+                    "fitz",
+                    "pymupdf",
+                )
             },
             "vc_redist_x64": _vc_redist_registry_status(),
             "default_rapidocr_model_dir": str(default_rapidocr_model_dir()),

@@ -1,8 +1,8 @@
 """Diagnose CMM header OCR metadata extraction for one PDF.
 
 Usage:
-  python scripts/diagnose_header_ocr_metadata.py ../example_reports/extracted/sample.pdf
-  python scripts/diagnose_header_ocr_metadata.py sample.pdf --db-file reports.sqlite
+  python scripts/diagnose_header_ocr_metadata.py <path-to-report.pdf>
+  python scripts/diagnose_header_ocr_metadata.py <path-to-report.pdf> --db-file reports.sqlite
 """
 
 from __future__ import annotations
@@ -172,6 +172,7 @@ def build_diagnostic_payload(pdf_path: Path, db_file: str | None = None) -> dict
         default_rapidocr_latin_model_paths,
         default_rapidocr_model_dir,
         missing_rapidocr_latin_model_paths,
+        rapidocr_latin_runtime_config_from_env,
     )
     from modules.report_repository import compute_sha256
 
@@ -182,6 +183,21 @@ def build_diagnostic_payload(pdf_path: Path, db_file: str | None = None) -> dict
     model_dir_override = os.getenv("METROLIZA_HEADER_OCR_MODEL_DIR") or None
     model_paths = default_rapidocr_latin_model_paths(model_dir_override)
     missing_models = missing_rapidocr_latin_model_paths(model_paths)
+    try:
+        runtime_config = rapidocr_latin_runtime_config_from_env()
+        runtime_config_summary = {
+            "engine": runtime_config.engine,
+            "accelerator": runtime_config.accelerator,
+            "params": runtime_config.params,
+            "error": None,
+        }
+    except Exception as exc:
+        runtime_config_summary = {
+            "engine": None,
+            "accelerator": None,
+            "params": {},
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     sha256_value = compute_sha256(resolved_pdf)
 
     db_rows: list[dict[str, Any]] = []
@@ -210,9 +226,15 @@ def build_diagnostic_payload(pdf_path: Path, db_file: str | None = None) -> dict
             },
             "env": {
                 "METROLIZA_HEADER_OCR_BACKEND": os.getenv("METROLIZA_HEADER_OCR_BACKEND"),
+                "METROLIZA_HEADER_OCR_ENGINE": os.getenv("METROLIZA_HEADER_OCR_ENGINE"),
+                "METROLIZA_HEADER_OCR_ACCELERATOR": os.getenv("METROLIZA_HEADER_OCR_ACCELERATOR"),
+                "METROLIZA_HEADER_OCR_DEVICE_ID": os.getenv("METROLIZA_HEADER_OCR_DEVICE_ID"),
+                "METROLIZA_HEADER_OCR_CACHE_DIR": os.getenv("METROLIZA_HEADER_OCR_CACHE_DIR"),
                 "METROLIZA_HEADER_OCR_MODEL_DIR": os.getenv("METROLIZA_HEADER_OCR_MODEL_DIR"),
                 "METROLIZA_HEADER_OCR_ZOOM": os.getenv("METROLIZA_HEADER_OCR_ZOOM"),
+                "METROLIZA_HEADER_OCR_THREADS": os.getenv("METROLIZA_HEADER_OCR_THREADS"),
             },
+            "header_ocr_runtime_config": runtime_config_summary,
             "default_rapidocr_model_dir": str(default_rapidocr_model_dir()),
             "missing_rapidocr_model_files": [str(path) for path in missing_models],
         },

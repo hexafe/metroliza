@@ -91,7 +91,7 @@ def test_source_rows_for_sha_decodes_metadata_json(tmp_path):
             """,
             (
                 2,
-                "V29091150_001",
+                "VTST1001_001",
                 "2020-01-28",
                 "1",
                 json.dumps({"header_extraction_mode": "ocr"}),

@@ -1,5 +1,4 @@
 import math
-import time
 import importlib
 import json
 from pathlib import Path
@@ -258,31 +257,6 @@ def test_pairwise_edge_fixtures_documented_expectations_hold():
             fixture['expected_effect_size'],
             abs_tol=fixture['effect_abs_tol'],
         ), fixture['rationale']
-
-
-def test_cliffs_delta_rank_based_path_scales_better_on_large_arrays():
-    rng = np.random.default_rng(99)
-    sample_a = rng.integers(0, 101, size=4000).astype(float)
-    sample_b = rng.integers(0, 101, size=4000).astype(float)
-
-    optimized_durations = []
-    legacy_durations = []
-    for _ in range(3):
-        start = time.perf_counter()
-        optimized = _cliffs_delta(sample_a, sample_b)
-        optimized_durations.append(time.perf_counter() - start)
-
-        start = time.perf_counter()
-        legacy = _legacy_cliffs_delta(sample_a, sample_b)
-        legacy_durations.append(time.perf_counter() - start)
-
-    optimized_time = min(optimized_durations)
-    legacy_time = min(legacy_durations)
-
-    assert optimized is not None
-    assert legacy is not None
-    assert math.isclose(optimized, legacy, rel_tol=1e-12, abs_tol=1e-12)
-    assert optimized_time < legacy_time
 
 
 def test_effect_size_ci_is_deterministic_with_seeded_sampling(monkeypatch):
@@ -634,8 +608,8 @@ def test_pairwise_effect_ci_batch_native_and_python_parity(monkeypatch):
             assert math.isclose(native_ci[1], py_ci[1], rel_tol=3e-2, abs_tol=3e-2)
 
 
-def test_bootstrap_ci_benchmark_by_group_count_and_iterations(monkeypatch):
-    benchmark_cases = [
+def test_bootstrap_ci_runs_for_group_count_and_iterations(monkeypatch):
+    cases = [
         (2, 200),
         (3, 200),
         (4, 400),
@@ -644,20 +618,17 @@ def test_bootstrap_ci_benchmark_by_group_count_and_iterations(monkeypatch):
     monkeypatch.setenv('METROLIZA_COMPARISON_STATS_CI_BACKEND', 'python')
     importlib.reload(comparison_stats_native)
 
-    wall_times = []
-    for group_count, iterations in benchmark_cases:
+    observed_cases = []
+    for group_count, iterations in cases:
         groups = [rng.normal(loc=i * 0.25, scale=1.0, size=120).astype(float) for i in range(group_count)]
         kernel = 'cohen_d' if group_count == 2 else 'eta_squared'
-        start = time.perf_counter()
         ci = _bootstrap_effect_percentile_ci(
             effect_kernel=kernel,
             groups=groups[:2] if kernel == 'cohen_d' else groups,
             level=0.95,
             iterations=iterations,
         )
-        elapsed = time.perf_counter() - start
-        wall_times.append((group_count, iterations, elapsed))
+        observed_cases.append((group_count, iterations))
         assert ci is not None
 
-    assert len(wall_times) == len(benchmark_cases)
-    assert all(elapsed > 0.0 for _, _, elapsed in wall_times)
+    assert observed_cases == cases

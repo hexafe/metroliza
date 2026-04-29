@@ -73,6 +73,41 @@ class ReportMetadataPersistence:
     def replace_metadata_warnings(self, report_id: int, warnings: Iterable[Any]) -> None:
         return self._repository.replace_metadata_warnings(report_id, warnings)
 
+    def replace_report_metadata_enrichment(
+        self,
+        report_id: int,
+        metadata: Any,
+        *,
+        candidates: Iterable[Any],
+        warnings: Iterable[Any],
+        metadata_version: str,
+        metadata_profile_id: str | None = None,
+        metadata_profile_version: str | None = None,
+        parse_status: str | None = None,
+        metadata_confidence: float | None = None,
+        identity_hash: str | None = None,
+        raw_report_json: Any = None,
+    ) -> None:
+        diagnostics_kwargs: dict[str, Any] = {}
+        if parse_status is not None:
+            diagnostics_kwargs["parse_status"] = parse_status
+        if metadata_confidence is not None:
+            diagnostics_kwargs["metadata_confidence"] = metadata_confidence
+        if identity_hash is not None:
+            diagnostics_kwargs["identity_hash"] = identity_hash
+        if raw_report_json is not None:
+            diagnostics_kwargs["raw_report_json"] = raw_report_json
+        return self._repository.replace_report_metadata_enrichment(
+            report_id,
+            metadata,
+            candidates=candidates,
+            warnings=warnings,
+            metadata_version=metadata_version,
+            metadata_profile_id=metadata_profile_id,
+            metadata_profile_version=metadata_profile_version,
+            **diagnostics_kwargs,
+        )
+
     def replace_measurements(self, report_id: int, measurements: Iterable[Any]) -> None:
         return self._repository.replace_measurements(report_id, measurements)
 

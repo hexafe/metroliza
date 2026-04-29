@@ -287,6 +287,12 @@ class ExportDialog(QDialog):
             self.close_button = QPushButton("Close")
             self.close_button.clicked.connect(self.close)
             self.close_button.setToolTip("Close the export window without starting an export.")
+            self.metadata_enrichment_notice_label = QLabel(
+                "Metadata enrichment is running. Export will use the current database state."
+            )
+            self.metadata_enrichment_notice_label.setWordWrap(True)
+            self.metadata_enrichment_notice_label.setVisible(False)
+            self._refresh_metadata_enrichment_notice()
 
             self.database_text_label = self._build_path_field(self.db_file)
             self.excel_file_text_label = self._build_path_field(self.excel_file)
@@ -530,6 +536,7 @@ class ExportDialog(QDialog):
             self.content_scroll_area.setWidget(self.content_widget)
             self.content_scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             self.layout.addWidget(self.content_scroll_area, 1)
+            self.layout.addWidget(self.metadata_enrichment_notice_label)
 
             footer_layout = QHBoxLayout()
             footer_layout.setContentsMargins(0, 0, 0, 0)
@@ -559,6 +566,18 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.close_button, self.export_button)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _refresh_metadata_enrichment_notice(self):
+        if not hasattr(self, "metadata_enrichment_notice_label"):
+            return False
+        parent = self.parent()
+        enrichment_active = (
+            parent is not None
+            and hasattr(parent, "is_metadata_enrichment_active")
+            and parent.is_metadata_enrichment_active()
+        )
+        self.metadata_enrichment_notice_label.setVisible(bool(enrichment_active))
+        return bool(enrichment_active)
 
     def _build_path_field(self, value):
         field = QLineEdit()
@@ -837,6 +856,7 @@ class ExportDialog(QDialog):
     def show_loading_screen(self):
         """Validate inputs, persist options, and hand work to the export thread."""
         try:
+            self._refresh_metadata_enrichment_notice()
             self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
                 self,
                 window_title="Exporting data...",

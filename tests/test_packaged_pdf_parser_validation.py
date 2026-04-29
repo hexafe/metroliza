@@ -116,6 +116,7 @@ def test_validate_nuitka_report_has_header_ocr_accepts_report(tmp_path):
               <module name="modules.header_ocr_corrections" />
               <module name="rapidocr" />
               <module name="onnxruntime" />
+              <module name="openvino" />
               <module name="cv2" />
               <module name="numpy" />
               <data-file name="modules/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx" />
@@ -142,6 +143,7 @@ def test_validate_nuitka_report_has_header_ocr_rejects_missing_model_data(tmp_pa
               <module name="modules.header_ocr_corrections" />
               <module name="rapidocr" />
               <module name="onnxruntime" />
+              <module name="openvino" />
               <module name="cv2" />
               <module name="numpy" />
             </nuitka-report>
@@ -165,6 +167,7 @@ def test_validate_nuitka_report_has_header_ocr_rejects_missing_third_party_notic
               <module name="modules.header_ocr_corrections" />
               <module name="rapidocr" />
               <module name="onnxruntime" />
+              <module name="openvino" />
               <module name="cv2" />
               <module name="numpy" />
               <data-file name="modules/ocr_models/rapidocr/ch_PP-OCRv4_det_mobile.onnx" />
@@ -183,7 +186,7 @@ def test_validate_nuitka_report_has_header_ocr_rejects_missing_third_party_notic
 def test_validate_third_party_notice_requires_ocr_license_terms(tmp_path):
     notice = tmp_path / 'THIRD_PARTY_NOTICES.md'
     notice.write_text(
-        'RapidOCR Apache-2.0 Baidu ONNX Runtime MIT OpenCV NumPy BSD-3-Clause',
+        'RapidOCR Apache-2.0 Baidu ONNX Runtime MIT OpenVINO OpenCV NumPy BSD-3-Clause',
         encoding='utf-8',
     )
 
@@ -237,14 +240,17 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert "'--include-package-data=fitz'" in script
     assert "'--include-package=rapidocr'" in script
     assert "'--include-package=onnxruntime'" in script
+    assert "'--include-package=openvino'" in script
     assert "'--include-package=cv2'" in script
     assert "'--include-package=numpy'" in script
     assert "'--include-package-data=rapidocr'" in script
     assert "'--include-package-data=onnxruntime'" in script
+    assert "'--include-package-data=openvino'" in script
     assert "'--include-package-data=cv2'" in script
     assert "'--include-package-data=numpy'" in script
     assert "'--include-distribution-metadata=rapidocr'" in script
     assert "'--include-distribution-metadata=onnxruntime'" in script
+    assert "'--include-distribution-metadata=openvino'" in script
     assert "'--include-distribution-metadata=opencv-python'" in script
     assert "'--include-distribution-metadata=numpy'" in script
     assert 'ch_PP-OCRv4_det_mobile.onnx' in script
@@ -276,25 +282,29 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert "fitz_datas, fitz_binaries, fitz_hiddenimports = _collect_optional_runtime_assets('fitz')" in spec
     assert "rapidocr_datas, rapidocr_binaries, rapidocr_hiddenimports = _collect_optional_runtime_assets('rapidocr')" in spec
     assert "onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = _collect_optional_runtime_assets('onnxruntime')" in spec
+    assert "openvino_datas, openvino_binaries, openvino_hiddenimports = _collect_optional_runtime_assets('openvino')" in spec
     assert "cv2_datas, cv2_binaries, cv2_hiddenimports = _collect_optional_runtime_assets('cv2')" in spec
     assert "numpy_datas, numpy_binaries, numpy_hiddenimports = _collect_optional_runtime_assets('numpy')" in spec
     assert "rapidocr_metadata_datas = _collect_optional_distribution_metadata('rapidocr')" in spec
     assert "onnxruntime_metadata_datas = _collect_optional_distribution_metadata('onnxruntime')" in spec
+    assert "openvino_metadata_datas = _collect_optional_distribution_metadata('openvino')" in spec
     assert "opencv_python_metadata_datas = _collect_optional_distribution_metadata('opencv-python')" in spec
     assert "numpy_metadata_datas = _collect_optional_distribution_metadata('numpy')" in spec
     assert 'def _collect_optional_vendored_model_data()' in spec
     assert "html_dashboard_datas = [(str(ROOT_DIR / 'modules' / 'html_dashboard_assets' / 'plotly-2.27.0.min.js'), 'modules/html_dashboard_assets')]" in spec
     assert "third_party_notice_datas = [(str(ROOT_DIR / 'THIRD_PARTY_NOTICES.md'), '.')]" in spec
-    assert "binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries + hexafe_groupstats_binaries + rapidocr_binaries + onnxruntime_binaries + cv2_binaries + numpy_binaries" in spec
-    assert "datas=third_party_notice_datas + html_dashboard_datas + pymupdf_datas + fitz_datas + hexafe_groupstats_datas + rapidocr_datas + onnxruntime_datas + cv2_datas + numpy_datas + rapidocr_metadata_datas + onnxruntime_metadata_datas + opencv_python_metadata_datas + numpy_metadata_datas + ocr_model_datas" in spec
+    assert "binaries=windows_runtime_binaries + pymupdf_binaries + fitz_binaries + hexafe_groupstats_binaries + rapidocr_binaries + onnxruntime_binaries + openvino_binaries + cv2_binaries + numpy_binaries" in spec
+    assert "datas=third_party_notice_datas + html_dashboard_datas + pymupdf_datas + fitz_datas + hexafe_groupstats_datas + rapidocr_datas + onnxruntime_datas + openvino_datas + cv2_datas + numpy_datas + rapidocr_metadata_datas + onnxruntime_metadata_datas + openvino_metadata_datas + opencv_python_metadata_datas + numpy_metadata_datas + ocr_model_datas" in spec
     assert "'modules.cmm_report_parser'" in spec
     assert "'modules.native_chart_compositor'" in spec
     assert "'rapidocr'" in spec
     assert "'onnxruntime'" in spec
+    assert "'openvino'" in spec
     assert "'cv2'" in spec
     assert "'numpy'" in spec
     assert '*rapidocr_hiddenimports' in spec
     assert '*onnxruntime_hiddenimports' in spec
+    assert '*openvino_hiddenimports' in spec
     assert '*cv2_hiddenimports' in spec
     assert '*numpy_hiddenimports' in spec
     assert "runtime_tmpdir=None" in spec

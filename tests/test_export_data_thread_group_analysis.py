@@ -6,7 +6,6 @@ import sqlite3
 import types
 import unittest
 import zipfile
-import inspect
 import copy
 import base64
 import xml.etree.ElementTree as ET
@@ -398,24 +397,6 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
         thread = ExportDataThread(request)
         self.assertTrue(thread.get_export_backend().run(thread))
         return out_path
-
-    def test_summary_sheet_extended_charts_keep_native_fast_paths_for_distribution_iqr_and_trend(self):
-        module_source = inspect.getsource(export_data_thread_module)
-
-        self.assertIn('distribution_backend_native', module_source)
-        self.assertIn('iqr_backend_native', module_source)
-        self.assertIn('trend_backend_native', module_source)
-        self.assertIn('build_resolved_distribution_spec', module_source)
-        self.assertIn('build_resolved_iqr_spec', module_source)
-        self.assertIn('build_resolved_trend_spec', module_source)
-
-        self.assertIn('extract_distribution_geometry(', module_source)
-        self.assertIn('extract_iqr_geometry(', module_source)
-        self.assertNotIn('extract_trend_geometry(', module_source)
-
-        self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='distribution'")
-        self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='iqr'")
-        self.assertRegex(module_source, r"_save_summary_chart\(\s*None,\s*chart_type='trend'")
 
     def test_summary_sheet_extended_charts_runtime_native_fast_path_contract_is_behavioral(self):
         # Valid 1x1 PNG used to bypass renderer internals while testing branch behavior.

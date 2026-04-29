@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 import sqlite3
 import sys
@@ -83,6 +84,8 @@ from modules.export_logging_service import (  # noqa: E402
 from modules.parse_reports_thread import (  # noqa: E402
     build_report_fingerprints_from_rows,
     build_source_file_fingerprint,
+    enrich_report_metadata,
+    merge_enriched_metadata_for_persistence,
     parse_new_reports,
 )
 
@@ -277,6 +280,89 @@ class TestParseHelpers(unittest.TestCase):
             fingerprints = thread.get_report_fingerprints_in_database()
 
         self.assertEqual(fingerprints, {'sha256:sha-current'})
+
+
+    def test_get_report_fingerprints_light_mode_accepts_current_light_metadata(self):
+        from modules.parse_reports_thread import ParseReportsThread
+        from modules.contracts import ParseRequest
+        from modules.report_schema import ensure_report_schema
+
+        def _insert_report(conn, *, sha256, parser_id, parser_version, metadata_json):
+            conn.execute(
+                """
+                INSERT INTO source_files (sha256, source_format, discovered_at, is_active)
+                VALUES (?, 'pdf', '2026-04-21T00:00:00Z', 1)
+                """,
+                (sha256,),
+            )
+            source_file_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO parsed_reports (
+                    source_file_id, parser_id, parser_version, template_family, parse_status,
+                    measurement_count, has_nok, nok_count, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 'cmm_pdf_header_box', 'parsed', 0, 0, 0,
+                        '2026-04-21T00:00:00Z', '2026-04-21T00:00:00Z')
+                """,
+                (source_file_id, parser_id, parser_version),
+            )
+            report_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                """
+                INSERT INTO report_metadata (report_id, metadata_version, metadata_json)
+                VALUES (?, 'report_metadata_v1', ?)
+                """,
+                (report_id, metadata_json),
+            )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, 'reports.sqlite')
+            ensure_report_schema(db_path)
+            with sqlite3.connect(db_path) as conn:
+                _insert_report(
+                    conn,
+                    sha256='sha-current-light',
+                    parser_id='cmm_pdf_header_box',
+                    parser_version='1.1.0',
+                    metadata_json='{"metadata_parsing_mode": "light", "header_extraction_mode": "none"}',
+                )
+                _insert_report(
+                    conn,
+                    sha256='sha-current-filename-source',
+                    parser_id='cmm_pdf_header_box',
+                    parser_version='1.1.0',
+                    metadata_json='{"field_sources": {"reference": "filename_candidate"}, "header_extraction_mode": "none"}',
+                )
+                _insert_report(
+                    conn,
+                    sha256='sha-old-same-parser',
+                    parser_id='cmm_pdf_header_box',
+                    parser_version='1.0.0',
+                    metadata_json='{"metadata_parsing_mode": "light"}',
+                )
+                _insert_report(
+                    conn,
+                    sha256='sha-other-parser',
+                    parser_id='other_parser',
+                    parser_version='1.0.0',
+                    metadata_json='{}',
+                )
+
+            thread = ParseReportsThread(
+                ParseRequest(source_directory='.', db_file=db_path, metadata_parsing_mode='light')
+            )
+
+            fingerprints = thread.get_report_fingerprints_in_database()
+
+        self.assertEqual(
+            fingerprints,
+            {
+                'sha256:sha-current-light',
+                'sha256:sha-current-filename-source',
+                'sha256:sha-other-parser',
+            },
+        )
 
 
     def test_get_report_fingerprints_stops_loading_batches_on_cancel(self):
@@ -502,6 +588,270 @@ class TestParseHelpers(unittest.TestCase):
         thread._emit_progress(120)
 
         self.assertEqual(captured_values, [25, 100])
+
+    def test_enrich_report_metadata_tracks_processed_and_enriched_files(self):
+        reports = ["a.pdf", "b.pdf", "c.pdf"]
+        progress_updates = []
+
+        result = enrich_report_metadata(
+            reports,
+            parser_factory=lambda report: report,
+            persist_enrichment=lambda report, _parser: report != "b.pdf",
+            on_progress=lambda processed, total: progress_updates.append((processed, total)),
+        )
+
+        self.assertEqual(result.enriched_files, 2)
+        self.assertEqual(result.total_files, 3)
+        self.assertEqual(progress_updates, [(1, 3), (2, 3), (3, 3)])
+
+    def test_merge_enriched_metadata_preserves_stable_light_fields_and_manual_overrides(self):
+        from modules.report_metadata_models import CanonicalReportMetadata
+
+        current_row = {
+            "reference": "LIGHT-REF",
+            "reference_raw": "LIGHT-REF",
+            "report_date": "2024-01-01",
+            "part_name": "Light Part",
+            "sample_number": "7",
+            "sample_number_kind": "filename_tail",
+            "stats_count_raw": "7",
+            "stats_count_int": 7,
+            "metadata_json": json.dumps(
+                {
+                    "field_sources": {
+                        "reference": "filename_candidate",
+                        "revision": None,
+                        "operator_name": None,
+                    },
+                    "manual_overrides": {
+                        "part_name": {
+                            "value": "Light Part",
+                            "source": "manual",
+                        }
+                    },
+                }
+            ),
+        }
+        enriched = CanonicalReportMetadata(
+            parser_id="cmm_pdf_header_box",
+            template_family="cmm_pdf_header_box",
+            template_variant="synthetic_variant",
+            metadata_confidence=0.98,
+            reference="OCR-REF",
+            reference_raw="OCR-REF",
+            report_date="2024-01-02",
+            report_time="12:34",
+            part_name="OCR Part",
+            revision="B",
+            sample_number="8",
+            sample_number_kind="explicit_sample_number",
+            stats_count_raw="8",
+            stats_count_int=8,
+            operator_name="Synthetic Operator",
+            comment="Synthetic comment",
+            page_count=1,
+            metadata_json={
+                "field_sources": {
+                    "reference": "position_cell",
+                    "report_date": "position_cell",
+                    "report_time": "position_cell",
+                    "part_name": "position_cell",
+                    "revision": "position_cell",
+                    "sample_number": "explicit_sample_number",
+                    "stats_count_raw": "position_cell",
+                    "operator_name": "position_cell",
+                    "comment": "position_cell",
+                }
+            },
+            warnings=(),
+        )
+
+        merged, summary = merge_enriched_metadata_for_persistence(current_row, enriched)
+
+        self.assertEqual(merged.reference, "LIGHT-REF")
+        self.assertEqual(merged.report_date, "2024-01-01")
+        self.assertEqual(merged.part_name, "Light Part")
+        self.assertEqual(merged.sample_number, "7")
+        self.assertEqual(merged.stats_count_raw, "7")
+        self.assertEqual(merged.revision, "B")
+        self.assertEqual(merged.operator_name, "Synthetic Operator")
+        self.assertEqual(merged.report_time, "12:34")
+        self.assertIn("reference", summary["preserved_fields"])
+        self.assertIn("revision", summary["updated_fields"])
+        self.assertEqual(merged.metadata_json["field_sources"]["reference"], "filename_candidate")
+        self.assertEqual(merged.metadata_json["field_sources"]["revision"], "position_cell")
+        self.assertIn("manual_overrides", merged.metadata_json)
+
+    def test_background_metadata_enrichment_uses_metadata_only_persistence(self):
+        import modules.parse_reports_thread as parse_module
+        from modules.contracts import ParseRequest
+        from modules.parse_reports_thread import ParseReportsThread
+        from modules.report_metadata_models import CanonicalReportMetadata, MetadataCandidate, MetadataSelectionResult
+        from modules.report_repository import ReportRepository
+
+        class _Signal:
+            def __init__(self):
+                self.values = []
+
+            def emit(self, value):
+                self.values.append(value)
+
+        class _FakeParser:
+            manifest = types.SimpleNamespace(version="1.1.0")
+
+            def __init__(self, selection_result):
+                self.metadata_parsing_mode = "light"
+                self._metadata_selection_result = selection_result
+                self.open_modes = []
+
+            def open_report(self):
+                self.open_modes.append(self.metadata_parsing_mode)
+
+            def extract_metadata(self):
+                return self._metadata_selection_result
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = os.path.join(tmpdir, "synthetic.pdf")
+            with open(report_path, "wb") as report_file:
+                report_file.write(b"synthetic pdf bytes")
+            db_path = os.path.join(tmpdir, "reports.sqlite")
+            repository = ReportRepository(db_path)
+            report_id = repository.persist_parsed_report(
+                source_path=report_path,
+                parser_id="cmm_pdf_header_box",
+                parser_version="1.1.0",
+                template_family="cmm_pdf_header_box",
+                template_variant="synthetic_variant",
+                parse_status="parsed",
+                metadata={
+                    "reference": "LIGHT-REF",
+                    "reference_raw": "LIGHT-REF",
+                    "report_date": "2024-01-01",
+                    "part_name": "Light Part",
+                    "revision": None,
+                    "sample_number": "7",
+                    "sample_number_kind": "filename_tail",
+                    "stats_count_raw": "7",
+                    "stats_count_int": 7,
+                    "metadata_json": {
+                        "field_sources": {
+                            "reference": "filename_candidate",
+                            "report_date": "filename_candidate",
+                            "part_name": "filename_candidate",
+                            "sample_number": "filename_candidate",
+                            "stats_count_raw": "filename_candidate",
+                        }
+                    },
+                },
+                candidates=[],
+                warnings=[],
+                measurements=[
+                    {
+                        "row_order": 1,
+                        "header": "Feature 1",
+                        "ax": "X",
+                        "meas": 10.0,
+                        "status_code": "ok",
+                    }
+                ],
+                metadata_version="report_metadata_v1",
+                raw_report_json={"parse_backend": "synthetic", "measurement_blocks": 1},
+            )
+            enriched_metadata = CanonicalReportMetadata(
+                parser_id="cmm_pdf_header_box",
+                template_family="cmm_pdf_header_box",
+                template_variant="synthetic_variant",
+                metadata_confidence=0.99,
+                reference="OCR-REF",
+                reference_raw="OCR-REF",
+                report_date="2024-01-02",
+                report_time="12:34",
+                part_name="OCR Part",
+                revision="B",
+                sample_number="8",
+                sample_number_kind="explicit_sample_number",
+                stats_count_raw="8",
+                stats_count_int=8,
+                operator_name="Synthetic Operator",
+                comment="Synthetic comment",
+                page_count=1,
+                metadata_json={
+                    "field_sources": {
+                        "reference": "position_cell",
+                        "report_date": "position_cell",
+                        "report_time": "position_cell",
+                        "part_name": "position_cell",
+                        "revision": "position_cell",
+                        "sample_number": "explicit_sample_number",
+                        "stats_count_raw": "position_cell",
+                        "operator_name": "position_cell",
+                        "comment": "position_cell",
+                    }
+                },
+                warnings=(),
+            )
+            candidate = MetadataCandidate(
+                field_name="revision",
+                raw_value="B",
+                normalized_value="B",
+                source_type="position_cell",
+                source_detail="synthetic_cell",
+                page_number=1,
+                region_name="header",
+                label_text="REV",
+                rule_id="synthetic_revision",
+                confidence=0.99,
+                evidence_text=None,
+                selected=True,
+            )
+            fake_parser = _FakeParser(MetadataSelectionResult(enriched_metadata, (candidate,)))
+            thread = ParseReportsThread(
+                ParseRequest(
+                    source_directory=tmpdir,
+                    db_file=db_path,
+                    metadata_parsing_mode="light",
+                    run_background_metadata_enrichment=True,
+                )
+            )
+            progress_signal = _Signal()
+            label_signal = _Signal()
+            thread.update_progress = progress_signal
+            thread.update_label = label_signal
+
+            with mock.patch.object(parse_module, "get_parser", return_value=fake_parser):
+                with sqlite3.connect(db_path) as connection:
+                    result = thread._run_background_metadata_enrichment([report_path], connection)
+
+            self.assertEqual(result.enriched_files, 1)
+            self.assertEqual(fake_parser.open_modes, ["complete"])
+            self.assertEqual(progress_signal.values, [75, 100])
+            with sqlite3.connect(db_path) as connection:
+                metadata_row = connection.execute(
+                    """
+                    SELECT reference, report_date, report_time, revision, operator_name, metadata_json
+                    FROM report_metadata
+                    WHERE report_id = ?
+                    """,
+                    (report_id,),
+                ).fetchone()
+                measurement_rows = connection.execute(
+                    "SELECT row_order, header, ax, meas FROM report_measurements WHERE report_id = ?",
+                    (report_id,),
+                ).fetchall()
+                raw_report_json = connection.execute(
+                    "SELECT raw_report_json FROM parsed_reports WHERE id = ?",
+                    (report_id,),
+                ).fetchone()[0]
+
+            self.assertEqual(metadata_row[:5], ("LIGHT-REF", "2024-01-01", "12:34", "B", "Synthetic Operator"))
+            self.assertEqual(measurement_rows, [(1, "Feature 1", "X", 10.0)])
+            metadata_json = json.loads(metadata_row[5])
+            self.assertEqual(metadata_json["field_sources"]["reference"], "filename_candidate")
+            self.assertEqual(metadata_json["field_sources"]["revision"], "position_cell")
+            self.assertIn("reference", metadata_json["metadata_enrichment"]["preserved_fields"])
+            raw_payload = json.loads(raw_report_json)
+            self.assertEqual(raw_payload["parse_backend"], "synthetic")
+            self.assertTrue(raw_payload["metadata_enrichment"]["measurement_rows_preserved"])
 
 
 class TestExportHelpers(unittest.TestCase):

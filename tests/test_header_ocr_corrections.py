@@ -36,23 +36,23 @@ def test_polish_month_helper_corrects_common_ocr_drift():
 
 
 def test_reference_correction_only_applies_in_reference_fields():
-    assert correct_reference_ocr_text("VSPC0174O8") == "VSPC017408"
-    assert correct_header_ocr_value("reference", "VSPC0174O8") == "VSPC017408"
-    assert correct_header_ocr_value("part_name", "VSPC0174O8") == "VSPC0174O8"
+    assert correct_reference_ocr_text("VTST0174O8") == "VTST017408"
+    assert correct_header_ocr_value("reference", "VTST0174O8") == "VTST017408"
+    assert correct_header_ocr_value("part_name", "VTST0174O8") == "VTST0174O8"
 
 
 def test_operator_aliases_are_canonicalized_deterministically():
-    assert correct_operator_name_ocr_text("PAM Jakbiec S.") == "PAM_Jakubiec S."
-    assert correct_operator_name_ocr_text("PAM MW") == "PAM_MW"
-    assert correct_operator_name_ocr_text("REX GAZDA") == "REX_GAZDA"
-    assert correct_operator_name_ocr_text("REX_Stachura") == "REX_Stachura"
-    assert correct_operator_name_ocr_text("MADEBY : REX GAZDA") == "REX_GAZDA"
-    assert correct_operator_name_ocr_text("MEASUREMENT MADEBY : PAM Jakubiec S.") == "PAM_Jakubiec S."
+    assert correct_operator_name_ocr_text("LAB Operator A") == "LAB_OPERATOR_A"
+    assert correct_operator_name_ocr_text("LAB MW") == "LAB_MW"
+    assert correct_operator_name_ocr_text("CMM Operator A") == "CMM_OPERATOR_A"
+    assert correct_operator_name_ocr_text("CMM_Operator B") == "CMM_OPERATOR_B"
+    assert correct_operator_name_ocr_text("MADEBY : CMM Operator A") == "CMM_OPERATOR_A"
+    assert correct_operator_name_ocr_text("MEASUREMENT MADEBY : LAB Operator A") == "LAB_OPERATOR_A"
 
 
 def test_part_name_cleanup_is_conservative():
-    assert correct_part_name_ocr_text("BodyEA211 1.0L") == "Body EA211 1.0L"
-    assert correct_part_name_ocr_text("EGR valve EA 897") == "EGR valve EA897"
+    assert correct_part_name_ocr_text("WidgetAB123 1.0L") == "Widget AB123 1.0L"
+    assert correct_part_name_ocr_text("Valve AB 123") == "Valve AB123"
 
 
 def test_comments_are_preserved():
@@ -62,19 +62,19 @@ def test_comments_are_preserved():
 
 def test_logo_noise_filter_is_conservative():
     assert is_logo_noise_text("logo") is True
-    assert is_logo_noise_text("PAM", y0=8.0) is True
-    assert is_logo_noise_text("PAM_MW", y0=72.0) is False
+    assert is_logo_noise_text("LAB", y0=8.0) is True
+    assert is_logo_noise_text("LAB_MW", y0=72.0) is False
 
 
 def test_batch_postprocessing_filters_noise_and_canonicalizes_labels():
     items = [
         {"text": "logo", "y0": 4.0},
         {"text": "PARTNAME", "y0": 10.0},
-        {"text": "PAM", "y0": 8.0},
-        {"text": "PAM Jakbiec S.", "y0": 72.0, "field_name": "operator_name"},
+        {"text": "LAB", "y0": 8.0},
+        {"text": "LAB Operator A", "y0": 72.0, "field_name": "operator_name"},
     ]
 
     corrected = postprocess_header_ocr_items(items)
 
-    assert [item["text"] for item in corrected] == ["PART NAME", "PAM_Jakubiec S."]
+    assert [item["text"] for item in corrected] == ["PART NAME", "LAB_OPERATOR_A"]
     assert postprocess_header_ocr_item({"text": "REV NUMBERE"})["text"] == "REV NUMBER"

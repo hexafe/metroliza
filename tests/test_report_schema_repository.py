@@ -444,6 +444,213 @@ def test_update_report_metadata_non_identity_field_keeps_hash(tmp_path):
     assert row == (original_hash, "New Operator")
 
 
+def test_replace_report_metadata_enrichment_preserves_measurement_rows(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    repository.ensure_schema()
+    original_hash = _identity_hash(reference="REF-1")
+    report_id = _persist_basic_report(
+        tmp_path,
+        repository,
+        file_name="synthetic_source.pdf",
+        reference="REF-1",
+        identity_hash=original_hash,
+    )
+
+    repository.replace_report_metadata_enrichment(
+        report_id,
+        {
+            "reference": "REF-2",
+            "reference_raw": "REF-2",
+            "report_date": "2024-01-03",
+            "report_time": "09:10",
+            "part_name": "Part",
+            "revision": "B",
+            "sample_number": "2",
+            "sample_number_kind": "explicit_sample_number",
+            "operator_name": "Operator",
+            "metadata_json": {
+                "field_sources": {"reference": "position_cell"},
+                "header_extraction_mode": "ocr",
+            },
+        },
+        candidates=[
+            {
+                "field_name": "reference",
+                "raw_value": "REF-2",
+                "normalized_value": "REF-2",
+                "source_type": "header",
+                "source_detail": "position_cell",
+                "rule_id": "synthetic_reference_candidate",
+                "confidence": 0.98,
+                "selected": True,
+            }
+        ],
+        warnings=[
+            {
+                "code": "synthetic_metadata_warning",
+                "field_name": "reference",
+                "severity": "info",
+                "message": "Synthetic metadata warning.",
+            }
+        ],
+        metadata_version="report_metadata_v1",
+        metadata_profile_id="cmm_pdf_header_box",
+        metadata_profile_version="1",
+        parse_status="parsed_with_warnings",
+        metadata_confidence=0.98,
+        identity_hash="identity-2",
+        raw_report_json={"parse_backend": "synthetic", "header_extraction_mode": "ocr"},
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        measurement_rows = conn.execute(
+            """
+            SELECT id, report_id, row_order, header, ax, meas, raw_measurement_json
+            FROM report_measurements
+            WHERE report_id = ?
+            """,
+            (report_id,),
+        ).fetchall()
+        parsed_row = conn.execute(
+            """
+            SELECT parse_status, metadata_confidence, identity_hash, measurement_count, has_nok, nok_count, raw_report_json
+            FROM parsed_reports
+            WHERE id = ?
+            """,
+            (report_id,),
+        ).fetchone()
+        metadata_row = conn.execute(
+            "SELECT reference, revision, metadata_json FROM report_metadata WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        candidate_count = conn.execute(
+            "SELECT COUNT(*) FROM report_metadata_candidates WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()[0]
+        warning_count = conn.execute(
+            "SELECT COUNT(*) FROM report_metadata_warnings WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()[0]
+
+    assert len(measurement_rows) == 1
+    assert measurement_rows[0][1:6] == (report_id, 1, "Feature 1", "X", 10.0)
+    assert json.loads(measurement_rows[0][6]) == {"header": "Feature 1", "tokens": ["X"]}
+    assert parsed_row[:6] == ("parsed_with_warnings", 0.98, "identity-2", 1, 0, 0)
+    assert json.loads(parsed_row[6])["header_extraction_mode"] == "ocr"
+    assert metadata_row[:2] == ("REF-2", "B")
+    assert json.loads(metadata_row[2])["field_sources"]["reference"] == "position_cell"
+    assert candidate_count == 1
+    assert warning_count == 1
+
+
+def test_replace_report_metadata_enrichment_rolls_back_as_one_transaction(tmp_path):
+    db_path = str(tmp_path / "reports.db")
+    repository = ReportRepository(db_path)
+    repository.ensure_schema()
+    report_id = _persist_basic_report(tmp_path, repository, file_name="rollback_source.pdf")
+    repository.replace_metadata_candidates(
+        report_id,
+        [
+            {
+                "field_name": "reference",
+                "raw_value": "REF-1",
+                "normalized_value": "REF-1",
+                "source_type": "header",
+                "rule_id": "original_candidate",
+                "confidence": 0.9,
+                "selected": True,
+            }
+        ],
+    )
+    repository.replace_metadata_warnings(
+        report_id,
+        [
+            {
+                "code": "original_warning",
+                "field_name": "reference",
+                "severity": "info",
+                "message": "Original synthetic warning.",
+            }
+        ],
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        original_measurements = conn.execute(
+            "SELECT id, report_id, row_order, header, ax, meas FROM report_measurements WHERE report_id = ?",
+            (report_id,),
+        ).fetchall()
+
+    try:
+        repository.replace_report_metadata_enrichment(
+            report_id,
+            {
+                "reference": "REF-ROLLBACK",
+                "reference_raw": "REF-ROLLBACK",
+                "report_date": "2024-01-04",
+                "report_time": "10:11",
+                "part_name": "Part",
+                "revision": "C",
+                "sample_number": "3",
+                "sample_number_kind": "explicit_sample_number",
+                "operator_name": "Operator",
+                "metadata_json": {"field_sources": {"reference": "position_cell"}},
+            },
+            candidates=[
+                {
+                    "field_name": "reference",
+                    "raw_value": "REF-ROLLBACK",
+                    "normalized_value": "REF-ROLLBACK",
+                    "source_type": "header",
+                    "rule_id": "invalid_candidate",
+                    "confidence": 1.5,
+                    "selected": True,
+                }
+            ],
+            warnings=[],
+            metadata_version="report_metadata_v1",
+            parse_status="parsed_with_warnings",
+        )
+    except sqlite3.IntegrityError:
+        pass
+    else:
+        raise AssertionError("Expected metadata enrichment replacement to fail")
+
+    with sqlite3.connect(db_path) as conn:
+        metadata_reference = conn.execute(
+            "SELECT reference FROM report_metadata WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()[0]
+        candidate_rules = [
+            row[0]
+            for row in conn.execute(
+                "SELECT rule_id FROM report_metadata_candidates WHERE report_id = ?",
+                (report_id,),
+            ).fetchall()
+        ]
+        warning_codes = [
+            row[0]
+            for row in conn.execute(
+                "SELECT code FROM report_metadata_warnings WHERE report_id = ?",
+                (report_id,),
+            ).fetchall()
+        ]
+        measurement_rows = conn.execute(
+            "SELECT id, report_id, row_order, header, ax, meas FROM report_measurements WHERE report_id = ?",
+            (report_id,),
+        ).fetchall()
+        parse_status = conn.execute(
+            "SELECT parse_status FROM parsed_reports WHERE id = ?",
+            (report_id,),
+        ).fetchone()[0]
+
+    assert metadata_reference == "REF-1"
+    assert candidate_rules == ["original_candidate"]
+    assert warning_codes == ["original_warning"]
+    assert measurement_rows == original_measurements
+    assert parse_status == "parsed"
+
+
 def test_update_measurement_fields_keeps_status_aggregate_and_raw_json_coherent(tmp_path):
     db_path = str(tmp_path / "reports.db")
     repository = ReportRepository(db_path)

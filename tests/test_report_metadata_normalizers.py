@@ -12,7 +12,7 @@ from modules.report_metadata_normalizers import (
 
 
 def test_normalize_reference_preserves_suffix_tokens():
-    assert normalize_reference("  V29046477_001  ") == "V29046477_001"
+    assert normalize_reference("  VTST2001_001  ") == "VTST2001_001"
 
 
 def test_normalize_report_date_supports_numeric_and_polish_months():

@@ -128,7 +128,7 @@ DEFAULT_CMM_PDF_HEADER_BOX_PROFILE = MetadataProfile(
             "MEASUREMENT MADE BY",
             "MEASUREMENT MADEBY",
             "MEASUREMENT NADE BY",
-            "MEASUREMENT ON REX CMM",
+            "MEASUREMENT ON CMM SYSTEM",
             "MEASUREMENT",
             "OPERATOR",
         ),

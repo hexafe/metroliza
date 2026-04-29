@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
+import os
 import sys
 import threading
 from pathlib import Path
@@ -16,6 +17,38 @@ from typing import Any, Mapping, Sequence
 
 
 DEFAULT_HEADER_OCR_BACKEND = "rapidocr_latin"
+HEADER_OCR_ENGINE_ENV = "METROLIZA_HEADER_OCR_ENGINE"
+HEADER_OCR_ACCELERATOR_ENV = "METROLIZA_HEADER_OCR_ACCELERATOR"
+HEADER_OCR_DEVICE_ID_ENV = "METROLIZA_HEADER_OCR_DEVICE_ID"
+HEADER_OCR_CACHE_DIR_ENV = "METROLIZA_HEADER_OCR_CACHE_DIR"
+HEADER_OCR_OPENVINO_PERFORMANCE_HINT_ENV = "METROLIZA_HEADER_OCR_OPENVINO_PERFORMANCE_HINT"
+HEADER_OCR_OPENVINO_NUM_STREAMS_ENV = "METROLIZA_HEADER_OCR_OPENVINO_NUM_STREAMS"
+HEADER_OCR_TENSORRT_FP16_ENV = "METROLIZA_HEADER_OCR_TENSORRT_FP16"
+HEADER_OCR_TENSORRT_INT8_ENV = "METROLIZA_HEADER_OCR_TENSORRT_INT8"
+HEADER_OCR_TENSORRT_FORCE_REBUILD_ENV = "METROLIZA_HEADER_OCR_TENSORRT_FORCE_REBUILD"
+RAPIDOCR_STAGE_PREFIXES = ("Det", "Cls", "Rec")
+RAPIDOCR_ENGINE_ALIASES = {
+    "ort": "onnxruntime",
+    "onnx": "onnxruntime",
+    "onnxruntime": "onnxruntime",
+    "openvino": "openvino",
+    "ov": "openvino",
+    "tensorrt": "tensorrt",
+    "trt": "tensorrt",
+}
+RAPIDOCR_ACCELERATOR_ALIASES = {
+    "": "cpu",
+    "none": "cpu",
+    "cpu": "cpu",
+    "cuda": "cuda",
+    "nvidia": "cuda",
+    "dml": "dml",
+    "directml": "dml",
+    "gpu": "gpu",
+    "auto": "auto",
+    "npu": "npu",
+    "coreml": "coreml",
+}
 RAPIDOCR_MODEL_FILENAMES = {
     "det_model_path": "ch_PP-OCRv4_det_mobile.onnx",
     "cls_model_path": "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
@@ -86,6 +119,15 @@ class RapidOcrLatinBackendConfig:
 
 
 @dataclass(frozen=True)
+class RapidOcrLatinRuntimeConfig:
+    """Resolved runtime engine/accelerator parameters for RapidOCR Latin."""
+
+    engine: str
+    accelerator: str
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class HeaderOcrRecord:
     """Normalized OCR record emitted by the backend."""
 
@@ -134,6 +176,127 @@ def missing_rapidocr_latin_model_paths(model_paths: RapidOcrLatinModelPaths) -> 
         model_paths.rec_keys_path,
     )
     return tuple(Path(path) for path in paths if path is not None and not Path(path).exists())
+
+
+def _env_value(env: Mapping[str, str] | None, name: str) -> str | None:
+    source = os.environ if env is None else env
+    value = source.get(name)
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _env_bool(env: Mapping[str, str] | None, name: str, default: bool) -> bool:
+    value = _env_value(env, name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(env: Mapping[str, str] | None, name: str) -> int | None:
+    value = _env_value(env, name)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}.") from exc
+
+
+def _normalize_rapidocr_engine(value: str | None) -> str:
+    normalized = (value or "onnxruntime").strip().lower()
+    engine = RAPIDOCR_ENGINE_ALIASES.get(normalized)
+    if engine is None:
+        allowed = ", ".join(sorted(set(RAPIDOCR_ENGINE_ALIASES.values())))
+        raise ValueError(f"Unsupported header OCR engine {value!r}; expected one of: {allowed}.")
+    return engine
+
+
+def _normalize_rapidocr_accelerator(value: str | None) -> str:
+    normalized = (value or "cpu").strip().lower()
+    accelerator = RAPIDOCR_ACCELERATOR_ALIASES.get(normalized)
+    if accelerator is None:
+        allowed = ", ".join(sorted(set(RAPIDOCR_ACCELERATOR_ALIASES.values())))
+        raise ValueError(
+            f"Unsupported header OCR accelerator {value!r}; expected one of: {allowed}."
+        )
+    return accelerator
+
+
+def _stage_engine_params(engine: str) -> dict[str, str]:
+    return {f"{stage}.engine_type": engine for stage in RAPIDOCR_STAGE_PREFIXES}
+
+
+def _device_id_params(prefix: str, device_id: int | None) -> dict[str, int]:
+    if device_id is None:
+        return {}
+    return {f"{prefix}.device_id": device_id}
+
+
+def rapidocr_latin_runtime_config_from_env(
+    *,
+    env: Mapping[str, str] | None = None,
+    ocr_thread_count: int | None = None,
+) -> RapidOcrLatinRuntimeConfig:
+    """Resolve RapidOCR runtime params from Metroliza OCR env vars.
+
+    The default remains ONNX Runtime CPU. Other values are intentionally dev/config
+    driven so hardware benchmarking can happen without expanding the GUI surface.
+    """
+
+    engine = _normalize_rapidocr_engine(_env_value(env, HEADER_OCR_ENGINE_ENV))
+    accelerator = _normalize_rapidocr_accelerator(_env_value(env, HEADER_OCR_ACCELERATOR_ENV))
+    device_id = _env_int(env, HEADER_OCR_DEVICE_ID_ENV)
+
+    params: dict[str, Any] = _stage_engine_params(engine)
+    if engine == "onnxruntime":
+        if ocr_thread_count is not None:
+            params["EngineConfig.onnxruntime.intra_op_num_threads"] = ocr_thread_count
+            params["EngineConfig.onnxruntime.inter_op_num_threads"] = 1
+        if accelerator == "cuda":
+            params["EngineConfig.onnxruntime.use_cuda"] = True
+            params.update(_device_id_params("EngineConfig.onnxruntime.cuda_ep_cfg", device_id))
+        elif accelerator == "dml":
+            params["EngineConfig.onnxruntime.use_dml"] = True
+            if device_id is not None:
+                params["EngineConfig.onnxruntime.dm_ep_cfg"] = {"device_id": device_id}
+        elif accelerator == "coreml":
+            params["EngineConfig.onnxruntime.use_coreml"] = True
+        elif accelerator != "cpu":
+            raise ValueError(f"Unsupported ONNX Runtime accelerator {accelerator!r}.")
+    elif engine == "openvino":
+        if accelerator != "cpu":
+            raise ValueError(
+                "RapidOCR OpenVINO currently supports CPU only in the installed wrapper; "
+                "GPU/AUTO/NPU needs a custom OpenVINO session wrapper."
+            )
+        if ocr_thread_count is not None:
+            params["EngineConfig.openvino.inference_num_threads"] = ocr_thread_count
+        performance_hint = _env_value(env, HEADER_OCR_OPENVINO_PERFORMANCE_HINT_ENV)
+        if performance_hint is not None:
+            params["EngineConfig.openvino.performance_hint"] = performance_hint
+        num_streams = _env_int(env, HEADER_OCR_OPENVINO_NUM_STREAMS_ENV)
+        if num_streams is not None:
+            params["EngineConfig.openvino.num_streams"] = num_streams
+    elif engine == "tensorrt":
+        if accelerator not in {"cpu", "cuda"}:
+            raise ValueError("TensorRT header OCR uses NVIDIA CUDA hardware.")
+        params.update(_device_id_params("EngineConfig.tensorrt", device_id))
+        cache_dir = _env_value(env, HEADER_OCR_CACHE_DIR_ENV)
+        if cache_dir is not None:
+            params["EngineConfig.tensorrt.cache_dir"] = cache_dir
+        params["EngineConfig.tensorrt.use_fp16"] = _env_bool(
+            env, HEADER_OCR_TENSORRT_FP16_ENV, True
+        )
+        params["EngineConfig.tensorrt.use_int8"] = _env_bool(
+            env, HEADER_OCR_TENSORRT_INT8_ENV, False
+        )
+        params["EngineConfig.tensorrt.force_rebuild"] = _env_bool(
+            env, HEADER_OCR_TENSORRT_FORCE_REBUILD_ENV, False
+        )
+
+    return RapidOcrLatinRuntimeConfig(engine=engine, accelerator=accelerator, params=params)
 
 
 def _rapidocr_enum_member_name(value: Any) -> str:
@@ -395,8 +558,15 @@ class RapidOcrLatinBackend:
         params.update(self.config.params)
         return params
 
-    def _build_engine_params(self, rapidocr_module: Any) -> dict[str, Any]:
-        return _coerce_rapidocr_param_enums(self._build_params(), rapidocr_module)
+    def _build_engine_params(self, rapidocr_module: Any, params: Mapping[str, Any]) -> dict[str, Any]:
+        return _coerce_rapidocr_param_enums(params, rapidocr_module)
+
+    @staticmethod
+    def _uses_onnxruntime(params: Mapping[str, Any]) -> bool:
+        for stage in RAPIDOCR_STAGE_PREFIXES:
+            if str(params.get(f"{stage}.engine_type", "onnxruntime")).strip().lower() == "onnxruntime":
+                return True
+        return False
 
     def load_engine(self) -> Any:
         """Import RapidOCR on demand and cache the instantiated engine."""
@@ -404,16 +574,18 @@ class RapidOcrLatinBackend:
         if self._engine is not None:
             return self._engine
 
+        params = self._build_params()
         # On Windows, importing RapidOCR may load OpenCV before ONNX Runtime.
         # Preloading ONNX Runtime first avoids native DLL load-order failures
         # seen as ``onnxruntime_pybind11_state`` initialization errors.
-        importlib.import_module("onnxruntime")
+        if self._uses_onnxruntime(params):
+            importlib.import_module("onnxruntime")
         rapidocr_module = importlib.import_module("rapidocr")
         rapidocr_class = getattr(rapidocr_module, "RapidOCR", None)
         if rapidocr_class is None:
             raise ImportError("rapidocr.RapidOCR is not available in the installed package.")
 
-        self._engine = rapidocr_class(params=self._build_engine_params(rapidocr_module))
+        self._engine = rapidocr_class(params=self._build_engine_params(rapidocr_module, params))
         return self._engine
 
     def recognize(self, image_path: str | Path) -> HeaderOcrRun:

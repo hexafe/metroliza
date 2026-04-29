@@ -17,17 +17,43 @@ def test_report_metadata_persistence_wrapper_delegates_to_repository(monkeypatch
             calls.append(("persist_parsed_report", kwargs))
             return 123
 
+        def replace_report_metadata_enrichment(self, report_id, metadata, **kwargs):
+            calls.append(("replace_report_metadata_enrichment", report_id, metadata, kwargs))
+
     monkeypatch.setattr(report_metadata_persistence, "ReportRepository", FakeRepository)
 
     marker = object()
     persistence = report_metadata_persistence.ReportMetadataPersistence("reports.db", connection=marker)
     result = persistence.persist_parsed_report(source_path="example.pdf")
+    persistence.replace_report_metadata_enrichment(
+        123,
+        {"reference": "REF-1"},
+        candidates=[],
+        warnings=[],
+        metadata_version="report_metadata_v1",
+        parse_status="parsed",
+        raw_report_json={"header_extraction_mode": "ocr"},
+    )
     persistence.ensure_schema()
 
     assert result == 123
     assert calls == [
         ("init", "reports.db", marker),
         ("persist_parsed_report", {"source_path": "example.pdf"}),
+        (
+            "replace_report_metadata_enrichment",
+            123,
+            {"reference": "REF-1"},
+            {
+                "candidates": [],
+                "warnings": [],
+                "metadata_version": "report_metadata_v1",
+                "metadata_profile_id": None,
+                "metadata_profile_version": None,
+                "parse_status": "parsed",
+                "raw_report_json": {"header_extraction_mode": "ocr"},
+            },
+        ),
         ("ensure_schema",),
     ]
 

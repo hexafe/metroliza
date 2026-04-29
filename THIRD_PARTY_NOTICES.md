@@ -12,10 +12,10 @@ can preserve them.
 
 ## Header OCR runtime
 
-Metroliza's packaged header OCR path uses RapidOCR with ONNX Runtime and a small
-set of vendored ONNX model files listed in `modules/ocr_models/rapidocr/README.md`.
-The packaged application uses local model files and does not download OCR models
-at runtime.
+Metroliza's packaged header OCR path uses RapidOCR with ONNX Runtime by default,
+OpenVINO as a selectable CPU acceleration backend, and a small set of vendored
+ONNX model files listed in `modules/ocr_models/rapidocr/README.md`. The packaged
+application uses local model files and does not download OCR models at runtime.
 
 | Component | License / notice | Project |
 | --- | --- | --- |
@@ -23,6 +23,7 @@ at runtime.
 | RapidOCR PyPI package | Apache-2.0 package metadata; pinned in `requirements-ocr.txt` | https://pypi.org/project/rapidocr/ |
 | RapidOCR model assets | RapidOCR's project page states that OCR model copyright is held by Baidu | https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml |
 | ONNX Runtime | MIT | https://github.com/microsoft/onnxruntime |
+| OpenVINO | Apache-2.0 | https://github.com/openvinotoolkit/openvino |
 | OpenCV Python package | Apache-2.0 | https://github.com/opencv/opencv-python |
 | NumPy | BSD-3-Clause | https://numpy.org/ |
 
@@ -38,9 +39,9 @@ Vendored RapidOCR model files:
   or other release artifact.
 - Preserve RapidOCR's Apache-2.0 license notice and the model copyright
   attribution above.
-- Preserve ONNX Runtime, OpenCV, and NumPy license/metadata files when the
+- Preserve ONNX Runtime, OpenVINO, OpenCV, and NumPy license/metadata files when the
   packaging tool can include distribution metadata.
-- If RapidOCR, OCR model files, ONNX Runtime, OpenCV, NumPy, or their pinned
+- If RapidOCR, OCR model files, ONNX Runtime, OpenVINO, OpenCV, NumPy, or their pinned
   versions change, update this file and rerun the packaging validation tests.
 - Do not publish a release artifact produced with an unsafe OCR packaging
   override such as `-AllowMissingHeaderOcrBuild`.

@@ -3,8 +3,8 @@
 Date: 2026-04-22
 
 Scope: verify current Metroliza report metadata extraction against
-`/home/hexaf/Projects/example_reports` and identify why a Windows desktop run can
-produce only filename-derived metadata even though standalone OCR works.
+a local external report corpus and identify why a Windows desktop run can produce
+only filename-derived metadata even though standalone OCR works.
 
 ## Summary
 
@@ -16,11 +16,11 @@ Evidence:
 
 - `python scripts/validate_packaged_pdf_parser.py --require-header-ocr` passed and
   validated all 3 vendored model files.
-- The 5 original `example_reports/extracted` PDFs all used
+- The 5-file external sample all used
   `header_extraction_mode="ocr"` and selected metadata from `position_cell`
   candidates, not from filename fallback.
-- A deterministic 10-folder sample across the full 4,333-PDF `example_reports`
-  tree had `10/10` reports enter OCR mode and `0/10` filename-only reports.
+- A deterministic 10-group sample across the larger external corpus had `10/10`
+  reports enter OCR mode and `0/10` filename-only reports.
 - Focused metadata/OCR tests passed: `39 passed`.
 
 The filename-only symptom was reproduced only when the parser could not use OCR:
@@ -47,41 +47,40 @@ located the top raster header image, rendered the crop, ran RapidOCR, converted
 OCR boxes back into page coordinates, and selected normalized position-cell
 metadata.
 
-Example successful result from
-`V29091150_Body_EA211_1.0L_2020.01.28_4_1.pdf`:
+Example successful result from an anonymized local sample PDF:
 
 - extraction mode: `ocr`
 - OCR items: `12`
 - required header fields found: `6`
 - selected sources: `position_cell` for reference, date, time, part name,
   revision, stats count, operator, and comment
-- selected reference: `V29091150_001`
-- selected date/time: `2020-01-28 13:41`
-- selected revision: `D.01`
-- selected operator: `REX_GAZDA`
+- selected reference: synthetic header reference
+- selected date/time: synthetic header date/time
+- selected revision: synthetic header revision
+- selected operator: synthetic operator alias
 
 ## Sample Results
 
-Original extracted sample:
+Original local sample:
 
 | Sample set | Checked | OCR mode | Filename-only |
 | --- | ---: | ---: | ---: |
-| `example_reports/extracted` | 5 | 5 | 0 |
+| external sample A | 5 | 5 | 0 |
 
 Stratified tree sample:
 
-| Folder | Result |
+| Group | Result |
 | --- | --- |
-| `DV5R` | OCR mode, non-filename metadata |
-| `DV6` | OCR mode, non-filename metadata |
-| `DeltaP` | OCR mode, non-filename metadata, but some field accuracy issues |
-| `EA211` | OCR mode, non-filename metadata |
-| `EA897` | OCR mode, non-filename metadata |
-| `EB_EP` | OCR mode, non-filename metadata |
-| `GW` | OCR mode, non-filename metadata |
-| `PAM_Bearing` | OCR mode, non-filename metadata, but some field accuracy issues |
-| `eSC_Jaguar` | OCR mode, non-filename metadata, but some field accuracy issues |
-| `extracted` | OCR mode, non-filename metadata |
+| group A | OCR mode, non-filename metadata |
+| group B | OCR mode, non-filename metadata |
+| group C | OCR mode, non-filename metadata, but some field accuracy issues |
+| group D | OCR mode, non-filename metadata |
+| group E | OCR mode, non-filename metadata |
+| group F | OCR mode, non-filename metadata |
+| group G | OCR mode, non-filename metadata |
+| group H | OCR mode, non-filename metadata, but some field accuracy issues |
+| group I | OCR mode, non-filename metadata, but some field accuracy issues |
+| group J | OCR mode, non-filename metadata |
 
 The broader sample shows that OCR activation works, but some older or nonstandard
 families still need profile/normalization improvements. Those accuracy issues are
@@ -183,9 +182,9 @@ python scripts/validate_packaged_pdf_parser.py --require-header-ocr
 python -m pytest tests/test_report_metadata_extractor.py tests/test_header_ocr_backend.py tests/test_header_ocr_geometry.py tests/test_header_ocr_corrections.py tests/test_packaged_pdf_parser_validation.py -q
 ```
 
-Additional one-off parser diagnostics were run against
-`/home/hexaf/Projects/example_reports` using `CMMReportParser.open_report()` and
-`CMMReportParser.extract_metadata()` directly.
+Additional one-off parser diagnostics were run against the local external corpus
+using `CMMReportParser.open_report()` and `CMMReportParser.extract_metadata()`
+directly.
 
 ## Recommendation
 

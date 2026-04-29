@@ -45,7 +45,7 @@ _LABEL_ALIASES = {
     "C0UNT": "COUNT",
     "MEASUREMENTMADEBY": "MEASUREMENT MADE BY",
     "MEASUREMENTNADEBY": "MEASUREMENT MADE BY",
-    "MEASUREMENTONREXCMM": "MEASUREMENT MADE BY",
+    "MEASUREMENTONCMMSYSTEM": "MEASUREMENT MADE BY",
     "NADE": "MADE",
 }
 _LABEL_FIELDS = {
@@ -58,13 +58,13 @@ _LABEL_FIELDS = {
     "SERIALNUMBER": "reference",
     "STATSCOUNT": "stats_count_raw",
     "MEASUREMENTMADEBY": "operator_name",
-    "MEASUREMENTONREXCMM": "operator_name",
+    "MEASUREMENTONCMMSYSTEM": "operator_name",
     "COMMENT": "comment",
     "DATE": "report_date",
     "TIME": "report_time",
 }
 _LOGO_NOISE = {"VAL", "VALC", "VALE", "VALEO", "EO", "LEO", "LOGO"}
-_TOP_BAND_NOISE = {"PAM"}
+_TOP_BAND_NOISE = {"LAB"}
 
 _POLISH_MONTHS = (
     "stycznia",
@@ -103,12 +103,10 @@ _MONTH_ALIASES = {
     "stycznla": "stycznia",
 }
 _OPERATOR_ALIASES = {
-    "PAM JAKBIEC S": "PAM_Jakubiec S.",
-    "PAM JAKUBIEC S": "PAM_Jakubiec S.",
-    "PAM MW": "PAM_MW",
-    "PAM GAZDA": "PAM_GAZDA",
-    "REX GAZDA": "REX_GAZDA",
-    "REX STACHURA": "REX_Stachura",
+    "LAB OPERATOR A": "LAB_OPERATOR_A",
+    "LAB OPERATOR B": "LAB_OPERATOR_B",
+    "CMM OPERATOR A": "CMM_OPERATOR_A",
+    "CMM OPERATOR B": "CMM_OPERATOR_B",
 }
 
 
@@ -288,7 +286,7 @@ def repair_operator_name(value: str | None, *, known_operators: Iterable[str] | 
             return CorrectedText(lookup[match[0]], rule_id="operator_known_list:fuzzy", confidence=0.94)
 
     normalized = text
-    if key.startswith("PAM ") or key.startswith("REX "):
+    if key.startswith("LAB ") or key.startswith("CMM "):
         prefix, _, suffix = normalized.partition(" ")
         normalized = f"{prefix}_{suffix}" if suffix else prefix
     return CorrectedText(normalized, rule_id="operator:separator" if normalized != text else None, confidence=0.90)
@@ -299,8 +297,8 @@ def repair_part_name(value: str | None) -> CorrectedText:
     if text is None:
         return CorrectedText(None)
     repaired = text.replace("_", " ")
-    repaired = re.sub(r"(?<=[a-z])(?=EA\d{3}\b)", " ", repaired)
-    repaired = re.sub(r"\b(EGR valve EA)\s+(897)\b", r"\1\2", repaired, flags=re.IGNORECASE)
+    repaired = re.sub(r"(?<=[a-z])(?=[A-Z]{2}\d{3}\b)", " ", repaired)
+    repaired = re.sub(r"\b(Valve [A-Z]{2})\s+(\d{3})\b", r"\1\2", repaired, flags=re.IGNORECASE)
     repaired = collapse_spaces(repaired) or repaired
     return CorrectedText(repaired, rule_id="part_name:separator" if repaired != text else None, confidence=0.85)
 

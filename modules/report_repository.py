@@ -17,6 +17,7 @@ from modules.report_schema import ensure_report_schema
 
 
 SEMANTIC_DUPLICATE_WARNING_CODE = "semantic_duplicate_identity_hash_detected"
+_UNSET = object()
 REPORT_METADATA_EDITABLE_FIELDS = frozenset(
     {
         "reference",
@@ -388,6 +389,87 @@ class ReportRepository:
 
         return run_transaction_with_retry(self.database, _upsert, connection=self.connection)
 
+    def _replace_report_metadata(
+        self,
+        cursor,
+        report_id: int,
+        metadata: Any,
+        *,
+        metadata_version: str,
+        metadata_profile_id: str | None = None,
+        metadata_profile_version: str | None = None,
+    ) -> None:
+        metadata_map = _as_mapping(metadata)
+        metadata_json = metadata_map.get("metadata_json")
+        if metadata_json is None:
+            metadata_json = {
+                key: value
+                for key, value in metadata_map.items()
+                if key not in {"warnings"}
+                and isinstance(value, (str, int, float, bool, type(None), list, tuple, dict))
+            }
+
+        cursor.execute(
+            """
+            INSERT INTO report_metadata (
+                report_id,
+                reference,
+                reference_raw,
+                report_date,
+                report_time,
+                part_name,
+                revision,
+                sample_number,
+                sample_number_kind,
+                stats_count_raw,
+                stats_count_int,
+                operator_name,
+                comment,
+                metadata_version,
+                metadata_profile_id,
+                metadata_profile_version,
+                metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(report_id) DO UPDATE SET
+                reference = excluded.reference,
+                reference_raw = excluded.reference_raw,
+                report_date = excluded.report_date,
+                report_time = excluded.report_time,
+                part_name = excluded.part_name,
+                revision = excluded.revision,
+                sample_number = excluded.sample_number,
+                sample_number_kind = excluded.sample_number_kind,
+                stats_count_raw = excluded.stats_count_raw,
+                stats_count_int = excluded.stats_count_int,
+                operator_name = excluded.operator_name,
+                comment = excluded.comment,
+                metadata_version = excluded.metadata_version,
+                metadata_profile_id = excluded.metadata_profile_id,
+                metadata_profile_version = excluded.metadata_profile_version,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                int(report_id),
+                metadata_map.get("reference"),
+                metadata_map.get("reference_raw"),
+                metadata_map.get("report_date"),
+                metadata_map.get("report_time"),
+                metadata_map.get("part_name"),
+                metadata_map.get("revision"),
+                metadata_map.get("sample_number"),
+                metadata_map.get("sample_number_kind"),
+                metadata_map.get("stats_count_raw"),
+                metadata_map.get("stats_count_int"),
+                metadata_map.get("operator_name"),
+                metadata_map.get("comment"),
+                metadata_version,
+                metadata_profile_id,
+                metadata_profile_version,
+                _to_json(metadata_json),
+            ),
+        )
+
     def replace_report_metadata(
         self,
         report_id: int,
@@ -399,83 +481,19 @@ class ReportRepository:
     ) -> None:
         """Replace canonical selected metadata for a parsed report."""
 
-        metadata_map = _as_mapping(metadata)
-        metadata_json = metadata_map.get("metadata_json")
-        if metadata_json is None:
-            metadata_json = {
-                key: value
-                for key, value in metadata_map.items()
-                if key not in {"warnings"}
-                and isinstance(value, (str, int, float, bool, type(None), list, tuple, dict))
-            }
-
         def _replace(cursor) -> None:
-            cursor.execute(
-                """
-                INSERT INTO report_metadata (
-                    report_id,
-                    reference,
-                    reference_raw,
-                    report_date,
-                    report_time,
-                    part_name,
-                    revision,
-                    sample_number,
-                    sample_number_kind,
-                    stats_count_raw,
-                    stats_count_int,
-                    operator_name,
-                    comment,
-                    metadata_version,
-                    metadata_profile_id,
-                    metadata_profile_version,
-                    metadata_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(report_id) DO UPDATE SET
-                    reference = excluded.reference,
-                    reference_raw = excluded.reference_raw,
-                    report_date = excluded.report_date,
-                    report_time = excluded.report_time,
-                    part_name = excluded.part_name,
-                    revision = excluded.revision,
-                    sample_number = excluded.sample_number,
-                    sample_number_kind = excluded.sample_number_kind,
-                    stats_count_raw = excluded.stats_count_raw,
-                    stats_count_int = excluded.stats_count_int,
-                    operator_name = excluded.operator_name,
-                    comment = excluded.comment,
-                    metadata_version = excluded.metadata_version,
-                    metadata_profile_id = excluded.metadata_profile_id,
-                    metadata_profile_version = excluded.metadata_profile_version,
-                    metadata_json = excluded.metadata_json
-                """,
-                (
-                    int(report_id),
-                    metadata_map.get("reference"),
-                    metadata_map.get("reference_raw"),
-                    metadata_map.get("report_date"),
-                    metadata_map.get("report_time"),
-                    metadata_map.get("part_name"),
-                    metadata_map.get("revision"),
-                    metadata_map.get("sample_number"),
-                    metadata_map.get("sample_number_kind"),
-                    metadata_map.get("stats_count_raw"),
-                    metadata_map.get("stats_count_int"),
-                    metadata_map.get("operator_name"),
-                    metadata_map.get("comment"),
-                    metadata_version,
-                    metadata_profile_id,
-                    metadata_profile_version,
-                    _to_json(metadata_json),
-                ),
+            self._replace_report_metadata(
+                cursor,
+                report_id,
+                metadata,
+                metadata_version=metadata_version,
+                metadata_profile_id=metadata_profile_id,
+                metadata_profile_version=metadata_profile_version,
             )
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
 
-    def replace_metadata_candidates(self, report_id: int, candidates: Iterable[Any]) -> None:
-        """Replace persisted metadata candidates for a parsed report."""
-
+    def _replace_metadata_candidates(self, cursor, report_id: int, candidates: Iterable[Any]) -> None:
         rows = []
         created_at = utc_timestamp()
         for candidate in candidates:
@@ -498,36 +516,39 @@ class ReportRepository:
                 )
             )
 
-        def _replace(cursor) -> None:
-            cursor.execute("DELETE FROM report_metadata_candidates WHERE report_id = ?", (int(report_id),))
-            cursor.executemany(
-                """
-                INSERT INTO report_metadata_candidates (
-                    report_id,
-                    field_name,
-                    raw_value,
-                    normalized_value,
-                    source_type,
-                    source_detail,
-                    page_number,
-                    region_name,
-                    label_text,
-                    rule_id,
-                    confidence,
-                    is_selected,
-                    evidence_text,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
+        cursor.execute("DELETE FROM report_metadata_candidates WHERE report_id = ?", (int(report_id),))
+        cursor.executemany(
+            """
+            INSERT INTO report_metadata_candidates (
+                report_id,
+                field_name,
+                raw_value,
+                normalized_value,
+                source_type,
+                source_detail,
+                page_number,
+                region_name,
+                label_text,
+                rule_id,
+                confidence,
+                is_selected,
+                evidence_text,
+                created_at
             )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    def replace_metadata_candidates(self, report_id: int, candidates: Iterable[Any]) -> None:
+        """Replace persisted metadata candidates for a parsed report."""
+
+        def _replace(cursor) -> None:
+            self._replace_metadata_candidates(cursor, report_id, candidates)
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
 
-    def replace_metadata_warnings(self, report_id: int, warnings: Iterable[Any]) -> None:
-        """Replace persisted metadata warnings for a parsed report."""
-
+    def _replace_metadata_warnings(self, cursor, report_id: int, warnings: Iterable[Any]) -> None:
         rows = []
         created_at = utc_timestamp()
         for warning in warnings:
@@ -544,22 +565,88 @@ class ReportRepository:
                 )
             )
 
+        cursor.execute("DELETE FROM report_metadata_warnings WHERE report_id = ?", (int(report_id),))
+        cursor.executemany(
+            """
+            INSERT INTO report_metadata_warnings (
+                report_id,
+                code,
+                field_name,
+                severity,
+                message,
+                details_json,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    def replace_metadata_warnings(self, report_id: int, warnings: Iterable[Any]) -> None:
+        """Replace persisted metadata warnings for a parsed report."""
+
         def _replace(cursor) -> None:
-            cursor.execute("DELETE FROM report_metadata_warnings WHERE report_id = ?", (int(report_id),))
-            cursor.executemany(
-                """
-                INSERT INTO report_metadata_warnings (
-                    report_id,
-                    code,
-                    field_name,
-                    severity,
-                    message,
-                    details_json,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+            self._replace_metadata_warnings(cursor, report_id, warnings)
+
+        run_transaction_with_retry(self.database, _replace, connection=self.connection)
+
+    def replace_report_metadata_enrichment(
+        self,
+        report_id: int,
+        metadata: Any,
+        *,
+        candidates: Iterable[Any],
+        warnings: Iterable[Any],
+        metadata_version: str,
+        metadata_profile_id: str | None = None,
+        metadata_profile_version: str | None = None,
+        parse_status: str | None = None,
+        metadata_confidence: float | None = None,
+        identity_hash: str | None | object = _UNSET,
+        raw_report_json: Any = _UNSET,
+    ) -> None:
+        """Atomically replace metadata enrichment rows without touching measurements."""
+
+        now = utc_timestamp()
+
+        def _replace(cursor) -> None:
+            cursor.execute("SELECT id FROM parsed_reports WHERE id = ?", (int(report_id),))
+            if cursor.fetchone() is None:
+                raise ValueError(f"Report {report_id} does not exist")
+
+            self._replace_report_metadata(
+                cursor,
+                report_id,
+                metadata,
+                metadata_version=metadata_version,
+                metadata_profile_id=metadata_profile_id,
+                metadata_profile_version=metadata_profile_version,
+            )
+            self._replace_metadata_candidates(cursor, report_id, candidates)
+            self._replace_metadata_warnings(cursor, report_id, warnings)
+
+            parsed_report_updates = ["updated_at = ?"]
+            parsed_report_params: list[Any] = [now]
+            if parse_status is not None:
+                parsed_report_updates.append("parse_status = ?")
+                parsed_report_params.append(parse_status)
+            if metadata_confidence is not None:
+                parsed_report_updates.append("metadata_confidence = ?")
+                parsed_report_params.append(float(metadata_confidence))
+            if identity_hash is not _UNSET:
+                parsed_report_updates.append("identity_hash = ?")
+                parsed_report_params.append(identity_hash)
+            if raw_report_json is not _UNSET:
+                parsed_report_updates.append("raw_report_json = ?")
+                parsed_report_params.append(_to_json(raw_report_json))
+            parsed_report_params.append(int(report_id))
+            cursor.execute(
+                f"""
+                UPDATE parsed_reports
+                SET {", ".join(parsed_report_updates)}
+                WHERE id = ?
                 """,
-                rows,
+                tuple(parsed_report_params),
             )
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)

@@ -1,6 +1,7 @@
 """Background parser thread using report_parser_factory to instantiate parser implementations."""
 
 import inspect
+import json
 import logging
 import os
 import time
@@ -18,7 +19,9 @@ from modules.cmm_schema import ensure_cmm_report_schema
 from modules.db import execute_with_retry, sqlite_connection_scope
 from modules.log_context import build_parse_log_extra, get_operation_logger
 from modules.progress_status import build_three_line_status
-from modules.report_repository import compute_sha256
+from modules.report_identity import build_report_identity_hash
+from modules.report_metadata_models import CanonicalReportMetadata
+from modules.report_repository import ReportRepository, compute_sha256
 from modules.cmm_report_parser import CMMReportParser
 from modules.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 
@@ -26,6 +29,12 @@ from modules.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 @dataclass(frozen=True)
 class ParseBatchResult:
     parsed_files: int
+    total_files: int
+
+
+@dataclass(frozen=True)
+class MetadataEnrichmentBatchResult:
+    enriched_files: int
     total_files: int
 
 
@@ -148,6 +157,39 @@ def parse_new_reports(
     return ParseBatchResult(parsed_files=parsed_files, total_files=total_files)
 
 
+def enrich_report_metadata(
+    report_paths,
+    parser_factory,
+    persist_enrichment,
+    should_cancel=lambda: False,
+    on_progress=None,
+    on_file_enriched=None,
+):
+    enriched_files = 0
+    processed_files = 0
+    total_files = len(report_paths)
+
+    for report in report_paths:
+        if should_cancel():
+            break
+
+        enrichment_start = time.perf_counter()
+        parser = parser_factory(report)
+        if parser is not None and persist_enrichment(report, parser):
+            enriched_files += 1
+
+        processed_files += 1
+        enrichment_duration_s = time.perf_counter() - enrichment_start
+
+        if on_file_enriched:
+            on_file_enriched(parser, processed_files, total_files, enrichment_duration_s)
+
+        if on_progress:
+            on_progress(processed_files, total_files)
+
+    return MetadataEnrichmentBatchResult(enriched_files=enriched_files, total_files=total_files)
+
+
 logger = get_operation_logger(logging.getLogger(__name__), "parse_reports")
 
 _CURRENT_CMM_METADATA_PARSER_ID = DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.parser_id
@@ -158,6 +200,232 @@ _HEADER_OCR_ERROR_MARKER = '%"header_ocr_error"%'
 _REFERENCE_FILENAME_MARKER = '%"reference": "filename_candidate"%'
 _REPORT_DATE_FILENAME_MARKER = '%"report_date": "filename_candidate"%'
 _STATS_COUNT_FILENAME_MARKER = '%"stats_count_raw": "filename_candidate"%'
+_METADATA_VALUE_FIELDS = (
+    "reference",
+    "reference_raw",
+    "report_date",
+    "report_time",
+    "part_name",
+    "revision",
+    "sample_number",
+    "sample_number_kind",
+    "stats_count_raw",
+    "stats_count_int",
+    "operator_name",
+    "comment",
+)
+_OCR_ONLY_METADATA_FIELDS = frozenset({"report_time", "revision", "operator_name", "comment"})
+_FIELD_DEPENDENCIES = {
+    "reference": ("reference_raw",),
+    "sample_number": ("sample_number_kind",),
+    "stats_count_raw": ("stats_count_int",),
+}
+
+
+def _json_object(value):
+    if isinstance(value, dict):
+        return dict(value)
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _metadata_value(metadata, field_name):
+    if isinstance(metadata, dict):
+        return metadata.get(field_name)
+    return getattr(metadata, field_name, None)
+
+
+def _metadata_mapping(metadata):
+    return {field_name: _metadata_value(metadata, field_name) for field_name in _METADATA_VALUE_FIELDS}
+
+
+def _field_has_manual_override(metadata_json, field_name):
+    manual_overrides = metadata_json.get("manual_overrides") if isinstance(metadata_json, dict) else {}
+    return isinstance(manual_overrides, dict) and field_name in manual_overrides
+
+
+def _should_use_enriched_metadata_field(field_name, current_value, enriched_value, current_metadata_json):
+    if _field_has_manual_override(current_metadata_json, field_name):
+        return False
+    if enriched_value in (None, ""):
+        return False
+    if current_value in (None, ""):
+        return True
+    if current_value == enriched_value:
+        return True
+    return field_name in _OCR_ONLY_METADATA_FIELDS
+
+
+def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
+    """Merge complete metadata into an existing light row without replacing stable light fields."""
+
+    current_row = current_row or {}
+    current_metadata_json = _json_object(current_row.get("metadata_json"))
+    enriched_metadata_json = _json_object(_metadata_value(enriched_metadata, "metadata_json"))
+    enriched_map = _metadata_mapping(enriched_metadata)
+    merged_map = dict(enriched_map)
+    updated_fields = []
+    preserved_fields = []
+
+    for field_name in _METADATA_VALUE_FIELDS:
+        current_value = current_row.get(field_name)
+        enriched_value = enriched_map.get(field_name)
+        if _should_use_enriched_metadata_field(field_name, current_value, enriched_value, current_metadata_json):
+            if current_value != enriched_value:
+                updated_fields.append(field_name)
+            continue
+
+        if current_value not in (None, ""):
+            merged_map[field_name] = current_value
+            if current_value != enriched_value:
+                preserved_fields.append(field_name)
+
+            for dependent_field in _FIELD_DEPENDENCIES.get(field_name, ()):
+                dependent_value = current_row.get(dependent_field)
+                if dependent_value not in (None, ""):
+                    merged_map[dependent_field] = dependent_value
+                    if dependent_value != enriched_map.get(dependent_field):
+                        preserved_fields.append(dependent_field)
+
+    merged_metadata_json = dict(enriched_metadata_json)
+    current_manual_overrides = current_metadata_json.get("manual_overrides")
+    if isinstance(current_manual_overrides, dict) and current_manual_overrides:
+        merged_metadata_json["manual_overrides"] = current_manual_overrides
+
+    field_sources = dict(merged_metadata_json.get("field_sources") or {})
+    current_field_sources = current_metadata_json.get("field_sources")
+    if isinstance(current_field_sources, dict):
+        for field_name in preserved_fields:
+            source = current_field_sources.get(field_name)
+            if source is not None:
+                field_sources[field_name] = source
+    merged_metadata_json["field_sources"] = field_sources
+    merged_metadata_json["metadata_enrichment"] = {
+        "mode": "complete",
+        "merge_policy": "preserve_existing_nonempty_light_fields_except_ocr_only",
+        "preserved_fields": sorted(set(preserved_fields)),
+        "updated_fields": sorted(set(updated_fields)),
+    }
+
+    merged_metadata = CanonicalReportMetadata(
+        parser_id=_metadata_value(enriched_metadata, "parser_id"),
+        template_family=_metadata_value(enriched_metadata, "template_family"),
+        template_variant=_metadata_value(enriched_metadata, "template_variant"),
+        metadata_confidence=_metadata_value(enriched_metadata, "metadata_confidence") or 0.0,
+        reference=merged_map.get("reference"),
+        reference_raw=merged_map.get("reference_raw"),
+        report_date=merged_map.get("report_date"),
+        report_time=merged_map.get("report_time"),
+        part_name=merged_map.get("part_name"),
+        revision=merged_map.get("revision"),
+        sample_number=merged_map.get("sample_number"),
+        sample_number_kind=merged_map.get("sample_number_kind"),
+        stats_count_raw=merged_map.get("stats_count_raw"),
+        stats_count_int=merged_map.get("stats_count_int"),
+        operator_name=merged_map.get("operator_name"),
+        comment=merged_map.get("comment"),
+        page_count=_metadata_value(enriched_metadata, "page_count"),
+        metadata_json=merged_metadata_json,
+        warnings=tuple(_metadata_value(enriched_metadata, "warnings") or ()),
+    )
+    merge_summary = {
+        "preserved_fields": sorted(set(preserved_fields)),
+        "updated_fields": sorted(set(updated_fields)),
+    }
+    return merged_metadata, merge_summary
+
+
+def report_metadata_row_for_enrichment(db_file, report_id, *, connection=None):
+    rows = execute_with_retry(
+        db_file,
+        """
+        SELECT
+            pr.raw_report_json,
+            rm.reference,
+            rm.reference_raw,
+            rm.report_date,
+            rm.report_time,
+            rm.part_name,
+            rm.revision,
+            rm.sample_number,
+            rm.sample_number_kind,
+            rm.stats_count_raw,
+            rm.stats_count_int,
+            rm.operator_name,
+            rm.comment,
+            rm.metadata_json
+        FROM parsed_reports pr
+        LEFT JOIN report_metadata rm ON rm.report_id = pr.id
+        WHERE pr.id = ?
+        """,
+        params=(int(report_id),),
+        connection=connection,
+        retries=5,
+        retry_delay_s=1,
+    )
+    if not rows:
+        return {}
+    columns = (
+        "raw_report_json",
+        "reference",
+        "reference_raw",
+        "report_date",
+        "report_time",
+        "part_name",
+        "revision",
+        "sample_number",
+        "sample_number_kind",
+        "stats_count_raw",
+        "stats_count_int",
+        "operator_name",
+        "comment",
+        "metadata_json",
+    )
+    return dict(zip(columns, rows[0]))
+
+
+def selection_result_for_complete_metadata_parser(parser):
+    if hasattr(parser, "metadata_parsing_mode"):
+        parser.metadata_parsing_mode = "complete"
+    parser.open_report()
+    selection_result = getattr(parser, "_metadata_selection_result", None)
+    if selection_result is None:
+        selection_result = parser.extract_metadata()
+    return selection_result
+
+
+def persist_complete_metadata_enrichment(db_file, report_id, selection_result, *, connection=None):
+    current_row = report_metadata_row_for_enrichment(db_file, report_id, connection=connection)
+    merged_metadata, merge_summary = merge_enriched_metadata_for_persistence(
+        current_row,
+        selection_result.metadata,
+    )
+    raw_report_json = _json_object(current_row.get("raw_report_json"))
+    raw_report_json["metadata_enrichment"] = {
+        "mode": "complete",
+        "measurement_rows_preserved": True,
+        **merge_summary,
+    }
+    repository = ReportRepository(db_file, connection=connection)
+    repository.replace_report_metadata_enrichment(
+        report_id,
+        merged_metadata,
+        candidates=selection_result.candidates,
+        warnings=merged_metadata.warnings,
+        metadata_version="report_metadata_v1",
+        metadata_profile_id=DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.template_family,
+        metadata_profile_version="1",
+        parse_status="parsed_with_warnings" if merged_metadata.warnings else "parsed",
+        metadata_confidence=merged_metadata.metadata_confidence,
+        identity_hash=build_report_identity_hash(merged_metadata),
+        raw_report_json=raw_report_json,
+    )
+    return merged_metadata, merge_summary
 
 
 class ParseReportsThread(QThread):
@@ -166,6 +434,7 @@ class ParseReportsThread(QThread):
         'discover_reports': (0, 15),
         'load_existing_reports': (15, 30),
         'parse_reports': (30, 100),
+        'enrich_metadata': (100, 100),
     }
 
     update_progress = pyqtSignal(int)
@@ -181,9 +450,15 @@ class ParseReportsThread(QThread):
         # Initialize the thread with validated request values
         self.directory = validated_request.source_directory
         self.db_file = validated_request.db_file
+        self.metadata_parsing_mode = validated_request.metadata_parsing_mode
+        self.run_background_metadata_enrichment = validated_request.run_background_metadata_enrichment
         self.parsing_canceled = False
         self._extracted_archive_dir = None
         self._last_emitted_progress = -1
+        self._progress_stage_ranges = dict(self.PROGRESS_STAGE_RANGES)
+        if self.run_background_metadata_enrichment and self.metadata_parsing_mode == "light":
+            self._progress_stage_ranges["parse_reports"] = (30, 75)
+            self._progress_stage_ranges["enrich_metadata"] = (75, 100)
 
     @staticmethod
     def _batched_values(values, batch_size):
@@ -205,7 +480,7 @@ class ParseReportsThread(QThread):
         self.update_progress.emit(progress_value)
 
     def _emit_stage_progress(self, stage_name, fraction=1.0):
-        start, end = self.PROGRESS_STAGE_RANGES[stage_name]
+        start, end = self._progress_stage_ranges[stage_name]
         safe_fraction = max(0.0, min(1.0, float(fraction)))
         self._emit_progress(start + ((end - start) * safe_fraction))
 
@@ -231,6 +506,27 @@ class ParseReportsThread(QThread):
             return build_three_line_status(stage_line, detail_line, "ETA --")
 
         files_per_second = parsed_files / elapsed_seconds if elapsed_seconds > 0 else 0.0
+        if files_per_second <= 0:
+            return build_three_line_status(stage_line, detail_line, "ETA --")
+
+        eta_seconds = remaining_files / files_per_second
+        elapsed_display = self._format_elapsed_or_eta(elapsed_seconds)
+        eta_display = self._format_elapsed_or_eta(eta_seconds)
+        return build_three_line_status(stage_line, detail_line, f"{elapsed_display} elapsed, ETA {eta_display}")
+
+    def _build_enrichment_label(self, *, enriched_files, total_files, start_time):
+        stage_line = "Enriching report metadata..."
+        if total_files <= 0:
+            return build_three_line_status(stage_line, "Files remaining 0", "ETA --")
+
+        remaining_files = max(0, total_files - enriched_files)
+        detail_line = f"File {enriched_files}/{total_files}, remaining {remaining_files}"
+
+        elapsed_seconds = max(0.0, time.perf_counter() - start_time)
+        if enriched_files < 2 or elapsed_seconds < 1.0:
+            return build_three_line_status(stage_line, detail_line, "ETA --")
+
+        files_per_second = enriched_files / elapsed_seconds if elapsed_seconds > 0 else 0.0
         if files_per_second <= 0:
             return build_three_line_status(stage_line, detail_line, "ETA --")
 
@@ -325,41 +621,63 @@ class ParseReportsThread(QThread):
                 self._emit_stage_progress('load_existing_reports', 1.0)
                 return report_fingerprints
 
-            rows = execute_with_retry(
-                self.db_file,
-                """
-                SELECT sf.sha256
-                FROM source_files sf
-                JOIN parsed_reports pr ON pr.source_file_id = sf.id
-                LEFT JOIN report_metadata rm ON rm.report_id = pr.id
-                WHERE sf.is_active = 1
-                  AND (
-                    pr.parser_id <> ?
-                    OR (
-                      pr.parser_version = ?
-                      AND COALESCE(rm.metadata_json, '') LIKE ?
-                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
-                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
-                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
-                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
-                      AND COALESCE(rm.metadata_json, '') NOT LIKE ?
-                    )
-                  )
-                """,
-                params=(
-                    _CURRENT_CMM_METADATA_PARSER_ID,
-                    _CURRENT_CMM_PARSER_VERSION,
-                    _HEADER_EXTRACTION_DIAGNOSTIC_MARKER,
-                    _HEADER_EXTRACTION_NONE_MARKER,
-                    _HEADER_OCR_ERROR_MARKER,
-                    _REFERENCE_FILENAME_MARKER,
-                    _REPORT_DATE_FILENAME_MARKER,
-                    _STATS_COUNT_FILENAME_MARKER,
-                ),
-                connection=connection,
-                retries=5,
-                retry_delay_s=1,
-            )
+            if self.metadata_parsing_mode == "light":
+                rows = execute_with_retry(
+                    self.db_file,
+                    """
+                    SELECT sf.sha256
+                    FROM source_files sf
+                    JOIN parsed_reports pr ON pr.source_file_id = sf.id
+                    WHERE sf.is_active = 1
+                      AND (
+                        pr.parser_id <> ?
+                        OR pr.parser_version = ?
+                      )
+                    """,
+                    params=(
+                        _CURRENT_CMM_METADATA_PARSER_ID,
+                        _CURRENT_CMM_PARSER_VERSION,
+                    ),
+                    connection=connection,
+                    retries=5,
+                    retry_delay_s=1,
+                )
+            else:
+                rows = execute_with_retry(
+                    self.db_file,
+                    """
+                    SELECT sf.sha256
+                    FROM source_files sf
+                    JOIN parsed_reports pr ON pr.source_file_id = sf.id
+                    LEFT JOIN report_metadata rm ON rm.report_id = pr.id
+                    WHERE sf.is_active = 1
+                      AND (
+                        pr.parser_id <> ?
+                        OR (
+                          pr.parser_version = ?
+                          AND COALESCE(rm.metadata_json, '') LIKE ?
+                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                          AND COALESCE(rm.metadata_json, '') NOT LIKE ?
+                        )
+                      )
+                    """,
+                    params=(
+                        _CURRENT_CMM_METADATA_PARSER_ID,
+                        _CURRENT_CMM_PARSER_VERSION,
+                        _HEADER_EXTRACTION_DIAGNOSTIC_MARKER,
+                        _HEADER_EXTRACTION_NONE_MARKER,
+                        _HEADER_OCR_ERROR_MARKER,
+                        _REFERENCE_FILENAME_MARKER,
+                        _REPORT_DATE_FILENAME_MARKER,
+                        _STATS_COUNT_FILENAME_MARKER,
+                    ),
+                    connection=connection,
+                    retries=5,
+                    retry_delay_s=1,
+                )
             report_fingerprints.update(
                 build_report_fingerprints_from_rows(rows, should_cancel=lambda: self.parsing_canceled)
             )
@@ -382,6 +700,98 @@ class ParseReportsThread(QThread):
             )
         except Exception as e:
             self.log_and_exit(e)
+
+    def _report_id_for_source_path(self, report_path, connection=None):
+        sha256_value = compute_sha256(report_path)
+        rows = execute_with_retry(
+            self.db_file,
+            """
+            SELECT pr.id
+            FROM source_files sf
+            JOIN parsed_reports pr ON pr.source_file_id = sf.id
+            WHERE sf.sha256 = ?
+              AND sf.is_active = 1
+            ORDER BY pr.id DESC
+            LIMIT 1
+            """,
+            params=(sha256_value,),
+            connection=connection,
+            retries=5,
+            retry_delay_s=1,
+        )
+        if not rows:
+            return None
+        return int(rows[0][0])
+
+    def _report_metadata_row(self, report_id, connection=None):
+        return report_metadata_row_for_enrichment(self.db_file, report_id, connection=connection)
+
+    def _run_background_metadata_enrichment(self, report_paths, connection):
+        if self.metadata_parsing_mode != "light" or not self.run_background_metadata_enrichment:
+            return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
+
+        if not report_paths:
+            self._emit_stage_progress('enrich_metadata', 1.0)
+            return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
+
+        self.update_label.emit(
+            build_three_line_status(
+                "Enriching report metadata...",
+                "Running complete OCR metadata for imported reports",
+                "ETA --",
+            )
+        )
+        self._emit_stage_progress('enrich_metadata', 0.0)
+
+        start_time = time.perf_counter()
+
+        def _parser_factory(report):
+            parser = get_parser(report, self.db_file, connection=connection)
+            selection_result_for_complete_metadata_parser(parser)
+            return parser
+
+        def _persist_enrichment(report, parser):
+            report_id = self._report_id_for_source_path(report, connection=connection)
+            if report_id is None:
+                return False
+
+            selection_result = getattr(parser, "_metadata_selection_result", None)
+            if selection_result is None:
+                selection_result = parser.extract_metadata()
+            persist_complete_metadata_enrichment(
+                self.db_file,
+                report_id,
+                selection_result,
+                connection=connection,
+            )
+            return True
+
+        result = enrich_report_metadata(
+            report_paths,
+            parser_factory=_parser_factory,
+            persist_enrichment=_persist_enrichment,
+            should_cancel=lambda: self.parsing_canceled,
+            on_progress=lambda enriched_files, total_files: (
+                self._emit_stage_progress('enrich_metadata', enriched_files / total_files if total_files else 1.0),
+                self.update_label.emit(
+                    self._build_enrichment_label(
+                        enriched_files=enriched_files,
+                        total_files=total_files,
+                        start_time=start_time,
+                    )
+                ),
+            ),
+        )
+        logger.info(
+            "Background metadata enrichment finished",
+            extra=build_parse_log_extra(
+                source_path=self.directory,
+                total_files=result.total_files,
+                parsed_count=result.enriched_files,
+                cancel_flag=self.parsing_canceled,
+            ),
+        )
+        return result
 
     def run(self):
         try:
@@ -503,10 +913,16 @@ class ParseReportsThread(QThread):
                         return parser.persist_prepared_report()
                     return parser.open_database_and_check_filename()
 
+                def _parser_factory(report):
+                    parser = get_parser(report, self.db_file, connection=connection)
+                    if hasattr(parser, "metadata_parsing_mode"):
+                        parser.metadata_parsing_mode = self.metadata_parsing_mode
+                    return parser
+
                 result = parse_new_reports(
                     list_of_reports,
                     report_fingerprints,
-                    parser_factory=lambda report: get_parser(report, self.db_file, connection=connection),
+                    parser_factory=_parser_factory,
                     persist_report=_persist_report,
                     should_cancel=lambda: self.parsing_canceled,
                     on_progress=lambda parsed_files, total_files: (
@@ -532,6 +948,9 @@ class ParseReportsThread(QThread):
                     enable_two_stage_pipeline=two_stage_enabled,
                     worker_count=two_stage_workers,
                 )
+
+                if not self.parsing_canceled and self.run_background_metadata_enrichment:
+                    self._run_background_metadata_enrichment(list_of_reports, connection)
 
             if result.total_files == 0:
                 self._emit_stage_progress('parse_reports', 1.0)

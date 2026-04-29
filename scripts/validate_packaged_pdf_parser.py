@@ -21,6 +21,7 @@ REQUIRED_PYMUPDF_MODULES = (
 REQUIRED_HEADER_OCR_MODULES = (
     'rapidocr',
     'onnxruntime',
+    'openvino',
     'cv2',
     'numpy',
 )
@@ -175,6 +176,7 @@ def validate_third_party_notice(notice_path: str | Path | None = None) -> Path:
         'Baidu',
         'ONNX Runtime',
         'MIT',
+        'OpenVINO',
         'OpenCV',
         'NumPy',
         'BSD-3-Clause',

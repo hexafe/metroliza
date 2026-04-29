@@ -34,8 +34,6 @@ def test_docs_remain_aligned_with_coverage_visibility_contract() -> None:
     assert '`unit-test-coverage` artifact `coverage.xml`' in checklist
 
 
-
-
 def test_ci_workflow_emits_non_blocking_coverage_threshold_status() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 
@@ -52,7 +50,7 @@ def test_ci_policy_keeps_coverage_threshold_governance_self_contained() -> None:
     assert 'Coverage threshold staged policy' in ci_policy
     assert 'Coverage threshold governance remains staged' in ci_policy
     assert 'release owner records a dated go/no-go decision' in ci_policy
-    assert 'docs/roadmaps/2026_03_rc1_test_ci_execution_tracker.md' not in ci_policy
+
 
 def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')

@@ -21,6 +21,7 @@ from modules.header_ocr_backend import (
     default_rapidocr_latin_model_paths,
     get_cached_rapidocr_latin_backend,
     missing_rapidocr_latin_model_paths,
+    rapidocr_latin_runtime_config_from_env,
 )
 from modules.header_ocr_corrections import (
     canonicalize_header_label,
@@ -55,6 +56,12 @@ from modules.parser_plugin_contracts import (
 logger = logging.getLogger(__name__)
 HEADER_OCR_THREADS_ENV = "METROLIZA_HEADER_OCR_THREADS"
 DEFAULT_HEADER_OCR_MAX_THREADS = 4
+METADATA_PARSING_MODE_LIGHT = "light"
+METADATA_PARSING_MODE_COMPLETE = "complete"
+SUPPORTED_METADATA_PARSING_MODES = {
+    METADATA_PARSING_MODE_LIGHT,
+    METADATA_PARSING_MODE_COMPLETE,
+}
 
 def _resolve_pymupdf_backend_module() -> str | None:
     """Return the import name for a valid PyMuPDF backend, if available."""
@@ -102,9 +109,16 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             reasons=("unsupported_extension",),
         )
 
-    def __init__(self, file_path: str, database: str, connection=None):
+    def __init__(
+        self,
+        file_path: str,
+        database: str,
+        connection=None,
+        metadata_parsing_mode: str = METADATA_PARSING_MODE_COMPLETE,
+    ):
         """Initialize parser for one CMM report file."""
         super().__init__(file_path=file_path, database=database, connection=connection)
+        self.metadata_parsing_mode = self._normalize_metadata_parsing_mode(metadata_parsing_mode)
         self.parse_backend_used = "unknown"
         self.persistence_backend_used = "unknown"
         self.stage_timings_s: dict[str, float] = {}
@@ -117,9 +131,17 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self._first_page_header_items = []
         self._header_extraction_diagnostics = {
             "header_extraction_mode": "none",
+            "metadata_parsing_mode": self.metadata_parsing_mode,
             "header_word_count": 0,
             "header_required_fields_found": 0,
         }
+
+    @staticmethod
+    def _normalize_metadata_parsing_mode(value: str | None) -> str:
+        mode = str(value or METADATA_PARSING_MODE_COMPLETE).strip().lower()
+        if mode in SUPPORTED_METADATA_PARSING_MODES:
+            return mode
+        return METADATA_PARSING_MODE_COMPLETE
 
     def open_database_and_check_filename(self):
         """Handle `open_database_and_check_filename` for `CMMReportParser`.
@@ -362,13 +384,13 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 return [], f"header_ocr_models_missing:{missing_names}"
 
             ocr_thread_count = cls._header_ocr_thread_count()
+            runtime_config = rapidocr_latin_runtime_config_from_env(
+                ocr_thread_count=ocr_thread_count
+            )
             backend = get_cached_rapidocr_latin_backend(
                 RapidOcrLatinBackendConfig(
                     model_paths=model_paths,
-                    params={
-                        "EngineConfig.onnxruntime.intra_op_num_threads": ocr_thread_count,
-                        "EngineConfig.onnxruntime.inter_op_num_threads": 1,
-                    },
+                    params=runtime_config.params,
                 )
             )
             with tempfile.TemporaryDirectory(prefix="metroliza_header_ocr_") as temp_dir:
@@ -399,6 +421,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             run_diagnostics = dict(run.diagnostics)
             run_diagnostics["ocr_runtime_s"] = round(ocr_runtime_s, 4)
             run_diagnostics["ocr_thread_count"] = ocr_thread_count
+            run_diagnostics["ocr_runtime_engine"] = runtime_config.engine
+            run_diagnostics["ocr_runtime_accelerator"] = runtime_config.accelerator
             for item in items:
                 item["ocr_run_diagnostics"] = run_diagnostics
             return postprocess_header_ocr_items(items), None
@@ -406,11 +430,18 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             return [], f"{type(exc).__name__}: {exc}"
 
     @classmethod
-    def _extract_first_page_header_items(cls, page, pdf_backend) -> tuple[list[dict], dict]:
+    def _extract_first_page_header_items(
+        cls,
+        page,
+        pdf_backend,
+        metadata_parsing_mode: str = METADATA_PARSING_MODE_COMPLETE,
+    ) -> tuple[list[dict], dict]:
+        metadata_mode = cls._normalize_metadata_parsing_mode(metadata_parsing_mode)
         selection = cls._header_crop_selection(page)
         if selection is None:
             return [], {
                 "header_extraction_mode": "none",
+                "metadata_parsing_mode": metadata_mode,
                 "header_word_count": 0,
                 "header_required_fields_found": 0,
             }
@@ -420,6 +451,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         word_required_fields = cls._header_required_fields_found(word_items)
         diagnostics = {
             "header_extraction_mode": "words" if word_items else "none",
+            "metadata_parsing_mode": metadata_mode,
             "header_word_count": len(word_items),
             "header_required_fields_found": word_required_fields,
             "header_region_bbox": tuple(round(value, 3) for value in bbox),
@@ -429,6 +461,10 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         }
 
         if word_required_fields >= 2:
+            return word_items, diagnostics
+
+        if metadata_mode == METADATA_PARSING_MODE_LIGHT:
+            diagnostics["header_ocr_skipped"] = "light_metadata_mode"
             return word_items, diagnostics
 
         ocr_items, ocr_error = cls._ocr_header_items_from_pixmap(page, bbox, pdf_backend)
@@ -448,6 +484,10 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                     "header_ocr_model": DEFAULT_HEADER_OCR_BACKEND,
                     "header_ocr_runtime_s": ocr_run_diagnostics.get("ocr_runtime_s"),
                     "header_ocr_thread_count": ocr_run_diagnostics.get("ocr_thread_count"),
+                    "header_ocr_runtime_engine": ocr_run_diagnostics.get("ocr_runtime_engine"),
+                    "header_ocr_runtime_accelerator": ocr_run_diagnostics.get(
+                        "ocr_runtime_accelerator"
+                    ),
                 }
             )
             return ocr_items, diagnostics
@@ -490,6 +530,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                         ) = self._extract_first_page_header_items(
                             page,
                             pdf_backend,
+                            metadata_parsing_mode=self.metadata_parsing_mode,
                         )
                     for line in page_text:
                         self.raw_text.append(line)
