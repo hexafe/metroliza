@@ -155,6 +155,18 @@ def _coerce_measurements_array(measurements) -> np.ndarray:
         if finite_values.flags['C_CONTIGUOUS']:
             return finite_values
         return np.ascontiguousarray(finite_values, dtype=np.float64)
+    if isinstance(measurements, pd.Series):
+        if pd.api.types.is_numeric_dtype(measurements):
+            values = measurements.to_numpy(dtype=np.float64, copy=False)
+        else:
+            values = pd.to_numeric(measurements, errors='coerce').dropna().to_numpy(dtype=float)
+        values = _as_float64_1d_contiguous(values)
+        if np.all(np.isfinite(values)):
+            return values
+        finite_values = values[np.isfinite(values)]
+        if finite_values.flags['C_CONTIGUOUS']:
+            return finite_values
+        return np.ascontiguousarray(finite_values, dtype=np.float64)
 
     values = pd.to_numeric(pd.Series(list(measurements)), errors='coerce').dropna().to_numpy(dtype=float)
     return _as_float64_1d_contiguous(values)
@@ -682,7 +694,8 @@ def build_fit_curve_payload(
         if dist is not None and params:
             return _build_density_curve(dist, params, x_values)
 
-    mu, std = norm.fit(values)
+    mu = float(np.mean(values))
+    std = float(np.std(values))
     if std <= 0:
         return None
     return _build_density_curve(norm, (mu, std), x_values)

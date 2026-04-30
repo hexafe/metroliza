@@ -101,6 +101,43 @@ python -m ruff check scripts/benchmark_trend_compare.py tests/test_benchmark_tre
 
 Result: focused tests passed (`14 passed`), ruff passed, and py_compile passed.
 
+## 2026-04-30 Histogram Density Payload Optimization
+
+Completed:
+
+- Optimized the histogram density curve adapter path for already-tabular numeric
+  input by avoiding the generic `pd.Series(list(...))` conversion.
+- Replaced the fallback normal-curve `scipy.stats.norm.fit(...)` call with the
+  equivalent NumPy mean/std MLE calculation.
+
+Focused validation:
+
+```bash
+python -m pytest tests/test_distribution_fit_service.py tests/test_export_summary_utils.py tests/test_export_plot_helpers.py::TestExportPlotHelpers::test_build_histogram_density_curve_payload_builds_curve_for_variable_data tests/test_export_plot_helpers.py::TestExportPlotHelpers::test_build_histogram_density_curve_payload_returns_none_for_constant_data tests/test_export_plot_helpers.py::TestExportPlotHelpers::test_build_histogram_density_curve_payload_accepts_numeric_string_measurements tests/test_export_plot_helpers.py::TestExportPlotHelpers::test_build_histogram_density_curve_payload_supports_kde_mode -q
+python -m ruff check modules/distribution_fit_service.py tests/test_distribution_fit_service.py tests/test_export_summary_utils.py tests/test_export_plot_helpers.py
+```
+
+Result: focused tests passed (`42 passed`), and ruff passed.
+
+Benchmark command:
+
+```bash
+python -m scripts.benchmark_paths \
+  --output-dir /tmp/metroliza_high_header_hist_after \
+  --scenarios excel_export_high_header_cardinality_compare \
+  --report-count 12 \
+  --headers-per-report 80
+```
+
+Result:
+
+- `/tmp/metroliza_high_header_hist_after/benchmark-20260430-192930.json`
+- `/tmp/metroliza_high_header_hist_after/benchmark-20260430-192930.csv`
+- `after_refactor=0.216s`
+- `after_distribution_payload=0.071s`
+- `after_histogram_payload=0.125s`
+- `speedup_ratio=1.11x`
+
 ## Validation Already Run
 
 ```bash
@@ -145,13 +182,9 @@ Key readings:
 
 ## Next Priority Order
 
-1. Investigate the remaining high-header benchmark cost in histogram density
-   payload generation. After the violin/distribution optimization, histogram
-   payload preparation is now the dominant stage in the synthetic high-header
-   scenario.
-2. Run clean-machine Windows packaged EXE smoke. Source OCR validation is green,
+1. Run clean-machine Windows packaged EXE smoke. Source OCR validation is green,
    but release confidence still needs packaged artifact launch/parser evidence.
-3. Return to DB bulk-update APIs for Modify DB flows after export and Windows
+2. Return to DB bulk-update APIs for Modify DB flows after export and Windows
    release evidence are handled.
 
 ## Do Not Rerun By Default
