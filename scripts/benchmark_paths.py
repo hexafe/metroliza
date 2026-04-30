@@ -225,6 +225,32 @@ def _create_csv_fixture(csv_path: Path, *, row_count: int, data_columns: int) ->
     return {'rows': row_count, 'headers': data_columns + 1}
 
 
+def _run_excel_export_with_close_timing(thread: Any) -> tuple[bool, dict[str, float]]:
+    from modules.export_backends import ExcelExportBackend
+
+    class TimingExcelExportBackend(ExcelExportBackend):
+        def __init__(self):
+            self.timings = {
+                'workbook_close': 0.0,
+            }
+
+        def close_writer(self, writer: Any) -> None:
+            close_start = time.perf_counter()
+            try:
+                return super().close_writer(writer)
+            finally:
+                self.timings['workbook_close'] += time.perf_counter() - close_start
+
+    backend = TimingExcelExportBackend()
+    previous_backend = getattr(thread, '_active_backend', None)
+    thread._active_backend = backend
+    try:
+        completed = backend.run(thread)
+    finally:
+        thread._active_backend = previous_backend
+    return bool(completed), dict(backend.timings)
+
+
 def benchmark_parse_path(temp_dir: Path, pdf_count: int) -> ScenarioResult:
     from modules.cmm_report_parser import CMMReportParser
     from modules.cmm_native_parser import get_backend_telemetry_snapshot, reset_backend_telemetry
@@ -472,7 +498,7 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
     groupby_stats_s = time.perf_counter() - groupby_start
 
     total_run_start = time.perf_counter()
-    completed = thread.get_export_backend().run(thread)
+    completed, backend_timings = _run_excel_export_with_close_timing(thread)
     total_run_s = time.perf_counter() - total_run_start
 
     if not completed:
@@ -490,9 +516,12 @@ def benchmark_excel_export_path(temp_dir: Path, report_count: int, headers_per_r
         stage_timings_s={
             'data_load': data_load_s,
             'groupby_stats': groupby_stats_s,
+            'transform_grouping': float(stage_timings.get('transform_grouping', 0.0)),
+            'worksheet_write_planning': float(stage_timings.get('worksheet_write_planning', 0.0)),
             'chart_payload_preparation': float(stage_timings.get('chart_payload_preparation', 0.0)),
             'chart_rendering': float(stage_timings.get('chart_rendering', 0.0)),
             'worksheet_writes': float(stage_timings.get('worksheet_writes', 0.0)),
+            'workbook_close': float(backend_timings.get('workbook_close', 0.0)),
         },
         input_metrics={
             'rows': fixture_metrics['measurement_rows'],
@@ -525,53 +554,87 @@ def benchmark_export_write_vs_shape_path(temp_dir: Path, report_count: int, head
     db_path = temp_dir / 'export_write_vs_shape.sqlite'
     fixture_metrics = _create_export_db_fixture(db_path, report_count=report_count, headers_per_report=headers_per_report)
 
+    data_load_start = time.perf_counter()
     loaded_df = build_measurement_export_dataframe(
         read_sql_dataframe(
             str(db_path),
             build_measurement_export_query(),
         )
     )
+    data_load_s = time.perf_counter() - data_load_start
+
+    grouping_start = time.perf_counter()
     grouped = list(loaded_df.groupby(['REFERENCE', 'HEADER - AX'], sort=False))
+    grouping_s = time.perf_counter() - grouping_start
 
     cache: dict[str, Any] = {}
     shape_start = time.perf_counter()
+    sort_s = 0.0
+    write_bundle_planning_s = 0.0
     shaped = []
     for idx, ((reference, header), group) in enumerate(grouped):
         base_col = idx * 5
+        sort_start = time.perf_counter()
         sorted_group = group.sort_values(
             by=['HEADER', 'AX', 'DATE', 'SAMPLE_NUMBER'],
             key=lambda col: col.astype(str).str.lower(),
         )
+        sort_s += time.perf_counter() - sort_start
+        bundle_start = time.perf_counter()
         write_bundle = build_measurement_write_bundle_cached(header, sorted_group, base_col, cache=cache)
+        write_bundle_planning_s += time.perf_counter() - bundle_start
         shaped.append((reference, header, write_bundle))
     shape_s = time.perf_counter() - shape_start
 
-    write_start = time.perf_counter()
+    workbook_setup_start = time.perf_counter()
     write_only_sheet_count = 0
-    with xlsxwriter.Workbook(str(temp_dir / 'export_write_vs_shape.xlsx')) as workbook:
-        formats = create_measurement_formats(workbook)
+    workbook = xlsxwriter.Workbook(str(temp_dir / 'export_write_vs_shape.xlsx'))
+    formats = create_measurement_formats(workbook)
+    workbook_setup_s = time.perf_counter() - workbook_setup_start
+    worksheet_creation_s = 0.0
+    block_write_s = 0.0
+    workbook_close_s = 0.0
+    try:
         current_reference = None
         worksheet = None
         for reference, _header, write_bundle in shaped:
             if reference != current_reference:
+                worksheet_create_start = time.perf_counter()
                 worksheet = workbook.add_worksheet(f'REF_{write_only_sheet_count + 1}')
+                worksheet_creation_s += time.perf_counter() - worksheet_create_start
                 current_reference = reference
                 write_only_sheet_count += 1
+            block_write_start = time.perf_counter()
             write_measurement_block(worksheet, write_bundle, formats, base_col=write_bundle['measurement_plan']['summary_column'] - 1)
-    write_only_s = time.perf_counter() - write_start
+            block_write_s += time.perf_counter() - block_write_start
+    finally:
+        close_start = time.perf_counter()
+        workbook.close()
+        workbook_close_s = time.perf_counter() - close_start
+    write_only_s = workbook_setup_s + worksheet_creation_s + block_write_s + workbook_close_s
 
     return ScenarioResult(
         scenario='excel_export_write_vs_shape_path',
-        wall_time_s=shape_s + write_only_s,
+        wall_time_s=data_load_s + grouping_s + shape_s + write_only_s,
         stage_timings_s={
+            'data_load': data_load_s,
+            'dataframe_grouping': grouping_s,
             'data_shaping': shape_s,
+            'data_sorting': sort_s,
+            'write_bundle_planning': write_bundle_planning_s,
+            'data_shaping_overhead': max(0.0, shape_s - sort_s - write_bundle_planning_s),
+            'workbook_setup': workbook_setup_s,
+            'worksheet_creation': worksheet_creation_s,
+            'write_measurement_blocks': block_write_s,
             'write_only_worksheet_ops': write_only_s,
+            'workbook_close': workbook_close_s,
             'write_to_shape_ratio': (write_only_s / shape_s) if shape_s > 0 else 0.0,
         },
         input_metrics={
             'rows': fixture_metrics['measurement_rows'],
             'headers': fixture_metrics['headers'],
             'chart_count': 0,
+            'header_groups': len(grouped),
             'worksheets': write_only_sheet_count,
         },
     )
@@ -598,24 +661,48 @@ def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: 
     grouped = list(loaded_df.groupby(['REFERENCE', 'HEADER - AX'], sort=False))
 
     legacy_start = time.perf_counter()
+    legacy_sampling_s = 0.0
+    legacy_distribution_payload_s = 0.0
+    legacy_histogram_payload_s = 0.0
+    legacy_trend_payload_s = 0.0
     for (_reference, _header), group in grouped:
+        sampling_start = time.perf_counter()
         sampled = thread._downsample_frame(group, thread._chart_sample_limit())
+        legacy_sampling_s += time.perf_counter() - sampling_start
         distribution_key = 'SAMPLE_NUMBER'
+        distribution_start = time.perf_counter()
         thread._build_violin_payload(sampled, distribution_key, thread.violin_plot_min_samplesize)
+        legacy_distribution_payload_s += time.perf_counter() - distribution_start
+        histogram_start = time.perf_counter()
         build_histogram_density_curve_payload(sampled['MEAS'], point_count=100)
+        legacy_histogram_payload_s += time.perf_counter() - histogram_start
+        trend_start = time.perf_counter()
         build_trend_plot_payload(sampled)
+        legacy_trend_payload_s += time.perf_counter() - trend_start
     before_s = time.perf_counter() - legacy_start
 
     policy = resolve_chart_sampling_policy(density_mode='full')
     new_start = time.perf_counter()
+    optimized_sampling_s = 0.0
+    optimized_distribution_payload_s = 0.0
+    optimized_histogram_payload_s = 0.0
+    optimized_trend_payload_s = 0.0
     for (_reference, _header), group in grouped:
+        sampling_start = time.perf_counter()
         sampled_distribution = sample_frame_for_chart(group, 'distribution', policy)
         sampled_histogram = sample_frame_for_chart(group, 'histogram', policy)
         sampled_trend = sample_frame_for_chart(group, 'trend', policy)
+        optimized_sampling_s += time.perf_counter() - sampling_start
         distribution_key = 'SAMPLE_NUMBER'
+        distribution_start = time.perf_counter()
         build_violin_payload_vectorized(sampled_distribution, distribution_key, thread.violin_plot_min_samplesize)
+        optimized_distribution_payload_s += time.perf_counter() - distribution_start
+        histogram_start = time.perf_counter()
         build_histogram_density_curve_payload(sampled_histogram['MEAS'], point_count=100)
+        optimized_histogram_payload_s += time.perf_counter() - histogram_start
+        trend_start = time.perf_counter()
         build_trend_plot_payload(sampled_trend)
+        optimized_trend_payload_s += time.perf_counter() - trend_start
     after_s = time.perf_counter() - new_start
 
     return ScenarioResult(
@@ -623,13 +710,38 @@ def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: 
         wall_time_s=before_s + after_s,
         stage_timings_s={
             'before_refactor': before_s,
+            'before_sampling': legacy_sampling_s,
+            'before_distribution_payload': legacy_distribution_payload_s,
+            'before_histogram_payload': legacy_histogram_payload_s,
+            'before_trend_payload': legacy_trend_payload_s,
+            'before_loop_overhead': max(
+                0.0,
+                before_s
+                - legacy_sampling_s
+                - legacy_distribution_payload_s
+                - legacy_histogram_payload_s
+                - legacy_trend_payload_s,
+            ),
             'after_refactor': after_s,
+            'after_sampling': optimized_sampling_s,
+            'after_distribution_payload': optimized_distribution_payload_s,
+            'after_histogram_payload': optimized_histogram_payload_s,
+            'after_trend_payload': optimized_trend_payload_s,
+            'after_loop_overhead': max(
+                0.0,
+                after_s
+                - optimized_sampling_s
+                - optimized_distribution_payload_s
+                - optimized_histogram_payload_s
+                - optimized_trend_payload_s,
+            ),
             'speedup_ratio': (before_s / after_s) if after_s > 0 else 0.0,
         },
         input_metrics={
             'rows': fixture_metrics['measurement_rows'],
             'headers': fixture_metrics['headers'],
             'chart_count': fixture_metrics['headers'] * 4,
+            'header_groups': len(grouped),
         },
     )
 
@@ -637,7 +749,10 @@ def benchmark_export_high_header_cardinality_path(temp_dir: Path, report_count: 
 
 
 def benchmark_distribution_fit_monte_carlo_path(temp_dir: Path, *, group_count: int, sample_size: int, monte_carlo_samples: int) -> ScenarioResult:
-    from modules.distribution_fit_service import fit_measurement_distribution
+    from modules.distribution_fit_service import (
+        _MONTE_CARLO_PVALUE_CACHE_NAMESPACE,
+        fit_measurement_distribution,
+    )
 
     del temp_dir
     rng = np.random.default_rng(314159)
@@ -656,18 +771,51 @@ def benchmark_distribution_fit_monte_carlo_path(temp_dir: Path, *, group_count: 
         fit_measurement_distribution(values, monte_carlo_gof_samples=monte_carlo_samples, monte_carlo_seed=2026)
     monte_carlo_s = time.perf_counter() - monte_carlo_start
 
+    memoization_cache: dict[Any, Any] = {}
+    monte_carlo_cache_warm_start = time.perf_counter()
+    for values in groups:
+        fit_measurement_distribution(
+            values,
+            monte_carlo_gof_samples=monte_carlo_samples,
+            monte_carlo_seed=2026,
+            memoization_cache=memoization_cache,
+        )
+    monte_carlo_cache_warm_s = time.perf_counter() - monte_carlo_cache_warm_start
+
+    monte_carlo_cached_refit_start = time.perf_counter()
+    for values in groups:
+        usl = float(np.mean(values) + (3.0 * np.std(values)))
+        fit_measurement_distribution(
+            values,
+            usl=usl,
+            monte_carlo_gof_samples=monte_carlo_samples,
+            monte_carlo_seed=2026,
+            memoization_cache=memoization_cache,
+        )
+    monte_carlo_cached_refit_s = time.perf_counter() - monte_carlo_cached_refit_start
+    monte_carlo_cache_entries = sum(
+        1
+        for key in memoization_cache
+        if isinstance(key, tuple) and key[:1] == (_MONTE_CARLO_PVALUE_CACHE_NAMESPACE,)
+    )
+
     return ScenarioResult(
         scenario='distribution_fit_monte_carlo_path',
-        wall_time_s=ks_proxy_s + monte_carlo_s,
+        wall_time_s=ks_proxy_s + monte_carlo_s + monte_carlo_cache_warm_s + monte_carlo_cached_refit_s,
         stage_timings_s={
             'ks_proxy_path': ks_proxy_s,
             'monte_carlo_bootstrap_path': monte_carlo_s,
             'slowdown_ratio': (monte_carlo_s / ks_proxy_s) if ks_proxy_s > 0 else 0.0,
+            'monte_carlo_cache_warm_path': monte_carlo_cache_warm_s,
+            'monte_carlo_cached_refit_path': monte_carlo_cached_refit_s,
+            'cached_refit_vs_uncached_ratio': (monte_carlo_cached_refit_s / monte_carlo_s) if monte_carlo_s > 0 else 0.0,
+            'cached_refit_vs_ks_proxy_ratio': (monte_carlo_cached_refit_s / ks_proxy_s) if ks_proxy_s > 0 else 0.0,
         },
         input_metrics={
             'rows': group_count * sample_size,
             'headers': group_count,
             'chart_count': group_count,
+            'monte_carlo_cache_entries': monte_carlo_cache_entries,
         },
     )
 
@@ -776,11 +924,14 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         for column in selected_data_columns
     }
 
-    import modules.csv_summary_dialog as csv_module
+    import modules.csv_summary_worker as csv_worker_module
     stats_seconds = 0.0
-    workbook_write_seconds = 0.0
-    original_stats = getattr(csv_module, "compute_column_summary_stats", None)
+    detail_sheet_write_seconds = 0.0
+    overview_sheet_write_seconds = 0.0
+    workbook_close_seconds = 0.0
+    original_stats = getattr(csv_worker_module, "compute_column_summary_stats", None)
     original_to_excel = pd.DataFrame.to_excel
+    original_writer_close = pd.ExcelWriter.close
 
     def timed_stats(*args, **kwargs):
         nonlocal stats_seconds
@@ -793,16 +944,32 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
             stats_seconds += time.perf_counter() - start
 
     def timed_to_excel(self, *args, **kwargs):
-        nonlocal workbook_write_seconds
+        nonlocal detail_sheet_write_seconds, overview_sheet_write_seconds
+        sheet_name = kwargs.get('sheet_name')
+        if sheet_name is None and args:
+            sheet_name = args[0]
         start = time.perf_counter()
         try:
             return original_to_excel(self, *args, **kwargs)
         finally:
-            workbook_write_seconds += time.perf_counter() - start
+            elapsed = time.perf_counter() - start
+            if sheet_name == 'CSV_SUMMARY':
+                overview_sheet_write_seconds += elapsed
+            else:
+                detail_sheet_write_seconds += elapsed
+
+    def timed_writer_close(self, *args, **kwargs):
+        nonlocal workbook_close_seconds
+        start = time.perf_counter()
+        try:
+            return original_writer_close(self, *args, **kwargs)
+        finally:
+            workbook_close_seconds += time.perf_counter() - start
 
     if original_stats is not None:
-        csv_module.compute_column_summary_stats = timed_stats
+        csv_worker_module.compute_column_summary_stats = timed_stats
     pd.DataFrame.to_excel = timed_to_excel
+    pd.ExcelWriter.close = timed_writer_close
 
     worker = BenchmarkCSVThread(
         selected_indexes=selected_indexes,
@@ -820,24 +987,34 @@ def benchmark_csv_summary_path(temp_dir: Path, row_count: int, data_columns: int
         worker.run()
     finally:
         if original_stats is not None:
-            csv_module.compute_column_summary_stats = original_stats
+            csv_worker_module.compute_column_summary_stats = original_stats
         pd.DataFrame.to_excel = original_to_excel
+        pd.ExcelWriter.close = original_writer_close
 
     run_s = time.perf_counter() - run_start
     if worker.canceled:
         raise RuntimeError('CSV summary benchmark ended in canceled state.')
 
-    chart_s = worker.chart_seconds
-    workbook_write_s = max(workbook_write_seconds, max(0.0, run_s - chart_s - stats_seconds))
+    transform_s = float(worker.stage_timings.get('transform_grouping', 0.0))
+    chart_s = max(float(worker.stage_timings.get('chart_rendering', 0.0)), worker.chart_seconds)
+    worksheet_write_s = float(worker.stage_timings.get('worksheet_writes', 0.0))
+    workbook_write_s = worksheet_write_s + overview_sheet_write_seconds + workbook_close_seconds
+    unattributed_run_s = max(0.0, run_s - transform_s - stats_seconds - chart_s - workbook_write_s)
 
     return ScenarioResult(
         scenario='csv_summary_export_path',
         wall_time_s=data_load_s + run_s,
         stage_timings_s={
             'data_load': data_load_s,
+            'transform_grouping': transform_s,
             'groupby_stats': stats_seconds,
+            'detail_sheet_to_excel': detail_sheet_write_seconds,
+            'worksheet_writes': worksheet_write_s,
             'chart_generation': chart_s,
+            'overview_sheet_write': overview_sheet_write_seconds,
             'workbook_write': workbook_write_s,
+            'workbook_close': workbook_close_seconds,
+            'unattributed_runtime': unattributed_run_s,
         },
         input_metrics={
             'rows': fixture_metrics['rows'],

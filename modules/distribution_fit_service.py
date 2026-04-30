@@ -108,6 +108,9 @@ _DISTRIBUTION_BY_NAME = {
 # Input: contiguous float64 1D sample array + candidate model metadata (distribution + fitted params).
 # Output: nll, aic, bic, ad_statistic, ks_statistic, and kernel error flags (consumed internally for fallback).
 
+_MONTE_CARLO_PVALUE_CACHE_NAMESPACE = '__distribution_fit_ad_monte_carlo_pvalue__'
+_CACHE_MISS = object()
+
 
 def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
     """Resolve curve point density and KDE smoothing safeguards for low sample sizes."""
@@ -357,6 +360,73 @@ def _estimate_ad_pvalue_monte_carlo(
     if valid_trials == 0:
         return None
     return float((exceed_count + 1) / (valid_trials + 1))
+
+
+def _monte_carlo_pvalue_cache_key(
+    *,
+    distribution_name: str,
+    params: tuple,
+    sample_size: int,
+    observed_stat: float,
+    iterations: int,
+    random_seed: int | None,
+):
+    return (
+        _MONTE_CARLO_PVALUE_CACHE_NAMESPACE,
+        str(distribution_name),
+        tuple(float(value) for value in params),
+        int(sample_size),
+        float(observed_stat),
+        int(iterations),
+        None if random_seed is None else int(random_seed),
+    )
+
+
+def _estimate_ad_pvalue_monte_carlo_cached(
+    *,
+    dist,
+    distribution_name: str,
+    params: tuple,
+    sample_size: int,
+    observed_stat: float,
+    iterations: int,
+    random_seed: int | None,
+    memoization_cache: MutableMapping | None,
+):
+    if memoization_cache is None:
+        return _estimate_ad_pvalue_monte_carlo(
+            dist=dist,
+            distribution_name=distribution_name,
+            params=params,
+            sample_size=sample_size,
+            observed_stat=observed_stat,
+            iterations=iterations,
+            random_seed=random_seed,
+        )
+
+    cache_key = _monte_carlo_pvalue_cache_key(
+        distribution_name=distribution_name,
+        params=params,
+        sample_size=sample_size,
+        observed_stat=observed_stat,
+        iterations=iterations,
+        random_seed=random_seed,
+    )
+    cached = memoization_cache.get(cache_key, _CACHE_MISS)
+    if cached is not _CACHE_MISS:
+        return cached
+
+    p_value = _estimate_ad_pvalue_monte_carlo(
+        dist=dist,
+        distribution_name=distribution_name,
+        params=params,
+        sample_size=sample_size,
+        observed_stat=observed_stat,
+        iterations=iterations,
+        random_seed=random_seed,
+    )
+    memoization_cache[cache_key] = p_value
+    return p_value
 
 
 def _classify_fit_quality(gof_pvalue: float | None, selected_is_acceptable: bool) -> dict:
@@ -823,7 +893,7 @@ def fit_measurement_distribution(
                 fitted['metrics'] = dict(fitted.get('metrics') or {})
                 fitted['gof'] = dict(fitted.get('gof') or {})
             if monte_carlo_gof_samples > 0:
-                fitted['gof']['ad_pvalue'] = _estimate_ad_pvalue_monte_carlo(
+                fitted['gof']['ad_pvalue'] = _estimate_ad_pvalue_monte_carlo_cached(
                     dist=candidate.scipy_dist,
                     distribution_name=candidate.name,
                     params=fitted['params'],
@@ -831,6 +901,7 @@ def fit_measurement_distribution(
                     observed_stat=fitted['gof']['ad_statistic'],
                     iterations=monte_carlo_gof_samples,
                     random_seed=monte_carlo_seed,
+                    memoization_cache=memoization_cache,
                 )
                 fitted['gof']['ad_pvalue_method'] = 'ad_parametric_bootstrap'
             else:

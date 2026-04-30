@@ -46,6 +46,30 @@ For CI quality-gate enforcement on `cmm_parser_backend_compare`:
 
 These values are pinned in CI and should only change with a dedicated baseline-governance PR that includes fresh trend evidence and explicit threshold-change justification.
 
+## Export benchmark stage coverage (`scripts/benchmark_paths.py`)
+
+All export benchmark fixtures are synthetic. Do not add real report files,
+real report-derived names, or customer-derived CSV values to these scenarios.
+
+Canonical export scenario keys:
+- `excel_export_path`
+- `excel_export_write_vs_shape_path`
+- `excel_export_high_header_cardinality_compare`
+- `csv_summary_export_path`
+
+Expected stage-level timings include:
+- Excel workbook path: `transform_grouping`, `worksheet_write_planning`,
+  `worksheet_writes`, `chart_payload_preparation`, `chart_rendering`,
+  and `workbook_close`.
+- Excel write-vs-shape path: `data_load`, `dataframe_grouping`,
+  `data_sorting`, `write_bundle_planning`, `write_measurement_blocks`,
+  `write_only_worksheet_ops`, and `workbook_close`.
+- High-header-cardinality path: before/after sampling and chart-payload
+  timings for distribution, histogram, and trend payloads.
+- CSV summary path: `transform_grouping`, `detail_sheet_to_excel`,
+  `worksheet_writes`, `chart_generation`, `overview_sheet_write`,
+  `workbook_write`, and `workbook_close`.
+
 ## 2) Distribution fit batch path (`scripts/benchmark_distribution_fit_batch.py`)
 
 - Scenario key: `distribution_fit_batch_compare`

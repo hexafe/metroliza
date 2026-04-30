@@ -154,6 +154,7 @@ SCHEMA_INDEX_STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS idx_source_file_locations_name ON source_file_locations(file_name)",
     "CREATE INDEX IF NOT EXISTS idx_source_file_locations_directory ON source_file_locations(directory_path)",
     "CREATE INDEX IF NOT EXISTS idx_source_file_locations_source_active ON source_file_locations(source_file_id, is_active)",
+    "CREATE INDEX IF NOT EXISTS idx_source_file_locations_latest_active ON source_file_locations(source_file_id, is_active, discovered_at DESC, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_parsed_reports_parser_template ON parsed_reports(parser_id, template_family, template_variant)",
     "CREATE INDEX IF NOT EXISTS idx_parsed_reports_identity_hash ON parsed_reports(identity_hash)",
     "CREATE INDEX IF NOT EXISTS idx_parsed_reports_status ON parsed_reports(parse_status)",

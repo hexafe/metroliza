@@ -638,5 +638,37 @@ class TestDistributionFitService(unittest.TestCase):
         self.assertEqual(second['status'], 'ok')
         self.assertEqual(len(memo), 1)
 
+    def test_fit_measurement_distribution_reuses_monte_carlo_pvalues_across_spec_refits(self):
+        measurements = np.ascontiguousarray(np.array([1.0, 1.2, 1.1, 1.3, 0.9, 1.05, 1.15], dtype=float))
+        memo = {}
+
+        with mock.patch.object(
+            distribution_fit_service,
+            '_estimate_ad_pvalue_monte_carlo',
+            return_value=0.42,
+        ) as monte_carlo_stub:
+            first = fit_measurement_distribution(
+                measurements,
+                usl=1.4,
+                monte_carlo_gof_samples=25,
+                monte_carlo_seed=2026,
+                memoization_cache=memo,
+            )
+            first_call_count = monte_carlo_stub.call_count
+            second = fit_measurement_distribution(
+                measurements,
+                usl=1.5,
+                monte_carlo_gof_samples=25,
+                monte_carlo_seed=2026,
+                memoization_cache=memo,
+            )
+
+        self.assertEqual(first['status'], 'ok')
+        self.assertEqual(second['status'], 'ok')
+        self.assertGreater(first_call_count, 0)
+        self.assertEqual(monte_carlo_stub.call_count, first_call_count)
+        self.assertEqual(first['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap')
+        self.assertEqual(second['gof_metrics']['ad_pvalue_method'], 'ad_parametric_bootstrap')
+
 if __name__ == '__main__':
     unittest.main()

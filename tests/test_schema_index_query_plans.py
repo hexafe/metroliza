@@ -36,6 +36,7 @@ sys.modules.setdefault('pymupdf', pymupdf_stub)
 
 import modules.cmm_report_parser as cmm_report_parser_module  # noqa: E402
 from modules.cmm_schema import ensure_cmm_report_schema  # noqa: E402
+from modules.report_schema import ensure_report_schema  # noqa: E402
 
 CMMReportParser = cmm_report_parser_module.CMMReportParser
 
@@ -179,6 +180,7 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
                 'idx_source_file_locations_name',
                 'idx_source_file_locations_directory',
                 'idx_source_file_locations_source_active',
+                'idx_source_file_locations_latest_active',
                 'idx_parsed_reports_parser_template',
                 'idx_parsed_reports_identity_hash',
                 'idx_parsed_reports_status',
@@ -264,6 +266,82 @@ class TestSchemaIndexQueryPlans(unittest.TestCase):
 
         self.assertIn('SCAN report_measurements', no_index_summary_plan)
         self.assertIn('idx_report_measurements_report_header_ax', indexed_summary_plan)
+
+    def test_latest_active_source_file_location_lookup_uses_covering_index(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = str(Path(temp_dir) / 'locations.db')
+            ensure_report_schema(db_path)
+
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO source_files (sha256, source_format, discovered_at, is_active)
+                    VALUES ('synthetic-sha', 'pdf', '2024-01-01T00:00:00Z', 1)
+                    """
+                )
+                source_file_id = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+                conn.executemany(
+                    """
+                    INSERT INTO source_file_locations (
+                        source_file_id, absolute_path, directory_path, file_name,
+                        file_extension, discovered_at, is_active
+                    )
+                    VALUES (?, ?, ?, ?, 'pdf', ?, ?)
+                    """,
+                    [
+                        (
+                            source_file_id,
+                            '/synthetic/reports/old.pdf',
+                            '/synthetic/reports',
+                            'old.pdf',
+                            '2024-01-01T00:00:00Z',
+                            1,
+                        ),
+                        (
+                            source_file_id,
+                            '/synthetic/reports/new.pdf',
+                            '/synthetic/reports',
+                            'new.pdf',
+                            '2024-01-02T00:00:00Z',
+                            1,
+                        ),
+                        (
+                            source_file_id,
+                            '/synthetic/reports/inactive.pdf',
+                            '/synthetic/reports',
+                            'inactive.pdf',
+                            '2024-01-03T00:00:00Z',
+                            0,
+                        ),
+                    ],
+                )
+
+                plan = self._explain(
+                    conn,
+                    """
+                    SELECT selected_location.id
+                    FROM source_file_locations selected_location
+                    WHERE selected_location.source_file_id = 1
+                      AND selected_location.is_active = 1
+                    ORDER BY selected_location.discovered_at DESC, selected_location.id DESC
+                    LIMIT 1
+                    """,
+                )
+                selected_file_name = conn.execute(
+                    """
+                    SELECT selected_location.file_name
+                    FROM source_file_locations selected_location
+                    WHERE selected_location.source_file_id = ?
+                      AND selected_location.is_active = 1
+                    ORDER BY selected_location.discovered_at DESC, selected_location.id DESC
+                    LIMIT 1
+                    """,
+                    (source_file_id,),
+                ).fetchone()[0]
+
+        self.assertIn('idx_source_file_locations_latest_active', plan)
+        self.assertNotIn('USE TEMP B-TREE', plan)
+        self.assertEqual(selected_file_name, 'new.pdf')
 
 
 if __name__ == '__main__':
