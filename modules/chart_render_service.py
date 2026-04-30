@@ -7,6 +7,7 @@ bounded concurrent rendering workloads.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from concurrent.futures import Future
 from dataclasses import dataclass
 from queue import Queue
@@ -190,19 +191,20 @@ def build_violin_payload_vectorized(sampled_group: pd.DataFrame, grouping_key: s
         values = cleaned_values.tolist()
         return ['All'], [values], len(cleaned_values) >= min_samplesize
 
-    work_df = sampled_group[[grouping_key, 'MEAS']].dropna(how='all', subset=[grouping_key, 'MEAS']).copy()
-    work_df = work_df.dropna(subset=['MEAS'])
-    if pd.api.types.is_string_dtype(work_df[grouping_key]) or pd.api.types.is_object_dtype(work_df[grouping_key]):
-        work_df[grouping_key] = work_df[grouping_key].str.strip()
-    work_df = work_df[work_df[grouping_key].notna()]
-    work_df = work_df[work_df[grouping_key] != '']
-    work_df[grouping_key] = work_df[grouping_key].astype(str)
+    numeric_values = pd.to_numeric(sampled_group['MEAS'], errors='coerce').to_numpy(dtype=float, copy=False)
+    group_values = sampled_group[grouping_key].to_numpy(dtype=object, copy=False)
+    grouped_values: OrderedDict[str, list[float]] = OrderedDict()
+    for group_value, measurement in zip(group_values, numeric_values, strict=False):
+        if not np.isfinite(measurement) or pd.isna(group_value):
+            continue
+        label = str(group_value).strip()
+        if not label:
+            continue
+        grouped_values.setdefault(label, []).append(float(measurement))
 
-    grouped = work_df.groupby(grouping_key, sort=False)['MEAS']
-    group_sizes = grouped.size()
-    labels = group_sizes.index.tolist()
-    values = [series.to_numpy(dtype=float).tolist() for _, series in grouped]
-    can_render_violin = bool((group_sizes >= int(min_samplesize)).all()) if len(group_sizes) else False
+    labels = list(grouped_values)
+    values = list(grouped_values.values())
+    can_render_violin = bool(values) and all(len(group) >= int(min_samplesize) for group in values)
     return labels, values, can_render_violin
 
 

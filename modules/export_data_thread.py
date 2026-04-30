@@ -4303,8 +4303,6 @@ class ExportDataThread(QThread):
                 return
 
             self._ensure_chart_executor()
-            self._ensure_summary_prep_executor()
-
             with sqlite_connection_scope(self.db_file) as connection:
                 self._db_connection = connection
                 self._prepare_export_snapshot()
@@ -5358,38 +5356,6 @@ class ExportDataThread(QThread):
             can_render_violin = sampling_context['distribution_payload']['can_render_violin']
             iqr_labels = sampling_context['iqr_payload']['labels']
             iqr_values = sampling_context['iqr_payload']['values']
-
-            prep_executor = self._summary_prep_executor
-            if prep_executor is not None:
-                try:
-                    distribution_future = prep_executor.submit(
-                        build_violin_payload_vectorized,
-                        sampled_distribution_group,
-                        distribution_key,
-                        self.violin_plot_min_samplesize,
-                    )
-                    iqr_future = prep_executor.submit(
-                        build_violin_payload_vectorized,
-                        sampled_iqr_group,
-                        distribution_key,
-                        self.violin_plot_min_samplesize,
-                    )
-                    distribution_labels, distribution_values, can_render_violin = distribution_future.result()
-                    iqr_labels, iqr_values, _ = iqr_future.result()
-                    sampling_context['distribution_payload'] = {
-                        'labels': distribution_labels,
-                        'values': distribution_values,
-                        'can_render_violin': can_render_violin,
-                    }
-                    sampling_context['iqr_payload'] = {
-                        'labels': iqr_labels,
-                        'values': iqr_values,
-                    }
-                except Exception:
-                    logger.debug(
-                        "Summary prep executor failed; falling back to in-process payload generation.",
-                        exc_info=True,
-                    )
 
             chart_payloads = _prepare_summary_chart_payloads_compute(
                 header=header,
