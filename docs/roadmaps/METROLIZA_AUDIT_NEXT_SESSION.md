@@ -80,6 +80,27 @@ For comparison, the pre-optimization 12-report/8-header local check showed
 audit handoff measured the same distribution-payload bottleneck at about
 `1.13s` to `1.14s`.
 
+## 2026-04-30 Export Stage Trend Advisory
+
+Completed:
+
+- Extended `scripts/benchmark_trend_compare.py` with advisory stage-metric
+  reporting.
+- Wired the non-blocking `perf-benchmarks` CI job to pass
+  `--export-stage-metrics`.
+- Documented that export stage medians are reported in `stage_metric_results`
+  and never add failure conditions beyond the existing scenario wall-time trend
+  comparison.
+
+Focused validation:
+
+```bash
+python -m pytest tests/test_benchmark_trend_compare.py tests/test_ci_policy_sync.py -q
+python -m ruff check scripts/benchmark_trend_compare.py tests/test_benchmark_trend_compare.py
+```
+
+Result: focused tests passed (`14 passed`), ruff passed, and py_compile passed.
+
 ## Validation Already Run
 
 ```bash
@@ -124,15 +145,13 @@ Key readings:
 
 ## Next Priority Order
 
-1. Add a non-blocking export performance trend check using the new stage keys.
-   Do not make it a hard CI gate until the baseline is stable.
-2. Investigate the remaining high-header benchmark cost in histogram density
+1. Investigate the remaining high-header benchmark cost in histogram density
    payload generation. After the violin/distribution optimization, histogram
    payload preparation is now the dominant stage in the synthetic high-header
    scenario.
-3. Run clean-machine Windows packaged EXE smoke. Source OCR validation is green,
+2. Run clean-machine Windows packaged EXE smoke. Source OCR validation is green,
    but release confidence still needs packaged artifact launch/parser evidence.
-4. Return to DB bulk-update APIs for Modify DB flows after export and Windows
+3. Return to DB bulk-update APIs for Modify DB flows after export and Windows
    release evidence are handled.
 
 ## Do Not Rerun By Default

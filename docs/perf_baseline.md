@@ -10,6 +10,10 @@ This document defines canonical benchmark scenarios and pass/fail policy for CI 
 - **Regression threshold:** flag a scenario if median wall time regresses beyond the percentage threshold vs `docs/perf_baseline_snapshot.json` and beyond the configured absolute slowdown floor.
 - **Current CI status:** the shared benchmark trend job is intentionally **non-blocking** (`continue-on-error: true`) during rollout.
 - **Shared benchmark noise floor:** the non-blocking shared benchmark job uses a `12%` median-regression threshold plus a `0.100s` absolute slowdown floor. This keeps sub-100 ms hosted-runner jitter from producing red advisory jobs while preserving the trend report values for review.
+- **Export stage metrics:** the shared non-blocking benchmark job also records
+  canonical export stage medians in `stage_metric_results`. These stage medians
+  are advisory diagnostics only; they do not add failure conditions beyond the
+  existing scenario wall-time trend comparison.
 
 ## Canonical Scenarios
 
@@ -69,6 +73,11 @@ Expected stage-level timings include:
 - CSV summary path: `transform_grouping`, `detail_sheet_to_excel`,
   `worksheet_writes`, `chart_generation`, `overview_sheet_write`,
   `workbook_write`, and `workbook_close`.
+
+CI trend reporting uses `scripts/benchmark_trend_compare.py
+--export-stage-metrics` to include these export stage keys in the uploaded
+non-blocking trend report. Missing stage keys are reported as `missing` in the
+JSON output rather than failing the job.
 
 ## 2) Distribution fit batch path (`scripts/benchmark_distribution_fit_batch.py`)
 

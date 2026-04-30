@@ -548,6 +548,7 @@ jobs:
                    benchmark_results/perf_ci/runs/run-3/benchmark-paths.json benchmark_results/perf_ci/runs/run-3/distribution-fit.json benchmark_results/perf_ci/runs/run-3/comparison-stats.json \
             --max-median-regression-pct 12 \
             --min-median-regression-s 0.100 \
+            --export-stage-metrics \
             --output-json benchmark_results/perf_ci/trend-report.json
 
       - name: Upload benchmark artifacts
