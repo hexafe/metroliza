@@ -871,7 +871,10 @@ class TestExportDialogThreadStartupContract(unittest.TestCase):
 
         with patch('modules.export_dialog.create_worker_progress_dialog', return_value=(_FakeDialog(), _FakeLabel(), _FakeBar(), object())), \
              patch('modules.export_dialog.save_export_dialog_config'), \
-             patch('modules.export_dialog.ExportDataThread', _FakeThread):
+             patch(
+                 'modules.export_dialog.create_export_data_thread',
+                 side_effect=lambda export_request: _FakeThread(export_request=export_request),
+             ):
             dialog.show_loading_screen()
 
         self.assertIsNotNone(_FakeThread.init_kwargs)
@@ -982,7 +985,10 @@ class TestExportDialogThreadStartupContract(unittest.TestCase):
 
         with patch('modules.export_dialog.create_worker_progress_dialog', side_effect=_create_progress_dialog), \
              patch('modules.export_dialog.save_export_dialog_config'), \
-             patch('modules.export_dialog.ExportDataThread', _FakeThread):
+             patch(
+                 'modules.export_dialog.create_export_data_thread',
+                 side_effect=lambda export_request: _FakeThread(export_request=export_request),
+             ):
             dialog.show_loading_screen()
 
         self.assertEqual(dialog.metadata_enrichment_notice_label.visible_states, [True])

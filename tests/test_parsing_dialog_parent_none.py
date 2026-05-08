@@ -64,12 +64,45 @@ class _FakeGridLayout:
         return None
 
 
+class _FakeComboBox:
+    def __init__(self, *_args, **_kwargs):
+        self._items = []
+        self._current_index = -1
+
+    def addItem(self, label, data=None):
+        self._items.append((label, data))
+        if self._current_index < 0:
+            self._current_index = 0
+
+    def setItemData(self, *_args, **_kwargs):
+        return None
+
+    def findData(self, target_data):
+        for index, (_label, data) in enumerate(self._items):
+            if data == target_data:
+                return index
+        return -1
+
+    def setCurrentIndex(self, index):
+        self._current_index = int(index)
+
+    def currentData(self):
+        if 0 <= self._current_index < len(self._items):
+            return self._items[self._current_index][1]
+        return None
+
+    def setToolTip(self, *_args, **_kwargs):
+        return None
+
+
 def _install_qt_stubs():
     pyqt6 = types.ModuleType("PyQt6")
     qtcore = types.ModuleType("PyQt6.QtCore")
     qtwidgets = types.ModuleType("PyQt6.QtWidgets")
 
+    qtcore.Qt = types.SimpleNamespace(ItemDataRole=types.SimpleNamespace(ToolTipRole=0))
     qtcore.pyqtSlot = lambda *args, **kwargs: (lambda fn: fn)
+    qtwidgets.QComboBox = _FakeComboBox
     qtwidgets.QDialog = _FakeDialog
     qtwidgets.QFileDialog = type(
         "QFileDialog",
