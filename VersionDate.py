@@ -1,17 +1,24 @@
-RELEASE_VERSION = "2026.04rc7"
-VERSION_DATE = "260421"
+RELEASE_VERSION = "2026.05rc1"
+VERSION_DATE = "260508"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "Re-running parsing now refreshes older CMM rows so packaged OCR metadata replaces filename-only records."
+    "OCR metadata enrichment, clearer parsing choices, visible export filters, and searchable database cleanup are now easier to use."
 )
-PUBLIC_VERSION_LABEL = "2026.04 (build 260421)"
+PUBLIC_VERSION_LABEL = "2026.05 (build 260508)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - Re-running parsing on an existing database now refreshes older CMM report rows so newly available OCR header metadata is persisted instead of keeping filename-only values<br>
-    - Header OCR now uses vendored RapidOCR model files for packaged builds, so the executable does not depend on runtime model downloads<br>
-    - PyInstaller and Nuitka packaging now validate RapidOCR, ONNX Runtime, OpenCV, NumPy, and OCR model assets before release builds<br>
-    - Third-party notices now document RapidOCR licensing and model attribution for commercial distribution packages<br>
+    - OCR is now available for enriched report metadata parsing<br>
+    - Parsing now offers one clear metadata mode selector: fast import, fast import with enrichment, or complete import<br>
+    - Existing database metadata can be enriched from the Tools menu with visible progress and cancel control<br>
+    - Export now shows which filters are active and includes a one-click Clear filters action<br>
+    - Modify Database normalization now uses searchable field tabs with occurrence counts<br>
+
+    <br><b>Archive:</b><br>
+
+    <br><b>Version 2026.04 (build 260421):</b><br>
+    - Re-running parsing on an existing database refreshes older CMM report rows so OCR header metadata can replace filename-only values<br>
+    - Packaged builds include OCR model files, so the executable does not depend on runtime model downloads<br>
     - HTML dashboard histograms now use the same bin range as the workbook/native histogram snapshots<br>
     - Plotly scatter and trend views show points only, without connecting lines between samples<br>
     - Metric sections include return buttons back to the dashboard jump list, and grouped metrics return to Group Analysis<br>
@@ -19,9 +26,6 @@ release_notes = f"""
     - Filtering now uses tabs and grouped sections for Measurement, Report metadata, and Source so the dialog stays compact and fits laptop screens<br>
     - Filter choices refresh report metadata views before loading, preventing stale-view measurement ID errors<br>
     - Report-scoped filters are translated safely back to measurement export rows when export data is loaded<br>
-    - Filter layout and metadata-query regressions now have focused test coverage<br>
-
-    <br><b>Archive:</b><br>
 
     <br><b>Version 2026.04rc2 (build 260415):</b><br>
     - Export setup is more compact on smaller laptops and keeps the main choices visible in one window<br>

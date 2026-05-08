@@ -1,10 +1,15 @@
 # Changelog (for end users)
 
-## 2026.04 (build 260421) — current version
-- Re-running parsing on an existing database now refreshes older CMM report rows so newly available OCR header metadata is persisted instead of keeping filename-only values.
-- Header OCR packaging now includes vendored RapidOCR model files so packaged builds do not rely on runtime model downloads.
-- PyInstaller and Nuitka release paths now validate RapidOCR, ONNX Runtime, OpenCV, NumPy, OCR adapter modules, and model assets before producing release artifacts.
-- Packaged distributions now include third-party notices and preserve OCR package metadata where available, covering RapidOCR licensing and model attribution.
+## 2026.05 (build 260508) — current version
+- OCR is now available for enriched report metadata parsing.
+- Parsing now offers one clear metadata mode selector: fast import, fast import with enrichment, or complete import.
+- Existing database metadata can be enriched from the Tools menu with visible progress and cancel control.
+- Export now shows which filters are active and includes a one-click Clear filters action.
+- Modify Database normalization now uses searchable field tabs with occurrence counts before changes are applied.
+
+## 2026.04 (build 260421)
+- Re-running parsing on an existing database refreshes older CMM report rows so OCR header metadata can replace filename-only values.
+- Packaged builds include OCR model files so the executable does not depend on runtime model downloads.
 - HTML dashboard histograms now use the same bin range as the workbook/native histogram snapshots.
 - Plotly scatter and trend views show points only, without connecting lines between samples.
 - Metric sections include return buttons back to the dashboard jump list, and grouped metrics return to Group Analysis.
@@ -12,7 +17,6 @@
 - Filtering now uses tabs and grouped sections for Measurement, Report metadata, and Source so the dialog stays compact and fits laptop screens.
 - Filter choices refresh report metadata views before loading, preventing stale-view measurement ID errors.
 - Report-scoped filters are translated safely back to measurement export rows when export data is loaded.
-- Filter layout and metadata-query regressions now have focused test coverage.
 
 ## 2026.04rc2(260415)
 - Export setup is more compact on smaller laptops and keeps the main choices visible in one window.

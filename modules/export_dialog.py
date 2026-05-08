@@ -1,7 +1,6 @@
 """Export dialog UI, export option builders, and completion message helpers."""
 
 from modules.progress_status import build_three_line_status
-from modules.export_data_thread import ExportDataThread
 from modules.filter_dialog import FilterDialog
 from modules.data_grouping import DataGrouping
 import modules.custom_logger as custom_logger
@@ -57,6 +56,13 @@ from modules.filter_state import NOT_APPLIED_LABEL, summarize_filter_state
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
 DEFAULT_FILTER_QUERY = build_measurement_export_query()
+
+
+def create_export_data_thread(export_request):
+    """Create the export worker only when an export actually starts."""
+    from modules.export_data_thread import ExportDataThread
+
+    return ExportDataThread(export_request=export_request)
 
 
 def format_message_with_clickable_links(message):
@@ -934,7 +940,7 @@ class ExportDialog(QDialog):
 
             # Start the exporting thread with validated options
             self._cancel_requested = False
-            self.export_thread = ExportDataThread(export_request=export_request)
+            self.export_thread = create_export_data_thread(export_request)
             self.export_thread.update_label.connect(self.loading_label.setText)
             self.export_thread.update_progress.connect(self.loading_bar.setValue)
             self.export_thread.error_occurred.connect(self.on_export_error)

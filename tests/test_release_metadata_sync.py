@@ -13,8 +13,27 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.04 (build 260421)")
+        self.assertEqual(metadata.public_version_label, "2026.05 (build 260508)")
         self.assertTrue(metadata.highlight)
+
+    def test_in_app_current_release_notes_stay_user_facing(self):
+        import VersionDate
+
+        current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
+
+        self.assertIn("OCR is now available for enriched report metadata parsing", current_section)
+        self.assertIn("Clear filters", current_section)
+        for technical_term in (
+            "PyInstaller",
+            "Nuitka",
+            "RapidOCR",
+            "ONNX",
+            "OpenCV",
+            "NumPy",
+            "test coverage",
+            "regression",
+        ):
+            self.assertNotIn(technical_term, current_section)
 
     def test_sync_readme_updates_public_labels(self):
         metadata = sync_release_metadata.load_metadata()
