@@ -4,7 +4,7 @@ from modules.progress_status import build_three_line_status
 from modules.parse_reports_thread import ParseReportsThread
 from modules.custom_logger import CustomLogger
 from PyQt6.QtCore import Qt, pyqtSlot
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QPushButton
+from PyQt6.QtWidgets import QComboBox, QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QPushButton
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
 from modules.worker_progress_dialog import create_worker_progress_dialog
@@ -14,12 +14,14 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
-_RICH_METADATA_LIGHT_TOOLTIP = (
-    "Run complete OCR metadata extraction after the fast import. Leave this off for quick analysis."
-)
-_RICH_METADATA_COMPLETE_TOOLTIP = (
-    "Complete metadata already runs OCR during import, so post-import enrichment is redundant."
-)
+_METADATA_MODE_FAST = "fast"
+_METADATA_MODE_FAST_THEN_ENRICH = "fast_then_enrich"
+_METADATA_MODE_COMPLETE = "complete"
+_METADATA_MODE_REQUEST_FIELDS = {
+    _METADATA_MODE_FAST: ("light", False),
+    _METADATA_MODE_FAST_THEN_ENRICH: ("light", True),
+    _METADATA_MODE_COMPLETE: ("complete", False),
+}
 
 
 class ParsingDialog(QDialog):
@@ -53,28 +55,31 @@ class ParsingDialog(QDialog):
         self.database_label.setToolTip("Use this button to select the database to which to save the results from PDF files")
         self.database_button.setToolTip("Use this button to select the database to which to save the results from PDF files")
 
-        self.metadata_mode_label = QLabel("Metadata parsing:")
+        self.metadata_mode_label = QLabel("Metadata mode:")
         self.metadata_mode_combo = QComboBox()
-        complete_tooltip = (
-            "Complete metadata uses OCR fallback for header-only fields like revision, "
-            "operator, and comment. It can be much slower on large imports."
-        )
-        light_tooltip = (
+        fast_tooltip = (
             "Light metadata skips OCR fallback and uses filename or embedded text metadata. "
-            "This is much faster for large imports."
+            "Use this for the fastest import."
         )
-        self.metadata_mode_combo.addItem("Complete metadata", "complete")
-        self.metadata_mode_combo.setItemData(0, complete_tooltip, Qt.ItemDataRole.ToolTipRole)
-        self.metadata_mode_combo.addItem("Light metadata", "light")
-        self.metadata_mode_combo.setItemData(1, light_tooltip, Qt.ItemDataRole.ToolTipRole)
-        self.metadata_mode_combo.setCurrentIndex(self.metadata_mode_combo.findData("light"))
-        self.metadata_mode_label.setToolTip(f"{light_tooltip} {complete_tooltip}")
-        self.metadata_mode_combo.setToolTip(f"{light_tooltip} {complete_tooltip}")
-
-        self.rich_metadata_checkbox = QCheckBox("Enrich metadata after import")
-        self.rich_metadata_checkbox.setChecked(False)
-        self.rich_metadata_checkbox.setToolTip(_RICH_METADATA_LIGHT_TOOLTIP)
-        self.metadata_mode_combo.currentIndexChanged.connect(self._sync_rich_metadata_checkbox_state)
+        enrich_tooltip = (
+            "Import quickly with light metadata first, then run a visible OCR metadata enrichment pass."
+        )
+        complete_tooltip = (
+            "Run OCR fallback during import for stronger header metadata coverage. "
+            "This is slower on large imports."
+        )
+        self.metadata_mode_combo.addItem("Fast import - light metadata, no OCR", _METADATA_MODE_FAST)
+        self.metadata_mode_combo.setItemData(0, fast_tooltip, Qt.ItemDataRole.ToolTipRole)
+        self.metadata_mode_combo.addItem(
+            "Fast import, then enrich metadata",
+            _METADATA_MODE_FAST_THEN_ENRICH,
+        )
+        self.metadata_mode_combo.setItemData(1, enrich_tooltip, Qt.ItemDataRole.ToolTipRole)
+        self.metadata_mode_combo.addItem("Complete import - OCR during parsing", _METADATA_MODE_COMPLETE)
+        self.metadata_mode_combo.setItemData(2, complete_tooltip, Qt.ItemDataRole.ToolTipRole)
+        self.metadata_mode_combo.setCurrentIndex(self.metadata_mode_combo.findData(_METADATA_MODE_FAST))
+        self.metadata_mode_label.setToolTip(f"{fast_tooltip} {enrich_tooltip} {complete_tooltip}")
+        self.metadata_mode_combo.setToolTip(f"{fast_tooltip} {enrich_tooltip} {complete_tooltip}")
 
         self.parse_button = QPushButton("Parse reports")
         self.parse_button.clicked.connect(self.show_loading_screen)
@@ -119,23 +124,13 @@ class ParsingDialog(QDialog):
         self.layout.addWidget(self.metadata_mode_label, 8, 0)
         self.layout.addWidget(self.metadata_mode_combo, 8, 1)
 
-        self.layout.addWidget(self.rich_metadata_checkbox, 9, 0, 1, 2)
-
-        self.layout.addWidget(self.parse_button, 10, 0, 1, 2)
+        self.layout.addWidget(self.parse_button, 9, 0, 1, 2)
 
         self.setLayout(self.layout)
-        self._sync_rich_metadata_checkbox_state()
 
-    def _sync_rich_metadata_checkbox_state(self):
-        metadata_mode = self.metadata_mode_combo.currentData() or "complete"
-        if metadata_mode == "light":
-            self.rich_metadata_checkbox.setEnabled(True)
-            self.rich_metadata_checkbox.setToolTip(_RICH_METADATA_LIGHT_TOOLTIP)
-            return
-
-        self.rich_metadata_checkbox.setChecked(False)
-        self.rich_metadata_checkbox.setEnabled(False)
-        self.rich_metadata_checkbox.setToolTip(_RICH_METADATA_COMPLETE_TOOLTIP)
+    def _selected_metadata_request_fields(self):
+        selected_mode = self.metadata_mode_combo.currentData() or _METADATA_MODE_FAST
+        return _METADATA_MODE_REQUEST_FIELDS.get(selected_mode, _METADATA_MODE_REQUEST_FIELDS[_METADATA_MODE_FAST])
 
     @pyqtSlot()
     def select_directory(self):
@@ -221,13 +216,13 @@ class ParsingDialog(QDialog):
             self.parse_button.setEnabled(False)
             self.loading_dialog.show()
 
-            metadata_parsing_mode = self.metadata_mode_combo.currentData() or "complete"
+            metadata_parsing_mode, run_background_metadata_enrichment = self._selected_metadata_request_fields()
             request = validate_parse_request(
                 ParseRequest(
                     source_directory=self.directory,
                     db_file=self.db_file,
                     metadata_parsing_mode=metadata_parsing_mode,
-                    run_background_metadata_enrichment=self.rich_metadata_checkbox.isChecked(),
+                    run_background_metadata_enrichment=run_background_metadata_enrichment,
                 )
             )
 

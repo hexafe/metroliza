@@ -50,6 +50,16 @@ This area shows the current database destination.
 
 The database button stays disabled until a source has been selected.
 
+### Metadata mode
+
+This controls how much report metadata Metroliza extracts during import.
+
+- **Fast import - light metadata, no OCR**: imports quickly and skips OCR fallback for metadata fields.
+- **Fast import, then enrich metadata**: imports quickly first, then runs a visible OCR metadata enrichment pass after import.
+- **Complete import - OCR during parsing**: runs OCR fallback during parsing for stronger metadata coverage, but it is slower.
+
+The default is **Fast import - light metadata, no OCR**.
+
 ### Parse reports
 
 This starts the parsing job.
@@ -69,9 +79,10 @@ Here is a simple example workflow.
    - If you cancel directory selection, you can choose a supported archive instead.
 4. Under **Select a database file**, click **Browse**.
 5. Choose a new or existing `.db` file.
-6. Click **Parse reports**.
-7. Wait for the progress dialog to finish.
-8. After success, read the completion message and continue to [Export overview](export_overview.md).
+6. Choose the metadata mode you want.
+7. Click **Parse reports**.
+8. Wait for the progress dialog to finish.
+9. After success, read the completion message and continue to [Export overview](export_overview.md).
 
 ## What happens while parsing runs
 
@@ -82,6 +93,8 @@ While it runs, you will see:
 - a progress bar,
 - status text, and
 - a **Cancel** button.
+
+If you chose **Fast import, then enrich metadata**, the progress dialog continues into the enrichment pass after the light import is done.
 
 ### Cancel behavior
 

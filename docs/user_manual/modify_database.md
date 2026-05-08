@@ -36,7 +36,7 @@ The dialog has three tabs.
 
 This tab keeps the original global cleanup workflow.
 
-It shows three editable tables side by side:
+It is split into three field tabs:
 
 #### REFERENCE
 
@@ -55,6 +55,15 @@ Use it when part or sample identifiers need cleanup.
 This table shows the distinct **HEADER** values stored in the database.
 
 Use it when measurement headers need to be renamed or standardized.
+
+Each field tab has:
+
+- a search box,
+- **Original value**,
+- **New value**, and
+- **Occurrences**.
+
+Edit **New value**. **Original value** stays read-only, and **Occurrences** shows how many rows currently use that value.
 
 Because this tab edits distinct values, a change applies everywhere that old value appears.
 

@@ -95,6 +95,25 @@ If the OCR model files are missing, refresh them before building:
 python scripts/fetch_rapidocr_models.py
 ```
 
+Official EXE builds include the OCR Python packages, RapidOCR model files, and
+`THIRD_PARTY_NOTICES.md`. End users do not need to download OCR model files
+separately when using an official EXE.
+
+For a packaged parser smoke check, set a real OCR-needed PDF fixture and an
+expected text fragment before launching the EXE:
+
+```powershell
+$env:METROLIZA_STARTUP_SMOKE = "1"
+$env:METROLIZA_PDF_PARSER_SMOKE_FIXTURE = "C:\path\to\report.pdf"
+$env:METROLIZA_PDF_PARSER_SMOKE_EXPECTED_TEXT = "expected text"
+.\dist\metroliza.exe
+```
+
+The smoke path verifies that the packaged app can start, open the PDF parser
+path, and find the expected text in the fixture. For an OCR-specific fixture,
+also confirm the generated parser diagnostics report
+`header_extraction_mode="ocr"`.
+
 
 ## Core workflow
 

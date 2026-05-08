@@ -88,12 +88,16 @@ class _FakeButton:
 class _FakeParent:
     def __init__(self):
         self.filter_query = None
+        self.filter_state = None
         self.applied = False
 
     def set_filter_query(self, query):
         self.filter_query = query
 
-    def set_filter_applied(self):
+    def set_filter_state(self, filter_state):
+        self.filter_state = filter_state
+
+    def set_filter_applied(self, *_args):
         self.applied = True
 
 
@@ -262,6 +266,8 @@ class TestFilterDialogMetadata(unittest.TestCase):
             self.assertIn("template_family IN ('cmm_pdf_header_box')", parent.filter_query)
             self.assertIn("has_nok = 1", parent.filter_query)
             self.assertNotIn("status_code IN", parent.filter_query)
+            self.assertIsNotNone(parent.filter_state)
+            self.assertEqual(parent.filter_state.operator_name_values, ("Jane Doe",))
 
     def test_filter_sections_group_metadata_without_single_horizontal_row(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()

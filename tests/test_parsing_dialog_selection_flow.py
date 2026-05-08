@@ -79,35 +79,36 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
     def test_default_metadata_mode_is_light_for_gui_parsing(self):
         dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
 
-        self.assertEqual(dialog.metadata_mode_combo.currentData(), 'light')
-        self.assertFalse(dialog.rich_metadata_checkbox.isChecked())
+        self.assertEqual(dialog.metadata_mode_combo.currentData(), 'fast')
+        self.assertEqual(dialog._selected_metadata_request_fields(), ('light', False))
+        self.assertFalse(hasattr(dialog, 'rich_metadata_checkbox'))
 
     def test_metadata_mode_tooltips_explain_speed_tradeoff(self):
         dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
 
         complete_index = dialog.metadata_mode_combo.findData('complete')
-        light_index = dialog.metadata_mode_combo.findData('light')
+        fast_index = dialog.metadata_mode_combo.findData('fast')
+        enrich_index = dialog.metadata_mode_combo.findData('fast_then_enrich')
 
         self.assertIn('OCR fallback', dialog.metadata_mode_combo.itemData(complete_index, Qt.ItemDataRole.ToolTipRole))
-        self.assertIn('much faster', dialog.metadata_mode_combo.itemData(light_index, Qt.ItemDataRole.ToolTipRole))
-        self.assertIn('much slower', dialog.metadata_mode_combo.toolTip())
+        self.assertIn('fastest import', dialog.metadata_mode_combo.itemData(fast_index, Qt.ItemDataRole.ToolTipRole))
+        self.assertIn('enrichment pass', dialog.metadata_mode_combo.itemData(enrich_index, Qt.ItemDataRole.ToolTipRole))
+        self.assertIn('slower', dialog.metadata_mode_combo.toolTip())
 
-    def test_complete_metadata_mode_disables_background_enrichment_checkbox(self):
+    def test_metadata_mode_selector_maps_all_user_choices_to_request_fields(self):
         dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
-        complete_index = dialog.metadata_mode_combo.findData('complete')
-        light_index = dialog.metadata_mode_combo.findData('light')
+        expected = {
+            'fast': ('light', False),
+            'fast_then_enrich': ('light', True),
+            'complete': ('complete', False),
+        }
 
-        dialog.rich_metadata_checkbox.setChecked(True)
-        dialog.metadata_mode_combo.setCurrentIndex(complete_index)
-
-        self.assertFalse(dialog.rich_metadata_checkbox.isEnabled())
-        self.assertFalse(dialog.rich_metadata_checkbox.isChecked())
-        self.assertIn('redundant', dialog.rich_metadata_checkbox.toolTip())
-
-        dialog.metadata_mode_combo.setCurrentIndex(light_index)
-
-        self.assertTrue(dialog.rich_metadata_checkbox.isEnabled())
-        self.assertIn('fast import', dialog.rich_metadata_checkbox.toolTip())
+        for combo_value, request_fields in expected.items():
+            with self.subTest(combo_value=combo_value):
+                index = dialog.metadata_mode_combo.findData(combo_value)
+                self.assertGreaterEqual(index, 0)
+                dialog.metadata_mode_combo.setCurrentIndex(index)
+                self.assertEqual(dialog._selected_metadata_request_fields(), request_fields)
 
     def test_loading_screen_passes_selected_metadata_mode_to_parse_request(self):
         captured = {}
@@ -124,9 +125,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
                 captured['started'] = True
 
         dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
-        light_index = dialog.metadata_mode_combo.findData('light')
-        self.assertGreaterEqual(light_index, 0)
-        dialog.metadata_mode_combo.setCurrentIndex(light_index)
+        fast_index = dialog.metadata_mode_combo.findData('fast')
+        self.assertGreaterEqual(fast_index, 0)
+        dialog.metadata_mode_combo.setCurrentIndex(fast_index)
 
         with patch(
             'modules.parsing_dialog.create_worker_progress_dialog',
@@ -138,7 +139,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertEqual(captured['request'].metadata_parsing_mode, 'light')
         self.assertFalse(captured['request'].run_background_metadata_enrichment)
 
-    def test_loading_screen_passes_user_enabled_background_metadata_enrichment(self):
+    def test_loading_screen_passes_fast_then_enrich_metadata_mode(self):
         captured = {}
 
         class _FakeParseThread:
@@ -153,7 +154,9 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
                 captured['started'] = True
 
         dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
-        dialog.rich_metadata_checkbox.setChecked(True)
+        enrich_index = dialog.metadata_mode_combo.findData('fast_then_enrich')
+        self.assertGreaterEqual(enrich_index, 0)
+        dialog.metadata_mode_combo.setCurrentIndex(enrich_index)
 
         with patch(
             'modules.parsing_dialog.create_worker_progress_dialog',
@@ -164,6 +167,35 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertTrue(captured['started'])
         self.assertEqual(captured['request'].metadata_parsing_mode, 'light')
         self.assertTrue(captured['request'].run_background_metadata_enrichment)
+
+    def test_loading_screen_passes_complete_metadata_mode(self):
+        captured = {}
+
+        class _FakeParseThread:
+            def __init__(self, request):
+                captured['request'] = request
+                self.update_label = _Signal()
+                self.update_progress = _Signal()
+                self.error_occurred = _Signal()
+                self.finished = _Signal()
+
+            def start(self):
+                captured['started'] = True
+
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
+        complete_index = dialog.metadata_mode_combo.findData('complete')
+        self.assertGreaterEqual(complete_index, 0)
+        dialog.metadata_mode_combo.setCurrentIndex(complete_index)
+
+        with patch(
+            'modules.parsing_dialog.create_worker_progress_dialog',
+            return_value=(_ProgressDialog(), _ProgressLabel(), _ProgressBar(), None),
+        ), patch('modules.parsing_dialog.ParseReportsThread', _FakeParseThread):
+            dialog.show_loading_screen()
+
+        self.assertTrue(captured['started'])
+        self.assertEqual(captured['request'].metadata_parsing_mode, 'complete')
+        self.assertFalse(captured['request'].run_background_metadata_enrichment)
 
 
 if __name__ == '__main__':

@@ -1119,6 +1119,72 @@ class TestExportDialogGroupingAnalysisDefaults(unittest.TestCase):
 
         self.assertEqual(dialog.group_analysis_level_combobox.currentText(), 'Light')
 
+
+class TestExportDialogFilterStateSummary(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        TestExportPresetFlowIntegration.setUpClass()
+
+    def test_clear_filters_resets_query_and_label(self):
+        from modules.export_dialog import DEFAULT_FILTER_QUERY, ExportDialog
+        from modules.filter_state import FilterState
+
+        class _FakeLabel:
+            def __init__(self):
+                self.value = None
+                self.tooltip = None
+
+            def setText(self, value):
+                self.value = value
+
+            def setToolTip(self, value):
+                self.tooltip = value
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.select_filter_label = _FakeLabel()
+        dialog.filter_query = "SELECT * FROM vw_measurement_export WHERE 1=1 AND ax IN ('AX1')"
+        dialog.filter_state = FilterState(ax_values=("AX1",), has_nok_only=True)
+        dialog.filter_window = None
+        dialog._discard_child_dialog = lambda *_args: None
+        dialog.log_and_exit = lambda *_args, **_kwargs: None
+
+        dialog.clear_filters()
+
+        self.assertEqual(dialog.filter_query, DEFAULT_FILTER_QUERY)
+        self.assertIsNone(dialog.filter_state)
+        self.assertEqual(dialog.select_filter_label.value, "Not applied")
+
+    def test_set_filter_applied_uses_compact_summary_and_detail_tooltip(self):
+        from modules.export_dialog import ExportDialog
+        from modules.filter_state import FilterState
+
+        class _FakeLabel:
+            def __init__(self):
+                self.value = None
+                self.tooltip = None
+
+            def setText(self, value):
+                self.value = value
+
+            def setToolTip(self, value):
+                self.tooltip = value
+
+        dialog = ExportDialog.__new__(ExportDialog)
+        dialog.select_filter_label = _FakeLabel()
+        dialog.log_and_exit = lambda *_args, **_kwargs: None
+        dialog.filter_state = None
+
+        dialog.set_filter_applied(
+            FilterState(
+                ax_values=("AX1", "AX2"),
+                reference_values=("REF1",),
+                has_nok_only=True,
+            )
+        )
+
+        self.assertEqual(dialog.select_filter_label.value, "AX: 2 selected; Reference: REF1; NOK only")
+        self.assertIn("AX: AX1, AX2", dialog.select_filter_label.tooltip)
+
     def test_grouping_disabled_sets_level_off(self):
         from modules.export_dialog import ExportDialog
 

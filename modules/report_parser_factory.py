@@ -465,7 +465,12 @@ def detect_format(file_path: str | Path) -> str:
     return diagnostics.selected.plugin_id if diagnostics.selected else "unknown"
 
 
-def get_parser(file_path: str | Path, database: str, connection=None):
+def get_parser(
+    file_path: str | Path,
+    database: str,
+    connection=None,
+    metadata_parsing_mode=None,
+):
     """Construct parser instance for a given file path."""
 
     normalized_path = _as_file_path(file_path)
@@ -474,7 +479,28 @@ def get_parser(file_path: str | Path, database: str, connection=None):
         raise ValueError(f"Unsupported report format: unknown ({normalized_path})")
 
     parser_cls = PARSER_MAP[diagnostics.selected.plugin_id]
-    return parser_cls(normalized_path, database, connection=connection)
+
+    constructor_kwargs = {"connection": connection}
+    if metadata_parsing_mode is not None:
+        try:
+            signature = inspect.signature(parser_cls)
+        except (TypeError, ValueError):
+            signature = None
+        supports_metadata_mode = False
+        if signature is not None:
+            supports_metadata_mode = "metadata_parsing_mode" in signature.parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
+            )
+        if supports_metadata_mode:
+            constructor_kwargs["metadata_parsing_mode"] = metadata_parsing_mode
+
+    parser = parser_cls(normalized_path, database, **constructor_kwargs)
+
+    if metadata_parsing_mode is not None and hasattr(parser, "metadata_parsing_mode"):
+        parser.metadata_parsing_mode = metadata_parsing_mode
+
+    return parser
 
 
 def _default_cmm_detector(file_path: str) -> ProbeResult:

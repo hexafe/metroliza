@@ -6,6 +6,15 @@ The **Data filtering** dialog lets you narrow which rows the Export workflow wil
 
 Open it from the Export dialog by clicking **Edit...** next to **Filters**.
 
+After filters are applied, the Export dialog shows a compact summary next to **Filters**. For example:
+
+- `Reference: 2 selected`
+- `Header: 8 selected`
+- `Date: 2026-01-01 to 2026-05-08`
+- `NOK only`
+
+Hover over the summary to see the full selected values when the label only shows counts.
+
 The dialog uses tabs so the available choices stay readable on smaller screens:
 
 - **Measurement** tab: AX, REFERENCE, HEADER, SELECTED HEADERS, and STATUS CODE.
@@ -144,11 +153,11 @@ Click **Apply filters** to send the current filter state back to the Export dial
 When applied:
 
 - the parent Export dialog stores the new filter query, and
-- its filter label changes to show that filtering is applied.
+- its filter label changes to summarize the active filters.
 
-There is no separate **clear** or **reset** button inside this dialog.
+Use **Clear filters** in the Export dialog to reset the export back to the default unfiltered state in one click.
 
-If you want to revise filters, reopen the dialog, change the selections, and click **Apply filters** again.
+If you want to revise filters instead, reopen the dialog, change the selections, and click **Apply filters** again.
 
 ## Practical examples
 
@@ -187,8 +196,8 @@ It is a confirmation list, not a separate second filter system.
 
 It mirrors what you selected in **HEADER**.
 
-### I cannot find a reset button
+### How do I clear filters?
 
-That is expected.
+Use **Clear filters** next to **Edit...** in the Export dialog.
 
-This dialog does not have a dedicated clear/reset button. To change filters, simply reopen it, adjust the selections, and apply again.
+This clears the stored filter query and changes the summary back to **Not applied**.

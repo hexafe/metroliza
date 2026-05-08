@@ -28,6 +28,22 @@ class TestValidateParseRequest(unittest.TestCase):
         validated = validate_parse_request(request)
         self.assertEqual(validated.metadata_parsing_mode, 'light')
 
+    def test_accepts_all_metadata_parsing_modes_used_by_parser_ui(self):
+        cases = {
+            'light': 'light',
+            'fast': 'light',
+            'complete': 'complete',
+        }
+        for input_mode, expected_mode in cases.items():
+            with self.subTest(input_mode=input_mode):
+                request = ParseRequest(
+                    source_directory='reports',
+                    db_file='test.db',
+                    metadata_parsing_mode=input_mode,
+                )
+                validated = validate_parse_request(request)
+                self.assertEqual(validated.metadata_parsing_mode, expected_mode)
+
     def test_accepts_background_metadata_enrichment_flag(self):
         request = ParseRequest(
             source_directory='reports',

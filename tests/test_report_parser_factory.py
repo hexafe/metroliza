@@ -99,6 +99,162 @@ def test_get_parser_returns_cmm_parser_for_pdf(tmp_path):
     assert parser.__class__.__name__ == "CMMReportParser"
 
 
+def test_get_parser_passes_metadata_mode_to_constructor_when_supported(tmp_path):
+    class ConstructorModeParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="constructor_mode",
+            display_name="Constructor Mode",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        def __init__(self, file_path, database, connection=None, metadata_parsing_mode=None):
+            super().__init__(file_path=file_path, database=database, connection=connection)
+            self.constructor_mode = metadata_parsing_mode
+            self.metadata_parsing_mode = None
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=100)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    try:
+        register_parser(ConstructorModeParser)
+        parser = get_parser(
+            tmp_path / "constructor_mode.pdf",
+            database=":memory:",
+            metadata_parsing_mode="light",
+        )
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+
+    assert isinstance(parser, ConstructorModeParser)
+    assert parser.constructor_mode == "light"
+    assert parser.metadata_parsing_mode == "light"
+
+
+def test_get_parser_falls_back_for_constructor_without_metadata_mode(tmp_path):
+    class LegacyConstructorParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="legacy_ctor",
+            display_name="Legacy Constructor",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        def __init__(self, file_path, database, connection=None):
+            super().__init__(file_path=file_path, database=database, connection=connection)
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=100)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    try:
+        register_parser(LegacyConstructorParser)
+        parser = get_parser(
+            tmp_path / "legacy_ctor.pdf",
+            database=":memory:",
+            metadata_parsing_mode="light",
+        )
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+
+    assert isinstance(parser, LegacyConstructorParser)
+
+
+def test_get_parser_sets_metadata_mode_attribute_post_construction(tmp_path):
+    class AttributeModeParser(BaseReportParser, BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id="attribute_mode",
+            display_name="Attribute Mode",
+            version="1.0.0",
+            supported_formats=("pdf",),
+        )
+
+        def __init__(self, file_path, database, connection=None):
+            super().__init__(file_path=file_path, database=database, connection=connection)
+            self.metadata_parsing_mode = "complete"
+
+        @classmethod
+        def probe(cls, _path, _context: ProbeContext) -> ProbeResult:
+            return ProbeResult(plugin_id=cls.manifest.plugin_id, can_parse=True, confidence=100)
+
+        def open_report(self):
+            self.raw_text = ["ok"]
+
+        def split_text_to_blocks(self):
+            self.blocks_text = []
+
+        def parse_to_v2(self):
+            raise NotImplementedError
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            return []
+
+    original_map = dict(PARSER_MAP)
+    original_manifests = dict(PARSER_MANIFESTS)
+    original_detectors = dict(PARSER_DETECTORS)
+    try:
+        register_parser(AttributeModeParser)
+        parser = get_parser(
+            tmp_path / "attribute_mode.pdf",
+            database=":memory:",
+            metadata_parsing_mode="light",
+        )
+    finally:
+        PARSER_MAP.clear()
+        PARSER_MAP.update(original_map)
+        PARSER_MANIFESTS.clear()
+        PARSER_MANIFESTS.update(original_manifests)
+        PARSER_DETECTORS.clear()
+        PARSER_DETECTORS.update(original_detectors)
+
+    assert isinstance(parser, AttributeModeParser)
+    assert parser.metadata_parsing_mode == "light"
+
+
 def test_register_parser_allows_runtime_extension(tmp_path):
     class DummyParser(BaseReportParser, BaseReportParserPlugin):
         manifest = PluginManifest(

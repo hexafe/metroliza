@@ -3,12 +3,14 @@ from modules.db import execute_with_retry
 from modules.list_selection_utils import ListSelectionUtils
 from modules import ui_theme_tokens
 from modules.help_menu import attach_help_menu_to_layout
+from modules.filter_state import FilterState
 from modules.report_query_service import (
     build_distinct_value_query as _build_distinct_value_query,
     build_measurement_filter_query as _build_measurement_filter_query,
 )
 from PyQt6.QtCore import QDate, Qt
 import PyQt6.QtWidgets as QtWidgets
+import inspect
 from PyQt6.QtWidgets import(
     QDateEdit,
     QDialog,
@@ -606,33 +608,85 @@ class FilterDialog(QDialog):
             date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
             date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
 
+            ax_values = [] if "SELECT ALL" in ax_selected_items else ax_selected_items
+            header_values = [] if "SELECT ALL" in header_selected_items else header_selected_items
+            reference_values = [] if "SELECT ALL" in reference_selected_items else reference_selected_items
+            part_name_values = [] if "SELECT ALL" in part_name_selected_items else part_name_selected_items
+            revision_values = [] if "SELECT ALL" in revision_selected_items else revision_selected_items
+            template_variant_values = [] if "SELECT ALL" in template_variant_selected_items else template_variant_selected_items
+            sample_number_values = [] if "SELECT ALL" in sample_number_selected_items else sample_number_selected_items
+            operator_name_values = [] if "SELECT ALL" in operator_name_selected_items else operator_name_selected_items
+            sample_number_kind_values = [] if "SELECT ALL" in sample_number_kind_selected_items else sample_number_kind_selected_items
+            status_code_values = [] if "SELECT ALL" in status_code_selected_items else status_code_selected_items
+            filename_values = [] if "SELECT ALL" in filename_selected_items else filename_selected_items
+            parser_id_values = [] if "SELECT ALL" in parser_id_selected_items else parser_id_selected_items
+            template_family_values = [] if "SELECT ALL" in template_family_selected_items else template_family_selected_items
+
             query = build_measurement_filter_query(
-                ax_values=[] if "SELECT ALL" in ax_selected_items else ax_selected_items,
-                header_values=[] if "SELECT ALL" in header_selected_items else header_selected_items,
-                reference_values=[] if "SELECT ALL" in reference_selected_items else reference_selected_items,
-                part_name_values=[] if "SELECT ALL" in part_name_selected_items else part_name_selected_items,
-                revision_values=[] if "SELECT ALL" in revision_selected_items else revision_selected_items,
-                template_variant_values=[] if "SELECT ALL" in template_variant_selected_items else template_variant_selected_items,
-                sample_number_values=[] if "SELECT ALL" in sample_number_selected_items else sample_number_selected_items,
-                operator_name_values=[] if "SELECT ALL" in operator_name_selected_items else operator_name_selected_items,
-                sample_number_kind_values=[] if "SELECT ALL" in sample_number_kind_selected_items else sample_number_kind_selected_items,
-                status_code_values=[] if "SELECT ALL" in status_code_selected_items else status_code_selected_items,
-                filename_values=[] if "SELECT ALL" in filename_selected_items else filename_selected_items,
-                parser_id_values=[] if "SELECT ALL" in parser_id_selected_items else parser_id_selected_items,
-                template_family_values=[] if "SELECT ALL" in template_family_selected_items else template_family_selected_items,
+                ax_values=ax_values,
+                header_values=header_values,
+                reference_values=reference_values,
+                part_name_values=part_name_values,
+                revision_values=revision_values,
+                template_variant_values=template_variant_values,
+                sample_number_values=sample_number_values,
+                operator_name_values=operator_name_values,
+                sample_number_kind_values=sample_number_kind_values,
+                status_code_values=status_code_values,
+                filename_values=filename_values,
+                parser_id_values=parser_id_values,
+                template_family_values=template_family_values,
                 has_nok_only=has_nok_only,
                 date_from=date_from,
                 date_to=date_to,
             )
 
             self.filter_query = query
-            self.parent().set_filter_query(self.filter_query)
-            self.parent().set_filter_applied()
+            filter_state = FilterState(
+                ax_values=tuple(ax_values),
+                header_values=tuple(header_values),
+                reference_values=tuple(reference_values),
+                part_name_values=tuple(part_name_values),
+                revision_values=tuple(revision_values),
+                template_variant_values=tuple(template_variant_values),
+                sample_number_values=tuple(sample_number_values),
+                operator_name_values=tuple(operator_name_values),
+                sample_number_kind_values=tuple(sample_number_kind_values),
+                status_code_values=tuple(status_code_values),
+                filename_values=tuple(filename_values),
+                parser_id_values=tuple(parser_id_values),
+                template_family_values=tuple(template_family_values),
+                has_nok_only=has_nok_only,
+                date_from=date_from,
+                date_to=date_to,
+            )
+
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "set_filter_query"):
+                parent.set_filter_query(self.filter_query)
+            if parent is not None and hasattr(parent, "set_filter_state"):
+                parent.set_filter_state(filter_state)
+            if parent is not None and hasattr(parent, "set_filter_applied"):
+                self._call_parent_filter_applied(parent, filter_state)
 
             # Hide the filter window
             self.hide()
         except Exception as e:
             self.log_and_exit(e)
+
+    @staticmethod
+    def _call_parent_filter_applied(parent, filter_state):
+        method = getattr(parent, "set_filter_applied", None)
+        if method is None:
+            return
+        try:
+            parameter_count = len(inspect.signature(method).parameters)
+        except (TypeError, ValueError):
+            parameter_count = 0
+        if parameter_count >= 1:
+            method(filter_state)
+        else:
+            method()
             
     def log_and_exit(self, exception):
         CustomLogger(exception, reraise=False)

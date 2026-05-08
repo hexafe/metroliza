@@ -48,8 +48,25 @@ class _FakeTable:
     def rowCount(self):
         return len(self._rows)
 
+    def columnCount(self):
+        return 1
+
     def item(self, row, col):
         return self._rows[row]
+
+
+class _FakeMatrixTable:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def rowCount(self):
+        return len(self._rows)
+
+    def columnCount(self):
+        return len(self._rows[0]) if self._rows else 0
+
+    def item(self, row, col):
+        return self._rows[row][col]
 
 
 class TestModifyDbUpdateStatements(unittest.TestCase):
@@ -75,6 +92,26 @@ class TestModifyDbUpdateStatements(unittest.TestCase):
                 ('UPDATE report_metadata SET reference = ? WHERE reference = ?', ('B2', 'B')),
                 ('UPDATE report_metadata SET reference = ? WHERE reference = ?', ('C2', 'C')),
             ],
+        )
+
+    def test_build_update_statements_uses_new_value_column_for_normalize_layout(self):
+        table = _FakeMatrixTable(
+            [
+                [_FakeItem('A', 'A'), _FakeItem('A', 'A'), _FakeItem(3, '3')],
+                [_FakeItem('B', 'B'), _FakeItem('B', 'B2'), _FakeItem(2, '2')],
+            ]
+        )
+
+        statements = ModifyDB.build_update_statements(
+            None,
+            table,
+            'report_metadata',
+            'reference',
+        )
+
+        self.assertEqual(
+            statements,
+            [('UPDATE report_metadata SET reference = ? WHERE reference = ?', ('B2', 'B'))],
         )
 
 

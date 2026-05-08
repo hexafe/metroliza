@@ -12,7 +12,7 @@ From here you can open:
 - CSV Summary, and
 - Characteristic Name Matching.
 
-It also gives you quick access to **About** and **Release notes** from the menu bar.
+It also gives you quick access to **About**, **Release notes**, **Tools**, and help from the menu bar.
 
 ## What each button does
 
@@ -53,6 +53,14 @@ Opens the [Characteristic Name Matching](characteristic_name_matching.md) dialog
 Use this when the same characteristic appears under different names in different reports or references and you want export/grouped analysis to treat them as the same characteristic.
 
 ## Menu actions
+
+### Tools > Enrich existing database metadata...
+
+Runs OCR metadata enrichment on reports already saved in the selected database.
+
+Use this as a maintenance action when an existing database was imported with fast metadata and you want to fill in richer report metadata later.
+
+While enrichment runs, the main window shows progress and a **Cancel** button. If no database is selected, the main window shows a message asking you to select a database first.
 
 ### About
 

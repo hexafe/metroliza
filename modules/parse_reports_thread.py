@@ -914,10 +914,12 @@ class ParseReportsThread(QThread):
                     return parser.open_database_and_check_filename()
 
                 def _parser_factory(report):
-                    parser = get_parser(report, self.db_file, connection=connection)
-                    if hasattr(parser, "metadata_parsing_mode"):
-                        parser.metadata_parsing_mode = self.metadata_parsing_mode
-                    return parser
+                    return get_parser(
+                        report,
+                        self.db_file,
+                        connection=connection,
+                        metadata_parsing_mode=self.metadata_parsing_mode,
+                    )
 
                 result = parse_new_reports(
                     list_of_reports,

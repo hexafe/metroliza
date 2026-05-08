@@ -52,6 +52,7 @@ from pathlib import Path
 from modules.worker_progress_dialog import create_worker_progress_dialog
 from modules.help_menu import attach_help_menu_to_layout
 from modules.report_query_service import build_measurement_export_query
+from modules.filter_state import NOT_APPLIED_LABEL, summarize_filter_state
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
@@ -186,6 +187,7 @@ class ExportDialog(QDialog):
         self.db_file = db_file
         self.excel_file = ""
         self.filter_query = DEFAULT_FILTER_QUERY
+        self.filter_state = None
         self.df_for_grouping = None
         
         self.filter_window = None
@@ -260,11 +262,14 @@ class ExportDialog(QDialog):
             self.select_db_label.setToolTip("Select the database used as the source for this export.")
             self.select_db_button.setToolTip(self.select_db_label.toolTip())
 
-            self.select_filter_label = QLabel("Not applied")
+            self.select_filter_label = QLabel(NOT_APPLIED_LABEL)
             self.select_filter_label.setToolTip("Optional export filters for AX, reference, header, or date range.")
             self.filter_button = QPushButton("Edit...")
             self.filter_button.clicked.connect(self.open_filter_window)
             self.filter_button.setToolTip("Edit the optional export filters.")
+            self.clear_filter_button = QPushButton("Clear filters")
+            self.clear_filter_button.clicked.connect(self.clear_filters)
+            self.clear_filter_button.setToolTip("Reset all export filters to the default unfiltered state.")
             
             self.select_group_label = QLabel("Not applied")
             self.select_group_label.setToolTip("Optional group assignments for grouped export workflows.")
@@ -484,7 +489,13 @@ class ExportDialog(QDialog):
             row += 1
             content_layout.addWidget(QLabel("Filters:"), row, 0)
             content_layout.addWidget(self.select_filter_label, row, 1, 1, 2)
-            content_layout.addWidget(self.filter_button, row, 3)
+            filter_actions = QWidget()
+            filter_actions_layout = QHBoxLayout(filter_actions)
+            filter_actions_layout.setContentsMargins(0, 0, 0, 0)
+            filter_actions_layout.setSpacing(6)
+            filter_actions_layout.addWidget(self.filter_button)
+            filter_actions_layout.addWidget(self.clear_filter_button)
+            content_layout.addWidget(filter_actions, row, 3)
 
             row += 1
             content_layout.addWidget(QLabel("Grouping:"), row, 0)
@@ -732,8 +743,9 @@ class ExportDialog(QDialog):
         self._set_path_field_value(self.database_text_label, db_file)
 
         self.filter_query = DEFAULT_FILTER_QUERY
+        self.filter_state = None
         self.df_for_grouping = None
-        self.select_filter_label.setText("Not applied")
+        self._refresh_filter_state_summary()
         self.set_grouping_applied(False)
         self._update_export_button_enabled_state()
 
@@ -785,6 +797,13 @@ class ExportDialog(QDialog):
             self.filter_query = query
         except Exception as e:
             self.log_and_exit(e)
+
+    def set_filter_state(self, filter_state):
+        try:
+            self.filter_state = filter_state
+            self._refresh_filter_state_summary()
+        except Exception as e:
+            self.log_and_exit(e)
             
     def set_df_for_grouping(self, df):
         try:
@@ -798,10 +817,27 @@ class ExportDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
             
-    def set_filter_applied(self):
+    def set_filter_applied(self, filter_state=None):
         try:
-            # Update filter label in export window
-            self.select_filter_label.setText("Applied")
+            if filter_state is not None:
+                self.filter_state = filter_state
+            self._refresh_filter_state_summary()
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def _refresh_filter_state_summary(self):
+        summary_label, details = summarize_filter_state(self.filter_state)
+        if hasattr(self.select_filter_label, "setText"):
+            self.select_filter_label.setText(summary_label)
+        if hasattr(self.select_filter_label, "setToolTip"):
+            self.select_filter_label.setToolTip(details)
+
+    def clear_filters(self):
+        try:
+            self.filter_query = DEFAULT_FILTER_QUERY
+            self.filter_state = None
+            self._refresh_filter_state_summary()
+            self._discard_child_dialog('filter_window')
         except Exception as e:
             self.log_and_exit(e)
     

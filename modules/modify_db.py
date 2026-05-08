@@ -125,30 +125,21 @@ class ModifyDB(QDialog):
 
     def create_widgets(self):
         try:
-            # Create table widgets for REFERENCE, PART NUMBER, and HEADER
-            self.reference_table = QTableWidget()
-            self.reference_table.setSelectionMode(self._multi_selection_mode())
-            self.reference_table.setSelectionBehavior(self._select_rows_behavior())
-            self.reference_table.setColumnCount(1)
-            self.reference_table.setHorizontalHeaderLabels(["REFERENCE"])
-            self.reference_table.setColumnWidth(0, 200)
+            self.reference_filter_edit = QtWidgets.QLineEdit()
+            self.reference_filter_edit.setPlaceholderText("Search references")
+            self.reference_table = self._create_normalize_table()
 
-            self.part_number_table = QTableWidget()
-            self.part_number_table.setSelectionMode(self._multi_selection_mode())
-            self.part_number_table.setSelectionBehavior(self._select_rows_behavior())
-            self.part_number_table.setColumnCount(1)
-            self.part_number_table.setHorizontalHeaderLabels(["SAMPLE NUMBER"])
-            self.part_number_table.setColumnWidth(0, 200)
+            self.part_number_filter_edit = QtWidgets.QLineEdit()
+            self.part_number_filter_edit.setPlaceholderText("Search sample numbers")
+            self.part_number_table = self._create_normalize_table()
 
-            self.header_table = QTableWidget()
-            self.header_table.setSelectionMode(self._multi_selection_mode())
-            self.header_table.setSelectionBehavior(self._select_rows_behavior())
-            self.header_table.setColumnCount(1)
-            self.header_table.setHorizontalHeaderLabels(["HEADER"])
-            self.header_table.setColumnWidth(0, 200)
+            self.header_filter_edit = QtWidgets.QLineEdit()
+            self.header_filter_edit.setPlaceholderText("Search headers")
+            self.header_table = self._create_normalize_table()
 
             self.tab_widget = QtWidgets.QTabWidget()
             self.normalize_tab = QtWidgets.QWidget()
+            self.normalize_tab_widget = QtWidgets.QTabWidget()
             self.report_records_tab = QtWidgets.QWidget()
             self.measurement_rows_tab = QtWidgets.QWidget()
 
@@ -174,15 +165,27 @@ class ModifyDB(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+    def _create_normalize_table(self):
+        table = QTableWidget()
+        table.setSelectionMode(self._multi_selection_mode())
+        table.setSelectionBehavior(self._select_rows_behavior())
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Original value", "New value", "Occurrences"])
+        table.setColumnWidth(0, 260)
+        table.setColumnWidth(1, 260)
+        table.setColumnWidth(2, 120)
+        return table
+
     def arrange_layout(self):
         try:
             layout = QGridLayout(self)
             attach_help_menu_to_layout(layout, self, [("Modify Database manual", 'modify_database')])
 
-            normalize_layout = QGridLayout(self.normalize_tab)
-            normalize_layout.addWidget(self.reference_table, 0, 0)
-            normalize_layout.addWidget(self.part_number_table, 0, 1)
-            normalize_layout.addWidget(self.header_table, 0, 2)
+            normalize_layout = QtWidgets.QVBoxLayout(self.normalize_tab)
+            normalize_layout.addWidget(self.normalize_tab_widget)
+            self._add_normalize_field_tab("REFERENCE", self.reference_filter_edit, self.reference_table)
+            self._add_normalize_field_tab("SAMPLE NUMBER", self.part_number_filter_edit, self.part_number_table)
+            self._add_normalize_field_tab("HEADER", self.header_filter_edit, self.header_table)
 
             report_layout = QtWidgets.QVBoxLayout(self.report_records_tab)
             report_layout.addWidget(self.report_filter_edit)
@@ -206,6 +209,13 @@ class ModifyDB(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+    def _add_normalize_field_tab(self, title, search_edit, table):
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+        layout.addWidget(search_edit)
+        layout.addWidget(table)
+        self.normalize_tab_widget.addTab(tab, title)
+
     def connect_signals(self):
         try:
             # Connect signals for button clicks or list item selection if needed
@@ -224,6 +234,15 @@ class ModifyDB(QDialog):
             )
             self.measurement_filter_edit.textChanged.connect(
                 lambda text: self._filter_table_rows(self.measurement_records_table, text)
+            )
+            self.reference_filter_edit.textChanged.connect(
+                lambda text: self._filter_table_rows(self.reference_table, text)
+            )
+            self.part_number_filter_edit.textChanged.connect(
+                lambda text: self._filter_table_rows(self.part_number_table, text)
+            )
+            self.header_filter_edit.textChanged.connect(
+                lambda text: self._filter_table_rows(self.header_table, text)
             )
         except Exception as e:
             self.log_and_exit(e)
@@ -289,8 +308,13 @@ class ModifyDB(QDialog):
         if not selected_rows:
             return False
 
+        edit_column = self._normalize_table_edit_column(target_table)
+        current_row = target_table.currentRow() if hasattr(target_table, "currentRow") else selected_rows[0]
+        suggested_item = target_table.item(current_row, edit_column)
         current_item = target_table.currentItem()
-        suggested_value = current_item.text() if current_item is not None else ""
+        if suggested_item is None:
+            suggested_item = current_item
+        suggested_value = suggested_item.text() if suggested_item is not None else ""
         new_value, is_confirmed = QtWidgets.QInputDialog.getText(
             self,
             "Rename selected items",
@@ -302,7 +326,7 @@ class ModifyDB(QDialog):
 
         normalized_value = str(new_value)
         for row in selected_rows:
-            item = target_table.item(row, 0)
+            item = target_table.item(row, edit_column)
             if item is not None:
                 item.setText(normalized_value)
 
@@ -354,19 +378,37 @@ class ModifyDB(QDialog):
 
             reference_values, _ = execute_select_with_columns(
                 self.db_file,
-                "SELECT DISTINCT reference FROM report_metadata WHERE reference IS NOT NULL ORDER BY reference;",
+                """
+                SELECT reference, COUNT(*) AS occurrences
+                FROM report_metadata
+                WHERE reference IS NOT NULL
+                GROUP BY reference
+                ORDER BY reference;
+                """,
             )
             self.populate_table(self.reference_table, reference_values)
 
             part_number_values, _ = execute_select_with_columns(
                 self.db_file,
-                "SELECT DISTINCT sample_number FROM report_metadata WHERE sample_number IS NOT NULL ORDER BY sample_number;",
+                """
+                SELECT sample_number, COUNT(*) AS occurrences
+                FROM report_metadata
+                WHERE sample_number IS NOT NULL
+                GROUP BY sample_number
+                ORDER BY sample_number;
+                """,
             )
             self.populate_table(self.part_number_table, part_number_values)
 
             header_values, _ = execute_select_with_columns(
                 self.db_file,
-                "SELECT DISTINCT header FROM report_measurements WHERE header IS NOT NULL ORDER BY header;",
+                """
+                SELECT header, COUNT(*) AS occurrences
+                FROM report_measurements
+                WHERE header IS NOT NULL
+                GROUP BY header
+                ORDER BY header;
+                """,
             )
             self.populate_table(self.header_table, header_values)
             self.populate_report_records_table()
@@ -378,10 +420,19 @@ class ModifyDB(QDialog):
         table.setRowCount(len(values))
         self.undo_data[table] = {}
         for i, value in enumerate(values):
-            item = QTableWidgetItem(str(value[0]))
-            item.setData(Qt.ItemDataRole.UserRole, str(value[0]))
-            table.setItem(i, 0, item)
-            self.undo_data[table][i] = str(value[0])
+            original_value = str(value[0])
+            occurrences = value[1] if len(value) > 1 else ""
+            original_item = self._record_table_item(original_value, editable=False)
+            new_item = self._record_table_item(original_value, editable=True)
+            count_item = self._record_table_item(occurrences, editable=False)
+            new_item.setData(Qt.ItemDataRole.UserRole, original_value)
+            table.setItem(i, 0, original_item)
+            table.setItem(i, 1, new_item)
+            table.setItem(i, 2, count_item)
+            self.undo_data[table][i] = original_value
+
+        if hasattr(table, "resizeColumnsToContents"):
+            table.resizeColumnsToContents()
 
     def populate_report_records_table(self):
         """Load report-level rows from the overview view into an editable table."""
@@ -546,10 +597,14 @@ class ModifyDB(QDialog):
     def collect_table_modifications(self, table, table_name):
         """Build a per-table change list using original values stored in UserRole."""
         modifications_text = ""
+        edit_column = self._normalize_table_edit_column(table)
 
         for i in range(table.rowCount()):
-            old_value = str(table.item(i, 0).data(Qt.ItemDataRole.UserRole))
-            new_value = str(table.item(i, 0).text())
+            item = table.item(i, edit_column)
+            if item is None:
+                continue
+            old_value = str(item.data(Qt.ItemDataRole.UserRole))
+            new_value = str(item.text())
 
             if old_value != new_value:
                 modifications_text += f"{old_value} → {new_value}\n"
@@ -644,15 +699,26 @@ class ModifyDB(QDialog):
     def build_update_statements(self, table_widget, table_name, column_name):
         """Build SQL UPDATE statements for rows modified in the given table."""
         statements = []
+        edit_column = ModifyDB._normalize_table_edit_column(table_widget)
         for row in range(table_widget.rowCount()):
-            new_value = str(table_widget.item(row, 0).text())
-            old_value = str(table_widget.item(row, 0).data(Qt.ItemDataRole.UserRole))
+            item = table_widget.item(row, edit_column)
+            if item is None:
+                continue
+            new_value = str(item.text())
+            old_value = str(item.data(Qt.ItemDataRole.UserRole))
 
             if new_value != old_value:
                 query = f"UPDATE {table_name} SET {column_name} = ? WHERE {column_name} = ?"
                 statements.append((query, (new_value, old_value)))
 
         return statements
+
+    @staticmethod
+    def _normalize_table_edit_column(table_widget):
+        try:
+            return 1 if table_widget.columnCount() > 1 else 0
+        except AttributeError:
+            return 0
 
     def collect_report_record_updates(self):
         return self.collect_record_table_updates(self.report_records_table, "report_id")

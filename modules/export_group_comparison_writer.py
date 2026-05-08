@@ -16,12 +16,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from hexafe_groupstats import AnalysisConfig, analyze_metric
-from hexafe_groupstats.core.corrections import (
+from hexafe_groupstats import (
+    AnalysisConfig,
+    analyze_metric,
     describe_correction_policy as _describe_correction_policy,
+    describe_pairwise_strategy as _describe_pairwise_strategy,
     format_correction_method as _format_correction_method,
 )
-from hexafe_groupstats.core.pairwise import describe_pairwise_strategy as _describe_pairwise_strategy
 
 from modules.characteristic_alias_service import resolve_characteristic_alias
 from modules.distribution_shape_analysis import compute_distribution_difference
