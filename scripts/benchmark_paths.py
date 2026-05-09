@@ -92,8 +92,8 @@ def _install_headless_stubs() -> None:
 
     for attr in (
         'QDialog', 'QVBoxLayout', 'QPushButton', 'QFileDialog', 'QListWidget', 'QMessageBox',
-        'QHBoxLayout', 'QProgressBar', 'QLabel', 'QTableWidget', 'QTableWidgetItem',
-        'QHeaderView', 'QCheckBox'
+        'QHBoxLayout', 'QGridLayout', 'QProgressBar', 'QLabel', 'QLineEdit', 'QTableWidget',
+        'QTableWidgetItem', 'QHeaderView', 'QCheckBox', 'QSizePolicy', 'QWidget', 'QFrame'
     ):
         setattr(qtwidgets_stub, attr, type(attr, (), {}))
     qtwidgets_stub.QApplication = _DummyApplication
