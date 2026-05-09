@@ -23,6 +23,13 @@ test.db
 # Local benchmark output
 benchmark_results/
 
+# Local/generated release and CI evidence
+logs/release_checks/
+artifacts/parser_plugin_workspace_ci/
+parser_plugin_workspace*/
+smoke-artifacts/
+nuitka-build-report.xml
+
 # Local native extension build outputs
 _metroliza_*_native.so
 modules/native/**/target/

@@ -2,7 +2,8 @@ param(
     [string]$EntryPoint = "metroliza.py",
     [string]$OutputName,
     [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
-    [string]$CredentialsPath = "credentials.json",
+    [switch]$BundleCredentials,
+    [string]$CredentialsPath = "",
     [switch]$FastDev,
     [switch]$RequireNative,
     [switch]$EnableConsole,
@@ -17,6 +18,15 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$credentialsPathWasBound = $PSBoundParameters.ContainsKey('CredentialsPath')
+
+if ($credentialsPathWasBound -and -not $BundleCredentials) {
+    throw '-CredentialsPath no longer bundles credentials by itself. Re-run with -BundleCredentials -CredentialsPath <path> only for an explicitly approved release build.'
+}
+
+if ($BundleCredentials -and [string]::IsNullOrWhiteSpace($CredentialsPath)) {
+    throw '-BundleCredentials requires -CredentialsPath <path>. Do not rely on an implicit credentials.json release default.'
+}
 
 $isWindowsHost = $env:OS -eq "Windows_NT"
 $isMacOSHost = $false
@@ -436,7 +446,7 @@ if ($LASTEXITCODE -eq 0) {
 $jobs = if ($env:NUMBER_OF_PROCESSORS) { $env:NUMBER_OF_PROCESSORS } else { 4 }
 $modeLabel = if ($FastDev) { 'standalone (faster dev build)' } else { 'onefile (release-like build)' }
 $nativeModeLabel = if ($RequireNative) { 'required' } else { 'optional' }
-$credentialsPathLabel = if ($CredentialsPath) { $CredentialsPath } else { '(disabled)' }
+$credentialsPathLabel = if ($BundleCredentials) { $CredentialsPath } else { '(disabled)' }
 $consoleMode = if ($EnableConsole) { 'force' } else { 'disable' }
 $pdfGateLabel = if ($AllowBrokenPdfParserBuild) { 'UNSAFE OVERRIDE ENABLED' } else { 'strict' }
 $headerOcrGateLabel = if ($AllowMissingHeaderOcrBuild) { 'UNSAFE OVERRIDE ENABLED' } else { 'strict' }
@@ -666,14 +676,16 @@ foreach ($modelFile in $rapidOcrModelFiles) {
     }
 }
 
-if ($CredentialsPath) {
+if ($BundleCredentials) {
     $resolvedCredentialsPath = Resolve-Path -LiteralPath $CredentialsPath -ErrorAction SilentlyContinue
     if ($resolvedCredentialsPath) {
         $destinationName = [System.IO.Path]::GetFileName($resolvedCredentialsPath.Path)
         $commonArgs += "--include-data-files=$($resolvedCredentialsPath.Path)=$destinationName"
     } else {
-        Write-Warning "Credentials file '$CredentialsPath' was not found. Continuing without bundling credentials.json."
+        throw "Credential bundling was requested, but '$CredentialsPath' was not found."
     }
+} else {
+    Write-Host '      Credential bundling disabled; OAuth credentials must remain outside the packaged artifact.'
 }
 
 if (-not $FastDev) {

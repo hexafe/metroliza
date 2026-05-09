@@ -20,3 +20,8 @@ repos:
         entry: '(client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*\S+'
         files: '\.(py|json|ya?ml|toml|ini|env)$'
         exclude: ^config/google/credentials\.example\.json$
+      - id: release-hygiene
+        name: release-hygiene
+        language: system
+        entry: python scripts/check_release_hygiene.py
+        pass_filenames: false

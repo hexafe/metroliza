@@ -52,7 +52,9 @@ def add_group_key(df):
 
     keyed_df = normalized_df.copy()
     raw_key = keyed_df[[report_id_column]].fillna('').astype(str).agg('|'.join, axis=1)
-    keyed_df['GROUP_KEY'] = raw_key.apply(lambda value: hashlib.sha1(value.encode('utf-8')).hexdigest())
+    keyed_df['GROUP_KEY'] = raw_key.apply(
+        lambda value: hashlib.sha1(value.encode('utf-8'), usedforsecurity=False).hexdigest()
+    )
     return keyed_df
 
 

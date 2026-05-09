@@ -65,6 +65,16 @@ These checks are explicitly non-blocking for normal PR CI:
 - Startup logs (`stdout`, `stderr`, and discovered `metroliza.log` paths) are gathered into `smoke-artifacts/`.
 - On failure, those artifacts are uploaded as `packaging-smoke-artifacts` for troubleshooting.
 
+### Performance benchmark trend semantics
+
+- The `perf-benchmarks` job may run extra synthetic benchmark scenarios so the
+  artifact keeps broader diagnostic context.
+- The trend comparison is scoped to scenario keys that have checked-in baseline
+  medians in `docs/perf_baseline_snapshot.json`; scenarios without baselines are
+  not treated as trend rows.
+- Export stage metrics remain advisory and can include stage timings from
+  scenarios that are not baseline-gated.
+
 ## Dependency setup and cache policy
 
 - CI no longer uses a standalone `python-setup` dependency warm-up job. That job did not share an environment with downstream jobs (each job runs on a fresh runner), so it added serial waiting time without reducing downstream install work.

@@ -15,7 +15,8 @@ param(
     [string]$EntryPoint = 'metroliza.py',
     [string]$OutputName,
     [string]$IconPath = "$PSScriptRoot/metroliza_icon2.ico",
-    [string]$CredentialsPath = 'credentials.json',
+    [switch]$BundleCredentials,
+    [string]$CredentialsPath = '',
 
     [switch]$FastDev,
     [switch]$RequireNative,
@@ -375,6 +376,7 @@ try {
             Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'IconPath' -SwitchName '-IconPath'
             Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'CredentialsPath' -SwitchName '-CredentialsPath'
             Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters -ParameterName 'CompilerStrategy' -SwitchName '-CompilerStrategy'
+            Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $BundleCredentials.IsPresent -SwitchName '-BundleCredentials'
             Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $FastDev.IsPresent -SwitchName '-FastDev'
             Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $EnableConsole.IsPresent -SwitchName '-EnableConsole'
             Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $AllowBrokenPdfParserBuild.IsPresent -SwitchName '-AllowBrokenPdfParserBuild'

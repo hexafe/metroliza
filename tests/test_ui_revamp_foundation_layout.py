@@ -135,11 +135,13 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
         )
 
         self.assertLessEqual(payload["progress_size"][0], payload["available"][0])
+        self.assertLessEqual(payload["progress_size"][1], payload["available"][1])
+        self.assertLessEqual(payload["progress_size"][1], 320)
         self.assertLessEqual(payload["release_size"][0], payload["available"][0])
         self.assertIn("Stage", payload["progress_text"])
         self.assertLessEqual(payload["bar_max_height"], 20)
-        self.assertGreater(payload["movie_size"][0], 96)
-        self.assertGreater(payload["movie_size"][1], 96)
+        self.assertEqual(max(payload["movie_size"]), 168)
+        self.assertGreaterEqual(min(payload["movie_size"]), 150)
         self.assertTrue(payload["source_size"][0] > 0 and payload["source_size"][1] > 0)
         self.assertAlmostEqual(
             payload["movie_size"][0] / payload["movie_size"][1],

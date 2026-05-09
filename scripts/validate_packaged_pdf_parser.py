@@ -7,8 +7,9 @@ import hashlib
 import importlib
 import importlib.util
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from defusedxml import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_PYMUPDF_MODULES = (

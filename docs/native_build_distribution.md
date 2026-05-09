@@ -220,7 +220,9 @@ PyInstaller is the closest current path to a turnkey single-file distribution fo
 - defaults to pure-Python fallback packaging when native module is absent
 - supports `-EnableConsole` for troubleshooting startup failures by showing a Windows console with traceback
 - supports `-RequireNative` to fail fast if native module is missing
-- bundles `credentials.json` into the executable only when the configured `-CredentialsPath` exists (default: `credentials.json`)
+- disables OAuth credential bundling by default; credentials are included only
+  when an explicitly approved build passes both `-BundleCredentials` and
+  `-CredentialsPath <path>`
 - always applies `--noinclude-data-files` guards for `token.json` path variants so OAuth tokens are not bundled
 
 Smoke checks after build:
@@ -231,6 +233,8 @@ Smoke checks after build:
 ./packaging/build_nuitka.ps1 -RequireNative
 # troubleshooting mode: show console and traceback if startup fails
 ./packaging/build_nuitka.ps1 -EnableConsole
+# explicitly approved sandbox credential bundle, never the normal release default
+./packaging/build_nuitka.ps1 -BundleCredentials -CredentialsPath .\sandbox.credentials.json
 # compiler auto-detect (default)
 ./packaging/build_nuitka.ps1 -CompilerStrategy auto
 # force MSVC on Windows and open install guidance if missing

@@ -537,6 +537,15 @@ class TestGoogleDriveExport(unittest.TestCase):
 
         self.assertIn("Re-authenticate", str(exc.exception))
 
+    def test_refresh_access_token_rejects_non_google_token_uri(self):
+        with self.assertRaises(GoogleDriveAuthError) as exc:
+            _refresh_access_token(
+                {"refresh_token": "refresh-token"},
+                {"client_id": "id", "client_secret": "secret", "token_uri": "http://example.com/token"},
+            )
+
+        self.assertIn("Google HTTPS OAuth token endpoint", str(exc.exception))
+
     def test_ensure_access_token_rejects_malformed_credentials_structure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             credentials_path = Path(tmpdir) / "credentials.json"

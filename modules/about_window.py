@@ -1,8 +1,6 @@
 """About dialog and clickable label helpers for application metadata display."""
 
-import os
-
-from PyQt6.QtCore import QSize, QTemporaryFile, Qt, QUrl
+from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt, QUrl
 from PyQt6.QtGui import QMovie, QDesktopServices, QCursor
 from PyQt6.QtWidgets import QDialog, QLabel, QVBoxLayout
 from modules import base64_encoded_files
@@ -31,13 +29,13 @@ class ClickableLabel(QLabel):
 class AboutWindow(QDialog):
     """Display version, license, and project attribution information.
 
-    The dialog renders an embedded GIF from in-memory base64 content and keeps
-    the movie instance alive for the dialog lifetime.
+    The dialog renders an embedded GIF from in-memory base64 content and keeps the
+    backing buffer and movie instance alive for the dialog lifetime.
     """
 
     def __init__(self, parent=None, days_until_expiration=0):
         super().__init__(parent)
-        self._gif_temp_file_path = ""
+        self._gif_buffer = None
         self._gif_label = None
 
         # Set the window title and layout
@@ -51,21 +49,12 @@ class AboutWindow(QDialog):
         self._gif_label = gif_label
         # gif_label.setFixedSize(200, 200)
 
-        # Load the loading.gif from a file, create a QMovie from it, and set it to the label
         gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
+        self._gif_buffer = QBuffer(self)
+        self._gif_buffer.setData(QByteArray(gif_decoded))
+        self._gif_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
 
-        # Create temporary file and save encoded gif to it
-        temp_file = QTemporaryFile()
-        temp_file.setAutoRemove(False)
-        temp_file_name = ""
-        if temp_file.open():
-            temp_file.write(gif_decoded)
-            temp_file.close()
-            temp_file_name = temp_file.fileName()
-            self._gif_temp_file_path = temp_file_name
-
-        # Create the QMovie using the temporary file name
-        self.gif = QMovie(temp_file_name)
+        self.gif = QMovie(self._gif_buffer, b"gif", self)
         self.gif.setScaledSize(QSize(200, 200))
         gif_label.setMovie(self.gif)
         gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -97,7 +86,7 @@ class AboutWindow(QDialog):
         self.layout.addWidget(link_label)
 
     def closeEvent(self, event):
-        """Remove the temporary GIF file created for QMovie during teardown."""
+        """Stop GIF playback and release the in-memory backing buffer."""
         if getattr(self, "gif", None) is not None:
             if hasattr(self.gif, "stop"):
                 self.gif.stop()
@@ -105,14 +94,7 @@ class AboutWindow(QDialog):
             if self._gif_label is not None:
                 self._gif_label.setMovie(None)
 
-            if hasattr(self.gif, "setFileName"):
-                self.gif.setFileName("")
-
-        if self._gif_temp_file_path and os.path.exists(self._gif_temp_file_path):
-            try:
-                os.remove(self._gif_temp_file_path)
-                self._gif_temp_file_path = ""
-            except PermissionError:
-                # On Windows, delayed movie teardown can transiently keep the file handle open.
-                pass
+        if self._gif_buffer is not None and hasattr(self._gif_buffer, "close"):
+            self._gif_buffer.close()
+            self._gif_buffer = None
         super().closeEvent(event)

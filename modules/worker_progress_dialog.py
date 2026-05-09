@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt
 from PyQt6.QtGui import QImageReader, QMovie
-from PyQt6.QtWidgets import QDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 
 import base64
 
@@ -9,8 +9,8 @@ from modules.ui_foundation import apply_metroliza_theme, configure_window_size, 
 
 
 def _scaled_loading_gif_size(source_size):
-    """Return a larger aspect-preserving presentation size for the loading GIF."""
-    target_max_dimension = 128
+    """Return an aspect-preserving presentation size for the loading GIF."""
+    target_max_dimension = 168
     if not source_size.isValid() or source_size.isEmpty():
         return QSize(target_max_dimension, target_max_dimension)
 
@@ -30,7 +30,7 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     loading_dialog = QDialog(parent, Qt.WindowType.WindowTitleHint)
     loading_dialog.setWindowTitle(window_title)
     loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    configure_window_size(loading_dialog, minimum=(440, 240), initial=(480, 300))
+    configure_window_size(loading_dialog, minimum=(460, 220), initial=(520, 260))
     apply_metroliza_theme(loading_dialog)
 
     loading_gif_label = QLabel(loading_dialog)
@@ -47,15 +47,17 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     loading_gif_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
 
     loading_gif = QMovie(loading_gif_buffer, b"gif", loading_dialog)
-    loading_gif.setScaledSize(_scaled_loading_gif_size(loading_gif_source_size))
+    loading_gif_size = _scaled_loading_gif_size(loading_gif_source_size)
+    loading_gif.setScaledSize(loading_gif_size)
     loading_gif_label.setMovie(loading_gif)
     loading_gif.start()
-    loading_gif_label.setFixedSize(loading_gif.scaledSize())
+    loading_gif_label.setFixedSize(loading_gif_size)
 
     loading_label = secondary_label(initial_status_text)
     loading_label.setParent(loading_dialog)
-    loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    loading_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
     loading_label.setMinimumHeight((loading_label.fontMetrics().lineSpacing() * 3) + 8)
+    loading_label.setWordWrap(True)
 
     loading_bar = QProgressBar(loading_dialog)
     loading_bar.setValue(0)
@@ -66,8 +68,12 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     layout = QVBoxLayout(loading_dialog)
     layout.setContentsMargins(16, 16, 16, 16)
     layout.setSpacing(10)
-    layout.addWidget(loading_gif_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-    layout.addWidget(loading_label)
+
+    status_layout = QHBoxLayout()
+    status_layout.setSpacing(14)
+    status_layout.addWidget(loading_gif_label, alignment=Qt.AlignmentFlag.AlignVCenter)
+    status_layout.addWidget(loading_label, stretch=1)
+    layout.addLayout(status_layout)
     layout.addWidget(loading_bar)
 
     cancel_button = QPushButton("Cancel", loading_dialog)

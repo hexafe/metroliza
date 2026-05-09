@@ -1,7 +1,5 @@
 import importlib
-import os
 import sys
-import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -48,36 +46,27 @@ class _FakeVBoxLayout:
         return None
 
 
-class _FakeQTemporaryFile:
-    def __init__(self):
-        self._auto_remove = True
-        self._path = tempfile.mkstemp(prefix="about_window_test_")[1]
-        self._handle = None
+class _FakeQBuffer:
+    def __init__(self, *_args, **_kwargs):
+        self.data = b""
+        self.opened = False
+        self.closed = False
 
-    def setAutoRemove(self, enabled):
-        self._auto_remove = enabled
+    def setData(self, data):
+        self.data = bytes(data)
 
-    def open(self):
-        self._handle = open(self._path, "wb")
+    def open(self, *_args, **_kwargs):
+        self.opened = True
         return True
 
-    def write(self, data):
-        self._handle.write(data)
-
     def close(self):
-        if self._handle:
-            self._handle.close()
-            self._handle = None
-        if self._auto_remove and os.path.exists(self._path):
-            os.remove(self._path)
-
-    def fileName(self):
-        return self._path
+        self.closed = True
 
 
 class _FakeQMovie:
-    def __init__(self, source_path):
-        self.source_path = source_path
+    def __init__(self, source, *_args):
+        self.source = source
+        self.stopped = False
 
     def setScaledSize(self, *_args, **_kwargs):
         return None
@@ -85,14 +74,21 @@ class _FakeQMovie:
     def start(self):
         return None
 
+    def stop(self):
+        self.stopped = True
+
     def isValid(self):
-        return bool(self.source_path) and os.path.exists(self.source_path)
+        return bool(getattr(self.source, "data", b"")) and getattr(self.source, "opened", False)
 
 
 def _install_qt_stubs():
     qtcore = types.ModuleType("PyQt6.QtCore")
+    qtcore.QByteArray = bytes
+    qtcore.QBuffer = _FakeQBuffer
+    qtcore.QIODevice = types.SimpleNamespace(
+        OpenModeFlag=types.SimpleNamespace(ReadOnly=0),
+    )
     qtcore.QSize = lambda *_args, **_kwargs: None
-    qtcore.QTemporaryFile = _FakeQTemporaryFile
     qtcore.Qt = types.SimpleNamespace(
         AlignmentFlag=types.SimpleNamespace(AlignCenter=0, AlignHCenter=1),
         CursorShape=types.SimpleNamespace(PointingHandCursor=0),
@@ -113,7 +109,7 @@ def _install_qt_stubs():
 
 
 class TestAboutWindowGifLifetime(unittest.TestCase):
-    def test_gif_file_persists_while_dialog_active_and_movie_is_valid(self):
+    def test_gif_buffer_persists_while_dialog_active_and_movie_is_valid(self):
         qtcore, qtgui, qtwidgets = _install_qt_stubs()
         with patch.dict(
             sys.modules,
@@ -128,15 +124,15 @@ class TestAboutWindowGifLifetime(unittest.TestCase):
             about_module = importlib.import_module("modules.about_window")
             dialog = about_module.AboutWindow()
 
-            gif_path = dialog._gif_temp_file_path
-            self.assertTrue(os.path.exists(gif_path))
+            self.assertIsNotNone(dialog._gif_buffer)
+            self.assertTrue(dialog._gif_buffer.opened)
             self.assertTrue(dialog.gif.isValid())
 
             dialog.closeEvent(None)
-            self.assertFalse(os.path.exists(gif_path))
+            self.assertIsNone(dialog._gif_buffer)
+            self.assertTrue(dialog.gif.stopped)
 
-
-    def test_close_event_tolerates_transient_permission_error_on_cleanup(self):
+    def test_close_event_detaches_movie_from_label_before_closing_buffer(self):
         qtcore, qtgui, qtwidgets = _install_qt_stubs()
         with patch.dict(
             sys.modules,
@@ -151,15 +147,11 @@ class TestAboutWindowGifLifetime(unittest.TestCase):
             about_module = importlib.import_module("modules.about_window")
             dialog = about_module.AboutWindow()
 
-            gif_path = dialog._gif_temp_file_path
-            self.assertTrue(os.path.exists(gif_path))
+            gif_buffer = dialog._gif_buffer
+            dialog.closeEvent(None)
 
-            with patch("modules.about_window.os.remove", side_effect=PermissionError):
-                dialog.closeEvent(None)
-
-            self.assertTrue(os.path.exists(gif_path))
-            os.remove(gif_path)
-
+            self.assertTrue(gif_buffer.closed)
+            self.assertIsNone(dialog._gif_label.movie)
 
 if __name__ == "__main__":
     unittest.main()

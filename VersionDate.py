@@ -2,7 +2,7 @@ RELEASE_VERSION = "2026.05"
 VERSION_DATE = "260509"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "CSV Summary now lives under Tools, fast parsing can hand enrichment back to the main window, grouping shortcuts are restored, and help opens GitHub manuals."
+    "CSV Summary now lives under Tools, fast parsing can hand enrichment back to the main window, grouping shortcuts are restored, and the main workflow is easier to read."
 )
 PUBLIC_VERSION_LABEL = "2026.05 (build 260509)"
 
@@ -11,9 +11,8 @@ release_notes = f"""
     - CSV Summary now opens from the Tools menu and makes Create Summary the clear primary action<br>
     - Fast import with enrichment now returns control to the main window before metadata enrichment continues<br>
     - Grouping keyboard shortcuts now create, add, or rename groups without applying grouping by accident<br>
-    - Parsing and export progress windows now show a larger loading animation with the same clear status text<br>
-    - Help and manual actions now open GitHub documentation in the browser<br>
-    - The desktop workflow keeps the calmer visual style with clearer status rows and bounded paths<br>
+    - Help and manuals now open from the Help menu in the browser<br>
+    - Main workflows use clearer status rows and fit long file paths better<br>
 
     <br><b>Archive:</b><br>
 

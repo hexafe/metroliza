@@ -202,6 +202,10 @@ def test_build_nuitka_script_fails_closed_by_default_and_names_unsafe_override()
 
     assert '[switch]$AllowBrokenPdfParserBuild' in script
     assert '[switch]$AllowMissingHeaderOcrBuild' in script
+    assert '[switch]$BundleCredentials' in script
+    assert '[string]$CredentialsPath = ""' in script
+    assert '-CredentialsPath no longer bundles credentials by itself.' in script
+    assert '-BundleCredentials requires -CredentialsPath <path>.' in script
     assert "[ValidateSet('auto', 'gcc', 'clang')]" in script
     assert "[string]$CompilerStrategy = 'auto'" in script
     assert '[switch]$AutoInstallCompiler' in script
@@ -261,6 +265,9 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert '--require-header-ocr' in script
     assert "modules/html_dashboard_assets/plotly-2.27.0.min.js" in script
     assert '--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=modules/html_dashboard_assets/plotly-2.27.0.min.js' in script
+    assert 'if ($BundleCredentials)' in script
+    assert "Credential bundling disabled; OAuth credentials must remain outside the packaged artifact." in script
+    assert "Credential bundling was requested, but '$CredentialsPath' was not found." in script
     assert "$commonArgs += '--include-package=pymupdf'" in script
     assert "$commonArgs += '--include-package=fitz'" in script
     assert "'pymupdf._mupdf'" in script

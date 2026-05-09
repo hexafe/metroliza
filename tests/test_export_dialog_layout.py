@@ -97,7 +97,7 @@ class TestExportDialogLayout(unittest.TestCase):
             ExportDialog._load_dialog_config = lambda self: {'selected_preset': 'fast_diagnostics'}
 
             app = QApplication.instance() or QApplication([])
-            long_db = '/home/hexaf/Projects/metroliza/very/' + '/'.join(['deeply_nested_directory_name'] * 6) + '/measurement_database_name_with_really_long_identifier.db'
+            long_db = '/synthetic/metroliza/very/' + '/'.join(['deeply_nested_directory_name'] * 6) + '/measurement_database_name_with_really_long_identifier.db'
             long_xlsx = long_db.replace('.db', '.xlsx')
 
             dialog = ExportDialog(parent=None, db_file=long_db)

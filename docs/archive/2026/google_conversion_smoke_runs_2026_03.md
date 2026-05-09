@@ -18,5 +18,6 @@ Historical smoke evidence moved out of the active release-check template.
 - Build identity: `2026.03-build260305-84a2302`.
 - Outcome: FAIL. Smoke exited during credential preflight because `/tmp/metroliza-smoke-260305/credentials.json` was missing.
 - Fallback `.xlsx` behavior: not exercised because the run stopped before upload/conversion.
-- Local log path recorded at the time: `logs/release_checks/google_conversion_smoke_260305_20260306T204206+0000.log`.
+- Local generated log was intentionally removed from Git history's active tree during
+  release-hygiene cleanup; the failure summary above preserves the useful evidence.
 - Status: superseded historical evidence.

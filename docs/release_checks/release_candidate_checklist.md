@@ -112,10 +112,14 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 
 Local evidence from `codex/metroliza-ui-ux-visual-revamp` on 2026-05-09:
 
-- `QT_QPA_PLATFORM=offscreen python -m pytest -q` passed: 1276 passed, 27 skipped, 60 subtests passed.
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q` passed: 1282 passed, 27 skipped, 7 warnings, 60 subtests passed.
 - `python -m ruff check .` passed.
+- `python -m compileall -q -x '^\./\.git/' .` passed.
 - `python scripts/sync_release_metadata.py --check` passed.
+- `python scripts/check_release_hygiene.py` passed.
 - `git diff --check` passed.
+- `python -m bandit -r modules scripts packaging metroliza.py VersionDate.py -x modules/html_dashboard_assets -f json -o /tmp/metroliza-bandit.json` completed with 0 high findings; remaining medium/low findings are release-audit triage items.
+- `python -m pip_audit -r requirements.txt -r requirements-dev.txt -r requirements-build.txt --progress-spinner off --cache-dir /tmp/metroliza-pip-audit-cache` reported no known vulnerabilities for auditable dependencies; `hexafe-groupstats` was skipped because it is installed from Git rather than PyPI.
 - Synthetic benchmark warmup passed with:
   `PYTHONPATH=. python scripts/benchmark_paths.py --output-dir /tmp/metroliza-perf-ci-warmup --pdf-count 20 --report-count 40 --headers-per-report 6 --csv-rows 300 --csv-columns 4 --fit-group-count 12 --fit-sample-size 90 --fit-monte-carlo-samples 40 --group-preprocess-groups 10 --group-preprocess-values 1500 --cmm-bench-report-count 120 --cmm-bench-measurements-per-report 120`.
 

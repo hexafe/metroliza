@@ -68,6 +68,20 @@ def test_ci_workflow_keeps_manual_smoke_gates_non_blocking() -> None:
     assert 'name: packaging-smoke-artifacts' in workflow
 
 
+def test_ci_and_precommit_run_release_hygiene_scan() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    precommit_config = Path('.pre-commit-config.yaml').read_text(encoding='utf-8')
+    gitignore = Path('.gitignore').read_text(encoding='utf-8')
+
+    assert 'name: Release hygiene scan' in workflow
+    assert 'python scripts/check_release_hygiene.py' in workflow
+    assert 'id: release-hygiene' in precommit_config
+    assert 'logs/release_checks/' in gitignore
+    assert 'artifacts/parser_plugin_workspace_ci/' in gitignore
+    assert 'smoke-artifacts/' in gitignore
+    assert 'nuitka-build-report.xml' in gitignore
+
+
 def test_ci_workflow_keeps_native_chart_planner_parity_smoke_step() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
@@ -93,6 +107,24 @@ def test_ci_workflow_keeps_manual_smoke_inputs_opt_in_by_default() -> None:
     assert 'run_google_conversion_smoke:' in workflow
     assert 'description: "Set to 1 to run release-only Google conversion smoke check"' in workflow
     assert workflow.count('default: "0"') >= 2
+
+
+def test_perf_benchmark_trend_filters_to_baseline_backed_scenarios() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+
+    assert '--export-stage-metrics' in workflow
+    assert (
+        '--scenarios pdf_parse_path cmm_parser_backend_compare excel_export_path '
+        'excel_export_high_header_cardinality_compare csv_summary_export_path '
+        'distribution_fit_monte_carlo_path distribution_fit_batch_compare '
+        'group_preprocess_mixed_types_compare comparison_stats_ci_flow '
+        'comparison_stats_pairwise_flow'
+    ) in workflow
+    assert 'trend comparison is scoped to scenario keys that have checked-in baseline' in ci_policy
+    assert 'scenarios without baselines' in ci_policy
+    assert 'not treated as trend rows' in ci_policy
+    assert 'Export stage metrics remain advisory' in ci_policy
 
 
 def test_ci_policy_keeps_manual_smoke_lane_semantics_explicit() -> None:

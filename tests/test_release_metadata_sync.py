@@ -22,14 +22,19 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         current_section = VersionDate.release_notes.split("<br><b>Archive:</b><br>", 1)[0]
 
         self.assertIn("CSV Summary now opens from the Tools menu", current_section)
-        self.assertIn("Help and manual actions now open GitHub documentation", current_section)
+        self.assertIn("Help and manuals now open from the Help menu", current_section)
+        self.assertIn("Main workflows use clearer status rows", current_section)
         for technical_term in (
+            "loading animation",
             "PyInstaller",
             "Nuitka",
             "RapidOCR",
             "ONNX",
             "OpenCV",
             "NumPy",
+            "Bandit",
+            "pip-audit",
+            "benchmark",
             "test coverage",
             "regression",
         ):

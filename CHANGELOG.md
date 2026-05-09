@@ -4,9 +4,8 @@
 - CSV Summary now opens from the Tools menu and makes Create Summary the clear primary action.
 - Fast import with enrichment now returns control to the main window before metadata enrichment continues.
 - Grouping keyboard shortcuts now create, add, or rename groups without applying grouping by accident.
-- Parsing and export progress windows now show a larger loading animation with the same clear status text.
-- Help and manual actions now open GitHub documentation in the browser.
-- The desktop workflow keeps the calmer visual style with clearer status rows and bounded paths.
+- Help and manuals now open from the Help menu in the browser.
+- Main workflows use clearer status rows and fit long file paths better.
 
 ## 2026.04 (build 260421)
 - Re-running parsing on an existing database refreshes older CMM report rows so OCR header metadata can replace filename-only values.

@@ -45,6 +45,7 @@ GOOGLE_DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files"
 GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 GOOGLE_OAUTH_SCOPES = (GOOGLE_DRIVE_SCOPE,)
 GOOGLE_DRIVE_REPORTS_FOLDER_NAME = "metroliza_reports"
+GOOGLE_OAUTH_TOKEN_HOSTS = {"oauth2.googleapis.com", "accounts.google.com"}
 logger = get_operation_logger(logging.getLogger(__name__), "google_conversion")
 
 
@@ -193,7 +194,29 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any]:
     for key in ("client_id", "client_secret", "token_uri"):
         if not installed.get(key):
             raise GoogleDriveAuthError(f"credentials.json missing required field: {key}")
-    return installed
+
+    credentials = dict(installed)
+    credentials["token_uri"] = _validate_google_oauth_token_uri(credentials["token_uri"])
+    return credentials
+
+
+def _validate_google_oauth_token_uri(token_uri: str) -> str:
+    """Return a validated Google OAuth token endpoint URL."""
+    parsed = urllib.parse.urlparse(str(token_uri))
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or host not in GOOGLE_OAUTH_TOKEN_HOSTS
+        or not parsed.path.endswith("/token")
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise GoogleDriveAuthError(
+            "credentials.json token_uri must use the Google HTTPS OAuth token endpoint."
+        )
+    return str(token_uri)
 
 
 def _interactive_oauth_authorization(credentials_path: Path, token_path: Path) -> dict[str, Any]:
@@ -344,8 +367,9 @@ def _refresh_access_token(token_payload: dict[str, Any], credentials: dict[str, 
         }
     ).encode("utf-8")
 
+    token_uri = _validate_google_oauth_token_uri(credentials["token_uri"])
     request = urllib.request.Request(
-        credentials["token_uri"],
+        token_uri,
         data=refresh_form,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",

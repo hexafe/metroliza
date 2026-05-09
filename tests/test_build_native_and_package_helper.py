@@ -13,6 +13,9 @@ def test_build_native_and_package_helper_covers_native_build_and_packaging_paths
     assert "'modules/native/distribution_fit_ad/Cargo.toml'" in script
     assert '$invocationBoundParameters = @{}' in script
     assert 'Add-ValueArgumentIfBound -Arguments $nuitkaArgs -BoundParameters $invocationBoundParameters' in script
+    assert '[switch]$BundleCredentials' in script
+    assert "[string]$CredentialsPath = ''" in script
+    assert "Add-SwitchArgumentIfNeeded -Arguments $nuitkaArgs -Enabled $BundleCredentials.IsPresent -SwitchName '-BundleCredentials'" in script
     assert "@('-m', 'maturin', 'develop', '--release', '--manifest-path', $target.ManifestPath)" in script
     assert "build_backend_diagnostic_summary" in script
     assert "build_nuitka.ps1" in script

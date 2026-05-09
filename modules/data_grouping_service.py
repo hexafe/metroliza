@@ -37,7 +37,9 @@ def compute_group_key_for_df(df):
         lambda row: json.dumps(list(row), ensure_ascii=False, separators=(',', ':')),
         axis=1,
     )
-    return raw_key.apply(lambda value: hashlib.sha1(value.encode('utf-8')).hexdigest())
+    return raw_key.apply(
+        lambda value: hashlib.sha1(value.encode('utf-8'), usedforsecurity=False).hexdigest()
+    )
 
 
 def reassign_group_keys_to_default(df, *, selected_part_keys, default_group, group_color_column, default_group_color):
