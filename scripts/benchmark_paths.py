@@ -89,6 +89,9 @@ def _install_headless_stubs() -> None:
     qtcore_stub.Qt = object()
     qtcore_stub.QTemporaryFile = _DummyTempFile
     qtcore_stub.QSize = object
+    qtcore_stub.QByteArray = object
+    qtcore_stub.QBuffer = object
+    qtcore_stub.QIODevice = object
 
     for attr in (
         'QDialog', 'QVBoxLayout', 'QPushButton', 'QFileDialog', 'QListWidget', 'QMessageBox',
@@ -99,6 +102,7 @@ def _install_headless_stubs() -> None:
     qtwidgets_stub.QApplication = _DummyApplication
 
     qtgui_stub.QMovie = type('QMovie', (), {})
+    qtgui_stub.QImageReader = type('QImageReader', (), {})
 
     pyqt_stub = types.ModuleType('PyQt6')
     pyqt_stub.QtCore = qtcore_stub

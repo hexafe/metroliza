@@ -81,7 +81,6 @@ class MainWindow(QMainWindow):
         self.parse_button = QPushButton("Parse Reports")
         self.modifydb_button = QPushButton("Modify Database")
         self.export_button = QPushButton("Export Workbook")
-        self.csv_summary_button = QPushButton("CSV Summary")
         self.map_characteristics_button = QPushButton("Match Characteristic Names")
         self.metadata_enrichment_status_label = status_chip("Metadata enrichment idle", "neutral")
         self.metadata_enrichment_progress_bar = QProgressBar()
@@ -117,7 +116,6 @@ class MainWindow(QMainWindow):
         self.parse_button.setToolTip("Import measurements from PDF reports into a SQLite database.")
         self.modifydb_button.setToolTip("Clean stored references, sample numbers, headers, and record values.")
         self.export_button.setToolTip("Filter, group, and export database measurements to an Excel workbook.")
-        self.csv_summary_button.setToolTip("Create a standalone summary workbook from CSV data.")
         self.map_characteristics_button.setToolTip("Map different report names to one common characteristic name.")
         self.cancel_metadata_enrichment_button.setToolTip("Request metadata enrichment cancellation after the current report")
 
@@ -127,14 +125,20 @@ class MainWindow(QMainWindow):
         self.about_button.triggered.connect(self.open_about_window)
         self.release_notes_action = QAction("Release notes", self)
         self.release_notes_action.triggered.connect(self.open_release_notes_dialog)
+        self.csv_summary_action = QAction("CSV Summary...", self)
+        self.csv_summary_action.setToolTip("Create a standalone summary workbook from CSV data.")
+        self.csv_summary_action.triggered.connect(self.launch_csv_summary_dialog)
         self.enrich_metadata_action = QAction("Enrich existing database metadata...", self)
         self.enrich_metadata_action.setToolTip("Run OCR metadata enrichment on reports already saved in the selected database")
         self.enrich_metadata_action.triggered.connect(self.launch_metadata_enrichment)
-        self.menuBar().addAction(self.about_button)
-        self.menuBar().addAction(self.release_notes_action)
         self.tools_menu = self.menuBar().addMenu("Tools")
+        self.tools_menu.addAction(self.csv_summary_action)
         self.tools_menu.addAction(self.enrich_metadata_action)
-        build_help_menu(self, [("Main window manual", 'main_window')], menu_bar=self.menuBar())
+        _, self.help_menu = build_help_menu(self, [("Main window manual", 'main_window')], menu_bar=self.menuBar())
+        if hasattr(self.help_menu, "addSeparator"):
+            self.help_menu.addSeparator()
+        self.help_menu.addAction(self.release_notes_action)
+        self.help_menu.addAction(self.about_button)
 
     def setup_buttons_layout(self):
         """Add the buttons to the layout and connect the signals."""
@@ -159,13 +163,6 @@ class MainWindow(QMainWindow):
         prep_row.addWidget(self.map_characteristics_button)
         self.layout.addLayout(prep_row)
 
-        secondary_row = QHBoxLayout()
-        secondary_row.setContentsMargins(0, 0, 0, 0)
-        secondary_row.setSpacing(8)
-        secondary_row.addWidget(self.csv_summary_button)
-        secondary_row.addStretch(1)
-        self.layout.addLayout(secondary_row)
-
         self.layout.addWidget(separator())
         self.layout.addWidget(self.metadata_enrichment_status_label)
         self.layout.addWidget(self.metadata_enrichment_progress_bar)
@@ -173,7 +170,6 @@ class MainWindow(QMainWindow):
         self.parse_button.clicked.connect(self.launch_parsing_dialog)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
         self.export_button.clicked.connect(self.launch_export_dialog)
-        self.csv_summary_button.clicked.connect(self.launch_csv_summary_dialog)
         self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
         self.cancel_metadata_enrichment_button.clicked.connect(self.stop_metadata_enrichment)
         self.metadata_enrichment_status_label.setVisible(False)
@@ -183,7 +179,6 @@ class MainWindow(QMainWindow):
         configure_accessibility(self.export_button, name="Export Workbook")
         configure_accessibility(self.modifydb_button, name="Modify Database")
         configure_accessibility(self.map_characteristics_button, name="Match Characteristic Names")
-        configure_accessibility(self.csv_summary_button, name="CSV Summary")
         configure_accessibility(self.cancel_metadata_enrichment_button, name="Cancel metadata enrichment")
 
     def _sync_context_rows(self):
@@ -282,9 +277,21 @@ class MainWindow(QMainWindow):
 
             if not self.parsing_dialog or not self.parsing_dialog.isVisible():
                 self.parsing_dialog = ParsingDialog(self, self.directory, self.db_file)
+                enrichment_signal = getattr(self.parsing_dialog, "metadata_enrichment_requested", None)
+                if enrichment_signal is not None:
+                    enrichment_signal.connect(self.start_metadata_enrichment_from_parsing)
                 self.parsing_dialog.show()
         except Exception as e:
             CustomLogger(e, reraise=False)
+
+    def start_metadata_enrichment_from_parsing(self, db_file):
+        """Receive a successful light import request and start modeless enrichment."""
+        try:
+            if db_file:
+                self.set_db_file(db_file)
+            self.launch_metadata_enrichment()
+        except Exception as e:
+            self.log_and_exit(e)
             
     def launch_modifydb_dialog(self):
         try:

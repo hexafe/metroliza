@@ -90,7 +90,11 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
         payload = self._run_probe(
             """
             import json
-            from PyQt6.QtWidgets import QApplication
+            import base64
+            from PyQt6.QtCore import QByteArray, QBuffer, QIODevice
+            from PyQt6.QtGui import QImageReader
+            from PyQt6.QtWidgets import QApplication, QPushButton
+            from modules import base64_encoded_files
             from modules.release_notes_dialog import ReleaseNotesDialog
             from modules.worker_progress_dialog import create_worker_progress_dialog
 
@@ -106,12 +110,23 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
             release_notes.show()
             app.processEvents()
             available = app.primaryScreen().availableGeometry()
+            movie_size = movie.scaledSize()
+            gif_bytes = base64.b64decode(base64_encoded_files.encoded_loading_gif)
+            source_buffer = QBuffer()
+            source_buffer.setData(QByteArray(gif_bytes))
+            source_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+            source_size = QImageReader(source_buffer, b"gif").size()
+            cancel_texts = [button.text() for button in progress_dialog.findChildren(QPushButton)]
             print(json.dumps({
                 "progress_size": [progress_dialog.width(), progress_dialog.height()],
                 "release_size": [release_notes.width(), release_notes.height()],
                 "available": [available.width(), available.height()],
                 "progress_text": label.text(),
                 "bar_max_height": progress_bar.maximumHeight(),
+                "movie_size": [movie_size.width(), movie_size.height()],
+                "source_size": [source_size.width(), source_size.height()],
+                "movie_file_name": movie.fileName(),
+                "cancel_texts": cancel_texts,
             }, sort_keys=True))
             progress_dialog.close()
             release_notes.close()
@@ -123,6 +138,16 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
         self.assertLessEqual(payload["release_size"][0], payload["available"][0])
         self.assertIn("Stage", payload["progress_text"])
         self.assertLessEqual(payload["bar_max_height"], 20)
+        self.assertGreater(payload["movie_size"][0], 96)
+        self.assertGreater(payload["movie_size"][1], 96)
+        self.assertTrue(payload["source_size"][0] > 0 and payload["source_size"][1] > 0)
+        self.assertAlmostEqual(
+            payload["movie_size"][0] / payload["movie_size"][1],
+            payload["source_size"][0] / payload["source_size"][1],
+            places=2,
+        )
+        self.assertEqual(payload["movie_file_name"], "")
+        self.assertIn("Cancel", payload["cancel_texts"])
 
 
 if __name__ == "__main__":

@@ -17,8 +17,19 @@ else:
 
 
 class _DummyParent(QWidget if QWidget is not None else object):
+    def __init__(self):
+        super().__init__()
+        self.db_file = None
+        self.enrichment_launches = 0
+
     def set_directory(self, _directory):
         return None
+
+    def set_db_file(self, db_file):
+        self.db_file = db_file
+
+    def launch_metadata_enrichment(self):
+        self.enrichment_launches += 1
 
 
 class _Signal:
@@ -99,7 +110,7 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         dialog = ParsingDialog(parent=None, directory='/tmp/reports', db_file='/tmp/reports.db')
         expected = {
             'fast': ('light', False),
-            'fast_then_enrich': ('light', True),
+            'fast_then_enrich': ('light', False),
             'complete': ('complete', False),
         }
 
@@ -166,7 +177,38 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
 
         self.assertTrue(captured['started'])
         self.assertEqual(captured['request'].metadata_parsing_mode, 'light')
+        self.assertFalse(captured['request'].run_background_metadata_enrichment)
+        self.assertTrue(dialog._pending_modeless_metadata_enrichment)
+
+    def test_fast_then_enrich_archive_uses_embedded_enrichment_fallback(self):
+        captured = {}
+
+        class _FakeParseThread:
+            def __init__(self, request):
+                captured['request'] = request
+                self.update_label = _Signal()
+                self.update_progress = _Signal()
+                self.error_occurred = _Signal()
+                self.finished = _Signal()
+
+            def start(self):
+                captured['started'] = True
+
+        dialog = ParsingDialog(parent=None, directory='/tmp/reports.zip', db_file='/tmp/reports.db')
+        enrich_index = dialog.metadata_mode_combo.findData('fast_then_enrich')
+        self.assertGreaterEqual(enrich_index, 0)
+        dialog.metadata_mode_combo.setCurrentIndex(enrich_index)
+
+        with patch(
+            'modules.parsing_dialog.create_worker_progress_dialog',
+            return_value=(_ProgressDialog(), _ProgressLabel(), _ProgressBar(), None),
+        ), patch('modules.parsing_dialog.ParseReportsThread', _FakeParseThread):
+            dialog.show_loading_screen()
+
+        self.assertTrue(captured['started'])
+        self.assertEqual(captured['request'].metadata_parsing_mode, 'light')
         self.assertTrue(captured['request'].run_background_metadata_enrichment)
+        self.assertFalse(dialog._pending_modeless_metadata_enrichment)
 
     def test_loading_screen_passes_complete_metadata_mode(self):
         captured = {}
@@ -196,6 +238,55 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         self.assertTrue(captured['started'])
         self.assertEqual(captured['request'].metadata_parsing_mode, 'complete')
         self.assertFalse(captured['request'].run_background_metadata_enrichment)
+
+    def test_successful_fast_then_enrich_requests_modeless_metadata_enrichment(self):
+        parent = _DummyParent()
+        dialog = ParsingDialog(parent=parent, directory='/tmp/reports', db_file='/tmp/reports.db')
+        emitted = []
+        dialog.metadata_enrichment_requested.connect(emitted.append)
+        dialog.loading_dialog = _ProgressDialog()
+        dialog._pending_modeless_metadata_enrichment = True
+
+        with patch('modules.parsing_dialog.QMessageBox.information') as information_mock:
+            dialog.on_parse_finished()
+
+        information_mock.assert_not_called()
+        self.assertEqual(emitted, ['/tmp/reports.db'])
+        self.assertEqual(parent.db_file, '/tmp/reports.db')
+        self.assertEqual(parent.enrichment_launches, 0)
+        self.assertFalse(dialog._pending_modeless_metadata_enrichment)
+
+    def test_canceled_parse_does_not_request_modeless_metadata_enrichment(self):
+        parent = _DummyParent()
+        dialog = ParsingDialog(parent=parent, directory='/tmp/reports', db_file='/tmp/reports.db')
+        emitted = []
+        dialog.metadata_enrichment_requested.connect(emitted.append)
+        dialog.loading_dialog = _ProgressDialog()
+        dialog._pending_modeless_metadata_enrichment = True
+        dialog.parsing_canceled = True
+
+        with patch('modules.parsing_dialog.QMessageBox.information'):
+            dialog.on_parse_finished()
+
+        self.assertEqual(emitted, [])
+        self.assertEqual(parent.enrichment_launches, 0)
+        self.assertFalse(dialog._pending_modeless_metadata_enrichment)
+
+    def test_failed_parse_does_not_request_modeless_metadata_enrichment(self):
+        parent = _DummyParent()
+        dialog = ParsingDialog(parent=parent, directory='/tmp/reports', db_file='/tmp/reports.db')
+        emitted = []
+        dialog.metadata_enrichment_requested.connect(emitted.append)
+        dialog.loading_dialog = _ProgressDialog()
+        dialog._pending_modeless_metadata_enrichment = True
+        dialog.parse_error_message = 'synthetic failure'
+
+        with patch('modules.parsing_dialog.QMessageBox.warning'):
+            dialog.on_parse_finished()
+
+        self.assertEqual(emitted, [])
+        self.assertEqual(parent.enrichment_launches, 0)
+        self.assertFalse(dialog._pending_modeless_metadata_enrichment)
 
 
 if __name__ == '__main__':

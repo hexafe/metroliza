@@ -32,6 +32,47 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         finally:
             window.close()
 
+    def test_csv_summary_is_tools_action_without_launcher_button(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            button_texts = [button.text() for button in window.findChildren(QPushButton)]
+            self.assertNotIn("CSV Summary", button_texts)
+            self.assertFalse(hasattr(window, "csv_summary_button"))
+
+            action_texts = [action.text() for action in window.tools_menu.actions()]
+            self.assertIn("CSV Summary...", action_texts)
+        finally:
+            window.close()
+
+    def test_release_and_about_are_under_help_menu(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        try:
+            top_level_action_texts = [action.text() for action in window.menuBar().actions()]
+            self.assertIn("Tools", top_level_action_texts)
+            self.assertIn("Help", top_level_action_texts)
+            self.assertNotIn("About", top_level_action_texts)
+            self.assertNotIn("Release notes", top_level_action_texts)
+
+            help_action_texts = [action.text() for action in window.help_menu.actions()]
+            self.assertIn("Main window manual", help_action_texts)
+            self.assertIn("Release notes", help_action_texts)
+            self.assertIn("About", help_action_texts)
+        finally:
+            window.close()
+
+    def test_parsing_enrichment_request_starts_modeless_enrichment(self):
+        window = MainWindow(version_label="test", days_until_expiration=None)
+        calls = []
+        try:
+            window.launch_metadata_enrichment = lambda: calls.append(window.db_file)
+
+            window.start_metadata_enrichment_from_parsing("/tmp/metroliza.db")
+
+            self.assertEqual(window.db_file, "/tmp/metroliza.db")
+            self.assertEqual(calls, ["/tmp/metroliza.db"])
+        finally:
+            window.close()
+
     def test_metadata_enrichment_without_database_shows_clear_message(self):
         window = MainWindow(version_label="test", days_until_expiration=None)
         try:

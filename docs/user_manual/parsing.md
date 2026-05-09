@@ -55,7 +55,7 @@ The database button stays disabled until a source has been selected.
 This controls how much report metadata Metroliza extracts during import.
 
 - **Fast import - light metadata, no OCR**: imports quickly and skips OCR fallback for metadata fields.
-- **Fast import, then enrich metadata**: imports quickly first, then runs a visible OCR metadata enrichment pass after import.
+- **Fast import, then enrich metadata**: imports quickly first, closes Parsing after the import succeeds, then starts a visible OCR metadata enrichment pass from the main window so you can keep using the app.
 - **Complete import - OCR during parsing**: runs OCR fallback during parsing for stronger metadata coverage, but it is slower.
 
 The default is **Fast import - light metadata, no OCR**.
@@ -94,7 +94,9 @@ While it runs, you will see:
 - status text, and
 - a **Cancel** button.
 
-If you chose **Fast import, then enrich metadata**, the progress dialog continues into the enrichment pass after the light import is done.
+If you chose **Fast import, then enrich metadata** for a normal folder source, Parsing runs only the fast light import. After a successful import, the Parsing window closes and metadata enrichment continues from the main window.
+
+Archive sources are the exception. Archives are unpacked into a temporary location while Parsing runs, so **Fast import, then enrich metadata** keeps the enrichment step inside the Parsing progress dialog for archive imports. This lets Metroliza read the extracted files before the temporary location is cleaned up.
 
 ### Cancel behavior
 

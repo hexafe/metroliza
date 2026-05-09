@@ -13,6 +13,11 @@ Metroliza should remain a professional metrology workflow tool: quiet, dense, pr
 - 2026-05-09 branch `codex/metroliza-ui-ux-visual-revamp` started for the PyQt6 UI/UX and visual theme revamp.
 - Shared UI helpers now live in `modules/ui_foundation.py`, with semantic visual tokens in `modules/ui_theme_tokens.py`.
 - The first implementation slice covers the main window command center, parsing layout/readiness, worker progress/release notes, CSV Summary, Modify Database, filtering/grouping, export, Characteristic Matching, and HTML dashboard review polish.
+- The 2026-05-09 release-fix pass completed the final pre-release UI blockers:
+  CSV Summary moved under Tools and gained clearer footer actions; fast-then-enrich
+  parsing now hands folder imports back to the main window for modeless
+  enrichment; grouping Enter-key shortcuts were restored; progress animation is
+  larger and temp-file-free; Help/manual links open GitHub-rendered docs.
 - Focused integration validation for the slice: `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_ui_theme_tokens.py tests/test_ui_revamp_foundation_layout.py tests/test_main_window_metadata_ui.py tests/test_parsing_dialog_selection_flow.py tests/test_parsing_dialog_parent_none.py tests/test_dialog_parent_none_safety.py tests/test_export_dialog_layout.py tests/test_export_presets.py tests/test_filter_dialog_layout.py tests/test_filter_dialog_metadata.py tests/test_filter_dialog_delete_key.py tests/test_data_grouping_layout.py tests/test_data_grouping_filter_query.py tests/test_data_grouping_delete_key.py tests/test_data_grouping_error_paths.py tests/test_csv_summary_integration.py tests/test_csv_summary_utils.py tests/test_modifydb_update_statements.py tests/test_modifydb_shift_range_selection.py tests/test_modifydb_record_updates.py tests/test_characteristic_mapping_dialog.py tests/test_export_html_dashboard.py tests/test_release_metadata_sync.py -q` -> 184 passed, 3 subtests passed.
 - Release metadata sync check is green: `python scripts/sync_release_metadata.py --check`.
 - Main window metadata enrichment has already been deduplicated: the launcher button is gone, and enrichment is available from `Tools -> Enrich existing database metadata...` with visible status/progress/cancel controls.
@@ -20,7 +25,11 @@ Metroliza should remain a professional metrology workflow tool: quiet, dense, pr
 - Export now has active filter summaries and a Clear filters action. Remaining export work should refine hierarchy, path containment, validation, and accessibility while preserving the compact single-window design.
 - Modify Database normalization has moved from three side-by-side tables to field tabs with search and occurrence counts. Remaining work is responsive sizing, table behavior, impact messaging, and undo clarity.
 - Characteristic Matching is one of the stronger management-dialog patterns, but it still needs responsive sizing, table stretch behavior, and calmer action grouping.
-- CSV Summary remains the most visibly outdated workflow surface. It still relies on small fixed geometries, dense controls, and subdialogs that need better hierarchy and state summaries.
+- CSV Summary no longer has the largest release-blocking layout issues: it is
+  launched from Tools, its main dialog uses clearer state rows and a primary
+  `Create Summary` footer action, and preset/input/output safety behavior is
+  covered by tests. Remaining future work is limited to deeper subdialog/table
+  polish rather than release-blocking navigation.
 
 ## Audit Reconciliation
 
@@ -98,8 +107,8 @@ compact, calm, readable, and visibly intentional without looking like a web app.
 - Replace the remaining vertical launcher stack with a compact workflow command surface:
   - primary actions: Parse Reports, Export Workbook.
   - preparation actions: Modify Database, Match Characteristic Names.
-  - secondary action: CSV Summary.
-  - maintenance action: Tools menu metadata enrichment, with visible status row when active or recently completed.
+  - utility actions: Tools menu CSV Summary and metadata enrichment, with visible
+    enrichment status row when active or recently completed.
 - Remove the fixed `300 x 150` window assumption. Let the command surface breathe on large screens and remain usable on small displays.
 - Add persistent context rows for selected source/database and enrichment status.
 - Keep only one major database workflow dialog active at a time, but explain close/switch behavior through visible status text when needed.
@@ -159,6 +168,11 @@ compact, calm, readable, and visibly intentional without looking like a web app.
 
 ### Phase 7: CSV Summary Revamp
 
+- 2026-05-09 release-fix status: main-dialog blockers are complete. CSV Summary
+  is under Tools, the old `Summary configuration` header gap is gone, `Create
+  Summary` is the primary/default footer action, clearing presets is confirmed,
+  CSV/XLSX path handling is explicit, and worker failures no longer appear as
+  cancellations.
 - Redesign CSV Summary around state rows:
   - input CSV selected/not selected,
   - selected index and data columns,

@@ -1,5 +1,5 @@
-from PyQt6.QtCore import QSize, QTemporaryFile, Qt
-from PyQt6.QtGui import QMovie
+from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QSize, Qt
+from PyQt6.QtGui import QImageReader, QMovie
 from PyQt6.QtWidgets import QDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout
 
 import base64
@@ -8,32 +8,49 @@ from modules import base64_encoded_files
 from modules.ui_foundation import apply_metroliza_theme, configure_window_size, secondary_label
 
 
+def _scaled_loading_gif_size(source_size):
+    """Return a larger aspect-preserving presentation size for the loading GIF."""
+    target_max_dimension = 128
+    if not source_size.isValid() or source_size.isEmpty():
+        return QSize(target_max_dimension, target_max_dimension)
+
+    width = source_size.width()
+    height = source_size.height()
+    if width >= height:
+        scaled_width = target_max_dimension
+        scaled_height = max(1, round((target_max_dimension * height) / width))
+    else:
+        scaled_height = target_max_dimension
+        scaled_width = max(1, round((target_max_dimension * width) / height))
+    return QSize(scaled_width, scaled_height)
+
+
 def create_worker_progress_dialog(parent, *, window_title, initial_status_text, on_cancel):
     """Create a standardized progress dialog used by parse/export/csv worker flows."""
     loading_dialog = QDialog(parent, Qt.WindowType.WindowTitleHint)
     loading_dialog.setWindowTitle(window_title)
     loading_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    configure_window_size(loading_dialog, minimum=(420, 210), initial=(460, 260))
+    configure_window_size(loading_dialog, minimum=(440, 240), initial=(480, 300))
     apply_metroliza_theme(loading_dialog)
 
     loading_gif_label = QLabel(loading_dialog)
-    loading_gif_label.setFixedSize(96, 96)
     loading_gif_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
     loading_gif_decoded = base64.b64decode(base64_encoded_files.encoded_loading_gif)
+    loading_gif_reader_buffer = QBuffer(loading_dialog)
+    loading_gif_reader_buffer.setData(QByteArray(loading_gif_decoded))
+    loading_gif_reader_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+    loading_gif_source_size = QImageReader(loading_gif_reader_buffer, b"gif").size()
 
-    temp_file = QTemporaryFile()
-    temp_file.setAutoRemove(False)
-    temp_file_name = ""
-    if temp_file.open():
-        temp_file.write(loading_gif_decoded)
-        temp_file.close()
-        temp_file_name = temp_file.fileName()
+    loading_gif_buffer = QBuffer(loading_dialog)
+    loading_gif_buffer.setData(QByteArray(loading_gif_decoded))
+    loading_gif_buffer.open(QIODevice.OpenModeFlag.ReadOnly)
 
-    loading_gif = QMovie(temp_file_name)
-    loading_gif.setScaledSize(QSize(96, 96))
+    loading_gif = QMovie(loading_gif_buffer, b"gif", loading_dialog)
+    loading_gif.setScaledSize(_scaled_loading_gif_size(loading_gif_source_size))
     loading_gif_label.setMovie(loading_gif)
     loading_gif.start()
+    loading_gif_label.setFixedSize(loading_gif.scaledSize())
 
     loading_label = secondary_label(initial_status_text)
     loading_label.setParent(loading_dialog)
@@ -57,4 +74,5 @@ def create_worker_progress_dialog(parent, *, window_title, initial_status_text, 
     cancel_button.clicked.connect(on_cancel)
     layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
 
+    loading_dialog._loading_gif_buffer = loading_gif_buffer
     return loading_dialog, loading_label, loading_bar, loading_gif

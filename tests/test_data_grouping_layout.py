@@ -101,6 +101,10 @@ class TestDataGroupingLayout(unittest.TestCase):
                 "column_stretch": [layout.columnStretch(i) for i in range(4)],
                 "column_min_widths": [layout.columnMinimumWidth(i) for i in range(4)],
                 "fixed_200": fixed_200,
+                "use_grouping_is_default": dialog.use_grouping_button.isDefault(),
+                "use_grouping_auto_default": dialog.use_grouping_button.autoDefault(),
+                "clear_grouping_is_default": dialog.dont_use_grouping_button.isDefault(),
+                "clear_grouping_auto_default": dialog.dont_use_grouping_button.autoDefault(),
                 "summary_labels": [
                     hasattr(dialog, "reference_summary_label"),
                     hasattr(dialog, "group_summary_label"),
@@ -126,6 +130,10 @@ class TestDataGroupingLayout(unittest.TestCase):
         self.assertGreaterEqual(payload["column_min_widths"][1], 180)
         self.assertGreaterEqual(payload["column_min_widths"][2], 140)
         self.assertGreaterEqual(payload["column_min_widths"][3], 180)
+        self.assertFalse(payload["use_grouping_is_default"])
+        self.assertFalse(payload["use_grouping_auto_default"])
+        self.assertFalse(payload["clear_grouping_is_default"])
+        self.assertFalse(payload["clear_grouping_auto_default"])
         self.assertEqual(payload["summary_labels"], [True, True, True])
         self.assertTrue(payload["summary_texts"][0].startswith("Reference:"))
         self.assertTrue(payload["summary_texts"][1].startswith("Group:"))

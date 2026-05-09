@@ -7,64 +7,125 @@ from pathlib import Path
 
 import pandas as pd
 
-# Minimal Qt stubs so CSVSummaryDialog can be imported in headless CI.
-qtcore_stub = types.ModuleType('PyQt6.QtCore')
+_PYQT_MODULE_NAMES = ('PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets')
+_ORIGINAL_PYQT_MODULES = {name: sys.modules.get(name) for name in _PYQT_MODULE_NAMES}
+
+try:
+    import PyQt6.QtCore  # noqa: F401
+    import PyQt6.QtGui  # noqa: F401
+    import PyQt6.QtWidgets  # noqa: F401
+except ImportError:  # pragma: no cover - exercised only when PyQt6 is unavailable
+    _USE_QT_STUBS = True
+else:
+    _USE_QT_STUBS = False
+
+if _USE_QT_STUBS:
+    # Minimal Qt stubs so CSVSummaryDialog can be imported in headless CI.
+    qtcore_stub = types.ModuleType('PyQt6.QtCore')
 
 
-class _DummyQThread:
-    def __init__(self, *args, **kwargs):
-        pass
+    class _DummyQThread:
+        def __init__(self, *args, **kwargs):
+            pass
 
 
-class _DummySignal:
-    def emit(self, *args, **kwargs):
-        return None
+    class _DummySignal:
+        def emit(self, *args, **kwargs):
+            return None
 
 
-def _dummy_pyqt_signal(*args, **kwargs):
-    return _DummySignal()
+    def _dummy_pyqt_signal(*args, **kwargs):
+        return _DummySignal()
 
 
-qtcore_stub.Qt = object()
-qtcore_stub.pyqtSlot = lambda *args, **kwargs: (lambda f: f)
-qtcore_stub.QThread = _DummyQThread
-qtcore_stub.pyqtSignal = _dummy_pyqt_signal
-qtcore_stub.QTemporaryFile = type('QTemporaryFile', (), {})
-qtcore_stub.QSize = type('QSize', (), {})
-sys.modules['PyQt6.QtCore'] = qtcore_stub
+    qtcore_stub.Qt = object()
+    qtcore_stub.pyqtSlot = lambda *args, **kwargs: (lambda f: f)
+    qtcore_stub.QThread = _DummyQThread
+    qtcore_stub.pyqtSignal = _dummy_pyqt_signal
+    qtcore_stub.QTemporaryFile = type('QTemporaryFile', (), {})
+    qtcore_stub.QSize = type('QSize', (), {})
+    qtcore_stub.QByteArray = type('QByteArray', (), {})
+    qtcore_stub.QBuffer = type('QBuffer', (), {})
+    qtcore_stub.QIODevice = type('QIODevice', (), {})
+    sys.modules['PyQt6.QtCore'] = qtcore_stub
 
-qtgui_stub = types.ModuleType('PyQt6.QtGui')
-qtgui_stub.QMovie = type('QMovie', (), {})
-sys.modules['PyQt6.QtGui'] = qtgui_stub
+    qtgui_stub = types.ModuleType('PyQt6.QtGui')
+    qtgui_stub.QMovie = type('QMovie', (), {})
+    qtgui_stub.QImageReader = type('QImageReader', (), {})
+    sys.modules['PyQt6.QtGui'] = qtgui_stub
 
-qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
-for name in [
-    'QApplication',
-    'QDialog',
-    'QFrame',
-    'QGridLayout',
-    'QVBoxLayout',
-    'QPushButton',
-    'QFileDialog',
-    'QListWidget',
-    'QMessageBox',
-    'QHBoxLayout',
-    'QProgressBar',
-    'QLabel',
-    'QLineEdit',
-    'QSizePolicy',
-    'QTableWidget',
-    'QTableWidgetItem',
-    'QHeaderView',
-    'QCheckBox',
-    'QWidget',
-]:
-    setattr(qtwidgets_stub, name, type(name, (), {}))
-sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
+    qtwidgets_stub = types.ModuleType('PyQt6.QtWidgets')
+
+
+    class _DummyQFileDialog:
+        class Option:
+            ReadOnly = 1
+
+        @staticmethod
+        def getOpenFileName(*args, **kwargs):
+            return "", ""
+
+        @staticmethod
+        def getSaveFileName(*args, **kwargs):
+            return "", ""
+
+
+    class _DummyQMessageBox:
+        class StandardButton:
+            Yes = 1
+            No = 2
+
+        @staticmethod
+        def warning(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def information(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def critical(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def question(*args, **kwargs):
+            return _DummyQMessageBox.StandardButton.No
+
+
+    for name in [
+        'QApplication',
+        'QDialog',
+        'QFrame',
+        'QGridLayout',
+        'QVBoxLayout',
+        'QPushButton',
+        'QListWidget',
+        'QHBoxLayout',
+        'QProgressBar',
+        'QLabel',
+        'QLineEdit',
+        'QSizePolicy',
+        'QTableWidget',
+        'QTableWidgetItem',
+        'QHeaderView',
+        'QCheckBox',
+        'QWidget',
+    ]:
+        setattr(qtwidgets_stub, name, type(name, (), {}))
+    qtwidgets_stub.QFileDialog = _DummyQFileDialog
+    qtwidgets_stub.QMessageBox = _DummyQMessageBox
+    sys.modules['PyQt6.QtWidgets'] = qtwidgets_stub
 
 import modules.csv_summary_dialog as csv_summary_dialog_module  # noqa: E402
 from modules.csv_summary_dialog import CSVSummaryDialog, DataProcessingThread  # noqa: E402
 from modules.csv_summary_utils import build_default_plot_toggles  # noqa: E402
+
+if _USE_QT_STUBS:
+    for module_name, original_module in _ORIGINAL_PYQT_MODULES.items():
+        if original_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = original_module
 
 
 class CsvSummaryIntegrationTests(unittest.TestCase):
@@ -346,6 +407,8 @@ class CsvSummaryDialogStateTests(unittest.TestCase):
         self.assertIn('QPushButton("Create Summary")', source)
         self.assertIn('configure_window_size(self, minimum=(760, 460), initial=(900, 620))', source)
         self.assertNotIn('setGeometry(', source)
+        self.assertNotIn('section_label("Summary configuration")', source)
+        self.assertIn('footer_actions.addStretch(1)', source)
 
     def test_sync_ui_state_blocks_when_output_or_limits_missing_and_unblocks_when_ready(self):
         dialog = self._build_dialog_state()
@@ -370,3 +433,112 @@ class CsvSummaryDialogStateTests(unittest.TestCase):
 
         self.assertTrue(dialog.start_button.isEnabled())
         self.assertEqual("Ready to create CSV summary workbook.", dialog.readiness_label.text())
+
+    def test_handle_input_button_rejects_non_csv_path_without_mutating_input(self):
+        dialog = CSVSummaryDialog.__new__(CSVSummaryDialog)
+        dialog.input_file = ""
+
+        original_get_open = csv_summary_dialog_module.QFileDialog.getOpenFileName
+        original_warning = csv_summary_dialog_module.QMessageBox.warning
+        warnings = []
+        try:
+            csv_summary_dialog_module.QFileDialog.getOpenFileName = lambda *args, **kwargs: ("/tmp/report.txt", "")
+            csv_summary_dialog_module.QMessageBox.warning = lambda *args: warnings.append(args[1:3])
+            dialog.handle_input_button()
+        finally:
+            csv_summary_dialog_module.QFileDialog.getOpenFileName = original_get_open
+            csv_summary_dialog_module.QMessageBox.warning = original_warning
+
+        self.assertEqual(dialog.input_file, "")
+        self.assertEqual(warnings, [("Invalid input file", "Please select a .csv input file.")])
+
+    def test_handle_output_button_normalizes_extension_to_xlsx(self):
+        dialog = CSVSummaryDialog.__new__(CSVSummaryDialog)
+        dialog.input_file = "/tmp/input.csv"
+        dialog.output_file = ""
+        dialog._sync_ui_state = lambda: None
+
+        original_get_save = csv_summary_dialog_module.QFileDialog.getSaveFileName
+        try:
+            csv_summary_dialog_module.QFileDialog.getSaveFileName = lambda *args, **kwargs: ("/tmp/report.out", "")
+            dialog.handle_output_button()
+        finally:
+            csv_summary_dialog_module.QFileDialog.getSaveFileName = original_get_save
+
+        self.assertEqual(dialog.output_file, "/tmp/report.xlsx")
+
+    def test_handle_output_button_normalizes_uppercase_xlsx_suffix(self):
+        dialog = CSVSummaryDialog.__new__(CSVSummaryDialog)
+        dialog.input_file = "/tmp/input.csv"
+        dialog.output_file = ""
+        dialog._sync_ui_state = lambda: None
+
+        original_get_save = csv_summary_dialog_module.QFileDialog.getSaveFileName
+        try:
+            csv_summary_dialog_module.QFileDialog.getSaveFileName = lambda *args, **kwargs: ("/tmp/report.XLSX", "")
+            dialog.handle_output_button()
+        finally:
+            csv_summary_dialog_module.QFileDialog.getSaveFileName = original_get_save
+
+        self.assertEqual(dialog.output_file, "/tmp/report.xlsx")
+
+    def test_handle_clear_presets_requires_confirmation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_path = Path(tmpdir) / ".csv_summary_presets.json"
+            preset_path.write_text("{}", encoding="utf-8")
+
+            dialog = CSVSummaryDialog.__new__(CSVSummaryDialog)
+            dialog.preset_path = preset_path
+
+            original_question = csv_summary_dialog_module.QMessageBox.question
+            original_info = csv_summary_dialog_module.QMessageBox.information
+            info_calls = []
+            try:
+                csv_summary_dialog_module.QMessageBox.question = lambda *args: csv_summary_dialog_module.QMessageBox.StandardButton.No
+                csv_summary_dialog_module.QMessageBox.information = lambda *args: info_calls.append(args[1:3])
+                dialog.handle_clear_presets_button()
+                self.assertTrue(preset_path.exists())
+
+                csv_summary_dialog_module.QMessageBox.question = lambda *args: csv_summary_dialog_module.QMessageBox.StandardButton.Yes
+                dialog.handle_clear_presets_button()
+            finally:
+                csv_summary_dialog_module.QMessageBox.question = original_question
+                csv_summary_dialog_module.QMessageBox.information = original_info
+
+            self.assertFalse(preset_path.exists())
+            self.assertIn(("Presets cleared", "Saved CSV presets were removed."), info_calls)
+
+    def test_on_data_processing_finished_distinguishes_failure_from_cancellation(self):
+        class _FakeLoadingDialog:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        dialog = CSVSummaryDialog.__new__(CSVSummaryDialog)
+        dialog.loading_dialog = _FakeLoadingDialog()
+        dialog.worker_thread = type("Worker", (), {"canceled": True})()
+        dialog.output_file = "/tmp/out.xlsx"
+
+        original_info = csv_summary_dialog_module.QMessageBox.information
+        original_critical = csv_summary_dialog_module.QMessageBox.critical
+        info_calls = []
+        critical_calls = []
+        try:
+            csv_summary_dialog_module.QMessageBox.information = lambda *args: info_calls.append(args[1:3])
+            csv_summary_dialog_module.QMessageBox.critical = lambda *args: critical_calls.append(args[1:3])
+
+            dialog._worker_failed = True
+            dialog.on_data_processing_finished()
+            self.assertIn(("Processing failed", "CSV summary export failed. Review the log for details and try again."), critical_calls)
+
+            dialog.loading_dialog = _FakeLoadingDialog()
+            dialog.worker_thread = type("Worker", (), {"canceled": True})()
+            dialog._worker_failed = False
+            dialog.on_data_processing_finished()
+        finally:
+            csv_summary_dialog_module.QMessageBox.information = original_info
+            csv_summary_dialog_module.QMessageBox.critical = original_critical
+
+        self.assertIn(("Processing canceled", "Processing has been canceled"), info_calls)

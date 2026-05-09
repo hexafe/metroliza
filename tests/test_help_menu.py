@@ -1,4 +1,5 @@
 import importlib
+import os
 import sys
 import types
 import unittest
@@ -80,11 +81,35 @@ class TestHelpMenu(unittest.TestCase):
     def test_manual_url_keys_point_to_github_markdown(self):
         for key, path in self.help_menu.MANUAL_PATHS.items():
             with self.subTest(key=key):
-                expected = (
-                    'https://github.com/hexafe/metroliza/blob/master/'
-                    f'{path.relative_to(self.help_menu.REPO_ROOT).as_posix()}'
-                )
+                expected = self.help_menu.github_blob_url(path.relative_to(self.help_menu.REPO_ROOT))
                 self.assertEqual(self.help_menu.manual_url(key), expected)
+                self.assertTrue(expected.startswith('https://github.com/hexafe/metroliza/blob/'))
+                self.assertNotIn('file://', expected)
+                self.assertNotIn(str(self.help_menu.REPO_ROOT), expected)
+
+    def test_docs_ref_defaults_to_release_constant(self):
+        self.assertEqual(
+            self.help_menu.GITHUB_RENDERED_DOCS_REF,
+            self.help_menu.DEFAULT_RELEASE_DOCS_REF,
+        )
+
+    def test_docs_ref_can_be_overridden_by_environment(self):
+        sys.modules.pop('modules.help_menu', None)
+        qtcore = types.ModuleType('PyQt6.QtCore')
+        qtcore.QUrl = _FakeQUrl
+        qtgui = types.ModuleType('PyQt6.QtGui')
+        qtgui.QAction = _FakeAction
+        qtgui.QDesktopServices = types.SimpleNamespace(openUrl=lambda *_args, **_kwargs: True)
+        qtwidgets = types.ModuleType('PyQt6.QtWidgets')
+        qtwidgets.QMenuBar = _FakeMenuBar
+        qtwidgets.QMessageBox = _FakeMessageBox
+
+        with patch.dict(os.environ, {'METROLIZA_RELEASE_DOCS_REF': 'release/2026.05-rc1'}, clear=False):
+            with patch.dict(sys.modules, {'PyQt6.QtCore': qtcore, 'PyQt6.QtGui': qtgui, 'PyQt6.QtWidgets': qtwidgets}):
+                overridden_module = importlib.import_module('modules.help_menu')
+
+        self.assertEqual(overridden_module.GITHUB_RENDERED_DOCS_REF, 'release/2026.05-rc1')
+        self.assertIn('/blob/release/2026.05-rc1/', overridden_module.manual_url('parsing'))
 
     def test_open_manual_opens_github_manual_url(self):
         with patch.object(self.help_menu.QDesktopServices, 'openUrl', return_value=True) as open_url_mock:
@@ -94,6 +119,8 @@ class TestHelpMenu(unittest.TestCase):
         open_url_mock.assert_called_once()
         opened_url = open_url_mock.call_args.args[0]
         self.assertEqual(opened_url.toString(), self.help_menu.manual_url('parsing'))
+        self.assertTrue(opened_url.toString().startswith('https://github.com/hexafe/metroliza/blob/'))
+        self.assertNotIn('file://', opened_url.toString())
 
     def test_open_manual_warns_when_manual_missing(self):
         with patch.object(self.help_menu, 'manual_path', return_value=Path('/tmp/definitely-missing-manual.md')):

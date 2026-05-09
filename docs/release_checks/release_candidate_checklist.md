@@ -11,10 +11,10 @@ Complete before announcing code freeze or cutting an RC branch.
 - [ ] Scope is locked for the target release; all non-release-critical work is moved out of milestone.
 - [ ] Release owner and backup owner are assigned.
 - [x] `VersionDate.py` version/build/date values are updated for this RC.
-- [ ] `CHANGELOG.md` includes user-facing notes for this RC.
-- [ ] `README.md` **Release highlights** reflects the current RC/release line.
-- [ ] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
-- [ ] Open blockers are triaged against the defect criteria in section 6.
+- [x] `CHANGELOG.md` includes user-facing notes for this RC/release.
+- [x] `README.md` **Release highlights** reflects the current RC/release line.
+- [x] `python scripts/sync_release_metadata.py --check` passes (VersionDate/README/CHANGELOG are aligned).
+- [x] Open blockers are triaged against the defect criteria in section 6.
 - [x] Open implementation-item gate triage is completed in [`implementation_item_triage.md`](./implementation_item_triage.md) (Gate/Owner/Target RC/Rationale filled) before freeze proceeds.
 
 ## 2) Documentation readiness
@@ -107,6 +107,17 @@ python -m maturin build --manifest-path modules/native/chart_renderer/Cargo.toml
 - [ ] CMM parser perf gate evidence (`cmm-parser-perf-gate` + `cmm-parser-perf-artifacts`) is reviewed when parser/backend changes are present; triage follows [`cmm_parser_perf_guardrail.md`](./cmm_parser_perf_guardrail.md). *(Owner: Release owner/QA)*
 - [ ] Coverage visibility output from `unit-tests` is reviewed (job log summary and `unit-test-coverage` artifact `coverage.xml`) as RC confidence evidence; this is informational and not a blocking PR check. *(Owner: Release owner/QA)*
 - [ ] Any optional manual smoke evidence (if executed) is linked from release notes or tracker (`packaging-smoke`, `google-conversion-smoke`). *(Owner: Release owner)*
+
+### 2026.05 UI/UX release-fix evidence
+
+Local evidence from `codex/metroliza-ui-ux-visual-revamp` on 2026-05-09:
+
+- `QT_QPA_PLATFORM=offscreen python -m pytest -q` passed: 1276 passed, 27 skipped, 60 subtests passed.
+- `python -m ruff check .` passed.
+- `python scripts/sync_release_metadata.py --check` passed.
+- `git diff --check` passed.
+- Synthetic benchmark warmup passed with:
+  `PYTHONPATH=. python scripts/benchmark_paths.py --output-dir /tmp/metroliza-perf-ci-warmup --pdf-count 20 --report-count 40 --headers-per-report 6 --csv-rows 300 --csv-columns 4 --fit-group-count 12 --fit-sample-size 90 --fit-monte-carlo-samples 40 --group-preprocess-groups 10 --group-preprocess-values 1500 --cmm-bench-report-count 120 --cmm-bench-measurements-per-report 120`.
 
 Optional CI/manual smoke commands (non-blocking for regular PRs/pushes):
 

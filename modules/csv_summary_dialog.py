@@ -257,11 +257,21 @@ class CSVSummaryDialog(QDialog):
 
         self.clear_presets_button = QPushButton("Clear saved presets")
         self.clear_presets_button.setToolTip("Remove saved CSV summary presets from your profile.")
+        if hasattr(self.clear_presets_button, "setAutoDefault"):
+            self.clear_presets_button.setAutoDefault(False)
+        if hasattr(self.clear_presets_button, "setDefault"):
+            self.clear_presets_button.setDefault(False)
         self.start_button = QPushButton("Create Summary")
         self.start_button.setToolTip("Run CSV summary export in the background.")
         if hasattr(self.start_button, "setDefault"):
             self.start_button.setDefault(True)
+        if hasattr(self.start_button, "setAutoDefault"):
+            self.start_button.setAutoDefault(True)
+        self.start_button.setStyleSheet(
+            "QPushButton { font-weight: 600; min-width: 160px; }"
+        )
         self.readiness_label = status_chip("Select an input CSV to begin.", "warning")
+        self._worker_failed = False
 
         self.input_button.clicked.connect(self.handle_input_button)
         self.filter_button.clicked.connect(self.handle_filter_button)
@@ -279,7 +289,6 @@ class CSVSummaryDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
         attach_help_menu_to_layout(layout, self, [("CSV Summary manual", 'csv_summary')])
-        layout.addWidget(section_label("Summary configuration"))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
@@ -317,11 +326,13 @@ class CSVSummaryDialog(QDialog):
 
         row += 1
         grid.addWidget(self.readiness_label, row, 0, 1, 3)
-        row += 1
-        grid.addWidget(self.clear_presets_button, row, 0, 1, 2)
-        grid.addWidget(self.start_button, row, 2)
-
         layout.addLayout(grid)
+        footer_actions = QHBoxLayout()
+        footer_actions.setSpacing(10)
+        footer_actions.addWidget(self.clear_presets_button)
+        footer_actions.addStretch(1)
+        footer_actions.addWidget(self.start_button)
+        layout.addLayout(footer_actions)
         self.setLayout(layout)
         self.preset_path = Path.home() / '.metroliza' / '.csv_summary_presets.json'
         self._sync_ui_state()
@@ -512,8 +523,9 @@ class CSVSummaryDialog(QDialog):
         options = QFileDialog.Option.ReadOnly
         filename, _ = QFileDialog.getOpenFileName(self, "Select input file (CSV)", "", "CSV Files (*.csv);;All Files (*)", options=options)
         if filename:
-            if not filename.endswith(".csv"):
-                filename += ".csv"
+            if Path(filename).suffix.lower() != ".csv":
+                QMessageBox.warning(self, "Invalid input file", "Please select a .csv input file.")
+                return
             logger.info("Selected input CSV file: %s", filename)
             self.input_file = filename
             # Enable the FILTER and OUTPUT buttons after the input file is selected
@@ -607,6 +619,15 @@ class CSVSummaryDialog(QDialog):
         if not self.preset_path.exists():
             QMessageBox.information(self, "No presets", "No saved CSV presets were found.")
             return
+        reply = QMessageBox.question(
+            self,
+            "Clear saved presets",
+            "Remove all saved CSV Summary presets?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
 
         self.preset_path.unlink(missing_ok=True)
         QMessageBox.information(self, "Presets cleared", "Saved CSV presets were removed.")
@@ -632,8 +653,11 @@ class CSVSummaryDialog(QDialog):
                                                 "Excel Files (*.xlsx);;All Files (*)")#, options=options)
 
         if filename:
-            logger.info("Selected output Excel file: %s", filename)
-            self.output_file = filename
+            selected_path = Path(filename)
+            if selected_path.suffix != ".xlsx":
+                selected_path = selected_path.with_suffix(".xlsx")
+            logger.info("Selected output Excel file: %s", selected_path)
+            self.output_file = str(selected_path)
             self._sync_ui_state()
 
     @pyqtSlot()
@@ -660,7 +684,8 @@ class CSVSummaryDialog(QDialog):
         )
         # Connect the progress signal to the update_progress_bar slot
         self.worker_thread.progress_signal.connect(self.update_progress_bar)
-        self.worker_thread.status_signal.connect(self.loading_label.setText)
+        self._worker_failed = False
+        self.worker_thread.status_signal.connect(self._on_worker_status_text)
         self.worker_thread.finished.connect(self.on_data_processing_finished)
         self.worker_thread.start()
 
@@ -677,12 +702,22 @@ class CSVSummaryDialog(QDialog):
             # Stop the data processing thread if it exists
             self.worker_thread.cancel()
 
+    def _on_worker_status_text(self, status_text):
+        self.loading_label.setText(status_text)
+        self._worker_failed = "Processing failed" in (status_text or "")
+
     @pyqtSlot()
     def on_data_processing_finished(self):
         """Handle completion feedback for both canceled and successful runs."""
         # Data processing is complete or canceled
 
-        if self.worker_thread.canceled:
+        if self._worker_failed:
+            QMessageBox.critical(
+                self,
+                "Processing failed",
+                "CSV summary export failed. Review the log for details and try again.",
+            )
+        elif self.worker_thread.canceled:
             # Show a message box to inform the user that processing has been canceled
             QMessageBox.information(self, "Processing canceled", "Processing has been canceled")
         else:

@@ -175,12 +175,17 @@ The dialog includes several shortcuts.
 
 ### Keyboard shortcuts
 
-- Press **Enter** while the **REFERENCE** list has focus to start group creation for the selected reference.
+- Press **Enter** while the **REFERENCE** list has focus to start group creation for the selected reference, with the selected reference name prefilled.
+- Press **Enter** while the **PART #** list has focus to start group creation for the selected part selection.
+- Press **Enter** while the **GROUPS** list has focus to rename the selected group.
+- Press **Enter** while **PART IN SELECTED GROUP** has focus to keep focus in that pane; it does not apply or clear grouping.
 - Press **Delete** or **Backspace** in **PART #** to remove the selected parts from their current custom group and return them to **POPULATION**.
 - Press **Delete** or **Backspace** in **PART IN SELECTED GROUP** to remove those selected items from the current group.
 - Press **Delete** or **Backspace** in **GROUPS** to delete the selected custom group.
 
-The result depends on which pane currently has focus, so make sure the correct list is active before using Delete.
+Applying or clearing grouping remains explicit: use **Use grouping** or **Clear grouping** buttons.
+
+The result depends on which pane currently has focus, so make sure the correct list is active before using Enter, Delete, or Backspace.
 
 ## Common mistakes
 

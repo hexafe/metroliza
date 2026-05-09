@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import types
 
@@ -13,7 +14,8 @@ import PyQt6.QtWidgets as QtWidgets
 REPO_ROOT = Path(__file__).resolve().parent.parent
 USER_MANUAL_ROOT = REPO_ROOT / 'docs' / 'user_manual'
 GITHUB_REPOSITORY_BASE_URL = 'https://github.com/hexafe/metroliza'
-GITHUB_RENDERED_MANUAL_BRANCH = 'master'
+DEFAULT_RELEASE_DOCS_REF = 'master'
+GITHUB_RENDERED_DOCS_REF = os.environ.get('METROLIZA_RELEASE_DOCS_REF', DEFAULT_RELEASE_DOCS_REF)
 
 MANUAL_PATHS = {
     'main_window': USER_MANUAL_ROOT / 'main_window.md',
@@ -88,6 +90,12 @@ def manual_path(manual_key: str) -> Path:
     return MANUAL_PATHS[manual_key]
 
 
+def github_blob_url(path: str | Path) -> str:
+    """Return the GitHub-rendered repository URL for a repo-relative path."""
+    relative_path = Path(path).as_posix().lstrip('/')
+    return f'{GITHUB_REPOSITORY_BASE_URL}/blob/{GITHUB_RENDERED_DOCS_REF}/{relative_path}'
+
+
 def manual_url(manual_key: str) -> str:
     """Return the GitHub rendered-file URL for a known manual key.
 
@@ -96,7 +104,7 @@ def manual_url(manual_key: str) -> str:
     view instead of downloading raw file contents.
     """
     relative_path = manual_path(manual_key).relative_to(REPO_ROOT).as_posix()
-    return f'{GITHUB_REPOSITORY_BASE_URL}/blob/{GITHUB_RENDERED_MANUAL_BRANCH}/{relative_path}'
+    return github_blob_url(relative_path)
 
 
 
@@ -139,10 +147,13 @@ def attach_help_menu_to_layout(layout, parent, entries):
 
 
 __all__ = [
+    'DEFAULT_RELEASE_DOCS_REF',
+    'GITHUB_RENDERED_DOCS_REF',
     'MANUAL_PATHS',
     'USER_MANUAL_ROOT',
     'attach_help_menu_to_layout',
     'build_help_menu',
+    'github_blob_url',
     'manual_path',
     'manual_url',
     'open_manual',

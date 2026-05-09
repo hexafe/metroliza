@@ -4,6 +4,8 @@
 
 Use **CSV Summary** when you want to create an Excel summary directly from a CSV file.
 
+Open it from **Tools > CSV Summary...** in the main window.
+
 This workflow is separate from the normal **Parsing → database file → Export** flow.
 
 Use CSV Summary when:
@@ -25,11 +27,12 @@ Main controls:
 - **Include histogram and boxplot charts**
 - **Summary-only mode (skip per-column sheets/charts)**
 - **Select output file (xlsx)**
-- **START**
+- **Create Summary**
 
 ### 1. Select input file (CSV)
 
 Choose the CSV file you want to summarize.
+The selected file must already end with `.csv`.
 
 After a valid CSV is loaded:
 
@@ -64,10 +67,11 @@ See [Plot options](#plot-options) below.
 ### 5. Select output file (xlsx)
 
 Choose where the output **Excel file** should be saved.
+If you choose a path without an `.xlsx` suffix, Metroliza saves it as `.xlsx`.
 
-After you choose an output file, **START** becomes enabled.
+After you choose an output file, **Create Summary** becomes enabled.
 
-### 6. Click START
+### 6. Click Create Summary
 
 This saves the current preset choices and starts the background export.
 
@@ -162,6 +166,7 @@ When you reopen a similar CSV later, Metroliza may restore those saved choices a
 ### Clear saved presets
 
 Use **Clear saved presets (optional)** if you want to remove the stored CSV Summary presets.
+Metroliza asks for confirmation before deleting presets.
 
 This clears the saved preset file for the CSV Summary workflow.
 

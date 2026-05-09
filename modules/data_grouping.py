@@ -170,9 +170,13 @@ class DataGrouping(QDialog):
             self.use_grouping_button = QPushButton("Use grouping")
             self.dont_use_grouping_button = QPushButton("Clear grouping")
             if hasattr(self.use_grouping_button, "setDefault"):
-                self.use_grouping_button.setDefault(True)
+                self.use_grouping_button.setDefault(False)
             if hasattr(self.use_grouping_button, "setAutoDefault"):
-                self.use_grouping_button.setAutoDefault(True)
+                self.use_grouping_button.setAutoDefault(False)
+            if hasattr(self.dont_use_grouping_button, "setDefault"):
+                self.dont_use_grouping_button.setDefault(False)
+            if hasattr(self.dont_use_grouping_button, "setAutoDefault"):
+                self.dont_use_grouping_button.setAutoDefault(False)
             self.reference_summary_label = ui_foundation.status_chip("Reference: none", variant="neutral")
             self.group_summary_label = ui_foundation.status_chip("Group: none", variant="neutral")
             self.selection_summary_label = ui_foundation.status_chip("Selected parts: 0", variant="neutral")
@@ -1097,6 +1101,26 @@ class DataGrouping(QDialog):
                     self.create_group(initial_group_name=selected_reference)
                     event.accept()
                     return
+                if event is not None and hasattr(event, "accept"):
+                    event.accept()
+                return
+
+            if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.part_list):
+                self.create_group()
+                if event is not None and hasattr(event, "accept"):
+                    event.accept()
+                return
+
+            if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.groups_list):
+                self.rename_group()
+                if event is not None and hasattr(event, "accept"):
+                    event.accept()
+                return
+
+            if pressed_key in enter_keys and self._list_or_viewport_has_focus(self.part_group_list):
+                if event is not None and hasattr(event, "accept"):
+                    event.accept()
+                return
 
             if pressed_key in delete_keys:
                 if self._list_or_viewport_has_focus(self.part_list):

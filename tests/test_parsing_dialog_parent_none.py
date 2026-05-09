@@ -9,6 +9,9 @@ class _FakeSignal:
     def connect(self, *_args, **_kwargs):
         return None
 
+    def emit(self, *_args, **_kwargs):
+        return None
+
 
 class _FakeDialog:
     def __init__(self, *args, **kwargs):
@@ -147,6 +150,7 @@ def _install_qt_stubs():
 
     qtcore.Qt = types.SimpleNamespace(ItemDataRole=types.SimpleNamespace(ToolTipRole=0))
     qtcore.pyqtSlot = lambda *args, **kwargs: (lambda fn: fn)
+    qtcore.pyqtSignal = lambda *args, **kwargs: _FakeSignal()
     qtwidgets.QApplication = type("QApplication", (), {"instance": staticmethod(lambda: None)})
     qtwidgets.QComboBox = _FakeComboBox
     qtwidgets.QDialog = _FakeDialog

@@ -10,6 +10,7 @@ from modules.export_summary_composition_service import (
     classify_capability_value as _classify_capability_value,
 )
 from modules.group_analysis_service import get_spec_status_label
+from modules.help_menu import github_blob_url
 
 SECTION_GAP = 1
 DEFAULT_PLOT_ROW_SPAN = 16
@@ -38,12 +39,8 @@ TITLE_LAST_COL = 14
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GROUP_ANALYSIS_MANUAL_PDF_PATH = REPO_ROOT / 'docs' / 'user_manual' / 'group_analysis' / 'user_manual.pdf'
-GROUP_ANALYSIS_MANUAL_GITHUB_URL = (
-    'https://github.com/hexafe/metroliza/blob/master/docs/user_manual/group_analysis/user_manual.md'
-)
-GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL = (
-    'https://github.com/hexafe/metroliza/blob/master/docs/user_manual/group_analysis/user_manual.pdf'
-)
+GROUP_ANALYSIS_MANUAL_GITHUB_URL = github_blob_url('docs/user_manual/group_analysis/user_manual.md')
+GROUP_ANALYSIS_MANUAL_PDF_GITHUB_URL = github_blob_url('docs/user_manual/group_analysis/user_manual.pdf')
 
 
 _PLOT_SKIP_REASON_LABELS = {

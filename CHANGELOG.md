@@ -1,11 +1,12 @@
 # Changelog (for end users)
 
-## 2026.05 (build 260508) — current version
-- OCR is now available for enriched report metadata parsing.
-- Parsing now offers one clear metadata mode selector: fast import, fast import with enrichment, or complete import.
-- Existing database metadata can be enriched from the Tools menu with visible progress and cancel control.
-- Export now shows which filters are active and includes a one-click Clear filters action.
-- Modify Database normalization now uses searchable field tabs with occurrence counts before changes are applied.
+## 2026.05 (build 260509) — current version
+- CSV Summary now opens from the Tools menu and makes Create Summary the clear primary action.
+- Fast import with enrichment now returns control to the main window before metadata enrichment continues.
+- Grouping keyboard shortcuts now create, add, or rename groups without applying grouping by accident.
+- Parsing and export progress windows now show a larger loading animation with the same clear status text.
+- Help and manual actions now open GitHub documentation in the browser.
+- The desktop workflow keeps the calmer visual style with clearer status rows and bounded paths.
 
 ## 2026.04 (build 260421)
 - Re-running parsing on an existing database refreshes older CMM report rows so OCR header metadata can replace filename-only values.

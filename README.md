@@ -281,11 +281,11 @@ Examples of metric availability by spec type:
 
 ## Release metadata
 
-Current release highlight (`2026.05 (build 260508)`): OCR metadata enrichment, clearer parsing choices, visible export filters, searchable database cleanup, and a calmer workflow UI are now easier to use.
+Current release highlight (`2026.05 (build 260509)`): CSV Summary now lives under Tools, fast parsing can hand enrichment back to the main window, grouping shortcuts are restored, and help opens GitHub manuals.
 
 Canonical release metadata is in `VersionDate.py` (`RELEASE_VERSION`, `VERSION_DATE`, `CURRENT_RELEASE_HIGHLIGHT`).
 
-### Changelog highlights (release `2026.05 (build 260508)`)
+### Changelog highlights (release `2026.05 (build 260509)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

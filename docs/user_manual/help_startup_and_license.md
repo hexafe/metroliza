@@ -24,7 +24,7 @@ In practical terms:
 
 ## About
 
-The **About** dialog is available from the main window menu.
+The **About** dialog is available from **Help > About** in the main window.
 
 It shows:
 
@@ -37,7 +37,7 @@ Use it when you need a quick version check or project reference.
 
 ## Release notes
 
-The **Release notes** dialog is also available from the main window menu.
+The **Release notes** dialog is also available from **Help > Release notes** in the main window.
 
 It shows short, non-technical release notes inside the app, plus a brief archive of earlier versions.
 

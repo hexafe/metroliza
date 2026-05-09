@@ -3,7 +3,7 @@
 from modules.progress_status import build_three_line_status
 from modules.parse_reports_thread import ParseReportsThread
 from modules.custom_logger import CustomLogger
-from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import QComboBox, QDialog, QFileDialog, QGridLayout, QLabel, QMessageBox, QPushButton
 import logging
 from modules.contracts import ParseRequest, validate_parse_request
@@ -30,7 +30,7 @@ _METADATA_MODE_FAST_THEN_ENRICH = "fast_then_enrich"
 _METADATA_MODE_COMPLETE = "complete"
 _METADATA_MODE_REQUEST_FIELDS = {
     _METADATA_MODE_FAST: ("light", False),
-    _METADATA_MODE_FAST_THEN_ENRICH: ("light", True),
+    _METADATA_MODE_FAST_THEN_ENRICH: ("light", False),
     _METADATA_MODE_COMPLETE: ("complete", False),
 }
 
@@ -41,6 +41,8 @@ class ParsingDialog(QDialog):
     The dialog tracks selected source/database paths and handles cancellation,
     error propagation, and completion feedback from the worker thread.
     """
+
+    metadata_enrichment_requested = pyqtSignal(str)
 
     def __init__(self, parent=None, directory=None, db_file=None):
         super().__init__(parent)
@@ -127,6 +129,7 @@ class ParsingDialog(QDialog):
         self.parse_thread = None
         self.parsing_canceled = False
         self.parse_error_message = None
+        self._pending_modeless_metadata_enrichment = False
 
         # Initialize the layout
         self.layout = QGridLayout()
@@ -183,6 +186,36 @@ class ParsingDialog(QDialog):
     def _selected_metadata_request_fields(self):
         selected_mode = self.metadata_mode_combo.currentData() or _METADATA_MODE_FAST
         return _METADATA_MODE_REQUEST_FIELDS.get(selected_mode, _METADATA_MODE_REQUEST_FIELDS[_METADATA_MODE_FAST])
+
+    @staticmethod
+    def _archive_extension_set():
+        return {ext.lower() for _, extensions, _ in shutil.get_unpack_formats() for ext in extensions}
+
+    def _selected_metadata_mode(self):
+        return self.metadata_mode_combo.currentData() or _METADATA_MODE_FAST
+
+    def _source_is_archive(self):
+        if not self.directory:
+            return False
+        return str(self.directory).lower().endswith(tuple(self._archive_extension_set()))
+
+    def _build_parse_request_fields(self):
+        selected_mode = self._selected_metadata_mode()
+        metadata_parsing_mode, run_background_metadata_enrichment = _METADATA_MODE_REQUEST_FIELDS.get(
+            selected_mode,
+            _METADATA_MODE_REQUEST_FIELDS[_METADATA_MODE_FAST],
+        )
+        request_modeless_enrichment = selected_mode == _METADATA_MODE_FAST_THEN_ENRICH
+
+        if request_modeless_enrichment and self._source_is_archive():
+            # Archive imports are unpacked into a temporary directory owned by
+            # ParseReportsThread. Modeless enrichment would run after cleanup,
+            # so archive fast-then-enrich intentionally keeps enrichment inside
+            # the parser thread while those extracted files still exist.
+            run_background_metadata_enrichment = True
+            request_modeless_enrichment = False
+
+        return metadata_parsing_mode, run_background_metadata_enrichment, request_modeless_enrichment
 
     def _sync_readiness_state(self):
         is_ready = bool(self.directory and self.db_file)
@@ -274,8 +307,14 @@ class ParsingDialog(QDialog):
             # Disable the parse button and show the progress dialog
             self.parse_button.setEnabled(False)
             self.loading_dialog.show()
+            self.parsing_canceled = False
+            self.parse_error_message = None
 
-            metadata_parsing_mode, run_background_metadata_enrichment = self._selected_metadata_request_fields()
+            (
+                metadata_parsing_mode,
+                run_background_metadata_enrichment,
+                self._pending_modeless_metadata_enrichment,
+            ) = self._build_parse_request_fields()
             request = validate_parse_request(
                 ParseRequest(
                     source_directory=self.directory,
@@ -318,12 +357,17 @@ class ParsingDialog(QDialog):
     def on_parse_finished(self):
         """Handle parse completion, including cancellation and error paths."""
         try:
+            should_request_modeless_enrichment = (
+                not self.parse_error_message
+                and not self.parsing_canceled
+                and self._pending_modeless_metadata_enrichment
+            )
             if self.parse_error_message:
                 QMessageBox.warning(self, "Parsing failed", self.parse_error_message)
             elif self.parsing_canceled:
                 # Show a message box to inform the user that parsing has been canceled
                 QMessageBox.information(self, "Parsing canceled", "Parsing has been canceled")
-            else:
+            elif not should_request_modeless_enrichment:
                 # Show a message box to inform the user that parsing is complete
                 QMessageBox.information(self, "Parsing successful", f"Measurements data saved to {self.db_file}!")
 
@@ -336,9 +380,18 @@ class ParsingDialog(QDialog):
             # Reset parse state flags
             self.parsing_canceled = False
             self.parse_error_message = None
+            self._pending_modeless_metadata_enrichment = False
+
+            if should_request_modeless_enrichment:
+                parent = self.parent()
+                if parent is not None and hasattr(parent, "set_db_file"):
+                    parent.set_db_file(self.db_file)
 
             # Close the parsing dialog
             self.accept()
+
+            if should_request_modeless_enrichment:
+                self.metadata_enrichment_requested.emit(self.db_file)
         except Exception as e:
             self.log_and_exit(e)
         

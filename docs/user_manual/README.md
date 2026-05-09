@@ -8,6 +8,8 @@ Use these guides when you want to understand what to click, what each dialog doe
 
 Metroliza has several separate workflows. You do not need every tool every time.
 
+In the app itself, the main database workflow starts from the main window buttons, utility actions live under **Tools**, and manuals/support items live under **Help**.
+
 This manual set helps you:
 
 - learn the normal app workflow in a simple order,

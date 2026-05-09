@@ -9,10 +9,9 @@ From here you can open:
 - Parsing,
 - Modify Database,
 - Export,
-- CSV Summary, and
 - Characteristic Name Matching.
 
-It also gives you quick access to **About**, **Release notes**, **Tools**, and help from the menu bar.
+It also gives you quick access to the **Tools** and **Help** menus from the menu bar.
 
 ## What each button does
 
@@ -40,9 +39,9 @@ Opens the [Export overview](export_overview.md) dialog.
 
 Use this when you already have a database file and want to create an **Excel file**. This is the main reporting/export workflow.
 
-### CSV Summary
+### Tools > CSV Summary...
 
-Opens the [CSV Summary](csv_summary.md) workflow.
+Opens the [CSV Summary](csv_summary.md) workflow from the **Tools** menu.
 
 This is a separate mini-app inside Metroliza. It works directly from a CSV file and does **not** require the normal parse-to-database workflow.
 
@@ -62,13 +61,13 @@ Use this as a maintenance action when an existing database was imported with fas
 
 While enrichment runs, the main window shows progress and a **Cancel** button. If no database is selected, the main window shows a message asking you to select a database first.
 
-### About
+### Help > About
 
 Opens the [Help, startup, and license](help_startup_and_license.md) reference page’s **About** dialog.
 
 This dialog shows version information and project attribution.
 
-### Release notes
+### Help > Release notes
 
 Opens the [Help, startup, and license](help_startup_and_license.md) reference page’s **Release notes** dialog.
 
@@ -89,6 +88,8 @@ A practical version is:
 - **Optionally modify the database**.
 - **Optionally match characteristic names**.
 - **Export**.
+- Use **Tools** for utility workflows such as **CSV Summary** or **Enrich existing database metadata...**.
+- Use **Help** for manuals, **Release notes**, and **About**.
 
 ## Typical user journeys
 

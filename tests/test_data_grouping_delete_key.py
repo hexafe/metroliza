@@ -453,14 +453,80 @@ class TestDataGroupingDeleteKey(unittest.TestCase):
             dialog = self._build_dialog(data_grouping_module)
             dialog.part_list.setFocus()
 
-            captured = {"count": 0}
-            dialog.create_group = lambda initial_group_name="": captured.__setitem__("count", captured["count"] + 1)
+            captured = {"value": None}
+            dialog.create_group = lambda initial_group_name="": captured.__setitem__("value", initial_group_name)
 
             event = _FakeKeyEvent(_FakeQtKey.Key_Return)
             data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
 
-            self.assertFalse(event.accepted)
-            self.assertEqual(captured["count"], 0)
+            self.assertTrue(event.accepted)
+            self.assertEqual(captured["value"], "")
+
+    def test_enter_key_on_groups_list_calls_rename_group(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = types.ModuleType("modules.db")
+        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
+            dialog = self._build_dialog(data_grouping_module)
+            dialog.groups_list = _FakeListWidget()
+            dialog.groups_list.setViewportFocus()
+
+            captured = {"count": 0}
+            dialog.rename_group = lambda: captured.__setitem__("count", captured["count"] + 1)
+
+            event = _FakeKeyEvent(_FakeQtKey.Key_Enter)
+            data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
+
+            self.assertTrue(event.accepted)
+            self.assertEqual(captured["count"], 1)
+
+    def test_enter_key_on_part_group_list_is_consumed_without_grouping_action(self):
+        pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()
+        fake_db = types.ModuleType("modules.db")
+        fake_db.read_sql_dataframe = lambda *_args, **_kwargs: None
+
+        with patch.dict(
+            sys.modules,
+            {
+                "PyQt6": pyqt6,
+                "PyQt6.QtCore": qtcore,
+                "PyQt6.QtWidgets": qtwidgets,
+                "PyQt6.QtGui": qtgui,
+                "modules.db": fake_db,
+            },
+            clear=False,
+        ):
+            data_grouping_module = self._load_data_grouping_module()
+            data_grouping_module.Qt = _FakeQt
+            setattr(data_grouping_module.DataGrouping.__mro__[1], "keyPressEvent", lambda *_args, **_kwargs: None)
+            dialog = self._build_dialog(data_grouping_module)
+            dialog.part_group_list.setViewportFocus()
+
+            create_group_calls = {"count": 0}
+            rename_group_calls = {"count": 0}
+            dialog.create_group = lambda initial_group_name="": create_group_calls.__setitem__("count", create_group_calls["count"] + 1)
+            dialog.rename_group = lambda: rename_group_calls.__setitem__("count", rename_group_calls["count"] + 1)
+
+            event = _FakeKeyEvent(_FakeQtKey.Key_Return)
+            data_grouping_module.DataGrouping.keyPressEvent(dialog, event)
+
+            self.assertTrue(event.accepted)
+            self.assertEqual(create_group_calls["count"], 0)
+            self.assertEqual(rename_group_calls["count"], 0)
 
 
 if __name__ == "__main__":

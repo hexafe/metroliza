@@ -1,19 +1,19 @@
-RELEASE_VERSION = "2026.05rc1"
-VERSION_DATE = "260508"
+RELEASE_VERSION = "2026.05"
+VERSION_DATE = "260509"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = (
-    "OCR metadata enrichment, clearer parsing choices, visible export filters, searchable database cleanup, and a calmer workflow UI are now easier to use."
+    "CSV Summary now lives under Tools, fast parsing can hand enrichment back to the main window, grouping shortcuts are restored, and help opens GitHub manuals."
 )
-PUBLIC_VERSION_LABEL = "2026.05 (build 260508)"
+PUBLIC_VERSION_LABEL = "2026.05 (build 260509)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - OCR is now available for enriched report metadata parsing<br>
-    - Parsing now offers one clear metadata mode selector: fast import, fast import with enrichment, or complete import<br>
-    - Existing database metadata can be enriched from the Tools menu with visible progress and cancel control<br>
-    - Export now shows which filters are active and includes a one-click Clear filters action<br>
-    - Modify Database normalization now uses searchable field tabs with occurrence counts<br>
-    - Main workflow windows now use a calmer visual style with clearer status rows, bounded paths, and more consistent progress feedback<br>
+    - CSV Summary now opens from the Tools menu and makes Create Summary the clear primary action<br>
+    - Fast import with enrichment now returns control to the main window before metadata enrichment continues<br>
+    - Grouping keyboard shortcuts now create, add, or rename groups without applying grouping by accident<br>
+    - Parsing and export progress windows now show a larger loading animation with the same clear status text<br>
+    - Help and manual actions now open GitHub documentation in the browser<br>
+    - The desktop workflow keeps the calmer visual style with clearer status rows and bounded paths<br>
 
     <br><b>Archive:</b><br>
 
