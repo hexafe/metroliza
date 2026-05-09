@@ -111,6 +111,27 @@ class TestHelpMenu(unittest.TestCase):
         self.assertEqual(overridden_module.GITHUB_RENDERED_DOCS_REF, 'release/2026.05-rc1')
         self.assertIn('/blob/release/2026.05-rc1/', overridden_module.manual_url('parsing'))
 
+    def test_github_url_helper_imports_without_pyqt_runtime(self):
+        sys.modules.pop('modules.help_menu', None)
+        real_import = __import__
+
+        def _raise_for_pyqt(name, *args, **kwargs):
+            if name.startswith('PyQt6'):
+                raise ImportError('simulated missing Qt runtime')
+            return real_import(name, *args, **kwargs)
+
+        with patch('builtins.__import__', side_effect=_raise_for_pyqt):
+            fallback_module = importlib.import_module('modules.help_menu')
+
+        self.assertEqual(
+            fallback_module.github_blob_url('docs/user_manual/main_window.md'),
+            (
+                'https://github.com/hexafe/metroliza/blob/'
+                f'{fallback_module.DEFAULT_RELEASE_DOCS_REF}/docs/user_manual/main_window.md'
+            ),
+        )
+        self.assertFalse(fallback_module.open_manual(None, 'main_window'))
+
     def test_open_manual_opens_github_manual_url(self):
         with patch.object(self.help_menu.QDesktopServices, 'openUrl', return_value=True) as open_url_mock:
             result = self.help_menu.open_manual(None, 'parsing')

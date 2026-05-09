@@ -6,9 +6,14 @@ import os
 from pathlib import Path
 import types
 
-import PyQt6.QtCore as QtCore
-import PyQt6.QtGui as QtGui
-import PyQt6.QtWidgets as QtWidgets
+try:
+    import PyQt6.QtCore as QtCore
+    import PyQt6.QtGui as QtGui
+    import PyQt6.QtWidgets as QtWidgets
+except (ImportError, OSError, RuntimeError):
+    QtCore = types.SimpleNamespace()
+    QtGui = types.SimpleNamespace()
+    QtWidgets = types.SimpleNamespace()
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
