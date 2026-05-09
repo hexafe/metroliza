@@ -159,24 +159,39 @@ def configure_window_size(widget, *, minimum=(420, 260), initial=(640, 420), scr
         widget.resize(initial_width, initial_height)
 
 
+def _label(text):
+    try:
+        label = QLabel(text)
+    except TypeError:
+        label = QLabel()
+        if hasattr(label, "setText"):
+            label.setText(text)
+    return label
+
+
 def section_label(text):
-    label = QLabel(text)
-    label.setProperty("sectionLabel", True)
+    label = _label(text)
+    if hasattr(label, "setProperty"):
+        label.setProperty("sectionLabel", True)
     return label
 
 
 def secondary_label(text):
-    label = QLabel(text)
-    label.setProperty("secondary", True)
-    label.setWordWrap(True)
+    label = _label(text)
+    if hasattr(label, "setProperty"):
+        label.setProperty("secondary", True)
+    if hasattr(label, "setWordWrap"):
+        label.setWordWrap(True)
     return label
 
 
 def status_chip(text, variant="neutral"):
-    label = QLabel(text)
-    label.setProperty("statusChip", True)
-    label.setProperty("statusVariant", variant)
-    label.setWordWrap(True)
+    label = _label(text)
+    if hasattr(label, "setProperty"):
+        label.setProperty("statusChip", True)
+        label.setProperty("statusVariant", variant)
+    if hasattr(label, "setWordWrap"):
+        label.setWordWrap(True)
     return label
 
 

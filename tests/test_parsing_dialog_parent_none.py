@@ -30,11 +30,28 @@ class _FakeDialog:
         return None
 
 
+class _FakeWidget:
+    def __init__(self, *_args, **_kwargs):
+        self._properties = {}
+
+    def __getattr__(self, _name):
+        def _method(*_args, **_kwargs):
+            return None
+        return _method
+
+
 class _FakeLabel:
     def __init__(self, text=""):
         self._text = text
+        self._properties = {}
 
     def setToolTip(self, *_args, **_kwargs):
+        return None
+
+    def setProperty(self, key, value):
+        self._properties[key] = value
+
+    def setWordWrap(self, *_args, **_kwargs):
         return None
 
     def setText(self, text):
@@ -42,6 +59,20 @@ class _FakeLabel:
 
     def text(self):
         return self._text
+
+
+class _FakeLineEdit(_FakeLabel):
+    def setReadOnly(self, *_args, **_kwargs):
+        return None
+
+    def setSizePolicy(self, *_args, **_kwargs):
+        return None
+
+    def setMinimumWidth(self, *_args, **_kwargs):
+        return None
+
+    def setCursorPosition(self, *_args, **_kwargs):
+        return None
 
 
 class _FakeButton:
@@ -62,6 +93,19 @@ class _FakeButton:
 class _FakeGridLayout:
     def addWidget(self, *_args, **_kwargs):
         return None
+
+
+class _FakeFrame(_FakeWidget):
+    Shape = types.SimpleNamespace(HLine=1)
+    Shadow = types.SimpleNamespace(Plain=1)
+
+
+class _FakeHeaderView:
+    ResizeMode = types.SimpleNamespace(Interactive=0, Stretch=1, ResizeToContents=2)
+
+
+class _FakeSizePolicy:
+    Policy = types.SimpleNamespace(Expanding=1, Fixed=2)
 
 
 class _FakeComboBox:
@@ -98,10 +142,12 @@ class _FakeComboBox:
 def _install_qt_stubs():
     pyqt6 = types.ModuleType("PyQt6")
     qtcore = types.ModuleType("PyQt6.QtCore")
+    qtgui = types.ModuleType("PyQt6.QtGui")
     qtwidgets = types.ModuleType("PyQt6.QtWidgets")
 
     qtcore.Qt = types.SimpleNamespace(ItemDataRole=types.SimpleNamespace(ToolTipRole=0))
     qtcore.pyqtSlot = lambda *args, **kwargs: (lambda fn: fn)
+    qtwidgets.QApplication = type("QApplication", (), {"instance": staticmethod(lambda: None)})
     qtwidgets.QComboBox = _FakeComboBox
     qtwidgets.QDialog = _FakeDialog
     qtwidgets.QFileDialog = type(
@@ -113,8 +159,11 @@ def _install_qt_stubs():
             "getSaveFileName": staticmethod(lambda *_args, **_kwargs: ("", "")),
         },
     )
+    qtwidgets.QFrame = _FakeFrame
+    qtwidgets.QHeaderView = _FakeHeaderView
     qtwidgets.QGridLayout = _FakeGridLayout
     qtwidgets.QLabel = _FakeLabel
+    qtwidgets.QLineEdit = _FakeLineEdit
     qtwidgets.QMessageBox = type(
         "QMessageBox",
         (),
@@ -126,14 +175,17 @@ def _install_qt_stubs():
         },
     )
     qtwidgets.QPushButton = _FakeButton
+    qtwidgets.QSizePolicy = _FakeSizePolicy
+    qtwidgets.QWidget = _FakeWidget
     pyqt6.QtCore = qtcore
+    pyqt6.QtGui = qtgui
     pyqt6.QtWidgets = qtwidgets
-    return pyqt6, qtcore, qtwidgets
+    return pyqt6, qtcore, qtgui, qtwidgets
 
 
 class TestParsingDialogParentNoneSafety(unittest.TestCase):
     def _import_module(self):
-        pyqt6, qtcore, qtwidgets = _install_qt_stubs()
+        pyqt6, qtcore, qtgui, qtwidgets = _install_qt_stubs()
         parse_reports_thread = types.ModuleType("modules.parse_reports_thread")
         parse_reports_thread.ParseReportsThread = type("ParseReportsThread", (), {})
         worker_progress_dialog = types.ModuleType("modules.worker_progress_dialog")
@@ -143,12 +195,14 @@ class TestParsingDialogParentNoneSafety(unittest.TestCase):
             {
                 "PyQt6": pyqt6,
                 "PyQt6.QtCore": qtcore,
+                "PyQt6.QtGui": qtgui,
                 "PyQt6.QtWidgets": qtwidgets,
                 "modules.parse_reports_thread": parse_reports_thread,
                 "modules.worker_progress_dialog": worker_progress_dialog,
             },
             clear=False,
         ):
+            sys.modules.pop("modules.ui_foundation", None)
             sys.modules.pop("modules.parsing_dialog", None)
             return importlib.import_module("modules.parsing_dialog")
 
